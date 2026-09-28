@@ -42,6 +42,8 @@ import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScr
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { findStalePerformanceTakes } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
+import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
+import { projectSoundBed } from './soundBed.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -157,6 +159,21 @@ export async function resolveMasterAudioPath(project) {
     throw new ServerError('Project audio file is missing', { status: 404, code: 'AUDIO_MISSING' });
   }
   return safe;
+}
+
+// #8988: resolve the project's explicitly chosen sound-design bed (a
+// music-library track) to a verified path under data/music/, or null when the
+// song is the sole audio master (the default).
+async function resolveSoundBed(project) {
+  const bed = projectSoundBed(project);
+  // A (synced) record naming the song itself as its bed mixes nothing.
+  if (!bed || bed.trackId === project.trackId) return null;
+  const track = await getTrack(bed.trackId);
+  const safe = track?.audioFilename ? safeUnder(PATHS.music, track.audioFilename) : null;
+  if (!safe || !existsSync(safe)) {
+    throw new ServerError('The sound-design bed track is missing — choose another bed or clear it', { status: 404, code: 'SOUND_BED_MISSING' });
+  }
+  return { path: safe, volume: bed.volume };
 }
 
 // A still/card section has no source clip to measure, so its authored span IS
@@ -388,7 +405,7 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
 // overlap the window, clipped to it and re-based to the excerpt's own timeline
 // (0 = `startSec`) so a contact sheet built from the excerpt file can sample
 // cut boundaries directly. `totalDuration` becomes the excerpt's own length.
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null } = {}) {
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
   const frameGrid = gridOption || clips.some((c) => c.layer);
   // Stills and cards have no dimensions of their own: the first footage clip
@@ -450,7 +467,24 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const fullDuration = audioDurationSec != null ? Math.min(videoTotal, audioDurationSec) : videoTotal;
 
   let videoMap = '[outv]';
+  // The song is the sole audio master unless a sound-design bed was explicitly
+  // chosen (#8988) — then the bed is mixed UNDER it through the shared bed
+  // chain, trimmed to the song so it can never extend or replace the master.
+  let audioSrc = `[${audioIdx}:a]`;
   let audioMap = `${audioIdx}:a`;
+  if (soundBed?.path) {
+    filters.push(`[${audioIdx}:a]${AUDIO_NORM}[master]`);
+    const bed = buildAudioBedMix({
+      beds: [{ assetPath: soundBed.path, offsetSec: 0, durationSec: fullDuration, volume: soundBed.volume }],
+      firstInputIdx: audioIdx + 1 + overlays.length,
+      mainLabel: '[master]',
+      outLabel: '[mixa]',
+    });
+    inputs.push(...bed.inputs);
+    filters.push(...bed.filters);
+    audioSrc = '[mixa]';
+    audioMap = '[mixa]';
+  }
   let totalDuration = fullDuration;
   let sections = plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, layer: c.layer || 'footage', startSec, endSec }));
 
@@ -458,7 +492,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     const excerptStart = Math.max(0, Math.min(excerpt.startSec, fullDuration));
     const excerptEnd = Math.max(excerptStart, Math.min(excerpt.endSec, fullDuration));
     filters.push(`[outv]trim=start=${excerptStart}:end=${excerptEnd},setpts=PTS-STARTPTS[outvx]`);
-    filters.push(`[${audioIdx}:a]atrim=start=${excerptStart}:end=${excerptEnd},asetpts=PTS-STARTPTS[outax]`);
+    filters.push(`${audioSrc}atrim=start=${excerptStart}:end=${excerptEnd},asetpts=PTS-STARTPTS[outax]`);
     videoMap = '[outvx]';
     audioMap = '[outax]';
     totalDuration = excerptEnd - excerptStart;
@@ -553,7 +587,8 @@ export async function planMusicVideoRender(project) {
       { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
     );
   }
-  return { ffmpeg, audioPath, composed, clips, audioDurationSec };
+  const soundBed = await resolveSoundBed(project);
+  return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed };
 }
 
 export async function renderMusicVideo(projectId) {
@@ -573,7 +608,7 @@ export async function renderMusicVideo(projectId) {
 
   let handedOff = false;
   try {
-    const { ffmpeg, audioPath, composed, clips, audioDurationSec } = await planMusicVideoRender(project);
+    const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
 
@@ -582,7 +617,7 @@ export async function renderMusicVideo(projectId) {
     const jobId = randomUUID();
     const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
     const outputPath = join(PATHS.videos, filename);
-    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed });
+    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed });
     // #8984: a composed project lays its timed text cues over the cut, and a
     // title card's text (#8985) joins them over its own section. No renderable
     // cue (plain mode, or nothing timed) skips the overlay capture entirely.
@@ -764,7 +799,7 @@ export async function renderMusicVideo(projectId) {
       signal.throwIfAborted();
       // Capture is over: from here a cancel kills the encode (job.process).
       job.overlayAbort = null;
-      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true });
+      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, soundBed });
       startEncode(layered.args, 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;

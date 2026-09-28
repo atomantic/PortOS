@@ -94,6 +94,39 @@ describe('buildMusicVideoFfmpegArgs', () => {
   });
 });
 
+// #8988 — an optional, explicitly chosen sound-design bed mixed UNDER the song.
+describe('sound-design bed (#8988)', () => {
+  const clips = [clip({ videoPath: '/v/a.mp4' }), clip({ videoPath: '/v/b.mp4' })];
+  const filterOf = (args) => args[args.indexOf('-filter_complex') + 1];
+  const mapsOf = (args) => args.reduce((acc, a, i) => (a === '-map' ? [...acc, args[i + 1]] : acc), []);
+
+  it('with no bed chosen, the output audio is exactly the master track — no mix stage at all', () => {
+    const plain = buildMusicVideoFfmpegArgs(clips, '/music/song.wav', '/out.mp4', { audioDurationSec: 30 });
+    const noBed = buildMusicVideoFfmpegArgs(clips, '/music/song.wav', '/out.mp4', { audioDurationSec: 30, soundBed: null });
+    expect(noBed.args).toEqual(plain.args);
+    expect(filterOf(noBed.args)).not.toMatch(/amix|\[master\]/);
+    expect(mapsOf(noBed.args)).toEqual(['[outv]', '2:a']);
+  });
+
+  it('mixes a chosen bed under the master at its own level, trimmed to the song, after any overlay inputs', () => {
+    const overlays = [{ startSec: 1, path: '/tmp/cue-0.mov' }];
+    const { args } = buildMusicVideoFfmpegArgs(clips, '/music/song.wav', '/out.mp4', {
+      audioDurationSec: 30, overlays, soundBed: { path: '/music/rain.wav', volume: 0.3 }, excerpt: { startSec: 1, endSec: 3 },
+    });
+    const fc = filterOf(args);
+    // inputs: 0,1 clips · 2 song · 3 overlay · 4 bed
+    const inputs = args.reduce((acc, a, i) => (a === '-i' ? [...acc, args[i + 1]] : acc), []);
+    expect(inputs).toEqual(['/v/a.mp4', '/v/b.mp4', '/music/song.wav', '/tmp/cue-0.mov', '/music/rain.wav']);
+    expect(fc).toContain('[2:a]aresample=48000');
+    expect(fc).toMatch(/\[4:a\][^;]*atrim=start=0:end=4,[^;]*volume=0\.3\[bed0\]/);
+    // The song keeps its length and level: duration=first, normalize=0.
+    expect(fc).toContain('[master][bed0]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mixa]');
+    // A draft excerpt windows the MIXED audio, not the bare song.
+    expect(fc).toContain('[mixa]atrim=start=1:end=3,asetpts=PTS-STARTPTS[outax]');
+    expect(mapsOf(args)).toEqual(['[outvx]', '[outax]']);
+  });
+});
+
 describe('excerptBoundaryTimes (#8986)', () => {
   // No encoded file has a frame timestamped at its own total duration, so the
   // trailing boundary is always guarded back to `span - 1/fps` (default 24fps)

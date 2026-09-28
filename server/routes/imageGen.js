@@ -68,7 +68,7 @@ async function enqueueLoggedImage(req, job) {
   // service's closure.
   if (job.params?.musicVideo?.revisionId) {
     const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
-    await assertRevisionOpen(job.params.musicVideo.projectId, job.params.musicVideo.revisionId);
+    await assertRevisionOpen(job.params.musicVideo.projectId, job.params.musicVideo.revisionId, { sceneId: job.params.musicVideo.sceneId, kind: 'image' });
   }
   const queued = await enqueueJob(job);
   try {
@@ -675,7 +675,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // tag carries no revisionId.
   if (params.musicVideo?.revisionId) {
     const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
-    await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId);
+    await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId, { sceneId: params.musicVideo.sceneId, kind: 'image' });
   }
   const result = await imageGen.generateImage(params);
   if (params.fableLoom && result?.filename) {

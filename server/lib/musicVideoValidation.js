@@ -382,11 +382,41 @@ export const musicVideoRevisionStartSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(200)).min(1).max(500).optional(),
 }).strict();
 
+// ---- Opt-in automatic review/retries (#8988) --------------------------------
+// Every limit is required: a run never picks its own budget. `maxAttempts`
+// bounds the reviews (provider calls); `maxGenerations` is the spend limit on
+// paid scene-generation jobs. See services/musicVideo/autoReview.js.
+export const musicVideoAutoReviewLimitsSchema = z.object({
+  maxAttempts: z.number().int().min(1).max(10),
+  maxGenerations: z.number().int().min(0).max(100),
+}).strict();
+
+export const musicVideoAutoReviewStartSchema = z.object({
+  startSec: z.number().min(0).max(36000),
+  endSec: z.number().min(0).max(36000),
+  limits: musicVideoAutoReviewLimitsSchema,
+  providerId: z.string().min(1).max(200).nullable().optional(),
+  model: z.string().min(1).max(200).nullable().optional(),
+}).strict().refine((r) => r.endSec > r.startSec, { message: 'endSec must be greater than startSec' });
+
+// Resume may RAISE either limit (never below what the run already used).
+export const musicVideoAutoReviewResumeSchema = z.object({
+  limits: musicVideoAutoReviewLimitsSchema.partial().optional(),
+}).strict();
+
 // A generation kickoff that failed before reaching the queue (#9011) — names
 // the rejected section whose claim should clear so the next resume can hand
 // it out again immediately instead of waiting out GENERATION_CLAIM_LEASE_MS.
 export const musicVideoRevisionReleaseSchema = z.object({
   sceneId: z.string().min(1).max(200),
+}).strict();
+
+// Optional sound-design bed (#8988): one explicitly chosen music-library track
+// mixed UNDER the song. null (or omitted) keeps the song as the sole audio
+// master. See services/musicVideo/soundBed.js.
+export const musicVideoSoundBedSchema = z.object({
+  trackId: z.string().min(1).max(64),
+  volume: z.number().min(0.05).max(1).optional(),
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
@@ -416,6 +446,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
+  soundBed: musicVideoSoundBedSchema.nullable().optional(),
 }).strict();
 
 // Fork a project into its next editable version. The server derives lineage and

@@ -335,8 +335,8 @@ export function cancelRevisionOnProject(project, revisionId, now = new Date().to
  * project itself is gone (the route's own lookup reports that separately).
  */
 export function assertRevisionOpenForGeneration(project, revisionId) {
-  if (!project) return;
-  resumableRevision(project, revisionId);
+  if (!project) return null;
+  return resumableRevision(project, revisionId);
 }
 
 /**

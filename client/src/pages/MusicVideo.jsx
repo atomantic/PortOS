@@ -25,6 +25,7 @@ import useMusicVideoMidiJob from '../hooks/useMusicVideoMidiJob.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
 import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
+import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
 import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
@@ -134,6 +135,7 @@ export default function MusicVideo() {
   // Selective section revision (#8987): regenerate only a draft's flagged
   // sections, resumable from the server's checkpoint.
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });
+  const autoReview = useMusicVideoAutoReview({ project: selected, replaceProject, submitSections: revisions.submitSections });
   // Pre-production treatment (#8980): brief, compiled arc, shot direction,
   // proof checklist and the non-destructive Apply review.
   const treatment = useMusicVideoTreatment({ project: selected, onProjectPatch: patchProject, replaceProject });
@@ -718,6 +720,7 @@ export default function MusicVideo() {
                 editNote={excerpts.editNote}
                 deleteNote={excerpts.deleteNote}
                 revision={{ ...revisions, genScenes: sceneMedia.genScenes, genVideoScenes: sceneMedia.genVideoScenes }}
+                autoReview={autoReview}
               />
               <LyricsPanel
                 project={selected}

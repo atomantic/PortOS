@@ -142,6 +142,14 @@ describe('cloneProjectRecord', () => {
 });
 
 describe('applyProjectPatch', () => {
+  it('stores an explicit sound-design bed (level clamped), clears it with null, and never lets the song be its own bed (#8988)', () => {
+    const withSong = applyProjectPatch(baseProject(), { trackId: 'trk-song' });
+    const bedded = applyProjectPatch(withSong, { soundBed: { trackId: 'trk-rain', volume: 0.333 } });
+    expect(bedded.soundBed).toEqual({ trackId: 'trk-rain', volume: 0.33 });
+    expect(applyProjectPatch(bedded, { soundBed: null }).soundBed).toBeNull();
+    expect(() => applyProjectPatch(withSong, { soundBed: { trackId: 'trk-song' } })).toThrow(expect.objectContaining({ code: 'SOUND_BED_IS_MASTER' }));
+  });
+
   it('merges fields and bumps updatedAt', () => {
     const next = applyProjectPatch(baseProject(), { name: 'Renamed', trackId: 't2' });
     expect(next.name).toBe('Renamed');

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Film, Flag, CheckCircle2, Trash2, X, Clapperboard, RotateCcw } from 'lucide-react';
 import RevisionPanel, { currentRevision } from './RevisionPanel.jsx';
+import AutoReviewPanel from './AutoReviewPanel.jsx';
 
 const VERDICT_STYLES = {
   flagged: 'bg-port-error/20 text-port-error',
@@ -133,7 +134,7 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
  * start) — a frame check alone can't prove motion/audio sync, so the video
  * plays alongside the sheet rather than replacing it.
  */
-export default function ExcerptPanel({ project, rendering, progress, excerpts, revision = null, ...actions }) {
+export default function ExcerptPanel({ project, rendering, progress, excerpts, revision = null, autoReview = null, ...actions }) {
   const activeRevision = currentRevision(project);
   const canRevise = !!revision && !revision.busy && !rendering
     && !(activeRevision && (activeRevision.status === 'open' || activeRevision.status === 'rendering'));
@@ -177,6 +178,10 @@ export default function ExcerptPanel({ project, rendering, progress, excerpts, r
         <RevisionPanel project={project} busy={revision.busy || rendering}
           genScenes={revision.genScenes} genVideoScenes={revision.genVideoScenes}
           onResume={revision.resume} onCancel={revision.cancel} />
+      )}
+      {autoReview && (
+        <AutoReviewPanel project={project} startSec={startSec} endSec={endSec} rangeValid={valid}
+          rendering={rendering} autoReview={autoReview} />
       )}
       {excerpts.length > 0 && (
         <ul className="space-y-2">

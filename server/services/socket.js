@@ -434,6 +434,11 @@ function setupMusicVideoEventForwarding() {
   musicVideoEvents.on('scene-video', (data) => {
     if (ioInstance) ioInstance.emit('music-video:scene-video', data);
   });
+  // An opt-in auto-review run advanced (#8988) — the board submits any
+  // sections it hands out and shows the run's checkpoint without a refetch.
+  musicVideoEvents.on('auto-review', (data) => {
+    if (ioInstance) ioInstance.emit('music-video:auto-review', data);
+  });
 }
 
 let aiStatusForwardingSetup = false;

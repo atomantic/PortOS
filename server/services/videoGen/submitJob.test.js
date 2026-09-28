@@ -238,7 +238,7 @@ describe('submitVideoGenJob', () => {
       mocks.prepareVideoGenParams.mockResolvedValue(prepared);
 
       await expect(submitVideoGenJob({ prompt: 'singer', backend: 'fal', musicVideo: tagged }, {})).rejects.toBe(closed);
-      expect(mocks.assertRevisionOpen).toHaveBeenCalledWith('mv-1', 'mvr-1');
+      expect(mocks.assertRevisionOpen).toHaveBeenCalledWith('mv-1', 'mvr-1', { sceneId: musicVideo.sceneId, kind: 'video' });
       // The check runs immediately before enqueueJob — after staging, not before
       // it — so the race window against a concurrent cancel is as small as this
       // request can make it; a refusal there still rolls back what was staged.
