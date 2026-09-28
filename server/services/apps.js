@@ -38,7 +38,9 @@ function buildPortosApp() {
     repoPath: PATHS.root,
     type: 'express',
     uiPort: PORTS.API,
-    devUiPort: PORTS.UI,
+    // Production serves the built client from the API process; no Vite dev UI
+    // is available for the PortOS management entry.
+    devUiPort: null,
     apiPort: PORTS.API,
     tlsPort: certPresent ? PORTS.API : null,
     buildCommand: 'npm run build',

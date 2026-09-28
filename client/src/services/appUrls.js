@@ -5,9 +5,9 @@ import { PORTOS_APP_ID } from './apiCore';
  * Returns `{ https, http, dev }` — any may be null. Callers pick whichever
  * fits (tile uses the first non-null; detail view renders buttons for each).
  *
- * Self-app (`portos-default`) returns `{ http: origin }` only: the active
- * session's URL already has the correct scheme and port, so rewriting would
- * point at the wrong listener (HTTPS-only 5555 vs loopback-HTTP 5553).
+ * Self-app (`portos-default`) returns `{ http: origin, dev: null }`: the active
+ * session's URL already has the correct scheme and port, and production does
+ * not serve a separate Vite UI for the management entry.
  */
 export function getLaunchUrls(app) {
   if (!app) return { https: null, http: null, dev: null };
@@ -24,12 +24,11 @@ export function getLaunchUrls(app) {
   // that is guaranteed to fail — the https one already covers that port.
   const tlsPort = app.tlsPort || null;
   const httpPort = (port) => (port && port !== tlsPort ? port : null);
-  const devPort = httpPort(app.devUiPort);
+  const devPort = app.id === PORTOS_APP_ID ? null : httpPort(app.devUiPort);
   const dev = devPort ? `http://${hostname}:${devPort}` : null;
-  // Self-app: primary URL is the active origin (right scheme + port); dev still
-  // reflects the Vite dev server on a separate port.
+  // Self-app: primary URL is the active origin (right scheme + port).
   if (app.id === PORTOS_APP_ID) {
-    return { https: null, http: window.location.origin, dev };
+    return { https: null, http: window.location.origin, dev: null };
   }
   const uiPort = httpPort(app.uiPort);
   return {

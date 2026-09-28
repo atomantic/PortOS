@@ -465,7 +465,7 @@ describe('PortOS production process manifest', () => {
     const app = (await getAllApps()).find(({ id }) => id === PORTOS_APP_ID);
     expect(app.pm2ProcessNames).toEqual(expectedNames);
     expect(app.processes.map(({ name }) => name)).toEqual(expectedNames);
-    expect(app).toMatchObject({ uiPort: 5555, apiPort: 5555, devUiPort: 5554, startCommands: ['npm start'] });
+    expect(app).toMatchObject({ uiPort: 5555, apiPort: 5555, devUiPort: null, startCommands: ['npm start'] });
     expect(app.processes[0]).toMatchObject({ name: 'portos-server', port: 5555, ports: { api: 5555 } });
     expect(seed.pm2ProcessNames).toEqual(expectedNames);
     expect(seed.processes.map(({ name }) => name)).toEqual(expectedNames);

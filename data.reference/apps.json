@@ -8,7 +8,7 @@
       "type": "express",
       "uiPort": 5555,
       "apiPort": 5555,
-      "devUiPort": 5554,
+      "devUiPort": null,
       "buildCommand": "npm run build",
       "startCommands": [
         "npm start"
