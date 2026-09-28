@@ -32,6 +32,7 @@ import {
   musicVideoTreatmentApplySchema,
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
+  musicVideoCodeGenerateSchema,
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
   musicVideoRevisionStartSchema,
@@ -76,6 +77,8 @@ import {
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFile, analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
+import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
+import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import {
@@ -376,6 +379,28 @@ router.get('/render/:jobId/events', (req, res) => {
 router.post('/render/:jobId/cancel', (req, res) => {
   res.json({ ok: cancelRender(req.params.jobId) });
 });
+
+// Code-rendered style (#9076). Document reads build the page from stored
+// section functions and never call a provider. Generate / regenerate are the
+// only provider calls, and both require this click.
+router.get('/:id/code/document', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  if (project.composition?.mode !== 'code') {
+    throw new ServerError('Switch the render style to Code-rendered first', { status: 409, code: 'NOT_CODE_MODE' });
+  }
+  res.json(prepareCodeRender(project));
+}));
+
+router.post('/:id/code/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
+  res.json(await generateMusicVideoCode(req.params.id, body));
+}));
+
+router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
+  res.json(await regenerateMusicVideoCodeSection(req.params.id, req.params.sectionId, body));
+}));
 
 // --- Draft excerpt render (#8986) ---
 // A director-chosen [startSec, endSec) window re-rendered through the same

@@ -24,6 +24,7 @@ import {
   MUSIC_VIDEO_TYPOGRAPHY_FONTS as TYPOGRAPHY_FONTS,
   MUSIC_VIDEO_TYPOGRAPHY_PLACEMENTS as TYPOGRAPHY_PLACEMENTS,
   MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES as TYPOGRAPHY_TEMPLATES,
+  isDeterministicCodeSource,
 } from '../../lib/musicVideoValidation.js';
 
 export const COMPOSITION_VERSION = 1;
@@ -32,6 +33,27 @@ const MAX_SEC = 36000;
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const toTime = (value) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_SEC ? round3(value) : null);
 const pick = (value, allowed, fallback) => (allowed.includes(value) ? value : fallback);
+
+// Keep generated section functions across a mode switch. A source that would
+// not seek cleanly is dropped rather than stored.
+function normalizeCodeVideo(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const seen = new Set();
+  const sections = [];
+  for (const section of Array.isArray(input.sections) ? input.sections : []) {
+    if (!section || typeof section.id !== 'string' || !section.id || seen.has(section.id)) continue;
+    if (!isDeterministicCodeSource(section.source)) continue;
+    seen.add(section.id);
+    sections.push({ id: section.id, source: section.source });
+  }
+  if (!sections.length && !input.providerId && !input.model && !input.generatedAt) return null;
+  return {
+    providerId: typeof input.providerId === 'string' && input.providerId ? input.providerId.slice(0, 120) : null,
+    model: typeof input.model === 'string' && input.model ? input.model.slice(0, 200) : null,
+    generatedAt: typeof input.generatedAt === 'string' && input.generatedAt ? input.generatedAt.slice(0, 40) : null,
+    sections,
+  };
+}
 
 /**
  * Normalize a validated (or legacy/peer-supplied) manifest. Every cue persists
@@ -70,6 +92,7 @@ export function normalizeComposition(input) {
       font: pick(style.font, TYPOGRAPHY_FONTS, 'sans'),
     },
     posterSec: toTime(input.posterSec),
+    codeVideo: normalizeCodeVideo(input.codeVideo),
   };
 }
 

@@ -301,3 +301,63 @@ export function extractAnimationHtml(text) {
   const end = endMatch ? start + endMatch.index + endMatch[0].length : text.length;
   return text.slice(start, end).trim();
 }
+
+const CODE_VIDEO_RULES = `RUNTIME CONTRACT (the host already supplies this — write only the section functions):
+- globalThis.portosComposition.seek(t) covers the whole song. The page reads the inlined song.json document (the same JSON written beside index.html). You do not fetch it.
+- One function per section id: \`function render(ctx, env) { ... }\`. env is { t, localT, frame, width, height, song, palette, section, safe, karaoke }.
+- Use the shared palette (env.palette) and the safe rect (env.safe, 10% inset). Do not draw lyric text — the host paints karaoke after your function, inside the title-safe area, so every active line stays readable.
+- Karaoke, enforced by the host: a word may brighten at most 0.4s before its startSec, and the highlight never begins before startSec.
+- Determinism: no Math.random, Date.now, performance.now, getRandomValues, fetch, WebSocket, XMLHttpRequest, import, or require. Per-frame jitter must use env.frame (the integer frame index), never continuous env.t, so motion-blur sub-frames stay coherent.
+- Canvas 2D only. No external assets, fonts, or network.`;
+
+function promptSong(song) {
+  return {
+    durationSec: song.durationSec,
+    fps: song.fps,
+    sections: song.sections,
+    lyrics: (song.lyrics || []).slice(0, 400),
+    beats: (song.beats || []).slice(0, 400),
+    downbeats: (song.downbeats || []).slice(0, 200),
+  };
+}
+
+/**
+ * Music-video variant of the code-animation contract (#9076). Asks for one
+ * render function per section (or just `onlySectionId` when regenerating).
+ * The host assembles the page; the model does not return a full HTML document.
+ */
+export function buildMusicVideoCodePrompt({ title = '', palette, song, styleLines = [], onlySectionId = null }) {
+  const wanted = (song.sections || []).filter((section) => !onlySectionId || section.id === onlySectionId);
+  const brief = wanted.map((section) => `- ${section.id} [${section.startSec}s, ${section.endSec}s) ${section.label || ''}${section.lyric ? ` — lyric: ${section.lyric}` : ' — instrumental'}`).join('\n');
+  const scope = onlySectionId
+    ? `Return a function for section "${onlySectionId}" only. The host keeps every other section.`
+    : 'Return one function for every section id listed.';
+  return [
+    `You write Canvas 2D section functions for a code-rendered music video${title ? ` titled "${trimTo(title, 200)}"` : ''}. The host seeks them against the song. No footage generation.`,
+    CODE_VIDEO_RULES,
+    `PALETTE:\n${JSON.stringify(palette)}`,
+    styleLines.length ? `STYLE SOURCE:\n${styleLines.join('\n')}` : '',
+    `SONG (song.json):\n${JSON.stringify(promptSong(song))}`,
+    `SECTIONS:\n${brief}`,
+    scope,
+    'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML document, no explanation.',
+  ].filter(Boolean).join('\n\n');
+}
+
+/** Pull `{ sections: [{ id, source }] }` out of a model response. `[]` when absent. */
+export function extractCodeSections(text) {
+  if (!isNonBlankStr(text)) return [];
+  const fences = [...text.matchAll(/```(?:json)?[^\n]*\n([\s\S]*?)```/gi)].map((match) => match[1]);
+  const candidates = fences.length ? fences : [text];
+  for (const candidate of candidates) {
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start < 0 || end <= start) continue;
+    try {
+      const parsed = JSON.parse(candidate.slice(start, end + 1));
+      if (!Array.isArray(parsed?.sections)) continue;
+      return parsed.sections.filter((section) => section && typeof section.id === 'string' && typeof section.source === 'string');
+    } catch { /* the next fence may be the document */ }
+  }
+  return [];
+}

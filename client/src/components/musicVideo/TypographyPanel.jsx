@@ -1,4 +1,5 @@
 import { Copy, Plus, Trash2 } from 'lucide-react';
+import { compositionDraft, RENDER_STYLES, renderStyleLabel } from './compositionDraft.js';
 
 // Client-minted ids keep a freshly added row addressable across saves (see LyricsPanel).
 const mintId = () => `mtc-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -11,8 +12,6 @@ const PLACEMENTS = [['lower', 'Lower'], ['center', 'Center'], ['upper', 'Upper']
 const EMPHASES = [['subtitle', 'Subtitle'], ['hero', 'Hero']];
 const FONTS = [['sans', 'Sans'], ['serif', 'Serif'], ['mono', 'Mono']];
 
-const EMPTY = { version: 1, mode: 'concat', textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null };
-
 /**
  * Composition manifest editor (#8984): switch the final render between plain
  * cuts and a composed render that lays these timed text cues over the footage
@@ -22,9 +21,10 @@ const EMPTY = { version: 1, mode: 'concat', textCues: [], style: { color: '#ffff
  * the whole manifest (like the lyric lists).
  */
 export default function TypographyPanel({ project, onEditLocal, onSave }) {
-  const composition = { ...EMPTY, ...(project.composition || {}), style: { ...EMPTY.style, ...(project.composition?.style || {}) } };
+  const composition = compositionDraft(project);
   const cues = composition.textCues || [];
   const composed = composition.mode === 'composed';
+  const codeMode = composition.mode === 'code';
   const timedLyrics = (project.lyricCues || []).filter((c) => typeof c.startSec === 'number' && typeof c.endSec === 'number');
 
   const edit = (patch) => onEditLocal({ composition: { ...composition, ...patch } });
@@ -41,16 +41,15 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
   return (
     <details className="mt-2 bg-port-bg border border-port-border rounded-lg p-2 text-xs">
       <summary className="cursor-pointer select-none text-port-text-muted">
-        Typography — {composed ? 'composed render' : 'plain cuts'} · {cues.length} text cue{cues.length === 1 ? '' : 's'}
+        Typography — {renderStyleLabel(composition.mode)} · {cues.length} text cue{cues.length === 1 ? '' : 's'}
         <span className="block sm:inline sm:ml-1">— timed text laid over the footage, kept inside the title-safe area.</span>
       </summary>
 
       <div className="mt-2 flex flex-wrap items-end gap-2">
         <div>
-          <label htmlFor="mv-typo-mode" className="block text-port-text-muted mb-0.5">Final render</label>
+          <label htmlFor="mv-typo-mode" className="block text-port-text-muted mb-0.5">Render style</label>
           <select id="mv-typo-mode" value={composition.mode} onChange={(e) => replace({ mode: e.target.value })} className={inputCls}>
-            <option value="concat">Plain cuts</option>
-            <option value="composed">Composed with typography</option>
+            {RENDER_STYLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </div>
         <div>
@@ -82,6 +81,7 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
       </div>
 
       {composed && cues.length === 0 && <p className="mt-2 text-port-text-muted">No text cues yet — a composed render with none renders as plain cuts.</p>}
+      {codeMode && <p className="mt-2 text-port-text-muted">Code-rendered draws the song in code. Text cues stay stored and come back if you switch to Composed.</p>}
       <div className="mt-2 max-h-72 overflow-y-auto space-y-1 pr-1">
         {cues.map((cue, i) => (
           <div key={cue.id} className="flex flex-wrap items-center gap-1">

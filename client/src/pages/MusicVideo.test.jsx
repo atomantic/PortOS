@@ -82,6 +82,9 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   startMusicVideoRevision: vi.fn(),
   resumeMusicVideoRevision: vi.fn(),
   cancelMusicVideoRevision: vi.fn(),
+  getMusicVideoCodeDocument: vi.fn(async () => ({ html: '<!doctype html><html><body></body></html>', durationSec: 2, fps: 24, width: 1280, height: 720, song: { sections: [] }, timeline: { sections: [] } })),
+  generateMusicVideoCode: vi.fn(),
+  regenerateMusicVideoCodeSection: vi.fn(),
 }));
 vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn(), listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
@@ -1053,7 +1056,7 @@ describe('MusicVideo typography composition (#8984)', () => {
       composition: expect.objectContaining({ mode: 'concat', textCues: [expect.objectContaining({ text: 'first line', startSec: 1, endSec: 3, template: 'fade' })] }),
     }, { silent: true }));
 
-    fireEvent.change(screen.getByLabelText('Final render'), { target: { value: 'composed' } });
+    fireEvent.change(document.getElementById('mv-typo-mode'), { target: { value: 'composed' } });
     fireEvent.change(screen.getByLabelText('Text cue 1 motion'), { target: { value: 'typewriter' } });
     fireEvent.change(text, { target: { value: 'first line, typed' } });
     fireEvent.blur(text);

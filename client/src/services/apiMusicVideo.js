@@ -141,6 +141,14 @@ export const cancelMusicVideoMidiTranscription = (jobId, options = {}) =>
 // the SSE URL below (subscribe with useSseProgress). cancel stops an in-flight job.
 export const renderMusicVideoProject = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/render`, { method: 'POST', ...options });
+export const getMusicVideoCodeDocument = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/code/document`, options);
+export const generateMusicVideoCode = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/code/generate`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const regenerateMusicVideoCodeSection = (id, sectionId, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/code/sections/${encodeURIComponent(sectionId)}/regenerate`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
 
 // EventSource URL for a render job's progress stream (consumed by useSseProgress).
 export const musicVideoRenderEventsUrl = (jobId) =>
