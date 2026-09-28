@@ -89,6 +89,23 @@ const redactExternalTokens = (settings) => {
     const { token, ...rest } = next.beeper;
     next.beeper = rest;
   }
+  // fal.ai / reactor.inc video keys (#8997) — same write-only posture, but
+  // nested one level deeper (`videoGen.fal.apiKey` / `videoGen.reactor.apiKey`),
+  // since `hydratePrivateKeys` re-injects them into `settings.videoGen` on
+  // every read (privateKeyStore.js). The Settings UI reads only presence, via
+  // GET /api/settings/credentials.
+  if (isPlainObject(next.videoGen)) {
+    const videoGen = { ...next.videoGen };
+    if (isPlainObject(videoGen.fal)) {
+      const { apiKey, ...rest } = videoGen.fal;
+      videoGen.fal = rest;
+    }
+    if (isPlainObject(videoGen.reactor)) {
+      const { apiKey, ...rest } = videoGen.reactor;
+      videoGen.reactor = rest;
+    }
+    next.videoGen = videoGen;
+  }
   return next;
 };
 
@@ -124,9 +141,23 @@ const preserveExternallyOwnedKeys = (next, current) => {
     }
     next[parentKey] = { ...incoming, [childKey]: stored };
   };
+  // Same carryOver contract, one level deeper — for `videoGen.fal.apiKey` /
+  // `videoGen.reactor.apiKey` (#8997), which live under a grandchild key
+  // rather than a direct child of the top-level slice.
+  const carryOverNested = (parentKey, childKey, grandchildKey) => {
+    const incomingParent = next[parentKey];
+    if (!isPlainObject(incomingParent)) return;
+    const incoming = incomingParent[childKey];
+    const stored = current?.[parentKey]?.[childKey]?.[grandchildKey];
+    if (!isPlainObject(incoming) || grandchildKey in incoming) return;
+    if (stored === undefined) return;
+    next[parentKey] = { ...incomingParent, [childKey]: { ...incoming, [grandchildKey]: stored } };
+  };
   carryOver('imageGen', 'hfToken');
   carryOver('civitai', 'apiKey');
   carryOver('videoGen', 'acceptedModelTerms', { alwaysStored: true });
+  carryOverNested('videoGen', 'fal', 'apiKey');
+  carryOverNested('videoGen', 'reactor', 'apiKey');
   // beeperSettingsSchema is `.strict()` with no `token`/`tokenExpiresAt`
   // field, so a valid `beeper` PUT through this route can never carry either
   // — without this, the generic top-level shallow merge (`{ ...current,
