@@ -251,10 +251,11 @@ export async function updateService(ref, input) {
  * (OpenCode Zen `free` keeps only `*-free`). Then `nextConnectionCatalog`'s
  * contract holds unchanged: a failure keeps what was known with a sanitized
  * reason, a successful empty answer is `known` and empty. No pin, default or
- * route model list is touched.
+ * default is changed. Derived model lists follow the refreshed catalog; only
+ * an explicit preset refresh (`resetPresetId`) clears that preset's narrowing.
  */
 export function refreshServiceCatalog(ref, deps = {}) {
-  const { env, probe, harnessModels, routeModels, now } = { ...defaultDeps(), ...deps };
+  const { env, probe, harnessModels, routeModels, now, resetPresetId = null } = { ...defaultDeps(), ...deps };
   return serializeProviderGraph(async () => {
     requireProviderGraph();
     const [graph, envFile] = await Promise.all([readGraph(), loadInstallEnvFile()]);
@@ -275,7 +276,9 @@ export function refreshServiceCatalog(ref, deps = {}) {
     const revision = await saveConnectionSettings({ ...connection, catalog });
     // A derived preset's `models` is this catalog narrowed (#7565): a listing
     // that changed reaches every preset on the instance in the same request.
-    await rematerializeDerivedPresets({ ...connection, catalog, revision: revision ?? connection.revision });
+    await rematerializeDerivedPresets({ ...connection, catalog, revision: revision ?? connection.revision }, {
+      resetPresetId: outcome.refreshed ? resetPresetId : null,
+    });
 
     console.log(`🔗 Refreshed service ${connection.slug ?? connection.id} catalog via ${definition.catalog.strategy}: `
       + `${catalog.state}, ${catalog.models.length} models`);

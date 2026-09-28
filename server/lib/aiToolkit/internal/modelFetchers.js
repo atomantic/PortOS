@@ -150,6 +150,7 @@ export const MODEL_FETCHERS = [
     // `claude` owns `~/.claude` — widening this is a separate call from
     // widening the vendors that probe their own CLI.
     cliMatch: (p) => p?.command === 'claude' && !usesThirdPartyBackend(p),
+    tuiMatch: (p) => p?.command === 'claude' && !usesThirdPartyBackend(p),
     cliNameMatch: (p) => displayName(p).includes('claude') && !usesThirdPartyBackend(p),
     fetch: '_fetchAnthropicModels',
   },

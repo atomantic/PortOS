@@ -1340,14 +1340,14 @@ describe('Provider Service', () => {
     });
 
     it('reports a non-ollama-backed TUI provider as unsupported, not as missing', async () => {
-      // A plain claude TUI provider has no Ollama backing and no catalog to
-      // fetch. It must say THAT — not fall out as null and get rendered as
+      // An unknown TUI provider has no catalog to fetch. It must say THAT,
+      // not fall out as null and get rendered as
       // "Provider not found", which is false: it exists and its type is fine.
       const p = await providerService.createProvider({
-        name: 'Claude Code TUI',
+        name: 'Example TUI',
         type: 'tui',
-        command: 'claude',
-        models: ['claude-opus-4-8'],
+        command: 'example-tui',
+        models: ['example-model'],
       });
 
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -1359,7 +1359,7 @@ describe('Provider Service', () => {
       expect(err.status).toBe(400);
       // The configured list is untouched.
       const after = await providerService.getProviderById(p.id);
-      expect(after.models).toEqual(['claude-opus-4-8']);
+      expect(after.models).toEqual(['example-model']);
     });
 
     it('returns null only for a provider that does not exist', async () => {
@@ -1622,7 +1622,7 @@ describe('Provider Service', () => {
       PATH: `${binDir}${delimiter}${process.env.PATH || ''}`,
     });
 
-    it.skipIf(process.platform === 'win32')('refreshes a claude-commanded provider from the cached catalog, not the antigravity sentinel', async () => {
+    it.skipIf(process.platform === 'win32').each(['cli', 'tui'])('refreshes a claude %s provider from the cached catalog', async (type) => {
       const configDir = await writeClaudeCatalog([
         { id: 'fixture-alpha', name: 'fixture-alpha', section: 'main' },
         { id: 'fixture-beta', name: 'fixture-beta', section: 'main' },
@@ -1630,7 +1630,7 @@ describe('Provider Service', () => {
       const binDir = await writeFakeClaude('2.1.280 (Claude Code)');
       const p = await providerService.createProvider({
         name: 'Claude via Antigravity',
-        type: 'cli',
+        type,
         command: 'claude',
         models: ['x'],
         envVars: claudeEnv(configDir, binDir),

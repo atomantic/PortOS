@@ -1212,7 +1212,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
       // probe onto the record alone leaves that catalog stale, so the next
       // derivation discards what was found — refresh the service instead, which
       // re-derives every preset on it.
-      const { service } = await refreshServiceCatalog(stored.serviceId);
+      const { service } = await refreshServiceCatalog(stored.serviceId, { resetPresetId: stored.id });
       if (service.catalog?.state === 'failed') {
         throw new ServerError(service.catalog.error || 'The service could not list its models; its catalog was preserved.', { status: 502 });
       }
