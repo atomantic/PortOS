@@ -310,8 +310,8 @@ export function applyProjectPatch(project, patch) {
   // The MIDI transcription was produced from the OLD audio too — clear it with
   // the analysis so a stale .mid can't masquerade as the new track's score.
   // Lyric-cue and phrase timings were aligned to the OLD audio as well: keep the
-  // director's text but clear the times (#8964), unless this same patch supplied
-  // fresh lists of its own.
+  // director's text but clear the times and word timings (#8964, #9074), unless
+  // this same patch supplied fresh lists of its own.
   return touch(project, {
     ...invalidateTimedText(project),
     // Composition cue times and the poster frame were set against the old
