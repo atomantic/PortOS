@@ -65,4 +65,28 @@ describe('model comparison seed scope', () => {
     }
   });
 
+  it('ships Claude Sonnet 5.5 benchmark performance, pricing, and coding data', async () => {
+    const seed = await readSeed();
+    const rows = seed.observations.filter(row => row.model === 'claude-sonnet-5.5');
+    expect(rows.length).toBeGreaterThanOrEqual(10);
+
+    const aaRows = rows.filter(row => row.benchmark === 'Artificial Analysis Intelligence Index v4.3.2');
+    const efforts = new Set(aaRows.map(row => row.effort));
+    expect(efforts).toEqual(new Set(['low', 'medium', 'high', 'xhigh', 'max']));
+
+    const maxRow = aaRows.find(row => row.effort === 'max' && row.provider === 'Anthropic' && row.id.startsWith('aa-v4.3.2'));
+    expect(maxRow.quality.value).toBe(56);
+    expect(maxRow.costPerTask.value).toBe(7.6);
+    expect(maxRow.inputPerMillion.value).toBe(2);
+    expect(maxRow.outputPerMillion.value).toBe(10);
+    expect(maxRow.tokensPerSecond.value).toBe(141.9);
+
+    const codingRow = rows.find(row => row.benchmark.includes('Terminal-Bench 4.0'));
+    expect(codingRow).toBeDefined();
+    expect(codingRow.quality.value).toBe(63.6);
+
+    const pricing = rows.filter(row => row.benchmark.startsWith('Official API pricing'));
+    expect(pricing.length).toBeGreaterThanOrEqual(2);
+  });
+
 });
