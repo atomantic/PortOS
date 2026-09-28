@@ -92,14 +92,20 @@
         "--print"
       ],
       "models": [
-        "claude-fable-5-1",
-        "claude-haiku-4-5",
-        "claude-sonnet-5",
         "claude-opus-5-5",
-        "claude-opus-5"
+        "claude-fable-5-1",
+        "claude-sonnet-5-5",
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6"
       ],
       "defaultModel": "claude-opus-5-5",
-      "lightModel": "claude-haiku-4-5",
+      "lightModel": "claude-haiku-4-5-20251001",
       "mediumModel": "claude-sonnet-5",
       "heavyModel": "claude-opus-5-5",
       "ultraModel": "claude-fable-5-1",
@@ -897,14 +903,20 @@
         "--dangerously-skip-permissions"
       ],
       "models": [
-        "claude-fable-5-1",
-        "claude-haiku-4-5",
-        "claude-sonnet-5",
         "claude-opus-5-5",
-        "claude-opus-5"
+        "claude-fable-5-1",
+        "claude-sonnet-5-5",
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6"
       ],
       "defaultModel": "claude-opus-5-5",
-      "lightModel": "claude-haiku-4-5",
+      "lightModel": "claude-haiku-4-5-20251001",
       "mediumModel": "claude-sonnet-5",
       "heavyModel": "claude-opus-5-5",
       "ultraModel": "claude-fable-5-1",
