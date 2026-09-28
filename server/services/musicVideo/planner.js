@@ -1,3 +1,4 @@
+import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 /**
  * Music Video — autonomous shot planner (#1855; multi-shot + lyrics #8964).
  *
@@ -123,6 +124,7 @@ export function buildScenePlanPrompt(project, shots) {
   return `You are directing a music video for "${project.name}".
 ${conceptLine}
 ${styleLine}
+${musicVideoCreativeContext(concept)}
 ${briefLines}
 
 The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent):

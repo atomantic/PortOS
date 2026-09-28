@@ -218,7 +218,13 @@ describe('buildScenePlanPrompt', () => {
       lyricCues: [{ text: 'we run the night', startSec: 10, endSec: 14 }],
       phrases: [{ label: 'Lift', startSec: 18, endSec: 30, intent: 'the city falls away' }],
     });
-    const prompt = buildScenePlanPrompt(makeProject(), shots);
+    const prompt = buildScenePlanPrompt(makeProject({ concept: {
+      prompt: 'cyberpunk chase', style: 'neon, rain-slicked streets', universeStyle: 'Ink silhouettes', moodBoardStyle: 'Watercolor',
+      subjects: [{ id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' }],
+    } }), shots);
+    expect(prompt).toContain('Universe style: Ink silhouettes');
+    expect(prompt).toContain('Mood board style: Watercolor');
+    expect(prompt).toContain('character (protagonist): Example singer — Silver coat');
     expect(prompt).toContain('Neon Nights');
     expect(prompt).toContain('cyberpunk chase');
     expect(prompt).toContain('neon, rain-slicked streets');

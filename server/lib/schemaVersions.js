@@ -602,7 +602,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // and submits performance scenes to a cutaway-only lane — edits that then win
   // LWW onto the upgraded peer. Pre-#8977 records need no rewrite (absent
   // `shotMode` = cutaway; takes without an instruction render as before).
-  musicVideoProjects: 4,
+  // v5 = authored universe style and cast/place/object snapshots in concept.
+  // Older peers ignore these when generating, losing character continuity.
+  musicVideoProjects: 5,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

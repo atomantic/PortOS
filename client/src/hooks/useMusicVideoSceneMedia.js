@@ -1,3 +1,4 @@
+import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
 import toast from '../components/ui/Toast';
 import { addMusicVideoSceneTake } from '../services/apiMusicVideo.js';
 import { generateImage } from '../services/apiSystem.js';
@@ -106,7 +107,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const genVideoScenes = videoLane.genScenes;
 
   const style = project?.concept?.style?.trim();
-  const direction = visualDirection(project?.visualSpec);
+  const direction = [musicVideoCreativeContext(project?.concept), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
   const conditioning = conditioningReferences(project?.visualSpec);
   // The image prompt for a scene's reference frame: its frame prompt (or the
   // shot prompt as a fallback) suffixed with the project's global concept style

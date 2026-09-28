@@ -761,3 +761,6 @@ export * from './databaseAuthority.js';
 export * from './databaseMaintenanceJournal.js';
 
 export * from './databaseWriterRegistry.js';
+
+export * from './musicVideoCreativeContext.js';
+export * from './moodBoardStyleContext.js';

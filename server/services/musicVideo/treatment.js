@@ -316,10 +316,10 @@ export function treatmentBasis(project) {
     analysis: fingerprint(analysis
       ? [analysis.durationSec ?? null, (analysis.sections || []).map((s) => [s?.startSec ?? null, s?.endSec ?? null, s?.energy ?? null])]
       : null),
-    visualSpec: fingerprint(spec ? [
+    visualSpec: fingerprint([project?.concept || null, spec ? [
       (spec.references || []).map((r) => [r.imageId, r.role || 'mood', r.use || 'reference', r.label || '', r.note || '']),
       spec.palette || [], spec.typography || '', spec.cameraRules || '',
-    ] : null),
+    ] : null]),
     lyrics: fingerprint((project?.lyricCues || []).map((c) => [c.text, c.startSec ?? null, c.endSec ?? null])),
     scenes: fingerprint((project?.scenes || []).map((s) => [s.sceneId, s.startSec ?? null, s.endSec ?? null])),
   };

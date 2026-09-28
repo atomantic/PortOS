@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react';
 import { ImagePlus, Trash2, Plus, Palette, Sparkles } from 'lucide-react';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
-import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
 import { MAX_CONDITIONING_REFERENCES } from '../../hooks/useMusicVideoSceneMedia.js';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
 import { pullUniverseCanonReferences } from '../../lib/musicVideoUniverseRefs.js';
@@ -189,11 +188,7 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
           </div>
         </div>
 
-        <MoodBoardReferenceStrip
-          value={spec.moodBoardId || ''}
-          onChange={(id) => onSave({ moodBoardId: id || null })}
-          newBoardName={project.name}
-        />
+
       </div>
     </details>
   );

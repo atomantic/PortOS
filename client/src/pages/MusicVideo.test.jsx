@@ -1455,6 +1455,20 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     scenes: [{ sceneId: 's1', order: 0, prompt: 'waves', framePrompt: 'harbor at dawn', referenceImageId: null, videoHistoryId: null, takes: [] }],
   };
 
+  it('carries authored character identity and source styles into actual frame requests', async () => {
+    await openProject({ ...SPEC_PROJECT, concept: { ...SPEC_PROJECT.concept,
+      universeStyle: 'Ink silhouettes', moodBoardStyle: 'Watercolor', subjects: [
+        { id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' },
+      ],
+    } });
+    fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining('character (protagonist): Example singer — Silver coat'),
+    }), { silent: true }));
+    expect(generateImage.mock.calls[0][0].prompt).toContain('Mood board style: Watercolor');
+    expect(generateImage.mock.calls[0][0].prompt).toContain('Universe style: Ink silhouettes');
+  });
+
   it('sends flagged references as conditioning inputs and names the capability gap when the backend refuses them', async () => {
     generateImage.mockRejectedValueOnce(Object.assign(
       new Error('Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend'),

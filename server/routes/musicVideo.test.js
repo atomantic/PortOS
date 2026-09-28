@@ -159,6 +159,20 @@ describe('musicVideo routes', () => {
     expect(svc.cloneProject).not.toHaveBeenCalled();
   });
 
+  it('PATCH /:id validates an image-free production bible and bounds its subjects', async () => {
+    const concept = { universeId: 'u1', universeStyle: 'Ink silhouettes', moodBoardStyle: 'Watercolor', subjects: [
+      { id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' },
+      { id: 'place', kind: 'place', name: 'Example stage' },
+    ] };
+    const saved = await request(app).patch('/api/music-video/mv-1').send({ concept });
+    expect(saved.status).toBe(200);
+    expect(saved.body.concept).toEqual(concept);
+    const rejected = await request(app).patch('/api/music-video/mv-1').send({ concept: { subjects: Array(25).fill(concept.subjects[0]) } });
+    expect(rejected.status).toBe(400);
+    const invalidKind = await request(app).patch('/api/music-video/mv-1').send({ concept: { subjects: [{ ...concept.subjects[0], kind: 'unknown' }] } });
+    expect(invalidKind.status).toBe(400);
+  });
+
   it('PATCH /:id updates', async () => {
     const r = await request(app).patch('/api/music-video/mv-1').send({ name: 'Renamed' });
     expect(r.status).toBe(200);
