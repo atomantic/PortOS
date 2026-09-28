@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { findFfmpeg, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
+import { findFfmpeg, probeVideoDuration, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { loadHistory } from '../videoGen/history.js';
 import { videoGenEvents } from '../videoGen/events.js';
@@ -368,4 +368,99 @@ globalThis.portosComposition = { durationSec:1, fps:12, width:1280, height:720, 
     finally { videoGenEvents.off('progress', onProgress); await closed; }
     expect((await readdir(PATHS.videos)).some(name => name.includes(input.jobId))).toBe(false);
   });
+
+  const pcmOf = (path, extra = []) => execFileSync(ffmpeg, ['-v', 'error', ...extra, '-i', path, '-vn', '-f', 'f32le', '-ac', '1', '-ar', '48000', '-'], { maxBuffer: 64 * 1024 * 1024 });
+  const rms = (pcm, startSec, endSec) => {
+    const from = Math.floor(startSec * 48000);
+    const to = Math.min(pcm.length / 4, Math.floor(endSec * 48000));
+    let sum = 0;
+    for (let n = from; n < to; n++) sum += pcm.readFloatLE(n * 4) ** 2;
+    return Math.sqrt(sum / Math.max(1, to - from));
+  };
+
+  it('reads song.json inside the sandbox and treats a missing feature block as null', async () => {
+    const html = `<!doctype html><html><body style="margin:0"><script>
+      globalThis.portosComposition = { durationSec: 1, fps: 12, width: 1280, height: 720,
+        async seek() {
+          const song = await (await fetch('song.json')).json();
+          const ok = song.features === null && !Array.isArray(song.features) && song.beats[0] === 0 && song.words[0].w === 'go';
+          document.body.style.background = ok ? 'rgb(0,255,0)' : 'rgb(255,0,0)';
+        } };
+    </script></body></html>`;
+    const input = await composition(html);
+    await mkdir(PATHS.music, { recursive: true });
+    const master = join(PATHS.music, 'song-null-features.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-y', master]);
+    const result = await renderComposition({
+      ...input, owner: 'music-video', audio: { path: master, startSec: 0 }, maxDurationSec: 180,
+      song: { beats: [0], downbeats: [0], sections: [], features: [], words: [{ w: 'go', startSec: 0, endSec: 0.4, conf: 'matched' }] },
+    });
+    const pixel = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, result.filename), '-frames:v', '1', '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    expect(pixel[1]).toBeGreaterThan(200);
+    expect(pixel[0]).toBeLessThan(40);
+    expect(existsSync(join(PATHS.data, input.directory, 'song.json'))).toBe(false);
+  }, 30000);
+
+  it('renders a 180s song without looping or fading the master', async () => {
+    const html = `<!doctype html><html><body style="margin:0"><script>
+      globalThis.portosComposition = { durationSec: 180, fps: 12, width: 1280, height: 720, async seek() {} };
+    </script></body></html>`;
+    const input = await composition(html);
+    await mkdir(PATHS.music, { recursive: true });
+    const master = join(PATHS.music, 'song-180.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=180', '-y', master]);
+    const frames = [];
+    const onProgress = (event) => { if (event.generationId === input.jobId) frames.push(event); };
+    videoGenEvents.on('progress', onProgress);
+    let result;
+    try { result = await renderComposition({ ...input, owner: 'music-video', audio: { path: master, startSec: 0 }, maxDurationSec: 180, song: { beats: [], features: null, words: null } }); }
+    finally { videoGenEvents.off('progress', onProgress); }
+    const output = join(PATHS.videos, result.filename);
+    expect(await probeVideoStreamInfo(output)).toMatchObject({ frameCount: 180 * 12 });
+    expect(Math.abs(await probeVideoDuration(output) - 180)).toBeLessThanOrEqual(1 / 12);
+    const audio = pcmOf(output);
+    expect(Math.abs(audio.length / 4 / 48000 - 180)).toBeLessThanOrEqual(1 / 12);
+    expect(rms(audio, 179.85, 179.98)).toBeGreaterThan(rms(audio, 20, 20.5) * 0.5);
+    expect(frames.some((event) => event.step > 0 && event.totalSteps === 2160 && event.etaMs > 0 && /Rendering frame \d+\/2160/.test(event.message))).toBe(true);
+  }, 300000);
+
+  it('muxes a 60–75s excerpt aligned to that range of the master', async () => {
+    const html = `<!doctype html><html><body style="margin:0"><script>
+      globalThis.portosComposition = { durationSec: 15, fps: 12, width: 1280, height: 720, async seek() {} };
+    </script></body></html>`;
+    const input = await composition(html);
+    await mkdir(PATHS.music, { recursive: true });
+    const master = join(PATHS.music, 'song-excerpt.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=60', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=15', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=105', '-filter_complex', '[0][1][2]concat=n=3:v=0:a=1', '-y', master]);
+    const result = await renderComposition({
+      ...input, owner: 'music-video', audio: { path: master, startSec: 60 }, maxDurationSec: 180, song: { features: null },
+    });
+    const output = pcmOf(join(PATHS.videos, result.filename));
+    const reference = pcmOf(master, ['-ss', '60', '-t', '15']);
+    const opening = pcmOf(master, ['-ss', '0', '-t', '15']);
+    const frameSamples = Math.round(48000 / 12);
+    const samples = (buf) => buf.length / 4;
+    const scoreAgainst = (other, lag) => {
+      let sum = 0;
+      let count = 0;
+      const nOut = samples(output);
+      const nOther = samples(other);
+      for (let n = 0; n < nOut; n += 8) {
+        const m = n + lag;
+        if (m < 0 || m >= nOther) continue;
+        sum += output.readFloatLE(n * 4) * other.readFloatLE(m * 4);
+        count += 1;
+      }
+      return count ? sum / count : 0;
+    };
+    let bestLag = 0;
+    let best = -Infinity;
+    for (let lag = -frameSamples; lag <= frameSamples; lag += 40) {
+      const value = scoreAgainst(reference, lag);
+      if (value > best) { best = value; bestLag = lag; }
+    }
+    expect(Math.abs(bestLag)).toBeLessThanOrEqual(frameSamples);
+    expect(best).toBeGreaterThan(Math.abs(scoreAgainst(opening, 0)) * 4);
+    expect(await probeVideoStreamInfo(join(PATHS.videos, result.filename))).toMatchObject({ frameCount: 15 * 12 });
+  }, 60000);
 });

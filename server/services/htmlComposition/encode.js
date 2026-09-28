@@ -20,13 +20,17 @@ async function frameFormat(page, { width, height, layout }) {
 
 // Stream one frame at a time. The write callback supplies back-pressure and
 // the terminal race releases a pending write on exit, disconnect or cancel.
-export async function encodeComposition(page, contract, outputPath, { musicPath, signal, onProgress } = {}) {
-  const ffmpeg = await findFfmpeg();
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+  const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
-  const tag = await bt709TagFilter();
+  const tag = await tagFilter();
   signal?.throwIfAborted();
   const { fps, durationSec, width, height, motionBlur } = contract;
   const numFrames = Math.round(durationSec * fps);
+  // Music-video masters are cut once (`-ss` / `-t`) and muxed whole. Library
+  // beds keep the launch-video loop and half-second tail fade.
+  const exactAudio = audio?.path ? audio : null;
+  if (exactAudio && musicPath) throw new Error('Music-video audio replaces library music');
   // Integer motionBlur (1-4) captures that many subframes per output frame and
   // lets ffmpeg's tmix filter blend them; 1 (default) captures/encodes exactly
   // as before, byte for byte. The object form (#9077) blends in Node instead
@@ -39,11 +43,13 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   await frameFormat(page, contract);
   const input = shutter ? ['-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${width}x${height}`] : ['-f', 'image2pipe', '-vcodec', 'png'];
   const args = ['-hide_banner', '-loglevel', 'error', ...input, '-framerate', String(fps * sub), '-i', 'pipe:0'];
-  if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
+  if (exactAudio) args.push('-ss', String(exactAudio.startSec ?? 0), '-t', String(durationSec), '-i', exactAudio.path);
+  else if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
   args.push('-map', '0:v', '-vf', [motionBlurFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
-  if (musicPath) args.push('-map', '1:a', '-af', `atrim=duration=${durationSec},asetpts=PTS-STARTPTS,afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
+  if (exactAudio) args.push('-map', '1:a', ...AAC_ENCODE_ARGS);
+  else if (musicPath) args.push('-map', '1:a', '-af', `atrim=duration=${durationSec},asetpts=PTS-STARTPTS,afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
   args.push('-frames:v', String(numFrames), '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath);
-  const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
+  const proc = spawnProcess(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
   let stderr = '';
   let exited = false;
   let stopping = false;
@@ -55,6 +61,15 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   });
   // Attach a rejection handler before the first browser round trip.
   finished.catch(() => {});
+  // One watcher for the whole job. A per-frame `.then` on `finished` piles up
+  // handlers for a song-length capture (600s at 12fps is 7200 of them).
+  let failEncoder;
+  const encoderStopped = new Promise((_, reject) => { failEncoder = reject; });
+  encoderStopped.catch(() => {});
+  finished.then(
+    () => failEncoder(new Error('ffmpeg exited before capture completed')),
+    (error) => failEncoder(error),
+  );
   const stop = () => {
     if (!exited && !stopping) {
       stopping = true;
@@ -73,7 +88,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   };
   const write = bytes => Promise.race([
     new Promise((resolve, reject) => proc.stdin.write(bytes, error => error ? reject(error) : resolve())),
-    finished.then(() => { throw new Error('ffmpeg exited before capture completed'); }),
+    encoderStopped,
   ]);
   const toRgb = png => sharp(png).removeAlpha().raw().toBuffer();
   // Output frames per sub-frame count: where a shutter render spent its time.
@@ -102,7 +117,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
       } else {
         for (let k = 0; k < sub; k++) await write(await capture(n / fps + k / (fps * sub)));
       }
-      onProgress?.((n + 1) / numFrames);
+      onProgress?.((n + 1) / numFrames, { frame: n + 1, frames: numFrames });
     }
     proc.stdin.end();
     await finished;

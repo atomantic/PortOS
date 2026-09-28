@@ -38,7 +38,7 @@ import { getProject, listProjects, updateProject, mutateProjectRecord } from './
 import { applyProjectPatch } from './projectsLogic.js';
 import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { renderableCues, sectionCardCues } from './composition.js';
-import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
+import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch, renderSongComposition } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { findStalePerformanceTakes } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
@@ -596,7 +596,31 @@ export async function planMusicVideoRender(project) {
   return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed };
 }
 
-export async function renderMusicVideo(projectId) {
+// Code compositions are not the footage concat below. The caller names the
+// composition directory; excerpts pass the master's in-point as startSec.
+async function renderMusicVideoCode(projectId, { codeDirectory, startSec = 0 }) {
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const existingJob = projectRenders.get(projectId);
+  if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
+    throw new ServerError('Render already in progress for this project', {
+      status: 409, code: 'RENDER_IN_PROGRESS', context: { jobId: existingJob === PENDING ? null : existingJob },
+    });
+  }
+  projectRenders.set(projectId, PENDING);
+  const jobId = randomUUID();
+  try {
+    const audioPath = await resolveMasterAudioPath(project);
+    return await renderSongComposition({ project, directory: codeDirectory, jobId, audioPath, startSec });
+  } finally {
+    if (projectRenders.get(projectId) === PENDING) projectRenders.delete(projectId);
+  }
+}
+
+export async function renderMusicVideo(projectId, options = {}) {
+  if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
+    return renderMusicVideoCode(projectId, options);
+  }
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
 
