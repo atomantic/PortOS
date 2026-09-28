@@ -594,7 +594,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'better-runtime-safety': 'Runtime safety — missing awaits, unhandled rejections, unguarded nulls, leaks, races; file issues (default) or implement fixes',
   'better-dependency-freedom': 'Dependency freedom — replace micro-packages and native-API wrappers with in-repo code; file issues (default) or implement one removal',
   'better-test-quality': 'Test quality — vacuous, weak, or redundant tests; file issues (default) or implement one cleanup',
-  'better-dev-environment': 'Development environment — temp files/processes leaked by test runs, writes outside the sandbox, watcher cost, suite runtime, setup drift; file issues (default) or implement one fix',
+  'better-dev-environment': 'Development environment — temp files/processes leaked by test runs, writes outside the sandbox, watcher cost, suite runtime; file issues (default) or implement one fix',
   'infrastructure': 'Infrastructure & deployment — IaC, containers, orchestration and CI: exposure, identity grants, secrets, pinning, limits; file issues (default) or implement fixes',
   'data-integrity': 'Data integrity — idempotent ingestion, atomic writes, consistency, schema evolution of stored data; file issues (default) or implement fixes',
   'reliability': 'Reliability — graceful shutdown, health/readiness, backpressure, job leasing, mixed-version deploys; file issues (default) or implement fixes',

@@ -482,7 +482,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
   'better-dev-environment': {
     quotaBurnId: null,
     label: 'Development environment',
-    description: 'Dev-loop host-impact audit (leaked temp files and processes, writes outside the sandbox, watcher and idle cost, suite runtime, setup drift) — configurable: file issues (default) or implement one fix',
+    description: 'Dev-loop host-impact audit (leaked temp files and processes, writes outside the sandbox, watcher and idle cost, suite runtime) — configurable: file issues (default) or implement one fix',
     defaultFileIssues: true,
     filing: filing({
       slugPrefix: 'dev-environment-',

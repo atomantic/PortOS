@@ -1665,7 +1665,7 @@ cover, and the probe result.`,
   'better-dev-environment': `[Improvement: {appName}] Development environment audit
 
 Audit what {appName}'s development loop does to the machine it runs on: the test
-suites, dev server, watchers, setup scripts and pre-push checks. The product can
+suites, dev server, watchers and pre-push checks. The product can
 be correct and every test meaningful while each run quietly leaves something
 behind. On a machine where agents run the suites many times a day, one leaked
 directory per run becomes tens of thousands.
@@ -1677,8 +1677,9 @@ Repository: {repoPath}
 ## Measure, do not only read
 
 A static read of one test file cannot see accumulation — you have to observe it.
-Before and after a bounded run of the project's own test commands (and, where
-safe, one start/stop of its dev server), snapshot:
+Before and after ONE run of the project's own test commands (a representative
+subset is enough — a per-run leak shows up in a single run) and, where safe, one
+start of its dev server stopped after about 60 seconds, snapshot:
 
 - entries in the system temp directory, counted by name prefix;
 - child processes the run started, and ports left listening;
@@ -1708,11 +1709,9 @@ count and the safe cleanup command instead.
   activity when nothing is being edited.
 - **Parallel-checkout collisions** — fixed ports, fixed temp paths, or a shared
   database that break when two checkouts or agents run the suite at once.
-- **Slow or nondeterministic loop** — the slowest suites and what makes them
-  slow (real sleeps, real network, repeated expensive setup), and tests that
-  pass or fail depending on order, clock, or machine.
-- **Setup drift** — documented setup, install, or version requirements that no
-  longer match what the scripts and manifests actually do.
+- **Slow loop** — the slowest suites and what makes them slow (real sleeps,
+  real network, repeated expensive setup), read from that same run's reporter
+  output rather than a second run.
 
 ## Prefer a guard to a patch
 
@@ -1723,7 +1722,9 @@ suite cannot reintroduce it. Fixing the one instance you measured is not enough.
 
 ## Not yours
 
-Whether a test's assertions prove anything belongs to the test-quality work;
+Whether a test's assertions prove anything, and order-dependent tests, belong to
+the test-quality work; documented setup that no longer works to the
+documentation work;
 missing coverage to the test-coverage work; leaks in the running product to
 the runtime-safety work; CI and deployment configuration to the infrastructure
 work; dependency versions to the dependency-update work.
@@ -1731,10 +1732,9 @@ work; dependency versions to the dependency-update work.
 ## The bar
 
 Every finding quotes its measurement — the before and after counts, the
-surviving process, the changed file — names the source with \`file:LINE\`,
-and estimates the cost at the project's real cadence (runs per day times what
-each run leaves or spends). Report counts and name prefixes, never absolute
-paths that contain a username or other machine identity.`,
+surviving process, the changed file — and estimates the cost at the project's
+real cadence (runs per day times what each run leaves or spends). Report counts
+and name prefixes, never absolute paths that contain a username.`,
 
   'infrastructure': `[Improvement: {appName}] Infrastructure and deployment audit
 
