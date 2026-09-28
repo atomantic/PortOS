@@ -1683,3 +1683,63 @@ export function createStallNudgeGate({
     get nudgesSent() { return total; },
   };
 }
+
+// ─── agy exited to its launch shell ─────────────────────────────────────────
+//
+// When agy quits (a crash, a dropped connection, a stray `/exit`), it prints
+//
+//   Resume with -c (or command below):
+//   agy --conversation=<uuid>
+//
+// and the LOGIN SHELL it was typed into survives. Every nudge above then pastes
+// into a bare prompt, and the stall gate burns its budget on a shell — the
+// worktree holds a half-finished run that nothing will ever continue. The
+// banner carries the one thing needed to recover: the conversation id.
+const AGY_CONVERSATION_PATTERN = /--conversation=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
+// Carry-over so a banner split by a PTY chunk boundary still matches: the flag
+// plus a full uuid is 51 chars.
+const AGY_RESUME_CARRY_CAP = 96;
+// A run that exits to the shell this many times is not going to survive one
+// more relaunch.
+export const AGY_RESUME_MAX_ATTEMPTS = 3;
+// The shell must have been silent this long before the relaunch is typed, so
+// the banner has finished painting and the prompt is back.
+export const AGY_RESUME_SETTLE_MS = 3000;
+
+/**
+ * State machine for "agy left its shell behind — relaunch it on the same
+ * conversation". `observe` records the newest conversation id seen in the
+ * (ANSI-stripped) stream; `takeResume` returns it once, when the stream has been
+ * quiet long enough and the budget allows, else null; the caller reports each
+ * real relaunch via `recordRelaunch`.
+ *
+ * @returns {{ observe: (chunk: string) => void,
+ *             takeResume: (nowMs: number, lastOutputAtMs: number) => string|null,
+ *             recordRelaunch: () => void, readonly attempts: number }}
+ */
+export function createAgyResumeGate({ settleMs = AGY_RESUME_SETTLE_MS, maxAttempts = AGY_RESUME_MAX_ATTEMPTS } = {}) {
+  let carry = '';
+  let pending = null;
+  let attempts = 0;
+  return {
+    observe(chunk) {
+      if (!chunk) return;
+      const window = carry + chunk;
+      carry = window.slice(-AGY_RESUME_CARRY_CAP);
+      let last = null;
+      for (const match of window.matchAll(AGY_CONVERSATION_PATTERN)) last = match[1];
+      if (last) pending = last.toLowerCase();
+    },
+    takeResume(nowMs, lastOutputAtMs) {
+      if (!pending || attempts >= maxAttempts) return null;
+      if (nowMs - lastOutputAtMs < settleMs) return null;
+      const id = pending;
+      pending = null;
+      return id;
+    },
+    // Counted separately from `takeResume`: a banner that scrolled past in a
+    // session whose agy is still alive is not a relaunch and must not spend budget.
+    recordRelaunch() { attempts += 1; },
+    get attempts() { return attempts; },
+  };
+}
