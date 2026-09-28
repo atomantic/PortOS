@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Routes, Route } from 'react-router';
 import PromptFromMedia from './PromptFromMedia';
 import * as api from '../../services/apiMediaJobs';
+
+vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 
 vi.mock('../../hooks/useProviderModels', () => ({
   default: vi.fn(() => ({
@@ -24,6 +26,8 @@ vi.mock('../../hooks/useVisionModelIds', () => ({
 
 vi.mock('../../services/apiMediaJobs', () => ({
   promptFromMedia: vi.fn(),
+  listMediaPromptExaminations: vi.fn(async () => ({ items: [], hasMore: false })),
+  getMediaPromptExamination: vi.fn(),
 }));
 
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: () => null }));
@@ -142,9 +146,26 @@ describe('PromptFromMedia', () => {
     expect(onResult).toHaveBeenCalledWith(payload);
   });
 
-  it('skips the disclosure toggle when hosted as an always-open card', () => {
+  it('skips the disclosure toggle when hosted as an always-open card', async () => {
     renderPanel({ alwaysOpen: true, initialSource: null });
+    await screen.findByText('No saved examinations yet.');
     expect(screen.queryByRole('button', { name: /toggle prompt from media/i })).toBeNull();
     expect(screen.getByRole('button', { name: /pick image/i })).toBeInTheDocument();
   });
+});
+
+// Returning from either renderer restores the complete examination without a provider call.
+it('reopens both saved prompts from a durable examination URL', async () => {
+  api.getMediaPromptExamination.mockResolvedValue({
+    id: 'saved', source: { sourceKind: 'image', filename: 'still.png' },
+    result: { imagePrompt: 'Moonlit mountains', videoPrompt: 'Clouds drift over mountains', imageNegativePrompt: 'blur' },
+  });
+  render(<MemoryRouter initialEntries={['/media/prompt/saved']}><Routes>
+    <Route path="/media/prompt/:examinationId" element={<PromptFromMedia alwaysOpen />} />
+  </Routes></MemoryRouter>);
+  await screen.findByDisplayValue('Moonlit mountains');
+  expect(screen.getByDisplayValue('Clouds drift over mountains')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Open in Image Gen' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Open in Video Gen' })).toBeTruthy();
+  expect(api.promptFromMedia).not.toHaveBeenCalled();
 });

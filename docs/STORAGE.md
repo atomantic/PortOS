@@ -690,3 +690,7 @@ continues its unchanged allowlist (`metadata.json`, `output.txt`, `prompt.txt`).
 Filesystem backups include both gzip assets and their sidecars, and restore keeps
 them readable without a conversion. Data Management's backup export keeps its
 originals and is distinct from space reclamation.
+
+### Media prompt examinations
+
+`media_prompt_examinations` is db-primary, machine-local history of explicit media analyses. Each immutable UUID record retains the source kind and filename/video ID, both requested prompts and negatives, rationale, and provider/model attribution. Source references are descriptive locators, not foreign keys: examinations remain usable after source media deletion. No binary data or credentials are stored. Lists are paginated and details loaded on demand. PostgreSQL dumps cover the records; migration 418 registers additive boot DDL with no seed or backfill. The JSON adapter is only for development/tests. No federation is added.
