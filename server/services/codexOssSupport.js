@@ -35,6 +35,7 @@
 
 import { commandOutput } from '../lib/commandExists.js';
 import { CODEX_COMMAND } from '../lib/codex.js';
+import { isTestRunner } from '../lib/runtimeEnv.js';
 
 // Same window as the runtime `--version` sweep in providerRuntimeInstaller.js:
 // an expiry is "we no longer know", so a user who upgrades Codex from a
@@ -52,6 +53,14 @@ const supportCache = new Map();
 let refreshInFlight = new Map();
 
 const readHelp = (command) => commandOutput(command, ['exec', '--help'], { timeoutMs: 10_000 });
+
+// A caller that passes no `run` override gets this in production — but under
+// the test runner it answers NOT PROBED without spawning anything, the same
+// "an incidental test never asked for a real CLI probe" guard
+// `providerRuntimeInstaller.js` applies to the runtime `--version` sweep
+// (#9039). A test that wants the real spawn passes its own `run`, same as
+// every case in `codexOssSupport.test.js` already does.
+const defaultRun = (command) => (isTestRunner() ? Promise.resolve(null) : readHelp(command));
 
 const resolveCommand = (command) => (typeof command === 'string' && command.trim()) || CODEX_COMMAND;
 
@@ -78,7 +87,7 @@ export function peekCodexOssSupport(command) {
  * @param {{fresh?: boolean, run?: (command: string) => Promise<string|null>}} [options]
  * @returns {Promise<{supported: boolean}|null>}
  */
-export async function getCodexOssSupport(command, { fresh = false, run = readHelp } = {}) {
+export async function getCodexOssSupport(command, { fresh = false, run = defaultRun } = {}) {
   const resolved = resolveCommand(command);
   if (!fresh) {
     const cached = peekCodexOssSupport(resolved);

@@ -1,5 +1,8 @@
 import { execFile } from './childProcess.js';
 import { promisify } from 'util';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
@@ -26,13 +29,37 @@ const execFileAsync = promisify(execFile);
  * needs it, but it costs one FD close and makes every probe immune. Same
  * reasoning, and the same incident, as `_execCliModelList` in
  * `lib/aiToolkit/providers.js`.
+ *
+ * `TMPDIR`/`TMP`/`TEMP` are pinned to a throwaway directory scoped to THIS one
+ * probe, mkdtemp'd before the spawn and removed once it settles. Several real
+ * agentic CLIs (kilo, opencode — both self-extracting/Node-launcher binaries)
+ * write their own scratch/cache state (a session dir, Node's own module
+ * compile cache) directly into whatever `TMPDIR` they inherit on EVERY
+ * invocation, not just a first run. Left alone that state piles up in the
+ * host's real temp directory a little on every provider-readiness poll, and
+ * inside PortOS's own run-scoped vitest temp root (#9032) it fails the run
+ * outright once every other leak is fixed (#9039) — a probe here never
+ * observes or needs its own past scratch, so isolating and discarding it costs
+ * one extra mkdtemp/rmSync and removes both problems at the source. A caller
+ * that already scoped its own `env` still gets its OTHER vars untouched; only
+ * the three temp-dir keys are overridden on top.
  */
 function probe(cmd, args, { timeoutMs, env, cwd, maxBuffer }) {
+  const scratchDir = mkdtempSync(join(tmpdir(), 'portos-cli-probe-'));
+  const probeEnv = { ...(env || process.env), TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir };
   const options = {
     timeout: timeoutMs,
-    ...(env === undefined ? {} : { env }),
+    env: probeEnv,
     ...(cwd === undefined ? {} : { cwd }),
     ...(maxBuffer === undefined ? {} : { maxBuffer }),
+  };
+  const cleanup = () => {
+    try {
+      rmSync(scratchDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort — a lingering handle on a still-terminating child must
+      // not throw out of a probe that already has its answer.
+    }
   };
   // `bufferedSpawn.js` is imported lazily, not at module load: this module is
   // reached by a very large share of the server suite, and an eager edge into
@@ -46,13 +73,14 @@ function probe(cmd, args, { timeoutMs, env, cwd, maxBuffer }) {
     .then(({ prepareCliSpawn }) => {
       // Resolution reads the env the CHILD will run under, so a caller that
       // overrides PATH probes its own binary, not one off the server's PATH.
-      const launch = prepareCliSpawn(cmd, args, env || process.env);
+      const launch = prepareCliSpawn(cmd, args, probeEnv);
       const pending = execFileAsync(launch.command, launch.args, options);
       pending.child?.stdin?.end();
       return pending;
     })
     .then(({ stdout }) => String(stdout ?? '').trim())
-    .catch(() => null);
+    .catch(() => null)
+    .finally(cleanup);
 }
 
 /**
