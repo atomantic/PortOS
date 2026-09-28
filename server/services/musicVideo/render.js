@@ -364,7 +364,17 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
 // song-time boundary, so the edit never drifts more than half a frame from the
 // authored timeline however many sections it has. Returns `sections`, each
 // section's `[startSec, endSec)` on the output timebase.
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false } = {}) {
+//
+// `excerpt` (#8986 — a draft excerpt render) windows the SAME full-song plan
+// down to `[startSec, endSec)` with one extra filter stage after the cut/overlay
+// chain is built: `trim`/`atrim` the finished `[outv]`/audio down to the window
+// and re-zero their timestamps, so a footage cut and every overlay keep the
+// exact absolute song-time alignment they'd have in a full render — only the
+// output's first/last frame move. `sections` reports only the spans that
+// overlap the window, clipped to it and re-based to the excerpt's own timeline
+// (0 = `startSec`) so a contact sheet built from the excerpt file can sample
+// cut boundaries directly. `totalDuration` becomes the excerpt's own length.
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
   const frameGrid = gridOption || clips.some((c) => c.layer);
   // Stills and cards have no dimensions of their own: the first footage clip
@@ -423,14 +433,31 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   });
 
   const videoTotal = plan[plan.length - 1].endSec;
-  const totalDuration = audioDurationSec != null ? Math.min(videoTotal, audioDurationSec) : videoTotal;
-  const sections = plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, layer: c.layer || 'footage', startSec, endSec }));
+  const fullDuration = audioDurationSec != null ? Math.min(videoTotal, audioDurationSec) : videoTotal;
+
+  let videoMap = '[outv]';
+  let audioMap = `${audioIdx}:a`;
+  let totalDuration = fullDuration;
+  let sections = plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, layer: c.layer || 'footage', startSec, endSec }));
+
+  if (excerpt) {
+    const excerptStart = Math.max(0, Math.min(excerpt.startSec, fullDuration));
+    const excerptEnd = Math.max(excerptStart, Math.min(excerpt.endSec, fullDuration));
+    filters.push(`[outv]trim=start=${excerptStart}:end=${excerptEnd},setpts=PTS-STARTPTS[outvx]`);
+    filters.push(`[${audioIdx}:a]atrim=start=${excerptStart}:end=${excerptEnd},asetpts=PTS-STARTPTS[outax]`);
+    videoMap = '[outvx]';
+    audioMap = '[outax]';
+    totalDuration = excerptEnd - excerptStart;
+    sections = sections
+      .filter((s) => s.startSec < excerptEnd && s.endSec > excerptStart)
+      .map((s) => ({ ...s, startSec: Math.max(0, s.startSec - excerptStart), endSec: Math.min(totalDuration, s.endSec - excerptStart) }));
+  }
 
   const args = [
     ...inputs,
     '-filter_complex', filters.join(';'),
-    '-map', '[outv]',
-    '-map', `${audioIdx}:a`,
+    '-map', videoMap,
+    '-map', audioMap,
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '18',
@@ -444,6 +471,75 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     outputPath,
   ];
   return { args, totalDuration, canonW, canonH, fps, sections };
+}
+
+// Pure: every cut and typography-cue boundary that falls inside
+// `[startSec, endSec)`, re-based to the excerpt's own timeline (0 = `startSec`)
+// and deduplicated — the sample times for the excerpt's contact sheet (#8986).
+// `sections`/`cues` are given in ABSOLUTE song time (as `buildMusicVideoFfmpegArgs`
+// returns them pre-excerpt, or as `renderableCues`/`sectionCardCues` compute
+// them). Always includes both ends of the window so the sheet covers the first
+// and last frame even when no cut/cue lands exactly on them.
+//
+// No encoded video has a frame timestamped at its own total duration (the last
+// frame's presentation time is always `duration - 1/fps` or earlier), so any
+// boundary that lands exactly at the excerpt's end (its own `span`, including
+// one shifted there from a cut/cue at or past `endSec`) is guarded back to
+// `span - 1/fps` — the last frame a real capture can land on — rather than
+// asking `encodeFileContactSheetAtTimes` for an instant that doesn't exist.
+export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 24 } = {}) {
+  const span = endSec - startSec;
+  const lastFrame = fps > 0 ? Math.max(0, round3(span - 1 / fps)) : span;
+  const times = new Set([0, lastFrame]);
+  const add = (t) => {
+    if (typeof t !== 'number' || !Number.isFinite(t)) return;
+    if (t < startSec - 1e-9 || t > endSec + 1e-9) return;
+    const rel = Math.min(span, Math.max(0, t - startSec));
+    times.add(rel >= span - 1e-9 ? lastFrame : round3(rel));
+  };
+  for (const s of Array.isArray(sections) ? sections : []) { add(s.startSec); add(s.endSec); }
+  for (const c of Array.isArray(cues) ? cues : []) { add(c.startSec); add(c.endSec); }
+  return Array.from(times).sort((a, b) => a - b);
+}
+
+// Shared prep for both the full render and the draft excerpt render (#8986):
+// resolve the master audio, refuse a stale performance take, resolve + snap
+// every scene's clip, and refuse a render whose shots don't cover their
+// authored span. Both callers build on the exact same resolved clip list, so
+// an excerpt frame matches what a full render would produce at that song time.
+export async function planMusicVideoRender(project) {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
+
+  const audioPath = await resolveMasterAudioPath(project);
+  // #8977: a performance take sings one stretch of one recording. If the
+  // scene was re-timed or the song replaced since, its mouth motion no longer
+  // matches the audio under it — refuse rather than render it out of sync.
+  const stale = await findStalePerformanceTakes(project, audioPath);
+  if (stale.length > 0) {
+    throw new ServerError(
+      `${stale.length} performance shot${stale.length === 1 ? ' has' : 's have'} no lip-synced take of the current song interval and recording — regenerate ${stale.length === 1 ? 'it' : 'them'}, or switch to Cutaway, before rendering`,
+      { status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale } },
+    );
+  }
+  // #8985: a composed render cuts still and card sections into the same
+  // timebase as the footage; plain concat renders footage only, as before.
+  const composed = project.composition?.mode === 'composed';
+  const rawClips = await resolveSceneClips(project, { layered: composed });
+  const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
+  const beats = project.audioAnalysis?.beats;
+  const clips = beatSnapClips(rawClips, beats, { scenes: project.scenes });
+  // #8964: a new (non-looping) shot must never silently repeat footage to
+  // fill its span. Refuse the render and name the shots that need a trim,
+  // a continuation, a replacement clip, or an explicit loop.
+  const shortfalls = findCoverageShortfalls(clips);
+  if (shortfalls.length > 0) {
+    throw new ServerError(
+      `${shortfalls.length} shot${shortfalls.length === 1 ? ' is' : 's are'} longer than ${shortfalls.length === 1 ? 'its' : 'their'} source clip — trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
+      { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
+    );
+  }
+  return { ffmpeg, audioPath, composed, clips, audioDurationSec };
 }
 
 export async function renderMusicVideo(projectId) {
@@ -463,37 +559,7 @@ export async function renderMusicVideo(projectId) {
 
   let handedOff = false;
   try {
-    const ffmpeg = await findFfmpeg();
-    if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
-
-    const audioPath = await resolveMasterAudioPath(project);
-    // #8977: a performance take sings one stretch of one recording. If the
-    // scene was re-timed or the song replaced since, its mouth motion no longer
-    // matches the audio under it — refuse rather than render it out of sync.
-    const stale = await findStalePerformanceTakes(project, audioPath);
-    if (stale.length > 0) {
-      throw new ServerError(
-        `${stale.length} performance shot${stale.length === 1 ? ' has' : 's have'} no lip-synced take of the current song interval and recording — regenerate ${stale.length === 1 ? 'it' : 'them'}, or switch to Cutaway, before rendering`,
-        { status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale } },
-      );
-    }
-    // #8985: a composed render cuts still and card sections into the same
-    // timebase as the footage; plain concat renders footage only, as before.
-    const composed = project.composition?.mode === 'composed';
-    const rawClips = await resolveSceneClips(project, { layered: composed });
-    const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
-    const beats = project.audioAnalysis?.beats;
-    const clips = beatSnapClips(rawClips, beats, { scenes: project.scenes });
-    // #8964: a new (non-looping) shot must never silently repeat footage to
-    // fill its span. Refuse the render and name the shots that need a trim,
-    // a continuation, a replacement clip, or an explicit loop.
-    const shortfalls = findCoverageShortfalls(clips);
-    if (shortfalls.length > 0) {
-      throw new ServerError(
-        `${shortfalls.length} shot${shortfalls.length === 1 ? ' is' : 's are'} longer than ${shortfalls.length === 1 ? 'its' : 'their'} source clip — trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
-        { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
-      );
-    }
+    const { ffmpeg, audioPath, composed, clips, audioDurationSec } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
 

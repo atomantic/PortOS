@@ -176,6 +176,39 @@ export async function encodeReferenceContactSheet(videoPath, outputPath, { every
   return { columns, rows, times };
 }
 
+// Same phone-sized, six-across contact sheet as `encodeContactSheet`, but
+// sampling a REAL rendered video file at explicit `times` (seconds, relative
+// to the file's own start) rather than a browser composition or a uniform
+// step (#8986 — the excerpt render's cut/cue contact sheet from
+// `excerptBoundaryTimes` in services/musicVideo/render.js). Each time is
+// converted to an exact frame INDEX and selected with `eq(n,…)` — the same
+// technique `extractEvaluationFrames` (lib/ffmpeg.js) uses for multi-frame
+// selection — rather than a `between(t,…)` time window: at 30/60fps a time
+// window can match several consecutive frames, overfilling the tile before
+// later boundary times are ever reached.
+export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times, { width, height, fps } = {}) {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
+  if (!Array.isArray(times) || times.length === 0) throw new Error('encodeFileContactSheetAtTimes: no sample times');
+  if (!(fps > 0)) throw new Error('encodeFileContactSheetAtTimes: fps is required');
+  const tileWidth = width && height && width < height ? 240 : 360;
+  const columns = Math.min(PROOF_COLUMNS, times.length);
+  const rows = Math.ceil(times.length / columns);
+  // Two very close boundary times can round to the same frame index — the
+  // dedup means the tile gets one fewer real frame than requested (a padded
+  // cell), never a duplicate or an out-of-order one.
+  const indices = [...new Set(times.map((t) => Math.max(0, Math.round(t * fps))))];
+  const selectExpr = indices.map((i) => `eq(n,${i})`).join('+');
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vf',
+      `select='${selectExpr}',scale=${tileWidth}:-2,tile=${columns}x${rows}:padding=4:color=black`,
+      '-vsync', 'vfr', '-frames:v', '1', '-y', outputPath],
+  });
+  if (!result.ok) throw new Error(`Excerpt contact sheet failed: ${result.reason}`);
+  return { columns, rows };
+}
+
 // Source remains subject to the composition sandbox and launch privacy gate;
 // only bounded PCM leaves the browser, never arbitrary paths or encoded files.
 export async function synthesizeCompositionMusic(page, durationSec) {

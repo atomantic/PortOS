@@ -45,6 +45,22 @@ vi.mock('../services/musicVideo/render.js', () => ({
   cancelRender: vi.fn(() => true),
 }));
 
+// Same posture for the draft excerpt render (#8986) — the route's job is to
+// validate + dispatch + stream; the ffmpeg/overlay pipeline is covered in
+// excerptRender.js's own tests, and note/delete persistence in
+// musicVideoExcerpt.test.js against the real file-backed store.
+vi.mock('../services/musicVideo/excerptRender.js', () => ({
+  startExcerptRender: vi.fn(async () => ({ jobId: 'mve-job-1', excerptId: 'mve-job-1' })),
+  attachExcerptRenderSseClient: vi.fn(() => true),
+  cancelExcerptRender: vi.fn(() => true),
+}));
+vi.mock('../services/musicVideo/excerptService.js', () => ({
+  deleteExcerpt: vi.fn(async (id) => ({ id })),
+  addReviewNote: vi.fn(async (id, excerptId, input) => ({ project: { id }, note: { id: 'mvn-1', ...input } })),
+  editReviewNote: vi.fn(async (id, excerptId, noteId, patch) => ({ project: { id }, note: { id: noteId, ...patch } })),
+  deleteReviewNote: vi.fn(async (id) => ({ id })),
+}));
+
 // Mock the MuScriptor transcription service so the route test doesn't depend
 // on a provisioned venv; the route's job is to validate + resolve + dispatch.
 vi.mock('../services/audioMidiTranscription.js', () => ({
@@ -66,6 +82,8 @@ import * as svc from '../services/musicVideo/projects.js';
 import { analyzeAudioFile, analyzeAudioFileManual } from '../services/musicVideo/audioAnalysis.js';
 import { getTrack } from '../services/tracks/index.js';
 import * as renderSvc from '../services/musicVideo/render.js';
+import * as excerptRenderSvc from '../services/musicVideo/excerptRender.js';
+import * as excerptSvc from '../services/musicVideo/excerptService.js';
 import * as midiSvc from '../services/audioMidiTranscription.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import musicVideoRoutes from './musicVideo.js';
@@ -521,6 +539,71 @@ describe('musicVideo routes', () => {
       renderSvc.attachRenderSseClient.mockReturnValueOnce(false);
       const r = await request(app).get('/api/music-video/render/nope/events');
       expect(r.status).toBe(404);
+    });
+  });
+
+  describe('draft excerpt render (#8986)', () => {
+    it('POST /:id/excerpt validates the range and dispatches to the excerpt render service', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/excerpt').send({ startSec: 10, endSec: 20 });
+      expect(r.status).toBe(200);
+      expect(excerptRenderSvc.startExcerptRender).toHaveBeenCalledWith('mv-1', { startSec: 10, endSec: 20 });
+      expect(r.body).toEqual({ jobId: 'mve-job-1', excerptId: 'mve-job-1' });
+    });
+
+    it('POST /:id/excerpt rejects a non-forward range before dispatching', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/excerpt').send({ startSec: 20, endSec: 10 });
+      expect(r.status).toBe(400);
+      expect(excerptRenderSvc.startExcerptRender).not.toHaveBeenCalled();
+    });
+
+    it('POST /excerpt/:jobId/cancel cancels the job', async () => {
+      const r = await request(app).post('/api/music-video/excerpt/mve-1/cancel').send({});
+      expect(r.status).toBe(200);
+      expect(excerptRenderSvc.cancelExcerptRender).toHaveBeenCalledWith('mve-1');
+      expect(r.body).toEqual({ ok: true });
+    });
+
+    it('GET /excerpt/:jobId/events 404s for an unknown job', async () => {
+      excerptRenderSvc.attachExcerptRenderSseClient.mockReturnValueOnce(false);
+      const r = await request(app).get('/api/music-video/excerpt/nope/events');
+      expect(r.status).toBe(404);
+    });
+
+    it('DELETE /:id/excerpt/:excerptId dispatches to the excerpt service', async () => {
+      const r = await request(app).delete('/api/music-video/mv-1/excerpt/mve-1');
+      expect(r.status).toBe(200);
+      expect(excerptSvc.deleteExcerpt).toHaveBeenCalledWith('mv-1', 'mve-1');
+    });
+
+    it('POST /:id/excerpt/:excerptId/notes validates and adds a review note', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/excerpt/mve-1/notes').send({ atSec: 3, note: 'lip-sync drifts here' });
+      expect(r.status).toBe(201);
+      expect(excerptSvc.addReviewNote).toHaveBeenCalledWith('mv-1', 'mve-1', { atSec: 3, note: 'lip-sync drifts here' });
+      expect(r.body.note).toMatchObject({ atSec: 3, note: 'lip-sync drifts here' });
+    });
+
+    it('POST /:id/excerpt/:excerptId/notes rejects a blank note', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/excerpt/mve-1/notes').send({ atSec: 3, note: '' });
+      expect(r.status).toBe(400);
+      expect(excerptSvc.addReviewNote).not.toHaveBeenCalled();
+    });
+
+    it('PATCH /:id/excerpt/:excerptId/notes/:noteId edits a note', async () => {
+      const r = await request(app).patch('/api/music-video/mv-1/excerpt/mve-1/notes/mvn-1').send({ verdict: 'approved' });
+      expect(r.status).toBe(200);
+      expect(excerptSvc.editReviewNote).toHaveBeenCalledWith('mv-1', 'mve-1', 'mvn-1', { verdict: 'approved' });
+    });
+
+    it('PATCH /:id/excerpt/:excerptId/notes/:noteId rejects an empty patch', async () => {
+      const r = await request(app).patch('/api/music-video/mv-1/excerpt/mve-1/notes/mvn-1').send({});
+      expect(r.status).toBe(400);
+      expect(excerptSvc.editReviewNote).not.toHaveBeenCalled();
+    });
+
+    it('DELETE /:id/excerpt/:excerptId/notes/:noteId dispatches to the excerpt service', async () => {
+      const r = await request(app).delete('/api/music-video/mv-1/excerpt/mve-1/notes/mvn-1');
+      expect(r.status).toBe(200);
+      expect(excerptSvc.deleteReviewNote).toHaveBeenCalledWith('mv-1', 'mve-1', 'mvn-1');
     });
   });
 });

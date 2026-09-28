@@ -350,6 +350,30 @@ export const musicVideoTreatmentProofReviewSchema = z.object({
   }).strict().optional(),
 }).strict();
 
+// ---- Draft excerpt render (#8986) -------------------------------------------
+// A director-chosen `[startSec, endSec)` window re-rendered through the same
+// composed pipeline as a full render, plus a cut/cue contact sheet and
+// timecoded review notes against the excerpt's OWN timeline (0 = its start).
+// See services/musicVideo/excerpt.js / excerptRender.js.
+export const MUSIC_VIDEO_EXCERPT_NOTE_VERDICTS = ['flagged', 'approved'];
+
+export const musicVideoExcerptRequestSchema = z.object({
+  startSec: z.number().min(0).max(36000),
+  endSec: z.number().min(0).max(36000),
+}).strict().refine((r) => r.endSec > r.startSec, { message: 'endSec must be greater than startSec' });
+
+export const musicVideoExcerptNoteSchema = z.object({
+  atSec: z.number().min(0).max(36000),
+  note: z.string().min(1).max(2000),
+  verdict: z.enum(MUSIC_VIDEO_EXCERPT_NOTE_VERDICTS).nullable().optional(),
+}).strict();
+
+export const musicVideoExcerptNoteUpdateSchema = z.object({
+  atSec: z.number().min(0).max(36000).optional(),
+  note: z.string().min(1).max(2000).optional(),
+  verdict: z.enum(MUSIC_VIDEO_EXCERPT_NOTE_VERDICTS).nullable().optional(),
+}).strict().refine((r) => r.atSec !== undefined || r.note !== undefined || r.verdict !== undefined, { message: 'atSec, note or verdict is required' });
+
 export const musicVideoProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),

@@ -127,6 +127,35 @@ export const musicVideoRenderEventsUrl = (jobId) =>
 export const cancelMusicVideoRender = (jobId, options = {}) =>
   request(`/music-video/render/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
 
+// ---- Draft excerpt render (#8986) ----
+// A director-chosen [startSec, endSec) window re-rendered through the same
+// composed pipeline, plus a cut/cue contact sheet and timecoded review notes.
+// Kickoff resolves to { jobId, excerptId }; progress streams over its OWN SSE
+// URL (subscribe with useSseProgress / useSseJobSlot).
+export const renderMusicVideoExcerpt = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/excerpt`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const musicVideoExcerptRenderEventsUrl = (jobId) =>
+  `/api/music-video/excerpt/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoExcerptRender = (jobId, options = {}) =>
+  request(`/music-video/excerpt/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+export const deleteMusicVideoExcerpt = (id, excerptId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/excerpt/${encodeURIComponent(excerptId)}`, { method: 'DELETE', ...options });
+// Body: { atSec, note, verdict? } → { project, note }.
+export const addMusicVideoExcerptNote = (id, excerptId, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/excerpt/${encodeURIComponent(excerptId)}/notes`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+// Body: any of { atSec, note, verdict } → { project, note }.
+export const updateMusicVideoExcerptNote = (id, excerptId, noteId, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/excerpt/${encodeURIComponent(excerptId)}/notes/${encodeURIComponent(noteId)}`, {
+    method: 'PATCH', body: JSON.stringify(body), ...options,
+  });
+export const deleteMusicVideoExcerptNote = (id, excerptId, noteId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/excerpt/${encodeURIComponent(excerptId)}/notes/${encodeURIComponent(noteId)}`, {
+    method: 'DELETE', ...options,
+  });
+
 // ---- Pre-production treatment (#8980) ----
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to the
 // board's scene ids and a proof checklist. Every write names the treatment
