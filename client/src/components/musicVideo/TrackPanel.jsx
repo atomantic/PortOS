@@ -4,6 +4,7 @@ import MidiVisualization from '../songs/MidiVisualization.jsx';
 import { trackAudioUrl } from '../../services/apiTracks.js';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
 import VocalStemControl from './VocalStemControl.jsx';
+import SoundBedControl from './SoundBedControl.jsx';
 import { trackSourceLabel } from '../../lib/trackProvenance.js';
 
 /**
@@ -12,7 +13,8 @@ import { trackSourceLabel } from '../../lib/trackProvenance.js';
  * download the resolved master file. Relinking is blocked while a render or a
  * MIDI transcription is bound to this project — both already resolved the
  * project's audio at kickoff. An optional vocal stem (#8977) conditions
- * lip-sync performance shots in place of the mix.
+ * lip-sync performance shots in place of the mix, and an optional
+ * sound-design bed (#8988) mixes under the song only when explicitly chosen.
  */
 export default function TrackPanel({
   project, tracks, trackName, audioFilename, youtube,
@@ -62,6 +64,8 @@ export default function TrackPanel({
         hasAudio={Boolean(project.trackId || project.uploadedAudioFilename)}
         onUpdated={onProjectUpdated}
       />
+      {/* #8988: an optional, explicitly chosen bed mixed under the song. */}
+      <SoundBedControl key={project.id} project={project} tracks={tracks} disabled={renderBound} onUpdated={onProjectUpdated} />
       {/* Preview + download the project's master audio track. Both act on
           the resolved data/music/ file (linked track or uploaded audio). */}
       {audioUrl && (

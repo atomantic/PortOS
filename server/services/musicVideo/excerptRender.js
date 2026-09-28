@@ -35,6 +35,7 @@ import { renderTypographyOverlays, removeCompositionScratch } from './compositio
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
 import { markRevisionRendering, settleRevisionRender } from './revision.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
+import { musicVideoEvents } from './events.js';
 
 const jobs = new Map();
 const projectExcerptRenders = new Map();
@@ -88,7 +89,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
 
   let handedOff = false;
   try {
-    const { ffmpeg, audioPath, composed, clips, audioDurationSec } = await planMusicVideoRender(project);
+    const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
 
@@ -163,6 +164,8 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
         console.warn(`⚠️ Music-video excerpt render [${jobId.slice(4, 12)}] could not remove its overlay scratch: ${err.message}`);
       });
       closeJobAfterDelay(jobs, jobId);
+      // #8988: an auto-review run waiting on this draft continues from here.
+      if (persisted) musicVideoEvents.emit('excerpt-render', { projectId, excerptId, status: patch.status });
       return persisted;
     };
 
@@ -267,7 +270,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     };
 
     if (!composition) {
-      const { args } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped } });
+      const { args } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed });
       startEncode(args);
       return { jobId, excerptId };
     }
@@ -286,7 +289,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     }).then((overlays) => {
       signal.throwIfAborted();
       job.overlayAbort = null;
-      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped } });
+      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped }, soundBed });
       startEncode(layered.args, 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;

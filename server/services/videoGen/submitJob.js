@@ -202,7 +202,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       // import since only this rare path needs the revision service's closure.
       if (body.musicVideo?.revisionId) {
         const { assertRevisionOpen } = await import('../musicVideo/revisionService.js');
-        await assertRevisionOpen(body.musicVideo.projectId, body.musicVideo.revisionId);
+        await assertRevisionOpen(body.musicVideo.projectId, body.musicVideo.revisionId, { sceneId: body.musicVideo.sceneId, kind: 'video' });
       }
       return enqueueJob({ kind: 'video', params });
     },

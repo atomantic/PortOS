@@ -19,6 +19,7 @@
  * against the freshest record under the backend's write serialization.
  */
 
+import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { cancelExcerptRender, startExcerptRender } from './excerptRender.js';
 import {
@@ -31,6 +32,7 @@ import {
   revisionSectionStates,
   startRevisionOnProject,
 } from './revision.js';
+import { chargeAutoReviewGeneration, runOwningRevision } from './autoReview.js';
 
 /** Open a revision from a reviewed excerpt. Returns `{ project, revision, skippedSceneIds }`. */
 export async function startRevision(projectId, excerptId, input = {}) {
@@ -44,11 +46,30 @@ export async function startRevision(projectId, excerptId, input = {}) {
  * revision's cancel/kickoff race is closed server-side rather than raced.
  * Throws 404/409 (ServerError, code REVISION_CLOSED); a no-op when the tag
  * carries no revisionId.
+ *
+ * #8988: this is also the spend choke point of an opt-in auto-review run. A
+ * job for a revision a RUNNING run opened is charged against the run's
+ * `maxGenerations` in one serialized write, and refused (409
+ * AUTO_REVIEW_SPEND_LIMIT) once the limit is spent — before it is queued. A
+ * second job for a section whose job for this revision is still queued or
+ * running (a double submit) is refused too, so it is never paid for twice.
  */
-export async function assertRevisionOpen(projectId, revisionId) {
+export async function assertRevisionOpen(projectId, revisionId, { sceneId = null, kind = null } = {}) {
   if (!revisionId) return;
   const project = await getProject(projectId);
   assertRevisionOpenForGeneration(project, revisionId);
+  if (!project || !runOwningRevision(project, revisionId)) return;
+  const { listJobs } = await import('../mediaJobQueue/index.js');
+  const jobs = [...listJobs({ kind: 'video' }), ...listJobs({ kind: 'image' })];
+  await mutateProjectRecord(projectId, (current) => {
+    const revision = assertRevisionOpenForGeneration(current, revisionId);
+    const inFlight = sceneId && revisionGenerationJobs(current, revision, jobs)
+      .some((job) => job.params?.musicVideo?.sceneId === sceneId && (!kind || job.kind === kind));
+    if (inFlight) {
+      throw new ServerError('This section is already generating for the auto-review run', { status: 409, code: 'AUTO_REVIEW_SECTION_IN_FLIGHT', context: { sceneId } });
+    }
+    return chargeAutoReviewGeneration(current, revisionId);
+  });
 }
 
 /**

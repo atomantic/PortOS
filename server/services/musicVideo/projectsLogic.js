@@ -33,6 +33,7 @@ import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/mus
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
+import { normalizeSoundBed } from './soundBed.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
@@ -241,6 +242,8 @@ export function applyProjectPatch(project, patch) {
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
     // #8984 — the composition manifest is replaced whole; null clears it.
     ...('composition' in patch ? { composition: normalizeComposition(patch.composition) } : {}),
+    // #8988 — an explicitly chosen sound-design bed; null clears it.
+    ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
   };
   const conceptMergedPatch = ('concept' in timedPatch && timedPatch.concept && project.concept)
     ? { ...timedPatch, concept: { ...project.concept, ...timedPatch.concept } }

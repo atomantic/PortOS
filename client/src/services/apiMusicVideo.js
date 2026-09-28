@@ -191,6 +191,20 @@ export const releaseMusicVideoRevisionSection = (id, revisionId, sceneId, option
     method: 'POST', body: JSON.stringify({ sceneId }), ...options,
   });
 
+// ---- Opt-in automatic review/retries (#8988) ----
+// Start body: { startSec, endSec, limits: { maxAttempts, maxGenerations }, providerId?, model? }
+// → { project, run }. The run then advances server-side and reports over the
+// `music-video:auto-review` socket event.
+export const startMusicVideoAutoReview = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/auto-reviews`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Body: { limits?: { maxAttempts?, maxGenerations? } } — optionally RAISES the limits.
+export const resumeMusicVideoAutoReview = (id, runId, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/auto-reviews/${encodeURIComponent(runId)}/resume`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const stopMusicVideoAutoReview = (id, runId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/auto-reviews/${encodeURIComponent(runId)}/stop`, { method: 'POST', ...options });
+export const cancelMusicVideoAutoReview = (id, runId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/auto-reviews/${encodeURIComponent(runId)}/cancel`, { method: 'POST', ...options });
+
 // ---- Pre-production treatment (#8980) ----
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to the
 // board's scene ids and a proof checklist. Every write names the treatment

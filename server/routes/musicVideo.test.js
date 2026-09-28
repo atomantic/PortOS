@@ -236,6 +236,17 @@ describe('musicVideo routes', () => {
     expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { composition });
   });
 
+  it('PATCH /:id takes an explicit sound-design bed, refuses a bed louder than the song, and clears it with null (#8988)', async () => {
+    const loud = await request(app).patch('/api/music-video/mv-1').send({ soundBed: { trackId: 'trk-rain', volume: 1.5 } });
+    expect(loud.status).toBe(400);
+    expect(svc.updateProject).not.toHaveBeenCalled();
+    const ok = await request(app).patch('/api/music-video/mv-1').send({ soundBed: { trackId: 'trk-rain', volume: 0.25 } });
+    expect(ok.status).toBe(200);
+    const cleared = await request(app).patch('/api/music-video/mv-1').send({ soundBed: null });
+    expect(cleared.status).toBe(200);
+    expect(svc.updateProject).toHaveBeenLastCalledWith('mv-1', { soundBed: null });
+  });
+
   describe('POST /:id/lyrics/import (#8964)', () => {
     it('replaces the cue list with the parsed LRC and reports the detected format', async () => {
       svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [{ id: 'lc-old', text: 'old', startSec: 1, endSec: 2 }] });
