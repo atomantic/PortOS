@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { posixPath } from './testHelper.js';
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
@@ -202,6 +202,15 @@ describe('Creative Director scratch cwd (#4650)', () => {
     await removeCreativeDirectorScratchCwd('agent-cd-rm');
     expect(existsSync(dir)).toBe(false);
     await expect(removeCreativeDirectorScratchCwd('agent-cd-rm')).resolves.toBeUndefined();
+  });
+
+  // removeCreativeDirectorScratchCwd only ever removes the per-agent leaf —
+  // in production the shared `portos-cd-cwd` container is meant to persist
+  // and be reused across runs. In this test file it is a throwaway created
+  // by `mkdirSync(dir, { recursive: true })` above, so clean the container
+  // itself once here (#9032).
+  afterAll(() => {
+    rmSync(join(tmpdir(), 'portos-cd-cwd'), { recursive: true, force: true });
   });
 });
 

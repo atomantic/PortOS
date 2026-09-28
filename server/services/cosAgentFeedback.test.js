@@ -292,10 +292,6 @@ describe('submitAgentFeedback records the rating (#5594)', () => {
     await rm(join(ledgerRoot, 'user-action-events.json'), { force: true });
   });
 
-  afterAll(async () => {
-    await rm(ledgerRoot, { recursive: true, force: true });
-  });
-
   it('writes a cos.agent.feedback row with the rating, comment, and derived task type', async () => {
     const result = await submitAgentFeedback('agent-1', { rating: 'negative', comment: 'Missed the root cause' });
     expect(result).toMatchObject({ success: true });
@@ -403,4 +399,12 @@ describe('pending feedback served from the eligibility projection', () => {
       nextCursor: newest.id,
     });
   });
+});
+
+// ledgerRoot is the module-scope mkdtemp root every describe block above
+// shares. Remove it exactly once, after every test in the file has run —
+// nested inside one describe block, its own afterAll would fire before a
+// LATER describe block finishes writing to it (#9032).
+afterAll(async () => {
+  await rm(ledgerRoot, { recursive: true, force: true });
 });

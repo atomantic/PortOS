@@ -11,7 +11,7 @@
  *      for a stitched timeline final (`timeline-<slice>-<ts>.mp4` beside an
  *      independent `randomUUID()` history id).
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -19,6 +19,7 @@ import { createHash } from 'crypto';
 import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot = mkdtempSync(join(tmpdir(), 'portos-vthumb-boot-'));
+const bootRoot = tempRoot;
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
@@ -182,4 +183,12 @@ describe('#4162 — pulled-video thumbnail naming + arrival event', () => {
 
     expect(arrivals.map((a) => a.filename)).toEqual(['timeline-cafebabe-1700000000002.mp4']);
   });
+});
+
+// bootRoot is the module-scope placeholder mkdtemp'd before any hook runs
+// (needed so the mocked PATHS.data resolves before the dynamic import below
+// evaluates) — once the first describe block's beforeEach reassigns
+// `tempRoot`, nothing else references it. Remove it once here (#9032).
+afterAll(() => {
+  rmSync(bootRoot, { recursive: true, force: true });
 });

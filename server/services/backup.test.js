@@ -1695,6 +1695,11 @@ describe('generateManifest', () => {
     tmpRoot = await mkdtemp(join(tmpdir(), 'portos-manifest-'));
   });
 
+  afterEach(async () => {
+    const { rm } = await import('fs/promises');
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
   it('writes the manifest file and returns hashes for every data file', async () => {
     const { mkdir, writeFile, readFile } = await import('fs/promises');
     const { join } = await import('path');

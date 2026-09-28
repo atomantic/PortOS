@@ -1,6 +1,23 @@
 /**
  * Test suites that create mkdtemp directories must clean them up.
  *
+ * ## This is a cheap hint, not the authority
+ *
+ * This is a static source-text scan (regex over `mkdtemp`/`rmSync` call
+ * sites) — cheap, but blind to a leak driven by a spawned child process, a
+ * fixed-name file, a module-scope root reused across a whole file, or the
+ * file-wide false-negative documented below. #9032 found ~50 such leaks this
+ * scan could not see and added a runner-level guarantee instead: every server
+ * test run gets its own `pvt-*` temp root (`server/vitest.config.js` points
+ * `TMPDIR`/`TMP`/`TEMP` at it before any worker spawns), and
+ * `server/test/runTempRoot.js` (a Vitest `globalSetup`) reports and removes
+ * whatever is left in that root once the whole run finishes, failing the run
+ * on anything unexpected. THAT mechanism is authoritative — it catches every
+ * leak regardless of shape, because a leaked directory has nowhere to escape
+ * to but the run root. This scan remains valuable as fast, IDE-visible
+ * feedback at the exact `mkdtemp` call site the runner-level check can only
+ * report by directory name.
+ *
  * ## The bug class
  *
  * Test suites call `mkdtemp(join(tmpdir(), 'prefix-'))` to create isolated

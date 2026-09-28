@@ -71,7 +71,15 @@ vi.mock('../services/pipeline/musicLibrary.js', () => ({
   isSupportedMusicUpload: () => true,
   assertSafeMusicFilename: (f) => { if (f.includes('..') || f.includes('/')) throw Object.assign(new Error('bad'), { status: 400, code: 'X' }); },
   listMusicLibrary: vi.fn(async () => [{ filename: 'music-1.mp3', label: 'theme', sizeBytes: 10, updatedAt: '2026-05-15T00:00:00.000Z' }]),
-  importUploadedTrack: vi.fn(async () => ({ filename: 'music-up.mp3', sizeBytes: 11 })),
+  // The real importUploadedTrack copies tempPath into the library then
+  // unlinks it (best-effort) — the route's real (unmocked) multipart parser
+  // stages the upload under the OS temp dir before this is called, so the
+  // mock must consume it the same way or that staged file leaks (#9032).
+  importUploadedTrack: vi.fn(async (tempPath) => {
+    const { rm: rmTemp } = await import('fs/promises');
+    if (tempPath) await rmTemp(tempPath, { force: true }).catch(() => {});
+    return { filename: 'music-up.mp3', sizeBytes: 11 };
+  }),
   statMusicTrack: vi.fn(async (f) => (lib.store.has(f) ? { filename: f, label: f, sizeBytes: 10 } : null)),
 }));
 

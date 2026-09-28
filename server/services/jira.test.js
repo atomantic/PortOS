@@ -1,8 +1,15 @@
 import fs from 'fs/promises';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { rmSync } from 'fs';
+import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const tempRoot = createTempDataRoot('portos-jira-');
+
+// createTempDataRoot documents "caller is responsible for cleanup" — this
+// file never removed its root (#9032).
+afterAll(() => {
+  rmSync(tempRoot, { recursive: true, force: true });
+});
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');

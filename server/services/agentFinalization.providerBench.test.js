@@ -27,7 +27,7 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
   getGoalFidelityConfig: vi.fn(async () => null),
 }));
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: 'main\n', stderr: '', exitCode: 0 })),
@@ -328,5 +328,17 @@ describe('finalizeAgent — Creative Director scratch cleanup (#4650)', () => {
       prExpected: false,
     });
     expect(existsSync(dir)).toBe(false);
+  });
+
+  // finalizeAgent's real cleanup only removes the per-agent leaf — in
+  // production the shared `portos-cd-cwd` container is meant to persist and
+  // be reused across runs. `mkdirSync(dir, { recursive: true })` above also
+  // created that container, so remove it once here (#9032), mirroring
+  // spawnCwd.test.js.
+  afterAll(async () => {
+    const { rmSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    rmSync(join(tmpdir(), 'portos-cd-cwd'), { recursive: true, force: true });
   });
 });

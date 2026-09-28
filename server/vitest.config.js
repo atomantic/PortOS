@@ -1,4 +1,7 @@
 import { defineConfig } from 'vitest/config';
+import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { vitestCiPool } from '../scripts/vitestCiPool.js';
 import { DB_TEST_INCLUDE } from './vitest.config.db.js';
 
@@ -7,6 +10,77 @@ import { DB_TEST_INCLUDE } from './vitest.config.db.js';
 if (process.env.npm_lifecycle_event === 'test:fast') {
   process.env.VITEST_FAST = '1';
 }
+
+// Run-scoped temp root (#9032). #9000 added the static `mkdtempCleanup.guards
+// .test.js` scan, and #9009 documented it as file-wide (any rmSync anywhere in
+// a file satisfies it for every mkdtemp call in that file) — a heuristic that
+// cannot see a leak driven by a spawned child process, a fixed-name log file,
+// or a partially-cleaned file. Rather than chasing more static patterns, give
+// every mkdtemp/tmpdir() call in the run nowhere to leak TO: create one root
+// for the whole run, in the REAL host tmpdir, and point TMPDIR/TMP/TEMP at it
+// before any worker spawns. `os.tmpdir()` reads those env vars dynamically —
+// in this process, in a forked worker (workers inherit process.env), and in
+// any spawned child that inherits process.env (Python's tempfile module,
+// ffmpeg, git) — so every one of those calls resolves inside the root instead
+// of the host's real temp directory. `server/test/runTempRoot.js` (wired
+// below as globalSetup) is the other half: it reports and removes whatever is
+// left in the root after the run.
+//
+// Stale-root sweep: remove `pvt-*` roots older than 6 hours from a PAST run
+// that was killed before its teardown ran (a killed CoS agent, a crashed
+// worker) — using the REAL tmpdir, before this run's own TMPDIR override
+// below. A root from a run that is still in flight (started recently, by
+// definition) survives; only the age check matters, not which process it
+// belongs to, since two runs never share a root path.
+// Idempotency guard: `server/vitest.config.test.js` (and any other suite
+// that asserts on this file's own NODE_ENV-forcing behavior) dynamically
+// re-imports this module after `vi.resetModules()`, re-running every
+// top-level statement — including the mkdtempSync below — even though a real
+// `vitest run` only ever loads this config once. Without a guard, each of
+// those re-imports mints and abandons its OWN "pvt-*" root (nobody's
+// globalSetup teardown owns it), which is itself a leak this same change is
+// fixing (#9032). `process.env.PORTOS_TEST_TEMP_ROOT` marks that this
+// process already has a run root; reuse it instead of minting another.
+const REAL_TMPDIR = tmpdir();
+let RUN_TEMP_ROOT = process.env.PORTOS_TEST_TEMP_ROOT;
+
+if (!RUN_TEMP_ROOT) {
+  // Stale-root sweep: remove `pvt-*` roots older than 6 hours from a PAST run
+  // that was killed before its teardown ran (a killed CoS agent, a crashed
+  // worker) — using the REAL tmpdir, before this run's own TMPDIR override
+  // below. A root from a run that is still in flight (started recently, by
+  // definition) survives; only the age check matters, not which process it
+  // belongs to, since two runs never share a root path.
+  const STALE_ROOT_AGE_MS = 6 * 60 * 60 * 1000;
+  try {
+    const now = Date.now();
+    for (const name of readdirSync(REAL_TMPDIR)) {
+      if (!name.startsWith('pvt-')) continue;
+      const path = join(REAL_TMPDIR, name);
+      try {
+        const stat = statSync(path);
+        if (stat.isDirectory() && now - stat.mtimeMs > STALE_ROOT_AGE_MS) {
+          rmSync(path, { recursive: true, force: true });
+        }
+      } catch {
+        // Already gone, or a permissions/race hiccup — never fail config load
+        // over a best-effort sweep of someone else's stale root.
+      }
+    }
+  } catch {
+    // REAL_TMPDIR unreadable — skip the sweep rather than fail config load.
+  }
+
+  // Short prefix: Unix-socket tests (e.g. services/itermBridge.test.js) build
+  // a `join(tmpdir(), 'prefix-XXXXXX', 'name.sock')` path, and macOS caps
+  // `sockaddr_un.sun_path` at 104 bytes — a long run-root prefix nested under
+  // another temp dir could push a legitimate socket path over that limit.
+  RUN_TEMP_ROOT = mkdtempSync(join(REAL_TMPDIR, 'pvt-'));
+  process.env.PORTOS_TEST_TEMP_ROOT = RUN_TEMP_ROOT;
+}
+process.env.TMPDIR = RUN_TEMP_ROOT;
+process.env.TMP = RUN_TEMP_ROOT;
+process.env.TEMP = RUN_TEMP_ROOT;
 
 // The suite REQUIRES NODE_ENV=test: it is what selects the file storage backend
 // (memoryBackend.js and every store facade) so no suite talks to the real
@@ -25,7 +99,12 @@ export default defineConfig({
   test: {
     ...vitestCiPool(),
     // Workers get their own process.env — set it there as well as above.
-    env: { NODE_ENV: 'test' },
+    env: {
+      NODE_ENV: 'test',
+      TMPDIR: RUN_TEMP_ROOT,
+      TMP: RUN_TEMP_ROOT,
+      TEMP: RUN_TEMP_ROOT,
+    },
     // 30s on every platform (#7951). This WAS 10s off Windows, and the split
     // has always been a fiction: the cost it budgets for is vitest's transform
     // pipeline, which is slower on Windows but not cheap anywhere. Measured on
@@ -153,5 +232,10 @@ export default defineConfig({
     // Global setup: mocks getPeers → [] so test-created records never fan out
     // to live sync peers.  Per-suite vi.mock('./instances.js', …) overrides win.
     setupFiles: ['./vitest.setup.js'],
+    // Runs once in the main process, before any worker starts and again once
+    // after the whole run finishes (unlike setupFiles, which runs per test
+    // file, per worker). Reports and removes whatever is left in
+    // RUN_TEMP_ROOT once every test has finished (#9032).
+    globalSetup: ['./test/runTempRoot.js'],
   }
 });
