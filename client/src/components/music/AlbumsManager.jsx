@@ -32,7 +32,6 @@ import {
 
 // Cap cover uploads so the base64 round-trip stays small. Enforced by
 // GalleryImagePicker's `maxBytes`.
-const COVER_MAX_BYTES = 12 * 1024 * 1024;
 
 const emptyForm = () => ({
   title: '', artistId: '', artist: '', description: '', genre: '', releaseYear: '', coverImageUrl: '', trackIds: [],
@@ -412,7 +411,7 @@ export default function AlbumsManager() {
         </div>
       </div>
 
-      <GalleryImagePicker open={galleryOpen} onClose={() => setGalleryOpen(false)} onSelect={handleCoverPick} allowUpload maxBytes={COVER_MAX_BYTES} />
+      <GalleryImagePicker open={galleryOpen} onClose={() => setGalleryOpen(false)} onSelect={handleCoverPick} allowUpload />
       <AlbumTrackPicker open={trackPickerOpen} tracks={availableTracks} onClose={() => setTrackPickerOpen(false)} onAdd={addTracks} />
     </div>
   );

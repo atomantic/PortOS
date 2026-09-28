@@ -193,3 +193,24 @@ describe('uploads routes (#4101)', () => {
     expect(after.body.totalSizeFormatted).toBe('0 B');
   });
 });
+
+
+describe('streamed uploads', () => {
+  it('accepts media beyond the JSON ceiling, persists the bytes, and rejects unsupported extensions', async () => {
+    const payload = Buffer.alloc(56 * 1024 * 1024, 7);
+    const multipart = (filename, bytes) => Buffer.concat([
+      Buffer.from(`--upload-test\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: video/mp4\r\n\r\n`),
+      bytes, Buffer.from('\r\n--upload-test--\r\n'),
+    ]);
+    const res = await request(buildApp()).post('/api/uploads')
+      .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('large.mp4', payload));
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ originalName: 'large.mp4', size: payload.length, mimeType: 'video/mp4' });
+    expect(res.body.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(readFileSync(join(PATHS.uploads, res.body.filename)).equals(payload)).toBe(true);
+    const bad = await request(buildApp()).post('/api/uploads')
+      .set('Content-Type', 'multipart/form-data; boundary=upload-test').send(multipart('bad.exe', Buffer.from('bad')));
+    expect(bad.status).toBe(400);
+    expect(bad.body.code).toBe('INVALID_FILE_TYPE');
+  });
+});

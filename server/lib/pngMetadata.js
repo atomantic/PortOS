@@ -5,6 +5,7 @@
 // prompt provenance survives as structured application metadata instead of being
 // lost with the source bytes.
 
+import { open } from 'node:fs/promises';
 import { inflateSync } from 'node:zlib';
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -287,4 +288,34 @@ export function extractPngGenerationMetadata(value) {
     }
   }
   return normalizeGenerationMetadata(result);
+}
+
+// Seek past pixel data rather than reading a potentially huge PNG into memory.
+export async function extractPngGenerationMetadataFile(path) {
+  const file = await open(path, 'r');
+  try {
+    const signature = Buffer.alloc(8);
+    await file.read(signature, 0, 8, 0);
+    if (!signature.equals(PNG_SIGNATURE)) return {};
+    const { size } = await file.stat();
+    const chunks = [signature];
+    let offset = 8;
+    for (let count = 0; count < MAX_PNG_CHUNKS && offset + 12 <= size; count++) {
+      const header = Buffer.alloc(8);
+      await file.read(header, 0, 8, offset);
+      const length = header.readUInt32BE(0);
+      const type = header.toString('ascii', 4, 8);
+      if (offset + length + 12 > size) break;
+      if (TEXT_CHUNK_TYPES.has(type) && length <= MAX_TEXT_CHUNK_BYTES) {
+        const chunk = Buffer.alloc(length + 12);
+        await file.read(chunk, 0, chunk.length, offset);
+        chunks.push(chunk);
+      }
+      offset += length + 12;
+      if (type === 'IEND') break;
+    }
+    return extractPngGenerationMetadata(Buffer.concat(chunks));
+  } finally {
+    await file.close();
+  }
 }

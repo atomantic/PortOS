@@ -236,6 +236,7 @@ const pendingUpload = { current: null };
 const setPendingUpload = (...files) => { pendingUpload.current = files.flat(); };
 
 vi.mock('../lib/multipart.js', () => ({
+  optionalUpload: () => (_req, _res, next) => next(),
   // Bypass the streaming parser. If a test set a pending upload via
   // setPendingUpload(), inject it under req.files keyed by fieldname so the
   // route exercises the upload-staging path; otherwise pass through.

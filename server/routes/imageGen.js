@@ -16,7 +16,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import {
   validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
-import { optionalUploadFields } from '../lib/multipart.js';
+import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
@@ -86,7 +86,6 @@ async function enqueueLoggedImage(req, job) {
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_LORAS = 8;
 const MAX_REFERENCE_IMAGES = 10;
-const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
 const updatePromptSchema = z.object({ prompt: z.string().max(MAX_PROMPT_LENGTH) });
 const galleryImageFilenameSchema = (label) => z.string().max(256)
   .regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, `${label} must be a basename ending in png/jpg/jpeg/webp`);
@@ -260,7 +259,6 @@ const REFERENCE_IMAGE_FIELDS = Array.from({ length: MAX_REFERENCE_IMAGES }, (_, 
 const IMAGE_UPLOAD_FIELDS = ['initImage', ...REFERENCE_IMAGE_FIELDS];
 
 const imageGenUploads = optionalUploadFields(IMAGE_UPLOAD_FIELDS, {
-  limits: { fileSize: MAX_IMAGE_UPLOAD_BYTES },
   fileFilter: (_req, file, cb) => cb(null, ACCEPTED_INIT_IMAGE_MIME.has((file.mimetype || '').toLowerCase())),
 });
 
@@ -317,7 +315,7 @@ const avatarSchema = z.object({
 // Upload a user-supplied image straight into the gallery (`data/images/`) so it
 // rides the existing `image` peer-sync asset path. `data` is base64 (no data:
 // URI prefix); the real format is sniffed server-side, so the schema only caps
-// the encoded string length (~16MB decoded ≈ 21.8M base64 chars).
+// the legacy JSON request. Multipart uploads have no size cap.
 const uploadImageSchema = z.object({
   data: z.string().min(1).max(24 * 1024 * 1024),
 });
@@ -689,7 +687,14 @@ router.post('/avatar', asyncHandler(async (req, res) => {
 // headshots) get a `/data/images/<f>` URL that the peer-sync `image` asset
 // path can transfer — unlike `/api/uploads/<f>`, which is not a pullable
 // asset kind and 404s on a peer.
-router.post('/upload', asyncHandler(async (req, res) => {
+router.post('/upload', optionalUpload('file'), asyncHandler(async (req, res) => {
+  if (req.file) {
+    try {
+      return res.json(await local.saveUploadedGalleryImage(null, req.file.path));
+    } finally {
+      await unlinkGuarded(req.file.path).catch(() => {});
+    }
+  }
   const { data } = validateRequest(uploadImageSchema, req.body);
   res.json(await local.saveUploadedGalleryImage(data));
 }));

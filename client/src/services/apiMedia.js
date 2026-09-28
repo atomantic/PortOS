@@ -1,4 +1,4 @@
-import { request, API_BASE, throwApiError } from './apiCore.js';
+import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';
 import { formatBytes } from '../utils/formatters.js';
 import {
   validateImageFile,
@@ -243,7 +243,7 @@ async function uploadAttachmentFile(file, options = {}) {
 // Uploads (general file storage)
 export const uploadFile = (base64Data, filename, options = {}) => request('/uploads', {
   method: 'POST',
-  body: JSON.stringify({ data: base64Data, filename }),
+  body: uploadBody(base64Data, filename),
   ...options
 });
 export const listUploads = (options = {}) => request('/uploads', options);

@@ -1,4 +1,4 @@
-import { request, API_BASE, throwApiError } from './apiCore.js';
+import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';
 import { filterHardwareCompatibleModels } from '../utils/systemCapabilities.js';
 
 // Image gen — local backend extras (gallery, models, LoRAs, cancel, delete).
@@ -268,7 +268,7 @@ export const getVideoHistoryItem = (id, options = {}) => request(`/video-gen/his
 // dir. Returns the history entry; feed it through normalizeVideo to display.
 export const uploadGalleryVideo = (base64Data, filename, options = {}) => request('/video-gen/upload', {
   method: 'POST',
-  body: JSON.stringify({ data: base64Data, ...(filename ? { filename } : {}) }),
+  body: uploadBody(base64Data, filename),
   ...options,
 });
 export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });

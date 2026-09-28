@@ -11,7 +11,7 @@
 // then selected exactly like a gallery image — the same source-image flow the
 // image→3D page feeds to createImageTo3dModel. Hosts get one modal for both
 // "reuse an image" and "upload a new one" instead of a separate file `<input>`
-// beside the picker; `maxBytes` narrows the size cap below the wire limit.
+// beside the picker. Uploads have no default file-size limit.
 //
 // Local gallery only — no external/web search (deliberate, see plan).
 
@@ -25,7 +25,7 @@ import { listImageGalleryFacets } from '../../services/apiImageVideo';
 import { listUniverseNames } from '../../services/apiUniverseBuilder';
 import { uploadGalleryImage } from '../../services/apiSystem';
 import {
-  readFileAsBase64, validateImageFile, JSON_UPLOAD_MAX_FILE_SIZE, UPLOAD_IMAGE_ACCEPT,
+  validateImageFile, UPLOAD_IMAGE_ACCEPT,
 } from '../../utils/fileUpload';
 import { useGalleryPage } from '../../hooks/useGalleryPage';
 import { humanizeCategory } from '../../lib/universeBuilderShared';
@@ -52,7 +52,7 @@ const byLabel = (a, b) => a.label.localeCompare(b.label);
 const asText = (value) => (typeof value === 'string' && value.trim() ? value : null);
 
 export default function GalleryImagePicker({
-  open, onClose, onSelect, allowUpload = false, maxBytes = JSON_UPLOAD_MAX_FILE_SIZE,
+  open, onClose, onSelect, allowUpload = false, maxBytes = Infinity,
 }) {
   const [facets, setFacets] = useState({ universes: [], categories: [], kinds: [], collections: [] });
   const [uploading, setUploading] = useState(false);
@@ -105,16 +105,12 @@ export default function GalleryImagePicker({
   const handleUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    // Drag-drop and clipboard paste bypass the picker's `accept`, and an
-    // oversized body only fails as an opaque 413 — so gate here, not just in the
-    // file dialog. `maxBytes` lets a host keep a tighter product cap than the wire limit.
+    // Validate the format as well as the input's accept hint.
     const invalid = validateImageFile(file, maxBytes);
     if (invalid) { toast.error(invalid); return; }
     const session = sessionRef.current;
     setUploading(true);
-    const base64 = await readFileAsBase64(file).catch(() => null);
-    if (!base64) { setUploading(false); toast.error(`Failed to read ${file.name}`); return; }
-    const saved = await uploadGalleryImage(base64, { silent: true }).catch((err) => {
+    const saved = await uploadGalleryImage(file, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Upload failed');
       return null;
     });

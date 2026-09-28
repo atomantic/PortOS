@@ -15,7 +15,6 @@ import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, publishAppL
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
 import { uploadFile } from '../../services/apiMedia';
 import { trackAudioUrl } from '../../services/apiTracks';
-import { readFileAsBase64, JSON_UPLOAD_MAX_FILE_SIZE } from '../../utils/fileUpload';
 import { formatBytes, formatDateTime, formatDurationSec } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
@@ -96,11 +95,8 @@ function LaunchVideoForm({ appId, onQueued }) {
     const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v'];
     const kind = VIDEO_TYPES.includes(file.type) ? 'video' : IMAGE_TYPES.includes(file.type) ? 'image' : null;
     if (!kind) { toast.error('Choose a PNG, JPEG, WEBP, GIF, MP4, WebM, MOV or M4V file'); return; }
-    if (file.size > JSON_UPLOAD_MAX_FILE_SIZE) { toast.error(`File is too large (${formatBytes(file.size)}). Max ${formatBytes(JSON_UPLOAD_MAX_FILE_SIZE)}.`); return; }
     setReferenceUploading(true);
-    const base64 = await readFileAsBase64(file).catch(() => null);
-    if (!base64) { setReferenceUploading(false); toast.error(`Failed to read ${file.name}`); return; }
-    const saved = await uploadFile(base64, file.name, { silent: true }).catch(err => { toast.error(err?.message || 'Upload failed'); return null; });
+    const saved = await uploadFile(file, file.name, { silent: true }).catch(err => { toast.error(err?.message || 'Upload failed'); return null; });
     setReferenceUploading(false);
     if (!saved?.filename) return;
     setReference({ kind, source: 'upload', filename: saved.filename, label: file.name, previewUrl: null });

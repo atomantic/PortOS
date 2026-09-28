@@ -6,14 +6,30 @@
  * the route surface, not re-run here against real dirs.
  */
 
-import { describe, it, expect } from 'vitest';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 import {
   detectVideoContainer,
   buildUploadHistoryEntry,
   saveUploadedGalleryVideo,
   saveUploadedGalleryVideoBuffer,
-  MAX_GALLERY_VIDEO_UPLOAD_BYTES,
+  saveUploadedGalleryVideoFile,
 } from './videoUpload.js';
+
+const uploadState = vi.hoisted(() => ({ root: '', history: [], fail: false }));
+vi.mock('../lib/fileUtils.js', async (original) => {
+  const actual = await original();
+  return { ...actual, PATHS: { ...actual.PATHS, get videos() { return uploadState.root; } } };
+});
+vi.mock('../lib/ffmpeg.js', () => ({ generateThumbnail: vi.fn(async () => null), probeVideoDuration: vi.fn(async () => 2) }));
+vi.mock('./videoGen/history.js', () => ({ mutateVideoHistory: vi.fn(async (mutate) => {
+  if (uploadState.fail) throw new Error('history write failed');
+  uploadState.history = mutate(uploadState.history);
+}) }));
+uploadState.root = mkdtempSync(join(tmpdir(), 'gallery-video-test-'));
+afterAll(() => rmSync(uploadState.root, { recursive: true, force: true }));
 
 const ftyp = (brand) => Buffer.concat([
   Buffer.from([0, 0, 0, 24]),
@@ -66,12 +82,25 @@ describe('saveUploadedGalleryVideo validation', () => {
   it('rejects an empty upload before touching disk', async () => {
     await expect(saveUploadedGalleryVideo('')).rejects.toThrow(/empty/i);
   });
-  it('rejects an oversize upload', async () => {
-    const oversize = Buffer.alloc(MAX_GALLERY_VIDEO_UPLOAD_BYTES + 1, 1).toString('base64');
-    await expect(saveUploadedGalleryVideo(oversize)).rejects.toThrow(/maximum size/i);
-  });
   it('rejects a non-video payload', async () => {
     const notVideo = Buffer.from('hello world, definitely not a video').toString('base64');
     await expect(saveUploadedGalleryVideo(notVideo)).rejects.toThrow(/unsupported video format/i);
   });
+});
+
+
+it('imports a large staged video without the JSON ceiling and removes failed imports', async () => {
+  const tempPath = join(uploadState.root, 'source.mp4');
+  const bytes = Buffer.concat([ftyp('isom'), Buffer.alloc(56 * 1024 * 1024)]);
+  writeFileSync(tempPath, bytes);
+  const entry = await saveUploadedGalleryVideoFile(tempPath, 'large.mp4');
+  expect(entry).toMatchObject({ title: 'large.mp4', source: 'upload', durationSec: 2 });
+  expect(uploadState.history[0]).toEqual(entry);
+  expect(readFileSync(join(uploadState.root, entry.filename)).equals(bytes)).toBe(true);
+  uploadState.fail = true;
+  const { readdirSync } = await import('fs');
+  const before = readdirSync(uploadState.root).sort();
+  await expect(saveUploadedGalleryVideoFile(tempPath, 'failed.mp4')).rejects.toThrow('history write failed');
+  expect(readdirSync(uploadState.root).sort()).toEqual(before);
+  expect(existsSync(tempPath)).toBe(true);
 });
