@@ -135,17 +135,21 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
     expect(manifest).toEqual([]);
   });
 
-  it('bundles the MuScriptor MIDI transcription alongside the master audio', async () => {
+  it('bundles the MuScriptor MIDI transcription and the vocal stem alongside the master audio', async () => {
     const audioBytes = Buffer.from('uploaded-audio');
     const midiBytes = Buffer.from('MThd-midi-bytes');
+    const stemBytes = Buffer.from('vocal-stem');
     writeMusic('upload.mp3', audioBytes);
     writeMusic('neon-midi.mid', midiBytes);
+    writeMusic('vocals.wav', stemBytes);
     const manifest = await buildMusicVideoAssetManifest({
       trackId: null, uploadedAudioFilename: 'upload.mp3', scenes: [],
       midiTranscription: { filename: 'neon-midi.mid', model: 'medium' },
+      vocalStemFilename: 'vocals.wav',
     });
     expect(manifest).toContainEqual({ filename: 'upload.mp3', kind: 'music', sha256: sha(audioBytes) });
     expect(manifest).toContainEqual({ filename: 'neon-midi.mid', kind: 'music', sha256: sha(midiBytes) });
+    expect(manifest).toContainEqual({ filename: 'vocals.wav', kind: 'music', sha256: sha(stemBytes) });
   });
 
   it('dedups when the upload basename and the linked track point at the same file', async () => {

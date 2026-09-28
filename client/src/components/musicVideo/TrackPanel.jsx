@@ -3,6 +3,7 @@ import toast from '../ui/Toast';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
 import { trackAudioUrl } from '../../services/apiTracks.js';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
+import VocalStemControl from './VocalStemControl.jsx';
 import { trackSourceLabel } from '../../lib/trackProvenance.js';
 
 /**
@@ -10,11 +11,12 @@ import { trackSourceLabel } from '../../lib/trackProvenance.js';
  * YouTube (re-selecting either PATCHes the project's trackId), then preview and
  * download the resolved master file. Relinking is blocked while a render or a
  * MIDI transcription is bound to this project — both already resolved the
- * project's audio at kickoff.
+ * project's audio at kickoff. An optional vocal stem (#8977) conditions
+ * lip-sync performance shots in place of the mix.
  */
 export default function TrackPanel({
   project, tracks, trackName, audioFilename, youtube,
-  renderBound, midiBound, onChangeTrack,
+  renderBound, midiBound, onChangeTrack, onProjectUpdated,
 }) {
   const blockedMessage = renderBound
     ? 'Wait for the current render to finish before changing the track'
@@ -55,6 +57,11 @@ export default function TrackPanel({
           compact
         />
       </div>
+      <VocalStemControl
+        project={project}
+        hasAudio={Boolean(project.trackId || project.uploadedAudioFilename)}
+        onUpdated={onProjectUpdated}
+      />
       {/* Preview + download the project's master audio track. Both act on
           the resolved data/music/ file (linked track or uploaded audio). */}
       {audioUrl && (

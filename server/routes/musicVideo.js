@@ -42,6 +42,9 @@ import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
+import { uploadSingle } from '../lib/multipart.js';
+import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
+import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import {
   listProjects,
   getProject,
@@ -137,6 +140,27 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 router.delete('/:id', asyncHandler(async (req, res) => {
   await deleteProject(req.params.id);
   res.json({ ok: true });
+}));
+
+// Optional vocal stem (#8977): a full-length bounce of the vocal on the
+// master's timebase. Performance shots are conditioned on it instead of the
+// mix; the master stays the project's audio. Same audio formats and size cap
+// as a track upload.
+const vocalStemUpload = uploadSingle('stem', {
+  limits: { fileSize: MUSIC_UPLOAD_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (isSupportedMusicUpload(file)) cb(null, true);
+    else cb(new ServerError('Unsupported audio format — accepted: MP3, WAV, M4A, OGG, FLAC', { status: 400, code: 'VALIDATION_ERROR' }));
+  },
+});
+
+router.post('/:id/vocal-stem', vocalStemUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No vocal stem file uploaded', { status: 400, code: 'VALIDATION_ERROR' });
+  res.json(await attachVocalStem(req.params.id, { tempPath: req.file.path, originalName: req.file.originalname }));
+}));
+
+router.delete('/:id/vocal-stem', asyncHandler(async (req, res) => {
+  res.json(await detachVocalStem(req.params.id));
 }));
 
 // Resolve a project's source audio to an absolute path under data/music/. The

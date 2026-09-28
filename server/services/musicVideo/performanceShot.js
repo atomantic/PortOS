@@ -21,6 +21,11 @@
  *      performance, capability snapshot, target edit duration and the coverage
  *      the provider will generate.
  *
+ * When the project carries a vocal stem (vocalStem.js) the window is cut from
+ * the stem instead of the mix, at the same song times, after re-checking that
+ * the stem still shares the master's timebase. The instruction records which
+ * recording conditioned the take.
+ *
  * The sliced WAV is staged under data/uploads so the media-job queue owns and
  * deletes it on every terminal path (completion, failure, cancel, restart).
  * The master stays untouched and remains the only audio in the final render.
@@ -42,6 +47,7 @@ import {
   selectedPerformanceInstruction,
 } from '../../lib/musicVideoShotTiming.js';
 import { getProject } from './projects.js';
+import { assertVocalStemTimebase, resolveVocalStemPath } from './vocalStem.js';
 
 export const SHOT_INSTRUCTION_VERSION = 1;
 
@@ -145,10 +151,17 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   const plan = planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec, capability });
   if (!plan.ok) throw refuse(plan.message, plan.code);
 
+  // An optional vocal stem conditions the provider in place of the mix. It
+  // is re-checked here because the file could have been replaced on disk or
+  // arrived from a peer since it was attached.
+  const stemPath = resolveVocalStemPath(project);
+  if (stemPath) assertVocalStemTimebase(await probeVideoDuration(stemPath), songDurationSec);
+
   const audioSha256 = await hashFile(masterPath);
+  const conditioningSha256 = stemPath ? await hashFile(stemPath) : audioSha256;
   await ensureDir(PATHS.uploads);
   const audioFilePath = join(PATHS.uploads, `mv-performance-${randomUUID()}.wav`);
-  await sliceAudioWindow(masterPath, audioFilePath, { startSec: plan.windowStartSec, endSec: plan.windowEndSec });
+  await sliceAudioWindow(stemPath || masterPath, audioFilePath, { startSec: plan.windowStartSec, endSec: plan.windowEndSec });
   // Verify the cut before anything is paid for: the provider rejects short
   // audio and silently clips long audio, and both would break the edit points.
   const slicedSec = await probeVideoDuration(audioFilePath);
@@ -169,6 +182,10 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
       source: project.trackId ? 'track' : 'upload',
       sha256: audioSha256,
       songDurationSec,
+      // What the provider heard: the master itself, or a vocal stem on the
+      // master's timebase. `sha256` above stays the master's, so a take
+      // is stale only when the song changes, not when a stem is swapped.
+      conditioning: { source: stemPath ? 'vocal-stem' : 'master', sha256: conditioningSha256 },
     },
     songInterval: { startSec: scene.startSec, endSec: scene.endSec },
     audioWindow: { startSec: plan.windowStartSec, endSec: plan.windowEndSec, durationSec: plan.windowSec },
