@@ -786,6 +786,40 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
   });
 
+  it('cancels during dispatch validation without invoking the provider and cleans staged uploads', async () => {
+    const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+    let releaseDispatch;
+    let enteredDispatch;
+    const entered = new Promise((resolve) => { enteredDispatch = resolve; });
+    const gate = new Promise((resolve) => { releaseDispatch = resolve; });
+    assertVideoAttemptDispatch.mockImplementationOnce(() => {
+      enteredDispatch();
+      return gate;
+    });
+    const uploads = join(tempDataDir, 'uploads');
+    mkdirSync(uploads, { recursive: true });
+    const uploadedTempPath = join(uploads, 'example-frame.png');
+    const audioFilePath = join(uploads, 'example-audio.wav');
+    const extraPath = join(uploads, 'example-extra.png');
+    for (const path of [uploadedTempPath, audioFilePath, extraPath]) writeFileSync(path, 'staged');
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      prompt: 'cancel before dispatch', uploadedTempPath, audioFilePath,
+      uploadedTempPaths: [extraPath],
+      videoProduction: { projectId: 'example-project', attemptId: 'example-attempt' },
+    } });
+    await entered;
+    stubs.cancelVideo.mockReturnValueOnce(false);
+    try {
+      await expect(mediaJobQueue.cancelJob(job.jobId)).resolves.toEqual({ ok: true, status: 'canceling' });
+    } finally {
+      releaseDispatch();
+    }
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'canceled');
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(stubs.generateChainedVideo).not.toHaveBeenCalled();
+    for (const path of [uploadedTempPath, audioFilePath, extraPath]) expect(existsSync(path)).toBe(false);
+  });
+
   it('restores cancellation bookkeeping when a provider refuses during finalization', async () => {
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
       mode: 'grok', prompt: 'finishing render', videoProduction: { submissionUncertain: false },
