@@ -375,7 +375,7 @@ export default function CodeAnimation() {
     if (!next) return;
     const requested = jobId;
     setJob(next);
-    if (next.status === 'completed' && next.html) setPreview({ html: next.html, audioUrl: next.audioUrl, frame: next.frame });
+    if (next.status === 'completed' && next.html) setPreview({ html: next.html, audioUrl: next.audioUrl, frame: next.frame, jobId: next.id });
     else setPreview(null);
     if (next.status !== 'missing') {
       setSavedJobs((previous) => [galleryJob(next), ...previous.filter((item) => item.id !== requested)]
@@ -842,6 +842,7 @@ export default function CodeAnimation() {
                 html={preview.html}
                 audioUrl={preview.audioUrl}
                 frame={preview.frame}
+                jobId={preview.jobId}
                 messages={options.messages}
                 audioGlobal={options.audioGlobal}
                 title={draft.title || draft.concept.slice(0, 40)}

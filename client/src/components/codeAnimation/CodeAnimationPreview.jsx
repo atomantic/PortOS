@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, Download, FileCode2, LoaderCircle, Save } from 'lucide-react';
+import { Circle, Clapperboard, Download, FileCode2, LoaderCircle, Save } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../ui/Toast';
-import { uploadGalleryVideo } from '../../services/api';
+import { cancelCodeAnimationExport, exportCodeAnimation, uploadGalleryVideo } from '../../services/api';
+import { useSseProgress } from '../../hooks/useSseProgress';
 import { downloadBlob } from '../../lib/downloadBlob';
 
 // Seconds past the film's own duration before a silent recording is abandoned
@@ -66,7 +67,7 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
  * The opaque-origin frame cannot fetch `/api/uploads/*` itself, so the audio
  * track is read here and handed over as a data URL through the audio global.
  */
-export default function CodeAnimationPreview({ html, audioUrl, messages, audioGlobal, frame, title }) {
+export default function CodeAnimationPreview({ html, audioUrl, messages, audioGlobal, frame, title, jobId }) {
   const iframeRef = useRef(null);
   // A generated page receives the selected track only after an explicit choice.
   // Tie that choice to the URL so a changed track needs fresh consent.
@@ -85,6 +86,24 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const [video, setVideo] = useState(null);
   const [saving, setSaving] = useState(false);
   const recordTimerRef = useRef(null);
+  // Frame-exact export runs server-side on the media queue; its progress and
+  // result stream from the composition job's SSE channel.
+  const [exportJob, setExportJob] = useState(null);
+  const [exportStarting, setExportStarting] = useState(false);
+  const exportUrl = exportJob ? `/api/html-composition/${encodeURIComponent(exportJob)}/events` : null;
+  const { latest: exportFrame } = useSseProgress(exportUrl, { enabled: !!exportUrl });
+  const exportResult = exportFrame?.type === 'complete' ? exportFrame.result : null;
+  const exportError = exportFrame?.type === 'error' ? exportFrame.error : null;
+  const exporting = !!exportJob && !exportResult && !exportError && exportFrame?.type !== 'canceled';
+  const exportPercent = exportFrame?.type === 'progress' ? Math.round((exportFrame.progress || 0) * 100) : 0;
+
+  useEffect(() => {
+    if (exportError) toast.error(`Export failed: ${String(exportError).slice(0, 300)}`);
+  }, [exportError]);
+
+  useEffect(() => {
+    setExportJob(null);
+  }, [jobId]);
 
   useEffect(() => {
     let active = true;
@@ -176,6 +195,19 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     }, (duration + RECORD_GRACE_SECONDS) * 1_000);
   };
 
+  const handleExport = async () => {
+    if (!jobId || exporting || exportStarting) return;
+    setExportStarting(true);
+    const queued = await exportCodeAnimation(jobId, { silent: true }).catch((error) => {
+      toast.error(error.message || 'Failed to start the export');
+      return null;
+    });
+    setExportStarting(false);
+    if (!queued?.jobId) return;
+    for (const note of queued.notes || []) toast(note);
+    setExportJob(queued.jobId);
+  };
+
   const handleSave = async () => {
     if (!video || video.saved || saving) return;
     setSaving(true);
@@ -247,8 +279,29 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
           className="inline-flex items-center gap-2 rounded-lg bg-port-error/90 px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {recording ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Circle className="h-4 w-4 fill-current" />}
-          {recording ? `Recording ${Math.floor(recordProgress)}s / ${Math.round(duration)}s` : 'Record video'}
+          {recording ? `Recording ${Math.floor(recordProgress)}s / ${Math.round(duration)}s` : 'Record (real-time)'}
         </button>
+        {jobId && (
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting || exportStarting}
+            title="Render every frame server-side through renderFrame(t) — no dropped frames, H.264 MP4 in Media History"
+            className={BUTTON_PRIMARY}
+          >
+            {exporting || exportStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}
+            {exporting ? `Exporting ${exportPercent}%` : 'Export MP4 (frame-exact)'}
+          </button>
+        )}
+        {exporting && (
+          <button
+            type="button"
+            onClick={() => cancelCodeAnimationExport(exportJob, { silent: true }).catch((error) => toast.error(error.message || 'Failed to cancel the export'))}
+            className={BUTTON_SECONDARY}
+          >
+            Cancel export
+          </button>
+        )}
         <button
           type="button"
           onClick={() => downloadBlob(html, `${fileBase}.html`, 'text/html')}
@@ -261,6 +314,18 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
           {audio.status === 'failed' ? ' · audio track failed to load' : ''}
         </span>
       </div>
+
+      {exportResult?.path && (
+        <div className="space-y-2 rounded-lg border border-port-border bg-port-card p-3">
+          <video src={exportResult.path} controls className="max-h-80 w-full rounded bg-black" aria-label="Exported animation" />
+          <div className="flex flex-wrap items-center gap-2">
+            <a href={exportResult.path} download={`${fileBase}.mp4`} className={BUTTON_SECONDARY}>
+              <Download className="h-4 w-4" /> Download MP4
+            </a>
+            <Link to="/media/history" className="text-xs text-port-accent hover:underline">Saved to Media History</Link>
+          </div>
+        </div>
+      )}
 
       {video && (
         <div className="space-y-2 rounded-lg border border-port-border bg-port-card p-3">
