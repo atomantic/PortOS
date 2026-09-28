@@ -12,8 +12,8 @@
     "better-test-quality": "ab53a477cd194a5c4fbda09d901a3775",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "ae6e8164698faebc2a5fd4fecb3d41e8",
-    "claim-issue": "182a18e2b37e7f1c22c5f853889d2290",
-    "claim-issue-gitlab": "a33eb4fa904a59a09d71f030f55b1531",
+    "claim-issue": "77be383966232f8115454e15237c31b7",
+    "claim-issue-gitlab": "486710f675ef8e753cdc89e07c47795b",
     "claim-issue-jira": "e2f06509e4797cdc577c4684bd5d02e8",
     "code-quality": "6762542233cdffb86d4e2244945bf52b",
     "code-reviewer-implement": "2e10cac7c1e1cd021d06bfddb5c1eaf2",
@@ -30,7 +30,7 @@
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
     "infrastructure": "b4ad755eb115b82679c601a0df1ffd7b",
-    "issue-reconcile": "541afc6566aa012ebc400ccff391ce2b",
+    "issue-reconcile": "716c87476d77d7e4f98613dadc06f228",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
     "media-render-research": "5164eda916760e6f3604b0c80a5f33ec",
@@ -74,8 +74,8 @@
     "better-structural-drift": 1,
     "better-test-quality": 1,
     "branch-reconcile": 7,
-    "claim-issue": 36,
-    "claim-issue-gitlab": 32,
+    "claim-issue": 37,
+    "claim-issue-gitlab": 33,
     "claim-issue-jira": 21,
     "code-quality": 4,
     "code-reviewer-a": 1,
@@ -92,7 +92,7 @@
     "error-handling": 3,
     "feature-ideas": 11,
     "infrastructure": 1,
-    "issue-reconcile": 7,
+    "issue-reconcile": 8,
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
     "media-render-research": 1,
@@ -190,7 +190,8 @@
       "0651e646940cc96677cf87d4764bd88d",
       "b9360ef3018be5fce3e0413cae86a20d",
       "f6f3c5865744d46da2edde702beecf27",
-      "811ff55f4e797ee554b43f5c0911bc19"
+      "811ff55f4e797ee554b43f5c0911bc19",
+      "182a18e2b37e7f1c22c5f853889d2290"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -223,7 +224,8 @@
       "cc66fbe92da7f2ecdcdaeb5b374b010a",
       "aa5d48957e72f7eb71a2027219cea2b5",
       "b2881cf80bbff9f7104255b6746a20c7",
-      "542e10eb02e850fb40d11fab6497deee"
+      "542e10eb02e850fb40d11fab6497deee",
+      "a33eb4fa904a59a09d71f030f55b1531"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
@@ -320,7 +322,8 @@
       "c87d7adb57de208c069964760c9c6276",
       "a30f5d76b980bc9016f576047c9d5bb1",
       "53e068c533e989ae31025fdfd4a3ecf9",
-      "62a2940dfecffaa4902396a4687fd9f7"
+      "62a2940dfecffaa4902396a4687fd9f7",
+      "541afc6566aa012ebc400ccff391ce2b"
     ],
     "mobile-responsive": [
       "636bdc17fa39ed2f2e27623284c8e04c",

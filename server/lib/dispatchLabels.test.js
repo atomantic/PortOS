@@ -373,9 +373,8 @@ describe('shared guidance', () => {
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('help wanted');
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('Issue-quality gate');
     for (const name of Object.keys(DISPATCH_LABEL_COLORS)) {
-      // Verify that colors are included in guidance but separated from names to prevent miscopying
-      expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain(DISPATCH_LABEL_COLORS[name]);
-      // Ensure the guidance doesn't use the old format that embeds names and colors together
+      // A `name hex` pair is what agents copied into malformed label names (#9056).
+      expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain(`gh label create ${name} --color ${DISPATCH_LABEL_COLORS[name]}`);
       expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toContain(`${name} ${DISPATCH_LABEL_COLORS[name]}`);
     }
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('REQUIRED on every issue you file');
