@@ -126,7 +126,8 @@ function makeSocket(id = 'sock-1') {
     emitted,
     on(event, fn) { handlers[event] = fn; },
     emit(event, ...args) { emitted.push([event, ...args]); },
-    removeAllListeners: vi.fn()
+    removeAllListeners: vi.fn(),
+    setMaxListeners: vi.fn()
   };
 }
 
