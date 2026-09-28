@@ -581,7 +581,7 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // Music Video projects (#1770): the user-authored config + creative content the
   // merge can restore. `scenes[]` (the beat-aligned director board with prompts)
   // carries the bulk of the work, alongside name/status/mode/trackId/
-  // uploadedAudioFilename/concept. Server-owned / machine-managed fields are
+  // uploadedAudioFilename/vocalStemFilename/concept. Server-owned / machine-managed fields are
   // excluded — `id`/`createdAt`/the LWW-tombstone trio are structural,
   // `renderHistoryId` is a derived output pointer, and `audioAnalysis` is the
   // machine-derived beat cache (regenerated from the audio, not hand-authored).
@@ -589,7 +589,7 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // narrowing); this set is what the Conflicts UI offers for restore.
   // `musicVideoProject` matches the record kind and updateProject (via
   // applyProjectPatch's wholesale spread) accepts every field here.
-  musicVideoProject: ['name', 'status', 'mode', 'trackId', 'uploadedAudioFilename', 'concept', 'scenes'],
+  musicVideoProject: ['name', 'status', 'mode', 'trackId', 'uploadedAudioFilename', 'vocalStemFilename', 'concept', 'scenes'],
 });
 
 const present = (v) => v !== undefined;

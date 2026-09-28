@@ -70,6 +70,15 @@ export const splitMusicVideoScene = (id, sceneId, backend, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/split`, {
     method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
   });
+// Optional vocal stem (#8977): a full-length vocal bounce on the master's
+// timebase that performance shots are conditioned on. Both → the project.
+export const uploadMusicVideoVocalStem = (id, file, options = {}) => {
+  const body = new FormData();
+  body.append('stem', file, file.name || 'vocal-stem');
+  return request(`/music-video/${encodeURIComponent(id)}/vocal-stem`, { method: 'POST', body, ...options });
+};
+export const removeMusicVideoVocalStem = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/vocal-stem`, { method: 'DELETE', ...options });
 
 // ---- Scene takes (#8965) ----
 // Every render/import for a scene slot is an immutable take; the scene's

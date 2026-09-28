@@ -695,6 +695,7 @@ export default function MusicVideo() {
                 renderBound={renderTargetsSelected}
                 midiBound={midiTargetsSelected}
                 onChangeTrack={handleChangeTrack}
+                onProjectUpdated={replaceProject}
               />
               <RenderStatusPanel
                 rendering={renderTargetsSelected}

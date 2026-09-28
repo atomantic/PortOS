@@ -547,6 +547,9 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
   // precisely so it rides this manifest; without it a subscribed peer receives
   // a `midiTranscription.filename` pointer whose bytes never arrive.
   if (isStr(project?.midiTranscription?.filename)) audioNames.push(project.midiTranscription.filename);
+  // The optional vocal stem (#8977) conditions performance shots and lives
+  // under PATHS.music beside the master, so it rides the same entries.
+  if (isStr(project?.vocalStemFilename)) audioNames.push(project.vocalStemFilename);
   for (const name of [...new Set(audioNames)]) {
     const audio = assetReference(name, 'music');
     if (audio) dedup.set(`${audio.kind}:${audio.filename}`, audio);

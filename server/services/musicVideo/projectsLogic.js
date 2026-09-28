@@ -296,6 +296,9 @@ export function applyProjectPatch(project, patch) {
     // Composition cue times and the poster frame were set against the old
     // song too: keep the text, clear the timings (#8984).
     ...(project.composition ? { composition: invalidateCompositionTiming(project.composition) } : {}),
+    // A vocal stem is a bounce of the OLD song; conditioning a performance on
+    // it against the new master would sing the wrong words (#8977).
+    ...(project.vocalStemFilename ? { vocalStemFilename: null } : {}),
     ...mergedPatch,
     ...statusPatch,
     audioAnalysis: null,

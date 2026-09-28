@@ -7,6 +7,7 @@
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -41,14 +42,14 @@ const MARKER_SEC = 20;
 
 // A mono 16-bit PCM WAV built sample-by-sample, so the marker's position is
 // known exactly without trusting any encoder.
-function songWav() {
-  const samples = SONG_SEC * RATE;
+function songWav({ seconds = SONG_SEC, markerAmp = 30000 } = {}) {
+  const samples = seconds * RATE;
   const buf = Buffer.alloc(44 + samples * 2);
   buf.write('RIFF', 0); buf.writeUInt32LE(36 + samples * 2, 4); buf.write('WAVE', 8);
   buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22);
   buf.writeUInt32LE(RATE, 24); buf.writeUInt32LE(RATE * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34);
   buf.write('data', 36); buf.writeUInt32LE(samples * 2, 40);
-  buf.writeInt16LE(30000, 44 + MARKER_SEC * RATE * 2);
+  buf.writeInt16LE(markerAmp, 44 + MARKER_SEC * RATE * 2);
   return buf;
 }
 
@@ -113,6 +114,7 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(si.songInterval).toEqual({ startSec: 20, endSec: 21.5 });
     expect(si.cues).toEqual([{ text: 'hold on', startSec: 0.775, endSec: 2.275 }]);
     expect(si.audio.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(si.audio.conditioning).toEqual({ source: 'master', sha256: si.audio.sha256 });
     expect(si).toMatchObject({ referenceImageId: 'frame.png', performance: 'sings the held note', generatedCoverageSec: 5.05 });
     expect(si.capability).toMatchObject({ provider: 'fal', minAudioSec: 5, maxAudioSec: 14.8 });
 
@@ -192,6 +194,34 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     const [asCutaway] = await resolveSceneClips({ scenes: [{ ...withTake, shotMode: 'cutaway' }] });
     expect(asCutaway).toMatchObject({ inSec: 0 });
   }, 60_000);
+
+  it('conditions on the vocal stem at the same song times and refuses a stem off the master timebase', async () => {
+    const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+    const stem = songWav({ markerAmp: 12000 });
+    await writeFile(join(PATHS.music, 'vocals.wav'), stem);
+    getProject.mockResolvedValue({ ...project(), vocalStemFilename: 'vocals.wav' });
+    const args = { musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: '/x/frame.png', mode: 'image' };
+    const { audioFilePath, shotInstruction: si } = await preparePerformanceShot(args);
+
+    // Same window and in-point as the master slice, but the stem's bytes.
+    expect(si.audioWindow).toEqual({ startSec: 18.225, endSec: 23.275, durationSec: 5.05 });
+    const samples = pcm(await readFile(audioFilePath));
+    const markerAt = Math.round((MARKER_SEC - 18.225) * RATE);
+    expect(samples.readInt16LE(markerAt * 2)).toBe(12000);
+    // Staleness still keys on the master; the stem is recorded as what the
+    // provider heard.
+    expect(si.audio.sha256).toBe(sha(songWav()));
+    expect(si.audio.conditioning).toEqual({ source: 'vocal-stem', sha256: sha(stem) });
+
+    // A trimmed stem would put the syllables on the wrong frames.
+    await writeFile(join(PATHS.music, 'vocals.wav'), songWav({ seconds: SONG_SEC - 1 }));
+    await rm(PATHS.uploads, { recursive: true, force: true });
+    await expect(preparePerformanceShot(args)).rejects.toMatchObject({ status: 400, code: 'MUSIC_VIDEO_VOCAL_STEM_TIMEBASE' });
+    // A stem the record names but the disk lacks is not silently replaced by the mix.
+    await rm(join(PATHS.music, 'vocals.wav'));
+    await expect(preparePerformanceShot(args)).rejects.toMatchObject({ status: 404, code: 'MUSIC_VIDEO_VOCAL_STEM_MISSING' });
+    expect(existsSync(PATHS.uploads) ? await readdir(PATHS.uploads) : []).toEqual([]);
+  });
 
   it('uses the full span of a long shot and stays under the provider maximum', async () => {
     getProject.mockResolvedValue(project({ startSec: 10, endSec: 24.7 }));
