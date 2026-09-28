@@ -245,6 +245,10 @@ export const ALWAYS_RUN_TESTS = [
   'server/lib/cliChildEnv.test.js',
   'server/lib/editorial/proseTics.test.js',
   'server/lib/generatedManifests.test.js',
+  // Whole-tree scanner over git-tracked test files (#9000): a suite anywhere
+  // in server/scripts/lib/autofixer can add a leaked mkdtemp call with no
+  // import edge back to this guard.
+  'server/lib/mkdtempCleanup.guards.test.js',
   // Base-relative server import-growth guard (#7993). A new eager edge in a
   // widely reached module multiplies across suites this file does not import,
   // so impact selection would not reach it unless the diff touched this file.

@@ -67,7 +67,7 @@ const TEST_HELPER_PATTERNS = [
 
 const MKDTEMP_PATTERN = /\b(?:mkdtemp|mkdtempSync)\s*\(\s*(?:join|path\.join)\s*\(\s*(?:tmpdir|process\.env\.\w+|os\.tmpdir)\s*\(\s*\)/g;
 const SKIP_MARKER = /SKIP\s*:\s*mkdtemp\s*cleanup/i;
-const CLEANUP_PATTERN = /\b(?:rmSync|destroyGitSandbox|rm\()\s*\(/;
+const CLEANUP_PATTERN = /\b(?:rmSync|rm|fs\.rm|destroyGitSandbox)\s*\(/;
 
 /**
  * Finds all git-tracked files in test-bearing trees that match test patterns or are test helpers.
@@ -88,6 +88,38 @@ function findTestFiles() {
   return files;
 }
 
+/**
+ * Scans a single file's source for mkdtemp calls that lack a cleanup
+ * mechanism. Returns an array of human-readable violation strings (empty
+ * when the file is clean). Pulled out of the tree-wide test so a probe can
+ * exercise the exact same code path against an inline fixture.
+ */
+function findViolationsInSource(file, src) {
+  const violations = [];
+
+  // Skip files with no mkdtemp calls
+  if (!MKDTEMP_PATTERN.test(src)) return violations;
+
+  // Check if there's any cleanup mechanism (rmSync, destroyGitSandbox, rm, etc.)
+  const hasCleanup = CLEANUP_PATTERN.test(src);
+
+  // Find each mkdtemp call and check for skip marker
+  MKDTEMP_PATTERN.lastIndex = 0; // Reset regex
+  for (const match of src.matchAll(MKDTEMP_PATTERN)) {
+    // Check if this specific call has the skip marker nearby (within 2 lines before)
+    const callIndex = match.index;
+    const beforeCall = src.slice(Math.max(0, callIndex - 200), callIndex);
+    const hasSkipMarker = SKIP_MARKER.test(beforeCall);
+
+    if (!hasSkipMarker && !hasCleanup) {
+      const lineNum = src.slice(0, callIndex).split('\n').length;
+      violations.push(`${file} line ${lineNum}: mkdtemp without cleanup (add skip marker if justified)`);
+    }
+  }
+
+  return violations;
+}
+
 describe('mkdtemp cleanup guard (#9000)', () => {
   it('finds test files to scan', () => {
     const files = findTestFiles();
@@ -100,26 +132,7 @@ describe('mkdtemp cleanup guard (#9000)', () => {
 
     for (const file of findTestFiles()) {
       const src = readFileSync(join(REPO_ROOT, file), 'utf8');
-
-      // Skip files with no mkdtemp calls
-      if (!MKDTEMP_PATTERN.test(src)) continue;
-
-      // Check if there's any cleanup mechanism (rmSync, destroyGitSandbox, rm, etc.)
-      const hasCleanup = CLEANUP_PATTERN.test(src);
-
-      // Find each mkdtemp call and check for skip marker
-      MKDTEMP_PATTERN.lastIndex = 0; // Reset regex
-      for (const match of src.matchAll(MKDTEMP_PATTERN)) {
-        // Check if this specific call has the skip marker nearby (within 2 lines before)
-        const callIndex = match.index;
-        const beforeCall = src.slice(Math.max(0, callIndex - 200), callIndex);
-        const hasSkipMarker = SKIP_MARKER.test(beforeCall);
-
-        if (!hasSkipMarker && !hasCleanup) {
-          const lineNum = src.slice(0, callIndex).split('\n').length;
-          violations.push(`${file} line ${lineNum}: mkdtemp without cleanup (add skip marker if justified)`);
-        }
-      }
+      violations.push(...findViolationsInSource(file, src));
     }
 
     if (violations.length > 0) {
@@ -131,6 +144,24 @@ describe('mkdtemp cleanup guard (#9000)', () => {
         + `Or add "// SKIP: mkdtemp cleanup — [reason]" if this is a special case.`,
       );
     }
+  });
+
+  it('flags a probe fixture that mkdtemps with no cleanup (real code path)', () => {
+    const probeSrc = `
+      import { mkdtempSync } from 'fs';
+      import { tmpdir } from 'os';
+      import { join } from 'path';
+
+      describe('probe', () => {
+        it('leaks a temp dir', () => {
+          const dir = mkdtempSync(join(tmpdir(), 'x-'));
+          expect(dir).toBeTruthy();
+        });
+      });
+    `;
+    const violations = findViolationsInSource('probe/fixture.test.js', probeSrc);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatch(/probe\/fixture\.test\.js line \d+: mkdtemp without cleanup/);
   });
 
   describe('the guard recognizer', () => {
@@ -153,7 +184,9 @@ describe('mkdtemp cleanup guard (#9000)', () => {
 
     it('detects skip markers', () => {
       const src = `// SKIP: mkdtemp cleanup — special case\nconst d = mkdtemp(join(tmpdir(), 'prefix-'));`;
-      const beforeCall = src.slice(0, src.indexOf('mkdtemp'));
+      // The comment itself contains the word "mkdtemp", so find the actual
+      // call site (the last occurrence) rather than the first.
+      const beforeCall = src.slice(0, src.lastIndexOf('mkdtemp'));
       expect(SKIP_MARKER.test(beforeCall)).toBe(true);
     });
 
