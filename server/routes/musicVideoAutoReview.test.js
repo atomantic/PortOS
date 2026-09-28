@@ -277,6 +277,10 @@ describe('opt-in automatic review/retries (#8988)', () => {
     expect(run(current).stopReason).toMatch(/generation failed: provider error/);
     expect(run(current).usage.generations).toBe(1);
     expect(current.revisions.find((rv) => rv.id === revisionId).sections.find((s) => s.sceneId === 's2').claimedAt).toBeNull();
+    // That job DID reach the queue, so a later release never refunds it.
+    h.jobs.push(job);
+    await request(app).post(`${base(p.id)}/revisions/${revisionId}/release`).send({ sceneId: 's2' });
+    expect(run(await projects.getProject(p.id)).usage.generations).toBe(1);
   });
 
   it('stops before handing out a revision the remaining spend cannot cover', async () => {

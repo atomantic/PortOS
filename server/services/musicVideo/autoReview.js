@@ -71,8 +71,16 @@ export const projectAutoReviews = (project) => (Array.isArray(project?.autoRevie
 const activeAutoReview = (project) => projectAutoReviews(project).find((r) => ACTIVE.has(r.status)) || null;
 
 const currentAttempt = (run) => run.attempts[run.attempts.length - 1];
-const liveReservations = (run, nowMs) => (Array.isArray(run.reservations) ? run.reservations : [])
-  .filter((r) => Number.isFinite(nowMs) && nowMs - Date.parse(r.at) < RESERVATION_LEASE_MS);
+// A reservation is live until its lease lapses or a job for its section
+// reaches the queue (from then on the job itself is the in-flight evidence,
+// and the charge is spent for good — it can never be refunded).
+const reachedQueue = (r, jobs) => jobs.some((job) => {
+  const tag = job?.params?.musicVideo;
+  return tag?.revisionId === r.revisionId && tag?.sceneId === r.sceneId
+    && (!r.kind || job.kind === r.kind) && typeof job.queuedAt === 'string' && job.queuedAt >= r.at;
+});
+const liveReservations = (run, nowMs, jobs = []) => (Array.isArray(run.reservations) ? run.reservations : [])
+  .filter((r) => Number.isFinite(nowMs) && nowMs - Date.parse(r.at) < RESERVATION_LEASE_MS && !reachedQueue(r, jobs));
 
 function findRun(project, runId) {
   const run = projectAutoReviews(project).find((r) => r.id === runId);
@@ -336,11 +344,10 @@ export function cancelAutoReviewOnProject(project, runId, now = new Date().toISO
  * Returns `{ project, run }` — `run` null (and the project untouched) when no
  * running run owns the revision.
  */
-export function chargeAutoReviewGeneration(project, revisionId, { sceneId = null, kind = null } = {}, now = new Date().toISOString()) {
+export function chargeAutoReviewGeneration(project, revisionId, { sceneId = null, kind = null, jobs = [] } = {}, now = new Date().toISOString()) {
   const run = runOwningRevision(project, revisionId);
   if (!run) return { project, run: null };
-  const nowMs = Date.parse(now);
-  const reservations = liveReservations(run, nowMs);
+  const reservations = liveReservations(run, Date.parse(now), jobs);
   // A charge RESERVES its section until the job reaches the queue (where the
   // caller's live-job check takes over), so two overlapping submissions of the
   // same section can never both be paid for.
@@ -360,12 +367,13 @@ export function chargeAutoReviewGeneration(project, revisionId, { sceneId = null
  * Refund a charge whose submission never reached the queue (the board reports
  * a failed kickoff by releasing the section's claim): the reservation is
  * dropped and its generation returned to the budget. A no-op when there is no
- * live reservation for the section — a job that was queued stays charged.
+ * live reservation for the section — a charge whose job reached the queue
+ * (`jobs`, the queue's list incl. its recent archive) stays spent.
  */
-export function refundAutoReviewGeneration(project, revisionId, sceneId, now = new Date().toISOString()) {
+export function refundAutoReviewGeneration(project, revisionId, sceneId, jobs = [], now = new Date().toISOString()) {
   const run = projectAutoReviews(project).find((r) => RESUMABLE.has(r.status) && currentAttempt(r).revisionId === revisionId);
   if (!run) return { project, run: null };
-  const reservations = liveReservations(run, Date.parse(now));
+  const reservations = liveReservations(run, Date.parse(now), jobs);
   const idx = reservations.findIndex((r) => r.revisionId === revisionId && r.sceneId === sceneId);
   if (idx === -1) return { project, run: null };
   return mutateRun(project, run.id, (r) => ({

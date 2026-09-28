@@ -13,7 +13,7 @@ const STATUS_TONES = {
   'needs-human': 'text-port-warning', failed: 'text-port-error', canceled: 'text-port-text-muted',
 };
 const CHECK_TONES = { pass: 'bg-port-success/20 text-port-success', fail: 'bg-port-error/20 text-port-error', unverified: 'bg-port-border text-port-text-muted' };
-const CHECK_LABELS = { composition: 'Composition', continuity: 'Continuity', motion: 'Motion', audioSync: 'Audio sync' };
+const CHECK_LABELS = { composition: 'Composition', continuity: 'Continuity', motion: 'Motion', audioSync: 'Audio sync (stream parity)' };
 const ACTION_LABELS = {
   wait: (a) => (a.on === 'generation' ? 'Waiting for the revised sections to generate…' : 'Rendering the draft…'),
   reviewing: () => 'Reviewing the draft (frames + continuous excerpt)…',

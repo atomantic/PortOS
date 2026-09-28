@@ -11,6 +11,14 @@
  *     audio/video stream-length parity that shows the song ran under the whole
  *     cut without being clipped or padded.
  *
+ * What `audioSync` can and cannot prove: the render maps the master song on
+ * the same timebase as the cut and never re-cuts it (render.js), and a
+ * lip-synced performance take of a stale song interval is refused before the
+ * render (performanceShot.js), so the one way picture and song drift apart is
+ * a stream that ends early or runs long — which the parity check measures. It
+ * does not listen to the content; a problem only a listener would hear is a
+ * director's call, and the UI labels the check as stream parity.
+ *
  * A vision model cannot hear, and a set of stills cannot show motion, so the
  * gate never lets frames alone pass `motion` or `audioSync`: without a
  * successful continuous analysis both stay `unverified`, and a review with any

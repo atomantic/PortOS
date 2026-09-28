@@ -68,7 +68,7 @@ export async function assertRevisionOpen(projectId, revisionId, { sceneId = null
     if (inFlight) {
       throw new ServerError('This section is already generating for the auto-review run', { status: 409, code: 'AUTO_REVIEW_SECTION_IN_FLIGHT', context: { sceneId } });
     }
-    return chargeAutoReviewGeneration(current, revisionId, { sceneId, kind });
+    return chargeAutoReviewGeneration(current, revisionId, { sceneId, kind, jobs });
   });
 }
 
@@ -79,10 +79,12 @@ export async function assertRevisionOpen(projectId, revisionId, { sceneId = null
  */
 export async function releaseRevisionSection(projectId, revisionId, sceneId) {
   // #8988: a kickoff that never reached the queue also returns its charge to
-  // the owning auto-review run's spend budget.
+  // the owning auto-review run's spend budget (never one whose job did).
+  const { listJobs } = await import('../mediaJobQueue/index.js');
+  const jobs = [...listJobs({ kind: 'video' }), ...listJobs({ kind: 'image' })];
   return mutateProjectRecord(projectId, (current) => {
     const released = releaseRevisionClaim(current, revisionId, sceneId);
-    return { ...released, project: refundAutoReviewGeneration(released.project, revisionId, sceneId).project };
+    return { ...released, project: refundAutoReviewGeneration(released.project, revisionId, sceneId, jobs).project };
   });
 }
 

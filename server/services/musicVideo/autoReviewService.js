@@ -258,6 +258,8 @@ async function takeSteps(projectId, runId) {
       if (resumed.render) continue;
       const fresh = await requireProject(projectId);
       const current = findRun(fresh, runId);
+      // Paused or cancelled while the revision resumed: hand nothing out.
+      if (current.status !== 'running') return { project: fresh, run: current, action: { type: 'idle' } };
       if (resumed.needsGeneration.length) {
         return { project: fresh, run: current, action: { type: 'generate', revisionId: step.revisionId, sections: resumed.needsGeneration } };
       }

@@ -47,7 +47,8 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
       const { replaceProject: replace, submitSections: submit } = handlers.current;
       if (data.project) replace?.(data.project);
       setAction(data.action || null);
-      if (data.action?.type === 'generate' && data.action.sections?.length && submit) {
+      // Only a RUNNING run's hand-out is submitted — never one that raced a pause.
+      if (data.action?.type === 'generate' && data.run?.status === 'running' && data.action.sections?.length && submit) {
         submit(data.project, data.action.sections, data.action.revisionId).then((n) => {
           if (n) toast.info(`Auto-review: generating ${n} revised section${n === 1 ? '' : 's'}`);
         });
