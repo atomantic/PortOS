@@ -122,19 +122,18 @@ export default function PromptFromMedia({
     }
   }, [providers, providersLoading, setSelectedProviderId, setSelectedModel]);
 
-  useEffect(() => {
-    if (!initialSource) return;
-    setSource(sourceFromItem(initialSource));
-    setResult(null);
-  }, [initialSource]);
-
   const { data: history, error: historyError, updateData: setHistory } = useSocketResource(
     ({ signal }) => listMediaPromptExaminations(historyOffset, { silent: true, signal }),
     { events: HISTORY_EVENTS, resourceKey: historyOffset, enabled: isOpen },
   );
 
   useEffect(() => {
-    if (!examinationId) return;
+    if (!examinationId) {
+      setSource(sourceFromItem(initialSource));
+      setResult(null);
+      setDetailError('');
+      return;
+    }
     let active = true;
     setResult(null);
     setSource(null);
@@ -145,7 +144,7 @@ export default function PromptFromMedia({
       setResult({ ...record.result, examinationId: record.id });
     }).catch(() => { if (active) setDetailError('Saved examination could not be loaded.'); });
     return () => { active = false; };
-  }, [examinationId]);
+  }, [examinationId, initialSource]);
 
   const persistProvider = (id) => {
     if (id) safeWriteStorage(LS_KEY_PROVIDER, id);

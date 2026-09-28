@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, Link } from 'react-router';
 import PromptFromMedia from './PromptFromMedia';
 import * as api from '../../services/apiMediaJobs';
 
@@ -180,4 +180,20 @@ it('does not duplicate a saved examination already received through history refr
   fireEvent.click(screen.getByRole('button', { name: 'Create prompt' }));
   await screen.findByDisplayValue('Mountains');
   expect(screen.getAllByText(/still.png ·/)).toHaveLength(1);
+});
+
+it('clears the saved examination when returning to the analyzer index', async () => {
+  api.getMediaPromptExamination.mockResolvedValueOnce({
+    id: 'saved', source: { sourceKind: 'image', filename: 'still.png' },
+    result: { imagePrompt: 'Previous examination' },
+  });
+  render(<MemoryRouter initialEntries={['/media/prompt/saved']}>
+    <Link to="/media/prompt">New examination</Link>
+    <Routes><Route path="/media/prompt/:examinationId?" element={<PromptFromMedia alwaysOpen />} /></Routes>
+  </MemoryRouter>);
+  await screen.findByDisplayValue('Previous examination');
+  fireEvent.click(screen.getByRole('link', { name: 'New examination' }));
+  await waitFor(() => expect(screen.queryByDisplayValue('Previous examination')).toBeNull());
+  expect(screen.queryByRole('button', { name: 'Clear selected media' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Create prompt' })).toBeDisabled();
 });
