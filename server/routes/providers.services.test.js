@@ -296,7 +296,7 @@ describe('POST /api/providers/services/:slug/refresh-catalog', () => {
   it('asks the signing-in program for a harness catalog, and reports a missing binary as failed, never []', async () => {
     harnessModels.mockResolvedValue({ ok: false, reason: 'Claude Code is not installed on this host.', models: [], updated: [] });
     const res = await request(app()).post('/api/providers/services/claude-subscription/refresh-catalog');
-    expect(harnessModels).toHaveBeenCalledWith('claude');
+    expect(harnessModels).toHaveBeenCalledWith('claude', { probeOnly: true });
     expect(res.body.service.catalog).toMatchObject({ state: 'failed', models: ['claude-example'], error: 'Claude Code is not installed on this host.' });
     expect(probe).not.toHaveBeenCalled();
 
