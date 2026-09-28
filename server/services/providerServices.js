@@ -250,8 +250,8 @@ export async function updateService(ref, input) {
  * definition under different plans list different models from one answer
  * (OpenCode Zen `free` keeps only `*-free`). Then `nextConnectionCatalog`'s
  * contract holds unchanged: a failure keeps what was known with a sanitized
- * reason, a successful empty answer is `known` and empty. No pin, default or
- * default is changed. Derived model lists follow the refreshed catalog; only
+ * reason, a successful empty answer is `known` and empty. No pin or default
+ * is changed. Derived model lists follow the refreshed catalog; only
  * an explicit preset refresh (`resetPresetId`) clears that preset's narrowing.
  */
 export function refreshServiceCatalog(ref, deps = {}) {
