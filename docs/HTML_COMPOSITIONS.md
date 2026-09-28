@@ -132,6 +132,11 @@ helper script for compositions. Copy it beside `index.html`, load it with
   motion-blur shutter; key per-frame flicker to it.
 - `rng(seed)` — seeded noise (mulberry32); never use `Math.random`.
 - `beats(bpm)` — a beat grid (`at`, `bar`, `index`, `phase`, `list`).
+- `song(audioAnalysis)` — seekable song lookups from a music-video project's
+  analysis JSON: `env('rms'|'low'|'mid'|'high', t)` (interpolated 0..1),
+  `hit('kick'|'snare'|'hat', t, halfLife)` (decaying pulses from past onsets;
+  band heuristics, not stems), `beatAt`, `barAt`, `beatPhase`, `sectionAt`.
+  `ready` is false when the analysis has no feature track (re-analyze).
 - `renderCues({ sampleRate, durationSec, cues })`, `mixCues`, `toPcm` —
   synthesized `click`, `tick`, `pop`, `thump`, `whoosh` and `riser` cues
   that return the plain PCM array `renderAudio` needs.

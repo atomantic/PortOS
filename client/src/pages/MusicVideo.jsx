@@ -855,6 +855,8 @@ export default function MusicVideo() {
                 audioAnalysis={selected.audioAnalysis}
                 scenes={selected.scenes || []}
                 tempo={tempo}
+                onReanalyze={handleAnalyze}
+                analyzing={analyzing}
               />
             </div>
 

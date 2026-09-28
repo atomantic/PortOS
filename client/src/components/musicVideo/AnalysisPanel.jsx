@@ -3,9 +3,12 @@ import { formatDurationSec } from '../../utils/formatters.js';
 /**
  * Beat-grid readout for the analyzed track, the "cuts are too long" nudge, and
  * the manual-tempo fallback shown when the auto-detector found no BPM.
- * `tempo` is the useMusicVideoManualTempo slot.
+ * `tempo` is the useMusicVideoManualTempo slot. The song feature track (#9073)
+ * is null on analyses cached before it existed — shown as "not analyzed" with a
+ * Re-analyze action, never as zero-energy data.
  */
-export default function AnalysisPanel({ audioAnalysis, scenes, tempo }) {
+export default function AnalysisPanel({ audioAnalysis, scenes, tempo, onReanalyze, analyzing = false }) {
+  const features = audioAnalysis?.features ?? null;
   const authoredCutDurations = scenes
     .filter((scene) => typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec)
     .map((scene) => scene.endSec - scene.startSec);
@@ -22,6 +25,29 @@ export default function AnalysisPanel({ audioAnalysis, scenes, tempo }) {
           <span>Beats: {audioAnalysis.beats?.length || 0}</span>
           <span>Sections: {audioAnalysis.sections?.length || 0}</span>
           {averageCutSec != null && <span>Average cut: {averageCutSec.toFixed(1)}s</span>}
+        </div>
+      )}
+      {audioAnalysis && (
+        <div data-testid="song-features" className="text-xs text-port-text-muted mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+          {features ? (
+            <>
+              <span>Song features: {features.onsets.low.length} kick-ish · {features.onsets.mid.length} snare-ish · {features.onsets.high.length} hat-ish hits</span>
+              {features.truncatedAtSec != null && (
+                <span className="text-port-warning">Covers the first {formatDurationSec(features.truncatedAtSec)} only</span>
+              )}
+            </>
+          ) : (
+            <>
+              <span>Song features (loudness bands, drum hits): not analyzed</span>
+              {onReanalyze && (
+                <button type="button" onClick={onReanalyze} disabled={analyzing}
+                  title="Re-runs the offline analysis, including tempo detection (replaces a manually set tempo)"
+                  className="bg-port-card border border-port-border rounded px-2 py-1 min-h-[32px] hover:bg-port-border/40 disabled:opacity-50">
+                  {analyzing ? 'Analyzing…' : 'Re-analyze'}
+                </button>
+              )}
+            </>
+          )}
         </div>
       )}
       {longCutCount > 0 && (
