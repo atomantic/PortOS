@@ -323,21 +323,28 @@ export async function recoverStuckMusicVideoExcerpts() {
     const stuck = (project.excerpts || []).filter((e) => e.status === 'rendering'
       && !projectExcerptRenders.has(project.id) && isLocalRenderMark(e.renderingOn, instanceId));
     if (stuck.length === 0) continue;
-    const ok = await mutateProjectRecord(project.id, (current) => {
+    // Re-checked against the FRESHEST record under the write lock: a peer sync
+    // landing after the list may have finished the draft or handed it to
+    // another instance, and only a still-stuck local mark is demoted.
+    const stuckIds = new Set(stuck.map((e) => e.id));
+    const outcome = await mutateProjectRecord(project.id, (current) => {
+      const demoted = (current.excerpts || []).filter((e) => stuckIds.has(e.id) && e.status === 'rendering'
+        && !projectExcerptRenders.has(project.id) && isLocalRenderMark(e.renderingOn, instanceId));
       let next = current;
-      for (const excerpt of stuck) {
+      for (const excerpt of demoted) {
         next = { ...next, excerpts: (next.excerpts || []).map((e) => (e.id === excerpt.id ? { ...e, status: 'error', error: 'Interrupted by a server restart', jobId: null, partialFilename: null, renderingOn: null } : e)) };
         next = settleRevisionRender(next, excerpt.id, { status: 'error', error: 'The draft render was interrupted by a server restart' });
       }
-      return { project: next };
-    }).then(() => { recovered += stuck.length; return true; }, (err) => {
+      return { project: next, demoted };
+    }).catch((err) => {
       console.error(`❌ Music Video excerpt recovery: project ${project.id.slice(0, 8)} write failed: ${err.message}`);
-      return false;
+      return null;
     });
     // Only once the record no longer points at them, so a failed write can't
     // leave a record naming a file that is gone.
-    if (!ok) continue;
-    for (const { partialFilename } of stuck) {
+    if (!outcome) continue;
+    recovered += outcome.demoted.length;
+    for (const { partialFilename } of outcome.demoted) {
       if (typeof partialFilename !== 'string' || !partialFilename) continue;
       await unlinkUnder(PATHS.videos, partialFilename);
       await unlinkUnder(PATHS.videoThumbnails, sheetFilenameFor(partialFilename));

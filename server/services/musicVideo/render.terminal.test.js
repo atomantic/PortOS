@@ -216,14 +216,27 @@ describe('status write failures are logged, not swallowed (#8430)', () => {
   });
 });
 
+// Recovery re-checks each record under the store's write lock (#9010): back
+// both the list and the transform with one in-memory store.
+const seedStore = (records) => {
+  const store = new Map(records.map((r) => [r.id, r]));
+  listProjects.mockResolvedValueOnce(records);
+  mutateProjectRecord.mockImplementation(async (id, transform) => {
+    const outcome = transform(store.get(id));
+    store.set(id, outcome.project);
+    return outcome;
+  });
+  return store;
+};
+const statusOf = (store) => Object.fromEntries([...store].map(([id, p]) => [id, p.status]));
+
 describe('recoverStuckMusicVideoRenders (#8430)', () => {
   it('demotes stale renders by history, skips live jobs and other statuses', async () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     prime('live-1');
     await renderMusicVideo('live-1');
-    updateProject.mockClear();
-    listProjects.mockResolvedValueOnce([
+    const store = seedStore([
       { id: 'done-1', status: 'rendering', renderHistoryId: 'hist-1' },
       { id: 'fresh-1', status: 'rendering' },
       { id: 'live-1', status: 'rendering' },
@@ -232,10 +245,8 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
 
     await recoverStuckMusicVideoRenders();
 
-    expect(updateProject.mock.calls).toEqual([
-      ['done-1', settled('complete')],
-      ['fresh-1', settled('ready')],
-    ]);
+    expect(statusOf(store)).toEqual({ 'done-1': 'complete', 'fresh-1': 'ready', 'live-1': 'rendering', 'idle-1': 'ready' });
+    expect(store.get('fresh-1')).toMatchObject({ renderingOn: null, renderPartialFilename: null });
     expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 2/2'))).toBe(true);
     logSpy.mockRestore();
   });
@@ -252,22 +263,27 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     loadHistory.mockResolvedValue([{ id: 'r-done', filename: 'music-video-finished.mp4' }]);
-    listProjects.mockResolvedValueOnce([
+    const store = seedStore([
       { id: 'mine-1', status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: 'music-video-mine.mp4' },
       { id: 'peer-1', status: 'rendering', renderingOn: 'inst-peer', renderPartialFilename: 'music-video-peer.mp4' },
       { id: 'legacy-1', status: 'rendering' },
       // Its history append landed but the 'complete' write did not: the file is a finished render.
       { id: 'late-1', status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: 'music-video-finished.mp4' },
+      // Listed as ours, but a peer sync handed the mark over before the demotion write.
+      { id: 'moved-1', status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: 'music-video-moved.mp4' },
     ]);
+    const listed = mutateProjectRecord.getMockImplementation();
+    mutateProjectRecord.mockImplementation(async (id, transform) => {
+      if (id === 'moved-1') store.set(id, { ...store.get(id), renderingOn: 'inst-peer' });
+      return listed(id, transform);
+    });
 
     await recoverStuckMusicVideoRenders();
 
-    expect(updateProject.mock.calls).toEqual([
-      ['mine-1', settled('ready')],
-      ['legacy-1', settled('ready')],
-      ['late-1', settled('ready')],
-    ]);
+    expect(statusOf(store)).toEqual({ 'mine-1': 'ready', 'peer-1': 'rendering', 'legacy-1': 'ready', 'late-1': 'ready', 'moved-1': 'rendering' });
+    expect(store.get('peer-1')).toMatchObject({ renderingOn: 'inst-peer', renderPartialFilename: 'music-video-peer.mp4' });
     expect(unlink.mock.calls).toEqual([['/data/videos/music-video-mine.mp4']]);
+    expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 3/4'))).toBe(true);
     logSpy.mockRestore();
   });
 
@@ -275,21 +291,20 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     const { recoverStuckMusicVideoExcerpts } = await import('./excerptRender.js');
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const draft = (id, extra) => ({ id, status: 'rendering', jobId: id, partialFilename: `${id}.mp4`, notes: [], ...extra });
-    let record = {
+    const store = seedStore([{
       id: 'mv-x', status: 'complete', revisions: [],
       excerpts: [draft('mve-mine', { renderingOn: 'inst-self' }), draft('mve-peer', { renderingOn: 'inst-peer' }), draft('mve-legacy')],
-    };
-    listProjects.mockResolvedValueOnce([record]);
-    mutateProjectRecord.mockImplementation(async (_id, transform) => { record = transform(record).project; return {}; });
+    }]);
 
     await recoverStuckMusicVideoExcerpts();
 
-    const byId = Object.fromEntries(record.excerpts.map((e) => [e.id, e]));
+    const byId = Object.fromEntries(store.get('mv-x').excerpts.map((e) => [e.id, e]));
     expect(byId['mve-mine']).toMatchObject({ status: 'error', renderingOn: null, partialFilename: null });
     expect(byId['mve-legacy']).toMatchObject({ status: 'error', partialFilename: null });
     expect(byId['mve-peer']).toMatchObject({ status: 'rendering', renderingOn: 'inst-peer', partialFilename: 'mve-peer.mp4' });
-    expect(unlink.mock.calls.map(([p]) => p)).not.toContain('/data/videos/mve-peer.mp4');
-    expect(unlink.mock.calls.map(([p]) => p)).toContain('/data/videos/mve-mine.mp4');
+    const unlinked = unlink.mock.calls.map(([p]) => p);
+    expect(unlinked).toContain('/data/videos/mve-mine.mp4');
+    expect(unlinked).not.toContain('/data/videos/mve-peer.mp4');
     logSpy.mockRestore();
   });
 
@@ -297,22 +312,26 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
     listProjects.mockRejectedValueOnce(new Error('DB unavailable'));
     await expect(recoverStuckMusicVideoRenders()).rejects.toThrow('DB unavailable');
-    expect(updateProject).not.toHaveBeenCalled();
+    expect(mutateProjectRecord).not.toHaveBeenCalled();
   });
 
   it('logs a failed demotion and keeps recovering the rest', async () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    listProjects.mockResolvedValueOnce([
+    const store = seedStore([
       { id: 'bad-1', status: 'rendering' },
       { id: 'good-1', status: 'rendering' },
     ]);
-    updateProject.mockRejectedValueOnce(new Error('write failed'));
+    const listed = mutateProjectRecord.getMockImplementation();
+    mutateProjectRecord.mockImplementation(async (id, transform) => {
+      if (id === 'bad-1') throw new Error('write failed');
+      return listed(id, transform);
+    });
 
     await recoverStuckMusicVideoRenders();
 
-    expect(updateProject).toHaveBeenCalledWith('good-1', settled('ready'));
+    expect(statusOf(store)).toEqual({ 'bad-1': 'rendering', 'good-1': 'ready' });
     expect(errorSpy.mock.calls.some(([line]) => line.includes('bad-1'))).toBe(true);
     expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 1/2'))).toBe(true);
     errorSpy.mockRestore();

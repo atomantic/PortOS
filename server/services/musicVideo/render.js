@@ -34,7 +34,8 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
-import { getProject, listProjects, updateProject } from './projects.js';
+import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
+import { applyProjectPatch } from './projectsLogic.js';
 import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { renderableCues, sectionCardCues } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
@@ -805,24 +806,37 @@ export async function recoverStuckMusicVideoRenders() {
   const instanceId = await ensureInstanceId();
   const stuck = (await listProjects()).filter((p) => p?.status === 'rendering'
     && !projectRenders.has(p.id) && isLocalRenderMark(p.renderingOn, instanceId));
-  // A render whose history append landed but whose 'complete' write failed
-  // still names its (finished) file — that file is the gallery's, not a partial.
-  const finished = stuck.some((p) => p.renderPartialFilename)
-    ? new Set((await loadHistory()).map((entry) => entry?.filename))
-    : new Set();
+  // Filenames the video history references, loaded on first need: a render
+  // whose history append landed but whose 'complete' write failed still names
+  // its (finished) file — that file is the gallery's, not a partial.
+  let finished = null;
   let recovered = 0;
   for (const project of stuck) {
-    const targetStatus = project.renderHistoryId ? 'complete' : 'ready';
-    const ok = await updateProject(project.id, settledRender(targetStatus)).then(() => true, (err) => {
-      console.error(`❌ Music Video recovery: project ${project.id.slice(0, 8)} status→${targetStatus} write failed: ${err.message}`);
-      return false;
+    // Re-checked against the FRESHEST record under the write lock: a peer sync
+    // landing between the list and this write may have handed the mark to
+    // another instance (or finished it), and that render is not ours to demote.
+    const outcome = await mutateProjectRecord(project.id, (current) => {
+      const stillStuck = current?.status === 'rendering' && !projectRenders.has(current.id)
+        && isLocalRenderMark(current.renderingOn, instanceId);
+      if (!stillStuck) return { project: current, demoted: false };
+      const targetStatus = current.renderHistoryId ? 'complete' : 'ready';
+      return { project: applyProjectPatch(current, settledRender(targetStatus)), demoted: true, partial: current.renderPartialFilename };
+    }).catch((err) => {
+      console.error(`❌ Music Video recovery: project ${project.id.slice(0, 8)} demotion write failed: ${err.message}`);
+      return null;
     });
-    if (!ok) continue;
+    if (!outcome?.demoted) continue;
     recovered++;
     // Only once the record no longer points at it. The filename came off a
     // (possibly peer-synced) record, so it is only resolved inside videos/.
-    const partial = project.renderPartialFilename;
-    const partialPath = typeof partial === 'string' && !finished.has(partial) ? safeUnder(PATHS.videos, partial) : null;
+    const { partial } = outcome;
+    if (typeof partial !== 'string' || !partial) continue;
+    // An unreadable history keeps every file — a stray partial beats deleting a finished render.
+    finished ??= await loadHistory().then((history) => new Set(history.map((entry) => entry?.filename)), (err) => {
+      console.warn(`⚠️ Music Video recovery: video history unreadable, keeping partial render output: ${err.message}`);
+      return false;
+    });
+    const partialPath = !finished || finished.has(partial) ? null : safeUnder(PATHS.videos, partial);
     if (partialPath) await unlink(partialPath).catch(() => {});
   }
   if (stuck.length > 0) console.log(`🎬 Music Video boot recovery: demoted ${recovered}/${stuck.length} stuck render(s)`);
