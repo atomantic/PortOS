@@ -322,7 +322,7 @@ const describeSpawnFailure = (spawnError, command) =>
  * `.cmd`/`.bat` spawn under `shell:false` fails outright post-CVE-2024-27980,
  * and why the `cmd.exe` wrapper avoids DEP0190's unescaped-join hazard).
  */
-export async function executeCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout }) {
+export async function executeCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout, toolFree = false }) {
   const toolkit = requireToolkit();
 
   const runsPath = join(runnerConfig.dataDir, 'runs');
@@ -380,7 +380,9 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
     : null;
   const cleanupVisionFiles = vision?.cleanup || (() => Promise.resolve());
   // Build provider-specific args for prompt delivery
-  const builtArgs = vision?.invocation.args || buildCliArgs(provider);
+  // `toolFree`: a one-shot over caller-supplied text gets no approval bypass
+  // and no tools where the vendor can disable them (#9008).
+  const builtArgs = vision?.invocation.args || buildCliArgs(provider, { toolFree });
   // Rewrite the argv for prompt delivery and learn whether to still write stdin:
   //   - Antigravity (`agy`): prompt spliced in as the --print VALUE (agy doesn't
   //     read stdin) → useStdin=false.

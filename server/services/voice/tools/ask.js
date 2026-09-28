@@ -50,7 +50,7 @@ export const ASK_TOOLS = [
       // runAsk yields { sources, delta, done, error }. Collect deltas into an array
       // (avoids O(n²) string reallocation on long answers); the terminal `done` event
       // delivers the canonical full answer + reranked sources and supersedes deltas.
-      for await (const evt of runAsk({ question: trimmed, mode: validMode, signal: ctx.signal })) {
+      for await (const evt of runAsk({ question: trimmed, mode: validMode, signal: ctx.signal, hasHostControl: ctx.hasHostControl })) {
         if (evt.type === 'sources') sources = evt.sources;
         else if (evt.type === 'delta') deltas.push(evt.text);
         else if (evt.type === 'error') { errorMsg = evt.error; break; }

@@ -6,6 +6,7 @@ import { exec } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { listProcessesStrict } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';
+import { requestHasHostControl } from '../services/authGate.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage, WORKSPACE_ROOTS_CONFIGURED } from '../lib/workspaceRoots.js';
@@ -268,6 +269,8 @@ router.post('/pm2', asyncHandler(async (req, res) => {
 // README, then ships them to a configured AI provider (possibly a hosted API) and
 // runs that provider's CLI with cwd set here — so the confinement check must run
 // BEFORE detectAppWithAi, or a refused path has already left the machine.
+// A provider that cannot run tool-free needs host control (#9008): a remote
+// caller on a password-free install gets 403 HOST_CONTROL_FORBIDDEN instead.
 router.post('/ai', asyncHandler(async (req, res) => {
   const { path, providerId } = req.body;
 
@@ -280,7 +283,7 @@ router.post('/ai', asyncHandler(async (req, res) => {
     throw new ServerError(confinement.error, { status: 400, code: confinement.code });
   }
 
-  const result = await detectAppWithAi(path, providerId);
+  const result = await detectAppWithAi(path, providerId, { hasHostControl: requestHasHostControl(req) });
 
   res.json(result);
 }));

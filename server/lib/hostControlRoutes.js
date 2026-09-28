@@ -34,6 +34,11 @@
  *     already-configured values), and test, vision, refresh-models and
  *     refresh-catalog (they run an already-configured provider on a fixed
  *     prompt, as every AI feature does).
+ *   - The "already-configured provider" exemptions here hold only for
+ *     tool-free execution (#9008). POST /api/ask and POST /api/detect/ai hand
+ *     caller text to a caller-chosen provider, so they gate per request
+ *     instead: a provider that cannot run tool-free (`toolFreeOneShotArgs` in
+ *     lib/providerVendors.js) needs host control.
  *   - pipeline and FableLoom: only autopilot start is gated — with gap filing
  *     or self-improvement on it queues CoS agents. Every other pipeline route
  *     generates text or media through an already-configured provider, the

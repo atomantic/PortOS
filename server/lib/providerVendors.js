@@ -155,6 +155,115 @@ function defaultSpawnArgs(cliArgsFn, fallbackCommand) {
   });
 }
 
+// ─── tool-free one-shot argv (#9008) ───────────────────────────────────────
+
+// Approval/permission-bypass switches, in every vendor's spelling. A one-shot
+// text call (Ask, AI app detection) hands the model caller-supplied text, so it
+// must never carry one: with it, the CLI is an agent that runs shell commands
+// with the PortOS user's privileges. Boolean flags; a `--flag=value` spelling is
+// dropped too. Short aliases are vendor-specific (`-f` is not a bypass
+// everywhere), so they live on the vendor rows as `bypassAliases`.
+const APPROVAL_BYPASS_FLAGS = [
+  '--dangerously-skip-permissions', // claude, agy
+  '--allow-dangerously-skip-permissions', // claude
+  '--dangerously-bypass-approvals-and-sandbox', // codex
+  '--full-auto', // codex
+  '--yolo', // codex, cursor, kimi
+  '--auto', // kilo, kimi
+  '--approve', // pi
+  '--force', // cursor
+  '--auto-review', // cursor
+  '--always-approve', // grok
+  '--yes-always', // aider
+  '--allow-all-tools', // copilot
+];
+// Valued options whose VALUE is the bypass (`--permission-mode bypassPermissions`
+// for claude and grok, codex's unsandboxed mode).
+const APPROVAL_BYPASS_VALUES = new Map([
+  ['--permission-mode', 'bypassPermissions'],
+  ['--sandbox', 'danger-full-access'],
+  ['-s', 'danger-full-access'],
+]);
+
+const flagMatches = (arg, flag) => arg === flag || arg.startsWith(`${flag}=`);
+
+/**
+ * Remove each option in `flags` together with its value(s): the joined
+ * `--flag=value` spelling, or the separate tokens that follow it. `variadic`
+ * options consume every following token up to the next flag (Claude's
+ * `--tools <tools...>`); the others consume exactly one.
+ */
+function dropOptions(args, flags, { variadic = false } = {}) {
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const flag = typeof arg === 'string' && flags.find((f) => flagMatches(arg, f));
+    if (!flag) {
+      out.push(arg);
+      continue;
+    }
+    if (arg !== flag) continue; // joined form carries its own value
+    if (!variadic) {
+      i += 1;
+      continue;
+    }
+    while (i + 1 < args.length && !(typeof args[i + 1] === 'string' && args[i + 1].startsWith('-'))) i += 1;
+  }
+  return out;
+}
+
+/** Strip every approval-bypass switch. `removed` says whether one was present. */
+function stripApprovalBypassArgs(args, aliases = []) {
+  const booleans = [...APPROVAL_BYPASS_FLAGS, ...aliases];
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (typeof arg !== 'string') { out.push(arg); continue; }
+    if (booleans.some((f) => flagMatches(arg, f))) continue;
+    const valued = [...APPROVAL_BYPASS_VALUES].find(([flag]) => flagMatches(arg, flag));
+    if (valued) {
+      const [flag, bypass] = valued;
+      if (arg === `${flag}=${bypass}`) continue;
+      if (arg === flag && args[i + 1] === bypass) { i += 1; continue; }
+    }
+    out.push(arg);
+  }
+  return { args: out, removed: out.length !== args.length };
+}
+
+// Claude Code: no built-in tools, no MCP servers (a project `.mcp.json` would
+// otherwise start processes), and only the USER's settings — a project or local
+// `.claude/settings*.json` in the working directory can declare hooks, which
+// run shell commands without any tool call, and print mode skips the trust
+// dialog that would otherwise gate them. `--restricted` is not used: it also
+// drops user settings, where a Bedrock or gateway install keeps its env.
+const CLAUDE_TOOL_FREE_ARGS = [
+  '--tools', '',
+  '--strict-mcp-config',
+  '--mcp-config', '{"mcpServers":{}}',
+  '--setting-sources', 'user',
+];
+function claudeToolFreeArgs(args) {
+  const cleared = dropOptions(
+    dropOptions(args, ['--tools', '--allowedTools', '--allowed-tools', '--mcp-config'], { variadic: true }),
+    ['--setting-sources'],
+  ).filter((arg) => arg !== '--strict-mcp-config');
+  return [...cleared, ...CLAUDE_TOOL_FREE_ARGS];
+}
+
+// Grok's read-only permission mode plus an empty built-in tool allowlist — the
+// same pair its no-tool public-review recipe enforces.
+function grokToolFreeArgs(args) {
+  return [...dropOptions(args, ['--permission-mode', '--tools']), '--permission-mode', 'plan', '--tools', ''];
+}
+
+// Pi: `--no-builtin-tools` alone leaves extension tools enabled, so extensions
+// and skills go too (the no-tool public-review recipe's rule).
+const PI_TOOL_FREE_ARGS = ['--no-approve', '--no-tools', '--no-builtin-tools', '--no-extensions', '--no-skills'];
+function piToolFreeArgs(args) {
+  return [...args.filter((arg) => !PI_TOOL_FREE_ARGS.includes(arg)), ...PI_TOOL_FREE_ARGS];
+}
+
 // ─── codex ──────────────────────────────────────────────────────────────────
 
 // The opt-in that pins a Codex run to the account PortOS believes it is using.
@@ -550,8 +659,8 @@ const OPENCHAMBER = {
 
 // ─── grok ───────────────────────────────────────────────────────────────────
 
-function grokCliArgs(baseArgs, { model }) {
-  return ensureGrokHeadlessArgs(baseArgs, model);
+function grokCliArgs(baseArgs, { model, toolFree }) {
+  return ensureGrokHeadlessArgs(baseArgs, model, { toolFree });
 }
 
 const GROK = {
@@ -563,6 +672,7 @@ const GROK = {
   tuiArgs: ensureGrokTuiArgs,
   cliArgs: grokCliArgs,
   spawnArgs: defaultSpawnArgs(grokCliArgs, 'grok'),
+  toolFreeOneShot: { matchCommand: isGrokCommand, toolFreeArgs: grokToolFreeArgs },
   publicReview: {
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
       spawnArgs: grokPublicReviewSpawnArgs,
@@ -591,6 +701,8 @@ const KIMI = {
   cliArgs: kimiCliArgs,
   preparePrompt: prepareKimiPrompt,
   spawnArgs: defaultSpawnArgs(kimiCliArgs, 'kimi'),
+  // No tool-disable switch: only the bypass alias is stripped.
+  toolFreeOneShot: { matchCommand: isKimiCommand, bypassAliases: ['-y'] },
 };
 
 // ─── cursor ─────────────────────────────────────────────────────────────────
@@ -613,6 +725,14 @@ const CURSOR = {
   tuiArgs: ensureCursorTuiArgs,
   cliArgs: cursorCliArgs,
   spawnArgs: defaultSpawnArgs(cursorCliArgs, CURSOR_COMMAND),
+  // No tool-disable switch. `--force` also clears cursor's workspace-trust
+  // gate, so when a bypass is stripped the narrow `--trust` (which approves
+  // nothing) keeps the headless run from exiting on the trust block.
+  toolFreeOneShot: {
+    matchCommand: isCursorCommand,
+    bypassAliases: ['-f'],
+    afterStrip: (args) => (argvHasFlag(args, ['--trust']) ? args : [...args, '--trust']),
+  },
 };
 
 // ─── gemini (legacy — see file header) ─────────────────────────────────────
@@ -647,6 +767,7 @@ const PI = {
   cliArgs: piCliArgs,
   preparePrompt: preparePiPrompt,
   spawnArgs: defaultSpawnArgs(piCliArgs, PI_COMMAND),
+  toolFreeOneShot: { matchCommand: isPiCommand, bypassAliases: ['-a'], toolFreeArgs: piToolFreeArgs },
   publicReview: {
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
       matchProvider: (provider) => isProcessProvider(provider) && isPiCommand(provider?.command),
@@ -828,6 +949,9 @@ const CLAUDE = {
   matchCommand: () => true,
   cliArgs: claudeCliArgs,
   spawnArgs: claudeSpawnArgs,
+  // Positive binary match: the row's always-true `matchCommand` must never
+  // hand an unknown command claude's flags or a tool-free verdict.
+  toolFreeOneShot: { matchCommand: isClaudeCommand, toolFreeArgs: claudeToolFreeArgs },
   publicReview: {
     // Claude is the historical always-true fallback row, so its posture
     // matcher must positively identify the binary — an unknown command must
@@ -958,9 +1082,63 @@ export function prepareCliPrompt(command, args, prompt, options = {}) {
 }
 
 /** `buildCliArgs` (cliProviderArgs.js): headless one-shot argv per vendor. */
-export function buildVendorCliArgs(provider, baseArgs, { model, effort }) {
+export function buildVendorCliArgs(provider, baseArgs, { model, effort, toolFree = false }) {
   const vendor = PROVIDER_VENDORS.find((v) => v.cliArgs && matchesProvider(v, provider));
-  return vendor.cliArgs(baseArgs, { model, effort, provider });
+  return vendor.cliArgs(baseArgs, { model, effort, provider, toolFree });
+}
+
+/**
+ * Make a built one-shot CLI argv tool-free (#9008), for callers that hand the
+ * model text they do not control — Ask and AI app detection. Run it on the
+ * FINAL argv (after the vendor builder, before prompt delivery), because
+ * several builders append their vendor's bypass flag themselves.
+ *
+ * Every approval-bypass switch is removed for every vendor. A vendor with a
+ * maintained tool-disable switch (claude, grok, pi) then gets it appended and
+ * reports `toolFree: true`; every other CLI — including agy, codex, opencode,
+ * kilo and cursor, whose tool posture has no argv off switch — reports
+ * `toolFree: false`, which callers treat as host control. An API provider runs
+ * no process, so its argv is returned unchanged with `toolFree: true`.
+ *
+ * @param {object} provider - provider record (type, command)
+ * @param {string[]} [args] - the built argv
+ * @returns {{ args: string[], toolFree: boolean }}
+ */
+export function toolFreeOneShotArgs(provider, args = []) {
+  if (provider?.type === PROVIDER_TYPES.API) return { args: [...args], toolFree: true };
+  const spec = PROVIDER_VENDORS.find((v) => v.toolFreeOneShot?.matchCommand(provider?.command))?.toolFreeOneShot;
+  const { args: stripped, removed } = stripApprovalBypassArgs(args, spec?.bypassAliases);
+  if (spec?.toolFreeArgs) return { args: spec.toolFreeArgs(stripped), toolFree: true };
+  return { args: removed && spec?.afterStrip ? spec.afterStrip(stripped) : stripped, toolFree: false };
+}
+
+/**
+ * Whether a one-shot call on `provider` can run without host authority: an API
+ * provider, or a headless CLI whose vendor has a tool-disable switch. A TUI
+ * record is never tool-free — its interactive argv comes from the TUI spawn
+ * path, which this module does not make tool-free.
+ */
+export function isToolFreeOneShotProvider(provider) {
+  if (provider?.type === PROVIDER_TYPES.API) return true;
+  return provider?.type === PROVIDER_TYPES.CLI && toolFreeOneShotArgs(provider).toolFree;
+}
+
+/**
+ * The refusal for a one-shot over caller text whose provider cannot be made
+ * tool-free and whose caller lacks host control, or null when it may run.
+ * A plain `{ status, code, message }` so this module stays free of the server's
+ * error classes; callers wrap it in a `ServerError`.
+ *
+ * @param {object} provider
+ * @param {boolean} hasHostControl - the caller's server-derived authority
+ */
+export function toolFreeOneShotRefusal(provider, hasHostControl) {
+  if (hasHostControl === true || isToolFreeOneShotProvider(provider)) return null;
+  return {
+    status: 403,
+    code: 'HOST_CONTROL_FORBIDDEN',
+    message: `Provider '${providerLabel(provider)}' cannot run without tools, so using it here requires host control: an operator session, or a local connection when no password is set. Choose an API provider or a tool-free CLI instead.`,
+  };
 }
 
 /** How a provider names itself in an error a user has to act on. */

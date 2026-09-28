@@ -78,20 +78,24 @@ const OUTPUT_FORMAT_FLAGS = ['--output-format', '-o'];
  *   - `--output-format plain`      — PortOS parses CLI stdout as plain text.
  *   - `--permission-mode bypassPermissions` — don't block file-writing agents on
  *     approval prompts (grok's analog of `claude --dangerously-skip-permissions`).
+ *     With `toolFree` (a one-shot answer over caller text — Ask, AI app
+ *     detection, #9008) it is the read-only `plan` mode instead; the caller
+ *     then runs `toolFreeOneShotArgs` to empty the tool allowlist too.
  *   - `--model <id>`               — gated on no user-baked model flag.
  *   - `--prompt-file /dev/stdin`   — deliver the prompt over stdin (POSIX); the
  *     spawn helper rewrites this to a temp file on Windows.
  * @param {string[]} baseArgs - user/legacy args (already model-flag-sanitized)
  * @param {string|null|undefined} model - defaultModel to pin, or null to omit
+ * @param {{ toolFree?: boolean }} [options]
  * @returns {string[]}
  */
-export function ensureGrokHeadlessArgs(baseArgs = [], model) {
+export function ensureGrokHeadlessArgs(baseArgs = [], model, { toolFree = false } = {}) {
   const out = [...baseArgs];
   if (!argvHasFlag(out, OUTPUT_FORMAT_FLAGS)) {
     out.push('--output-format', 'plain');
   }
   if (!argvHasFlag(out, PERMISSION_FLAGS)) {
-    out.push('--permission-mode', 'bypassPermissions');
+    out.push('--permission-mode', toolFree ? 'plan' : 'bypassPermissions');
   }
   if (model && !hasModelFlag(out)) {
     out.push('--model', model);
