@@ -41,9 +41,10 @@ function buildExportShim({ maxDurationSec = EXPORT_MAX_DURATION_SEC, song = null
   window.requestAnimationFrame = () => 0;
   window.cancelAnimationFrame = () => {};
   let film = null;
+  const findFilm = () => [...document.querySelectorAll('canvas')].sort((a, b) => (b.width * b.height) - (a.width * a.height))[0] || null;
   const hideAllButFilm = () => {
-    const canvases = [...document.querySelectorAll('canvas')];
-    film = canvases.sort((a, b) => (b.width * b.height) - (a.width * a.height))[0] || null;
+    if (film) return;
+    film = findFilm();
     if (!film) return;
     film.setAttribute('data-portos-film', '');
     const style = document.createElement('style');
@@ -59,10 +60,13 @@ function buildExportShim({ maxDurationSec = EXPORT_MAX_DURATION_SEC, song = null
       throw new Error('This animation does not define window.renderFrame(t), so it cannot export frame-exact — use Record (real-time) instead');
     }
     const meta = window.ANIMATION_META || {};
+    hideAllButFilm();
     if (!film) throw new Error('This animation has no <canvas> to export');
+    const fps = Number(meta.fps);
     return {
-      durationSec: Math.min(Number(meta.duration), ${Number(maxDurationSec)}),
-      fps: Number(meta.fps),
+      // Whole frames only: the renderer refuses a fractional frame count.
+      durationSec: Math.floor(Math.min(Number(meta.duration), ${Number(maxDurationSec)}) * fps) / fps,
+      fps,
       width: Number(meta.width),
       height: Number(meta.height),
       // Each seek resolves after the next paint so the screenshot holds frame t.
