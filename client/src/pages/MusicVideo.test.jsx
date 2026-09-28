@@ -64,6 +64,12 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoHandoff: vi.fn(),
   getMusicVideoHandoffBundle: vi.fn(),
   importMusicVideoHandoff: vi.fn(),
+  getMusicVideoProject: vi.fn(),
+  updateMusicVideoTreatment: vi.fn(),
+  compileMusicVideoTreatment: vi.fn(),
+  previewMusicVideoTreatmentApply: vi.fn(),
+  applyMusicVideoTreatment: vi.fn(),
+  reviewMusicVideoTreatmentProof: vi.fn(),
 }));
 vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));

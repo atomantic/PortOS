@@ -171,6 +171,18 @@ whole number of frames on the song's timebase, so the edit never drifts from
 the authored timeline. A plain concat render ignores the layer and plays
 footage, exactly as before.
 
+A project's pre-production **treatment** (#8980,
+`server/services/musicVideo/treatment.js`) plans for this layer instead of
+fighting it. Each directed shot names a typography role (none, subtitle,
+hero) and a reserved region (upper third, center, lower third); applying the
+treatment adds that region to the scene's frame and motion prompts as clean,
+low-detail negative space and asks the image/video model for no lettering, so
+the generated picture leaves room for the composited text rather than baking
+text into pixels. Apply can also add text cues from the timed lyrics, placed
+in each shot's reserved region; it never switches the render to `composed`.
+The treatment's proof checklist treats readable text and audio alignment as
+judgeable only in the final render.
+
 ## Launch-video admission (API foundation)
 
 `POST /api/html-composition/render` accepts `launchVideo: { targetDurationSec: 20 }`.
