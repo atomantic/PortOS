@@ -375,7 +375,13 @@ export async function getProviderRuntimeStatus(id, { findCommand, probeCommand, 
     probeCommand || (skip ? NEVER_FOUND : commandOutput),
     skip,
   );
-  statusCache.set(runtime.id, { at: Date.now(), status });
+  // A skipped probe is NOT PROBED, not "not installed" — the same distinction
+  // `codexOssSupport.js`'s own probe cache draws — so it must not sit in the
+  // TTL cache pretending to be a real answer a LATER call (one that injects
+  // real `findCommand`/`probeCommand`, e.g. a `hasCli()`-gated integration
+  // test that shares this module instance) would otherwise read back verbatim
+  // instead of getting its own real probe.
+  if (!skip) statusCache.set(runtime.id, { at: Date.now(), status });
   return status;
 }
 
