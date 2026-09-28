@@ -3,6 +3,11 @@ import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximi
 import { formatDurationSec } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
+import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
+
+// #8985: what a composed render shows for this scene's span.
+const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card' };
+const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -25,13 +30,17 @@ const COVERAGE_TOLERANCE_SEC = 0.25;
  * rejects, or notes takes there. `onImportTake` adds an externally generated
  * frame (gallery pick or upload) as a take; `onImportClipTake` (#8978) does the
  * same for an existing gallery clip.
+ *
+ * The layer picker (#8985) chooses what a composed render (`layered`) shows
+ * for the scene's span: its footage, its selected frame with a camera move, or
+ * a title card. A plain render always plays footage, and says so.
  */
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo,
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
-  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false,
+  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
@@ -58,6 +67,8 @@ export default function SceneCard({
   const shortBySec = !loops && spanSec != null && clipSec != null ? spanSec - clipSec : 0;
   const underCovered = shortBySec > COVERAGE_TOLERANCE_SEC;
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
+  const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
+  const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
@@ -116,6 +127,47 @@ export default function SceneCard({
           Loop clip
         </label>
       </div>
+      <div className="flex flex-wrap gap-2 items-center text-xs">
+        <label htmlFor={fieldId('layer')}>Layer</label>
+        <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
+          className="bg-port-bg border border-port-border rounded px-1 py-1">
+          {MUSIC_VIDEO_VISUAL_LAYERS.map((value) => <option key={value} value={value}>{LAYER_LABELS[value]}</option>)}
+        </select>
+        {layer === 'still' && (
+          <>
+            <label htmlFor={fieldId('move')}>Move</label>
+            <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
+              className="bg-port-bg border border-port-border rounded px-1 py-1">
+              {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+            </select>
+          </>
+        )}
+        {layer === 'card' && (
+          <>
+            <label htmlFor={fieldId('card-text')}>Card text</label>
+            <input id={fieldId('card-text')} type="text" maxLength={500} value={scene.cardText || ''}
+              placeholder="Title shown on the card"
+              onChange={(e) => onEditLocal(scene.sceneId, { cardText: e.target.value })}
+              onBlur={(e) => onSave(scene.sceneId, { cardText: e.target.value.trim() || null })}
+              className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1" />
+            <label htmlFor={fieldId('card-color')}>Background</label>
+            <input id={fieldId('card-color')} type="color" value={scene.cardColor || '#000000'}
+              onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
+              onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
+              className="h-8 w-10 bg-port-bg border border-port-border rounded" />
+          </>
+        )}
+      </div>
+      {layer !== 'footage' && !layered && (
+        <p className="text-[11px] text-port-text-muted">
+          {LAYER_LABELS[layer]} sections render in composed mode — a plain render plays this scene&apos;s footage.
+        </p>
+      )}
+      {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
+        <p role="alert" className="text-[11px] text-port-warning">
+          Set a start and end — a {layer === 'card' ? 'title card' : 'still'} runs for exactly its span.
+        </p>
+      )}
       {underCovered && (
         <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
           <AlertTriangle size={13} className="shrink-0" />

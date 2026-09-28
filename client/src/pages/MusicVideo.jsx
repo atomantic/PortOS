@@ -731,6 +731,7 @@ export default function MusicVideo() {
                   onReviewTake={takes.reviewTake}
                   onImportTake={(target) => setPickerTarget({ type: 'take', sceneId: target.sceneId })}
                   onImportClipTake={(target) => setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
+                  layered={selected.composition?.mode === 'composed'}
                 />
               ))}
             </div>
