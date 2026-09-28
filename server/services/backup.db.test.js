@@ -75,7 +75,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
   // A timed-out test keeps running. Gate every following case before it can
   // query the shared database; a failed drain hook skips that case's body.
   beforeEach(async () => {
-    await Promise.allSettled([...pendingRestores]);
+    await Promise.all([...pendingRestores]);
   });
 
   // Prepare the shared snapshot in a hook so setup failures stop dependent
