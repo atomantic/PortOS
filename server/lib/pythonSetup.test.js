@@ -186,6 +186,47 @@ describe('HOST_ARCH', () => {
   });
 });
 
+describe('isAllowedPython (#9015 — a caller-supplied path must not reach any file merely named python*)', () => {
+  beforeEach(resetState);
+
+  it('accepts a bare basename and a plausible absolute interpreter path', async () => {
+    const { isAllowedPython } = await loadModule();
+    expect(isAllowedPython('python3')).toBe(true);
+    expect(isAllowedPython('python')).toBe(true);
+    expect(isAllowedPython('/usr/bin/python3')).toBe(true);
+    expect(isAllowedPython('/Users/test/.venv/bin/python3.12')).toBe(true);
+  });
+
+  it('rejects a UNC path even though its basename looks like an interpreter', async () => {
+    const { isAllowedPython } = await loadModule();
+    // Windows-style UNC share.
+    expect(isAllowedPython('\\\\host\\share\\python.exe')).toBe(false);
+    // The POSIX-typed twin of a UNC share.
+    expect(isAllowedPython('//host/share/python3')).toBe(false);
+  });
+
+  it('rejects a relative path with directory components', async () => {
+    const { isAllowedPython } = await loadModule();
+    expect(isAllowedPython('./venv/bin/python3')).toBe(false);
+    expect(isAllowedPython('subdir/python3')).toBe(false);
+    expect(isAllowedPython('../../tmp/python3')).toBe(false);
+  });
+
+  it('still rejects a path whose basename is not a python interpreter', async () => {
+    const { isAllowedPython } = await loadModule();
+    expect(isAllowedPython('/usr/bin/bash')).toBe(false);
+    expect(isAllowedPython('')).toBe(false);
+    expect(isAllowedPython(null)).toBe(false);
+  });
+
+  it('accepts a Windows absolute interpreter path and still rejects UNC on win32', async () => {
+    mockState.platform = 'win32';
+    const { isAllowedPython } = await loadModule();
+    expect(isAllowedPython('C:\\Users\\test\\venv\\Scripts\\python.exe')).toBe(true);
+    expect(isAllowedPython('\\\\host\\share\\python.exe')).toBe(false);
+  });
+});
+
 describe('probePythonArch', () => {
   beforeEach(resetState);
 
