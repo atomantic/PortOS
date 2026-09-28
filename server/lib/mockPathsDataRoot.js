@@ -119,7 +119,10 @@ export function cleanupTempDataRoots() {
  * `await` this call as the LAST statement of the suite's `afterAll`.
  */
 export async function sweepStrayTempRoots(prefix) {
-  const sweepOnce = () => {
+  // Node's own rm retry (EBUSY/EPERM/ENOTEMPTY with linear backoff) covers a
+  // handle that is released moments later; an earlier pass may still hit a
+  // locked file, so only the final pass is allowed to throw.
+  const sweepOnce = (isFinal) => {
     const root = tmpdir();
     let entries;
     try {
@@ -128,15 +131,19 @@ export async function sweepStrayTempRoots(prefix) {
       return;
     }
     for (const name of entries) {
-      if (name.startsWith(prefix)) rmSync(join(root, name), { recursive: true, force: true });
+      if (!name.startsWith(prefix)) continue;
+      try {
+        rmSync(join(root, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch (err) {
+        if (isFinal) throw err;
+      }
     }
   };
-  const isWindows = process.platform === 'win32';
-  const delays = isWindows ? [300, 500, 800] : [300];
-  sweepOnce();
-  for (const delayMs of delays) {
+  const delays = process.platform === 'win32' ? [300, 500, 800] : [300];
+  sweepOnce(false);
+  for (const [i, delayMs] of delays.entries()) {
     await new Promise((resolve) => { setTimeout(resolve, delayMs); });
-    sweepOnce();
+    sweepOnce(i === delays.length - 1);
   }
 }
 
