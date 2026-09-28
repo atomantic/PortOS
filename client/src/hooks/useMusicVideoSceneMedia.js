@@ -30,16 +30,23 @@ const REFERENCE_CAPABILITY_CODES = new Set([
 
 /**
  * The project-wide visual direction appended to every generated prompt —
- * palette, camera rules and typography from the visual spec (#8965). Kept in
- * step with `visualDirection` in server/services/musicVideo/handoff.js, which
- * composes the same suffix for the external-tool handoff manifest.
+ * palette and camera rules from the visual spec (#8965). Kept in step with
+ * `visualDirection` in server/services/musicVideo/handoff.js, which composes
+ * the same suffix for the external-tool handoff manifest.
+ *
+ * Typography is deliberately excluded from this suffix (#8992): the visual
+ * spec's font/caption guidance belongs to the separately composited text
+ * layer (#8984), not to the image/video model's prompt — describing a font
+ * style there works against the "no text, letters, captions" guard the
+ * applied treatment adds and encourages text baked into the generated
+ * pixels. `spec.typography` still reaches the composition/typography lane
+ * directly and the external handoff manifest (`visualSpec.typography`).
  */
 export function visualDirection(spec) {
   if (!spec) return '';
   return [
     spec.palette?.length ? `color palette ${spec.palette.join(' ')}` : '',
     spec.cameraRules?.trim() ? `camera: ${spec.cameraRules.trim()}` : '',
-    spec.typography?.trim() ? `typography: ${spec.typography.trim()}` : '',
   ].filter(Boolean).join('; ');
 }
 
@@ -103,7 +110,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const conditioning = conditioningReferences(project?.visualSpec);
   // The image prompt for a scene's reference frame: its frame prompt (or the
   // shot prompt as a fallback) suffixed with the project's global concept style
-  // and the visual spec's palette/camera/typography direction.
+  // and the visual spec's palette/camera direction (typography excluded, #8992).
   // An applied treatment (#8980) adds the scene's composition constraints last:
   // focal subject, framing, the region reserved for the composited typography,
   // and no lettering in the generated pixels. Same order as the server's
