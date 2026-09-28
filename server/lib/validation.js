@@ -2541,9 +2541,18 @@ export const htmlCompositionContractSchema = z.object({
   fps: z.number().int().min(12).max(60),
   width: z.number().int(),
   height: z.number().int(),
-  // Subframes averaged per output frame to fake motion blur on fast moves;
-  // 1 (default) keeps the existing single-sample-per-frame behavior.
-  motionBlur: z.number().int().min(1).max(4).default(1),
+  // Subframes averaged per output frame to fake motion blur on fast moves.
+  // The integer form (1 default) keeps the existing tmix path byte for byte;
+  // the object form (#9077) samples a centred shutter in linear light, with a
+  // fixed count or 'auto' refinement that stops once the average converges.
+  motionBlur: z.union([
+    z.number().int().min(1).max(4),
+    z.object({
+      shutter: z.number().min(0.05).max(1).default(0.5),
+      samples: z.union([z.literal('auto'), z.number().int().min(4).max(64)]).default('auto'),
+      tolerance: z.number().min(1).max(8).default(2),
+    }).strict(),
+  ]).default(1),
   // Extra sizes this one timeline can render (#8960), reframed by the optional
   // layout({ width, height }) hook before each format's first seek.
   formats: z.array(z.enum(Object.values(LAUNCH_VIDEO_FORMAT_SIZES))).min(1).max(LAUNCH_VIDEO_FORMATS.length).optional(),
