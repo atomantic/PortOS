@@ -169,3 +169,15 @@ it('reopens both saved prompts from a durable examination URL', async () => {
   expect(screen.getByRole('button', { name: 'Open in Video Gen' })).toBeTruthy();
   expect(api.promptFromMedia).not.toHaveBeenCalled();
 });
+
+it('does not duplicate a saved examination already received through history refresh', async () => {
+  api.listMediaPromptExaminations.mockResolvedValueOnce({
+    items: [{ id: 'saved', source: { filename: 'still.png' }, createdAt: '2026-01-01T00:00:00Z' }], hasMore: false,
+  });
+  api.promptFromMedia.mockResolvedValueOnce({ imagePrompt: 'Mountains', examinationId: 'saved' });
+  renderPanel();
+  await screen.findByText(/still.png ·/);
+  fireEvent.click(screen.getByRole('button', { name: 'Create prompt' }));
+  await screen.findByDisplayValue('Mountains');
+  expect(screen.getAllByText(/still.png ·/)).toHaveLength(1);
+});
