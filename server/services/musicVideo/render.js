@@ -40,6 +40,7 @@ import { renderableCues, sectionCardCues } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { findStalePerformanceTakes } from './performanceShot.js';
+import { ensureInstanceId } from '../instanceIdentity.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -62,6 +63,18 @@ const PENDING = Symbol('mv-render-pending');
 // keeps the lane alive if one append throws.
 const appendToVideoHistory = (meta) =>
   mutateVideoHistory((history) => { history.unshift(meta); return history; });
+
+// #9010: an in-flight render mark (`status: 'rendering'` on a project, or on
+// one of its draft excerpts) names the instance running it in `renderingOn`.
+// Project records federate between a user's machines, so a booting machine
+// must only treat ITS OWN marks as crashed jobs — a peer's mark describes a
+// render that may still be running there. A legacy mark with no stamp predates
+// the field and is recovered as before.
+export const isLocalRenderMark = (renderingOn, instanceId) => !renderingOn || renderingOn === instanceId;
+
+// Every terminal project write clears the in-flight mark's stamp and the
+// partial-output pointer alongside the status.
+const settledRender = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null });
 
 export const attachRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
@@ -563,6 +576,8 @@ export async function renderMusicVideo(projectId) {
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
 
+    // Resolved before the job hand-off so a failure here releases the slot.
+    const renderingOn = await ensureInstanceId();
     const jobId = randomUUID();
     const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
     const outputPath = join(PATHS.videos, filename);
@@ -585,7 +600,10 @@ export async function renderMusicVideo(projectId) {
     const priorStatus = project.status && project.status !== 'rendering' ? project.status : 'ready';
     // Mark the project rendering so the board reflects an in-flight render even
     // on a client that didn't initiate it (federates via emitRecordUpdated).
-    await updateProject(projectId, { status: 'rendering' }).catch((err) => {
+    // #9010: stamp this instance on the mark so a peer's boot recovery leaves
+    // it alone, and record the output file so OUR boot recovery can delete the
+    // partial a restart mid-encode leaves behind.
+    await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename }).catch((err) => {
       console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
     });
 
@@ -646,7 +664,7 @@ export async function renderMusicVideo(projectId) {
           console.error(`❌ Music-video render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
           broadcastSse(job, { type: 'error', error: reason });
           projectRenders.delete(projectId);
-          await updateProject(projectId, { status: 'failed' }).catch((updateErr) => {
+          await updateProject(projectId, settledRender('failed')).catch((updateErr) => {
             console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
           });
           await releaseScratch();
@@ -668,7 +686,7 @@ export async function renderMusicVideo(projectId) {
             // A cancel restores the pre-render status (so a cancelled re-render of a
             // 'complete' project stays 'complete'); a real failure marks it 'failed'.
             const targetStatus = canceled ? priorStatus : 'failed';
-            await updateProject(projectId, { status: targetStatus }).catch((updateErr) => {
+            await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
             });
             await releaseScratch();
@@ -705,7 +723,7 @@ export async function renderMusicVideo(projectId) {
               musicVideoProjectId: projectId,
             };
             await appendToVideoHistory(meta);
-            await updateProject(projectId, { renderHistoryId: jobId, status: 'complete' }).catch((updateErr) => {
+            await updateProject(projectId, settledRender('complete', { renderHistoryId: jobId })).catch((updateErr) => {
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→complete write failed: ${updateErr.message}`);
             });
             console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
@@ -715,7 +733,7 @@ export async function renderMusicVideo(projectId) {
             job.lastError = `Finalize failed: ${err.message}`;
             console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
             broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
-            await updateProject(projectId, { status: 'failed' }).catch((updateErr) => {
+            await updateProject(projectId, settledRender('failed')).catch((updateErr) => {
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
             });
           } finally {
@@ -757,7 +775,7 @@ export async function renderMusicVideo(projectId) {
       broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
       projectRenders.delete(projectId);
       const targetStatus = canceled ? priorStatus : 'failed';
-      await updateProject(projectId, { status: targetStatus }).catch((updateErr) => {
+      await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
         console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
       });
       await releaseScratch();
@@ -774,23 +792,38 @@ export async function renderMusicVideo(projectId) {
 
 // Boot recovery: a render job cannot survive a restart, so a persisted
 // 'rendering' status with no live job is stale. Demote it to 'complete' when a
-// finished render is already recorded, otherwise to 'ready'. A list failure
-// propagates to the bootstrap caller's logBootstrapFailure rather than
-// reporting zero recovered.
+// finished render is already recorded, otherwise to 'ready', then delete the
+// partial output the interrupted encode was writing (#9010). A mark another
+// instance stamped is left alone — that render may still be running on the
+// peer this record synced from. A list failure propagates to the bootstrap
+// caller's logBootstrapFailure rather than reporting zero recovered.
 export async function recoverStuckMusicVideoRenders() {
   // No overlay capture survives a restart either; drop any scratch it left.
   await sweepCompositionScratch().catch((err) => {
     console.warn(`⚠️ Music Video recovery: could not remove stale overlay scratch: ${err.message}`);
   });
-  const stuck = (await listProjects()).filter((p) => p?.status === 'rendering' && !projectRenders.has(p.id));
+  const instanceId = await ensureInstanceId();
+  const stuck = (await listProjects()).filter((p) => p?.status === 'rendering'
+    && !projectRenders.has(p.id) && isLocalRenderMark(p.renderingOn, instanceId));
+  // A render whose history append landed but whose 'complete' write failed
+  // still names its (finished) file — that file is the gallery's, not a partial.
+  const finished = stuck.some((p) => p.renderPartialFilename)
+    ? new Set((await loadHistory()).map((entry) => entry?.filename))
+    : new Set();
   let recovered = 0;
   for (const project of stuck) {
     const targetStatus = project.renderHistoryId ? 'complete' : 'ready';
-    const ok = await updateProject(project.id, { status: targetStatus }).then(() => true, (err) => {
+    const ok = await updateProject(project.id, settledRender(targetStatus)).then(() => true, (err) => {
       console.error(`❌ Music Video recovery: project ${project.id.slice(0, 8)} status→${targetStatus} write failed: ${err.message}`);
       return false;
     });
-    if (ok) recovered++;
+    if (!ok) continue;
+    recovered++;
+    // Only once the record no longer points at it. The filename came off a
+    // (possibly peer-synced) record, so it is only resolved inside videos/.
+    const partial = project.renderPartialFilename;
+    const partialPath = typeof partial === 'string' && !finished.has(partial) ? safeUnder(PATHS.videos, partial) : null;
+    if (partialPath) await unlink(partialPath).catch(() => {});
   }
   if (stuck.length > 0) console.log(`🎬 Music Video boot recovery: demoted ${recovered}/${stuck.length} stuck render(s)`);
 }
