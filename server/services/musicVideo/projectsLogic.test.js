@@ -341,6 +341,19 @@ describe('setAudioAnalysis', () => {
     expect(next.status).toBe('analyzed');
   });
 
+  it('keeps a feature track through validation, drops it with the audio source, and leaves legacy analyses without one (#9073)', () => {
+    const features = {
+      envelopes: { fps: 30, rms: [0, 1], low: [0, 1], mid: [0, 1], high: [0, 1] },
+      onsets: { low: [0.5], mid: [], high: [] },
+      truncatedAtSec: null,
+    };
+    const withFeatures = setAudioAnalysis({ ...baseProject(), trackId: 't1' }, { ...analysis, version: 2, features });
+    expect(withFeatures.audioAnalysis.features).toEqual(features);
+    expect(setAudioAnalysis(baseProject(), analysis).audioAnalysis.features).toBeUndefined();
+    expect(() => setAudioAnalysis(baseProject(), { ...analysis, features: { ...features, envelopes: { ...features.envelopes, low: [2] } } })).toThrow();
+    expect(applyProjectPatch(withFeatures, { trackId: 't2' }).audioAnalysis).toBeNull();
+  });
+
   it('does not regress a later lifecycle status', () => {
     const ready = { ...baseProject(), status: 'ready' };
     expect(setAudioAnalysis(ready, analysis).status).toBe('ready');

@@ -590,23 +590,196 @@ function deriveSections(samples, sampleRate, hop) {
   return { sections, waveform: summarizeWaveform(energy), onset, fps };
 }
 
+// --- Song feature track (#9073) ----------------------------------------------
+//
+// Per-band loudness envelopes plus per-band onset times, so a code-rendered
+// scene can swell with the bass or flash on a snare-ish hit at any time `t`
+// without analysing audio live (live analysis is neither deterministic nor
+// available in an offline render). Computed once from the same decoded PCM.
+//
+// Bands are fixed FFT-bin splits, not stem separation: "low" is kick/bass-ish,
+// "mid" is snare/body-ish and "high" is hat/air-ish.
+
+// Persisted audioAnalysis shape version. A cached analysis without `version`
+// predates the feature track (implicitly 1) and reads as "features not analyzed".
+export const ANALYSIS_VERSION = 2;
+
+export const FEATURE_ENVELOPE_FPS = 30;
+export const FEATURE_BANDS = Object.freeze({
+  low: [40, 250],
+  mid: [250, 2000],
+  high: [2000, 10000],
+});
+const FEATURE_ONSET_HOP = 256; // ~11.6ms: finer than the 30fps envelope so onset times stay tight
+const FEATURE_CEILING_PERCENTILE = 0.95;
+const ONSET_SMOOTH_SEC = 0.5; // rolling-mean floor subtracted from band flux
+const ONSET_PEAK_RADIUS_SEC = 0.04; // a pick must be the local maximum within this span
+const ONSET_MIN_GAP_SEC = 0.08;
+const ONSET_STD_FACTOR = 1.5;
+const ONSET_MAX_RELATIVE_FLOOR = 0.2; // ignore picks under this fraction of the band's strongest flux
+const ONSET_ABS_FLOOR = 0.02; // mean log-magnitude rise per bin; below this is numerical noise
+
+const bandBins = (sampleRate) => Object.entries(FEATURE_BANDS).map(([name, [loHz, hiHz]]) => ({
+  name,
+  lo: Math.max(1, Math.ceil((loHz * FFT_SIZE) / sampleRate)),
+  hi: Math.min(FFT_SIZE / 2 - 1, Math.floor((hiHz * FFT_SIZE) / sampleRate)),
+}));
+
+/**
+ * Windowed STFT reduced to per-band values. Frames are centred on `f * hop`
+ * (out-of-range samples read as silence) so frame f describes time f*hop/rate.
+ * Returns per frame: `rms` (time-domain), per-band amplitude, and per-band
+ * spectral flux (mean positive rise of log-magnitude across the band's bins).
+ */
+function bandFrames(samples, sampleRate, hop) {
+  const frameCount = Math.floor(samples.length / hop) + 1;
+  const bands = bandBins(sampleRate);
+  const rms = new Float32Array(frameCount);
+  const amp = Object.fromEntries(bands.map(({ name }) => [name, new Float32Array(frameCount)]));
+  const flux = Object.fromEntries(bands.map(({ name }) => [name, new Float32Array(frameCount)]));
+  const win = hannWindow(FFT_SIZE);
+  const plan = fftPlan(FFT_SIZE);
+  const real = new Float64Array(FFT_SIZE);
+  const imaginary = new Float64Array(FFT_SIZE);
+  const previous = new Float64Array(FFT_SIZE / 2);
+  const half = FFT_SIZE / 2;
+  for (let f = 0; f < frameCount; f++) {
+    const base = f * hop - half;
+    let sum = 0;
+    for (let i = 0; i < FFT_SIZE; i++) {
+      const idx = base + i;
+      const sample = idx >= 0 && idx < samples.length ? samples[idx] : 0;
+      sum += sample * sample;
+      real[i] = sample * win[i];
+      imaginary[i] = 0;
+    }
+    rms[f] = Math.sqrt(sum / FFT_SIZE);
+    fftInPlace(real, imaginary, plan);
+    for (const { name, lo, hi } of bands) {
+      let power = 0;
+      let rise = 0;
+      for (let bin = lo; bin <= hi; bin++) {
+        const magnitude = Math.sqrt(real[bin] * real[bin] + imaginary[bin] * imaginary[bin]);
+        power += magnitude * magnitude;
+        const logMag = Math.log1p(magnitude);
+        const delta = logMag - previous[bin];
+        if (delta > 0) rise += delta;
+        previous[bin] = logMag;
+      }
+      const count = hi - lo + 1;
+      amp[name][f] = Math.sqrt(power / count) / FFT_SIZE;
+      flux[name][f] = rise / count;
+    }
+  }
+  return { rms, amp, flux };
+}
+
+// Scale to 0..1 against a percentile ceiling (one loud peak must not flatten
+// everything else). A silent series stays all zeros.
+function normalizeToPercentile(values) {
+  const ranked = Float32Array.from(values).sort();
+  const ceiling = ranked.length ? ranked[Math.min(ranked.length - 1, Math.floor(ranked.length * FEATURE_CEILING_PERCENTILE))] : 0;
+  return Array.from(values, (v) => (ceiling <= 1e-9 ? 0 : Number(Math.min(1, v / ceiling).toFixed(3))));
+}
+
+// Peak-pick one band's flux into onset times (seconds).
+function pickBandOnsets(fluxSeries, hopSec) {
+  const n = fluxSeries.length;
+  if (n < 3) return [];
+  // Subtract a rolling mean so sustained/noisy passages don't read as attacks.
+  const radius = Math.max(1, Math.round(ONSET_SMOOTH_SEC / hopSec / 2));
+  const onset = new Float32Array(n);
+  let rolling = 0;
+  let left = 0;
+  let right = 0;
+  for (let f = 0; f < n; f++) {
+    while (right < n && right <= f + radius) { rolling += fluxSeries[right]; right += 1; }
+    while (left < f - radius) { rolling -= fluxSeries[left]; left += 1; }
+    onset[f] = Math.max(0, fluxSeries[f] - rolling / Math.max(1, right - left));
+  }
+  let mean = 0;
+  let max = 0;
+  for (let f = 0; f < n; f++) { mean += onset[f]; if (onset[f] > max) max = onset[f]; }
+  mean /= n;
+  let variance = 0;
+  for (let f = 0; f < n; f++) variance += (onset[f] - mean) ** 2;
+  const threshold = Math.max(ONSET_ABS_FLOOR, ONSET_MAX_RELATIVE_FLOOR * max, mean + ONSET_STD_FACTOR * Math.sqrt(variance / n));
+  const peakRadius = Math.max(1, Math.round(ONSET_PEAK_RADIUS_SEC / hopSec));
+  const minGap = Math.max(1, Math.round(ONSET_MIN_GAP_SEC / hopSec));
+  const picks = [];
+  for (let f = 0; f < n; f++) {
+    const value = onset[f];
+    if (value < threshold) continue;
+    let isPeak = true;
+    for (let k = Math.max(0, f - peakRadius); k <= Math.min(n - 1, f + peakRadius); k++) {
+      // Strictly greater to the left, >= to the right: a plateau yields one pick.
+      if (k < f ? onset[k] >= value : onset[k] > value) { isPeak = false; break; }
+    }
+    if (!isPeak) continue;
+    const last = picks[picks.length - 1];
+    if (last != null && f - last < minGap) {
+      if (value > onset[last]) picks[picks.length - 1] = f;
+      continue;
+    }
+    picks.push(f);
+  }
+  return picks.map((f) => Number((f * hopSec).toFixed(3)));
+}
+
+/**
+ * Pure DSP: per-band loudness envelopes (~30fps grid, 0..1 per song with a
+ * 95th-percentile ceiling) and per-band onset times. Returns `null` when the
+ * audio is too short to analyse — never empty arrays, so "not analysed" and
+ * "analysed, silent" cannot be confused. `envelopes.fps` is the exact frame
+ * rate (sampleRate / integer hop); frame i is centred on i / fps seconds.
+ *
+ * @param {Float32Array} samples mono PCM
+ * @param {number} sampleRate
+ * @param {{ truncatedAtSec?: number|null }} [opts] set when the decode was cut short
+ */
+export function computeSongFeatures(samples, sampleRate, { truncatedAtSec = null } = {}) {
+  if (!samples || samples.length < FFT_SIZE) return null;
+  const envHop = Math.round(sampleRate / FEATURE_ENVELOPE_FPS);
+  const env = bandFrames(samples, sampleRate, envHop);
+  const flux = bandFrames(samples, sampleRate, FEATURE_ONSET_HOP).flux;
+  const onsetHopSec = FEATURE_ONSET_HOP / sampleRate;
+  return {
+    envelopes: {
+      fps: Number((sampleRate / envHop).toFixed(4)),
+      rms: normalizeToPercentile(env.rms),
+      low: normalizeToPercentile(env.amp.low),
+      mid: normalizeToPercentile(env.amp.mid),
+      high: normalizeToPercentile(env.amp.high),
+    },
+    onsets: {
+      low: pickBandOnsets(flux.low, onsetHopSec),
+      mid: pickBandOnsets(flux.mid, onsetHopSec),
+      high: pickBandOnsets(flux.high, onsetHopSec),
+    },
+    truncatedAtSec: truncatedAtSec == null ? null : Number(truncatedAtSec.toFixed(3)),
+  };
+}
+
+
 /**
  * Pure DSP core: analyze a mono PCM buffer and return the `audioAnalysis`
  * shape. Deterministic and ffmpeg-free, so it is unit-tested directly.
  *
  * @param {Float32Array} samples mono PCM
  * @param {number} sampleRate
- * @param {{ hop?: number }} [opts]
- * @returns {{ bpm: number|null, beats: number[], downbeats: number[], waveform: number[],
+ * @param {{ hop?: number, truncatedAtSec?: number|null }} [opts]
+ * @returns {{ version: number, features: object|null, bpm: number|null, beats: number[], downbeats: number[], waveform: number[],
  *   sections: Array<{label:string,startSec:number,endSec:number,energy:number}>,
  *   durationSec: number }}
  */
-export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP } = {}) {
+export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP, truncatedAtSec = null } = {}) {
   const durationSec = samples?.length ? samples.length / sampleRate : 0;
   const roundedDuration = Number(durationSec.toFixed(3));
   const { sections, waveform, onset, fps } = deriveSections(samples, sampleRate, hop);
   if (!onset) {
     return {
+      version: ANALYSIS_VERSION,
+      features: null,
       bpm: null,
       beats: [],
       downbeats: [],
@@ -624,6 +797,8 @@ export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP } = {}) {
   const beats = roundedBpm == null ? [] : fitBeats(onset, fps, bpm, durationSec);
   const downbeats = roundedBpm == null ? [] : pickDownbeats(beats, onset, fps);
   return {
+    version: ANALYSIS_VERSION,
+    features: computeSongFeatures(samples, sampleRate, { truncatedAtSec }),
     bpm: roundedBpm,
     beats,
     downbeats,
@@ -638,6 +813,14 @@ export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP } = {}) {
   };
 }
 
+// The decode is capped at MAX_ANALYSIS_SEC. A buffer that filled the cap may
+// have been cut off (a track of exactly that length is indistinguishable), so
+// the feature track says how far it covers instead of pretending to be complete.
+const truncatedAtSecFor = ({ samples, sampleRate }) => {
+  const durationSec = samples.length / sampleRate;
+  return durationSec >= MAX_ANALYSIS_SEC - 0.1 ? durationSec : null;
+};
+
 /**
  * Decode `audioPath` via ffmpeg and run the DSP analysis. Returns the
  * `audioAnalysis` shape, or `null` when the file can't be decoded (ffmpeg
@@ -649,7 +832,7 @@ export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP } = {}) {
 export async function analyzeAudioFile(audioPath, { signal } = {}) {
   const decoded = await decodeAudioToPcm(audioPath, { signal });
   if (!decoded) return null;
-  return analyzePcm(decoded.samples, decoded.sampleRate);
+  return analyzePcm(decoded.samples, decoded.sampleRate, { truncatedAtSec: truncatedAtSecFor(decoded) });
 }
 
 // Manual-tempo fallback (see `estimateTempo`'s TEMPO_PEAK_MIN/MIN_BPM/MAX_BPM
@@ -677,9 +860,12 @@ const manualDownbeats = (beats) => beats.filter((_, i) => i % 4 === 0);
  * @param {{ sections: Array, durationSec: number }} cached prior audioAnalysis
  * @param {{ bpm: number, offsetSec?: number }} tempo
  */
-export function buildManualAnalysisFromCached({ sections, durationSec, waveform = [] }, { bpm, offsetSec = 0 }) {
+export function buildManualAnalysisFromCached({ sections, durationSec, waveform = [], features = null }, { bpm, offsetSec = 0 }) {
   const beats = manualBeatTimes(bpm, offsetSec, durationSec);
   return {
+    // A prior analysis without a feature track stays "not analyzed" (null).
+    version: ANALYSIS_VERSION,
+    features,
     bpm: Number(bpm.toFixed(2)),
     beats,
     downbeats: manualDownbeats(beats),
@@ -702,12 +888,14 @@ export function buildManualAnalysisFromCached({ sections, durationSec, waveform 
  * @param {number} sampleRate
  * @param {{ bpm: number, offsetSec?: number, hop?: number }} opts
  */
-export function buildManualAnalysis(samples, sampleRate, { bpm, offsetSec = 0, hop = ONSET_HOP }) {
+export function buildManualAnalysis(samples, sampleRate, { bpm, offsetSec = 0, hop = ONSET_HOP, truncatedAtSec = null }) {
   const durationSec = samples?.length ? samples.length / sampleRate : 0;
   const roundedDuration = Number(durationSec.toFixed(3));
   const beats = manualBeatTimes(bpm, offsetSec, durationSec);
   const { sections, waveform } = deriveSections(samples, sampleRate, hop);
   return {
+    version: ANALYSIS_VERSION,
+    features: computeSongFeatures(samples, sampleRate, { truncatedAtSec }),
     bpm: Number(bpm.toFixed(2)),
     beats,
     downbeats: manualDownbeats(beats),
@@ -733,7 +921,7 @@ export function buildManualAnalysis(samples, sampleRate, { bpm, offsetSec = 0, h
 export async function analyzeAudioFileManual(audioPath, { bpm, offsetSec = 0 }, { signal } = {}) {
   const decoded = await decodeAudioToPcm(audioPath, { signal });
   if (!decoded) return null;
-  return buildManualAnalysis(decoded.samples, decoded.sampleRate, { bpm, offsetSec });
+  return buildManualAnalysis(decoded.samples, decoded.sampleRate, { bpm, offsetSec, truncatedAtSec: truncatedAtSecFor(decoded) });
 }
 
 // --- Section → beat-grid snapping (#4664) -----------------------------------

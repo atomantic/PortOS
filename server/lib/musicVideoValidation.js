@@ -638,7 +638,33 @@ export const musicVideoMidiTranscriptionSchema = z.object({
 // The cached beat/tempo/section map (audioAnalysis.js output). Validated when a
 // record round-trips so a hand-edited/legacy project can't carry a malformed
 // analysis; the analyzer itself produces this shape.
+// Per-band loudness envelopes (0..1 on a fixed fps grid) and onset times for
+// the seekable song feature track (#9073). `null`/absent means "not analyzed"
+// (an analysis cached before the feature track existed); an empty array is
+// never used as that sentinel.
+const envelopeSeriesSchema = z.array(z.number().min(0).max(1)).max(200000);
+const onsetTimesSchema = z.array(z.number().min(0)).max(100000);
+export const musicVideoSongFeaturesSchema = z.object({
+  envelopes: z.object({
+    fps: z.number().positive(),
+    rms: envelopeSeriesSchema,
+    low: envelopeSeriesSchema,
+    mid: envelopeSeriesSchema,
+    high: envelopeSeriesSchema,
+  }).strict(),
+  onsets: z.object({
+    low: onsetTimesSchema,
+    mid: onsetTimesSchema,
+    high: onsetTimesSchema,
+  }).strict(),
+  // Set when the decode was capped, so the tracks stop before the song does.
+  truncatedAtSec: z.number().min(0).nullable().optional(),
+}).strict();
+
 export const musicVideoAudioAnalysisSchema = z.object({
+  // Shape version: absent = 1 (pre feature track), 2 = carries `features`.
+  version: z.number().int().min(1).optional(),
+  features: musicVideoSongFeaturesSchema.nullable().optional(),
   bpm: z.number().nullable(),
   beats: z.array(z.number()),
   downbeats: z.array(z.number()),
