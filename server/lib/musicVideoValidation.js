@@ -16,6 +16,7 @@ import {
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
   MUSIC_VIDEO_AUTOMATION_TOOL_IDS,
 } from './musicVideoAutomation.js';
+import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
 // (autonomous); both share the same record + scene board.
@@ -463,6 +464,36 @@ export const musicVideoAutoReviewStartSchema = z.object({
 // Resume may RAISE either limit (never below what the run already used).
 export const musicVideoAutoReviewResumeSchema = z.object({
   limits: musicVideoAutoReviewLimitsSchema.partial().optional(),
+}).strict();
+
+// ---- Server-owned production run (#9066) -----------------------------------
+// The allowed pool: explicit image/video render backends (and models) the run
+// may dispatch to — re-checked for eligibility and capability at every
+// dispatch. Every limit but the dollar cap is required; the cap is accepted
+// only when every metered route has a known price (services/musicVideo/production.js).
+const musicVideoProductionRouteSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('image'), mode: z.enum(IMAGE_GEN_MODES), model: z.string().trim().min(1).max(200).nullable().optional() }).strict(),
+  z.object({ kind: z.literal('video'), mode: z.enum(VIDEO_GEN_MODES), model: z.string().trim().min(1).max(200).nullable().optional() }).strict(),
+]);
+
+export const musicVideoProductionLimitsSchema = z.object({
+  maxGenerations: z.number().int().min(1).max(500),
+  maxReviewAttempts: z.number().int().min(1).max(10),
+  spendCapUsd: z.number().min(0).max(100000).nullable().optional(),
+}).strict();
+
+export const musicVideoProductionStartSchema = z.object({
+  directive: z.string().max(4000).optional(),
+  pool: z.array(musicVideoProductionRouteSchema).min(1).max(12),
+  limits: musicVideoProductionLimitsSchema,
+  providerId: z.string().min(1).max(200).nullable().optional(),
+  model: z.string().min(1).max(200).nullable().optional(),
+}).strict();
+
+// Resume may RAISE a limit; `acceptBasis` continues against a changed creative setup.
+export const musicVideoProductionResumeSchema = z.object({
+  limits: musicVideoProductionLimitsSchema.partial().optional(),
+  acceptBasis: z.boolean().optional(),
 }).strict();
 
 // A generation kickoff that failed before reaching the queue (#9011) — names

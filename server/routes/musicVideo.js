@@ -39,6 +39,8 @@ import {
   musicVideoRevisionReleaseSchema,
   musicVideoAutoReviewStartSchema,
   musicVideoAutoReviewResumeSchema,
+  musicVideoProductionStartSchema,
+  musicVideoProductionResumeSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -87,6 +89,9 @@ import {
 import {
   startAutoReview, resumeAutoReview, stopAutoReview, cancelAutoReview,
 } from '../services/musicVideo/autoReviewService.js';
+import {
+  startProduction, resumeProduction, stopProduction, cancelProduction, getProduction,
+} from '../services/musicVideo/productionService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
@@ -492,6 +497,33 @@ router.post('/:id/auto-reviews/:runId/stop', asyncHandler(async (req, res) => {
 
 router.post('/:id/auto-reviews/:runId/cancel', asyncHandler(async (req, res) => {
   res.json(await cancelAutoReview(req.params.id, req.params.runId));
+}));
+
+// --- Server-owned production run (#9066) ---
+// Start/resume write the checkpoint and return at once; the run advances in
+// the background (plan → frames → clips → reviewed draft → revisions) from
+// queue completion events and reports over `music-video:production`. Only
+// these explicit requests start or resume a run — nothing at boot does.
+router.post('/:id/production-runs', asyncHandler(async (req, res) => {
+  const { providerId, model, ...input } = validateRequest(musicVideoProductionStartSchema, req.body || {});
+  res.status(201).json(await startProduction(req.params.id, { ...input, reviewer: { providerId, model } }));
+}));
+
+router.get('/:id/production-runs/:runId', asyncHandler(async (req, res) => {
+  res.json(await getProduction(req.params.id, req.params.runId));
+}));
+
+router.post('/:id/production-runs/:runId/resume', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoProductionResumeSchema, req.body || {});
+  res.json(await resumeProduction(req.params.id, req.params.runId, input));
+}));
+
+router.post('/:id/production-runs/:runId/stop', asyncHandler(async (req, res) => {
+  res.json(await stopProduction(req.params.id, req.params.runId));
+}));
+
+router.post('/:id/production-runs/:runId/cancel', asyncHandler(async (req, res) => {
+  res.json(await cancelProduction(req.params.id, req.params.runId));
 }));
 
 // --- Director scene board ---

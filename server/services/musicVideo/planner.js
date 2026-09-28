@@ -235,9 +235,11 @@ async function tryProposeScenePrompts(project, shots, { providerId, model } = {}
  * @param {string} [options.providerId] — pin a specific provider instead of
  *   the active one.
  * @param {string} [options.model] — model override for the prompt-seeding call.
+ * @param {string} [options.directive] — a production run's directive (#9066),
+ *   added to the director guidance the first-pass prompts are written under.
  * @returns {Promise<{ project: object, scenesAdded: number, promptsSeeded: boolean, promptsSkippedReason: string|null, pacing: object }>}
  */
-export async function planProject(id, { seedPrompts = true, providerId, model } = {}) {
+export async function planProject(id, { seedPrompts = true, providerId, model, directive } = {}) {
   const project = await getProject(id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -264,7 +266,9 @@ export async function planProject(id, { seedPrompts = true, providerId, model } 
   let promptsSeeded = false;
   let promptsSkippedReason = seedPrompts ? null : 'not-requested';
   if (seedPrompts) {
-    const { seeded, reason } = await tryProposeScenePrompts(project, shots, { providerId, model });
+    const guidance = [project.automation?.guidance?.trim(), directive?.trim()].filter(Boolean).join('\n');
+    const planning = directive?.trim() ? { ...project, automation: { ...project.automation, guidance } } : project;
+    const { seeded, reason } = await tryProposeScenePrompts(planning, shots, { providerId, model });
     if (seeded) {
       promptsSeeded = true;
       for (const [idx, fields] of seeded) {

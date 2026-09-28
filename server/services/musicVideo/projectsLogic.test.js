@@ -549,6 +549,20 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(next.videoSettings).toEqual({ modelId: 'shared-video-model' });
   });
 
+  it('keeps the production-run checkpoint install-local: never on the wire, never taken from a peer, kept over a newer remote (#9066)', async () => {
+    const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
+    const runs = [{ id: 'mvpr-local', status: 'running', pool: [{ kind: 'image', mode: 'codex', model: null }] }];
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'local', productionRuns: runs };
+    expect(sanitizeRecordForWire('musicVideoProject', local)).not.toHaveProperty('productionRuns');
+
+    const foreign = [{ id: 'mvpr-foreign', status: 'running' }];
+    expect(mergeProjectRecord(null, { id: 'mv-2', updatedAt: '2026-01-02T00:00:00Z', productionRuns: foreign }).next)
+      .not.toHaveProperty('productionRuns');
+    const { next } = mergeProjectRecord(local, { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit', productionRuns: foreign });
+    expect(next.name).toBe('remote edit');
+    expect(next.productionRuns).toEqual(runs);
+  });
+
   it('remote with a newer updatedAt wins', () => {
     const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'old' };
     const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'new' };

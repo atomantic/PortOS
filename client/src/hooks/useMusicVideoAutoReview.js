@@ -48,7 +48,9 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
       if (data.project) replace?.(data.project);
       setAction(data.action || null);
       // Only a RUNNING run's hand-out is submitted — never one that raced a pause.
-      if (data.action?.type === 'generate' && data.run?.status === 'running' && data.action.sections?.length && submit) {
+      // A run a production owns (#9066) is dispatched by the server, not the board.
+      if (data.action?.type === 'generate' && data.run?.status === 'running' && !data.run.productionRunId
+        && data.action.sections?.length && submit) {
         submit(data.project, data.action.sections, data.action.revisionId).then((n) => {
           if (n) toast.info(`Auto-review: generating ${n} revised section${n === 1 ? '' : 's'}`);
         });
