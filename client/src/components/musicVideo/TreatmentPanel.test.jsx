@@ -167,6 +167,19 @@ describe('TreatmentPanel edits and compile', () => {
     await waitFor(() => expect(api.compileMusicVideoTreatment).toHaveBeenCalledWith('mv-1', { baseRevision: 3, useAi: false }, { silent: true }));
   });
 
+  it('re-sends only the editable fields of existing reference notes', async () => {
+    api.updateMusicVideoTreatment.mockResolvedValue({ treatment: { ...TREATMENT, revision: 4 } });
+    const stored = { id: 'mvn-1', note: 'grainy 16mm', url: 'https://example.com/a', source: 'user', addedAt: '2026-01-01T00:00:00.000Z' };
+    render(<Harness initial={{ ...PROJECT, treatment: { ...TREATMENT, brief: { ...TREATMENT.brief, referenceNotes: [stored] } } }} />);
+    fireEvent.change(screen.getByLabelText('Reference note'), { target: { value: 'hand-drawn overlays' } });
+    fireEvent.click(screen.getByText('Add note'));
+    await waitFor(() => expect(api.updateMusicVideoTreatment).toHaveBeenCalledTimes(1));
+    expect(api.updateMusicVideoTreatment.mock.calls[0][1].brief.referenceNotes).toEqual([
+      { id: 'mvn-1', note: 'grainy 16mm', url: 'https://example.com/a' },
+      { note: 'hand-drawn overlays', url: null },
+    ]);
+  });
+
   it('serializes quick brief edits so each carries the revision the previous save returned', async () => {
     let revision = 3;
     api.updateMusicVideoTreatment.mockImplementation(async (_id, body) => {

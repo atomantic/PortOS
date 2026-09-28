@@ -119,7 +119,9 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
     const id = projectId;
     const { revision } = preview;
     setApplying(true);
-    return chainRef.current
+    // Apply joins the same write chain, so an edit or proof review started
+    // meanwhile runs after it (with the revision it leaves) instead of racing it.
+    const run = chainRef.current
       .then(() => applyMusicVideoTreatment(id, { revision, overwrite, addTextCues }, { silent: true }))
       .then(({ project: next, result }) => {
         replaceProject?.(next);
@@ -135,6 +137,8 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
         return null;
       })
       .finally(() => setApplying(false));
+    chainRef.current = run;
+    return run;
   };
 
   const reviewProof = (proofId, review) => enqueue(

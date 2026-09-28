@@ -62,7 +62,9 @@ export default function TreatmentPanel({ project, treatment: api }) {
   const [notesSaving, setNotesSaving] = useState(false);
   const saveNotes = (referenceNotes) => {
     setNotesSaving(true);
-    return saveBrief({ referenceNotes }).finally(() => setNotesSaving(false));
+    // Only the editable fields go back: source/addedAt are server-stamped provenance.
+    const editable = referenceNotes.map(({ id, note, url }) => ({ ...(id ? { id } : {}), note, url }));
+    return saveBrief({ referenceNotes: editable }).finally(() => setNotesSaving(false));
   };
   const notes = brief.referenceNotes || [];
   const urlValid = !noteUrl.trim() || /^https?:\/\/\S+$/i.test(noteUrl.trim());
