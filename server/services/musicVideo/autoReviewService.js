@@ -342,14 +342,22 @@ export async function stopAutoReview(projectId, runId) {
   return out;
 }
 
-/** Cancel a run, and the revision it has open (which stops its generation jobs). */
+/**
+ * Cancel a run, and the revision it has open (which stops its generation
+ * jobs) — both in one write, so the revision is never left open without its
+ * run guarding the spend.
+ */
 export async function cancelAutoReview(projectId, runId) {
-  const { revisionId } = await mutateProjectRecord(projectId, (current) => cancelAutoReviewOnProject(current, runId));
-  if (revisionId) {
-    await cancelRevision(projectId, revisionId).catch((err) => {
-      console.error(`❌ Music Video auto-review ${short(runId)} could not cancel its revision: ${err.message}`);
-    });
-  }
+  const before = await requireProject(projectId);
+  const { revisionId } = cancelAutoReviewOnProject(before, runId); // validates; the real write is below
+  const cancelRun = (p) => cancelAutoReviewOnProject(p, runId).project;
+  const withRevision = revisionId
+    ? await cancelRevision(projectId, revisionId, { alsoOnProject: cancelRun }).then(() => true, (err) => {
+      if (err?.code !== 'REVISION_CLOSED') throw err;
+      return false; // the revision closed meanwhile — cancel the run alone
+    })
+    : false;
+  if (!withRevision) await mutateProjectRecord(projectId, (current) => ({ project: cancelRun(current) }));
   const project = await requireProject(projectId);
   const run = findRun(project, runId);
   publish(projectId, project, run, { type: 'idle' });

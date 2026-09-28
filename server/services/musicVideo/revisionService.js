@@ -115,9 +115,15 @@ export async function resumeRevision(projectId, revisionId) {
  * Cancel a revision. Its draft render and any generation job it started that
  * is still queued/running are cancelled too, so a closed revision incurs no
  * further paid work. Returns `{ project, revision, canceledJobIds }`.
+ * `alsoOnProject` (#8988) applies a further transform in the SAME write — an
+ * auto-review run cancels itself with its revision, so no window exists in
+ * which the revision is open but its run no longer guards its spend.
  */
-export async function cancelRevision(projectId, revisionId) {
-  const { project, revision, renderExcerptId } = await mutateProjectRecord(projectId, (current) => cancelRevisionOnProject(current, revisionId));
+export async function cancelRevision(projectId, revisionId, { alsoOnProject = null } = {}) {
+  const { project, revision, renderExcerptId } = await mutateProjectRecord(projectId, (current) => {
+    const out = cancelRevisionOnProject(current, revisionId);
+    return alsoOnProject ? { ...out, project: alsoOnProject(out.project) } : out;
+  });
   if (renderExcerptId) cancelExcerptRender(renderExcerptId);
   const { listJobs, cancelJob } = await import('../mediaJobQueue/index.js');
   const live = revisionGenerationJobs(project, revision, [...listJobs({ kind: 'video' }), ...listJobs({ kind: 'image' })]);

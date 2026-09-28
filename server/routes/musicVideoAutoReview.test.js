@@ -283,6 +283,22 @@ describe('opt-in automatic review/retries (#8988)', () => {
     expect(run(await projects.getProject(p.id)).usage.generations).toBe(1);
   });
 
+  it('cancelling a run closes its open revision in the same write — nothing more is charged or allowed', async () => {
+    const p = await project();
+    h.verdicts.push(FAIL_S2);
+    await start(p.id, { maxAttempts: 2, maxGenerations: 2 });
+    await finishDraft(p.id, 1);
+    const before = await settled(p.id, (x) => expect(run(x).attempts[0].revisionId).toBeTruthy());
+    const revisionId = run(before).attempts[0].revisionId;
+
+    const r = await request(app).post(`${base(p.id)}/auto-reviews/${run(before).id}/cancel`);
+    expect(r.status).toBe(200);
+    const after = await projects.getProject(p.id);
+    expect(run(after).status).toBe('canceled');
+    expect(after.revisions.find((rv) => rv.id === revisionId).status).toBe('canceled');
+    await expect(assertRevisionOpen(p.id, revisionId, { sceneId: 's2', kind: 'video' })).rejects.toMatchObject({ code: 'REVISION_CLOSED' });
+  });
+
   it('stops before handing out a revision the remaining spend cannot cover', async () => {
     const p = await project();
     h.verdicts.push(FAIL_S2);

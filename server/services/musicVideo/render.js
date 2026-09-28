@@ -166,7 +166,8 @@ export async function resolveMasterAudioPath(project) {
 // song is the sole audio master (the default).
 async function resolveSoundBed(project) {
   const bed = projectSoundBed(project);
-  if (!bed) return null;
+  // A (synced) record naming the song itself as its bed mixes nothing.
+  if (!bed || bed.trackId === project.trackId) return null;
   const track = await getTrack(bed.trackId);
   const safe = track?.audioFilename ? safeUnder(PATHS.music, track.audioFilename) : null;
   if (!safe || !existsSync(safe)) {

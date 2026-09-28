@@ -229,7 +229,10 @@ export function beginNextAttempt(project, runId, excerptId, now = new Date().toI
 /**
  * Spend one review from the attempt budget BEFORE the provider call. Throws
  * 409 when the budget is spent, the run is no longer running, or the attempt
- * already holds a review — so an overlapping advance can never pay twice.
+ * already holds a review — so an overlapping advance can never pay twice
+ * (advances of one run are also coalesced in-process). A review interrupted
+ * by a restart left `reviewStartedAt` with no review: the director's next
+ * Continue/Resume reviews that draft again, and that call counts too.
  */
 export function beginAttemptReview(project, runId, now = new Date().toISOString()) {
   return mutateRun(project, runId, (run) => {
@@ -245,7 +248,9 @@ export function beginAttemptReview(project, runId, now = new Date().toISOString(
 
 const cleanFinding = (f, spanSec) => {
   if (!f || typeof f !== 'object' || !isNonBlankStr(f.note)) return null;
-  const atSec = typeof f.atSec === 'number' && Number.isFinite(f.atSec) ? Math.min(Math.max(0, f.atSec), spanSec) : null;
+  // Clamped INSIDE the half-open excerpt, so a finding at (or past) its end
+  // still lands in the last section rather than in none.
+  const atSec = typeof f.atSec === 'number' && Number.isFinite(f.atSec) ? Math.min(Math.max(0, f.atSec), Math.max(0, spanSec - 0.001)) : null;
   if (atSec === null) return null;
   return {
     atSec: Math.round(atSec * 1000) / 1000,
