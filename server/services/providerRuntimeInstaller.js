@@ -43,6 +43,12 @@ import { commandOutput } from '../lib/commandExists.js';
 import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
+import { isTestRunner } from '../lib/runtimeEnv.js';
+
+// Stand-in for `findCommandOnPath` OR `commandOutput` when a real PATH scan /
+// spawn is skipped (below) — both answer "nothing to report" (`null`) on any
+// argv, matching what a genuinely missing/unrunnable binary would answer.
+const NEVER_FOUND = () => null;
 
 const IS_WIN = process.platform === 'win32';
 
@@ -258,14 +264,16 @@ export function getProviderRuntime(id) {
   return (typeof id === 'string' && RUNTIMES_BY_ID.get(id)) || null;
 }
 
-async function probeRuntimeStatus(runtime, findCommand, probeCommand) {
+async function probeRuntimeStatus(runtime, findCommand, probeCommand, skipRealSpawn) {
   const kind = runtime.install.kind;
   const tool = INSTALL_TOOL[kind];
 
   // Boot adopts this already; repeat it here because the install route probes
   // again straight after `npm install --global`, and on a first install the
   // prefix directory did not exist when boot looked. Cached and idempotent.
-  await adoptNpmGlobalBinDir();
+  // Skipped under `skipRealSpawn` (see `getProviderRuntimeStatus`) — a test
+  // that never asked to probe a real binary should never spawn `npm` either.
+  if (!skipRealSpawn) await adoptNpmGlobalBinDir();
 
   const [resolved, toolPath] = await Promise.all([findCommand(runtime.command), findCommand(tool)]);
 
@@ -335,15 +343,45 @@ async function probeRuntimeStatus(runtime, findCommand, probeCommand) {
  * still needs, and a cached pre-install probe would fail the post-install
  * verification of a CLI that is now perfectly runnable.
  */
-export async function getProviderRuntimeStatus(id, { findCommand, probeCommand, fresh = false } = {}) {
+export async function getProviderRuntimeStatus(id, { findCommand, probeCommand, fresh = false, skipRealSpawn } = {}) {
   const runtime = getProviderRuntime(id);
   if (!runtime) return null;
   // Keyed by the canonical id, so an alias spelling shares the same entry
   // instead of probing the same binary twice.
   const cached = statusCache.get(runtime.id);
   if (!fresh && cached && Date.now() - cached.at < STATUS_TTL_MS) return cached.status;
-  const status = await probeRuntimeStatus(runtime, findCommand || findCommandOnPath, probeCommand || commandOutput);
-  statusCache.set(runtime.id, { at: Date.now(), status });
+  // A caller that passed neither override gets the REAL PATH scan and REAL
+  // `--version` spawn in production — but under the test runner that answer
+  // is "not probed" (never "not installed": `installed` stays a plain
+  // fail-closed false, the same shape a genuinely absent binary produces).
+  // `skipRealSpawn` can also arrive explicitly from `getProviderRuntimeStatuses`
+  // (below), which decides this once per batch rather than per row. This is
+  // what keeps an incidental route/service test — one that never asked to
+  // probe a real CLI at all — from shelling out to whatever `kilo`/`opencode`/
+  // `npm` happen to be on the DEVELOPER's own PATH (#9039); a test that
+  // explicitly wants the real probe still gets it by passing its own
+  // `findCommand`/`probeCommand` (every `providerRuntimeInstaller.test.js`
+  // case already does, and stays completely unaffected by this gate).
+  const usingDefaults = skipRealSpawn === undefined && !findCommand && !probeCommand;
+  const skip = skipRealSpawn ?? (usingDefaults && isTestRunner());
+  // Both fallbacks gate on `skip` the same way: an explicit `findCommand`/
+  // `probeCommand` still wins (a test that wants the real probe gets it by
+  // injecting its own), but a caller that combines an explicit
+  // `skipRealSpawn: true` with only ONE override must not still spawn a real
+  // `--version` process through the other one's default.
+  const status = await probeRuntimeStatus(
+    runtime,
+    findCommand || (skip ? NEVER_FOUND : findCommandOnPath),
+    probeCommand || (skip ? NEVER_FOUND : commandOutput),
+    skip,
+  );
+  // A skipped probe is NOT PROBED, not "not installed" — the same distinction
+  // `codexOssSupport.js`'s own probe cache draws — so it must not sit in the
+  // TTL cache pretending to be a real answer a LATER call (one that injects
+  // real `findCommand`/`probeCommand`, e.g. a `hasCli()`-gated integration
+  // test that shares this module instance) would otherwise read back verbatim
+  // instead of getting its own real probe.
+  if (!skip) statusCache.set(runtime.id, { at: Date.now(), status });
   return status;
 }
 
@@ -354,11 +392,15 @@ export async function getProviderRuntimeStatus(id, { findCommand, probeCommand, 
  * the provider is configured with, which may be an alias.
  */
 export async function getProviderRuntimeStatuses(deps = {}) {
+  // Decided ONCE for the whole batch — see `getProviderRuntimeStatus` — so
+  // every row answers "not probed" together rather than racing separately
+  // computed answers for the same TTL cache entry.
+  const skipRealSpawn = deps.skipRealSpawn ?? (!deps.findCommand && !deps.probeCommand && isTestRunner());
   // One PATH scan per distinct binary for the whole batch: five rows resolve
   // `npm` and two resolve `curl`, and the resolver hits the filesystem.
-  const findCommand = memoizePerBatch(deps.findCommand || findCommandOnPath);
+  const findCommand = memoizePerBatch(deps.findCommand || (skipRealSpawn ? NEVER_FOUND : findCommandOnPath));
   const statuses = await Promise.all(
-    PROVIDER_RUNTIMES.map((runtime) => getProviderRuntimeStatus(runtime.id, { ...deps, findCommand })),
+    PROVIDER_RUNTIMES.map((runtime) => getProviderRuntimeStatus(runtime.id, { ...deps, findCommand, skipRealSpawn })),
   );
   const byId = new Map(statuses.map((status) => [status.id, status]));
   return Object.fromEntries(PROVIDER_RUNTIMES.flatMap((runtime) => {

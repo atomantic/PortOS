@@ -40,18 +40,34 @@ export function setup() {
 // report — the root-level rmSync below still removes them either way.
 const VITEST_INTERNAL_SCRATCH_DIR = /^[A-Za-z0-9_-]{21}$/;
 
-// A handful of PortOS's own provider-availability tests spawn a REAL,
+// A handful of PortOS's own provider-availability tests used to spawn a REAL,
 // installed third-party CLI (kilo, opencode, …) when one is present on the
-// developer's PATH (`hasCli()`-style gates) — a binary that then writes its
-// OWN scratch/cache state (a config dir, a Node module compile cache, …)
-// into whatever TMPDIR it inherits, which since this file is our run root.
-// That state is not a PortOS temp-file leak — it belongs to the third-party
-// tool, only appears on a machine that actually has the tool installed
-// (invisible in CI, where those tests are gated off), and fixing it means
-// giving each such CLI invocation its own isolated cache dir, tracked in
-// #9039. Reported for visibility but never fails the run — unlike an
-// unrecognized name, which still does.
-const KNOWN_THIRD_PARTY_CLI_SCRATCH = new Set(['kilo', 'opencode', 'escape', 'node-compile-cache']);
+// developer's PATH (`hasCli()`-style gates) — a binary that then wrote its OWN
+// scratch/cache state (a config dir, a Node module compile cache, …) into
+// whatever TMPDIR it inherited, which since this file is our run root. #9039
+// traced every entry that used to land here to a real, fixable cause rather
+// than an unavoidable side effect of invoking a real binary:
+//   - `kilo` / `opencode` — the top-level scratch dirs those two binaries
+//     wrote on every invocation. Fixed by isolating TMPDIR/TMP/TEMP per spawn
+//     (`probe()` in `server/lib/commandExists.js`) AND by no longer spawning
+//     them at all from an incidental test: `providerRuntimeInstaller.js`'s
+//     `getProviderRuntimeStatus(es)` now skips the real PATH scan/`--version`
+//     probe under the test runner unless a test explicitly injects its own
+//     `findCommand`/`probeCommand` (every genuinely real-CLI-probe test
+//     already does), the same guard `codexOssSupport.js`'s `getCodexOssSupport`
+//     applies to its own `codex exec --help` probe.
+//   - `escape` — was never a third-party leak: it was
+//     `agentRunReconciler.test.js`'s own path-traversal fixture, deliberately
+//     written one level outside its RUNS_DIR and simply never swept in
+//     `afterAll`. Fixed by sweeping it there.
+// `node-compile-cache` — the confirmed cause (a real, unisolated `npm prefix
+// -g` in `npmGlobalBin.js`, npm being itself a large Node CLI that writes its
+// own module compile cache) is fixed the same way as `kilo`/`opencode` above.
+// It still reappears here VERY rarely (observed once in ~2,500 files) with no
+// real-CLI spawn in the trace that produced it — kept allowlisted rather than
+// pinned on an unconfirmed cause; narrow this further if a reproducible
+// trigger turns up.
+const KNOWN_THIRD_PARTY_CLI_SCRATCH = new Set(['node-compile-cache']);
 
 // A leak this file is NOT the right place to fix: `server/services/
 // htmlComposition/*` is a different work area's tree (#9032 was explicitly

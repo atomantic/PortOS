@@ -24,6 +24,8 @@
 
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { bufferedSpawn, prepareCliSpawn } from './bufferedSpawn.js';
 import { adoptPathDirs, safeChildProcessEnv } from './processEnv.js';
 
@@ -39,16 +41,32 @@ let binDirProbe = null;
 
 /** One `npm prefix -g`, mapped to the platform's global bin directory. */
 async function probeNpmGlobalBinDir(spawnImpl) {
-  const env = safeChildProcessEnv();
-  // `shell: false` + `prepareCliSpawn`, not `bufferedSpawn`'s `needsShell('npm')`
-  // default: that default is `shell: true` with an args array, which node
-  // space-joins WITHOUT escaping (DEP0190). The argv here is fixed, but the
-  // warning would print at every boot in both processes.
-  const { command, args } = prepareCliSpawn('npm', ['prefix', '-g'], env);
-  const { stdout } = await spawnImpl(command, args, { env, shell: false, timeoutMs: PREFIX_TIMEOUT_MS });
-  const prefix = String(stdout || '').trim().split(/\r?\n/)[0]?.trim() || '';
-  // Windows drops binaries straight in the prefix; POSIX uses `<prefix>/bin`.
-  return prefix ? (IS_WIN ? prefix : join(prefix, 'bin')) : null;
+  // npm is itself a large Node CLI that writes its OWN module compile cache
+  // under `TMPDIR`/`node-compile-cache` on every invocation (same class of
+  // problem `commandExists.js`'s `probe()` isolates for `kilo`/`opencode` —
+  // see its docstring, #9039). A throwaway scratch dir scoped to THIS one
+  // spawn keeps that cache out of the caller's real `TMPDIR` (and, under
+  // PortOS's own run-scoped vitest temp root, out of the leak report).
+  const scratchDir = mkdtempSync(join(tmpdir(), 'portos-cli-probe-'));
+  const env = { ...safeChildProcessEnv(), TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir };
+  try {
+    // `shell: false` + `prepareCliSpawn`, not `bufferedSpawn`'s `needsShell('npm')`
+    // default: that default is `shell: true` with an args array, which node
+    // space-joins WITHOUT escaping (DEP0190). The argv here is fixed, but the
+    // warning would print at every boot in both processes.
+    const { command, args } = prepareCliSpawn('npm', ['prefix', '-g'], env);
+    const { stdout } = await spawnImpl(command, args, { env, shell: false, timeoutMs: PREFIX_TIMEOUT_MS });
+    const prefix = String(stdout || '').trim().split(/\r?\n/)[0]?.trim() || '';
+    // Windows drops binaries straight in the prefix; POSIX uses `<prefix>/bin`.
+    return prefix ? (IS_WIN ? prefix : join(prefix, 'bin')) : null;
+  } finally {
+    try {
+      rmSync(scratchDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort — a lingering handle on a still-terminating npm must not
+      // throw out of a probe that already has its answer.
+    }
+  }
 }
 
 /**

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { existsSync } from 'node:fs'
 
 const execFileMock = { impl: (_cmd, _args, _opts, cb) => cb(null, { stdout: '', stderr: '' }) }
 vi.mock('./childProcess.js', () => ({
@@ -68,7 +69,35 @@ describe('commandExists', () => {
 
     await commandExists('opencode', undefined, { env, cwd: '/example/workspace' })
 
-    expect(seenOpts).toEqual({ timeout: 5_000, env, cwd: '/example/workspace' })
+    expect(seenOpts.timeout).toBe(5_000)
+    expect(seenOpts.cwd).toBe('/example/workspace')
+    // The caller's own vars survive; TMPDIR/TMP/TEMP are pinned to a
+    // throwaway per-probe scratch dir so a real CLI (kilo, opencode) cannot
+    // write its own scratch/cache state into the caller's TMPDIR (#9039).
+    expect(seenOpts.env.PATH).toBe('/example/bin')
+    expect(seenOpts.env.TMPDIR).toBe(seenOpts.env.TMP)
+    expect(seenOpts.env.TMPDIR).toBe(seenOpts.env.TEMP)
+    expect(seenOpts.env.TMPDIR).toMatch(/portos-cli-probe-/)
+  })
+
+  it('removes its throwaway scratch dir once the probe settles', async () => {
+    let scratchDir = null
+    execFileMock.impl = (_cmd, _args, opts, cb) => { scratchDir = opts.env.TMPDIR; cb(null, { stdout: '', stderr: '' }) }
+
+    await commandExists('claude')
+
+    expect(scratchDir).toMatch(/portos-cli-probe-/)
+    expect(existsSync(scratchDir)).toBe(false)
+  })
+
+  it('removes its scratch dir even when the probe fails', async () => {
+    let scratchDir = null
+    execFileMock.impl = (_cmd, _args, opts, cb) => { scratchDir = opts.env.TMPDIR; cb(new Error('ENOENT')) }
+
+    await commandExists('nope')
+
+    expect(scratchDir).toMatch(/portos-cli-probe-/)
+    expect(existsSync(scratchDir)).toBe(false)
   })
 
   // A bare `codex` is a `.cmd` shim on Windows. execFile's default shell:false
@@ -98,7 +127,10 @@ describe('commandExists', () => {
 
       await commandExists('codex', undefined, { env })
 
-      expect(seenEnv).toBe(env)
+      // Not the exact same object — the caller's vars ride along, plus the
+      // isolated TMPDIR/TMP/TEMP scratch override (see the throwaway-scratch
+      // tests above) — but every var the caller supplied is still there.
+      expect(seenEnv).toMatchObject(env)
     })
 
     it('falls back to process.env when the caller passes no child env', async () => {
@@ -107,7 +139,11 @@ describe('commandExists', () => {
 
       await commandExists('codex')
 
-      expect(seenEnv).toBe(process.env)
+      // Every process.env var rides along except TMPDIR/TMP/TEMP, which are
+      // pinned to the isolated per-probe scratch dir instead.
+      const { TMPDIR: _t, TMP: _tm, TEMP: _te, ...restOfProcessEnv } = process.env
+      expect(seenEnv).toMatchObject(restOfProcessEnv)
+      expect(seenEnv.TMPDIR).toMatch(/portos-cli-probe-/)
     })
   })
 })
