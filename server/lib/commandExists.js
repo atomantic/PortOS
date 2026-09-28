@@ -45,7 +45,16 @@ const execFileAsync = promisify(execFile);
  * the three temp-dir keys are overridden on top.
  */
 function probe(cmd, args, { timeoutMs, env, cwd, maxBuffer }) {
-  const scratchDir = mkdtempSync(join(tmpdir(), 'portos-cli-probe-'));
+  let scratchDir;
+  try {
+    scratchDir = mkdtempSync(join(tmpdir(), 'portos-cli-probe-'));
+  } catch {
+    // Could not even allocate the scratch dir (a full disk, an unwritable
+    // tmpdir) — fail closed the same as every other probe failure, rather
+    // than throwing synchronously out of what every caller treats as a
+    // promise that always resolves (never rejects).
+    return Promise.resolve(null);
+  }
   const probeEnv = { ...(env || process.env), TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir };
   const options = {
     timeout: timeoutMs,
