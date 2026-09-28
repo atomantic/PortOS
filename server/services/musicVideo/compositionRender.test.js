@@ -4,7 +4,7 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, sweepStrayTempRoots } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { _cleanupTestBrowser } from '../htmlComposition/testBrowserCleanup.js';
@@ -67,20 +67,8 @@ describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Ch
 
   afterAll(async () => {
     await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
-    // Belt-and-suspenders (#9032): this suite spawns a real, headless Chrome
-    // over CDP, and a lingering renderer/ffmpeg handle on a file inside the
-    // lazyTempDataRoot can make its rmSync above throw before the tree is
-    // fully removed — surfaced in CI (not reproducible locally without
-    // Chrome + ffmpeg both present) as a leftover `portos-mv-composition-*`
-    // root. Sweep the real tmpdir directly rather than relying solely on the
-    // in-memory `lazyRoots` map cleanupTempDataRoots() already cleared.
-    const { readdirSync: listDir, rmSync: removeDir } = await import('node:fs');
-    const { tmpdir: realTmpdir } = await import('node:os');
-    for (const name of listDir(realTmpdir())) {
-      if (name.startsWith('portos-mv-composition-')) {
-        removeDir(join(realTmpdir(), name), { recursive: true, force: true });
-      }
-    }
+    // Real ffprobe/ffmpeg subprocess work (#9032) — see sweepStrayTempRoots's doc.
+    sweepStrayTempRoots('portos-mv-composition-');
   });
 
   it('lays timed text over the cut on one continuous audio master, covering the edit within a frame', async () => {

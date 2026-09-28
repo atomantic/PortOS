@@ -43,7 +43,7 @@
  * target the default re-rooting wouldn't produce — it merges last.
  */
 
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, sep } from 'path';
 
@@ -92,6 +92,34 @@ export function lazyTempDataRoot(prefix = 'portos-test-') {
 export function cleanupTempDataRoots() {
   for (const root of lazyRoots.values()) rmSync(root, { recursive: true, force: true });
   lazyRoots.clear();
+}
+
+/**
+ * Belt-and-suspenders for a suite whose real (unmocked) child work — ffmpeg,
+ * a headless browser over CDP — can still be settling when `afterAll` runs:
+ * remove every real `os.tmpdir()` entry matching `prefix`, not just the one
+ * root `cleanupTempDataRoots()` tracked in memory (#9032). A lingering
+ * renderer/ffprobe handle on a file inside a `lazyTempDataRoot` root can make
+ * that function's own `rmSync` throw before the tree is fully gone, or an
+ * un-awaited background job can call `lazyTempDataRoot(prefix)` again AFTER
+ * `cleanupTempDataRoots()` already cleared it, minting a brand new root
+ * nothing else ever cleans. Call this LAST in the suite's `afterAll`, after
+ * `cleanupTempDataRoots()`, to narrow (not eliminate — a genuinely still-
+ * running background job can still recreate the prefix afterward) that race.
+ * `server/services/musicVideo/compositionRender.test.js` and
+ * `server/routes/musicVideoVocalStem.test.js` are the worked examples.
+ */
+export function sweepStrayTempRoots(prefix) {
+  const root = tmpdir();
+  let entries;
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (name.startsWith(prefix)) rmSync(join(root, name), { recursive: true, force: true });
+  }
 }
 
 /**

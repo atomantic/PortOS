@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots, sweepStrayTempRoots } from '../lib/mockPathsDataRoot.js';
 
 const ROOT = () => lazyTempDataRoot('mv-vocal-stem-route-test-');
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
@@ -62,7 +62,11 @@ beforeEach(async () => {
   writeFileSync(join(MUSIC(), 'other-song.wav'), wav(6));
   project = await projects.createProject({ name: 'Example Video', uploadedAudioFilename: 'song.wav' });
 });
-afterAll(cleanupTempDataRoots);
+afterAll(() => {
+  cleanupTempDataRoots();
+  // Real ffprobe/ffmpeg subprocess work (#9032) — see sweepStrayTempRoots's doc.
+  sweepStrayTempRoots('mv-vocal-stem-route-test-');
+});
 
 describe.skipIf(!ffmpeg)('music-video vocal stem routes', () => {
   it('attaches a stem on the song timebase, keeps it through removal in the library, and drops it with the song', async () => {
