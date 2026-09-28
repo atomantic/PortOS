@@ -84,8 +84,12 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
     const payload = { type: 'image' };
     if (mediaKey) payload.mediaKey = mediaKey;
     if (thumbUrl) payload.imageUrl = thumbUrl;
+    const promptText = typeof item?.prompt === 'string' && item.prompt !== '(no prompt)' ? item.prompt.trim() : '';
+    const captionText = typeof item?.caption === 'string' ? item.caption.trim() : '';
+    const effectiveCaption = captionText || promptText || null;
+    if (effectiveCaption) payload.caption = effectiveCaption;
     return payload;
-  }, [mediaKey, thumbUrl]);
+  }, [mediaKey, thumbUrl, item?.prompt, item?.caption]);
   // The identifiers membership/dedup keys on (mirror the payload).
   const pinKey = useMemo(() => ({ mediaKey, imageUrl: thumbUrl }), [mediaKey, thumbUrl]);
 

@@ -49,8 +49,9 @@ export function boardAnalyzePlan(items) {
   let analyzed = 0;
   let skipped = 0;
   for (const item of list) {
-    const stored = item?.analysis?.prompt;
-    if (typeof stored === 'string' && stored.trim()) {
+    const stored = (item?.analysis?.prompt && typeof item.analysis.prompt === 'string' && item.analysis.prompt.trim())
+      || (typeof item?.caption === 'string' && item.caption.trim());
+    if (stored) {
       analyzed += 1;
       continue;
     }

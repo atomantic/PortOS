@@ -186,19 +186,23 @@ function MoodBoardEditor({ id }) {
 
   const handlePickGalleryImage = (picked) => {
     if (!picked?.previewUrl && !picked?.key) return;
+    const promptText = typeof picked.prompt === 'string' && picked.prompt !== '(no prompt)' ? picked.prompt.trim() : '';
     addPickedItem({
       type: 'image',
       mediaKey: typeof picked.key === 'string' && picked.key.startsWith('image:') ? picked.key : null,
       imageUrl: picked.previewUrl || null,
+      caption: promptText || null,
     });
   };
 
   const handlePickGalleryVideo = (picked) => {
     if (!picked?.filename) return;
+    const promptText = typeof picked.prompt === 'string' && picked.prompt !== '(no prompt)' ? picked.prompt.trim() : '';
     addPickedItem({
       type: 'video',
       mediaKey: `video:${picked.filename}`,
       imageUrl: picked.previewUrl || null,
+      caption: promptText || null,
     });
   };
 
