@@ -210,6 +210,20 @@ describe('planShots', () => {
 });
 
 describe('buildScenePlanPrompt', () => {
+  it('bounds a maximal production bible without dropping cast identities', () => {
+    const subjects = Array.from({ length: 24 }, (_, index) => ({
+      id: `subject-${index}`, kind: 'character', role: 'protagonist',
+      name: `Subject ${index} ${'n'.repeat(105)}`, description: 'd'.repeat(1000),
+    }));
+    const base = makeProject({ concept: {} });
+    const prompt = buildScenePlanPrompt({ ...base, concept: {
+      universeStyle: 'u'.repeat(4000), moodBoardStyle: 'm'.repeat(4000), subjects,
+    } }, []);
+    expect(prompt.length - buildScenePlanPrompt(base, []).length).toBeLessThanOrEqual(6000);
+    for (const subject of subjects) expect(prompt).toContain(subject.name);
+    expect(prompt).toContain('descriptions may be abbreviated');
+  });
+
   it('includes the concept, style, and per-shot section/duration/energy/lyrics/intent', () => {
     const { shots } = planShots(SECTIONS, {
       beats: BEATS,
@@ -218,7 +232,13 @@ describe('buildScenePlanPrompt', () => {
       lyricCues: [{ text: 'we run the night', startSec: 10, endSec: 14 }],
       phrases: [{ label: 'Lift', startSec: 18, endSec: 30, intent: 'the city falls away' }],
     });
-    const prompt = buildScenePlanPrompt(makeProject(), shots);
+    const prompt = buildScenePlanPrompt(makeProject({ concept: {
+      prompt: 'cyberpunk chase', style: 'neon, rain-slicked streets', universeStyle: 'Ink silhouettes', moodBoardStyle: 'Watercolor',
+      subjects: [{ id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' }],
+    } }), shots);
+    expect(prompt).toContain('Universe style: Ink silhouettes');
+    expect(prompt).toContain('Mood board style: Watercolor');
+    expect(prompt).toContain('character (protagonist): Example singer — Silver coat');
     expect(prompt).toContain('Neon Nights');
     expect(prompt).toContain('cyberpunk chase');
     expect(prompt).toContain('neon, rain-slicked streets');

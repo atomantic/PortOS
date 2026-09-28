@@ -1,3 +1,4 @@
+import CreativeSetupPanel from '../components/musicVideo/CreativeSetupPanel.jsx';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film } from 'lucide-react';
@@ -82,6 +83,7 @@ export default function MusicVideo() {
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [arranging, setArranging] = useState(false);
+  const [creativeSetupPending, setCreativeSetupPending] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [cloning, setCloning] = useState(false);
   const [importingLyrics, setImportingLyrics] = useState(false);
@@ -623,6 +625,11 @@ export default function MusicVideo() {
         )}
         {selected && (
           <div className="space-y-3">
+            <CreativeSetupPanel key={`creative-${selected.id}`} project={selected} onPendingChange={setCreativeSetupPending}
+              onSave={(patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
+                patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec });
+              })} />
+            <fieldset disabled={creativeSetupPending} className="space-y-3 min-w-0">
             <div className="bg-port-card border border-port-border rounded-lg p-3">
               <ProjectToolbar
                 project={selected}
@@ -785,6 +792,7 @@ export default function MusicVideo() {
                 />
               ))}
             </div>
+            </fieldset>
           </div>
         )}
       </div>

@@ -190,7 +190,8 @@ describe('CreativeDirectorModelsDrawer', () => {
     });
     renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
     await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider')).toBeTruthy());
-    await waitFor(() => expect(getVisionModels).toHaveBeenCalled());
+    // Request start does not mean assignments and capabilities have rendered.
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider').disabled).toBe(false));
 
     fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'ollama' } });
 
@@ -221,7 +222,8 @@ describe('CreativeDirectorModelsDrawer', () => {
       models: [{ providerId: 'ollama', backend: 'ollama', id: 'muse-glimmer:30b', vision: true }],
     });
     renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
-    await waitFor(() => expect(getVisionModels).toHaveBeenCalled());
+    // Request start does not mean assignments and capabilities have rendered.
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider').disabled).toBe(false));
 
     fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'ollama' } });
 
@@ -284,7 +286,8 @@ describe('CreativeDirectorModelsDrawer', () => {
       ],
     });
     renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
-    await waitFor(() => expect(getVisionModels).toHaveBeenCalled());
+    // Request start does not mean assignments and capabilities have rendered.
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider').disabled).toBe(false));
 
     fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'ollama' } });
 

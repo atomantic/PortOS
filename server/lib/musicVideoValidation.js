@@ -25,6 +25,17 @@ export const musicVideoConceptSchema = z.object({
   prompt: z.string().max(8000).optional(),
   style: z.string().max(2000).optional(),
   universeId: z.string().max(64).nullable().optional(),
+  // Authored snapshots keep the production stable when source canon changes.
+  universeStyle: z.string().max(4000).optional(),
+  moodBoardStyle: z.string().max(4000).optional(),
+  subjects: z.array(z.object({
+    id: z.string().min(1).max(64),
+    kind: z.enum(['character', 'place', 'object']),
+    name: z.string().trim().min(1).max(120),
+    description: z.string().max(1000).optional(),
+    role: z.enum(['protagonist', 'band', 'supporting']).optional(),
+    canonId: z.string().max(64).optional(),
+  }).strict()).max(24).optional(),
 }).strict();
 
 // Renderer settings travel with the project so reopening a director board (or

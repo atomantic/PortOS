@@ -197,6 +197,21 @@ describe('treatment compile', () => {
     expect(res.body.treatment.arc.beats).toHaveLength(5);
   });
 
+  it('uses the saved cast and rejects a compile that raced a recast', async () => {
+    const project = await plannedProject();
+    await projects.updateProject(project.id, { concept: { universeStyle: 'Ink silhouettes', subjects: [
+      { id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' },
+    ] } });
+    runPromptThroughProvider.mockImplementationOnce(async ({ prompt }) => {
+      expect(prompt).toContain('character (protagonist): Example singer — Silver coat');
+      await projects.updateProject(project.id, { concept: { subjects: [] } });
+      return { text: '{}' };
+    });
+    const res = await compile(project.id, { baseRevision: 0 });
+    expect(res.status).toBe(409);
+    expect((await reload(project.id)).concept.subjects).toEqual([]);
+  });
+
   it('refuses a compile whose provider call raced a brief edit, keeping the edit', async () => {
     const project = await plannedProject();
     runPromptThroughProvider.mockImplementationOnce(async () => {

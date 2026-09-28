@@ -110,3 +110,20 @@ describe('buildHandoffManifest typography (#8992)', () => {
     expect(manifest.scenes[0].shotPrompt).not.toMatch(/typography/i);
   });
 });
+
+ it('preserves the authored bible through save, partial edit, clone and handoff', async () => {
+   const concept = { universeId: 'u1', universeStyle: 'Ink silhouettes', moodBoardStyle: 'Watercolor', subjects: [
+     { id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' },
+   ] };
+   const p = await projects.createProject({ name: 'Example production', concept });
+   await projects.updateProject(p.id, { concept: { style: 'Monochrome' } });
+   const saved = await projects.getProject(p.id);
+   expect(saved.concept).toEqual({ ...concept, style: 'Monochrome' });
+   const clone = await projects.cloneProject(p.id, {});
+   expect(clone.concept).toEqual(saved.concept);
+   await projects.addProjectScene(p.id, { framePrompt: 'A close-up', prompt: 'Slow push in' });
+   const manifest = buildHandoffManifest(await projects.getProject(p.id));
+   expect(manifest.concept.subjects).toEqual(concept.subjects);
+   expect(manifest.scenes[0].framePrompt).toContain('Example singer — Silver coat');
+   expect(manifest.scenes[0].shotPrompt).toContain('Mood board style: Watercolor');
+ });
