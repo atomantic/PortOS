@@ -39,20 +39,20 @@ import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { addExcerptNote, projectExcerpts } from './excerpt.js';
 import { projectRevisions } from './revision.js';
 
-export const AUTO_REVIEW_LIMIT_BOUNDS = Object.freeze({
+const AUTO_REVIEW_LIMIT_BOUNDS = Object.freeze({
   maxAttempts: Object.freeze({ min: 1, max: 10 }),
   maxGenerations: Object.freeze({ min: 0, max: 100 }),
 });
 // Statuses: `running` (advancing), `stopped` (paused by the director —
 // resumable), `limit-reached` (a limit stopped it — resumable once raised),
 // and the terminal `passed` / `needs-human` / `failed` / `canceled`.
-export const AUTO_REVIEW_STATUSES = Object.freeze(['running', 'stopped', 'limit-reached', 'passed', 'needs-human', 'failed', 'canceled']);
+const AUTO_REVIEW_STATUSES = Object.freeze(['running', 'stopped', 'limit-reached', 'passed', 'needs-human', 'failed', 'canceled']);
 const RESUMABLE = new Set(['running', 'stopped', 'limit-reached']);
 const ACTIVE = new Set(['running', 'stopped', 'limit-reached']);
 export const AUTO_REVIEW_CHECKS = Object.freeze(['composition', 'continuity', 'motion', 'audioSync']);
 // Draft renders are free, but a window that fails to render every time must
 // not loop forever: this many failed renders of one attempt fail the run.
-export const MAX_RENDER_FAILURES = 2;
+const MAX_RENDER_FAILURES = 2;
 const MAX_PROJECT_AUTO_REVIEWS = 10;
 const MAX_FINDINGS = 20;
 const MAX_FINDING_LEN = 500;
@@ -65,7 +65,7 @@ const autoReviewError = (status, code, message, context) =>
 export const projectAutoReviews = (project) => (Array.isArray(project?.autoReviews) ? project.autoReviews : []);
 
 /** The run that is still live (running, paused, or waiting on raised limits), if any. */
-export const activeAutoReview = (project) => projectAutoReviews(project).find((r) => ACTIVE.has(r.status)) || null;
+const activeAutoReview = (project) => projectAutoReviews(project).find((r) => ACTIVE.has(r.status)) || null;
 
 const currentAttempt = (run) => run.attempts[run.attempts.length - 1];
 
@@ -96,7 +96,7 @@ const intIn = (value, { min, max }, name) => {
 };
 
 /** Validate a limits object; every limit is REQUIRED — a run never picks its own budget. */
-export function normalizeAutoReviewLimits(limits) {
+function normalizeAutoReviewLimits(limits) {
   return {
     maxAttempts: intIn(limits?.maxAttempts, AUTO_REVIEW_LIMIT_BOUNDS.maxAttempts, 'maxAttempts'),
     maxGenerations: intIn(limits?.maxGenerations, AUTO_REVIEW_LIMIT_BOUNDS.maxGenerations, 'maxGenerations'),

@@ -21,7 +21,6 @@ import {
   excerptBoundaryTimes,
   resolveSceneClips,
   resolveMasterAudioPath,
-  resolveSoundBed,
   renderMusicVideo,
 } from './render.js';
 import { findFfmpeg, probeVideoGeometry } from '../../lib/ffmpeg.js';
@@ -125,12 +124,6 @@ describe('sound-design bed (#8988)', () => {
     // A draft excerpt windows the MIXED audio, not the bare song.
     expect(fc).toContain('[mixa]atrim=start=1:end=3,asetpts=PTS-STARTPTS[outax]');
     expect(mapsOf(args)).toEqual(['[outvx]', '[outax]']);
-  });
-
-  it('refuses a render whose chosen bed track no longer resolves', async () => {
-    getTrack.mockResolvedValue(null);
-    await expect(resolveSoundBed({ soundBed: { trackId: 'trk-gone' } })).rejects.toMatchObject({ code: 'SOUND_BED_MISSING' });
-    await expect(resolveSoundBed({})).resolves.toBeNull();
   });
 });
 

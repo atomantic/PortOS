@@ -164,7 +164,7 @@ export async function resolveMasterAudioPath(project) {
 // #8988: resolve the project's explicitly chosen sound-design bed (a
 // music-library track) to a verified path under data/music/, or null when the
 // song is the sole audio master (the default).
-export async function resolveSoundBed(project) {
+async function resolveSoundBed(project) {
   const bed = projectSoundBed(project);
   if (!bed) return null;
   const track = await getTrack(bed.trackId);

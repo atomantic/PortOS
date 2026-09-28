@@ -278,7 +278,7 @@ async function takeSteps(projectId, runId) {
  * coalesce onto the in-flight advance, which then takes one more pass.
  * Returns `{ project, run, action }`.
  */
-export function advanceAutoReview(projectId, runId) {
+function advanceAutoReview(projectId, runId) {
   const live = advancing.get(runId);
   if (live) {
     live.again = true;

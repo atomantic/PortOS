@@ -16,9 +16,9 @@
 
 import { isNonBlankStr } from '../../lib/textUtils.js';
 
-export const DEFAULT_SOUND_BED_VOLUME = 0.3;
-export const MIN_SOUND_BED_VOLUME = 0.05;
-export const MAX_SOUND_BED_VOLUME = 1;
+const DEFAULT_SOUND_BED_VOLUME = 0.3;
+const MIN_SOUND_BED_VOLUME = 0.05;
+const MAX_SOUND_BED_VOLUME = 1;
 
 const clampVolume = (v) => {
   if (typeof v !== 'number' || !Number.isFinite(v)) return DEFAULT_SOUND_BED_VOLUME;
