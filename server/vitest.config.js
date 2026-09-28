@@ -95,12 +95,26 @@ process.env.TEMP = RUN_TEMP_ROOT;
 // VITEST_FAST is set here too).
 process.env.NODE_ENV = 'test';
 
+// Node's module compile cache (`NODE_COMPILE_CACHE` env, or a CLI calling
+// `module.enableCompileCache()` on itself — recent npm/npx builds do) writes
+// to `TMPDIR/node-compile-cache` on every invocation of the process that
+// enables it. That directory used to turn up rarely in the run-scoped temp
+// root above (#9051) with no single spawn helper's isolation provably
+// covering every child that could inherit the run's TMPDIR — the cache is
+// process-wide, not tied to one call site, so isolating call sites one at a
+// time can't rule out the next one. Disabling it tree-wide removes the
+// possibility outright: honored since Node v22.1, and this repo requires
+// `^22.22.2 || ^24.15.0 || >=26.0.0` everywhere it runs (`package.json`
+// engines), so every supported Node build respects it.
+process.env.NODE_DISABLE_COMPILE_CACHE = '1';
+
 export default defineConfig({
   test: {
     ...vitestCiPool(),
     // Workers get their own process.env — set it there as well as above.
     env: {
       NODE_ENV: 'test',
+      NODE_DISABLE_COMPILE_CACHE: '1',
       TMPDIR: RUN_TEMP_ROOT,
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,

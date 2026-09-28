@@ -60,14 +60,22 @@ const VITEST_INTERNAL_SCRATCH_DIR = /^[A-Za-z0-9_-]{21}$/;
 //     `agentRunReconciler.test.js`'s own path-traversal fixture, deliberately
 //     written one level outside its RUNS_DIR and simply never swept in
 //     `afterAll`. Fixed by sweeping it there.
-// `node-compile-cache` — the confirmed cause (a real, unisolated `npm prefix
-// -g` in `npmGlobalBin.js`, npm being itself a large Node CLI that writes its
-// own module compile cache) is fixed the same way as `kilo`/`opencode` above.
-// It still reappears here VERY rarely (observed once in ~2,500 files) with no
-// real-CLI spawn in the trace that produced it — kept allowlisted rather than
-// pinned on an unconfirmed cause; narrow this further if a reproducible
-// trigger turns up.
-const KNOWN_THIRD_PARTY_CLI_SCRATCH = new Set(['node-compile-cache']);
+//   - `node-compile-cache` — narrowed in #9051. `npmGlobalBin.js`'s own
+//     `npm prefix -g` spawn was already TMPDIR-isolated by the time #9051
+//     started (the fix above landed for it in #9039), yet the directory still
+//     turned up rarely (~1 in 2,500 files) with no real-CLI spawn correlated
+//     in the trace — Node's module compile cache (written whenever
+//     `NODE_COMPILE_CACHE` is set or a CLI calls `module.enableCompileCache()`
+//     for itself, which recent npm/npx builds do) is per-process, not tied to
+//     one call site, so no single spawn helper's isolation can be proven to
+//     cover every child that might inherit the run's TMPDIR. Disabled
+//     tree-wide for the whole test run instead: `server/vitest.config.js` sets
+//     `NODE_DISABLE_COMPILE_CACHE=1` in both the main process env and every
+//     worker's `test.env`, honored since Node v22.1 (this repo requires
+//     `^22.22.2 || ^24.15.0 || >=26.0.0`), so any child that inherits
+//     `process.env` — isolated TMPDIR or not — never writes the cache in the
+//     first place. No longer allowlisted below; a recurrence is a real,
+//     unknown leak again.
 
 // A leak this file is NOT the right place to fix: `server/services/
 // mediaJobQueue/index.test.js` is a different work area, out of scope for
@@ -150,20 +158,18 @@ export function teardown() {
     }
     let hasUnknownLeak = false;
     for (const [prefix, count] of byPrefix) {
-      const knownThirdParty = KNOWN_THIRD_PARTY_CLI_SCRATCH.has(prefix);
       const knownPending = KNOWN_PENDING_LEAKS.has(prefix);
-      if (!knownThirdParty && !knownPending) hasUnknownLeak = true;
-      const note = knownThirdParty ? ' (known third-party CLI scratch, see #9039)'
-        : knownPending ? ' (known pending leak, see KNOWN_PENDING_LEAKS above)' : '';
+      if (!knownPending) hasUnknownLeak = true;
+      const note = knownPending ? ' (known pending leak, see KNOWN_PENDING_LEAKS above)' : '';
       console.warn(`⚠️ test temp leak: ${prefix} ×${count}${note}`);
     }
     // Strict mode (#9032): a leftover entry means some suite wrote outside
     // its own cleanup path. Fail the run so a new leaker is caught locally
     // and in CI instead of quietly growing $TMPDIR — the run root itself is
     // still removed below either way, so the failure never reaches the
-    // host's real temp directory. A KNOWN_THIRD_PARTY_CLI_SCRATCH or
-    // KNOWN_PENDING_LEAKS entry is still reported (so it does not silently
-    // balloon) but does not fail the run — see those constants' comments.
+    // host's real temp directory. A KNOWN_PENDING_LEAKS entry is still
+    // reported (so it does not silently balloon) but does not fail the run —
+    // see that constant's comment.
     if (hasUnknownLeak) process.exitCode = 1;
   }
 
