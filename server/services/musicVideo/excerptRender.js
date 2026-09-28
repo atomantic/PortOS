@@ -109,22 +109,32 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
 
     console.log(`🎬 Rendering music-video excerpt [${jobId.slice(4, 12)}]: project=${projectId.slice(0, 8)} range=[${startSec.toFixed(2)},${endClamped.toFixed(2)}]s clips=${clips.length} cues=${cues.length}`);
 
+    // Returns whether the persistence write succeeded — the success path below
+    // gates its 'complete' broadcast on it, so a director is never told an
+    // excerpt is ready when the record never actually recorded it (the project
+    // would otherwise stay stuck 'rendering' while the client believes it's
+    // done). The error/cancel paths already broadcast their OWN terminal type
+    // before calling this, so their write failing only delays the record
+    // catching up (boot recovery clears a truly stuck one).
     const finalize = async (patch) => {
       projectExcerptRenders.delete(projectId);
-      await mutateProjectRecord(projectId, (current) => ({ project: applyExcerptPatch(current, excerptId, patch) })).catch((err) => {
-        console.error(`❌ Music-video excerpt render [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
-      });
+      const persisted = await mutateProjectRecord(projectId, (current) => ({ project: applyExcerptPatch(current, excerptId, patch) }))
+        .then(() => true, (err) => {
+          console.error(`❌ Music-video excerpt render [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
+          return false;
+        });
       if (composition) await removeCompositionScratch(jobId).catch((err) => {
         console.warn(`⚠️ Music-video excerpt render [${jobId.slice(4, 12)}] could not remove its overlay scratch: ${err.message}`);
       });
       closeJobAfterDelay(jobs, jobId);
+      return persisted;
     };
 
     // A cut/cue contact sheet is a best-effort companion artifact — its
     // failure never fails an excerpt whose video encoded successfully.
     const buildContactSheet = async () => {
       try {
-        const times = excerptBoundaryTimes(probe.sections, cues, startSec, endClamped);
+        const times = excerptBoundaryTimes(probe.sections, cues, startSec, endClamped, { fps: probe.fps });
         const sheetFilename = `${filename.replace(/\.mp4$/, '')}-sheet.png`;
         await encodeFileContactSheetAtTimes(outputPath, join(PATHS.videoThumbnails, sheetFilename), times, { width: probe.canonW, height: probe.canonH });
         return sheetFilename;
@@ -194,7 +204,11 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
           try {
             job.status = 'complete';
             const contactSheetFilename = await buildContactSheet();
-            await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null });
+            const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null });
+            if (!persisted) {
+              broadcastSse(job, { type: 'error', error: 'The excerpt rendered, but saving the result failed — reload the project and try again' });
+              return;
+            }
             console.log(`✅ Music-video excerpt rendered [${jobId.slice(4, 12)}]: ${filename}`);
             broadcastSse(job, { type: 'complete', result: { excerptId, filename, path: `/data/videos/${filename}`, contactSheetFilename, contactSheetPath: contactSheetFilename ? `/data/video-thumbnails/${contactSheetFilename}` : null } });
           } catch (err) {

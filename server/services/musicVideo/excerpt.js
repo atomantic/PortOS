@@ -27,7 +27,10 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 
 const MAX_NOTE_LEN = 2000;
-const MAX_EXCERPT_SEC = 3600;
+// Matches the route's musicVideoExcerptRequestSchema bound exactly — the same
+// generic "song time" ceiling every other music-video timedSec field uses —
+// so a range the public schema accepts can never fail this deeper check.
+const MAX_EXCERPT_SEC = 36000;
 
 function excerptError(status, code, message, context) {
   return new ServerError(message, { status, code, ...(context ? { context } : {}) });

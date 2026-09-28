@@ -95,6 +95,9 @@ describe('buildMusicVideoFfmpegArgs', () => {
 });
 
 describe('excerptBoundaryTimes (#8986)', () => {
+  // No encoded file has a frame timestamped at its own total duration, so the
+  // trailing boundary is always guarded back to `span - 1/fps` (default 24fps)
+  // — the last frame a real capture can land on.
   it('re-bases cut and cue boundaries inside the window to the excerpt timeline and dedupes', () => {
     const sections = [
       { sceneId: 'a', startSec: 0, endSec: 2 },
@@ -102,17 +105,30 @@ describe('excerptBoundaryTimes (#8986)', () => {
       { sceneId: 'c', startSec: 4, endSec: 6 },
     ];
     const cues = [{ startSec: 2, endSec: 3 }]; // lands exactly on a cut — deduped
-    expect(excerptBoundaryTimes(sections, cues, 1, 5)).toEqual([0, 1, 2, 3, 4]);
+    expect(excerptBoundaryTimes(sections, cues, 1, 5)).toEqual([0, 1, 2, 3, 3.958]);
   });
 
   it('always includes both ends of the window even with no cut/cue on them', () => {
     const sections = [{ sceneId: 'a', startSec: 0, endSec: 10 }];
-    expect(excerptBoundaryTimes(sections, [], 2, 7)).toEqual([0, 5]);
+    expect(excerptBoundaryTimes(sections, [], 2, 7)).toEqual([0, 4.958]);
   });
 
   it('drops boundaries outside the window', () => {
     const sections = [{ sceneId: 'a', startSec: 0, endSec: 1 }, { sceneId: 'b', startSec: 1, endSec: 20 }];
-    expect(excerptBoundaryTimes(sections, [], 5, 8)).toEqual([0, 3]);
+    expect(excerptBoundaryTimes(sections, [], 5, 8)).toEqual([0, 2.958]);
+  });
+
+  it('guards a cut/cue boundary that lands exactly at the window end the same as the trailing bookend', () => {
+    // Section b's end (6) lands exactly on the window's own end (endSec=6) —
+    // its re-based time (span=4) must collapse onto the SAME guarded last-frame
+    // time as the bookend, not sit at an impossible frame just past it.
+    const sections = [{ sceneId: 'a', startSec: 0, endSec: 2 }, { sceneId: 'b', startSec: 2, endSec: 6 }];
+    expect(excerptBoundaryTimes(sections, [], 2, 6)).toEqual([0, 3.958]);
+  });
+
+  it('scales the last-frame guard to the given fps', () => {
+    const sections = [{ sceneId: 'a', startSec: 0, endSec: 10 }];
+    expect(excerptBoundaryTimes(sections, [], 0, 10, { fps: 30 })).toEqual([0, 9.967]); // 10 - 1/30
   });
 });
 

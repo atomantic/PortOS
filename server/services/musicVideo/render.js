@@ -480,12 +480,22 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
 // returns them pre-excerpt, or as `renderableCues`/`sectionCardCues` compute
 // them). Always includes both ends of the window so the sheet covers the first
 // and last frame even when no cut/cue lands exactly on them.
-export function excerptBoundaryTimes(sections, cues, startSec, endSec) {
+//
+// No encoded video has a frame timestamped at its own total duration (the last
+// frame's presentation time is always `duration - 1/fps` or earlier), so any
+// boundary that lands exactly at the excerpt's end (its own `span`, including
+// one shifted there from a cut/cue at or past `endSec`) is guarded back to
+// `span - 1/fps` — the last frame a real capture can land on — rather than
+// asking `encodeFileContactSheetAtTimes` for an instant that doesn't exist.
+export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 24 } = {}) {
   const span = endSec - startSec;
-  const times = new Set([0, span]);
+  const lastFrame = fps > 0 ? Math.max(0, round3(span - 1 / fps)) : span;
+  const times = new Set([0, lastFrame]);
   const add = (t) => {
     if (typeof t !== 'number' || !Number.isFinite(t)) return;
-    if (t >= startSec - 1e-9 && t <= endSec + 1e-9) times.add(round3(Math.min(span, Math.max(0, t - startSec))));
+    if (t < startSec - 1e-9 || t > endSec + 1e-9) return;
+    const rel = Math.min(span, Math.max(0, t - startSec));
+    times.add(rel >= span - 1e-9 ? lastFrame : round3(rel));
   };
   for (const s of Array.isArray(sections) ? sections : []) { add(s.startSec); add(s.endSec); }
   for (const c of Array.isArray(cues) ? cues : []) { add(c.startSec); add(c.endSec); }

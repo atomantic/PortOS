@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
-import { rmSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -115,5 +115,29 @@ describe('excerpts survive a clone (#8986 acceptance)', () => {
     const { project } = await projectWithExcerpt({ notes: [{ id: 'mvn-1', atSec: 2, note: 'kept across clone', verdict: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }] });
     const cloned = await projects.cloneProject(project.id, {});
     expect(cloned.excerpts).toEqual(project.excerpts);
+  });
+
+  // A clone never duplicates the rendered bytes — it carries over the SAME
+  // filename pointers as the source (see the previous test). Deleting one
+  // project's excerpt must not unlink a file the other still references.
+  it('does not delete the shared excerpt file while a clone still references it, and does once neither does', async () => {
+    const { project } = await projectWithExcerpt();
+    const cloned = await projects.cloneProject(project.id, {});
+    const videoPath = join(ROOT(), 'videos', 'music-video-excerpt-1.mp4');
+    const sheetPath = join(ROOT(), 'video-thumbnails', 'music-video-excerpt-1-sheet.png');
+    mkdirSync(join(ROOT(), 'videos'), { recursive: true });
+    mkdirSync(join(ROOT(), 'video-thumbnails'), { recursive: true });
+    writeFileSync(videoPath, 'mp4-bytes');
+    writeFileSync(sheetPath, 'png-bytes');
+
+    const first = await request(app).delete(`${base(project.id)}/excerpt/mve-1`);
+    expect(first.status).toBe(200);
+    expect(existsSync(videoPath)).toBe(true); // the clone still references it
+    expect(existsSync(sheetPath)).toBe(true);
+
+    const second = await request(app).delete(`${base(cloned.id)}/excerpt/mve-1`);
+    expect(second.status).toBe(200);
+    expect(existsSync(videoPath)).toBe(false); // no project references it anymore
+    expect(existsSync(sheetPath)).toBe(false);
   });
 });

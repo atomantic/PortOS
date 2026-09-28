@@ -12,7 +12,7 @@
 import { unlink } from 'fs/promises';
 import { PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
-import { mutateProjectRecord } from './projects.js';
+import { listProjects, mutateProjectRecord } from './projects.js';
 import {
   addExcerptNote,
   removeExcerptFromProject,
@@ -20,12 +20,28 @@ import {
   updateExcerptNote,
 } from './excerpt.js';
 
-/** Remove an excerpt and its rendered files. Refuses while its render is in flight. */
+// A clone carries its source project's `excerpts` over verbatim (the review
+// notes survive the clone, #8986 acceptance) — including the ORIGINAL's
+// filename/contactSheetFilename, since a clone never duplicates the actual
+// rendered bytes. Two projects can therefore point at the same on-disk file;
+// deleting one project's excerpt must not unlink it out from under the other.
+async function stillReferenced(filename) {
+  if (!filename) return false;
+  const projects = await listProjects();
+  return projects.some((p) => (p.excerpts || []).some((e) => e.filename === filename || e.contactSheetFilename === filename));
+}
+
+async function unlinkIfUnreferenced(root, filename) {
+  if (!filename || await stillReferenced(filename)) return;
+  await unlink(safeUnder(root, filename) || '').catch(() => {});
+}
+
+/** Remove an excerpt and its rendered files (only once no other project still references them). Refuses while its render is in flight. */
 export async function deleteExcerpt(id, excerptId) {
   const { project, excerpt } = await mutateProjectRecord(id, (current) => removeExcerptFromProject(current, excerptId));
   await Promise.all([
-    excerpt.filename ? unlink(safeUnder(PATHS.videos, excerpt.filename) || '').catch(() => {}) : null,
-    excerpt.contactSheetFilename ? unlink(safeUnder(PATHS.videoThumbnails, excerpt.contactSheetFilename) || '').catch(() => {}) : null,
+    unlinkIfUnreferenced(PATHS.videos, excerpt.filename),
+    unlinkIfUnreferenced(PATHS.videoThumbnails, excerpt.contactSheetFilename),
   ]);
   return project;
 }
