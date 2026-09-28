@@ -57,6 +57,13 @@ export default function TreatmentPanel({ project, treatment: api }) {
   const saveBrief = (patch) => api.save({ brief: patch });
   const [noteText, setNoteText] = useState('');
   const [noteUrl, setNoteUrl] = useState('');
+  // Note edits send the whole list, built from the rendered one: hold further
+  // add/remove until the previous save lands so neither can drop the other.
+  const [notesSaving, setNotesSaving] = useState(false);
+  const saveNotes = (referenceNotes) => {
+    setNotesSaving(true);
+    return saveBrief({ referenceNotes }).finally(() => setNotesSaving(false));
+  };
   const notes = brief.referenceNotes || [];
   const urlValid = !noteUrl.trim() || /^https?:\/\/\S+$/i.test(noteUrl.trim());
   const {
@@ -66,8 +73,8 @@ export default function TreatmentPanel({ project, treatment: api }) {
   const applied = t?.appliedRevision != null && t.appliedRevision === t.revision;
 
   const addNote = () => {
-    if ((!noteText.trim() && !noteUrl.trim()) || !urlValid) return;
-    saveBrief({ referenceNotes: [...notes, { note: noteText.trim(), url: noteUrl.trim() || null }] });
+    if (notesSaving || (!noteText.trim() && !noteUrl.trim()) || !urlValid) return;
+    saveNotes([...notes, { note: noteText.trim(), url: noteUrl.trim() || null }]);
     setNoteText('');
     setNoteUrl('');
   };
@@ -121,7 +128,7 @@ export default function TreatmentPanel({ project, treatment: api }) {
                 <li key={n.id} className="flex items-start gap-2 text-xs">
                   <span className="min-w-0 flex-1 break-words">{n.note}{n.url && <span className="text-port-text-muted"> — {n.url}</span>}</span>
                   <button type="button" aria-label="Remove reference note" title="Remove reference note"
-                    onClick={() => saveBrief({ referenceNotes: notes.filter((x) => x.id !== n.id) })}
+                    onClick={() => saveNotes(notes.filter((x) => x.id !== n.id))} disabled={notesSaving}
                     className="min-h-[32px] min-w-[32px] inline-flex items-center justify-center text-port-error">
                     <Trash2 size={12} />
                   </button>
@@ -140,7 +147,7 @@ export default function TreatmentPanel({ project, treatment: api }) {
               <input id={idFor('url')} value={noteUrl} maxLength={2000} onChange={(e) => setNoteUrl(e.target.value)}
                 placeholder="https://… (optional)" className={`${inputCls} ${urlValid ? '' : 'border-port-error'}`} />
             </div>
-            <button type="button" onClick={addNote} disabled={(!noteText.trim() && !noteUrl.trim()) || !urlValid || notes.length >= 20}
+            <button type="button" onClick={addNote} disabled={notesSaving || (!noteText.trim() && !noteUrl.trim()) || !urlValid || notes.length >= 20}
               className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
               <Plus size={13} /> Add note
             </button>

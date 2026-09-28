@@ -436,7 +436,8 @@ function proofArtifacts(project, proof) {
 }
 
 /**
- * Record a proof review. `passed` must cite a real artifact of this project
+ * Record a proof review. Either verdict needs a note of what was reviewed, and
+ * any artifact it cites must belong to the proof. `passed` must cite a real artifact of this project
  * that can actually show every check: the final render for audio alignment,
  * lip-sync and composited text; a clip (or the render) for motion and cut
  * continuity; any frame or clip for identity. Lip-sync cannot pass while the
@@ -451,18 +452,20 @@ export function reviewTreatmentProof(project, proofId, { baseRevision, status, e
   let recorded = null;
   if (status !== 'proposed') {
     recorded = normalizeEvidence({ ...(evidence || {}), reviewedAt: now });
+    // Either verdict records what was reviewed, and any artifact it cites must
+    // really belong to this proof.
+    if (!recorded.note) throw treatmentError(422, 'PROOF_EVIDENCE_REQUIRED', `Describe what you reviewed before marking a proof ${status}`);
+    const { clips, frames, render } = proofArtifacts(project, proof);
+    const isRender = !!recorded.videoHistoryId && recorded.videoHistoryId === render;
+    const isClip = !!recorded.videoHistoryId && (clips.has(recorded.videoHistoryId) || isRender);
+    const isFrame = !!recorded.imageId && frames.has(recorded.imageId);
+    if (recorded.videoHistoryId && !isClip) {
+      throw treatmentError(422, 'PROOF_EVIDENCE_NOT_FOUND', 'That video is not a clip of this proof\'s scenes or the project\'s final render');
+    }
+    if (recorded.imageId && !isFrame) {
+      throw treatmentError(422, 'PROOF_EVIDENCE_NOT_FOUND', 'That image is not a frame of this proof\'s scenes');
+    }
     if (status === 'passed') {
-      if (!recorded.note) throw treatmentError(422, 'PROOF_EVIDENCE_REQUIRED', 'Describe what you reviewed before marking a proof passed');
-      const { clips, frames, render } = proofArtifacts(project, proof);
-      const isRender = !!recorded.videoHistoryId && recorded.videoHistoryId === render;
-      const isClip = !!recorded.videoHistoryId && (clips.has(recorded.videoHistoryId) || isRender);
-      const isFrame = !!recorded.imageId && frames.has(recorded.imageId);
-      if (recorded.videoHistoryId && !isClip) {
-        throw treatmentError(422, 'PROOF_EVIDENCE_NOT_FOUND', 'That video is not a clip of this proof\'s scenes or the project\'s final render');
-      }
-      if (recorded.imageId && !isFrame) {
-        throw treatmentError(422, 'PROOF_EVIDENCE_NOT_FOUND', 'That image is not a frame of this proof\'s scenes');
-      }
       if (proof.checks.includes('lip-sync') && treatment.capabilityGaps.some((g) => g.id === 'lip-sync')) {
         throw treatmentError(422, 'PROOF_CAPABILITY_MISSING', 'This install has no source-audio lip-sync, so a lip-sync check cannot pass');
       }

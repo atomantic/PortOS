@@ -75,8 +75,8 @@ function ProofRow({ project, proof, onReview }) {
           className="flex items-center gap-1 bg-port-success/20 text-port-success disabled:opacity-50 rounded px-2 py-1 min-h-[44px] sm:min-h-0">
           <CheckCircle2 size={12} /> Passed
         </button>
-        <button type="button" onClick={() => submit('failed')}
-          className="flex items-center gap-1 bg-port-error/20 text-port-error rounded px-2 py-1 min-h-[44px] sm:min-h-0">
+        <button type="button" onClick={() => submit('failed')} disabled={!note.trim()}
+          className="flex items-center gap-1 bg-port-error/20 text-port-error disabled:opacity-50 rounded px-2 py-1 min-h-[44px] sm:min-h-0">
           <XCircle size={12} /> Failed
         </button>
         {proof.status !== 'proposed' && (

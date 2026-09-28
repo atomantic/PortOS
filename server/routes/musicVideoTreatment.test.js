@@ -358,6 +358,10 @@ describe('treatment proofs, clone and motion references', () => {
 
     const noNote = await review(body.treatment.revision, { status: 'passed', evidence: { videoHistoryId: 'clip-a' } });
     expect(noNote.body.code).toBe('PROOF_EVIDENCE_REQUIRED');
+    const bareFail = await review(body.treatment.revision, { status: 'failed' });
+    expect(bareFail.body.code).toBe('PROOF_EVIDENCE_REQUIRED');
+    const foreign = await review(body.treatment.revision, { status: 'failed', evidence: { videoHistoryId: 'not-this-project', note: 'looked wrong' } });
+    expect(foreign.body.code).toBe('PROOF_EVIDENCE_NOT_FOUND');
     const still = await review(body.treatment.revision, { status: 'passed', evidence: { imageId: 'frame-a.png', note: 'contact sheet looks fine' } });
     expect(still.status).toBe(422);
     expect(still.body.code).toBe('PROOF_EVIDENCE_INSUFFICIENT');

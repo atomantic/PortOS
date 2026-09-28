@@ -9,6 +9,7 @@ const PROMPT_LABELS = {
   none: 'prompts untouched',
 };
 
+const PROMPT_FIELDS = [['framePrompt', 'Frame prompt'], ['prompt', 'Motion prompt']];
 const snippet = (text) => (text && text.length > 90 ? `${text.slice(0, 89)}…` : text || '—');
 
 /**
@@ -82,8 +83,13 @@ export default function TreatmentApplyReview({ project, api }) {
                 </div>
                 {s.prompt === 'manual' && (
                   <div className="mt-1 space-y-0.5">
-                    <p className="text-port-text-muted">Yours: {snippet(s.current.framePrompt || s.current.prompt)}</p>
-                    <p className="text-port-text-muted">Treatment: {snippet(s.suggested.framePrompt || s.suggested.prompt)}</p>
+                    {/* Every hand-edited field the tick would replace, side by side. */}
+                    {PROMPT_FIELDS.filter(([field]) => s.fields?.[field] === 'manual').map(([field, name]) => (
+                      <div key={field}>
+                        <p className="text-port-text-muted">{name} — yours: {snippet(s.current[field])}</p>
+                        <p className="text-port-text-muted">{name} — treatment: {snippet(s.suggested[field])}</p>
+                      </div>
+                    ))}
                     <label className="flex items-center gap-1.5">
                       <input type="checkbox" checked={!!overwrite[s.sceneId]}
                         onChange={(e) => setOverwrite((prev) => ({ ...prev, [s.sceneId]: e.target.checked }))} />
