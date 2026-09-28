@@ -47,6 +47,11 @@ export function cancelExcerptRender(jobId) {
     job.overlayAbort.abort(new Error('Excerpt render cancelled'));
     return true;
   }
+  // ffmpeg often intercepts SIGTERM and exits itself (nonzero code, `signal:
+  // null` on the child's 'close' event) rather than dying FROM the signal —
+  // `onClose` below can't tell that apart from a genuine encode failure by
+  // signal alone, so record that a cancel was actually requested.
+  job.cancelRequested = true;
   const proc = job.process;
   killWithEscalation(proc, { label: 'music-video excerpt render', stillRunning: () => job.process === proc });
   return true;
@@ -192,7 +197,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
         onClose: async (code, signal) => {
           job.process = null;
           if (code !== 0) {
-            const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
+            const canceled = job.cancelRequested || signal === 'SIGTERM' || signal === 'SIGKILL';
             job.status = canceled ? 'canceled' : 'error';
             const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
             job.lastError = reason;
@@ -209,6 +214,11 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
             const contactSheetFilename = await buildContactSheet();
             const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null });
             if (!persisted) {
+              // The record write never landed, so nothing else could have
+              // learned these filenames to reference them — clean up rather
+              // than leaving them as permanently unreferenced orphans on disk.
+              await unlink(outputPath).catch(() => {});
+              if (contactSheetFilename) await unlink(join(PATHS.videoThumbnails, contactSheetFilename)).catch(() => {});
               broadcastSse(job, { type: 'error', error: 'The excerpt rendered, but saving the result failed — reload the project and try again' });
               return;
             }
