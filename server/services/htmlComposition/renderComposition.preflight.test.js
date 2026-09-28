@@ -3,11 +3,11 @@
 // Chrome/ffmpeg retry assertion in index.test.js: it mocks the browser and
 // encoder so it can assert the *reason* the retry stays cheap — encoding is
 // never reached — without paying for a real render.
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, afterAll } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots, sweepStrayTempRoots } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-html-composition-preflight-'),
@@ -54,5 +54,10 @@ describe('renderComposition delivery preflight', () => {
     })).rejects.toThrow(/EEXIST/);
 
     expect(encodeComposition).not.toHaveBeenCalled();
+  });
+
+  afterAll(async () => {
+    cleanupTempDataRoots();
+    await sweepStrayTempRoots('portos-html-composition-preflight-');
   });
 });

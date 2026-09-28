@@ -70,21 +70,10 @@ const VITEST_INTERNAL_SCRATCH_DIR = /^[A-Za-z0-9_-]{21}$/;
 const KNOWN_THIRD_PARTY_CLI_SCRATCH = new Set(['node-compile-cache']);
 
 // A leak this file is NOT the right place to fix: `server/services/
-// htmlComposition/*` is a different work area's tree (#9032 was explicitly
-// scoped out of it), and its `renderComposition.preflight.test.js` leaves a
-// real, non-empty `portos-html-composition-preflight-*` directory behind —
-// confirmed by direct inspection, not a false positive. Tracked in #9044,
-// which names the fix (the same `sweepStrayTempRoots()` helper that already
-// closed the identical symptom in two other real-ffmpeg/real-browser
-// suites). Remove this entry once #9044 lands.
-//
-// `mediaJobQueue-test-` (server/services/mediaJobQueue/index.test.js) is
-// the same "not the right place to fix" case as the htmlComposition entry
-// above — that tree is a different work area, out of scope for #9032 —
-// seen leaking on a Windows CI shard. Tracked in #9046. Remove this entry
-// once #9046 lands.
+// mediaJobQueue/index.test.js` is a different work area, out of scope for
+// #9032 — seen leaking on a Windows CI shard. Tracked in #9046. Remove
+// this entry once #9046 lands.
 const KNOWN_PENDING_LEAKS = new Set([
-  'portos-html-composition-preflight-',
   'mediaJobQueue-test-',
 ]);
 
