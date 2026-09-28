@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
-import { Film, Flag, CheckCircle2, Trash2, X, Clapperboard } from 'lucide-react';
+import { Film, Flag, CheckCircle2, Trash2, X, Clapperboard, RotateCcw } from 'lucide-react';
+import RevisionPanel, { currentRevision } from './RevisionPanel.jsx';
 
 const VERDICT_STYLES = {
   flagged: 'bg-port-error/20 text-port-error',
@@ -59,7 +60,7 @@ function NoteRow({ excerptId, note, busy, onEdit, onDelete, onSeek }) {
   );
 }
 
-function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNote, onEditNote, onDeleteNote }) {
+function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNote, onEditNote, onDeleteNote, canRevise, onRevise }) {
   const videoRef = useRef(null);
   const [draft, setDraft] = useState('');
   const seek = (t) => { if (videoRef.current) { videoRef.current.currentTime = t; videoRef.current.play?.().catch(() => {}); } };
@@ -77,6 +78,12 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
         <span className="font-medium">{fmt(excerpt.startSec)} – {fmt(excerpt.endSec)} <span className="text-port-text-muted">({STATUS_LABELS[excerpt.status] || excerpt.status})</span></span>
         <div className="flex items-center gap-2">
+          {/* #8987: regenerate ONLY the sections holding a flagged note; the rest stay as approved. */}
+          {excerpt.status === 'complete' && excerpt.sections?.length > 0 && excerpt.notes?.some((n) => n.verdict === 'flagged') && (
+            <button type="button" disabled={!canRevise} onClick={() => onRevise(excerpt.id)}
+              title="Reject the flagged sections and regenerate only those"
+              className="text-port-accent flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0"><RotateCcw size={12} /> Revise flagged</button>
+          )}
           {excerpt.status === 'rendering'
             ? <button type="button" onClick={() => onCancel(excerpt.id)} className="text-port-error flex items-center gap-1 min-h-[44px] sm:min-h-0"><X size={12} /> Cancel</button>
             : <button type="button" disabled={deleting} onClick={() => onDelete(excerpt.id)} className="text-port-error flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0"><Trash2 size={12} /> Delete</button>}
@@ -126,7 +133,10 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
  * start) — a frame check alone can't prove motion/audio sync, so the video
  * plays alongside the sheet rather than replacing it.
  */
-export default function ExcerptPanel({ project, rendering, progress, excerpts, ...actions }) {
+export default function ExcerptPanel({ project, rendering, progress, excerpts, revision = null, ...actions }) {
+  const activeRevision = currentRevision(project);
+  const canRevise = !!revision && !revision.busy && !rendering
+    && !(activeRevision && (activeRevision.status === 'open' || activeRevision.status === 'rendering'));
   const durationSec = project?.audioAnalysis?.durationSec ?? null;
   const [startSec, setStartSec] = useState(0);
   const [endSec, setEndSec] = useState(durationSec ? Math.min(15, durationSec) : 15);
@@ -163,12 +173,18 @@ export default function ExcerptPanel({ project, rendering, progress, excerpts, .
           <p className="text-xs text-port-text-muted mt-1">Rendering excerpt — {Math.round(progress)}%</p>
         </div>
       )}
+      {revision && (
+        <RevisionPanel project={project} busy={revision.busy || rendering}
+          genScenes={revision.genScenes} genVideoScenes={revision.genVideoScenes}
+          onResume={revision.resume} onCancel={revision.cancel} />
+      )}
       {excerpts.length > 0 && (
         <ul className="space-y-2">
           {[...excerpts].reverse().map((excerpt) => (
             <ExcerptCard key={excerpt.id} excerpt={excerpt} deleting={actions.deletingId === excerpt.id} noteBusy={actions.noteBusyId}
               onDelete={actions.deleteExcerpt} onCancel={actions.cancelExcerpt}
-              onAddNote={actions.addNote} onEditNote={actions.editNote} onDeleteNote={actions.deleteNote} />
+              onAddNote={actions.addNote} onEditNote={actions.editNote} onDeleteNote={actions.deleteNote}
+              canRevise={canRevise} onRevise={revision?.revise} />
           ))}
         </ul>
       )}

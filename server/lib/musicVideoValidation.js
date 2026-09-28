@@ -374,6 +374,14 @@ export const musicVideoExcerptNoteUpdateSchema = z.object({
   verdict: z.enum(MUSIC_VIDEO_EXCERPT_NOTE_VERDICTS).nullable().optional(),
 }).strict().refine((r) => r.atSec !== undefined || r.note !== undefined || r.verdict !== undefined, { message: 'atSec, note or verdict is required' });
 
+// ---- Selective section revision (#8987) -------------------------------------
+// Reject the flagged sections of a reviewed draft excerpt and regenerate only
+// those. `sceneIds` names the sections explicitly; omitted, every section
+// holding a `flagged` note is revised. See services/musicVideo/revision.js.
+export const musicVideoRevisionStartSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(200)).min(1).max(500).optional(),
+}).strict();
+
 export const musicVideoProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),

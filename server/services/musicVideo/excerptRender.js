@@ -26,12 +26,14 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { safeUnder } from '../../lib/ffmpeg.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes } from './render.js';
 import { renderableCues, sectionCardCues } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
+import { markRevisionRendering, settleRevisionRender } from './revision.js';
 
 const jobs = new Map();
 const projectExcerptRenders = new Map();
@@ -57,8 +59,21 @@ export function cancelExcerptRender(jobId) {
   return true;
 }
 
-/** Kick off a draft excerpt render. Returns `{ jobId, excerptId }`. */
-export async function startExcerptRender(projectId, { startSec, endSec }) {
+const round3 = (n) => Math.round(n * 1000) / 1000;
+const sheetFilenameFor = (filename) => `${filename.replace(/\.mp4$/, '')}-sheet.png`;
+// A filename read back off a (possibly peer-synced) record is only ever
+// resolved inside its own media directory.
+const unlinkUnder = (root, filename) => {
+  const path = safeUnder(root, filename);
+  return path ? unlink(path).catch(() => {}) : Promise.resolve();
+};
+
+/**
+ * Kick off a draft excerpt render. Returns `{ jobId, excerptId }`.
+ * `revisionId` (#8987) links the render to an open selective revision in the
+ * same write that creates the excerpt, so its finish settles that revision.
+ */
+export async function startExcerptRender(projectId, { startSec, endSec }, { revisionId = null } = {}) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -87,15 +102,25 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
       );
     }
     const endClamped = Math.min(endSec, probe.totalDuration);
+    const filename = `music-video-excerpt-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
+    const outputPath = join(PATHS.videos, filename);
+    // #8987: the sections this draft cuts, in absolute song time and clipped to
+    // the window — a flagged review note maps onto one of these when the
+    // director asks for a selective revision.
+    const sections = probe.sections
+      .filter((s) => s.startSec < endClamped && s.endSec > startSec)
+      .map((s) => ({ sceneId: s.sceneId, layer: s.layer, startSec: round3(Math.max(s.startSec, startSec)), endSec: round3(Math.min(s.endSec, endClamped)) }));
 
     // Persist the new `status: 'rendering'` excerpt against the FRESHEST
     // record (not the `project` snapshot planning read above), so a
-    // concurrent note/edit on another excerpt can't be clobbered.
-    const { excerpt } = await mutateProjectRecord(projectId, (current) => startExcerptOnProject(current, { startSec, endSec: endClamped }));
+    // concurrent note/edit on another excerpt can't be clobbered. The output
+    // filename is recorded now so a restart mid-encode can delete the partial.
+    const { excerpt } = await mutateProjectRecord(projectId, (current) => {
+      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, partialFilename: filename });
+      return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
+    });
     const excerptId = excerpt.id;
     const jobId = excerptId;
-    const filename = `music-video-excerpt-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
-    const outputPath = join(PATHS.videos, filename);
 
     // Only the cue/card windows overlapping the window are worth capturing —
     // typography outside it never survives the final trim.
@@ -123,7 +148,9 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
     // catching up (boot recovery clears a truly stuck one).
     const finalize = async (patch) => {
       projectExcerptRenders.delete(projectId);
-      const persisted = await mutateProjectRecord(projectId, (current) => ({ project: applyExcerptPatch(current, excerptId, patch) }))
+      const persisted = await mutateProjectRecord(projectId, (current) => ({
+        project: settleRevisionRender(applyExcerptPatch(current, excerptId, { ...patch, partialFilename: null }), excerptId, patch),
+      }))
         .then(() => true, (err) => {
           console.error(`❌ Music-video excerpt render [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
           return false;
@@ -140,7 +167,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
     const buildContactSheet = async () => {
       try {
         const times = excerptBoundaryTimes(probe.sections, cues, startSec, endClamped, { fps: probe.fps });
-        const sheetFilename = `${filename.replace(/\.mp4$/, '')}-sheet.png`;
+        const sheetFilename = sheetFilenameFor(filename);
         await encodeFileContactSheetAtTimes(outputPath, join(PATHS.videoThumbnails, sheetFilename), times, { width: probe.canonW, height: probe.canonH, fps: probe.fps });
         return sheetFilename;
       } catch (err) {
@@ -278,22 +305,35 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
 // render survives a restart — the job map is memory-only. Demote any excerpt
 // left `status: 'rendering'` with no live job to `error` so it isn't shown as
 // perpetually in-flight (and its slot doesn't 409 every later excerpt render
-// on that project).
+// on that project). #8987: delete the partial video/contact sheet the
+// interrupted encode was writing, and return a selective revision that was
+// rendering that draft to `open` — resumable from its checkpoint, re-rendering
+// without generating anything its sections already hold.
 export async function recoverStuckMusicVideoExcerpts() {
   const projects = await listProjects();
   let recovered = 0;
   for (const project of projects) {
     const stuck = (project.excerpts || []).filter((e) => e.status === 'rendering' && !projectExcerptRenders.has(project.id));
     if (stuck.length === 0) continue;
-    await mutateProjectRecord(project.id, (current) => {
+    const ok = await mutateProjectRecord(project.id, (current) => {
       let next = current;
       for (const excerpt of stuck) {
-        next = { ...next, excerpts: (next.excerpts || []).map((e) => (e.id === excerpt.id ? { ...e, status: 'error', error: 'Interrupted by a server restart', jobId: null } : e)) };
+        next = { ...next, excerpts: (next.excerpts || []).map((e) => (e.id === excerpt.id ? { ...e, status: 'error', error: 'Interrupted by a server restart', jobId: null, partialFilename: null } : e)) };
+        next = settleRevisionRender(next, excerpt.id, { status: 'error', error: 'The draft render was interrupted by a server restart' });
       }
       return { project: next };
-    }).then(() => { recovered += stuck.length; }, (err) => {
+    }).then(() => { recovered += stuck.length; return true; }, (err) => {
       console.error(`❌ Music Video excerpt recovery: project ${project.id.slice(0, 8)} write failed: ${err.message}`);
+      return false;
     });
+    // Only once the record no longer points at them, so a failed write can't
+    // leave a record naming a file that is gone.
+    if (!ok) continue;
+    for (const { partialFilename } of stuck) {
+      if (typeof partialFilename !== 'string' || !partialFilename) continue;
+      await unlinkUnder(PATHS.videos, partialFilename);
+      await unlinkUnder(PATHS.videoThumbnails, sheetFilenameFor(partialFilename));
+    }
   }
   if (recovered > 0) console.log(`🎬 Music Video excerpt boot recovery: demoted ${recovered} stuck excerpt render(s)`);
 }

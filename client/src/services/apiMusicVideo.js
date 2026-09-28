@@ -156,6 +156,19 @@ export const deleteMusicVideoExcerptNote = (id, excerptId, noteId, options = {})
     method: 'DELETE', ...options,
   });
 
+// ---- Selective section revision (#8987) ----
+// Reject a reviewed draft's flagged sections and regenerate only those.
+// Start body: { sceneIds? } → { project, revision, skippedSceneIds }.
+export const startMusicVideoRevision = (id, excerptId, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/excerpt/${encodeURIComponent(excerptId)}/revisions`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+// → { project, revision, needsGeneration, generating, render: { jobId, excerptId } | null }.
+export const resumeMusicVideoRevision = (id, revisionId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}/resume`, { method: 'POST', ...options });
+export const cancelMusicVideoRevision = (id, revisionId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}/cancel`, { method: 'POST', ...options });
+
 // ---- Pre-production treatment (#8980) ----
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to the
 // board's scene ids and a proof checklist. Every write names the treatment

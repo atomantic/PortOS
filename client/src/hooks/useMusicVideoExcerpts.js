@@ -62,6 +62,13 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
   });
 
   const startExcerpt = (startSec, endSec) => job.start({ startSec, endSec }, projectId);
+  // #8987: a selective revision's resume starts its draft re-render server-side;
+  // adopt that job so it shows the same progress and reloads on its finish.
+  const attachRender = (jobId, id = projectId) => job.attach(jobId, id);
+  // An excerpt's id IS its render job id, so any rendering excerpt — including
+  // one started before a reload, or by a revision — can be cancelled by id.
+  const cancelExcerpt = (excerptId) => cancelMusicVideoExcerptRender(excerptId, { silent: true })
+    .catch((err) => toast.error(err?.message || 'Failed to cancel the excerpt render'));
 
   const deleteExcerpt = (excerptId) => {
     setDeletingId(excerptId);
@@ -101,7 +108,8 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
     deletingId,
     noteBusyId,
     startExcerpt,
-    cancelExcerpt: job.cancel,
+    cancelExcerpt,
+    attachRender,
     deleteExcerpt,
     addNote,
     editNote,
