@@ -249,6 +249,25 @@ describe('music video production run (#9066)', () => {
     expect(dispatch.mock.calls.filter(([a]) => a.scene.sceneId === 'mvs-a')).toHaveLength(2);
   });
 
+  it('halts a slot that keeps failing, and a resume retries it', async () => {
+    seedProject();
+    await start();
+    const fail = (id) => {
+      const job = jobs.find((j) => j.id === id);
+      job.status = 'failed';
+      mediaJobEvents.emit('failed', job);
+    };
+    fail('job-1');
+    await settle();
+    fail('job-3');
+    await settle();
+    expect(theRun()).toMatchObject({ status: 'blocked', stopReason: expect.stringMatching(/"A" failed to generate its frame 2 times/) });
+    const before = dispatch.mock.calls.length;
+    await service.resumeProduction('mv-example', theRun().id);
+    await settle();
+    expect(dispatch.mock.calls.slice(before).map(([a]) => a.scene.sceneId)).toEqual(['mvs-a']);
+  });
+
   it('coalesces concurrent advances so each slot is dispatched once', async () => {
     seedProject();
     let release;

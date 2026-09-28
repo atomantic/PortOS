@@ -216,6 +216,7 @@ export function startProductionOnProject(project, {
     stopReason: null,
     error: null,
     createdAt: now,
+    resumedAt: now,
     updatedAt: now,
   };
   return { project: { ...project, productionRuns: pruneRuns([...projectProductionRuns(project), run]), updatedAt: now }, run };
@@ -285,9 +286,11 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
       if (stepKind === 'clip' && !scene.referenceImageId) { waiting = true; continue; }
       const steps = slotSteps(run, scene.sceneId, stepKind);
       if (steps.some((s) => LIVE_STEP.has(s.status)) || liveSlotJob(jobs, project.id, scene.sceneId, stepKind)) { waiting = true; continue; }
-      const failures = steps.filter((s) => s.status === 'failed' || s.status === 'canceled').length;
+      // Failures since the last Start/Resume: a resume retries the slot, and a
+      // job cancelled by Stop is not a failure of the route.
+      const failures = steps.filter((s) => s.status === 'failed' && (s.settledAt || '') >= (run.resumedAt || '')).length;
       if (failures >= MAX_SLOT_FAILURES) {
-        return { type: 'halt', status: 'needs-human', reason: `"${scene.label || scene.sceneId}" failed to generate its ${stepKind} ${failures} times — generate it by hand or change the pool, then resume` };
+        return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" failed to generate its ${stepKind} ${failures} times — generate it by hand, or resume to try again` };
       }
       return { type: 'dispatch', kind: stepKind, sceneId: scene.sceneId };
     }
@@ -478,6 +481,7 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       status: 'running',
       limits: nextLimits,
       processId,
+      resumedAt: now,
       stopReason: null,
       error: null,
       ...(basisChanged ? { basis: { revision: productionBasisRevision(project), capturedAt: now } } : {}),
