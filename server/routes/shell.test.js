@@ -1,9 +1,36 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
-import { rmSync, readFileSync, readdirSync } from 'fs';
+import { EventEmitter } from 'node:events';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { rmSync, readFileSync, readdirSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+
+// Real authorization middleware; only credential/settings stores are synthetic.
+const auth = vi.hoisted(() => ({
+  isAuthEnabled: vi.fn(),
+  verifyPassword: vi.fn(async password => password === 'example-password'),
+  verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-session'),
+}));
+vi.mock('../services/auth.js', () => auth);
+vi.mock('../services/settings.js', () => ({
+  settingsEvents: new EventEmitter(),
+  getSettings: vi.fn(async () => ({})),
+}));
+vi.mock('../services/instanceIdentity.js', () => ({
+  loadData: vi.fn(async () => ({ peers: [{
+    id: 'example-peer', instanceId: 'example-instance', enabled: true,
+    syncSecret: 'example-pair-secret-for-tests-only-123456',
+  }] })),
+}));
+
+const peerHeaders = {
+  [PEER_INSTANCE_HEADER]: 'example-instance',
+  [PEER_AUTH_HEADER]: derivePeerAuthToken('example-pair-secret-for-tests-only-123456', 'example-instance'),
+};
 
 // Point the screenshots root at a throwaway temp dir but keep every real helper
 // (saveImageUpload, sanitizeFilename, detectImageFormat, ...) so this exercises
@@ -29,9 +56,16 @@ import { PATHS } from '../lib/fileUtils.js';
 import { getSession, pasteToSession } from '../services/shell.js';
 import shellRoutes from './shell.js';
 
-const buildApp = () => {
+const buildApp = (address = '127.0.0.1') => {
   const app = express();
+  app.use((req, _res, next) => {
+    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
+    next();
+  });
+  app.use(authGate);
+  app.use(hostControlRouteGate);
   app.use(express.json({ limit: '20mb' }));
+  app.use(hostControlBodyGate);
   app.use('/api/shell', shellRoutes);
   app.use(errorMiddleware);
   return app;
@@ -44,6 +78,7 @@ const post = (body) => request(buildApp()).post(`/api/shell/sessions/${SESSION}/
 
 beforeEach(() => {
   vi.clearAllMocks();
+  auth.isAuthEnabled.mockResolvedValue(false);
   vi.mocked(getSession).mockReturnValue({ _id: 'sess-abc' });
   vi.mocked(pasteToSession).mockReturnValue(true);
 });
@@ -127,5 +162,60 @@ describe('POST /api/shell/sessions/:sessionId/image', () => {
     const res = await post({ data: pngBase64, filename: 'photo.png', message: 'x'.repeat(5001) });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('shell image operator authority (#9030)', () => {
+  const path = `/api/shell/sessions/${SESSION}/image`;
+  const body = { data: pngBase64, filename: 'example.png', message: 'Describe this example.' };
+  const files = () => existsSync(PATHS.screenshots) ? readdirSync(PATHS.screenshots).sort() : [];
+  const call = (address, headers = {}, spelling = path) => {
+    const req = request(buildApp(address)).post(spelling);
+    for (const [key, value] of Object.entries(headers)) req.set(key, value);
+    return req.send(body);
+  };
+  const expectNoEffects = before => {
+    expect(files()).toEqual(before);
+    expect(getSession).not.toHaveBeenCalled();
+    expect(pasteToSession).not.toHaveBeenCalled();
+  };
+
+  it('refuses remote and Vite-relayed terminal input before writing an image in every route spelling', async () => {
+    const before = files();
+    for (const [address, headers] of [
+      ['192.0.2.10', {}],
+      ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
+    ]) {
+      for (const spelling of [path, path.toUpperCase(), path + '/']) {
+        const res = await call(address, headers, spelling);
+        expect(res.status, spelling).toBe(403);
+        expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+        expectNoEffects(before);
+      }
+    }
+  });
+
+  it('does not grant terminal input to anonymous, valid Basic or scoped peer credentials', async () => {
+    auth.isAuthEnabled.mockResolvedValue(true);
+    const before = files();
+    for (const [headers, status, code] of [
+      [{}, 401, 'AUTH_REQUIRED'],
+      [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
+      [peerHeaders, 403, 'PEER_SCOPE_FORBIDDEN'],
+    ]) {
+      const res = await call('192.0.2.10', headers);
+      expect(res.status).toBe(status);
+      expect(res.body.code).toBe(code);
+      expectNoEffects(before);
+    }
+  });
+
+  it('lets an authenticated remote operator save the image and submit its message to the PTY', async () => {
+    auth.isAuthEnabled.mockResolvedValue(true);
+    const res = await call('192.0.2.10', { Authorization: 'Bearer example-session' });
+    expect(res.status).toBe(200);
+    const stored = join(PATHS.screenshots, res.body.filename);
+    expect(readFileSync(stored)).toEqual(PNG_BYTES);
+    expect(pasteToSession).toHaveBeenCalledWith(SESSION, `Describe this example.\n${stored}`, { label: 'image drop' });
   });
 });
