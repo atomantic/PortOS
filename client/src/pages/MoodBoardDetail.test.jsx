@@ -12,6 +12,7 @@ const mockUpdateMoodBoardItem = vi.fn();
 const mockSyncMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardXPost = vi.fn();
+const mockLocalizeMoodBoardMedia = vi.fn();
 
 vi.mock('../services/api', () => ({
   getMoodBoard: (...args) => mockGetMoodBoard(...args),
@@ -24,6 +25,7 @@ vi.mock('../services/api', () => ({
   syncMoodBoardPinterest: (...args) => mockSyncMoodBoardPinterest(...args),
   importMoodBoardPinterest: (...args) => mockImportMoodBoardPinterest(...args),
   importMoodBoardXPost: (...args) => mockImportMoodBoardXPost(...args),
+  localizeMoodBoardMedia: (...args) => mockLocalizeMoodBoardMedia(...args),
 }));
 
 const mockToastError = vi.fn();
@@ -106,6 +108,7 @@ const boardNameValue = () => screen.getByLabelText('Name').value;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLocalizeMoodBoardMedia.mockResolvedValue({ board: null, localized: 0, failed: 0 });
   currentId = 'a';
   analysisDelay = null;
 });
@@ -262,6 +265,34 @@ describe('MoodBoardDetail private Pinterest import', () => {
     await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Added 1 of 1 Pinterest pins'));
     expect(mockImportMoodBoardPinterest).toHaveBeenCalledWith('a', boardUrl, { silent: true });
     expect(screen.getByAltText('Example pin')).toHaveAttribute('src', '/data/images/pinterest-example.jpg');
+  });
+});
+
+describe('MoodBoardDetail external media re-hosting', () => {
+  it('imports external pins into the gallery on load and swaps in the localized board', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'mbi-1', type: 'image', imageUrl: 'https://example.com/a.jpg' }],
+    });
+    mockLocalizeMoodBoardMedia.mockResolvedValueOnce({
+      board: { id: 'a', name: 'Board A', items: [{ id: 'mbi-1', type: 'image', imageUrl: '/data/images/board-1.jpg' }] },
+      localized: 1,
+      failed: 0,
+    });
+    renderPage();
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Imported 1 external image into the gallery'));
+    expect(mockLocalizeMoodBoardMedia).toHaveBeenCalledWith('a', { silent: true });
+    expect(document.querySelector('img[src="/data/images/board-1.jpg"]')).not.toBeNull();
+  });
+
+  it('does not call the importer when every pin is already local', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'mbi-1', type: 'image', imageUrl: '/data/images/x.jpg' }],
+    });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(mockLocalizeMoodBoardMedia).not.toHaveBeenCalled();
   });
 });
 

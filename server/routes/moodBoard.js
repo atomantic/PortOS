@@ -40,6 +40,7 @@ import {
   syncPinterestBoard,
   importPrivatePinterestBoard,
   importXPost,
+  localizeBoardMedia,
 } from '../services/moodBoard/index.js';
 
 const router = Router();
@@ -167,6 +168,11 @@ router.post('/:id/x-post', asyncHandler(async (req, res) => {
   const data = validateRequest(moodBoardXPostImportSchema, req.body);
   const result = await importXPost(req.params.id, data);
   res.json(result);
+}));
+
+// Re-host every external image URL on the board into the local gallery.
+router.post('/:id/localize-media', asyncHandler(async (req, res) => {
+  res.json(await localizeBoardMedia(req.params.id));
 }));
 
 export default router;

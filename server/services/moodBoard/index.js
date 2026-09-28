@@ -17,6 +17,7 @@
 
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import * as store from './db.js';
+import { localizeImageUrl } from './localize.js';
 
 // Read paths + federation entry points pass straight through to the store. The
 // asset-manifest filename resolver lives in logic.js (pure) and is re-exported
@@ -43,6 +44,9 @@ export { importPrivatePinterestBoard } from './privatePinterest.js';
 // surfaced here so routes import a single moodBoard entry; fires its own
 // federation emit after the store mutation.
 export { importXPost } from './xPost.js';
+
+// Re-host external image URLs into the local gallery (boards never serve remote URLs).
+export { localizeBoardMedia } from './localize.js';
 
 // Announce a newly-created board to the per-record peer-sync pipeline: emit the
 // 'updated' event so any existing subscription pushes it, AND auto-subscribe
@@ -88,14 +92,22 @@ export async function deleteBoard(id) {
 // Inline item ops mutate the board record, so each propagates the whole board as
 // a structural edit (human-pace affordances, not a hot loop — safe to emit every
 // time; lastPushedHash + same-`updatedAt` LWW no-op dedup prevent ping-pong).
+// Pinned/added remote image URLs are downloaded first so the item is born local
+// (falls back to the URL when the host is unreachable — localizeBoardMedia can
+// retry later).
+async function withLocalImage(input) {
+  if (!input || (input.type !== 'image' && input.type !== 'video')) return input;
+  return input.imageUrl ? { ...input, imageUrl: await localizeImageUrl(input.imageUrl) } : input;
+}
+
 export async function addBoardItem(id, itemInput) {
-  const item = await store.addBoardItem(id, itemInput);
+  const item = await store.addBoardItem(id, await withLocalImage(itemInput));
   emitRecordUpdated('moodBoard', id);
   return item;
 }
 
 export async function updateBoardItem(id, itemId, patch) {
-  const item = await store.updateBoardItem(id, itemId, patch);
+  const item = await store.updateBoardItem(id, itemId, patch?.imageUrl ? { ...patch, imageUrl: await localizeImageUrl(patch.imageUrl) } : patch);
   emitRecordUpdated('moodBoard', id);
   return item;
 }
