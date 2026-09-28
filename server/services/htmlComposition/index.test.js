@@ -117,6 +117,43 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     expect(blended[1]).toBeLessThan(220);
   }, 60000);
 
+  // A 20px square crossing the 1280px frame in three frames (#9077).
+  const whip = motionBlur => `<!doctype html><html><head><style>body { margin: 0; background: white; } #block { position:absolute; top:100px; width:20px; height:20px; background:rgb(255,0,0); }</style>
+</head><body><div id="block"></div><script>
+globalThis.portosComposition = { durationSec:1, fps:12, width:1280, height:720, motionBlur:${motionBlur},
+  seek(t) { document.getElementById('block').style.left = Math.round(t * 5120) + 'px'; } };
+</script></body></html>`;
+  const frameRow = (filename, frame) => {
+    const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, filename), '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 40 * 1024 * 1024 });
+    const frameBytes = 1280 * 720 * 3;
+    return x => pixels[frame * frameBytes + (110 * 1280 + x) * 3 + 1]; // green: 255 on white, low on red
+  };
+
+  it('streaks a whip continuously with an auto shutter where integer motionBlur leaves separated copies', async () => {
+    // Frame one (t=1/12) centres the square at x≈427. Integer 4 samples
+    // t..t+3/48 → copies at 427/533/640/747 with white gaps between them.
+    const stepped = await renderComposition(await composition(whip(4)));
+    const steppedGreen = frameRow(stepped.filename, 1);
+    const steppedProfile = Array.from({ length: 300 }, (_, i) => steppedGreen(445 + i));
+    expect(Math.max(...steppedProfile)).toBeGreaterThan(252);
+    expect(Math.min(...steppedProfile)).toBeLessThan(200);
+    // A full shutter centred on the frame spans x≈213..640: an unbroken streak.
+    const streaked = await renderComposition(await composition(whip("{ shutter: 1, samples: 'auto' }")));
+    const streakGreen = frameRow(streaked.filename, 1);
+    const profile = Array.from({ length: 380 }, (_, i) => streakGreen(240 + i));
+    // Each pixel sees the square for ~1/20 of the shutter, so the streak is
+    // faint but even: no white gap and no brighter copy anywhere along it.
+    expect(Math.max(...profile)).toBeLessThan(252);
+    expect(Math.max(...profile) - Math.min(...profile)).toBeLessThanOrEqual(4);
+    expect(Object.keys(streaked.sampleHistogram).map(Number).some(count => count >= 9)).toBe(true);
+  }, 120000);
+
+  it('stops a still composition at one capture per frame with an auto shutter', async () => {
+    const html = fixture('', "motionBlur:{ samples: 'auto' }").replace("(40 + t * 480) + 'px'", "'40px'");
+    const result = await renderComposition(await composition(html));
+    expect(result.sampleHistogram).toEqual({ 1: 12 });
+  }, 60000);
+
   it('renders a gated launch composition and uses its declared poster beat', async () => {
     const html = `<!doctype html><html><body><script>
       globalThis.portosComposition = { durationSec:15, fps:12, width:1280, height:720,
@@ -293,6 +330,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     ['durationSec', 'durationSec:0'], ['fps', 'fps:12.5'], ['width', 'width:123'],
     ['durationSec', 'durationSec:1.01'], ['seek', 'seek:null'],
     ['motionBlur', 'motionBlur:0'], ['motionBlur', 'motionBlur:5'], ['motionBlur', 'motionBlur:2.5'],
+    ['motionBlur', 'motionBlur:{shutter:2}'], ['motionBlur', 'motionBlur:{samples:200}'], ['motionBlur', "motionBlur:{samples:'auto',frames:4}"],
   ])('names the invalid %s before capture', async (field, contract) => {
     const input = await composition(fixture('', contract));
     await expect(renderComposition(input)).rejects.toThrow(field);

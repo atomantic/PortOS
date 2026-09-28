@@ -67,6 +67,11 @@
   // Wrap time for seamless loops; negative time wraps too.
   const loopT = (t, duration) => ((t % duration) + duration) % duration;
 
+  // The output frame a time belongs to. Shutter motion blur samples times on
+  // both sides of each frame's centre, so per-frame flicker keyed to
+  // floor(t * fps) would change mid-shutter; rounding holds it for the frame.
+  const frameIdx = (t, fps) => Math.round(t * fps);
+
   // Seeded PRNG (mulberry32). Create one per element/scene with a fixed seed,
   // inside seek(t), so the same t always draws the same frame.
   function rng(seed) {
@@ -142,7 +147,7 @@
   }
 
   root.PortosMotion = Object.freeze({
-    clamp, spring, SPRINGS, preset, track, indicator, swapAlpha, loopT, rng, beats,
+    clamp, spring, SPRINGS, preset, track, indicator, swapAlpha, loopT, frameIdx, rng, beats,
     VOICES, mixCues, toPcm, renderCues,
   });
 })(globalThis);

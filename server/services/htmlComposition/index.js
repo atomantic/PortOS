@@ -159,11 +159,11 @@ export async function renderComposition({ jobId, ...input }) {
         const filename = `composition-${target.id}.mp4`;
         const outputPath = join(PATHS.videos, filename);
         ownedPaths.push(outputPath, join(PATHS.videoThumbnails, `${target.id}.jpg`));
-        await encodeComposition(page, target.contract, outputPath, { musicPath, signal, onProgress: progress => {
+        const { sampleHistogram } = await encodeComposition(page, target.contract, outputPath, { musicPath, signal, onProgress: progress => {
           videoGenEvents.emit('progress', { generationId: jobId, progress: (index + progress) / targets.length * 0.95 });
         } });
         page.check();
-        rendered.push({ ...target, filename, outputPath });
+        rendered.push({ ...target, filename, outputPath, sampleHistogram });
       }
       // End script execution before post-processing and publishing the result.
       await page.close({ verify: true });
@@ -210,7 +210,10 @@ export async function renderComposition({ jobId, ...input }) {
       success = true;
       // `id`/`filename` name a real history entry (the first format); `generationId`
       // is the job. A single-format render keeps id === generationId as before.
-      const summary = ({ id, filename, thumbnail }) => ({ id, filename, thumbnail, path: `/data/videos/${filename}` });
+      // A shutter-blur render reports how many output frames took each
+      // sub-frame count, so the user can see where the render time went.
+      const summary = ({ id, filename, thumbnail, sampleHistogram }) => ({ id, filename, thumbnail, path: `/data/videos/${filename}`,
+        ...(sampleHistogram ? { sampleHistogram } : {}) });
       const [first] = rendered;
       result = { ...(launchMetadata ? { appId: launchMetadata.appId } : {}), generationId: jobId, ...summary(first),
         ...(formats ? { videos: rendered.map(video => ({ format: video.format, ...summary(video) })) } : {}) };
