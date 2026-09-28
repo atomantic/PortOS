@@ -138,7 +138,8 @@ const defaultDeps = () => ({
   harnessModels: async (harnessId) => {
     const [{ refreshHarnessModels }, { PROVIDER_RUNTIMES }] = await Promise.all([import('./harnesses.js'), import('./providerRuntimeInstaller.js')]);
     const runtime = PROVIDER_RUNTIMES.find((row) => row.vendor === harnessId || row.id === harnessId)?.id ?? harnessId;
-    return refreshHarnessModels(runtime);
+    // Probe-only: this runs inside the provider-graph queue, where a record write would wait on itself.
+    return refreshHarnessModels(runtime, { probeOnly: true });
   },
   // Probe-only: the answer lands in the instance catalog, never on the record.
   routeModels: (providerId) => requireToolkit().services.providers.fetchProviderModels(providerId),
