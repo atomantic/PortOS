@@ -19,6 +19,7 @@ import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import { PromptFromMediaModal } from '../components/media/PromptFromMedia';
+import MoodBoardStylePanel from '../components/moodBoard/MoodBoardStylePanel';
 import { copyToClipboard } from '../lib/clipboard';
 import {
   getMoodBoard,
@@ -33,6 +34,7 @@ import {
   importMoodBoardXPost,
 } from '../services/api';
 import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource } from '../lib/moodBoardItemSrc';
+import { moodBoardAnalysisFromResult } from '../lib/moodBoardAnalysis';
 import { timeAgo } from '../utils/formatters';
 import useMounted from '../hooks/useMounted';
 
@@ -202,22 +204,8 @@ function MoodBoardEditor({ id }) {
   // matches the item's own type, falling back to whichever was generated.
   const persistAnalysis = async (item, result) => {
     if (!mountedRef.current) return;
-    const preferVideo = item.type === 'video';
-    const primary = preferVideo ? result.videoPrompt : result.imagePrompt;
-    const fallback = preferVideo ? result.imagePrompt : result.videoPrompt;
-    const usedPrimary = primary != null && primary !== '';
-    const prompt = usedPrimary ? primary : fallback;
-    if (!prompt) return;
-    const negative = usedPrimary
-      ? (preferVideo ? result.videoNegativePrompt : result.imageNegativePrompt)
-      : (preferVideo ? result.imageNegativePrompt : result.videoNegativePrompt);
-    const analysis = {
-      prompt,
-      negativePrompt: negative || null,
-      rationale: result.rationale || null,
-      providerId: result.providerId || null,
-      model: result.model || null,
-    };
+    const analysis = moodBoardAnalysisFromResult(item, result);
+    if (!analysis) return;
     const updated = await updateMoodBoardItem(id, item.id, { analysis }, { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
     if (!updated) { toast.error('Analysis ran but could not be saved to the item'); return; }
@@ -428,6 +416,8 @@ function MoodBoardEditor({ id }) {
           </div>
         </div>
       </div>
+
+      <MoodBoardStylePanel board={board} onBoardChange={setBoard} />
 
       {/* Pinterest link + sync */}
       <div className="bg-port-card border border-port-border rounded-md p-4 mb-6">
@@ -724,8 +714,8 @@ function MoodBoardEditor({ id }) {
                         <button
                           type="button"
                           onClick={() => setAnalyzeItemId(item.id)}
-                          title={item.analysis ? 'View AI analysis' : 'Analyze with AI'}
-                          aria-label={item.analysis ? 'View AI analysis' : 'Analyze with AI'}
+                          title={item.analysis ? 'View prompt from media' : 'Prompt from media'}
+                          aria-label={item.analysis ? 'View prompt from media' : 'Prompt from media'}
                           className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 transition-colors ${item.analysis ? 'text-port-accent hover:text-port-accent/80' : 'text-gray-500 hover:text-white'}`}
                         >
                           <ScanEye className="w-3.5 h-3.5" aria-hidden="true" />

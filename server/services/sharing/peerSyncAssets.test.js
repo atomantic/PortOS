@@ -343,6 +343,26 @@ describe('buildBoardAssetManifest — video items (#4188)', () => {
     expect(manifest).toContainEqual(expect.objectContaining({ filename: 'clip.mp4', kind: 'video', sha256: sha(videoBytes) }));
     expect(manifest).toHaveLength(2);
   });
+
+  it('bundles the canonical poster and dedups it against the same pinned file', async () => {
+    const posterBytes = Buffer.from('poster-bytes');
+    const otherBytes = Buffer.from('other-bytes');
+    writeImage('poster.png', posterBytes);
+    writeImage('other.png', otherBytes);
+    const withPoster = await buildBoardAssetManifest({
+      posterImageRef: 'poster.png',
+      items: [{ id: 'i1', type: 'image', mediaKey: 'image:other.png', imageUrl: null }],
+    });
+    expect(withPoster).toContainEqual(expect.objectContaining({ filename: 'poster.png', kind: 'image', sha256: sha(posterBytes) }));
+    expect(withPoster).toContainEqual(expect.objectContaining({ filename: 'other.png', kind: 'image', sha256: sha(otherBytes) }));
+    const deduped = await buildBoardAssetManifest({
+      posterImageRef: 'poster.png',
+      items: [{ id: 'i1', type: 'image', mediaKey: 'image:poster.png', imageUrl: null }],
+    });
+    expect(deduped.filter((entry) => entry.filename === 'poster.png')).toHaveLength(1);
+    const missing = await buildBoardAssetManifest({ posterImageRef: 'never-written.png', items: [] });
+    expect(missing).toEqual([]);
+  });
 });
 
 describe('buildFableLoomAssetManifest — scene renders', () => {

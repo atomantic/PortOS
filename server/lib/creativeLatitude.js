@@ -93,6 +93,7 @@ export const CREATIVE_NAMES = Object.freeze([
   'game-asset-feedback',
   'manuscript-reformat',
   'meatspace-post-llm', // creative-writing drills (story prompts, what-ifs, reframes)
+  'mood-board-composite-style',
   'mood-board-style-synthesis',
   'series-review-feedback', // routes the user's free-text notes back into the series
   'threejs-model-generation',

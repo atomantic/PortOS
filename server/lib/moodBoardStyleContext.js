@@ -62,10 +62,47 @@ export function collectBoardStyleContext(board) {
     totalChars += entrySize;
     fragments.push({ kind: it.type, ...entry });
   }
+  // The board's own composite prompt is the distilled through-line. It is one
+  // field, so it gets the description budget rather than the per-item cap —
+  // clipping it to 600 would drop the look downstream renders are asked to match.
+  const style = board?.style;
+  const stylePrompt = trimTo(style?.prompt, 2000) || null;
+  const styleNegative = trimTo(style?.negativePrompt, 2000) || null;
   return {
     name: trimTo(board?.name, 200) || null,
     description: trimTo(board?.description, 2000) || null,
+    stylePrompt,
+    styleNegative,
     items: fragments,
     droppedItems: dropped,
   };
+}
+
+/**
+ * Local image references a board contributes, poster first. `resolveItem`
+ * is `boardItemLocalImage` (injected so this module stays free of the board
+ * store). The canonical poster is the board's style reference — the same role
+ * a universe's style-probe image plays — and pinned item images follow it.
+ * Duplicate filenames are dropped so a poster that was also pinned ships once.
+ */
+export function moodBoardImageCandidates(board, resolveItem) {
+  const candidates = [];
+  const seen = new Set();
+  const push = (kind, filename, label) => {
+    if (kind !== 'image' && kind !== 'image-ref') return;
+    if (typeof filename !== 'string' || !filename.trim()) return;
+    const key = `${kind}:${filename.trim()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ kind, filename: filename.trim(), label });
+  };
+  push('image', board?.posterImageRef, 'Mood board poster');
+  const items = Array.isArray(board?.items) ? board.items : [];
+  for (const item of items) {
+    const asset = typeof resolveItem === 'function' ? resolveItem(item) : null;
+    if (!asset) continue;
+    const caption = typeof item?.caption === 'string' ? item.caption.trim() : '';
+    push(asset.kind, asset.filename, caption || asset.filename);
+  }
+  return candidates;
 }

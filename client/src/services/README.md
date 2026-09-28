@@ -84,7 +84,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiHealth.js` | Apple Health. |
 | `apiMeatspace.js` | MeatSpace health, genome, POST, memory-practice, and atomic POST training-run APIs. |
 | `apiMortalLoom.js` | Mortality tracking. |
-| `apiMoodBoard.js` | Mood boards (inspiration canvas + items), plus `listMoodBoardNames()` for pickers. |
+| `apiMoodBoard.js` | Mood boards (inspiration canvas + items), `listMoodBoardNames()` for pickers, and `composeMoodBoardPrompt()` which stores the board's composite style prompt. |
 | `apiTribe.js` | Tribe people (relationship rings + contacts), plus `getTribeDuplicateIdentifiers()` (`GET /tribe/duplicate-identifiers`): a non-blocking report of emails/phones shared by more than one person. |
 | `apiTimeline.js` | Human-activity timeline: `/timeline/day`. |
 | `apiCalendar.js` | Calendar events. |

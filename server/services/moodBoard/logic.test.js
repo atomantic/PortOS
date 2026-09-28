@@ -56,6 +56,36 @@ describe('applyBoardPatch', () => {
   it('preserves description when the key is absent', () => {
     expect(applyBoardPatch(base, { name: 'B' }).description).toBe('old');
   });
+  it('stores a composite style and poster, and null clears both', () => {
+    const style = { prompt: 'ink wash dusk', negativePrompt: 'gloss', analyzedItemCount: 2 };
+    const withStyle = applyBoardPatch(base, { style, posterImageRef: 'poster.png' });
+    expect(withStyle.style.prompt).toBe('ink wash dusk');
+    expect(withStyle.style.negativePrompt).toBe('gloss');
+    expect(withStyle.style.analyzedItemCount).toBe(2);
+    expect(withStyle.style.composedAt).toEqual(expect.any(String));
+    expect(withStyle.posterImageRef).toBe('poster.png');
+    const cleared = applyBoardPatch(withStyle, { style: null, posterImageRef: null });
+    expect(cleared.style).toBeNull();
+    expect(cleared.posterImageRef).toBeNull();
+  });
+  it('leaves style and poster in place when the patch omits them', () => {
+    const styled = {
+      ...base,
+      style: {
+        prompt: 'keep',
+        negativePrompt: null,
+        rationale: null,
+        analyzedItemCount: 0,
+        providerId: null,
+        model: null,
+        composedAt: 't1',
+      },
+      posterImageRef: 'poster.png',
+    };
+    const next = applyBoardPatch(styled, { name: 'B' });
+    expect(next.style.prompt).toBe('keep');
+    expect(next.posterImageRef).toBe('poster.png');
+  });
 });
 
 describe('addItem', () => {
@@ -286,6 +316,16 @@ describe('applyBoardRestore', () => {
   it('ignores a non-array items field', () => {
     const base = { ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }), items: [{ id: 'x' }] };
     expect(applyBoardRestore(base, { items: 'nope' }).items).toEqual([{ id: 'x' }]);
+  });
+  it('restores the composite style and poster when the journaled version had them', () => {
+    const base = { ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }), style: null, posterImageRef: 'new.png' };
+    const next = applyBoardRestore(base, {
+      style: { prompt: 'restored ink', analyzedItemCount: 1, composedAt: '2026-08-14T00:00:00.000Z' },
+      posterImageRef: 'old.png',
+    });
+    expect(next.style.prompt).toBe('restored ink');
+    expect(next.style.composedAt).toBe('2026-08-14T00:00:00.000Z');
+    expect(next.posterImageRef).toBe('old.png');
   });
 });
 

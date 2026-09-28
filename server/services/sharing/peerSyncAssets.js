@@ -657,6 +657,11 @@ export async function buildBoardAssetManifest(board) {
 
 export function referenceBoardAssetManifest(board) {
   const dedup = new Map();
+  // The canonical poster is a gallery still, same as a pinned image. A poster
+  // that is also pinned dedups onto one manifest entry. A missing local file
+  // is dropped later by the hash step, same as any other image ref.
+  const poster = imageAssetReference(board?.posterImageRef);
+  if (poster) dedup.set(`${poster.kind}:${poster.filename}`, poster);
   for (const it of Array.isArray(board?.items) ? board.items : []) {
     // `video` items (#4188) carry a `video:<filename>` mediaKey (the ref IS
     // the on-disk filename, so collectionVideoRefToFilename passes it through

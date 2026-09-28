@@ -97,7 +97,7 @@ An end-to-end creative production suite for authors, worldbuilders, filmmakers, 
 | **Universes & Canon** | `/universes`, `/universes/:id` | Worldbuilding bibles: sci-fi/fantasy lore, style templates, canon entries, characters, settings, and visual consistency anchors. | — |
 | **Creative Catalog** | `/catalog`, `/catalog?settings=1` | Searchable relational entity database (characters, places, objects, lore, scenes) with vector search and taxonomy management. | [STORAGE.md](../STORAGE.md) |
 | **Catalog Ingest** | `/catalog/ingest` | Paste unstructured scraps, scenes, or notes to automatically extract structured catalog ingredients. | — |
-| **Mood Boards** | `/mood-boards` | Visual pinboards, style canvases, color palettes, and conceptual reference collections. | — |
+| **Mood Boards** | `/mood-boards` | Visual pinboards and reference collections. Each pin and the whole board can be turned into a prompt; the board composes those prompts into one style and can render it as a canonical poster on any configured image service. | — |
 | **Media Gen (Image & Video)** | `/media`, `/media/image`, `/media/video` | Local and federated text-to-image (Stable Diffusion, FLUX, MFLUX) and text-to-video (LTX-Video, MiniMax H3) generation. | [Video Speed Profiles](./video-speed-profiles.md), [Video Text Encoders](./video-text-encoders.md) |
 | **Media History & Timeline** | `/media/history`, `/media/timeline` | Asset gallery, multi-track video timeline editor, clip trimming, audio overlay, and video stitching. | — |
 | **Image Annotation** | `/media/annotate` | Canvas drawing, sketch-over, visual markup, and region labeling for image conditioning. | — |

@@ -49,6 +49,15 @@ export const removeMoodBoardItem = (id, itemId, options) =>
     ...options,
   });
 
+// Distill stored per-item analyses into the board's own composite style prompt
+// and persist it on the board (`style`). Resolves to the updated board.
+export const composeMoodBoardPrompt = (id, { providerId, model } = {}, options = {}) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/compose-prompt`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model }),
+    ...options,
+  });
+
 // Board → universe style synthesis (#4188 Phase 4). Stateless review step:
 // sends the universe's CURRENT style context (styleNotes/influences/locked)
 // plus the chosen LLM; resolves to `{ proposed, diff, rationale, llm }`.
