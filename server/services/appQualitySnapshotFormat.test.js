@@ -171,6 +171,10 @@ it('rejects future, unrecognized, malformed, and invalid-index documents; collap
     { ...security, assessedAt: '2026-09-20T03:00:00.000Z', score: 3 },
   ]);
   expect(JSON.parse(replaced).measurements).toEqual([['2026-09-20', 0, 2, 5, 0, 2, 120, 120]]);
+  // An exact-timestamp tie resolves the same way whatever the input order.
+  const a = { ...security, score: 11 };
+  const b = { ...security, score: 12 };
+  expect(serializeQualitySnapshot(repository, [a, b])).toBe(serializeQualitySnapshot(repository, [b, a]));
   // A date-only file (the canonical form) round-trips byte-for-byte.
   expect(classifyQualitySnapshot(replaced).canonical).toBe(replaced);
 });

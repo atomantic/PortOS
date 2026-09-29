@@ -80,7 +80,10 @@ function collapseToDays(records) {
     if (!day) return null;
     const key = `${day}|${record.category}`;
     const kept = latest.get(key);
-    if (!kept || compareRecords(kept, record) <= 0) latest.set(key, record);
+    if (!kept || compareRecords(kept, record) < 0
+      || (compareRecords(kept, record) === 0 && compareText(releaseTieId(kept), releaseTieId(record)) < 0)) {
+      latest.set(key, record);
+    }
   }
   return [...latest.values()].map(record => ({ ...record, assessedAt: `${utcDay(record.assessedAt)}T00:00:00.000Z` }));
 }
