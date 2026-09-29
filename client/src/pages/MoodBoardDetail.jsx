@@ -19,6 +19,7 @@ import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import { PromptFromMediaModal } from '../components/media/PromptFromMedia';
+import MediaLightbox from '../components/media/MediaLightbox';
 import MoodBoardStylePanel from '../components/moodBoard/MoodBoardStylePanel';
 import MoodBoardCollagePanel from '../components/moodBoard/MoodBoardCollagePanel';
 import { copyToClipboard } from '../lib/clipboard';
@@ -74,6 +75,7 @@ function MoodBoardEditor({ id }) {
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const [playingItemId, setPlayingItemId] = useState(null);
+  const [previewItemId, setPreviewItemId] = useState(null);
 
   // Per-item prompt-from-media analysis (#4188 Phase 3). Track the item by id
   // (not a snapshot) so the modal's stored-analysis view stays fresh after the
@@ -386,6 +388,23 @@ function MoodBoardEditor({ id }) {
   }
 
   const items = Array.isArray(board.items) ? board.items : [];
+  // Still images only (videos play inline); prev/next walks this subset.
+  const previewables = items
+    .filter((it) => it.type === 'image' && moodBoardItemSrc(it))
+    .map((it) => {
+      const url = moodBoardItemSrc(it);
+      return {
+        kind: 'image',
+        key: `moodboard:${it.id}`,
+        id: it.id,
+        filename: decodeURIComponent(url.split(/[?#]/)[0].split('/').pop() || ''),
+        previewUrl: url,
+        downloadUrl: url,
+        prompt: moodBoardItemPrompt(it) || it.caption || '',
+      };
+    });
+  const previewIndex = previewables.findIndex((it) => it.id === previewItemId);
+
   const linkedFeedUrl = board.pinterest?.feedUrl || '';
   const linkedBoardUrl = board.pinterest?.boardUrl || '';
   const lastSyncedAt = board.pinterest?.lastSyncedAt || null;
@@ -556,7 +575,14 @@ function MoodBoardEditor({ id }) {
                         )
                       ) : item.type === 'image' || item.type === 'video' ? (
                         src ? (
-                          <img src={src} alt={displayText} loading="lazy" className="w-full h-full object-cover bg-port-bg" />
+                          <button
+                            type="button"
+                            onClick={() => setPreviewItemId(item.id)}
+                            aria-label="Preview image"
+                            className="block w-full h-full cursor-zoom-in"
+                          >
+                            <img src={src} alt={displayText} loading="lazy" className="w-full h-full object-cover bg-port-bg" />
+                          </button>
                         ) : (
                           <div className="w-full h-full flex items-center justify-center bg-port-bg text-gray-600">
                             <ImageIcon className="w-8 h-8" aria-hidden="true" />
@@ -918,6 +944,17 @@ function MoodBoardEditor({ id }) {
         allowUpload
         uploadToGallery
       />
+
+      {previewIndex >= 0 ? (
+        <MediaLightbox
+          item={previewables[previewIndex]}
+          onClose={() => setPreviewItemId(null)}
+          hasPrevious={previewIndex > 0}
+          hasNext={previewIndex < previewables.length - 1}
+          onPrevious={() => setPreviewItemId(previewables[previewIndex - 1].id)}
+          onNext={() => setPreviewItemId(previewables[previewIndex + 1].id)}
+        />
+      ) : null}
 
       {/* Per-item prompt-from-media analysis (#4188 Phase 3). A successful run
           auto-persists onto the item; the stored analysis renders above the
