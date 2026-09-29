@@ -2121,7 +2121,7 @@ const transientStreakKey = (taskType, appId) => `${taskType}:${appId || 'global'
  *
  * @returns {number} the new consecutive-transient count.
  */
-export function noteTransientProbe(taskType, appId) {
+function noteTransientProbe(taskType, appId) {
   const key = transientStreakKey(taskType, appId);
   const count = (transientStreaks.get(key) || 0) + 1;
   transientStreaks.set(key, count);
@@ -2129,7 +2129,7 @@ export function noteTransientProbe(taskType, appId) {
 }
 
 /** Reset the consecutive-transient streak — the probe stopped being transient. */
-export function clearTransientProbeStreak(taskType, appId) {
+function clearTransientProbeStreak(taskType, appId) {
   transientStreaks.delete(transientStreakKey(taskType, appId));
 }
 

@@ -76,8 +76,6 @@ import {
   emitOnDemandEmpty,
   applyOnDemandConsent,
   isConfiguredApprovalRequired,
-  noteTransientProbe,
-  clearTransientProbeStreak,
   PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD,
   buildJiraTicketTask,
   buildClaimWorkTask,
@@ -1257,27 +1255,7 @@ describe('emitOnDemandEmpty', () => {
     expect(ghHealth).not.toHaveBeenCalled();
   });
 
-  it('noteTransientProbe counts CONSECUTIVE transient probes for the same taskType+app', () => {
-    expect(noteTransientProbe('claim-issue', 'app-streak')).toBe(1);
-    expect(noteTransientProbe('claim-issue', 'app-streak')).toBe(2);
-    expect(noteTransientProbe('claim-issue', 'app-streak')).toBe(3);
-    expect(noteTransientProbe('claim-issue', 'app-streak')).toBe(4);
-  });
-
-  it('clearTransientProbeStreak restarts the count, so a recovered probe resets the escalation clock', () => {
-    noteTransientProbe('claim-issue', 'app-streak-2');
-    noteTransientProbe('claim-issue', 'app-streak-2');
-    clearTransientProbeStreak('claim-issue', 'app-streak-2');
-    expect(noteTransientProbe('claim-issue', 'app-streak-2')).toBe(1);
-  });
-
-  it('noteTransientProbe keys the streak by taskType+app, so one app never inherits another\'s count', () => {
-    noteTransientProbe('claim-issue', 'app-streak-a');
-    noteTransientProbe('claim-issue', 'app-streak-a');
-    expect(noteTransientProbe('claim-issue', 'app-streak-b')).toBe(1);
-    expect(noteTransientProbe('pr-watcher', 'app-streak-a')).toBe(1);
-  });
-
+  // The streak counter itself is exercised through prepare in cosTaskGenerator.providerPin.test.js.
   it('the escalation threshold is exported and applyPerpetualWorkGate levels its skip log against it, persisting a stall once escalated', () => {
     const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
     const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
