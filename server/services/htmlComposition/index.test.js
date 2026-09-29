@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
@@ -61,6 +61,17 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     browser = await chromium.connectOverCDP(endpoint);
     browserSession = await browser.newBrowserCDPSession();
   }, 30000);
+
+  // Each render writes its composition dir, MP4 and thumbnail under the data
+  // root; dropping them per test keeps the run root's peak size (and what a
+  // killed run strands) small (#9113). The Chrome profile must survive.
+  afterEach(async () => {
+    await rm(join(PATHS.data, 'compositions'), { recursive: true, force: true });
+    // Empty (not remove) the output dirs: later tests readdir them.
+    for (const dir of [PATHS.videos, PATHS.videoThumbnails]) {
+      for (const name of await readdir(dir).catch(() => [])) await rm(join(dir, name), { recursive: true, force: true });
+    }
+  });
 
   afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));
 

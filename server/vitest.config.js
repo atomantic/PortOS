@@ -1,9 +1,10 @@
 import { defineConfig } from 'vitest/config';
-import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { vitestCiPool } from '../scripts/vitestCiPool.js';
 import { DB_TEST_INCLUDE } from './vitest.config.db.js';
+import { sweepStaleRunRoots, writeOwnerFile } from './test/staleRunRoots.js';
 
 // `npm run test:fast` is the Windows-safe way to set the flag (a
 // `VITEST_FAST=1 vitest` script is parsed as an executable name on cmd.exe).
@@ -26,12 +27,7 @@ if (process.env.npm_lifecycle_event === 'test:fast') {
 // below as globalSetup) is the other half: it reports and removes whatever is
 // left in the root after the run.
 //
-// Stale-root sweep: remove `pvt-*` roots older than 6 hours from a PAST run
-// that was killed before its teardown ran (a killed CoS agent, a crashed
-// worker) — using the REAL tmpdir, before this run's own TMPDIR override
-// below. A root from a run that is still in flight (started recently, by
-// definition) survives; only the age check matters, not which process it
-// belongs to, since two runs never share a root path.
+// Stale-root sweep: see `test/staleRunRoots.js` (owner pid, 6h fallback).
 // Idempotency guard: `server/vitest.config.test.js` (and any other suite
 // that asserts on this file's own NODE_ENV-forcing behavior) dynamically
 // re-imports this module after `vi.resetModules()`, re-running every
@@ -45,37 +41,17 @@ const REAL_TMPDIR = tmpdir();
 let RUN_TEMP_ROOT = process.env.PORTOS_TEST_TEMP_ROOT;
 
 if (!RUN_TEMP_ROOT) {
-  // Stale-root sweep: remove `pvt-*` roots older than 6 hours from a PAST run
-  // that was killed before its teardown ran (a killed CoS agent, a crashed
-  // worker) — using the REAL tmpdir, before this run's own TMPDIR override
-  // below. A root from a run that is still in flight (started recently, by
-  // definition) survives; only the age check matters, not which process it
-  // belongs to, since two runs never share a root path.
-  const STALE_ROOT_AGE_MS = 6 * 60 * 60 * 1000;
-  try {
-    const now = Date.now();
-    for (const name of readdirSync(REAL_TMPDIR)) {
-      if (!name.startsWith('pvt-')) continue;
-      const path = join(REAL_TMPDIR, name);
-      try {
-        const stat = statSync(path);
-        if (stat.isDirectory() && now - stat.mtimeMs > STALE_ROOT_AGE_MS) {
-          rmSync(path, { recursive: true, force: true });
-        }
-      } catch {
-        // Already gone, or a permissions/race hiccup — never fail config load
-        // over a best-effort sweep of someone else's stale root.
-      }
-    }
-  } catch {
-    // REAL_TMPDIR unreadable — skip the sweep rather than fail config load.
-  }
+  // Stale-root sweep (#9113): reclaim `pvt-*` roots of killed runs — at once
+  // when the recorded owner pid is gone, after 6h when no owner is recorded,
+  // never while the owner lives. Uses the REAL tmpdir, before the override below.
+  sweepStaleRunRoots(REAL_TMPDIR);
 
   // Short prefix: Unix-socket tests (e.g. services/itermBridge.test.js) build
   // a `join(tmpdir(), 'prefix-XXXXXX', 'name.sock')` path, and macOS caps
   // `sockaddr_un.sun_path` at 104 bytes — a long run-root prefix nested under
   // another temp dir could push a legitimate socket path over that limit.
   RUN_TEMP_ROOT = mkdtempSync(join(REAL_TMPDIR, 'pvt-'));
+  writeOwnerFile(RUN_TEMP_ROOT);
   process.env.PORTOS_TEST_TEMP_ROOT = RUN_TEMP_ROOT;
 }
 process.env.TMPDIR = RUN_TEMP_ROOT;
