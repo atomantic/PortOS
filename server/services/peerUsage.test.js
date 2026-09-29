@@ -32,9 +32,11 @@ const {
   applyUsageRemote,
   getFleetUsage,
   getFleetQuotaEntries,
+  getFleetClaudeCodeModels,
   forgetInstanceUsage,
   PEER_USAGE_FILE,
 } = await import('./peerUsage.js');
+const { TRANSCRIPT_USAGE_FILE } = await import('./claudeCodeTranscriptUsage.js');
 const { recordLocalQuotaCards, readLocalQuotaCards, PROVIDER_QUOTAS_FILE } = await import('./providerQuotaShare.js');
 
 afterAll(cleanup);
@@ -99,6 +101,7 @@ beforeEach(async () => {
   const { atomicWrite } = await import('../lib/fileUtils.js');
   await atomicWrite(PEER_USAGE_FILE, { instances: {} });
   await atomicWrite(PROVIDER_QUOTAS_FILE, { quotas: [] });
+  await atomicWrite(TRANSCRIPT_USAGE_FILE, { days: {}, updatedAt: null });
 });
 
 const quotaCard = (over = {}) => ({
@@ -529,5 +532,37 @@ describe('federated subscription-quota readings', () => {
   it('leaves out a peer that published no readings', async () => {
     await applyUsageRemote({ instances: { 'inst-peer': peerEntry() } });
     expect(await getFleetQuotaEntries()).toEqual([]);
+  });
+});
+
+describe('federated Claude Code tokens per model', () => {
+  const counts = (o) => ({ messages: 2, input: 1_000_000, output: o, cacheRead: 0, cacheWrite: 0 });
+  const days = (o) => ({ '2026-09-10': { 'claude-opus-5-5': counts(o) }, '2026-08-01': { 'claude-opus-5-5': counts(o) } });
+
+  it('publishes this machine\'s history, moves the LWW stamp with it, and totals it with a peer', async () => {
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    await atomicWrite(TRANSCRIPT_USAGE_FILE, { days: days(1_000_000), updatedAt: '2026-09-20T00:00:00.000Z' });
+    const { data } = await getUsageSnapshot();
+    expect(data.instances['inst-self'].claudeCode.days['2026-09-10']['claude-opus-5-5'].output).toBe(1_000_000);
+    expect(Date.parse(data.instances['inst-self'].capturedAt)).toBeGreaterThanOrEqual(Date.parse('2026-09-20T00:00:00.000Z'));
+
+    await applyUsageRemote({ instances: { 'inst-peer': { ...peerEntry(), claudeCode: { updatedAt: '2026-09-21T00:00:00.000Z', days: days(3_000_000) } } } });
+    const fleet = await getFleetClaudeCodeModels({ from: '2026-09-01', to: '2026-09-30' });
+    expect(fleet.instances.map((i) => i.instanceId).sort()).toEqual(['inst-peer', 'inst-self']);
+    // Window scoping: the 2026-08-01 day is excluded from every row and the total.
+    expect(fleet.models).toEqual([expect.objectContaining({ model: 'claude-opus-5-5', messages: 4, output: 4_000_000 })]);
+    expect(fleet.totals.estimatedCost).toBeGreaterThan(0);
+  });
+
+  it('keeps an API-billed instance listed but out of the combined figures, and tolerates a peer with no history', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': { ...peerEntry(), claudeCode: { updatedAt: '2026-09-21T00:00:00.000Z', days: days(3_000_000) } }, 'inst-old': peerEntry() } });
+    const fleet = await getFleetClaudeCodeModels({ apiBilledInstanceIds: ['inst-peer'] });
+    expect(fleet.instances).toEqual([expect.objectContaining({ instanceId: 'inst-peer', usesSubscriptions: false })]);
+    expect(fleet.totals.total).toBe(0);
+  });
+
+  it('rebuilds a hostile peer history to the fixed shape', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': { ...peerEntry(), claudeCode: { updatedAt: '2026-09-21T00:00:00.000Z', days: { '2026-09-10': { m: { messages: 1, evil: 5 } }, junk: {} } } } } });
+    expect((await readStoreFile()).instances['inst-peer'].claudeCode.days).toEqual({ '2026-09-10': { m: { messages: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } });
   });
 });

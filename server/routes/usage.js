@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import * as usage from '../services/usage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
+import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
-import { getFleetUsage } from '../services/peerUsage.js';
+import { getFleetUsage, getFleetClaudeCodeModels } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import { resolveUsageRange } from '../lib/usageRange.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
@@ -135,6 +136,17 @@ router.get('/claude-code', asyncHandler(async (req, res) => {
   const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
   const data = await getClaudeCodeUsage({ wait: refresh ? WAIT.FRESH : WAIT.CACHED });
   res.json(data);
+}));
+
+// GET /api/usage/claude-code/models - Claude Code tokens per model, priced at
+// API rates, across the fleet: every instance's per-day transcript history
+// (this machine's is refreshed first if stale) plus a combined per-model list.
+// Same ?period=7d|30d|90d|all or ?from/?to window as GET /api/usage.
+router.get('/claude-code/models', asyncHandler(async (req, res) => {
+  const { from, to } = resolveUsageRange(validateRequest(usageQuerySchema, req.query));
+  await refreshLocalTranscriptUsage();
+  const apiBilledInstanceIds = await getApiBilledInstanceIds();
+  res.json({ from, to, ...(await getFleetClaudeCodeModels({ from, to, apiBilledInstanceIds })) });
 }));
 
 // GET /api/usage/raw - Get raw usage data

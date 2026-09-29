@@ -10,6 +10,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
+import ClaudeCodeModelTokensCard from '../components/usage/ClaudeCodeModelTokensCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
@@ -725,6 +726,9 @@ function InternalUsageMetrics() {
           and tokens on quotas with no usage API (e.g. opencode zen), plus the
           observed limit blocks that stand in for a quota meter. */}
       <FreeTierUsageCard freeTier={usage.freeTier} />
+
+      {/* Claude Code tokens per model (all instances) for the same window. */}
+      <ClaudeCodeModelTokensCard period={period} from={from} to={to} isCustom={isCustom} />
 
       {/* Same window, split by machine — renders only once a peer's usage has
           synced, so a single-machine install sees no change. */}
