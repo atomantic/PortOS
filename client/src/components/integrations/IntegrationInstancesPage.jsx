@@ -196,7 +196,7 @@ export default function IntegrationInstancesPage({
             const result = testResults[instance.id];
             return <div key={instance.id} className="bg-gray-800 rounded-lg p-4 sm:p-6">
               <div className="flex flex-col gap-4">
-                <div className="flex-1 min-w-0"><h3 className="text-lg font-bold text-white truncate">{instance.name}</h3>{summarize(instance)}</div>
+                <div className="flex-1 min-w-0"><h2 className="text-lg font-bold text-white truncate">{instance.name}</h2>{summarize(instance)}</div>
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => handleTest(instance.id)} disabled={testingInstance === instance.id} className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded disabled:opacity-50">{testingInstance === instance.id ? 'Testing...' : 'Test'}</button>
                   <button onClick={() => handleEdit(instance)} className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-warning hover:bg-port-warning/80 text-white text-sm rounded">Edit</button>

@@ -491,10 +491,10 @@ export default function Review() {
         {(queueItems.length > 0 || queueSourceErrors.length > 0 || queue?.partial) && (
           <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
                 <Inbox size={16} className="text-port-accent" />
                 Actions
-              </h3>
+              </h2>
               {queueItems.length > 0 && (
                 <span className="text-xs rounded-full px-2 py-0.5 bg-port-accent/10 text-port-accent border border-port-accent/20">
                   {formatCount(queueItems.length)} across domains
@@ -556,10 +556,10 @@ export default function Review() {
         {showLegacyReviewSurface && topActionItems.length > 0 && (
           <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
                 <Eye size={16} className="text-port-warning" />
                 Action Queue
-              </h3>
+              </h2>
               <span className="text-xs rounded-full px-2 py-0.5 bg-port-warning/10 text-port-warning border border-port-warning/20">
                 {formatCount(actionableItems.length)} actionable
               </span>
@@ -599,10 +599,10 @@ export default function Review() {
             aria-label={briefingFullscreen ? 'Daily Briefing' : undefined}
             className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : ''}`}>
             <div className="flex items-center justify-between gap-2 mb-2">
-              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
                 <FileText size={16} className="text-gray-400" />
                 Daily Briefing
-              </h3>
+              </h2>
               <div className="flex items-center gap-2">
                 <span className="text-[11px] text-gray-400">
                   {briefing.source} &middot; {formatDateTime(briefing.generatedAt)}
@@ -633,11 +633,11 @@ export default function Review() {
 
           return (
             <section key={type} className="space-y-2">
-              <h3 className={`text-sm font-semibold uppercase tracking-wide ${config.color} flex items-center gap-2`}>
+              <h2 className={`text-sm font-semibold uppercase tracking-wide ${config.color} flex items-center gap-2`}>
                 <TypeIcon size={16} />
                 {config.label}
                 <span className="text-gray-600">({formatCount(typeItems.length)})</span>
-              </h3>
+              </h2>
               <div className="space-y-1">
                 {typeItems.map(item => (
                   <ReviewItem

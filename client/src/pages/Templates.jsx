@@ -180,9 +180,9 @@ export default function Templates() {
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-white group-hover:text-port-accent transition-colors">
+                      <h2 className="font-semibold text-white group-hover:text-port-accent transition-colors">
                         {template.name}
-                      </h3>
+                      </h2>
                       {template.builtIn && (
                         <span className="text-xs px-2 py-0.5 bg-port-accent/20 text-port-accent rounded">
                           Built-in

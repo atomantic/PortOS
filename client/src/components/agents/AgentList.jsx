@@ -390,7 +390,7 @@ export default function AgentList() {
                     {agent.avatar?.emoji || '🤖'}
                   </div>
                   <div className="min-w-0">
-                    <h3 className="font-semibold text-white truncate">{agent.name}</h3>
+                    <h2 className="font-semibold text-white truncate">{agent.name}</h2>
                     <p className="text-sm text-gray-400 truncate">{agent.description || 'No description'}</p>
                   </div>
                 </div>
