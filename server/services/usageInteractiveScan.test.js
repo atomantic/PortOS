@@ -13,7 +13,7 @@ vi.mock('./usage.js', () => ({
 }));
 afterAll(cleanup);
 
-const { refreshInteractiveUsage, subtractWindows, splitByUtcDay, INTERACTIVE_SCAN_FILE } = await import('./usageInteractiveScan.js');
+const { refreshInteractiveUsage, INTERACTIVE_SCAN_FILE } = await import('./usageInteractiveScan.js');
 
 const GROK = { id: 'grok-cli', type: 'cli', command: 'grok', enabled: true, defaultModel: 'example-grok-model' };
 const AGY = { id: 'antigravity-cli', type: 'cli', command: 'agy', enabled: true, defaultModel: 'example-agy-model' };
@@ -39,20 +39,6 @@ const grokTurn = (promptId, ms, output, input = 1000) => JSON.stringify({
     },
     _meta: { agentTimestampMs: ms }
   }
-});
-
-describe('window helpers', () => {
-  it('subtracts run windows from an interval', () => {
-    expect(subtractWindows(0, 100, [[20, 30], [50, 60]])).toEqual([[0, 19], [31, 49], [61, 100]]);
-    expect(subtractWindows(0, 100, [[-5, 200]])).toEqual([]);
-    expect(subtractWindows(0, 100, [[300, 400]])).toEqual([[0, 100]]);
-  });
-
-  it('splits at UTC midnight', () => {
-    const day = 86_400_000;
-    const start = Date.parse('2026-09-09T23:00:00Z');
-    expect(splitByUtcDay(start, start + day).map((s) => s.day)).toEqual(['2026-09-09', '2026-09-10']);
-  });
 });
 
 describe('refreshInteractiveUsage', () => {
