@@ -238,11 +238,11 @@ export async function handlePipelineProgression(task, agentId, success) {
  *
  * @returns {Promise<Object>} the third argument to `cleanupAgentWorktree`
  */
-async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, taskOpenPR, agentOpensOwnPr, prClaimVerified = false, noChangesToShip = false }) {
+async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, taskOpenPR, agentOpensOwnPr, prClaimVerified = false, branchProvenEmpty = false }) {
   // `if-missing` for an agent-owned PR that finalize did NOT verify: cleanup
   // asks the forge once and only stands down when a PR actually exists, so a
   // harness that skipped its completion workflow can't strand the branch.
-  const prCreation = resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, noChangesToShip });
+  const prCreation = resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, branchProvenEmpty });
   // Merge per-task reviewer metadata with the user's Code Review Defaults
   // (Settings → Code Reviewers page). Settings I/O is cached inside the
   // resolver, so this is effectively free even when invoked from a tight CoS
@@ -285,9 +285,9 @@ async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, task
  * be skipped by a throw from the JIRA/pipeline/Creative Director steps — either
  * would leave the task held until the orphan sweep noticed.
  *
- * @param {{ agentId: string, task: object, agent: object, effectiveSuccess: boolean, outputBuffer: string, noChangesToShip?: boolean }} params
+ * @param {{ agentId: string, task: object, agent: object, effectiveSuccess: boolean, outputBuffer: string, branchProvenEmpty?: boolean }} params
  */
-export async function runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false, noChangesToShip = false }) {
+export async function runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false, branchProvenEmpty = false }) {
   // Fetch agent state once for JIRA, plan-question, and the resume pointer. Its
   // worktree fields are stamped once at registerAgent and never mutated, so passing
   // it to the release spares a re-read that would re-split the whole output.txt.
@@ -296,7 +296,7 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
 
   try {
     await runCompletionCleanupSteps({
-      agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified, noChangesToShip,
+      agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified, branchProvenEmpty,
     });
   } finally {
     await releaseRetryHold({
@@ -524,14 +524,14 @@ export async function removeCompletionSentinel({ agentId, agent, agentState }) {
   await rmGuarded(resolveDoneSentinelPath(workspace, agentId), { force: true });
 }
 
-async function completeWorktreeCleanup({ agentId, task, agent, agentState, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, noChangesToShip }) {
+async function completeWorktreeCleanup({ agentId, task, agent, agentState, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, branchProvenEmpty }) {
   if (task?.metadata?.jiraBranch) return;
   const ownership = prOwnership ?? resolveRunnerPrOwnership({ task, agent, agentState });
   return cleanupAgentWorktree(agentId, effectiveSuccess, await resolveWorktreeCleanupOptions({
     agentId, task, outputBuffer,
     taskOpenPR: ownership.taskOpenPR,
     agentOpensOwnPr: ownership.agentOpensOwnPr,
-    prClaimVerified, noChangesToShip,
+    prClaimVerified, branchProvenEmpty,
   }));
 }
 
@@ -569,18 +569,18 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
  * a failed hand-off must release the task with the resume pointer cleanup left.
  *
  * `prOwnership` is `resolvePrOwnership`'s answer for this run;
- * `prClaimVerified` / `noChangesToShip` are read off finalize's return.
+ * `prClaimVerified` / `branchProvenEmpty` are read off finalize's return.
  * `success` is the verdict finalize actually persisted — a PR-claim downgrade
  * must reach cleanup, or a run that opened no PR is cleaned up as a success and
  * loses its retry state (#3358).
  */
-export async function runSpawnerCompletionCleanup({ agentId, task, success, prOwnership, prClaimVerified = false, noChangesToShip = false, outputBuffer }) {
+export async function runSpawnerCompletionCleanup({ agentId, task, success, prOwnership, prClaimVerified = false, branchProvenEmpty = false, outputBuffer }) {
   try {
     const { getAgent } = await import('./cos.js');
     const agentState = await getAgent(agentId).catch(() => null);
     await runCompletionCleanupSteps({
       agentId, task, agentState, effectiveSuccess: success, prOwnership,
-      prClaimVerified, noChangesToShip, outputBuffer, continueOnError: true,
+      prClaimVerified, branchProvenEmpty, outputBuffer, continueOnError: true,
     });
   } finally {
     await releaseRetryHold({ agentId, task, success })

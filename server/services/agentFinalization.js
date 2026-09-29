@@ -63,6 +63,7 @@ import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from
 import { issueNumberFromRef } from './issueReconcile.js';
 
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
 /**
  * Release the execution lane and complete tool-execution tracking for a
  * finishing agent. Pulled OUT of finalizeAgent so callers can fire it
@@ -124,7 +125,7 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, noChangesToShip = false, noChangeProof = null }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null }) {
   if (terminatedByUser) return null;
   const taskType = task?.taskType || 'user';
   // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
@@ -148,16 +149,16 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // a run missing the task id or workspace needed to validate.
   if (taskType === 'user' || !task?.id || !workspacePath) return null;
   // A PortOS-owned audit can validly conclude that its shipped data is current.
-  // `noChangesToShip` is only set by verifyPrClaim after the forge answered that
+  // `branchProvenEmpty` is only set by verifyPrClaim after the forge answered that
   // no PR exists AND the branch was proven empty; the task marker narrows this
   // exception to an explicitly opted-in autonomous job. Do not use the marker
   // as a general no-commit exemption: a real change still needs the commit probe.
-  if (success && noChangesToShip === true && isVerifiedNoChangeTask(task)) return true;
+  if (success && branchProvenEmpty === true && permitsNoChangeCompletion(task)) return true;
   // A marked no-change audit needs a forge answer and an unambiguous empty-branch
   // proof. If either check was inconclusive, leave learning undeclared rather than
   // scoring a correct no-op as a commit miss. A non-empty branch remains a real
   // change path and still uses the ordinary commit criterion below.
-  if (success && isVerifiedNoChangeTask(task) && noChangeProof?.inconclusive === true) return null;
+  if (success && permitsNoChangeCompletion(task) && emptyBranchInconclusiveEvidence?.inconclusive === true) return null;
   // Pipeline/media tasks deliver artifacts, not a commit — the
   // commit criterion doesn't apply, so don't mislabel a clean artifact run as a
   // validation miss (which would also pollute the correlation window). null =
@@ -285,11 +286,6 @@ function hasIssueClosingTrailer(body, issueNumber) {
 
 function hasIssuePartialTrailer(body, issueNumber) {
   return new RegExp(`\\b(refs?|part of)\\s+#${issueNumber}\\b`, 'i').test(body);
-}
-
-function isVerifiedNoChangeTask(task) {
-  return (isTruthyMeta(task?.metadata?.autonomousJob) || isTruthyMeta(task?.metadata?.isInvestigation))
-    && isTruthyMeta(task?.metadata?.noChangeSuccess);
 }
 
 /**
@@ -443,7 +439,7 @@ function prVerdictFromObservation(observation) {
   if (policy.category) verdict.category = policy.category;
   if (observation.message) verdict.message = observation.message;
   if (observation.advisory) verdict.advisory = observation.advisory;
-  if (observation.outcome === PR_OBSERVATION.EMPTY_BRANCH) verdict.noChangesToShip = true;
+  if (observation.outcome === PR_OBSERVATION.EMPTY_BRANCH) verdict.branchProvenEmpty = true;
   if (observation.outcome === PR_OBSERVATION.MISSING_PR) {
     // Both facts ride the miss unconditionally: `commitsAhead` feeds the
     // suggested fix, and an explicit `inconclusive: false` is what tells the
@@ -556,14 +552,14 @@ async function observePrClaim({ task, workspacePath, success, prExpected }) {
  *
  * Four outcome families, never collapsed:
  *   - `ok: true`  — a PR exists with a valid claim trailer, or there was nothing to check
- *   - `ok: true, noChangesToShip: true` — the forge answered "no PR" and the
+ *   - `ok: true, branchProvenEmpty: true` — the forge answered "no PR" and the
  *     branch holds no commits, so there was nothing a PR could have been opened
  *     for; the run concluded that no change was warranted
  *   - `ok: false, category: 'pr-missing'` — the forge answered "no PR" for a
  *     branch that DOES hold commits
  *   - `ok: false, category: 'forge-unreachable'` — we could not ask
  *
- * @returns {Promise<{ ok: boolean, category?: string, message?: string, branch?: string|null, noChangesToShip?: boolean, commitsAhead?: number|null, inconclusive?: boolean }>}
+ * @returns {Promise<{ ok: boolean, category?: string, message?: string, branch?: string|null, branchProvenEmpty?: boolean, commitsAhead?: number|null, inconclusive?: boolean }>}
  * `inconclusive: true` is set for every requested check that cannot reach an
  * unambiguous answer (no resolvable branch, unreachable forge, unreadable claim
  * body, or unreadable commit count). It is omitted for a proven empty branch and
@@ -1178,8 +1174,8 @@ function resolvePrEvidence({ primaryObservation, noChangeObservation }) {
   return {
     completionOk: primary.completionOk,
     completionVerdict: prVerdictFromObservation(primaryObservation),
-    noChangesToShip: provenEmpty(primaryObservation) || provenEmpty(noChangeObservation),
-    noChangeProof: noChangeObservation ? prVerdictFromObservation(noChangeObservation) : null,
+    branchProvenEmpty: provenEmpty(primaryObservation) || provenEmpty(noChangeObservation),
+    emptyBranchInconclusiveEvidence: noChangeObservation ? prVerdictFromObservation(noChangeObservation) : null,
     // The branch the surviving evidence names, for the operator-facing log line.
     evidenceBranch: evidence.branch || noChangeObservation?.branch || null,
     ledgerEntry: evidencePolicy.recordable
@@ -1187,7 +1183,7 @@ function resolvePrEvidence({ primaryObservation, noChangeObservation }) {
         verified: evidencePolicy.completionOk,
         branch: evidence.branch,
         category: evidencePolicy.category,
-        noChangesToShip: provenEmpty(evidence),
+        branchProvenEmpty: provenEmpty(evidence),
       }
       : null,
     cleanupEvidence: prVerdictFromObservation(evidence),
@@ -1238,7 +1234,7 @@ export async function finalizeAgent({
   // A THROW here is not a verdict — fall back to the reported outcome rather
   // than manufacturing a failure out of a check that never ran, and say so by
   // NAME so the ledger gate below doesn't have to infer it from an empty result.
-  const noChangeAudit = !terminatedByUser && reportedSuccess && isVerifiedNoChangeTask(task);
+  const noChangeAudit = !terminatedByUser && reportedSuccess && permitsNoChangeCompletion(task);
   const primaryPrObservation = terminatedByUser
     ? prObservation(PR_OBSERVATION.SKIPPED)
     : await observePrClaim({ task, workspacePath, success: reportedSuccess, prExpected })
@@ -1257,7 +1253,7 @@ export async function finalizeAgent({
     task, workspacePath, success: reportedSuccess, agentId,
   });
   const prEvidence = resolvePrEvidence({ primaryObservation: primaryPrObservation, noChangeObservation });
-  const noChangesToShip = prEvidence.noChangesToShip;
+  const branchProvenEmpty = prEvidence.branchProvenEmpty;
 
   // Record the verdict in the lifecycle ledger (#4540) — but ONLY for an outcome
   // the policy table marks recordable. The sparse result returns the same
@@ -1282,7 +1278,7 @@ export async function finalizeAgent({
         verified,
         branch: branch ?? null,
         category: category ?? null,
-        noChangesToShip: prEvidence.ledgerEntry.noChangesToShip,
+        branchProvenEmpty: prEvidence.ledgerEntry.branchProvenEmpty,
       },
     });
   }
@@ -1355,7 +1351,7 @@ export async function finalizeAgent({
     emitLog('warn', `⚠️ ${prCompletionVerdict.message} — recording ${agentId} as needs-attention (${prCompletionVerdict.category}) rather than complete`, {
       agentId, taskId: task?.id, branch: prCompletionVerdict.branch, category: prCompletionVerdict.category
     });
-  } else if (noChangesToShip) {
+  } else if (branchProvenEmpty) {
     // A no-op run is a legitimate completion, not a silent one — the human still
     // wants to know a task burned an agent and concluded there was nothing to do.
     emitLog('info', `🫧 ${agentId} opened no change request and committed nothing to ${prEvidence.evidenceBranch} — recording the run as complete with no change warranted`, {
@@ -1564,8 +1560,8 @@ export async function finalizeAgent({
     startedAt: runStartedAt,
     success: verdict.success,
     hookResult,
-    noChangesToShip,
-    noChangeProof: prEvidence.noChangeProof,
+    branchProvenEmpty,
+    emptyBranchInconclusiveEvidence: prEvidence.emptyBranchInconclusiveEvidence,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });

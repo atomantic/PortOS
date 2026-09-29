@@ -38,7 +38,7 @@ describe('resolvePrCreation (#3733)', () => {
       taskOpenPR: true,
       agentOpensOwnPr: false,
       prClaimVerified: false,
-      noChangesToShip: true,
+      branchProvenEmpty: true,
     })).toBe(PR_CREATION.NEVER);
   });
 
@@ -63,7 +63,7 @@ describe('resolvePrCreation (#3733)', () => {
 describe('prClaimWasVerified (#3733)', () => {
   it('accepts only a forge answer about a real branch', () => {
     expect(prClaimWasVerified({ ok: true, branch: 'feature-x' })).toBe(true);
-    expect(prClaimWasVerified({ ok: true, branch: 'feature-x', noChangesToShip: true })).toBe(true);
+    expect(prClaimWasVerified({ ok: true, branch: 'feature-x', branchProvenEmpty: true })).toBe(true);
   });
 
   it('rejects a bare ok — that is "nothing was verified", not "a PR exists"', () => {

@@ -145,12 +145,12 @@ export const PR_CREATION = Object.freeze({
  * @param {boolean} opts.agentOpensOwnPr - the prompt told the agent to open it
  * @param {boolean} opts.prClaimVerified - finalize ran `verifyPrClaim` for this
  *   run (i.e. `prExpected` was true), so cleanup must not ask a second time
- * @param {boolean} [opts.noChangesToShip] - finalize verified an opted-in audit
+ * @param {boolean} [opts.branchProvenEmpty] - finalize verified an opted-in audit
  *   left no commits and no change request, so cleanup must not create an empty PR
  * @returns {string} a `PR_CREATION` value
  */
-export function resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, noChangesToShip = false }) {
-  if (!taskOpenPR || noChangesToShip) return PR_CREATION.NEVER;
+export function resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, branchProvenEmpty = false }) {
+  if (!taskOpenPR || branchProvenEmpty) return PR_CREATION.NEVER;
   if (!agentOpensOwnPr) return PR_CREATION.ALWAYS;
   return prClaimVerified ? PR_CREATION.NEVER : PR_CREATION.IF_MISSING;
 }
@@ -167,7 +167,7 @@ export function resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified
  * branch with no PR gets cleaned up as if it had one.
  *
  * A verified verdict therefore requires BOTH `ok` and a named `branch` — which
- * only the `found` and `noChangesToShip` shapes carry.
+ * only the `found` and `branchProvenEmpty` shapes carry.
  *
  * @param {{ok?: boolean, branch?: string|null}|null|undefined} prVerdict
  * @returns {boolean}

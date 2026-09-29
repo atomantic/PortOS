@@ -1639,6 +1639,17 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/PortOS will push and open the PR/);
     });
 
+    it('offers no-change guidance only where finalize will honour it (marker alone is not enough)', () => {
+      const build = (metadata) => buildLightContextPrompt(
+        makeTask({ metadata: { noChangeSuccess: true, useWorktree: true, openPR: true, ...metadata } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        { isTui: false, providerId: 'codex', providerCommand: 'codex' });
+      expect(build({})).not.toMatch(/no change is needed/i);
+      expect(build({ autonomousJob: true })).toMatch(/no change is needed/i);
+      expect(build({ isInvestigation: true })).toMatch(/no change is needed/i);
+    });
+
     it('gives a marked catalog audit an explicit no-change exit while retaining the change workflow', () => {
       const task = makeTask({ metadata: {
         autonomousJob: true,

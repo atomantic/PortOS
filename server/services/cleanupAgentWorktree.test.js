@@ -590,7 +590,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     });
 
     it('stands down when the branch holds no commits — there was nothing to open a PR for', async () => {
-      verifyPrClaimMock.mockResolvedValue({ ok: true, noChangesToShip: true, branch: 'cos/task-abc123' });
+      verifyPrClaimMock.mockResolvedValue({ ok: true, branchProvenEmpty: true, branch: 'cos/task-abc123' });
 
       await cleanupAgentWorktree('agent-1', true, netOpts);
 
@@ -2320,7 +2320,7 @@ describe('resolveWorktreeDisposition', () => {
     [false, 'never', null, {}, 'merge-or-preserve', false, true],
     [true, 'if-missing', { category: 'pr-missing' }, {}, 'open-pr', false, false],
     [true, 'if-missing', { ok: true, branch: 'example' }, {}, 'stand-down', true, false],
-    [true, 'if-missing', { ok: true, branch: 'example', noChangesToShip: true }, {}, 'stand-down', true, false],
+    [true, 'if-missing', { ok: true, branch: 'example', branchProvenEmpty: true }, {}, 'stand-down', true, false],
     [true, 'if-missing', { ok: true, branch: null }, {}, 'stand-down-uncertain', true, true],
     [true, 'if-missing', { category: 'forge-unreachable' }, {}, 'stand-down-uncertain', true, true],
     [true, 'if-missing', null, {}, 'stand-down-uncertain', true, true],
