@@ -75,7 +75,10 @@ describe('refreshInteractiveUsage', () => {
     expect(first.families.grok.tokens).toBe((600 + 400 + 100) + (400 + 400 + 200));
     const byDay = Object.fromEntries(applied.map((c) => [c.day, c.siblings[0]]));
     expect(applied.every((c) => [dayOf(P1), dayOf(P2)].includes(c.day))).toBe(true);
-    expect(applied[0].siblings[0]).toMatchObject({ providerId: 'grok-cli', cacheReadTokens: 400, source: 'measured' });
+    // p1 and p2 share a UTC day when the suite runs after 20:00 UTC, so read the
+    // total across days instead of assuming the first day holds p1 alone.
+    expect(Object.values(byDay).every((r) => r.providerId === 'grok-cli' && r.source === 'measured')).toBe(true);
+    expect(Object.values(byDay).reduce((sum, r) => sum + r.cacheReadTokens, 0)).toBe(800);
     // p3 fell inside the run window, so the scan bills only p2 (and p1) — never p3's 400.
     expect(Object.values(byDay).reduce((sum, r) => sum + r.tokensOut, 0)).toBe(300);
 
