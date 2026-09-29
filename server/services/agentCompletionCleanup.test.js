@@ -277,9 +277,9 @@ describe('runAgentCompletionCleanup — agentOpensOwnPr mirrors the prompt gate'
   // `prClaimVerified` is the caller's answer to "did finalize's PR-claim check
   // actually produce a forge verdict for this run?" — threaded in, never
   // re-derived here (see the note at its use site).
-  const cleanupCallFor = async (agent, { prClaimVerified = false, noChangesToShip = false, task = prTask } = {}) => {
+  const cleanupCallFor = async (agent, { prClaimVerified = false, branchProvenEmpty = false, task = prTask } = {}) => {
     await runAgentCompletionCleanup({
-      agentId: 'a1', task, agent, effectiveSuccess: true, outputBuffer: '', prClaimVerified, noChangesToShip,
+      agentId: 'a1', task, agent, effectiveSuccess: true, outputBuffer: '', prClaimVerified, branchProvenEmpty,
     });
     // cleanupAgentWorktree(agentId, success, options) — options is the 3rd arg.
     return cleanupAgentWorktree.mock.calls.at(-1)[2];
@@ -357,7 +357,7 @@ describe('runAgentCompletionCleanup — agentOpensOwnPr mirrors the prompt gate'
     const prOpenedBy = stampFor({ providerId: 'claude-ollama', providerCommand: 'claude', leanMode: true });
     const opts = await cleanupCallFor(
       { providerId: 'claude-ollama', providerCommand: 'claude', leanMode: true, prOpenedBy },
-      { noChangesToShip: true },
+      { branchProvenEmpty: true },
     );
     expect(opts.prCreation).toBe('never');
   });
@@ -510,7 +510,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
     // A task that asked for a PR from a run whose prompt hands it back to PortOS.
     prOwnership: { taskOpenPR: true, prOpenedBy: 'portos', agentOpensOwnPr: false, prClaimExpected: false },
     prClaimVerified: false,
-    noChangesToShip: false,
+    branchProvenEmpty: false,
     outputBuffer: 'out',
     ...overrides,
   });
@@ -555,7 +555,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
   // to ship, so no PR is opened for an empty branch and no reviewer defaults
   // are read for a follow-up that will never spawn.
   it('never opens a PR when finalize proved there was nothing to ship', async () => {
-    await runSpawnerCompletionCleanup(spawnerArgs({ noChangesToShip: true }));
+    await runSpawnerCompletionCleanup(spawnerArgs({ branchProvenEmpty: true }));
 
     expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({ prCreation: 'never' }));
     expect(resolveReviewLoopOptions).not.toHaveBeenCalled();

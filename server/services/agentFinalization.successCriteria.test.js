@@ -365,7 +365,7 @@ describe('evaluateSuccessCriteria — commit criterion (#2344, #3637)', () => {
       task,
       workspacePath: '/w',
       success: true,
-      noChangesToShip: true,
+      branchProvenEmpty: true,
       startedAt: STARTED_AT
     })).toBe(true);
     // The no-change proof came from verifyPrClaim's forge + branch checks; it
@@ -384,7 +384,7 @@ describe('evaluateSuccessCriteria — commit criterion (#2344, #3637)', () => {
       task,
       workspacePath: '/w',
       success: true,
-      noChangesToShip: false,
+      branchProvenEmpty: false,
       startedAt: STARTED_AT
     })).toBe(false);
     expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
@@ -396,7 +396,7 @@ describe('evaluateSuccessCriteria — commit criterion (#2344, #3637)', () => {
       task: { id: 'ordinary-audit-1', taskType: 'internal', metadata: { autonomousJob: true } },
       workspacePath: '/w',
       success: true,
-      noChangesToShip: true,
+      branchProvenEmpty: true,
       startedAt: STARTED_AT
     })).toBe(false);
     expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
@@ -409,7 +409,7 @@ describe('evaluateSuccessCriteria — commit criterion (#2344, #3637)', () => {
       metadata: { autonomousJob: 'true', noChangeSuccess: 'true' }
     };
     expect(await evaluateSuccessCriteria({
-      task, workspacePath: '/w', success: true, noChangesToShip: true, startedAt: STARTED_AT
+      task, workspacePath: '/w', success: true, branchProvenEmpty: true, startedAt: STARTED_AT
     })).toBe(true);
     expect(committedDuringRun).not.toHaveBeenCalled();
   });

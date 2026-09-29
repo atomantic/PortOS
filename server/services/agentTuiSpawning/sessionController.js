@@ -860,7 +860,7 @@ export function createTuiSessionController({
    * threw — a memory-extraction crash would otherwise strand the worktree and
    * the shell session on disk.
    */
-  const releaseRunResources = async ({ agentData, cleanupSuccess, prClaimVerified, noChangesToShip }) => {
+  const releaseRunResources = async ({ agentData, cleanupSuccess, prClaimVerified, branchProvenEmpty }) => {
     // Pipeline progression → worktree cleanup with the PR disposition →
     // sentinel removal → retry-hold release, in the one owner every completion
     // path shares. Caught so a throw there cannot skip the in-memory teardown
@@ -871,7 +871,7 @@ export function createTuiSessionController({
       success: cleanupSuccess,
       prOwnership,
       prClaimVerified,
-      noChangesToShip,
+      branchProvenEmpty,
       outputBuffer: getOutputBuffer(),
     }).catch(err => emitLog('warn', `TUI completion cleanup failed for ${agentId}: ${err.message}`, { agentId }));
     if (sentinel.cleanup) {
@@ -1074,7 +1074,7 @@ export function createTuiSessionController({
     // throw from finalize itself skips the assignment entirely — in all three
     // cases nothing was verified, so cleanup must ask rather than stand down.
     let prClaimVerified = false;
-    let noChangesToShip = false;
+    let branchProvenEmpty = false;
 
     // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
     // hook crash) still runs the local cleanup — sentinel removal, the shared
@@ -1108,9 +1108,9 @@ export function createTuiSessionController({
       });
       if (finalizeVerdict && typeof finalizeVerdict.success === 'boolean') cleanupSuccess = finalizeVerdict.success;
       prClaimVerified = prClaimWasVerified(finalizeVerdict?.prVerdict);
-      noChangesToShip = finalizeVerdict?.prVerdict?.noChangesToShip === true;
+      branchProvenEmpty = finalizeVerdict?.prVerdict?.branchProvenEmpty === true;
     } finally {
-      await releaseRunResources({ agentData, cleanupSuccess, prClaimVerified, noChangesToShip });
+      await releaseRunResources({ agentData, cleanupSuccess, prClaimVerified, branchProvenEmpty });
     }
   };
 

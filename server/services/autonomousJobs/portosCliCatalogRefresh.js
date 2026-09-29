@@ -73,7 +73,7 @@ export const PORTOS_CLI_CATALOG_REFRESH_JOB = Object.freeze({
   type: 'agent',
   promptTemplate: PORTOS_CLI_CATALOG_REFRESH_PROMPT,
   // A verified empty branch is a valid result for this audit. The finalizer
-  // consumes this marker only alongside verifyPrClaim's noChangesToShip proof;
+  // consumes this marker only alongside verifyPrClaim's branchProvenEmpty proof;
   // it is not a general commit-criterion exemption.
   taskMetadata: { useWorktree: true, openPR: true, simplify: true, noChangeSuccess: true },
   providerId: null,

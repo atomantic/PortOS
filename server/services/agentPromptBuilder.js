@@ -11,6 +11,7 @@ import { stat } from 'fs/promises';
 import { getMemorySection } from './memoryRetriever.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig } from '../lib/validation.js';
@@ -450,7 +451,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // is the JSON payload in the sentinel, not an API action — so it takes the
   // programmatic-output contract ahead of the no-code one.
   const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
-  const noChangeSuccess = isTruthyMeta(task.metadata?.noChangeSuccess);
+  const noChangeSuccess = permitsNoChangeCompletion(task);
   const isReadOnly = isTruthyMeta(task.metadata?.readOnly);
   // The review-loop follow-up that addresses PR feedback and merges (spawned by
   // the previous agent's cleanup hook). Its own procedure section renders far
@@ -936,7 +937,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   const noCodeOutput = isTruthyMeta(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
   const toolFreeReasoning = isPublicReviewNoToolProfile(task.metadata?.executionProfile);
   const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
-  const noChangeSuccess = isTruthyMeta(task.metadata?.noChangeSuccess);
+  const noChangeSuccess = permitsNoChangeCompletion(task);
   const isReviewLoopFollowUp = isTruthyMeta(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else

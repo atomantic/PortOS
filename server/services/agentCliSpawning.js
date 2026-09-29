@@ -785,7 +785,7 @@ export async function spawnDirectly({
     // that threw, and a throw from finalize skips the assignment entirely; in all
     // three cases nothing was verified, so cleanup must ask rather than stand down.
     let prClaimVerified = false;
-    let noChangesToShip = false;
+    let branchProvenEmpty = false;
 
     // try/finally so a throw from finalizeAgent still runs the local cleanup
     // (the shared completion dispatch, pid unregister, activeAgents delete).
@@ -813,7 +813,7 @@ export async function spawnDirectly({
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
       prClaimVerified = prClaimWasVerified(finalized?.prVerdict);
-      noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
+      branchProvenEmpty = finalized?.prVerdict?.branchProvenEmpty === true;
     } finally {
       // Pipeline progression → worktree cleanup with the PR disposition →
       // retry-hold release, in the one owner both in-process spawners share.
@@ -825,7 +825,7 @@ export async function spawnDirectly({
         success: cleanupSuccess,
         prOwnership,
         prClaimVerified,
-        noChangesToShip,
+        branchProvenEmpty,
         outputBuffer,
       }).catch(err => console.error(`❌ CLI completion cleanup failed for ${agentId}: ${err.message}`));
 
