@@ -26,6 +26,7 @@ import {
 import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
+import { startAnalyzeJob, getAnalyzeJob } from '../services/moodBoard/analyzeJob.js';
 import { STYLE_NOTES_MAX } from '../services/universeBuilder.js';
 import {
   listBoards,
@@ -139,6 +140,23 @@ router.post('/:id/backfill-prompts', asyncHandler(async (req, res) => {
   const board = await backfillGalleryPrompts(req.params.id);
   if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
   res.json(board);
+}));
+
+// Background analyze job: prompt-from-media over un-analyzed pins, then compose
+// the board style. Survives the page unmounting; progress follows the
+// `mood-board:analyze` socket event and GET restores it on return.
+const analyzeSchema = composePromptSchema.extend({
+  providerId: z.string().trim().min(1).max(128),
+}).strict();
+router.post('/:id/analyze', asyncHandler(async (req, res) => {
+  const body = validateRequest(analyzeSchema, req.body ?? {});
+  const board = await getBoard(req.params.id);
+  if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
+  res.status(202).json(startAnalyzeJob(req.params.id, body));
+}));
+
+router.get('/:id/analyze', asyncHandler(async (req, res) => {
+  res.json(getAnalyzeJob(req.params.id));
 }));
 
 router.post('/:id/compose-prompt', asyncHandler(async (req, res) => {

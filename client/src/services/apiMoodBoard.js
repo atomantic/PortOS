@@ -54,6 +54,18 @@ export const removeMoodBoardItem = (id, itemId, options) =>
 export const backfillMoodBoardPrompts = (id, options = {}) =>
   request(`/mood-boards/${encodeURIComponent(id)}/backfill-prompts`, { method: 'POST', ...options });
 
+// Board analyze runs server-side so it survives navigation: start (or join) the
+// job, and read its live state on return. `null` = no run since server start.
+export const startMoodBoardAnalyze = (id, { providerId, model } = {}, options = {}) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/analyze`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model }),
+    ...options,
+  });
+
+export const getMoodBoardAnalyze = (id, options = {}) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/analyze`, options);
+
 // Distill stored per-item analyses into the board's own composite style prompt
 // and persist it on the board (`style`). Resolves to the updated board.
 export const composeMoodBoardPrompt = (id, { providerId, model } = {}, options = {}) =>
