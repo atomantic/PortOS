@@ -41,6 +41,7 @@ vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedV
 
 import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
 import { updateTask, addTask, reviveBlockedTask, getAgent } from './cos.js';
+import { emitLog } from './cosEvents.js';
 import { cleanupAgentWorktree, releaseRetryHold, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { promptOpensOwnPr } from './promptSections/completion.js';
@@ -530,7 +531,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
     expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({
       prCreation: 'always', skipMerge: false, agentOutput: 'out', originalTask: task,
     }));
-    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task, success: true });
+    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', task, success: true }));
   });
 
   it('threads the resolved reviewer options and the task\'s PR completion through to the worktree cleanup', async () => {
@@ -573,7 +574,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
 
     expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', false, expect.objectContaining({ prCreation: 'always' }));
     expect(cleanupAgentWorktree.mock.calls[0][2]).not.toHaveProperty('reviewers');
-    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task: args.task, success: false });
+    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', task: args.task, success: false }));
   });
 
   // ...and a worktree cleanup that rejects must not either (#3373): the hold is
@@ -584,7 +585,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
 
     await expect(runSpawnerCompletionCleanup(args)).resolves.toBeUndefined();
 
-    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task: args.task, success: false });
+    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', task: args.task, success: false }));
   });
 
   it('continues cleanup and releases the hold when pipeline persistence fails', async () => {
@@ -592,7 +593,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
     const task = { id: 't', metadata: { pipeline: runningPipeline({ currentStage: 1 }) } };
     await runSpawnerCompletionCleanup(spawnerArgs({ task }));
     expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.any(Object));
-    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task, success: true });
+    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', task, success: true }));
   });
 
   // The dominant path: a harness that opened and landed its own PR. Cleanup can
@@ -684,6 +685,27 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
 
     await expect(readFile(join(workspace, '.agent-done-a1'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(join(workspace, '.agent-done-a2'), 'utf8')).toContain('Still working');
+  });
+
+  // The one difference between the two entry points. A failing step BEFORE the
+  // worktree cleanup (pipeline persistence here — a JIRA-branch task skips the
+  // cleanup by design, so it cannot show the contrast) either aborts the
+  // sequence (runner, handled by its completion handler) or is logged while the
+  // remaining steps still run (spawners, which call this from a `finally`).
+  // Both still release the retry hold.
+  it('treats a failing early step per entry point: runner propagates and skips worktree cleanup, spawner logs and continues', async () => {
+    updateTask.mockRejectedValueOnce(new Error('pipeline unavailable'));
+    const pipelineMeta = { pipeline: runningPipeline({ currentStage: 1 }) };
+
+    if (path === 'runner') {
+      await expect(complete(pipelineMeta)).rejects.toThrow('pipeline unavailable');
+      expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+    } else {
+      await complete(pipelineMeta);
+      expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Pipeline progression failed for a1: pipeline unavailable'), expect.any(Object));
+      expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.any(Object));
+    }
+    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }));
   });
 
   it('turns the plan-question marker into a notification and consumes it before cleanup', async () => {
