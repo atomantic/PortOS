@@ -82,7 +82,7 @@ function CreateLoopForm({ providers, onCreated, promptRef }) {
     <form onSubmit={handleSubmit} className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center gap-2 mb-2">
         <Plus size={16} className="text-port-accent" />
-        <h3 className="text-sm font-medium text-gray-200">New Loop</h3>
+        <h2 className="text-sm font-medium text-gray-200">New Loop</h2>
       </div>
 
       <textarea

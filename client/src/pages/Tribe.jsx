@@ -181,7 +181,7 @@ function ContactCard({ contact, active, onSelect, onLogTouch, cardRef }) {
           <div className="min-w-0">
             <div className="flex items-center gap-2 min-w-0">
               <UserRound size={16} className="shrink-0 text-gray-500" aria-hidden="true" />
-              <h3 className="font-semibold text-white truncate">{contact.name || 'Unnamed person'}</h3>
+              <h2 className="font-semibold text-white truncate">{contact.name || 'Unnamed person'}</h2>
             </div>
             <p className="mt-1 text-sm text-gray-400 truncate">{contact.relationship || 'Relationship'}</p>
           </div>

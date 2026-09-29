@@ -61,4 +61,12 @@ describe('EmptyState', () => {
     expect(container.querySelector('a')).toBeNull();
     expect(container.querySelector('button')).toBeNull();
   });
+
+  it('renders the title as an h2 by default and honours headingLevel', () => {
+    const { unmount } = renderWithRouter(<EmptyState title="Nothing yet" />);
+    expect(screen.getByRole('heading', { level: 2, name: 'Nothing yet' })).toBeTruthy();
+    unmount();
+    renderWithRouter(<EmptyState title="Nothing yet" headingLevel={3} />);
+    expect(screen.getByRole('heading', { level: 3, name: 'Nothing yet' })).toBeTruthy();
+  });
 });
