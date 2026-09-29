@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
 import { isPlainObject } from './objects.js';
+import { MIN_INTERVAL_MS, isValidLoopInterval } from './loopInterval.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES, PR_REVIEW_MODE_VALUES } from './prDisposition.js';
@@ -425,8 +426,9 @@ export const goalFidelityFalsePositiveSchema = z.object({
 // =============================================================================
 
 export const createLoopSchema = z.object({
-  prompt: z.string().min(1),
-  interval: z.union([z.string().min(1), z.number().positive()]),
+  prompt: z.string().trim().min(1),
+  interval: z.union([z.string().min(1), z.number().positive()])
+    .refine(isValidLoopInterval, `Interval must be at least ${MIN_INTERVAL_MS / 1000} seconds`),
   name: z.string().optional(),
   cwd: z.string().optional(),
   providerId: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
