@@ -108,8 +108,8 @@ const flush = async () => {
   await Promise.resolve();
 };
 
-const renderPage = () => render(
-  <MemoryRouter><MoodBoardDetail /></MemoryRouter>,
+const renderPage = (initialEntries = ['/mood-boards/a']) => render(
+  <MemoryRouter initialEntries={initialEntries}><MoodBoardDetail /></MemoryRouter>,
 );
 
 const boardNameValue = () => screen.getByLabelText('Name').value;
@@ -132,6 +132,24 @@ describe('MoodBoardDetail image preview', () => {
     expect(screen.getByTestId('lightbox').dataset.src).toBe('/data/images/one.png');
     fireEvent.click(screen.getByText('close-lightbox'));
     expect(screen.queryByTestId('lightbox')).toBeNull();
+  });
+
+  it('opens lightbox automatically when initial URL has preview search param', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'i1', type: 'image', imageUrl: '/data/images/one.png', caption: 'one' }],
+    });
+    renderPage(['/mood-boards/a?preview=i1']);
+    expect((await screen.findByTestId('lightbox')).dataset.src).toBe('/data/images/one.png');
+  });
+
+  it('opens lightbox automatically when initial URL has item search param', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'i1', type: 'image', imageUrl: '/data/images/one.png', caption: 'one' }],
+    });
+    renderPage(['/mood-boards/a?item=i1']);
+    expect((await screen.findByTestId('lightbox')).dataset.src).toBe('/data/images/one.png');
   });
 });
 

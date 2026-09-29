@@ -43,7 +43,7 @@ export default function usePreviewRoute(items, { paramName = 'preview', resolveI
   const setSearchParamsRef = useRef(setSearchParams);
   searchParamsRef.current = searchParams;
   setSearchParamsRef.current = setSearchParams;
-  const previewParam = searchParams.get(paramName);
+  const previewParam = searchParams.get(paramName) || (paramName !== 'item' ? searchParams.get('item') : null);
 
   const localPreview = useMemo(() => {
     if (!previewParam) return null;
@@ -52,6 +52,7 @@ export default function usePreviewRoute(items, { paramName = 'preview', resolveI
       list.find((i) => i?.filename === previewParam)
       || list.find((i) => i?.key === previewParam)
       || list.find((i) => typeof i?.key === 'string' && i.key.endsWith(`:${previewParam}`))
+      || list.find((i) => i?.id === previewParam)
       || null
     );
   }, [items, previewParam]);
@@ -71,12 +72,14 @@ export default function usePreviewRoute(items, { paramName = 'preview', resolveI
 
   const setPreview = useCallback((item) => {
     const currentSearchParams = searchParamsRef.current;
-    const wasOpen = !!currentSearchParams.get(paramName);
+    const wasOpen = !!(currentSearchParams.get(paramName) || currentSearchParams.get('item'));
     const isOpen = !!item;
     const next = new URLSearchParams(currentSearchParams);
-    if (!item) next.delete(paramName);
-    else {
-      const param = item.key || item.filename || '';
+    if (!item) {
+      next.delete(paramName);
+      next.delete('item');
+    } else {
+      const param = item.key || item.filename || item.id || '';
       next.set(paramName, param);
       // Seed the resolver with the item the caller already handed us, so an
       // opened item the host does not list (a variant picked from the toggle)
