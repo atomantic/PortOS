@@ -608,3 +608,16 @@ describe('Review Hub Daily Briefing fullscreen dialog (#9121)', () => {
     expect(screen.getByRole('button', { name: 'Fullscreen' })).toHaveFocus();
   });
 });
+
+describe('Actions view tabs wiring', () => {
+  it.each(['today', 'waiting'])('points the selected %s tab at a tabpanel it labels', async (view) => {
+    routerState.searchParams = new URLSearchParams(`view=${view}`);
+    render(<Review />);
+    const tab = await screen.findByRole('tab', { selected: true });
+    const panel = document.getElementById(tab.getAttribute('aria-controls'));
+    expect(panel).toBeTruthy();
+    expect(panel.getAttribute('role')).toBe('tabpanel');
+    expect(panel.getAttribute('aria-labelledby')).toBe(tab.id);
+    expect(tab.id).toBe(`tab-${view}`);
+  });
+});
