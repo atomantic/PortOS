@@ -643,7 +643,7 @@ export default function Ask() {
         streaming={streaming}
       />
 
-      <main className="flex-1 flex flex-col min-w-0">
+      <section className="flex-1 flex flex-col min-w-0">
         <div className="px-4 md:px-6 py-3 border-b border-port-border flex items-center gap-3 flex-wrap">
           <h1 className="text-lg font-semibold flex items-center gap-2"><MessageCircle size={18} /> Ask Yourself</h1>
           <div className="flex items-center gap-1 ml-auto">
@@ -729,7 +729,7 @@ export default function Ask() {
           </div>
           <div className="mt-1.5 text-xs text-gray-500">{modKey}+Enter to send</div>
         </form>
-      </main>
+      </section>
     </div>
   );
 }

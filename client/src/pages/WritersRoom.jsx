@@ -201,7 +201,7 @@ export default function WritersRoom() {
           </aside>
         )}
 
-        <main className="min-h-0 flex flex-col flex-1">
+        <section className="min-h-0 flex flex-col flex-1">
           {loadingWork && <div className="p-6 text-sm text-gray-500">Loading work…</div>}
           {!loadingWork && !activeWork && (
             <div className="flex-1 flex items-center justify-center p-8">
@@ -236,7 +236,7 @@ export default function WritersRoom() {
               />
             </>
           )}
-        </main>
+        </section>
 
         {showExercise && (
           <aside className="border-t lg:border-t-0 lg:border-l border-port-border bg-port-card/30 p-3 min-h-0 lg:overflow-y-auto">
