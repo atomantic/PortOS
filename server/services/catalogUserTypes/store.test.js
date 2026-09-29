@@ -52,3 +52,37 @@ describe('catalog user-type store — file backend (test/escape-hatch)', () => {
     expect(store.catalogUserTypes).toEqual([]);
   });
 });
+
+describe('updateUserTypes — serialized read-modify-write (#9132)', () => {
+  it('a route-style edit and a peer-sync merge running concurrently both survive', async () => {
+    const { updateUserTypes } = await import('./store.js');
+    store = { catalogUserTypes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] };
+    let releaseFirst;
+    const gate = new Promise((r) => { releaseFirst = r; });
+    // First writer (PATCH-like) stalls after reading; the second (peer tombstone
+    // + new type) is queued behind it and must observe the first's write.
+    const first = updateUserTypes(async (cur) => {
+      await gate;
+      return cur.map((t) => (t.id === 'a' ? { ...t, label: 'A2' } : t));
+    });
+    const second = updateUserTypes((cur) => [
+      ...cur.map((t) => (t.id === 'b' ? { ...t, deletedAt: 'T' } : t)),
+      { id: 'c', label: 'C' },
+    ]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(store.catalogUserTypes).toEqual([
+      { id: 'a', label: 'A2' },
+      { id: 'b', label: 'B', deletedAt: 'T' },
+      { id: 'c', label: 'C' },
+    ]);
+  });
+
+  it('a throwing mutator writes nothing and does not wedge the queue', async () => {
+    const { updateUserTypes } = await import('./store.js');
+    store = { catalogUserTypes: [{ id: 'a' }] };
+    await expect(updateUserTypes(() => { throw new Error('409'); })).rejects.toThrow('409');
+    await updateUserTypes((cur) => [...cur, { id: 'z' }]);
+    expect(store.catalogUserTypes).toEqual([{ id: 'a' }, { id: 'z' }]);
+  });
+});

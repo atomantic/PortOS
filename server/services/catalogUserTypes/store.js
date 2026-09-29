@@ -63,7 +63,7 @@ const facade = createPgFileFacade({
       await migrateCatalogUserTypesToDB();
     },
     loadDb: () => import('./db.js'),
-    makePg: (db) => ({ name: 'postgres', readUserTypes: db.readUserTypes, writeUserTypes: db.writeUserTypes }),
+    makePg: (db) => ({ name: 'postgres', readUserTypes: db.readUserTypes, writeUserTypes: db.writeUserTypes, updateUserTypes: db.updateUserTypes }),
   }),
 });
 
@@ -85,4 +85,45 @@ export async function readUserTypes() {
 /** Persist the whole user-type slice as the authoritative end state. */
 export async function writeUserTypes(list) {
   return (await facade.getBackend()).writeUserTypes(list);
+}
+
+// Per-process write queue: every read-modify-write of the slice runs one at a
+// time, so a route edit and a peer-sync apply can't each write a list derived
+// from a stale read (writeUserTypes is whole-slice authoritative — the loser's
+// rows would be hard-deleted). A rejected task must not wedge the chain.
+let writeQueue = Promise.resolve();
+
+/**
+ * Serialized read-modify-write of the user-type slice. `mutator(current)` gets
+ * the full slice (live + tombstones) and returns the desired next list, or
+ * null/undefined to skip the write; it may be async and may throw (the error
+ * propagates and nothing is written). `afterWrite(next)` runs inside the lock
+ * once persisted (e.g. refreshing the in-process registry) so registry updates
+ * apply in write order. Returns the persisted list (or the unchanged current
+ * list when the mutator skipped).
+ */
+export function updateUserTypes(mutator, afterWrite) {
+  const run = async () => {
+    const backend = await facade.getBackend();
+    let wrote = false;
+    const wrapped = async (current) => {
+      const next = await mutator(Array.isArray(current) ? current : []);
+      wrote = next != null;
+      return next;
+    };
+    let result;
+    if (backend.updateUserTypes) {
+      result = await backend.updateUserTypes(wrapped);
+    } else {
+      const current = await backend.readUserTypes();
+      const next = await wrapped(current);
+      if (next != null) await backend.writeUserTypes(next);
+      result = next ?? current;
+    }
+    if (wrote && afterWrite) afterWrite(result);
+    return result;
+  };
+  const task = writeQueue.then(run);
+  writeQueue = task.catch(() => {});
+  return task;
 }
