@@ -1056,3 +1056,12 @@ describe.runIf(IS_POSIX)('reattachDetached', () => {
     await originalClosed.catch(() => {});
   });
 });
+
+describe.runIf(IS_POSIX)('snapshotProcesses', () => {
+  it('reports the ps state of each row and includes this process', async () => {
+    const { snapshotProcesses } = await import('./detachedSpawn.js');
+    const own = (await snapshotProcesses()).find(row => row.pid === process.pid);
+    expect(own).toMatchObject({ pgid: expect.any(Number), state: expect.stringMatching(/^[A-Za-z]/) });
+    expect(Number.isFinite(own.startedAt)).toBe(true);
+  });
+});
