@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { CheckCircle2, ChevronDown, Loader2, Package, Play } from 'lucide-react';
 import { triggerButtonClass } from './scheduleConstants';
 import useClickOutside from '../../../../hooks/useClickOutside.js';
+import useEscapeKey from '../../../../hooks/useEscapeKey.js';
+import useFocusTrap from '../../../../hooks/useFocusTrap.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../../../hooks/usePopoverPosition.js';
 
 const MENU_WIDTH = 256; // w-64
@@ -43,6 +45,14 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
   // Both refs: the panel lives outside the trigger's subtree once portaled, so a
   // trigger-only containment check would read clicks on the panel as outside.
   useClickOutside([ref, popoverRef], open, () => setOpen(false));
+
+  // Focus the trigger explicitly too: Safari does not focus a button on click,
+  // so the trap's captured opener can be <body>.
+  useEscapeKey(open, () => { setOpen(false); triggerRef.current?.focus(); });
+  // Portaled to <body> and hidden until measured (menuStyle), so wait for that:
+  // move focus into the panel, wrap Tab inside it, and
+  // return focus to the trigger on close.
+  useFocusTrap(open && !disabled && !!menuStyle, popoverRef);
 
   // Without this, an open dropdown survives a flip to disabled and pops back open when re-enabled.
   useEffect(() => {
@@ -144,6 +154,7 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
           disabled={disabled}
           aria-disabled={disabled || undefined}
           aria-busy={triggering || undefined}
+          aria-haspopup="true"
           aria-expanded={open}
           className={triggerButtonClass(disabled)}
         >

@@ -4,6 +4,7 @@ import { Bot, ChevronDown, Search, Terminal, AlertTriangle } from 'lucide-react'
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import useClickOutside from '../../hooks/useClickOutside';
 import useEscapeKey from '../../hooks/useEscapeKey';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { tokenizeQuery, matchHaystack } from '../../lib/mediaSearch.js';
 import { isLaunchableTuiProvider } from '../../utils/providers';
 
@@ -82,7 +83,14 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
   // container — a single-ref containment check would read every click inside
   // the panel (including typing in the filter) as an outside click.
   useClickOutside([containerRef, popoverRef], open, close);
-  useEscapeKey(open, close);
+  // Escape returns focus to the trigger explicitly: Safari does not focus a
+  // button on click, so the trap's captured opener can be <body>.
+  useEscapeKey(open, () => { close(); triggerRef.current?.focus(); });
+  // The panel is portaled to the end of <body>, so without this Tab from the
+  // trigger skips it. Waits for the measured `style` (the panel is hidden until
+  // then, and a hidden element cannot take focus). Moves focus in on open, wraps Tab inside, and returns
+  // focus to the trigger on close (Escape, pick, or outside click).
+  useFocusTrap(open && !!style, popoverRef);
 
   const toggle = () => {
     if (open) { close(); return; }
@@ -103,6 +111,7 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
         className="flex items-center gap-1.5 px-2.5 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs transition-colors border border-port-border min-h-[40px] shrink-0"
         title="Launch an AI CLI from your enabled providers"
         aria-label="Launch an AI CLI"
+        aria-haspopup="true"
         aria-expanded={open}
       >
         <Bot size={14} />
@@ -124,8 +133,8 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
         >
           {launchable.length >= FILTER_THRESHOLD && (
             // Sticky so the filter stays reachable while scrolling a long list.
-            // Deliberately not autofocused — on a phone that pops the keyboard
-            // over the very list the user opened the menu to look at.
+            // Focus lands here on open (useFocusTrap) so keyboard users can type
+            // straight away.
             <div className="sticky top-0 flex items-center gap-2 px-3 py-2 bg-port-card border-b border-port-border">
               <Search size={14} className="text-gray-500 shrink-0" />
               <input

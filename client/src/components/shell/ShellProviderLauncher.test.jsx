@@ -134,4 +134,16 @@ describe('ShellProviderLauncher', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByText('Claude Code TUI')).toBeNull();
   });
+
+  it("exposes popup state, moves focus into the panel, and returns it to the trigger on Escape", () => {
+    open();
+    const trigger = screen.getByLabelText("Launch an AI CLI");
+    expect(trigger.getAttribute("aria-haspopup")).toBe("true");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(screen.getByText("Claude Code TUI").closest("button"));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  });
 });
