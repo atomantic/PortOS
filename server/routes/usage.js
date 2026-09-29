@@ -4,7 +4,7 @@ import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema } from '../lib/validation.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage } from '../services/peerUsage.js';
@@ -155,7 +155,7 @@ router.post('/backfill', asyncHandler(async (req, res) => {
 
 // POST /api/usage/session - Record a session
 router.post('/session', asyncHandler(async (req, res) => {
-  const { providerId, providerName, model } = req.body;
+  const { providerId, providerName, model } = validateRequest(usageSessionSchema, req.body);
   const sessionNumber = await usage.recordSession(providerId, providerName, model);
   res.json({ sessionNumber });
 }));
@@ -169,8 +169,8 @@ router.post('/messages', asyncHandler(async (req, res) => {
 
 // POST /api/usage/tokens - Record token usage
 router.post('/tokens', asyncHandler(async (req, res) => {
-  const { inputTokens, outputTokens } = req.body;
-  await usage.recordTokens(inputTokens || 0, outputTokens || 0);
+  const { inputTokens, outputTokens } = validateRequest(usageTokensSchema, req.body);
+  await usage.recordTokens(inputTokens, outputTokens);
   res.json({ success: true });
 }));
 

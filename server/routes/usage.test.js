@@ -429,6 +429,24 @@ describe('usage routes', () => {
     expect(usage.recordTokens).toHaveBeenCalledWith(500, 200);
   });
 
+  it.each(['5', -1, 1.5, {}, []])('POST /api/usage/tokens rejects %j', async (bad) => {
+    usage.recordTokens.mockClear();
+    const res = await request(buildApp()).post('/api/usage/tokens').send({ inputTokens: bad });
+    expect(res.status).toBe(400);
+    expect(usage.recordTokens).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { providerId: 5 },
+    { providerId: 'p1', providerName: {} },
+    { providerId: 'p1', model: [] }
+  ])('POST /api/usage/session rejects %j', async (body) => {
+    usage.recordSession.mockClear();
+    const res = await request(buildApp()).post('/api/usage/session').send(body);
+    expect(res.status).toBe(400);
+    expect(usage.recordSession).not.toHaveBeenCalled();
+  });
+
   it('DELETE /api/usage resets usage data', async () => {
     usage.resetUsage.mockResolvedValue();
     const res = await request(buildApp()).delete('/api/usage');
