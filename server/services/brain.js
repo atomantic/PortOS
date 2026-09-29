@@ -110,17 +110,25 @@ function parseJsonResponse(content, responseSchema = null, promptToStrip = '') {
 /**
  * Safe version of parseJsonResponse that returns null instead of throwing.
  * Used in background classification where errors can't bubble to middleware.
+ *
+ * The schema is the single validation authority: it picks the matching JSON
+ * candidate AND supplies the returned data. extractJson falls back to the first
+ * raw JSON value when no candidate matches; that fallback is discarded here
+ * (null) rather than re-validated by the caller.
  */
-function safeParseJsonResponse(content, responseSchema = null, promptToStrip = '') {
+function safeParseJsonResponse(content, responseSchema, promptToStrip = '') {
   if (!content || typeof content !== 'string') return null;
   const source = promptToStrip && content.includes(promptToStrip)
     ? content.replace(promptToStrip, '')
     : content;
-  const shapePredicate = responseSchema
-    ? (value) => responseSchema.safeParse(value).success
-    : undefined;
+  let matched = null;
+  const shapePredicate = (value) => {
+    const result = responseSchema.safeParse(value);
+    if (result.success) matched = { value, data: result.data };
+    return result.success;
+  };
   const { value } = extractJson(source, { skipInnerFence: true, shapePredicate });
-  return value === undefined ? null : value;
+  return matched && matched.value === value ? matched.data : null;
 }
 
 /**
@@ -146,20 +154,15 @@ export async function captureThought(text, providerOverride, modelOverride, { cr
   // Per-domain autonomy gate: `off` captures the thought but skips auto-classify
   // entirely (it lands in the inbox for manual review); `dry-run` classifies and
   // surfaces the suggestion but doesn't auto-file it.
-  let mode = await getDomainAutonomyMode('brain');
+  const autonomyMode = await getDomainAutonomyMode('brain');
 
   // Daily brain budget (#711): when today's auto-classify actions/minutes reach
   // the cap, fall back to `off` for the rest of the day — the thought is still
   // captured for manual review, just not auto-classified. A manual retry
   // (retryClassification) is user-initiated and never gated or counted.
-  let budgetPaused = false;
-  if (mode !== 'off') {
-    const budget = await getDomainBudgetStatus('brain');
-    if (!budget.withinBudget) {
-      mode = 'off';
-      budgetPaused = true;
-    }
-  }
+  const withinBudget = autonomyMode === 'off' || (await getDomainBudgetStatus('brain')).withinBudget;
+  const classify = autonomyMode !== 'off' && withinBudget;
+  const budgetPaused = autonomyMode !== 'off' && !withinBudget;
 
   // Create initial inbox log entry. When auto-classify is off the entry goes
   // straight to needs_review rather than the transient classifying state — and
@@ -168,13 +171,13 @@ export async function captureThought(text, providerOverride, modelOverride, { cr
     capturedText: text,
     source: 'brain_ui',
     ...(creative ? { creative: true } : {}),
-    ...(mode === 'off'
+    ...(!classify
       ? {}
       : { ai: { providerId: provider, modelId: model, promptTemplateId: 'brain-classifier' } }),
-    status: mode === 'off' ? 'needs_review' : 'classifying'
+    status: !classify ? 'needs_review' : 'classifying'
   });
 
-  if (mode === 'off') {
+  if (!classify) {
     console.log(`🧠 Thought captured, ${budgetPaused ? 'auto-classify daily budget reached' : 'auto-classify is OFF'} — left for manual review: ${inboxEntry.id}`);
     return {
       inboxLog: inboxEntry,
@@ -184,16 +187,24 @@ export async function captureThought(text, providerOverride, modelOverride, { cr
     };
   }
 
-  console.log(`🧠 Thought captured, classifying in background${mode === 'dry-run' ? ' (dry-run, no auto-file)' : ''}: ${inboxEntry.id}`);
+  console.log(`🧠 Thought captured, classifying in background${autonomyMode === 'dry-run' ? ' (dry-run, no auto-file)' : ''}: ${inboxEntry.id}`);
 
   // Run AI classification in background (don't await)
   // Pass resolved provider/model so callAI uses brain's configured provider, not the system active one
-  classifyInBackground(inboxEntry.id, text, meta, provider, model, mode, true)
+  classifyInBackground({
+    entryId: inboxEntry.id,
+    text,
+    meta,
+    provider,
+    model,
+    autoFile: autonomyMode !== 'dry-run',
+    countsTowardBudget: true
+  })
     .catch(err => console.error(`❌ Background classification failed for ${inboxEntry.id}: ${err.message}`));
 
   return {
     inboxLog: inboxEntry,
-    message: mode === 'dry-run'
+    message: autonomyMode === 'dry-run'
       ? 'Thought captured! AI is suggesting a classification (dry-run — confirm to file).'
       : 'Thought captured! AI is classifying...'
   };
@@ -257,7 +268,7 @@ function repoCaptureMessage(repoIntake) {
  * Background AI classification for a captured thought.
  * Updates the inbox entry and emits a brain:classified event when done.
  */
-async function classifyInBackground(entryId, text, meta, providerOverride, modelOverride, mode = 'execute', recordBudget = false) {
+async function classifyInBackground({ entryId, text, meta, provider, model, autoFile = true, countsTowardBudget = false }) {
   let classification = null;
   let aiError = null;
 
@@ -265,8 +276,8 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
   const aiResult = await callAI(
     'brain-classifier',
     { capturedText: text, now: new Date().toISOString() },
-    providerOverride,
-    modelOverride
+    provider,
+    model
   ).catch(err => {
     aiError = err;
     return null;
@@ -277,8 +288,8 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
 
   // Daily brain budget accounting (#711): an auto-classify consumed compute
   // whether or not it parsed, so count the attempt + its time. Only the auto
-  // path (captureThought) passes recordBudget — a manual retry doesn't count.
-  if (recordBudget) {
+  // path (captureThought) passes countsTowardBudget — a manual retry doesn't count.
+  if (countsTowardBudget) {
     await recordDomainUsage('brain', { actions: 1, ms: durationMs })
       .catch(err => console.error(`❌ Failed to record brain budget usage for ${entryId}: ${err.message}`));
   }
@@ -292,18 +303,8 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
 
   if (aiResponse) {
     console.log(`🧠 AI responded in ${elapsed}s for ${entryId}`);
-    const parsed = safeParseJsonResponse(aiResponse, classifierOutputSchema, aiResult.prompt);
-    if (parsed) {
-      const validationResult = classifierOutputSchema.safeParse(parsed);
-      if (validationResult.success) {
-        classification = validationResult.data;
-      } else {
-        console.error(`🧠 Classification validation failed: ${validationResult.error.issues.length} issues, first: ${validationResult.error.issues[0]?.message}`);
-        aiError = new Error('Invalid classification output from AI');
-      }
-    } else {
-      aiError = new Error('Could not parse AI response as JSON');
-    }
+    classification = safeParseJsonResponse(aiResponse, classifierOutputSchema, aiResult.prompt);
+    if (!classification) aiError = new Error('Could not parse a valid classification from AI response');
   } else {
     console.log(`🧠 AI failed after ${elapsed}s for ${entryId}`);
   }
@@ -345,7 +346,7 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
   // Dry-run: a confident classification was produced, but the auto-file side
   // effect is withheld. Surface the suggestion as needs_review so the user can
   // confirm filing it from the inbox.
-  if (mode === 'dry-run') {
+  if (!autoFile) {
     await storage.updateInboxLog(entryId, {
       ai: aiMeta,
       classification,
@@ -732,7 +733,16 @@ export async function retryClassification(inboxLogId, providerOverride, modelOve
   console.log(`🧠 Retrying classification in background: ${inboxLogId}`);
 
   // Run AI classification in background (don't await)
-  classifyInBackground(inboxLogId, inboxLog.capturedText, meta, provider, model)
+  // A manual retry is a user decision to file: it skips the autonomy gate and isn't budget-counted.
+  classifyInBackground({
+    entryId: inboxLogId,
+    text: inboxLog.capturedText,
+    meta,
+    provider,
+    model,
+    autoFile: true,
+    countsTowardBudget: false
+  })
     .catch(err => console.error(`❌ Background retry failed for ${inboxLogId}: ${err.message}`));
 
   return {
