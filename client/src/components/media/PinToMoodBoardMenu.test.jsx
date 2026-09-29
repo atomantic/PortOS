@@ -62,7 +62,13 @@ describe('PinToMoodBoardMenu', () => {
 
     expect(api.addMoodBoardItem).toHaveBeenCalledWith(
       'b1',
-      { type: 'image', mediaKey: 'image:hero.png', imageUrl: '/data/images/hero.png', caption: 'A cinematic cyberpunk alleyway' },
+      {
+        type: 'image',
+        mediaKey: 'image:hero.png',
+        imageUrl: '/data/images/hero.png',
+        caption: 'A cinematic cyberpunk alleyway',
+        prompt: 'A cinematic cyberpunk alleyway',
+      },
       { silent: true },
     );
   });
