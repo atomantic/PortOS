@@ -300,7 +300,7 @@ it('leaves scheduled brakes intact and does not spend dispatches on rejected wor
   expect((await runDevelopmentWatchdog({ force: true })).decisions[0].outcome).toBe('already-owned');
   expect(m.record).not.toHaveBeenCalled(); expect(m.execution).not.toHaveBeenCalled();
   m.duplicate = false;
-  m.prepare.mockResolvedValue(null);
+  m.prepare.mockResolvedValue({ task: null, pendingPerpetualDispatch: null, skip: { gate: 'perpetual-work', reason: null, cli: null, remedy: null, detail: null } });
   expect((await runDevelopmentWatchdog({ force: true })).decisions[0].reason).toBe('claim-schedule-no-work');
   expect(m.adds).toEqual([]); expect(m.record).not.toHaveBeenCalled();
 });

@@ -244,7 +244,7 @@ async function dispatch(app, decision) {
     if (owner) return { taskId: owner.id, duplicate: true };
     const { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } = await import('./cosTaskGenerator.js');
     const prepared = await prepareManagedAppImprovementTask('claim-issue', app, current);
-    if (!prepared?.task) return { reason: 'claim-schedule-no-work' };
+    if (!prepared.task) return { reason: 'claim-schedule-no-work' };
     const finalState = await loadState();
     if (authorityLost(finalState, app.id) || !isImprovementEnabled(finalState)) return { reason: 'authority-changed' };
     const task = await addTask({ ...prepared.task, metadata: { ...prepared.task.metadata,

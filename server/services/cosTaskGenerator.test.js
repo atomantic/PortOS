@@ -76,7 +76,8 @@ import {
   emitOnDemandEmpty,
   applyOnDemandConsent,
   isConfiguredApprovalRequired,
-  recordPerpetualTransient,
+  noteTransientProbe,
+  clearTransientProbeStreak,
   PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD,
   buildJiraTicketTask,
   buildClaimWorkTask,
@@ -370,11 +371,11 @@ describe('isConfiguredApprovalRequired', () => {
     const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
     const appStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
     expect(GEN_SRC.slice(selfStart, appStart)).toContain('stampApprovalReason(metadata, approval)');
-    // Bounded by the function's own `return { task, pendingPerpetualDispatch };`
+    // Bounded by the function's own `return { task, pendingPerpetualDispatch, skip: null };`
     // rather than a character count: a magic window makes this guard fire on
     // any commit that adds a comment above the stamp, which says nothing about
     // whether the stamp is still there.
-    const appBody = GEN_SRC.slice(appStart, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch };', appStart));
+    const appBody = GEN_SRC.slice(appStart, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch, skip: null };', appStart));
     expect(appBody).toContain('stampApprovalReason(metadata, approval)');
   });
 
@@ -414,7 +415,7 @@ describe('the on-demand consent flip reaches every drain path', () => {
     // Slice to the end of the function, not a fixed byte window: the consent line
     // sits at the bottom of a body that grows, so a magic number makes an
     // unrelated comment above it read as a missing consent call.
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch };', start));
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch, skip: null };', start));
     expect(body).toMatch(/selectionReason === 'on-demand'\) applyOnDemandConsent\(task\)/);
   });
 });
@@ -1187,7 +1188,7 @@ describe('emitOnDemandEmpty', () => {
     ghHealth.mockResolvedValue({ status: 'ok', ok: true, detail: null, remedy: null });
   });
 
-  const emitTransient = async (taskType) => {
+  const emitTransient = async (taskType, skip = null) => {
     const events = [];
     const handler = (d) => events.push(d);
     cosEvents.on('schedule:on-demand-empty', handler);
@@ -1196,7 +1197,8 @@ describe('emitOnDemandEmpty', () => {
         taskScheduleMod: stubMod,
         request: { id: 'req-2', taskType },
         targetApp: { id: 'app-1', name: 'App One' },
-        taskConfig: { type: 'on-demand', perpetual: true }
+        taskConfig: { type: 'on-demand', perpetual: true },
+        skip
       });
     } finally {
       cosEvents.off('schedule:on-demand-empty', handler);
@@ -1211,21 +1213,8 @@ describe('emitOnDemandEmpty', () => {
   });
 
   it('treats a perpetual on-demand drain as detector-driven for transient feedback', async () => {
-    recordPerpetualTransient('branch-reconcile', 'app-1', { cli: null, reason: 'probe-failed' });
-    const events = [];
-    const handler = (data) => events.push(data);
-    cosEvents.on('schedule:on-demand-empty', handler);
-    try {
-      await emitOnDemandEmpty({
-        taskScheduleMod: stubMod,
-        request: { id: 'req-reconcile', taskType: 'branch-reconcile' },
-        targetApp: { id: 'app-1', name: 'App One' },
-        taskConfig: { type: 'on-demand', perpetual: true }
-      });
-    } finally {
-      cosEvents.off('schedule:on-demand-empty', handler);
-    }
-    expect(events[0]).toMatchObject({ taskType: 'branch-reconcile', outcome: 'transient' });
+    const skip = { gate: 'perpetual-work', cli: null, reason: 'probe-failed', remedy: null, detail: null };
+    expect(await emitTransient('branch-reconcile', skip)).toMatchObject({ taskType: 'branch-reconcile', outcome: 'transient', forge: null });
   });
 
   it('skips the gh probe for a non-gh transient verdict, so a glab/git fault never toasts a gh remedy', async () => {
@@ -1233,76 +1222,60 @@ describe('emitOnDemandEmpty', () => {
     // no forge at all (cli: null); claim-issue-gitlab fails on glab. None of them
     // should be attributed to gh — the pre-fix suffix check got all three wrong.
     for (const [taskType, cli] of [['claim-issue-gitlab', 'glab'], ['branch-reconcile', null], ['quota-burn', null]]) {
-      recordPerpetualTransient(taskType, 'app-1', { cli, reason: 'probe-failed' });
-      expect(await emitTransient(taskType)).toMatchObject({ outcome: 'transient', forge: null });
+      const skip = { gate: 'perpetual-work', cli, reason: 'probe-failed', remedy: null, detail: null };
+      expect(await emitTransient(taskType, skip)).toMatchObject({ outcome: 'transient', forge: null });
     }
+    expect(ghHealth).not.toHaveBeenCalled();
   });
 
   it('names gh + its remedy when a gh verdict meets a gh that is broken for good', async () => {
     ghHealth.mockResolvedValueOnce({
       status: 'unreachable', ok: false, detail: 'bad file descriptor', remedy: 'Allow the gh binary outbound.'
     });
-    recordPerpetualTransient('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed' });
-    expect(await emitTransient('claim-issue')).toMatchObject({
+    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', remedy: null, detail: null })).toMatchObject({
       outcome: 'transient',
       forge: { cli: 'gh', remedy: 'Allow the gh binary outbound.' }
     });
   });
 
   it('stays generic when gh itself is healthy — that failure really was a blip', async () => {
-    recordPerpetualTransient('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed' });
-    expect(await emitTransient('claim-issue')).toMatchObject({ forge: null });
+    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', remedy: null, detail: null })).toMatchObject({ forge: null });
   });
 
-  it('consumes the verdict on read, so a stale one cannot be reported twice', async () => {
+  it('passes a remedy the detector already named straight through, without asking gh', async () => {
+    // A per-repo permission the token lacks passes checkGhHealth's global-auth
+    // probe, so consulting it would drop the remedy this channel exists to carry.
+    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', remedy: null, detail: null, remedy: 'Grant the token collaborator read.' })).toMatchObject({
+      forge: { cli: 'gh', remedy: 'Grant the token collaborator read.' }
+    });
+    expect(ghHealth).not.toHaveBeenCalled();
+  });
+
+  it('ignores a skip from a different gate, so only the work detector\'s verdict names a forge fault', async () => {
     ghHealth.mockResolvedValue({ status: 'not-installed', ok: false, detail: null, remedy: 'Install gh.' });
-    recordPerpetualTransient('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed' });
-    expect(await emitTransient('claim-issue')).toMatchObject({ forge: { cli: 'gh' } });
-    // Second emit finds nothing recorded — the verdict belonged to the first run.
-    expect(await emitTransient('claim-issue')).toMatchObject({ forge: null });
+    expect(await emitTransient('claim-issue', { gate: 'precondition', cli: 'gh', reason: null, remedy: null, detail: null })).toMatchObject({ forge: null });
+    expect(ghHealth).not.toHaveBeenCalled();
   });
 
-  it('keys the verdict by task type + app, so one type never consumes another\'s', async () => {
-    ghHealth.mockResolvedValue({ status: 'not-installed', ok: false, detail: null, remedy: 'Install gh.' });
-    recordPerpetualTransient('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed' });
-    // A different task type on the same app must not read claim-issue's verdict…
-    expect(await emitTransient('pr-watcher')).toMatchObject({ forge: null });
-    // …and it is still intact for the type that recorded it.
-    expect(await emitTransient('claim-issue')).toMatchObject({ forge: { cli: 'gh' } });
+  it('noteTransientProbe counts CONSECUTIVE transient probes for the same taskType+app', () => {
+    expect(noteTransientProbe('claim-issue', 'app-streak')).toBe(1);
+    expect(noteTransientProbe('claim-issue', 'app-streak')).toBe(2);
+    expect(noteTransientProbe('claim-issue', 'app-streak')).toBe(3);
+    expect(noteTransientProbe('claim-issue', 'app-streak')).toBe(4);
   });
 
-  it('drops a verdict older than its TTL rather than explaining an unrelated run', async () => {
-    ghHealth.mockResolvedValue({ status: 'not-installed', ok: false, detail: null, remedy: 'Install gh.' });
-    recordPerpetualTransient('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed' });
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    vi.setSystemTime(Date.now() + 61_000);
-    try {
-      expect(await emitTransient('claim-issue')).toMatchObject({ forge: null });
-    } finally {
-      vi.useRealTimers();
-    }
+  it('clearTransientProbeStreak restarts the count, so a recovered probe resets the escalation clock', () => {
+    noteTransientProbe('claim-issue', 'app-streak-2');
+    noteTransientProbe('claim-issue', 'app-streak-2');
+    clearTransientProbeStreak('claim-issue', 'app-streak-2');
+    expect(noteTransientProbe('claim-issue', 'app-streak-2')).toBe(1);
   });
 
-  it('recordPerpetualTransient counts CONSECUTIVE transient verdicts for the same taskType+app', () => {
-    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(1);
-    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(2);
-    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(3);
-    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(4);
-  });
-
-  it('recordPerpetualTransient resets the streak to 0 on a null (actionable/idle) verdict', () => {
-    recordPerpetualTransient('claim-issue', 'app-streak-2', { cli: 'gh', reason: 'gh-list-failed' });
-    recordPerpetualTransient('claim-issue', 'app-streak-2', { cli: 'gh', reason: 'gh-list-failed' });
-    expect(recordPerpetualTransient('claim-issue', 'app-streak-2', null)).toBe(0);
-    // The next transient verdict after a reset starts the streak over at 1, not
-    // where it left off — a recovered probe means the escalation clock restarts.
-    expect(recordPerpetualTransient('claim-issue', 'app-streak-2', { cli: 'gh', reason: 'gh-list-failed' })).toBe(1);
-  });
-
-  it('recordPerpetualTransient keys the streak by taskType+app, so one app never inherits another\'s count', () => {
-    recordPerpetualTransient('claim-issue', 'app-streak-a', { cli: 'gh', reason: 'gh-list-failed' });
-    recordPerpetualTransient('claim-issue', 'app-streak-a', { cli: 'gh', reason: 'gh-list-failed' });
-    expect(recordPerpetualTransient('claim-issue', 'app-streak-b', { cli: 'gh', reason: 'gh-list-failed' })).toBe(1);
+  it('noteTransientProbe keys the streak by taskType+app, so one app never inherits another\'s count', () => {
+    noteTransientProbe('claim-issue', 'app-streak-a');
+    noteTransientProbe('claim-issue', 'app-streak-a');
+    expect(noteTransientProbe('claim-issue', 'app-streak-b')).toBe(1);
+    expect(noteTransientProbe('pr-watcher', 'app-streak-a')).toBe(1);
   });
 
   it('the escalation threshold is exported and applyPerpetualWorkGate levels its skip log against it, persisting a stall once escalated', () => {
@@ -1314,20 +1287,8 @@ describe('emitOnDemandEmpty', () => {
     expect(gate).toContain('taskSchedule.recordPerpetualStall(taskType, app.id,');
   });
 
-  it('the actionable path resets both the transient streak and the persisted stall before deciding to dispatch or no-progress-park', () => {
-    const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
-    const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
-    const actionableIdx = gate.indexOf('if (detection.actionable) {');
-    const resetIdx = gate.indexOf('recordPerpetualTransient(taskType, app.id, null);');
-    const stallClearIdx = gate.indexOf('taskSchedule.recordPerpetualStall(taskType, app.id, null);');
-    expect(actionableIdx).toBeGreaterThan(-1);
-    expect(resetIdx).toBeGreaterThan(actionableIdx);
-    expect(stallClearIdx).toBeGreaterThan(actionableIdx);
-  });
-
-  it("surfaces the pr-reviewer preflight's recorded skip reason on an idle outcome", async () => {
+  it("surfaces the pr-reviewer preflight's skip reason on an idle outcome", async () => {
     const persist = vi.spyOn(taskStore, 'addTask').mockResolvedValue({ id: 'diagnostic' });
-    recordPerpetualTransient('pr-reviewer', 'app-1', { reason: 'security-guard-not-ready' });
     const events = [];
     const handler = (d) => events.push(d);
     cosEvents.on('schedule:on-demand-empty', handler);
@@ -1336,7 +1297,8 @@ describe('emitOnDemandEmpty', () => {
         taskScheduleMod: stubMod,
         request: { id: 'req-pr-reviewer', taskType: 'pr-reviewer' },
         targetApp: { id: 'app-1', name: 'PortOS' },
-        taskConfig: { type: 'on-demand', perpetual: false }
+        taskConfig: { type: 'on-demand', perpetual: false },
+        skip: { gate: 'security-preflight', reason: 'security-guard-not-ready', cli: null, remedy: null, detail: null }
       });
     } finally {
       cosEvents.off('schedule:on-demand-empty', handler);
@@ -1349,37 +1311,26 @@ describe('emitOnDemandEmpty', () => {
     persist.mockRestore();
   });
 
-  it('consumes the pr-reviewer skip reason on read, so a stale one cannot be reported twice', async () => {
-    recordPerpetualTransient('pr-reviewer', 'app-1', { reason: 'no-external-open-prs' });
-    const first = [];
-    let handler = (d) => first.push(d);
-    cosEvents.on('schedule:on-demand-empty', handler);
-    try {
-      await emitOnDemandEmpty({
-        taskScheduleMod: stubMod,
-        request: { id: 'req-a', taskType: 'pr-reviewer' },
-        targetApp: { id: 'app-1', name: 'PortOS' },
-        taskConfig: { type: 'on-demand', perpetual: false }
-      });
-    } finally {
-      cosEvents.off('schedule:on-demand-empty', handler);
-    }
-    expect(first[0]).toMatchObject({ reason: 'no-external-open-prs' });
-
-    const second = [];
-    handler = (d) => second.push(d);
-    cosEvents.on('schedule:on-demand-empty', handler);
-    try {
-      await emitOnDemandEmpty({
-        taskScheduleMod: stubMod,
-        request: { id: 'req-b', taskType: 'pr-reviewer' },
-        targetApp: { id: 'app-1', name: 'PortOS' },
-        taskConfig: { type: 'on-demand', perpetual: false }
-      });
-    } finally {
-      cosEvents.off('schedule:on-demand-empty', handler);
-    }
-    expect(second[0]).toMatchObject({ reason: null });
+  it('reports no pr-reviewer reason when the skip came from a later gate or there was none', async () => {
+    const reasonFor = async (skip) => {
+      const events = [];
+      const handler = (d) => events.push(d);
+      cosEvents.on('schedule:on-demand-empty', handler);
+      try {
+        await emitOnDemandEmpty({
+          taskScheduleMod: stubMod,
+          request: { id: 'req-b', taskType: 'pr-reviewer' },
+          targetApp: { id: 'app-1', name: 'PortOS' },
+          taskConfig: { type: 'on-demand', perpetual: false },
+          skip
+        });
+      } finally {
+        cosEvents.off('schedule:on-demand-empty', handler);
+      }
+      return events[0].reason;
+    };
+    expect(await reasonFor(null)).toBeNull();
+    expect(await reasonFor({ gate: 'precondition', reason: 'ignored', cli: null, remedy: null, detail: null })).toBeNull();
   });
 
   it('reads the LI last-run reason only for the layered-intelligence task type', () => {
@@ -1719,7 +1670,7 @@ describe('resolveTaskInputHook — hookMetadata threading (#3179)', () => {
     // edge: resolveTaskHookType reads it to dispatch the output hook, so a
     // collision would stop the very hook that asked for the bag from running.
     const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', start));
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
     expect(body).toContain('for (const [key, value] of Object.entries(hookMetadata || {}))');
     expect(body).toContain('if (key in metadata)');
     // A plain merge would reintroduce the clobber.
@@ -1729,15 +1680,15 @@ describe('resolveTaskInputHook — hookMetadata threading (#3179)', () => {
   it('stamps the bag onto metadata BELOW every gate that can still skip task creation', () => {
     // The ordering IS the fix. Source-pinned because it is invisible to a unit
     // test of the generator's happy path: moving the Object.assign above any
-    // `return null` would silently restore the #3179 bug — a hook side effect
+    // `return skipped(...)` would silently restore the #3179 bug — a hook side effect
     // keyed on the stamped metadata would fire for a task that is never built.
     const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
     expect(start, 'prepareManagedAppImprovementTask must exist').toBeGreaterThan(-1);
     const body = GEN_SRC.slice(start);
     const stampAt = body.indexOf('Object.entries(hookMetadata || {})');
     expect(stampAt, 'the hookMetadata stamp must exist').toBeGreaterThan(-1);
-    // Bound the scan to this function: `return { task, pendingPerpetualDispatch };` ends it.
-    const lastGateAt = body.slice(0, body.indexOf('return { task, pendingPerpetualDispatch };')).lastIndexOf('return null;');
+    // Bound the scan to this function: `return { task, pendingPerpetualDispatch, skip: null };` ends it.
+    const lastGateAt = body.slice(0, body.indexOf('return { task, pendingPerpetualDispatch, skip: null };')).lastIndexOf('return skipped(');
     expect(lastGateAt, 'the gate chain must exist').toBeGreaterThan(-1);
     expect(stampAt).toBeGreaterThan(lastGateAt);
   });
@@ -1752,7 +1703,7 @@ describe('resolveTaskInputHook — hookMetadata threading (#3179)', () => {
 describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
   const body = () => {
     const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    return GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', start));
+    return GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
   };
 
   it('accepts ignoreTaskId and forwards it to the input hook and the perpetual gate', () => {
@@ -1816,7 +1767,7 @@ describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)',
 describe('the drain cap has exactly one implementation, at the choke point', () => {
   it('prepareManagedAppImprovementTask applies it ahead of the work gate and the reconcile scans', () => {
     const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', start));
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
     const capIdx = body.indexOf('applyPerpetualDrainCap(app, taskType, interval, taskSchedule)');
     expect(capIdx, 'the choke point must apply the per-type drain cap').toBeGreaterThan(-1);
     expect(capIdx).toBeLessThan(body.indexOf('applyPerpetualWorkGate('));
@@ -1857,7 +1808,7 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
     // (generateManagedAppImprovementTaskForType) and the deferred queue/
     // on-demand/idle callers alike (#6871).
     const genStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', genStart));
+    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', genStart));
     expect(body, 'prepare must not charge the budget itself').not.toContain('recordPerpetualDispatch(');
     const pendingIdx = body.indexOf('perpetualGate.spendDispatch');
     expect(pendingIdx, 'the choke point must compute the deferred-dispatch record from the gate result').toBeGreaterThan(-1);
@@ -1918,7 +1869,7 @@ describe('pr-reviewer security preflight wiring', () => {
   // is recorded, and a passed preflight selects the current stage's prompt.
   it('runs the direct preflight before stage gates and resolves the next-stage prompt', () => {
     const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', start));
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
     const preflightAt = body.indexOf('runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule, {');
     const preconditionAt = body.indexOf('shouldSkipForPrecondition(metadata, app, taskType)');
     const promptAt = body.indexOf('getStagePrompt(taskType, currentStageIndex)');
@@ -1927,11 +1878,8 @@ describe('pr-reviewer security preflight wiring', () => {
     expect(preconditionAt, 'the ordinary stage gate must remain in the generator').toBeGreaterThan(-1);
     expect(preflightAt).toBeLessThan(preconditionAt);
     expect(promptAt, 'a passed preflight must select the current pipeline stage body').toBeGreaterThan(-1);
-    // The skip reason must be recorded before the `return null;` — otherwise a
-    // user-initiated "Review this PR" that hits the security guard, an unreviewable
-    // target PR, etc. reports the generic "nothing to do" toast instead of why.
-    expect(body).toContain("recordPerpetualTransient('pr-reviewer', app.id, securityPreflight.skipped ? { reason: securityPreflight.reason || null } : null)");
-    expect(body).toContain('if (securityPreflight.skipped) return null;');
+    // The skip reason rides the returned `skip` (behavioral test in
+    // cosTaskGenerator.idleReviewSteal.test.js) — nothing is recorded on the side.
   });
 
   it('carries a stolen on-demand request\'s PR target through the idle-review path', () => {
@@ -1945,7 +1893,7 @@ describe('pr-reviewer security preflight wiring', () => {
 
   it('keeps a targeted run distinguishable from the sweep in the duplicate guard', () => {
     const genStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', genStart));
+    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', genStart));
     expect(body).toContain('scopeDescriptionToPullRequest(');
   });
 });
