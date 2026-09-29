@@ -18,6 +18,8 @@ import {
   moodBoardItemUpdateSchema,
   moodBoardPinterestLinkSchema,
   moodBoardXPostImportSchema,
+  moodBoardCollageSchema,
+  moodBoardExtractFramesSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -42,6 +44,8 @@ import {
   importPrivatePinterestBoard,
   importXPost,
   localizeBoardMedia,
+  composeBoardCollage,
+  extractItemFrames,
 } from '../services/moodBoard/index.js';
 
 const router = Router();
@@ -182,6 +186,19 @@ router.post('/:id/x-post', asyncHandler(async (req, res) => {
 // Re-host every external image URL on the board into the local gallery.
 router.post('/:id/localize-media', asyncHandler(async (req, res) => {
   res.json(await localizeBoardMedia(req.params.id));
+}));
+
+// Compile every image (and sampled video frames) into one square-ish grid image
+// saved to the gallery.
+router.post('/:id/collage', asyncHandler(async (req, res) => {
+  const data = validateRequest(moodBoardCollageSchema, req.body ?? {});
+  res.json(await composeBoardCollage(req.params.id, data));
+}));
+
+// Sample N frames from a video pin and append them to the board as image items.
+router.post('/:id/items/:itemId/extract-frames', asyncHandler(async (req, res) => {
+  const data = validateRequest(moodBoardExtractFramesSchema, req.body);
+  res.json(await extractItemFrames(req.params.id, req.params.itemId, data));
 }));
 
 export default router;

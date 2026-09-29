@@ -20,6 +20,8 @@ vi.mock('../services/moodBoard/index.js', () => ({
   unlinkPinterestBoard: vi.fn(),
   syncPinterestBoard: vi.fn(),
   importXPost: vi.fn(),
+  composeBoardCollage: vi.fn(),
+  extractItemFrames: vi.fn(),
 }));
 
 // The synthesis service pulls the aiProvider/promptRunner stack — stub it so
@@ -185,6 +187,24 @@ describe('mood-board routes', () => {
       const res = await request(makeApp()).post('/api/mood-boards/mb-1/x-post').send({ url: 'not a url' });
       expect(res.status).toBe(400);
       expect(svc.importXPost).not.toHaveBeenCalled();
+    });
+  });
+  describe('collage + frame extraction', () => {
+    it('applies collage defaults and rejects out-of-range frame counts', async () => {
+      svc.composeBoardCollage.mockResolvedValueOnce({ filename: 'c.jpg' });
+      const ok = await request(makeApp()).post('/api/mood-boards/mb-1/collage').send({});
+      expect(ok.status).toBe(200);
+      expect(svc.composeBoardCollage).toHaveBeenCalledWith('mb-1', { framesPerVideo: 3, addFramesToBoard: false, cellSize: 512 });
+      const bad = await request(makeApp()).post('/api/mood-boards/mb-1/collage').send({ framesPerVideo: 99 });
+      expect(bad.status).toBe(400);
+    });
+
+    it('requires a count for per-item frame extraction', async () => {
+      svc.extractItemFrames.mockResolvedValueOnce({ added: 4 });
+      const ok = await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({ count: 4 });
+      expect(ok.status).toBe(200);
+      expect(svc.extractItemFrames).toHaveBeenCalledWith('mb-1', 'i1', { count: 4 });
+      expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({})).status).toBe(400);
     });
   });
 });

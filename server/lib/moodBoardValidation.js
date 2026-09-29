@@ -182,3 +182,17 @@ export const moodBoardItemUpdateSchema = z.object({
   prompt: promptSchema,
   analysis: moodBoardItemAnalysisSchema.nullable().optional(),
 }).strict();
+
+// Collage compilation + video frame extraction. `framesPerVideo` is how many
+// evenly spaced frames each video pin contributes to the grid; the per-item
+// extract endpoint always appends its frames to the board, so it only takes a
+// count. Bounds mirror MAX_FRAMES_PER_VIDEO in moodBoard/collage.js.
+export const moodBoardCollageSchema = z.object({
+  framesPerVideo: z.number().int().min(1).max(24).optional().default(3),
+  addFramesToBoard: z.boolean().optional().default(false),
+  cellSize: z.number().int().min(128).max(1024).optional().default(512),
+}).strict();
+
+export const moodBoardExtractFramesSchema = z.object({
+  count: z.number().int().min(1).max(24),
+}).strict();

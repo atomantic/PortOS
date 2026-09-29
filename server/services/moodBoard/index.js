@@ -48,6 +48,9 @@ export { importXPost } from './xPost.js';
 // Re-host external image URLs into the local gallery (boards never serve remote URLs).
 export { localizeBoardMedia } from './localize.js';
 
+// Collage compilation + video frame extraction (fires its own federation emits).
+export { composeBoardCollage, extractItemFrames } from './collage.js';
+
 // Announce a newly-created board to the per-record peer-sync pipeline: emit the
 // 'updated' event so any existing subscription pushes it, AND auto-subscribe
 // every moodBoards-enabled peer so brand-new boards (and their later tombstones)
