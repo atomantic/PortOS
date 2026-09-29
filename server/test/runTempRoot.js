@@ -21,6 +21,7 @@
  */
 import { readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { OWNER_FILE } from './staleRunRoots.js';
 
 export function setup() {
   // No-op: server/vitest.config.js already created the root and pointed
@@ -141,6 +142,7 @@ export function teardown() {
   }
 
   entries = entries
+    .filter((name) => name !== OWNER_FILE) // the run's own owner stamp (#9113), not a leak
     .filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name))
     .filter((name) => !isEffectivelyEmpty(join(root, name)));
 
