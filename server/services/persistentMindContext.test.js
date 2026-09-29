@@ -398,7 +398,7 @@ describe('persistent mind memory cleanup', () => {
 
     await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 1, preserved: 0 });
     expect(mock.memoryApi.archiveMemory).toHaveBeenCalledWith('memory-owned');
-    expect(mock.memoryApi.archiveMemory).not.toHaveBeenCalledWith('memory-foreign', expect.anything());
+    expect(mock.memoryApi.archiveMemory).not.toHaveBeenCalledWith('memory-foreign');
   });
 });
 
