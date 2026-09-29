@@ -406,7 +406,7 @@ function ProviderCostRows({ provider }) {
 // partly typed, so binding it straight to the URL param wiped the field
 // mid-keystroke. Hold the draft locally and commit only complete dates (or an
 // explicit clear); re-sync when the committed value changes underneath.
-function RangeDateInput({ id, value, onCommit }) {
+function RangeDateInput({ id, label, value, onCommit }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => { setDraft(value); }, [value]);
   const handleChange = (e) => {
@@ -420,6 +420,7 @@ function RangeDateInput({ id, value, onCommit }) {
   return (
     <input
       id={id}
+      aria-label={label}
       type="date"
       value={draft}
       onChange={handleChange}
@@ -444,9 +445,9 @@ function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
       ))}
       <div className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${isCustom ? 'border-port-accent bg-port-accent/10' : 'border-port-border'}`}>
         <label htmlFor="usage-from" className="text-xs text-gray-400">From</label>
-        <RangeDateInput id="usage-from" value={from} onCommit={(v) => onRange(v, to)} />
+        <RangeDateInput id="usage-from" label="From date" value={from} onCommit={(v) => onRange(v, to)} />
         <label htmlFor="usage-to" className="text-xs text-gray-400">To</label>
-        <RangeDateInput id="usage-to" value={to} onCommit={(v) => onRange(from, v)} />
+        <RangeDateInput id="usage-to" label="To date" value={to} onCommit={(v) => onRange(from, v)} />
       </div>
     </div>
   );

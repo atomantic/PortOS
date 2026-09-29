@@ -576,7 +576,7 @@ describe('UsagePage custom date range inputs', () => {
   it('keeps a half-typed date instead of resetting it, and commits once complete', async () => {
     api.getUsage.mockResolvedValue(usage);
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
-    const from = await screen.findByLabelText('From');
+    const from = await screen.findByLabelText('From date');
     const callsBefore = api.getUsage.mock.calls.length;
 
     // Partially typed segments surface as value "" (happy-dom lacks badInput, so
