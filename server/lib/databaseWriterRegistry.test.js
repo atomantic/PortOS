@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import { createDatabaseWriterRegistry } from './databaseWriterRegistry.js';
+import { classifyWriterQuiescence, createDatabaseWriterRegistry } from './databaseWriterRegistry.js';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
 import { spawnDetached } from './detachedSpawn.js';
 
@@ -153,5 +153,16 @@ describe('durable detached launch admission', () => {
       if (child.exitCode === null) child.kill('SIGKILL');
       await exited;
     }
+  });
+});
+
+describe('classifyWriterQuiescence zombies', () => {
+  const row = { kind: 'launch', state: 'exited', launcherPid: 4242, processGroup: false, createdAt: new Date().toISOString() };
+  const member = state => ({ pid: 4243, pgid: 4242, state, startedAt: Date.now(), command: 'sh' });
+
+  it('treats a zombie holding a recorded group as quiescent, but a live member as orphaned', () => {
+    expect(classifyWriterQuiescence(row, [member('Z')]).verdict).toBe('quiescent');
+    expect(classifyWriterQuiescence(row, [member('Z+')]).verdict).toBe('quiescent');
+    expect(classifyWriterQuiescence(row, [member('S')]).verdict).toBe('orphaned');
   });
 });
