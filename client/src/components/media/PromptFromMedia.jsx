@@ -72,6 +72,7 @@ export default function PromptFromMedia({
   initialSource = null,
   disabled = false,
   alwaysOpen = false,
+  showHistory = !initialSource && !setPrompt,
   onResult,
 }) {
   const navigate = useNavigate();
@@ -124,7 +125,7 @@ export default function PromptFromMedia({
 
   const { data: history, error: historyError, updateData: setHistory } = useSocketResource(
     ({ signal }) => listMediaPromptExaminations(historyOffset, { silent: true, signal }),
-    { events: HISTORY_EVENTS, resourceKey: historyOffset, enabled: isOpen },
+    { events: HISTORY_EVENTS, resourceKey: historyOffset, enabled: isOpen && showHistory },
   );
 
   useEffect(() => {
@@ -211,11 +212,13 @@ export default function PromptFromMedia({
     }
     if (onResult) onResult(data);
     if (data.examinationId) {
-      setHistoryOffset(0);
-      setHistory((previous) => ({
-        items: [{ id: data.examinationId, createdAt: new Date().toISOString(), source }, ...(previous?.items || []).filter((entry) => entry.id !== data.examinationId)].slice(0, 20),
-        hasMore: previous?.hasMore || previous?.items.length >= 20,
-      }));
+      if (showHistory) {
+        setHistoryOffset(0);
+        setHistory((previous) => ({
+          items: [{ id: data.examinationId, createdAt: new Date().toISOString(), source }, ...(previous?.items || []).filter((entry) => entry.id !== data.examinationId)].slice(0, 20),
+          hasMore: previous?.hasMore || previous?.items.length >= 20,
+        }));
+      }
       if (alwaysOpen && !initialSource && !setPrompt) navigate(`/media/prompt/${data.examinationId}`);
     }
   };
@@ -262,22 +265,24 @@ export default function PromptFromMedia({
 
       {isOpen && (
         <div className={alwaysOpen ? 'space-y-3' : 'p-3 bg-port-bg/70 border border-port-border rounded-lg space-y-3'}>
-          <details className="space-y-2">
-            <summary className="text-sm text-white cursor-pointer min-h-[36px]">Saved examinations</summary>
-            <p className="text-xs text-gray-400">Each analysis saves both requested prompts. Reopen a reference to render either without analyzing again.</p>
-            {historyError && <p role="alert" className="text-xs text-port-warning">Could not load examination history.</p>}
-            {history?.items.map((entry) => (
-              <button key={entry.id} type="button" disabled={running} onClick={() => navigate(`/media/prompt/${entry.id}`)}
-                className="block text-left text-xs text-port-accent break-all min-h-[36px]">
-                {entry.source.filename || entry.source.videoId} · {formatDateTime(entry.createdAt)}
-              </button>
-            ))}
-            {history && !history.items.length && <p className="text-xs text-gray-400">No saved examinations yet.</p>}
-            <div className="flex gap-3 text-xs text-port-accent">
-              {historyOffset > 0 && <button type="button" onClick={() => setHistoryOffset((value) => Math.max(0, value - 20))}>Previous examinations</button>}
-              {history?.hasMore && <button type="button" onClick={() => setHistoryOffset((value) => value + 20)}>Older examinations</button>}
-            </div>
-          </details>
+          {showHistory && (
+            <details className="space-y-2">
+              <summary className="text-sm text-white cursor-pointer min-h-[36px]">Saved examinations</summary>
+              <p className="text-xs text-gray-400">Each analysis saves both requested prompts. Reopen a reference to render either without analyzing again.</p>
+              {historyError && <p role="alert" className="text-xs text-port-warning">Could not load examination history.</p>}
+              {history?.items.map((entry) => (
+                <button key={entry.id} type="button" disabled={running} onClick={() => navigate(`/media/prompt/${entry.id}`)}
+                  className="block text-left text-xs text-port-accent break-all min-h-[36px]">
+                  {entry.source.filename || entry.source.videoId} · {formatDateTime(entry.createdAt)}
+                </button>
+              ))}
+              {history && !history.items.length && <p className="text-xs text-gray-400">No saved examinations yet.</p>}
+              <div className="flex gap-3 text-xs text-port-accent">
+                {historyOffset > 0 && <button type="button" onClick={() => setHistoryOffset((value) => Math.max(0, value - 20))}>Previous examinations</button>}
+                {history?.hasMore && <button type="button" onClick={() => setHistoryOffset((value) => value + 20)}>Older examinations</button>}
+              </div>
+            </details>
+          )}
           {detailError && <p role="alert" className="text-xs text-port-warning">{detailError}</p>}
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -487,6 +492,7 @@ export function PromptFromMediaModal({ item, open, onClose, kindDefault = 'both'
           kindDefault={kindDefault}
           initialSource={item}
           alwaysOpen
+          showHistory={false}
           onResult={onResult}
         />
       </div>
