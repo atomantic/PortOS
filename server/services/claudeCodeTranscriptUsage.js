@@ -150,12 +150,17 @@ function mergeDays(stored, scanned) {
 // MAX_DAYS x MAX_MODELS_PER_DAY rows per call.
 let storeMemo = null;
 
-/** The persisted local store: `{ days, updatedAt }` (`updatedAt` null before the first scan). */
+/**
+ * The persisted local store: `{ days, updatedAt }` (`updatedAt` null before the
+ * first scan). Throws when the file exists but is unreadable.
+ */
 export async function readLocalTranscriptUsage() {
   const info = await stat(TRANSCRIPT_USAGE_FILE).catch(() => null);
   const key = info ? `${TRANSCRIPT_USAGE_FILE}|${info.mtimeMs}|${info.size}` : null;
   if (key && storeMemo?.key === key) return storeMemo.value;
-  const raw = await readJSONFile(TRANSCRIPT_USAGE_FILE, null);
+  // Strict: a damaged store must stop the refresh, not read as empty and be
+  // overwritten by a rescan of only the transcripts the CLI has not yet pruned.
+  const raw = await readJSONFile(TRANSCRIPT_USAGE_FILE, null, { strict: true });
   const value = {
     days: sanitizeTranscriptDays(raw?.days),
     updatedAt: isNonBlankStr(raw?.updatedAt) ? raw.updatedAt : null

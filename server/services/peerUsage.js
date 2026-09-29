@@ -230,8 +230,9 @@ async function buildSelfEntry() {
   if (!instanceId) return null;
   const usage = selfDigest(getUsage());
   const { quotas, capturedAt: quotasAt } = await readLocalQuotaCards();
-  const local = await readLocalTranscriptUsage();
-  const claudeCode = local.updatedAt && Object.keys(local.days).length > 0 ? local : null;
+  // An unreadable store publishes no history rather than failing every sync read.
+  const local = await readLocalTranscriptUsage().catch(() => null);
+  const claudeCode = local?.updatedAt && Object.keys(local.days).length > 0 ? local : null;
   // capturedAt is the LWW stamp AND manifest fingerprint: the newest of every
   // component, so a transcript-store refresh alone still gets pulled by peers.
   const capturedAt = [usage.lastUpdated, quotasAt, claudeCode?.updatedAt].reduce(
