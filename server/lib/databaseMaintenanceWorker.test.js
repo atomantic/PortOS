@@ -125,8 +125,14 @@ function launch(id, token) {
       const child=await spawnDatabaseMaintenanceWorker(${JSON.stringify(id)},${JSON.stringify(token)});
       child.stdout.on('data',chunk=>process.stdout.write(chunk));
       child.stderr.on('data',chunk=>process.stderr.write(chunk));
-      child.on('error',()=>{process.exitCode=1;process.exit();});
-      child.on('close',code=>{process.exitCode=code;process.exit();});
+      // Pipe writes are asynchronous on Windows. Drain both forwarded streams
+      // before forced exit so refusal diagnostics reach the parent test.
+      const finish=code=>{
+        clearInterval(released);
+        process.stdout.write('',()=>process.stderr.write('',()=>process.exit(code ?? 1)));
+      };
+      child.on('error',()=>finish(1));
+      child.on('close',finish);
       const released=setInterval(()=>{
         if(existsSync(${JSON.stringify(controlDirFor(token))})) return;
         try{process.kill(child.pid,0);}catch{clearInterval(released);setTimeout(()=>{process.stdout.write('\\nRELEASED\\n',()=>process.exit(0));},300);}

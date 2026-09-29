@@ -114,18 +114,18 @@ describe('ProviderModelSelector', () => {
     expect(onProviderChange).toHaveBeenCalledWith('example-tui');
   });
 
-  it('renders every current Codex fallback choice, including Codex Spark', () => {
+  it('renders every current Codex fallback choice, including GPT-6.1 Sol', () => {
     const codexModels = SHIPPED_PROVIDERS.providers.codex.models;
-    expect(codexModels).toContain('gpt-5.3-codex-spark');
+    expect(codexModels).toContain('gpt-6.1-sol');
     renderSelector({
       providers: [{ id: 'codex', name: 'Codex CLI', type: 'cli', models: codexModels }],
       selectedProviderId: 'codex',
-      selectedModel: 'gpt-5.3-codex-spark',
+      selectedModel: 'gpt-6.1-sol',
       availableModels: codexModels,
     });
     const modelSelect = screen.getAllByRole('combobox')[1];
     expect([...modelSelect.querySelectorAll('option')].map((option) => option.value)).toEqual(codexModels);
-    expect(modelSelect.value).toBe('gpt-5.3-codex-spark');
+    expect(modelSelect.value).toBe('gpt-6.1-sol');
   });
 
   it('prepends empty options with value "" when emptyProviderOption/emptyModelOption are set', () => {
