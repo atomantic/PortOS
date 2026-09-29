@@ -20,6 +20,7 @@ const REASON_MAX = 1200;
 function analyzedItems(board) {
   const items = Array.isArray(board?.items) ? board.items : [];
   return items.filter((it) => (it?.analysis && typeof it.analysis.prompt === 'string' && it.analysis.prompt.trim())
+    || (typeof it?.prompt === 'string' && it.prompt.trim())
     || (typeof it?.caption === 'string' && it.caption.trim()));
 }
 
@@ -31,6 +32,7 @@ function withAnalysesFirst(board) {
   const rest = [];
   for (const it of items) {
     const hasPrompt = (it?.analysis && typeof it.analysis.prompt === 'string' && it.analysis.prompt.trim())
+      || (typeof it?.prompt === 'string' && it.prompt.trim())
       || (typeof it?.caption === 'string' && it.caption.trim());
     if (hasPrompt) analyzed.push(it);
     else rest.push(it);

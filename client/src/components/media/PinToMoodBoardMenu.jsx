@@ -87,6 +87,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
     const promptText = typeof item?.prompt === 'string' && item.prompt !== '(no prompt)' ? item.prompt.trim() : '';
     const captionText = typeof item?.caption === 'string' ? item.caption.trim() : '';
     const effectiveCaption = captionText || promptText || null;
+    if (promptText) payload.prompt = promptText;
     if (effectiveCaption) payload.caption = effectiveCaption;
     return payload;
   }, [mediaKey, thumbUrl, item?.prompt, item?.caption]);

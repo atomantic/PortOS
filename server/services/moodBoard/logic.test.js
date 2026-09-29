@@ -121,6 +121,12 @@ describe('addItem', () => {
     expect(item.imageUrl).toBe('/data/video-thumbnails/upload-ab12cd34.jpg');
     expect(item.text).toBeNull();
   });
+  it('normalizes prompt on media items and nulls on text items', () => {
+    const { item: img } = addItem(base, { type: 'image', mediaKey: 'image:a.png', prompt: 'an image prompt' });
+    expect(img.prompt).toBe('an image prompt');
+    const { item: txt } = addItem(base, { type: 'text', text: 'note', prompt: 'ignored prompt' });
+    expect(txt.prompt).toBeNull();
+  });
   it('throws BOARD_FULL at the item cap', () => {
     const full = { ...base, items: Array.from({ length: MAX_ITEMS_PER_BOARD }, (_, i) => ({ id: `i${i}` })) };
     expect(() => addItem(full, { type: 'text', text: 'x' })).toThrow(/full/i);
@@ -138,6 +144,12 @@ describe('updateItem', () => {
     const { item } = updateItem(withItem, itemId, { caption: 'new' });
     expect(item.caption).toBe('new');
     expect(item.text).toBe('orig');
+  });
+  it('patches prompt on a media item', () => {
+    const fresh = buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+    const { board: withImg, item: img } = addItem(fresh, { type: 'image', mediaKey: 'image:p.png' });
+    const { item: patched } = updateItem(withImg, img.id, { prompt: 'updated prompt' });
+    expect(patched.prompt).toBe('updated prompt');
   });
   it('throws NOT_FOUND for an unknown item id', () => {
     expect(() => updateItem(withItem, 'nope', { caption: 'x' })).toThrow(/not found/i);

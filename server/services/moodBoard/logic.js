@@ -193,6 +193,7 @@ function normalizeItem(input, { id, now = nowIso() } = {}) {
     mediaKey: hasMedia ? (input.mediaKey ?? null) : null,
     imageUrl: hasMedia ? (input.imageUrl ?? null) : null,
     text: input.type === 'text' ? input.text : null,
+    prompt: hasMedia ? (input.prompt ?? null) : null,
     caption: input.caption ?? null,
     source: input.source ?? null,
     createdAt: now,
@@ -245,7 +246,7 @@ export function updateItem(board, itemId, patch) {
   const updated = { ...current };
   const isMediaItem = current.type === 'image' || current.type === 'video';
   const editableKeys = isMediaItem
-    ? ['caption', 'source', 'imageUrl', 'mediaKey']
+    ? ['caption', 'source', 'imageUrl', 'mediaKey', 'prompt']
     : ['caption', 'source', 'text'];
   for (const key of editableKeys) {
     if (patch[key] !== undefined) updated[key] = patch[key];

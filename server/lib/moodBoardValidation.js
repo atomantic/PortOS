@@ -46,6 +46,7 @@ const imageUrlSchema = z.string().trim().min(1).max(2048).refine(
 
 const captionSchema = z.string().max(2000).nullable().optional();
 const sourceSchema = z.string().max(2048).nullable().optional();
+const promptSchema = z.string().trim().max(8000).nullable().optional();
 
 // Board create. description optional (defaults to '' in the record builder).
 export const moodBoardCreateSchema = z.object({
@@ -99,6 +100,7 @@ export const moodBoardItemCreateSchema = z.object({
   mediaKey: mediaKeySchema.nullable().optional(),
   imageUrl: imageUrlSchema.nullable().optional(),
   text: z.string().trim().max(10000).nullable().optional(),
+  prompt: promptSchema,
   caption: captionSchema,
   source: sourceSchema,
 }).strict().superRefine((val, ctx) => {
@@ -177,5 +179,6 @@ export const moodBoardItemUpdateSchema = z.object({
   text: z.string().trim().max(10000).nullable().optional(),
   imageUrl: imageUrlSchema.nullable().optional(),
   mediaKey: mediaKeySchema.nullable().optional(),
+  prompt: promptSchema,
   analysis: moodBoardItemAnalysisSchema.nullable().optional(),
 }).strict();

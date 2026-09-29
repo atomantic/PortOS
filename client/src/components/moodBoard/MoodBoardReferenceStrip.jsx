@@ -29,6 +29,7 @@ import { LayoutGrid, ChevronDown, ChevronRight, ExternalLink, ImageIcon, Plus, L
 import toast from '../ui/Toast';
 import { listMoodBoards, getMoodBoard, createMoodBoard } from '../../services/api';
 import { moodBoardItemSrc } from '../../lib/moodBoardItemSrc';
+import { moodBoardItemPrompt } from '../../lib/moodBoardAnalysis';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const MAX_THUMBS = 12;
@@ -122,7 +123,7 @@ export default function MoodBoardReferenceStrip({
   const thumbs = useMemo(() => {
     const items = Array.isArray(detail?.items) ? detail.items : [];
     return items
-      .map((it) => ({ id: it.id, src: moodBoardItemSrc(it), caption: it.caption || '' }))
+      .map((it) => ({ id: it.id, src: moodBoardItemSrc(it), caption: moodBoardItemPrompt(it) || it.caption || '' }))
       .filter((t) => t.src)
       .slice(0, MAX_THUMBS);
   }, [detail]);

@@ -117,7 +117,7 @@ async function resolveGalleryItemCaption(input) {
         const { metadata } = await readImageSidecar(filename).catch(() => ({}));
         const prompt = typeof metadata?.prompt === 'string' ? metadata.prompt.trim() : '';
         if (prompt && prompt !== '(no prompt)') {
-          return { ...input, caption: prompt };
+          return { ...input, prompt: input.prompt || prompt, caption: input.caption || prompt };
         }
       }
     } else if (input.type === 'video') {
@@ -131,7 +131,7 @@ async function resolveGalleryItemCaption(input) {
         const entry = (history || []).find((row) => row && (row.id === ref || row.filename === ref || row.thumbnail === ref));
         const prompt = typeof entry?.prompt === 'string' ? entry.prompt.trim() : '';
         if (prompt && prompt !== '(no prompt)') {
-          return { ...input, caption: prompt };
+          return { ...input, prompt: input.prompt || prompt, caption: input.caption || prompt };
         }
       }
     }

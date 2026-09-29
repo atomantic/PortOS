@@ -43,6 +43,9 @@ export function collectBoardStyleContext(board) {
     if (typeof it.caption === 'string' && it.caption.trim()) {
       entry.caption = trimTo(it.caption, CONTEXT_FIELD_MAX);
     }
+    if (typeof it.prompt === 'string' && it.prompt.trim()) {
+      entry.prompt = trimTo(it.prompt, CONTEXT_FIELD_MAX);
+    }
     const analysis = it.analysis;
     if (analysis && typeof analysis === 'object' && typeof analysis.prompt === 'string' && analysis.prompt.trim()) {
       entry.analyzedPrompt = trimTo(analysis.prompt, CONTEXT_FIELD_MAX);

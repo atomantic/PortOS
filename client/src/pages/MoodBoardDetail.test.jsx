@@ -507,6 +507,80 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     });
     await screen.findByRole('button', { name: 'Prompt from media' });
   });
+
+  it('displays the analyzed prompt indicator and value over the default caption', async () => {
+    const analyzedItem = {
+      id: 'i1',
+      type: 'image',
+      mediaKey: 'image:pic.png',
+      caption: 'default caption from pin',
+      analysis: {
+        prompt: 'detailed analyzed prompt',
+      },
+    };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [analyzedItem] });
+    mockUpdateMoodBoardItem.mockResolvedValueOnce({
+      ...analyzedItem,
+      analysis: { prompt: 'updated analyzed prompt' },
+    });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    expect(screen.getByTestId('item-indicator-analyzed')).toBeInTheDocument();
+    expect(screen.getByText('Analyzed prompt')).toBeInTheDocument();
+    expect(screen.getByText('default caption from pin')).toBeInTheDocument();
+
+    const input = screen.getByLabelText('Analyzed prompt');
+    expect(input).toHaveValue('detailed analyzed prompt');
+
+    fireEvent.change(input, { target: { value: 'updated analyzed prompt' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(mockUpdateMoodBoardItem).toHaveBeenCalledWith('a', 'i1', {
+        analysis: {
+          prompt: 'updated analyzed prompt',
+        },
+        prompt: 'updated analyzed prompt',
+      }, { silent: true });
+    });
+  });
+
+  it('displays the prompt indicator and value for items with prompt but no analysis', async () => {
+    const itemWithPrompt = {
+      id: 'i2',
+      type: 'image',
+      mediaKey: 'image:pic2.png',
+      prompt: 'explicit prompt text',
+      caption: 'default caption',
+    };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [itemWithPrompt] });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    expect(screen.getByTestId('item-indicator-prompt')).toBeInTheDocument();
+    expect(screen.getByTestId('item-indicator-prompt')).toHaveTextContent('Prompt');
+    const input = screen.getByLabelText('Item prompt');
+    expect(input).toHaveValue('explicit prompt text');
+  });
+
+  it('displays only default caption with no indicator when item has not been analyzed or given a prompt', async () => {
+    const pinItem = {
+      id: 'i3',
+      type: 'image',
+      imageUrl: '/data/images/pin.jpg',
+      caption: 'simple pin description',
+    };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [pinItem] });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    expect(screen.queryByTestId('item-indicator-analyzed')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('item-indicator-prompt')).not.toBeInTheDocument();
+    expect(screen.getByText('Caption')).toBeInTheDocument();
+    const input = screen.getByLabelText('Item caption');
+    expect(input).toHaveValue('simple pin description');
+  });
 });
 
 describe('MoodBoardDetail desktop layout', () => {

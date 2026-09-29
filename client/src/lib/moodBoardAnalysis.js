@@ -39,6 +39,38 @@ export function moodBoardAnalysisFromResult(item, result) {
 }
 
 /**
+ * Resolves the primary prompt text for a mood board item.
+ * Prefers the analyzed prompt from prompt-from-media, then explicit item.prompt,
+ * then a gallery item's caption prompt. Returns empty string if no prompt exists.
+ */
+export function moodBoardItemPrompt(item) {
+  if (item?.analysis?.prompt && typeof item.analysis.prompt === 'string' && item.analysis.prompt.trim()) {
+    return item.analysis.prompt.trim();
+  }
+  if (item?.prompt && typeof item.prompt === 'string' && item.prompt.trim()) {
+    return item.prompt.trim();
+  }
+  if ((item?.mediaKey?.startsWith('image:') || item?.mediaKey?.startsWith('video:')) && item?.caption && typeof item.caption === 'string' && item.caption.trim()) {
+    return item.caption.trim();
+  }
+  return '';
+}
+
+/**
+ * Returns true if the item has an explicit prompt-from-media analysis saved.
+ */
+export function isMoodBoardItemAnalyzed(item) {
+  return Boolean(item?.analysis?.prompt && typeof item.analysis.prompt === 'string' && item.analysis.prompt.trim());
+}
+
+/**
+ * Returns true if the item has been analyzed OR already has a prompt.
+ */
+export function moodBoardItemHasPrompt(item) {
+  return isMoodBoardItemAnalyzed(item) || Boolean(moodBoardItemPrompt(item));
+}
+
+/**
  * Split a board's items into the ones prompt-from-media can still read and
  * the ones that already carry a prompt. External URL pins can't be read, so
  * they count as skipped rather than pending.
@@ -49,9 +81,7 @@ export function boardAnalyzePlan(items) {
   let analyzed = 0;
   let skipped = 0;
   for (const item of list) {
-    const stored = (item?.analysis?.prompt && typeof item.analysis.prompt === 'string' && item.analysis.prompt.trim())
-      || (typeof item?.caption === 'string' && item.caption.trim());
-    if (stored) {
+    if (moodBoardItemHasPrompt(item)) {
       analyzed += 1;
       continue;
     }
