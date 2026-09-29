@@ -151,7 +151,9 @@ export default function useFocusTrap(active, containerRef, { initialFocusRef } =
       }
       // Restore focus to the pre-open element so keyboard users return to where
       // they were. Guard: it may have been removed from the DOM while open.
-      if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+      // <body> is not a real target (nothing was focused at open) — focusing it
+      // would blur whatever the caller just moved focus to, e.g. a trigger.
+      if (previouslyFocused && previouslyFocused !== document.body && typeof previouslyFocused.focus === 'function') {
         previouslyFocused.focus();
       }
     };
