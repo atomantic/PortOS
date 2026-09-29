@@ -8,7 +8,7 @@ Nothing calls an AI provider when a page loads or when the server starts.
 The browser explicitly requests `includeQuality=true` on app reads; bare
 `/api/apps` peer probes retain their existing response without assessment prose.
 
-All 30 scheduled audit categories first inventory first-party source roots, scan
+Every scheduled audit category first inventory first-party source roots, scan
 for their category's signals, rank the top five candidates (or all if fewer),
 and validate the strongest candidates before selecting a bounded investigation.
 The raw worst offender may be passed over only with an explanation such as a
