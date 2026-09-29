@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DISPATCH_MODEL_TIERS,
@@ -395,6 +396,13 @@ describe('shared guidance', () => {
   it('keeps the PortOS area vocabulary and repo-study complete-label contract explicit', () => {
     expect(PORTOS_AREA_LABELS).toContain('area:cos-agents');
     expect(PORTOS_AREA_LABELS).toContain('area:media');
+    expect([...PORTOS_AREA_LABELS]).toEqual([...new Set(PORTOS_AREA_LABELS)].sort());
+  });
+
+  it('only names area labels in quota-burn presets that exist in the vocabulary', () => {
+    const src = readFileSync(new URL('./quotaBurnPresets.js', import.meta.url), 'utf8');
+    const literals = [...new Set(src.match(/area:[a-z-]+/g) ?? [])];
+    expect(literals.filter((l) => !PORTOS_AREA_LABELS.includes(l))).toEqual([]);
     expect(PORTOS_AREA_LABEL_GUIDANCE).toContain('area:*');
     expect(PORTOS_AREA_LABEL_GUIDANCE).toContain('gh label list --search area:');
     expect(REPO_STUDY_LABEL_CONTRACT.forgeFlags)

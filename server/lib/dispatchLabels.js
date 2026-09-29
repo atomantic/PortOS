@@ -700,27 +700,33 @@ export const MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE = JIRA_DISPATCH_HINT_GUIDANCE
  * Current PortOS scope-label vocabulary. The forge remains the source of truth
  * at filing time (`gh label list --search area:` / `glab label list`), while this
  * list keeps autonomous prompts aware of the established labels instead of
- * inventing a new area for every reference study.
+ * inventing a new area for every reference study. Sorted and unique; snapshot
+ * of the tracker taken 2026-09-29.
  */
 export const PORTOS_AREA_LABELS = Object.freeze([
-  'area:database',
-  'area:songs',
-  'area:federation',
-  'area:pipeline',
-  'area:story-builder',
-  'area:writers-room',
-  'area:create',
-  'area:openworld',
   'area:brain',
-  'area:cos-agents',
-  'area:identity',
+  'area:calendar',
+  'area:ci',
   'area:content',
+  'area:cos-agents',
+  'area:create',
+  'area:cybercity',
+  'area:database',
   'area:devtools',
-  'area:ui',
+  'area:federation',
+  'area:identity',
+  'area:life-tracking',
+  'area:local-models',
+  'area:media',
+  'area:pipeline',
   'area:post',
   'area:privacy',
-  'area:life-tracking',
-  'area:media',
+  'area:songs',
+  'area:sprites',
+  'area:story-builder',
+  'area:ui',
+  'area:voice',
+  'area:writers-room',
 ]);
 
 /** Shared scope guidance for the one-shot repo-study label contract. */
