@@ -194,12 +194,12 @@ describe('PostSessionLauncher render (issue #2100)', () => {
 
     await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
     expect(getPostBenchmarkProtocol).toHaveBeenCalledWith({ silent: true });
-    expect(onStart.mock.calls[0][0]).toEqual([
+    expect(onStart.mock.calls[0][0].drills).toEqual([
       expect.objectContaining({ type: 'doubling-chain', config: { startValue: 5, steps: 8 } }),
       expect.objectContaining({ type: 'task-switching', config: { seed: 'post-foundation-a', count: 12 } }),
     ]);
-    expect(onStart.mock.calls[0][2]).toBe(false);
-    expect(onStart.mock.calls[0][4]).toEqual({
+    expect(onStart.mock.calls[0][0]).not.toHaveProperty('training');
+    expect(onStart.mock.calls[0][0].benchmark).toEqual({
       protocolId: 'post-foundation-battery',
       protocolVersion: 1,
       scorerVersion: 'post-deterministic-v1',
@@ -242,7 +242,7 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Quick 10 Min/ }));
 
     expect(onStart).toHaveBeenCalledTimes(1);
-    expect(onStart.mock.calls[0][3]).toMatchObject({
+    expect(onStart.mock.calls[0][0].plan).toMatchObject({
       targetDurationSec: 600,
       toleranceSec: 30,
       selectedTypes: expect.arrayContaining(['multiplication', 'n-back']),
@@ -270,7 +270,7 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     expect(row).toBeTruthy();
     fireEvent.click(row);
     expect(onStart).toHaveBeenCalledTimes(1);
-    const drills = onStart.mock.calls[0][0];
+    const drills = onStart.mock.calls[0][0].drills;
     // Only the recommended drill runs — powers/estimation are NOT queued.
     expect(drills.map(d => d.type)).toEqual(['multiplication']);
   });
@@ -290,7 +290,7 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     });
 
     await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
-    expect(onStart.mock.calls[0][0].map(d => d.type)).toEqual(['multiplication']);
+    expect(onStart.mock.calls[0][0].drills.map(d => d.type)).toEqual(['multiplication']);
     expect(onAutoStartConsumed).toHaveBeenCalledTimes(1);
   });
 
@@ -324,7 +324,7 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     await waitFor(() => expect(screen.getByText('Re-verify Multiplication 1×2')).toBeTruthy());
     fireEvent.click(screen.getByText('Re-verify Multiplication 1×2').closest('button'));
     expect(onStart).toHaveBeenCalledTimes(1);
-    const drills = onStart.mock.calls[0][0];
+    const drills = onStart.mock.calls[0][0].drills;
     expect(drills).toHaveLength(1);
     expect(drills[0].isReview).toBe(true);
     expect(drills[0].config.reviewSkillId).toBe('multiplication:L1');
@@ -342,7 +342,7 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     await waitFor(() => expect(screen.getByText('Re-verify n-back L0')).toBeTruthy());
     fireEvent.click(screen.getByText('Re-verify n-back L0').closest('button'));
     await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
-    expect(onStart.mock.calls[0][0][0].config.reviewSkillId).toBe('cognitive:n-back:L0');
+    expect(onStart.mock.calls[0][0].drills[0].config.reviewSkillId).toBe('cognitive:n-back:L0');
   });
 
   it('does not start any session when a skill-review rep cannot be found', async () => {
@@ -404,7 +404,7 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     await waitFor(() => expect(getPostRecommendations).toHaveBeenCalled());
     fireEvent.click(screen.getByText('Full POST'));
     expect(onStart).toHaveBeenCalledTimes(1);
-    const drills = onStart.mock.calls[0][0];
+    const drills = onStart.mock.calls[0][0].drills;
     expect(drills.some(d => d.type === 'wit-comeback')).toBe(false);
     expect(drills.some(d => d.type === 'multiplication')).toBe(true);
   });
@@ -545,7 +545,7 @@ describe('PostSessionLauncher — Start card (issue #3249)', () => {
     fireEvent.click(screen.getByText('Start: Shore up Powers'));
     expect(onStart).toHaveBeenCalledTimes(1);
     // The EXACT recommended drill, not its whole domain.
-    const drills = onStart.mock.calls[0][0];
+    const drills = onStart.mock.calls[0][0].drills;
     expect(drills).toHaveLength(1);
     expect(drills[0].type).toBe('powers');
   });
@@ -567,7 +567,7 @@ describe('PostSessionLauncher — Start card (issue #3249)', () => {
     await waitFor(() => expect(screen.getByText('Start: Full POST')).toBeTruthy());
     fireEvent.click(screen.getByText('Start: Full POST'));
     expect(onStart).toHaveBeenCalledTimes(1);
-    expect(onStart.mock.calls[0][0].length).toBeGreaterThan(1);
+    expect(onStart.mock.calls[0][0].drills.length).toBeGreaterThan(1);
   });
 
   it('collapses Conditions by default and keeps a set value when re-collapsed', async () => {
@@ -638,7 +638,7 @@ describe('PostSessionLauncher topic gating (issue #3252)', () => {
     await waitFor(() => expect(screen.getByText('Full POST')).toBeTruthy());
     fireEvent.click(screen.getByText('Full POST'));
 
-    const types = onStart.mock.calls[0][0].map(d => d.type).sort();
+    const types = onStart.mock.calls[0][0].drills.map(d => d.type).sort();
     expect(types).toEqual(['bridge-word', 'pun-wordplay', 'what-if', 'wit-comeback']);
   });
 
@@ -648,7 +648,7 @@ describe('PostSessionLauncher topic gating (issue #3252)', () => {
     await waitFor(() => expect(screen.getByText('Full POST')).toBeTruthy());
     fireEvent.click(screen.getByText('Full POST'));
 
-    const types = onStart.mock.calls[0][0].map(d => d.type).sort();
+    const types = onStart.mock.calls[0][0].drills.map(d => d.type).sort();
     expect(types).toEqual(['bridge-word', 'pun-wordplay']);
   });
 
@@ -669,7 +669,7 @@ describe('PostSessionLauncher topic gating (issue #3252)', () => {
     await waitFor(() => expect(getPostRecommendations).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole("button", { name: /Quick 5 Min/ }));
 
-    const mathDrills = onStart.mock.calls[0][0].filter(drill => drill.domain === "math");
+    const mathDrills = onStart.mock.calls[0][0].drills.filter(drill => drill.domain === "math");
     expect(mathDrills.map(drill => drill.type)).toEqual(["powers"]);
   });
 
@@ -687,12 +687,12 @@ describe('PostSessionLauncher topic gating (issue #3252)', () => {
     const quick = await screen.findByRole('button', { name: /Quick 5 Min/ });
     fireEvent.click(quick);
 
-    for (const drill of onStart.mock.calls[0][0]) {
+    for (const drill of onStart.mock.calls[0][0].drills) {
       expect(['pun-wordplay', 'bridge-word', 'multiplication']).toContain(drill.type);
     }
     // Quick picks one drill per domain — math and wordplay only, never the two
     // switched-off llm topics.
-    expect(onStart.mock.calls[0][0].map(d => d.domain).sort()).toEqual(['math', 'wordplay']);
+    expect(onStart.mock.calls[0][0].drills.map(d => d.domain).sort()).toEqual(['math', 'wordplay']);
   });
 });
 
@@ -737,7 +737,7 @@ describe('PostSessionLauncher review-rep topic gating (issue #3252)', () => {
     await waitFor(() => expect(screen.getByText(/due for a maintenance rep/)).toBeTruthy());
     fireEvent.click(await screen.findByRole('button', { name: /Quick 5 Min/ }));
 
-    expect(onStart.mock.calls[0][0].some(d => d.isReview && d.type === 'n-back')).toBe(true);
+    expect(onStart.mock.calls[0][0].drills.some(d => d.isReview && d.type === 'n-back')).toBe(true);
   });
 
   it('drops the review rep — and its launcher nudge — when its topic is switched off', async () => {
@@ -747,8 +747,8 @@ describe('PostSessionLauncher review-rep topic gating (issue #3252)', () => {
     expect(screen.queryByText(/due for a maintenance rep/)).toBeNull();
 
     fireEvent.click(await screen.findByRole('button', { name: /Quick 5 Min/ }));
-    expect(onStart.mock.calls[0][0].some(d => d.isReview)).toBe(false);
-    expect(onStart.mock.calls[0][0].some(d => d.type === 'n-back')).toBe(false);
+    expect(onStart.mock.calls[0][0].drills.some(d => d.isReview)).toBe(false);
+    expect(onStart.mock.calls[0][0].drills.some(d => d.type === 'n-back')).toBe(false);
   });
 });
 
@@ -786,7 +786,7 @@ describe('PostSessionLauncher honors the mentalMath module flag (issue #3252)', 
     await waitFor(() => expect(screen.getByText('Full POST')).toBeTruthy());
     fireEvent.click(screen.getByText('Full POST'));
 
-    expect(onStart.mock.calls[0][0].map(d => d.type)).toEqual(['n-back']);
+    expect(onStart.mock.calls[0][0].drills.map(d => d.type)).toEqual(['n-back']);
   });
 });
 
@@ -836,7 +836,7 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
     await waitFor(() => expect(getMemoryItems).toHaveBeenCalledWith({ silent: true }));
 
     fireEvent.click(screen.getByText('Full POST'));
-    expect(onStart.mock.calls[0][0]).toEqual(expect.arrayContaining([
+    expect(onStart.mock.calls[0][0].drills).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: 'memory-sequence',
         domain: 'memory',
@@ -844,10 +844,10 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
         timeLimitSec: 90,
       }),
     ]));
-    expect(onStart.mock.calls[0][0].some(d => d.type === 'memory-element-flash')).toBe(false);
+    expect(onStart.mock.calls[0][0].drills.some(d => d.type === 'memory-element-flash')).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: /Quick 5 Min/ }));
-    expect(onStart.mock.calls[1][0]).toEqual(expect.arrayContaining([
+    expect(onStart.mock.calls[1][0].drills).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: 'memory-sequence',
         domain: 'memory',
@@ -863,7 +863,7 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
     await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
 
     fireEvent.click(screen.getByText('Full POST'));
-    expect(onStart.mock.calls[0][0].map(d => d.type)).toEqual(['multiplication']);
+    expect(onStart.mock.calls[0][0].drills.map(d => d.type)).toEqual(['multiplication']);
   });
 
   it('does not compose memory when every item is disabled in the Practice Plan', async () => {
@@ -878,7 +878,7 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
     await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
 
     fireEvent.click(screen.getByText('Full POST'));
-    expect(onStart.mock.calls[0][0].some(d => d.domain === 'memory')).toBe(false);
+    expect(onStart.mock.calls[0][0].drills.some(d => d.domain === 'memory')).toBe(false);
   });
 
   it('omits Element Flash when the built-in elements item is unavailable', async () => {
@@ -898,7 +898,7 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
     await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
 
     fireEvent.click(screen.getByText('Full POST'));
-    expect(onStart.mock.calls[0][0].some(d => d.type === 'memory-element-flash')).toBe(false);
+    expect(onStart.mock.calls[0][0].drills.some(d => d.type === 'memory-element-flash')).toBe(false);
   });
 
   it('pins Element Flash to the compatible elements item', async () => {
@@ -917,7 +917,7 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
     await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
 
     fireEvent.click(screen.getByText('Full POST'));
-    expect(onStart.mock.calls[0][0]).toEqual(expect.arrayContaining([
+    expect(onStart.mock.calls[0][0].drills).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: 'memory-element-flash',
         config: { count: 6, memoryItemId: 'elements-song' },
@@ -936,7 +936,7 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
     await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
 
     fireEvent.click(screen.getByText('Full POST'));
-    expect(onStart.mock.calls[0][0].some(d => d.type === 'memory-sequence')).toBe(false);
+    expect(onStart.mock.calls[0][0].drills.some(d => d.type === 'memory-sequence')).toBe(false);
   });
 
   it('pins Sequence Recall to a compatible item instead of a lower-mastery one-line item', async () => {
@@ -949,7 +949,7 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
     await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
 
     fireEvent.click(screen.getByText('Full POST'));
-    expect(onStart.mock.calls[0][0]).toEqual(expect.arrayContaining([
+    expect(onStart.mock.calls[0][0].drills).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: 'memory-sequence',
         config: { count: 4, memoryItemId: 'runnable' },
