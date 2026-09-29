@@ -1,16 +1,8 @@
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
-
-export const gitDeleteBranchBodySchema = z.object({
-  path: z.string().min(1),
-  branch: z.string().min(1),
-  local: z.boolean().default(false),
-  remote: z.boolean().default(false),
-}).refine(({ local, remote }) => local || remote, {
-  message: 'at least one of local or remote must be true',
-});
 import { ServerError } from './errorHandler.js';
+import { isSafeGitRef } from './gitArgs.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
@@ -42,6 +34,49 @@ import { isPlainObject } from './objects.js';
 import { isValidCronExpression, isCronShaped } from './cronValidation.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from './userActionTypes.js';
 import { MIND_BUNDLE_GROUP_CHOICES, MIND_BUNDLE_MAX_CHARS, MIND_BUNDLE_PASSPHRASE_MAX_CHARS, MIND_BUNDLE_PASSPHRASE_MIN_CHARS, PERSISTENT_MIND_BUNDLE_GROUPS, PERSISTENT_MIND_BUNDLE_SCOPES } from './mindBundleFormat.js';
+
+// ---- Git write-route bodies (#9154) -----------------------------------------
+// Refs and files become argv entries for git, so a leading "-" would be parsed
+// as an option; the ref grammar rejects that plus git's own invalid-ref forms.
+export const gitRefNameSchema = z.string().min(1).max(255).refine(isSafeGitRef, {
+  message: 'not a valid git ref name',
+});
+const gitPathField = z.string().min(1);
+
+export const gitPathBodySchema = z.object({ path: gitPathField });
+export const gitStageBodySchema = z.object({
+  path: gitPathField,
+  files: z.array(z.string().min(1)).min(1).max(500),
+});
+export const gitCommitBodySchema = z.object({
+  path: gitPathField,
+  message: z.string().min(1).max(10000),
+});
+export const gitBranchBodySchema = z.object({ path: gitPathField, branch: gitRefNameSchema });
+export const gitOptionalBranchBodySchema = z.object({
+  path: gitPathField,
+  branch: gitRefNameSchema.nullish(),
+});
+export const gitBranchComparisonBodySchema = z.object({
+  path: gitPathField,
+  base: gitRefNameSchema.nullish(),
+  head: gitRefNameSchema.nullish(),
+});
+export const gitDiffBodySchema = z.object({ path: gitPathField, staged: z.boolean().default(false) });
+export const gitCommitsBodySchema = z.object({
+  path: gitPathField,
+  limit: z.number().int().min(1).max(100).default(10),
+});
+export const gitRemoteBranchesBodySchema = z.object({ path: gitPathField, force: z.boolean().default(false) });
+export const gitDeleteBranchBodySchema = z.object({
+  path: gitPathField,
+  branch: gitRefNameSchema,
+  local: z.boolean().default(false),
+  remote: z.boolean().default(false),
+}).refine(({ local, remote }) => local || remote, {
+  message: 'at least one of local or remote must be true',
+});
+
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can

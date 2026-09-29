@@ -21,7 +21,7 @@ import {
   detectForgeCli,
   parsePullRequestUrl
 } from '../lib/gitForge.js';
-import { PROTECTED_BRANCHES, validateFilePaths, toLiteralPathspec } from '../lib/gitArgs.js';
+import { PROTECTED_BRANCHES, validateFilePaths, toLiteralPathspec, assertSafeRef } from '../lib/gitArgs.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Re-export so callers that used to import from services/git.js keep working.
@@ -294,6 +294,8 @@ export async function updateBranches(dir) {
  * Get branch comparison (how far ahead headBranch is from baseBranch)
  */
 export async function getBranchComparison(dir, baseBranch = 'main', headBranch = 'dev') {
+  assertSafeRef(baseBranch);
+  assertSafeRef(headBranch);
   const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%cI"}';
   const logResult = await execGit(
     ['log', format, `${baseBranch}..${headBranch}`], dir, { ignoreExitCode: true }
@@ -320,6 +322,7 @@ export async function getBranchComparison(dir, baseBranch = 'main', headBranch =
  * Push to origin
  */
 export async function push(dir, branch = null) {
+  if (branch) assertSafeRef(branch);
   const args = branch ? ['push', 'origin', branch] : ['push'];
   const result = await execGit(args, dir);
   return { success: true, output: result.stdout + result.stderr };
@@ -369,6 +372,7 @@ export async function createBranch(dir, branchName) {
  * Switch to an existing branch
  */
 export async function checkout(dir, branchName) {
+  assertSafeRef(branchName);
   await execGit(['checkout', branchName], dir);
   return { success: true, branch: branchName };
 }
@@ -946,6 +950,7 @@ export async function updateDefaultBranch(dir) {
  * Sync branch - pull then push
  */
 export async function syncBranch(dir, branch = null) {
+  if (branch) assertSafeRef(branch);
   const currentBranch = branch || await getBranch(dir);
 
   // First pull with rebase
@@ -1327,6 +1332,7 @@ export async function deleteBranch(dir, branchName, { local = false, remote = fa
  * @returns {Promise<{success: boolean, output: string}>}
  */
 export async function mergeBranch(dir, branchName) {
+  assertSafeRef(branchName);
   const result = await execGit(['merge', '--no-ff', branchName], dir);
   return { success: true, output: (result.stdout + result.stderr).trim() };
 }
@@ -1423,6 +1429,7 @@ export const isBranchMergedInto = hasBranchMergeEvidence;
  * @returns {Promise<{success: boolean, branch: string}>}
  */
 export async function checkoutRemoteBranch(dir, branchName) {
+  assertSafeRef(branchName);
   await execGit(['checkout', '-b', branchName, `origin/${branchName}`], dir);
   return { success: true, branch: branchName };
 }

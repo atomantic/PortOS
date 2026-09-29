@@ -457,3 +457,68 @@ describe('git routes — submodules', () => {
     expect(gitSubmoduleService.updateSubmodule).not.toHaveBeenCalled();
   });
 });
+
+describe('git routes — body validation (#9154)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    allowWorkspace();
+  });
+
+  const P = '/Users/me/project';
+
+  it.each(['checkout', 'merge', 'checkout-remote', 'push', 'sync'])(
+    'POST /%s rejects option-shaped, malformed, and non-string branches with 400 and no git call',
+    async (route) => {
+      for (const branch of ['-f', '--force', '--abort', '-B x', 'a..b', 'a b', {}, 5]) {
+        const res = await request(makeApp()).post(`/api/git/${route}`).send({ path: P, branch });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('VALIDATION_ERROR');
+      }
+      expect(gitService[route === 'checkout-remote' ? 'checkoutRemoteBranch' : route === 'merge' ? 'mergeBranch' : route === 'sync' ? 'syncBranch' : route]).not.toHaveBeenCalled();
+    }
+  );
+
+  it('POST /branch-comparison rejects option-shaped base/head', async () => {
+    for (const body of [{ base: '-f' }, { head: '--force' }, { base: 'a..b' }]) {
+      const res = await request(makeApp()).post('/api/git/branch-comparison').send({ path: P, ...body });
+      expect(res.status).toBe(400);
+    }
+    expect(gitService.getBranchComparison).not.toHaveBeenCalled();
+  });
+
+  it('accepts ordinary branch names', async () => {
+    for (const branch of ['main', 'feature/foo-1', 'release/1.2.3']) {
+      const res = await request(makeApp()).post('/api/git/checkout').send({ path: P, branch });
+      expect(res.status).toBe(200);
+      expect(gitService.checkout).toHaveBeenCalledWith(P, branch);
+    }
+  });
+
+  it.each(['stage', 'unstage'])('POST /%s rejects non-array files with 400', async (route) => {
+    for (const files of [5, 'a.js', [], [1], {}]) {
+      const res = await request(makeApp()).post(`/api/git/${route}`).send({ path: P, files });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('validateFilePaths failures surface as 400, not 500', async () => {
+    const { validateFilePaths } = await import('../lib/gitArgs.js');
+    gitService.stageFiles.mockImplementation(async (_d, files) => validateFilePaths(files));
+    for (const files of [['../x'], ['/etc/passwd']]) {
+      const res = await request(makeApp()).post('/api/git/stage').send({ path: P, files });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+    }
+  });
+
+  it.each([
+    ['/diff', { staged: 'true' }],
+    ['/diff', { staged: 1 }],
+    ['/remote-branches', { force: 'false' }],
+    ['/commits', { limit: '5' }],
+    ['/commit', { message: ['a'] }],
+  ])('POST %s rejects wrongly typed %j', async (route, extra) => {
+    const res = await request(makeApp()).post(`/api/git${route}`).send({ path: P, ...extra });
+    expect(res.status).toBe(400);
+  });
+});

@@ -8,7 +8,9 @@ import { getAgents } from '../services/cosAgentLifecycle.js';
 import { protectedAgentIds } from '../services/agentState.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
-import { validateRequest, submoduleStatusQuerySchema, submoduleUpdateSchema, gitDeleteBranchBodySchema } from '../lib/validation.js';
+import { validateRequest, submoduleStatusQuerySchema, submoduleUpdateSchema, gitDeleteBranchBodySchema,
+  gitPathBodySchema, gitStageBodySchema, gitCommitBodySchema, gitBranchBodySchema, gitOptionalBranchBodySchema,
+  gitBranchComparisonBodySchema, gitDiffBodySchema, gitCommitsBodySchema, gitRemoteBranchesBodySchema } from '../lib/validation.js';
 
 /**
  * Assert that a caller-supplied workspace path exists, is a directory, and
@@ -98,7 +100,7 @@ router.get('/:appId', asyncHandler(async (req, res) => {
 
 // POST /api/git/status - Get status for a path
 router.post('/status', asyncHandler(async (req, res) => {
-  const { path } = req.body;
+  const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
   const status = await git.getStatus(path);
   res.json(status);
@@ -106,7 +108,7 @@ router.post('/status', asyncHandler(async (req, res) => {
 
 // POST /api/git/diff - Get diff for a path
 router.post('/diff', asyncHandler(async (req, res) => {
-  const { path, staged } = req.body;
+  const { path, staged } = validateRequest(gitDiffBodySchema, req.body);
   assertAllowedWorkspace(path);
   const diff = await git.getDiff(path, staged);
   res.json({ diff });
@@ -114,7 +116,7 @@ router.post('/diff', asyncHandler(async (req, res) => {
 
 // POST /api/git/commits - Get recent commits
 router.post('/commits', asyncHandler(async (req, res) => {
-  const { path, limit = 10 } = req.body;
+  const { path, limit } = validateRequest(gitCommitsBodySchema, req.body);
   assertAllowedWorkspace(path);
   const commits = await git.getCommits(path, limit);
   res.json({ commits });
@@ -122,40 +124,31 @@ router.post('/commits', asyncHandler(async (req, res) => {
 
 // POST /api/git/stage - Stage files
 router.post('/stage', asyncHandler(async (req, res) => {
-  const { path, files } = req.body;
+  const { path, files } = validateRequest(gitStageBodySchema, req.body);
   assertAllowedWorkspace(path);
-  if (!files) {
-    throw new ServerError('files is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
   await git.stageFiles(path, files);
   res.json({ success: true });
 }));
 
 // POST /api/git/unstage - Unstage files
 router.post('/unstage', asyncHandler(async (req, res) => {
-  const { path, files } = req.body;
+  const { path, files } = validateRequest(gitStageBodySchema, req.body);
   assertAllowedWorkspace(path);
-  if (!files) {
-    throw new ServerError('files is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
   await git.unstageFiles(path, files);
   res.json({ success: true });
 }));
 
 // POST /api/git/commit - Create a commit
 router.post('/commit', asyncHandler(async (req, res) => {
-  const { path, message } = req.body;
+  const { path, message } = validateRequest(gitCommitBodySchema, req.body);
   assertAllowedWorkspace(path);
-  if (!message) {
-    throw new ServerError('message is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
   const result = await git.commit(path, message);
   res.json(result);
 }));
 
 // POST /api/git/update-branches - Fetch and merge latest dev and main
 router.post('/update-branches', asyncHandler(async (req, res) => {
-  const { path } = req.body;
+  const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
   const result = await git.updateBranches(path);
   res.json(result);
@@ -163,7 +156,7 @@ router.post('/update-branches', asyncHandler(async (req, res) => {
 
 // POST /api/git/branch-comparison - Compare two branches
 router.post('/branch-comparison', asyncHandler(async (req, res) => {
-  const { path, base, head } = req.body;
+  const { path, base, head } = validateRequest(gitBranchComparisonBodySchema, req.body);
   assertAllowedWorkspace(path);
   const baseBranch = base || await git.getDefaultBranch(path, { allowRemote: false }).catch(() => null) || 'main';
   const result = await git.getBranchComparison(path, baseBranch, head || 'dev');
@@ -172,7 +165,7 @@ router.post('/branch-comparison', asyncHandler(async (req, res) => {
 
 // POST /api/git/push - Push to origin
 router.post('/push', asyncHandler(async (req, res) => {
-  const { path, branch } = req.body;
+  const { path, branch } = validateRequest(gitOptionalBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
   const result = await git.push(path, branch);
   res.json(result);
@@ -180,7 +173,7 @@ router.post('/push', asyncHandler(async (req, res) => {
 
 // POST /api/git/push-all - Push all branches with unpushed commits
 router.post('/push-all', asyncHandler(async (req, res) => {
-  const { path } = req.body;
+  const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
   const result = await git.pushAll(path);
   res.json(result);
@@ -188,7 +181,7 @@ router.post('/push-all', asyncHandler(async (req, res) => {
 
 // POST /api/git/info - Get full git info for a path
 router.post('/info', asyncHandler(async (req, res) => {
-  const { path } = req.body;
+  const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
   const info = await git.getGitInfo(path);
   res.json(info);
@@ -196,7 +189,7 @@ router.post('/info', asyncHandler(async (req, res) => {
 
 // POST /api/git/branches - Get all local branches
 router.post('/branches', asyncHandler(async (req, res) => {
-  const { path } = req.body;
+  const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
   const branches = await git.getBranches(path);
   res.json({ branches });
@@ -204,18 +197,15 @@ router.post('/branches', asyncHandler(async (req, res) => {
 
 // POST /api/git/checkout - Switch to a branch
 router.post('/checkout', asyncHandler(async (req, res) => {
-  const { path, branch } = req.body;
+  const { path, branch } = validateRequest(gitBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
-  if (!branch) {
-    throw new ServerError('branch is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
   const result = await git.checkout(path, branch);
   res.json(result);
 }));
 
 // POST /api/git/pull - Pull changes from remote
 router.post('/pull', asyncHandler(async (req, res) => {
-  const { path } = req.body;
+  const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
   const result = await git.pull(path);
   res.json(result);
@@ -223,7 +213,7 @@ router.post('/pull', asyncHandler(async (req, res) => {
 
 // POST /api/git/sync - Sync branch (pull then push)
 router.post('/sync', asyncHandler(async (req, res) => {
-  const { path, branch } = req.body;
+  const { path, branch } = validateRequest(gitOptionalBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
   const result = await git.syncBranch(path, branch);
   res.json(result);
@@ -231,7 +221,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
 
 // POST /api/git/remote-branches - Get remote branches with merge status
 router.post('/remote-branches', asyncHandler(async (req, res) => {
-  const { path, force } = req.body;
+  const { path, force } = validateRequest(gitRemoteBranchesBodySchema, req.body);
   assertAllowedWorkspace(path);
   const result = await git.getRemoteBranches(path, { force });
   res.json(result);
@@ -239,22 +229,16 @@ router.post('/remote-branches', asyncHandler(async (req, res) => {
 
 // POST /api/git/merge - Merge a branch into the current branch
 router.post('/merge', asyncHandler(async (req, res) => {
-  const { path, branch } = req.body;
+  const { path, branch } = validateRequest(gitBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
-  if (!branch) {
-    throw new ServerError('branch is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
   const result = await git.mergeBranch(path, branch);
   res.json(result);
 }));
 
 // POST /api/git/checkout-remote - Checkout a remote branch locally
 router.post('/checkout-remote', asyncHandler(async (req, res) => {
-  const { path, branch } = req.body;
+  const { path, branch } = validateRequest(gitBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
-  if (!branch) {
-    throw new ServerError('branch is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
   const result = await git.checkoutRemoteBranch(path, branch);
   res.json(result);
 }));
@@ -264,7 +248,7 @@ router.post('/checkout-remote', asyncHandler(async (req, res) => {
 // the response carries the pre-reset HEAD so the caller can offer a recovery
 // sha. See git.resetToDefaultBranch for the full contract.
 router.post('/reset-to-default', asyncHandler(async (req, res) => {
-  const { path } = req.body;
+  const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
   const result = await git.resetToDefaultBranch(path);
   res.json(result);
@@ -275,7 +259,7 @@ router.post('/reset-to-default', asyncHandler(async (req, res) => {
 // it is clean and its branch is fully in origin/<default>; anything else comes
 // back in `skipped` with the reason.
 router.post('/cleanup-merged', asyncHandler(async (req, res) => {
-  const { path } = req.body;
+  const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
   const { excludeBranches, activeAgentIds } = await getAgentProtections();
   const result = await git.deleteMergedBranches(path, { excludeBranches, activeAgentIds });

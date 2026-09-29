@@ -9,14 +9,48 @@ import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './p
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { cosToolCallSchema } from './cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agentContextValidation.js';
-import { gitDeleteBranchBodySchema } from './validation.js';
+import {
+  gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema, gitDeleteBranchBodySchema,
+  gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema,
+} from './validation.js';
 
 const jsonBody = (schema, required = true) => ({
   required,
   content: { 'application/json': { schema: zodToOpenApiSchema(schema) } },
 });
 
+const gitWriteOperation = (summary, schema) => ({
+  post: {
+    summary,
+    requestBody: jsonBody(schema),
+    responses: {
+      200: { description: 'Git operation result' },
+      400: { description: 'Invalid request body', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+    },
+  },
+});
+
 export const API_OPERATION_CONTRACTS = Object.freeze({
+  '/api/git/status': gitWriteOperation('Read git status for a path', gitPathBodySchema),
+  '/api/git/diff': gitWriteOperation('Read the working-tree or staged diff', gitDiffBodySchema),
+  '/api/git/commits': gitWriteOperation('List recent commits', gitCommitsBodySchema),
+  '/api/git/stage': gitWriteOperation('Stage files', gitStageBodySchema),
+  '/api/git/unstage': gitWriteOperation('Unstage files', gitStageBodySchema),
+  '/api/git/commit': gitWriteOperation('Create a commit', gitCommitBodySchema),
+  '/api/git/update-branches': gitWriteOperation('Fetch and merge the latest dev and main', gitPathBodySchema),
+  '/api/git/branch-comparison': gitWriteOperation('Compare two branches', gitBranchComparisonBodySchema),
+  '/api/git/push': gitWriteOperation('Push to origin', gitOptionalBranchBodySchema),
+  '/api/git/push-all': gitWriteOperation('Push every branch with unpushed commits', gitPathBodySchema),
+  '/api/git/info': gitWriteOperation('Read full git info for a path', gitPathBodySchema),
+  '/api/git/branches': gitWriteOperation('List local branches', gitPathBodySchema),
+  '/api/git/checkout': gitWriteOperation('Switch to a branch', gitBranchBodySchema),
+  '/api/git/pull': gitWriteOperation('Pull from the remote', gitPathBodySchema),
+  '/api/git/sync': gitWriteOperation('Pull then push a branch', gitOptionalBranchBodySchema),
+  '/api/git/remote-branches': gitWriteOperation('List remote branches with merge status', gitRemoteBranchesBodySchema),
+  '/api/git/merge': gitWriteOperation('Merge a branch into the current branch', gitBranchBodySchema),
+  '/api/git/checkout-remote': gitWriteOperation('Check out a remote branch locally', gitBranchBodySchema),
+  '/api/git/reset-to-default': gitWriteOperation("Discard local changes and match origin's default branch", gitPathBodySchema),
+  '/api/git/cleanup-merged': gitWriteOperation('Delete merged branches and their worktrees', gitPathBodySchema),
   '/api/git/delete-branch': {
     post: {
       summary: 'Delete a Git branch locally, remotely, or both',
