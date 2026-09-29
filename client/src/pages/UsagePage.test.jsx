@@ -9,6 +9,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
+  getClaudeCodeModelUsage: vi.fn(() => Promise.resolve({ filesScanned: 0, models: [], totals: {} })),
   getProviderUsage: vi.fn(),
   getUsage: vi.fn(),
   getUsageBackfillStatus: vi.fn(),

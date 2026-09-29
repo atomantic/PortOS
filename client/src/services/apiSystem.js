@@ -233,12 +233,17 @@ export const patchSettingsSlice = async (slicePath, partial, options = {}) => {
 
 // Usage. `params` selects the cost-report window: { period } (7d|30d|90d|all)
 // or { from, to } (YYYY-MM-DD).
-export const getUsage = (params = {}) => {
+const usageQuery = (params) => {
   const qs = new URLSearchParams(
     Object.entries(params).filter(([, v]) => v != null && v !== '')
   ).toString();
-  return request(`/usage${qs ? `?${qs}` : ''}`);
+  return qs ? `?${qs}` : '';
 };
+export const getUsage = (params = {}) => request(`/usage${usageQuery(params)}`);
+// Per-model token totals for every Claude Code session on this machine, read
+// from the CLI transcripts. Same { period } | { from, to } params as getUsage.
+export const getClaudeCodeModelUsage = (params = {}, options = {}) =>
+  request(`/usage/claude-code/models${usageQuery(params)}`, options);
 export const getHourlyUsage = (options = {}) => request('/usage/hourly', options);
 export const getUsageBackfillStatus = (options = {}) => request('/usage/backfill', options);
 // Monthly plan prices per provider family, used to compare subscription spend
