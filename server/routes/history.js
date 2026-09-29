@@ -12,6 +12,10 @@ const historyQuerySchema = z.object({
   success: z.preprocess(v => (v === 'true' ? true : v === 'false' ? false : undefined), z.boolean().optional()),
 });
 
+const historyClearQuerySchema = z.object({
+  olderThanDays: z.preprocess(v => (v !== undefined ? Number(v) : undefined), z.number().int().min(1).max(36500).optional()),
+});
+
 const router = Router();
 
 // GET /api/history - Get history entries
@@ -47,8 +51,8 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 
 // DELETE /api/history - Clear history
 router.delete('/', asyncHandler(async (req, res) => {
-  const olderThanDays = req.query.olderThanDays ? parseInt(req.query.olderThanDays, 10) : null;
-  res.json(await history.clearHistory(olderThanDays));
+  const { olderThanDays } = validateRequest(historyClearQuerySchema, req.query);
+  res.json(await history.clearHistory(olderThanDays ?? null));
 }));
 
 export default router;
