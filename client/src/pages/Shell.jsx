@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
 import useClickOutside from '../hooks/useClickOutside';
 import useEscapeKey from '../hooks/useEscapeKey';
+import useTerminalFullscreen from '../hooks/useTerminalFullscreen';
 import { useShellSession, MAX_SESSIONS } from '../hooks/useShellSession';
 import TerminalHotKeys from '../components/shell/TerminalHotKeys';
 import ShellSessionTabs from '../components/shell/ShellSessionTabs';
@@ -131,10 +132,16 @@ function PortosShellView() {
     showPasteInput, setShowPasteInput, pasteInputRef, handlePasteInputEvent, sendImage,
   };
 
+  const { containerRef, toggleRef } = useTerminalFullscreen(isFullscreen, () => setIsFullscreen(false));
+
   const statusLabel = connected ? 'Connected' : 'Disconnected';
 
   return (
-    <div className={isFullscreen
+    <div ref={containerRef}
+      role={isFullscreen ? 'dialog' : undefined}
+      aria-modal={isFullscreen ? 'true' : undefined}
+      aria-label={isFullscreen ? 'Terminal fullscreen view' : undefined}
+      className={isFullscreen
       ? 'fixed inset-0 z-[70] flex flex-col bg-port-bg p-2'
       // Deliberately tighter than the app-wide `p-4 md:p-6` mobile gutter: every
       // pixel here is a terminal row/column, and the chrome above it is already
@@ -185,6 +192,7 @@ function PortosShellView() {
         <div className="flex items-center gap-2 ml-auto shrink-0">
           <button
             onClick={() => setIsFullscreen(true)}
+            ref={toggleRef}
             className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
             title="Fullscreen terminal"
             aria-label="Fullscreen terminal"

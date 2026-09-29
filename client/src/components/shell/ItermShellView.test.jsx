@@ -108,6 +108,24 @@ describe('ItermShellView', () => {
     expect(screen.getByRole('link', { name: /Back to PortOS shells/ }).getAttribute('href')).toBe('/shell');
   });
 
+  it('fullscreen is a modal dialog: focus moves in, Escape exits, focus returns to the toggle', () => {
+    state.hook = hookState();
+    renderAt('/shell/iterm', <ItermShellView />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Fullscreen terminal' });
+    toggle.focus();
+    fireEvent.click(toggle);
+    const dialog = screen.getByRole('dialog', { name: 'Terminal fullscreen view' });
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    // Escape typed inside the terminal belongs to the program running there.
+    fireEvent.keyDown(screen.getByTestId('iterm-terminal'), { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Exit fullscreen' }), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Fullscreen terminal' }));
+  });
+
   it('names the fix for each status', () => {
     expect(itermHintText({ state: 'api-disabled' })).toMatch(/Enable Python API/);
     expect(itermHintText({ state: 'not-running' })).toMatch(/isn’t running/);
