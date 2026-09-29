@@ -187,7 +187,8 @@ async function parseSession(family, session, from, to, byCwd) {
 // caller, and tests drive it directly with a fixture home/runs dir.
 export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs, providers = null, now = Date.now() } = {}) => (
   withLock(async () => {
-    const state = await readJSONFile(INTERACTIVE_SCAN_FILE, { watermarks: {} });
+    // Strict: a damaged watermark must fail the scan, not read as empty and re-bill 35 days.
+    const state = await readJSONFile(INTERACTIVE_SCAN_FILE, { watermarks: {} }, { strict: true });
     const watermarks = { ...(state?.watermarks || {}) };
     const to = now - SETTLE_MS;
     // Not caught: a provider-list failure must surface, not read as "none configured".
