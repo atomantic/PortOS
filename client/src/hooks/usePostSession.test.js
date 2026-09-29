@@ -31,7 +31,7 @@ describe('usePostSession — Applied Numeracy', () => {
 
     const first = renderHook(() => usePostSession());
     await act(async () => {
-      await first.result.current.startSession([{ type: 'applied-numeracy', config: {}, timeLimitSec: 60 }]);
+      await first.result.current.startSession({ drills: [{ type: 'applied-numeracy', config: {}, timeLimitSec: 60 }] });
     });
     first.unmount();
 
@@ -55,7 +55,7 @@ describe('usePostSession — Applied Numeracy', () => {
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'applied-numeracy', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'applied-numeracy', config: {}, timeLimitSec: 60 }] });
     });
     act(() => { result.current.timeExpired(); });
 
@@ -91,7 +91,7 @@ describe('usePostSession — memory drill task shape', () => {
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }] });
     });
 
     act(() => {
@@ -115,7 +115,7 @@ describe('usePostSession — memory drill task shape', () => {
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }] });
     });
 
     act(() => {
@@ -141,7 +141,7 @@ describe('usePostSession — memory drill task shape', () => {
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-element-flash', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-element-flash', config: {}, timeLimitSec: 60 }] });
     });
 
     act(() => {
@@ -165,7 +165,7 @@ describe('usePostSession — memory drill task shape', () => {
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('line two');
@@ -205,7 +205,7 @@ describe('usePostSession — memory drill chunk/element attribution (#2016)', ()
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('line two');
@@ -227,7 +227,7 @@ describe('usePostSession — memory drill chunk/element attribution (#2016)', ()
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-element-flash', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-element-flash', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('Hydrogen');
@@ -248,7 +248,7 @@ describe('usePostSession — memory drill chunk/element attribution (#2016)', ()
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('4');
@@ -270,7 +270,7 @@ describe('usePostSession — memory drill chunk/element attribution (#2016)', ()
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('line two');
@@ -294,7 +294,7 @@ describe('usePostSession — memory drill chunk/element attribution (#2016)', ()
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }] });
     });
     // Time expires before any answer is submitted — both questions become
     // unanswered/incorrect but should still carry chunkId for mastery merge.
@@ -343,7 +343,7 @@ describe('usePostSession — memory-fill-blank scoring (issue #2099/#2116)', () 
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('quick');
@@ -368,7 +368,7 @@ describe('usePostSession — memory-fill-blank scoring (issue #2099/#2116)', () 
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer([{ index: 2, value: '  FOX  ' }]);
@@ -389,7 +389,7 @@ describe('usePostSession — memory-fill-blank scoring (issue #2099/#2116)', () 
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('slow');
@@ -410,7 +410,7 @@ describe('usePostSession — memory-fill-blank scoring (issue #2099/#2116)', () 
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer([{ index: 1, value: 'hydrogen' }]);
@@ -430,7 +430,7 @@ describe('usePostSession — memory-fill-blank scoring (issue #2099/#2116)', () 
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('nope');
@@ -449,7 +449,7 @@ describe('usePostSession — memory-fill-blank scoring (issue #2099/#2116)', () 
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('quick');
@@ -487,7 +487,7 @@ describe('usePostSession — sessionScore syncs to the server score on save (iss
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }] });
     });
     act(() => {
       result.current.submitAnswer('4');
@@ -528,7 +528,7 @@ describe('usePostSession — LLM training-log correctCount (issue #2097)', () =>
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'compound-chain', config: {}, timeLimitSec: 120 }], true);
+      await result.current.startSession({ drills: [{ type: 'compound-chain', config: {}, timeLimitSec: 120 }], training: true });
     });
 
     await act(async () => {
@@ -573,7 +573,7 @@ describe('usePostSession — LLM training-log correctCount (issue #2097)', () =>
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'compound-chain', config: {}, timeLimitSec: 120 }], true);
+      await result.current.startSession({ drills: [{ type: 'compound-chain', config: {}, timeLimitSec: 120 }], training: true });
     });
     await act(async () => {
       await result.current.completeLlmDrill({
@@ -607,7 +607,7 @@ describe('usePostSession — LLM training-log correctCount (issue #2097)', () =>
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'word-association', config: {}, timeLimitSec: 120 }], false);
+      await result.current.startSession({ drills: [{ type: 'word-association', config: {}, timeLimitSec: 120 }], training: false });
     });
     await act(async () => {
       await result.current.completeLlmDrill({
@@ -638,7 +638,7 @@ describe('usePostSession — LLM training-log correctCount (issue #2097)', () =>
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'bridge-word', config: {}, timeLimitSec: 120 }], true);
+      await result.current.startSession({ drills: [{ type: 'bridge-word', config: {}, timeLimitSec: 120 }], training: true });
     });
 
     await act(async () => {
@@ -679,7 +679,7 @@ describe('usePostSession — atomic training-run save (#4441)', () => {
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }], true);
+      await result.current.startSession({ drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }], training: true });
     });
     act(() => { result.current.submitAnswer('4'); });
     act(() => { result.current.acknowledgeAnswer(); });
@@ -709,7 +709,7 @@ describe('usePostSession — atomic training-run save (#4441)', () => {
     submitTrainingRun.mockResolvedValue({ id: 'training-run', attemptCount: 1 });
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'flanker', config: {} }], true);
+      await result.current.startSession({ drills: [{ type: 'flanker', config: {} }], training: true });
     });
     act(() => {
       result.current.completeCognitiveDrill({
@@ -769,7 +769,7 @@ describe('usePostSession — LLM training-log per-question breakdown (issue #211
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'compound-chain', config: {}, timeLimitSec: 120 }], true);
+      await result.current.startSession({ drills: [{ type: 'compound-chain', config: {}, timeLimitSec: 120 }], training: true });
     });
 
     await act(async () => {
@@ -813,7 +813,7 @@ describe('usePostSession — LLM training-log per-question breakdown (issue #211
     const { result } = renderHook(() => usePostSession());
 
     await act(async () => {
-      await result.current.startSession([{ type: 'word-association', config: {}, timeLimitSec: 120 }], true);
+      await result.current.startSession({ drills: [{ type: 'word-association', config: {}, timeLimitSec: 120 }], training: true });
     });
 
     await act(async () => {
@@ -853,7 +853,7 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }] });
     });
     const runId = result.current.runId;
     expect(runId).toMatch(/^[0-9a-f-]{36}$/i);
@@ -877,7 +877,7 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
 
     const first = renderHook(() => usePostSession());
     await act(async () => {
-      await first.result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+      await first.result.current.startSession({ drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }] });
     });
     act(() => { first.result.current.submitAnswer('4'); }); // answer q1, mid-drill
     const runId = first.result.current.runId;
@@ -899,10 +899,10 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([
+      await result.current.startSession({ drills: [
         { type: 'doubling-chain', config: {}, timeLimitSec: 60 },
         { type: 'doubling-chain', config: {}, timeLimitSec: 60 },
-      ]);
+      ] });
     });
     act(() => { result.current.submitAnswer('4'); }); // finish drill 1 → between-drills
     expect(result.current.state).toBe('between-drills');
@@ -937,7 +937,7 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
 
     const { result } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }] });
     });
     act(() => { result.current.submitAnswer('4'); });
     act(() => { result.current.submitAnswer('8'); });
@@ -1019,7 +1019,7 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
     });
     const { result, unmount } = renderHook(() => usePostSession());
     await act(async () => {
-      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+      await result.current.startSession({ drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }] });
     });
     act(() => { result.current.reset(); });
     unmount();
