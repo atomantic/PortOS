@@ -2580,3 +2580,6 @@ export function htmlCompositionContractSchemaFor(maxDurationSec = 120) {
 }
 
 export const htmlCompositionContractSchema = htmlCompositionContractSchemaFor(120);
+
+// Jira issue key (ABC-123) or numeric id — the value is interpolated into upstream REST paths.
+export const jiraTicketKeySchema = z.string().max(64).regex(/^([A-Za-z][A-Za-z0-9_]*-\d+|\d+)$/, 'Invalid Jira ticket id');
