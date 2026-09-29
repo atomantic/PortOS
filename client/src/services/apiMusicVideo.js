@@ -48,6 +48,14 @@ export const importMusicVideoLyrics = (id, body, options = {}) => request(`/musi
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Import the linked track's lyric sheet: its lines become the project's lyric
+// cues and its `[Chorus]`/`[Spoken, close]` tags become lyric markers.
+// Body `{ mode?: 'replace' | 'if-empty' }` — `if-empty` never replaces lines.
+// Resolves to { project, imported, markers, skipped }.
+export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import-track`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // Align director lyric lines to the vocal (#9074). Body `{}` aligns every line;
 // `{ cueId }` re-aligns one line. Resolves to the updated project. Runs only
 // when the caller invokes it — there is no boot or import hook.
@@ -86,6 +94,15 @@ export const uploadMusicVideoVocalStem = (id, file, options = {}) => {
 };
 export const removeMusicVideoVocalStem = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/vocal-stem`, { method: 'DELETE', ...options });
+// Separate the vocal out of the song with demucs and attach it as the stem.
+// Kickoff resolves to { jobId }; the terminal `complete` frame carries the
+// updated project. The first run installs demucs, so it can take minutes.
+export const separateMusicVideoVocals = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/vocal-stem/separate`, { method: 'POST', body: '{}', ...options });
+export const musicVideoVocalSeparationEventsUrl = (jobId) =>
+  `/api/music-video/vocal-stem/separate/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoVocalSeparation = (jobId, options = {}) =>
+  request(`/music-video/vocal-stem/separate/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
 
 // ---- Scene takes (#8965) ----
 // Every render/import for a scene slot is an immutable take; the scene's

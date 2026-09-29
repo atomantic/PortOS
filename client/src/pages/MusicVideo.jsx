@@ -19,11 +19,14 @@ import {
   splitMusicVideoScene,
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
+  importMusicVideoTrackLyrics,
   alignMusicVideoLyrics,
 } from '../services/apiMusicVideo.js';
 import useFieldDraft from '../hooks/useFieldDraft.js';
 import useMusicVideoYoutubeImport from '../hooks/useMusicVideoYoutubeImport.js';
 import useMusicVideoMidiJob from '../hooks/useMusicVideoMidiJob.js';
+import useMusicVideoKickoff from '../hooks/useMusicVideoKickoff.js';
+import useMusicVideoVocalSeparation from '../hooks/useMusicVideoVocalSeparation.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
 import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
@@ -139,6 +142,11 @@ export default function MusicVideo() {
       ...(!f.name || tracks.some((t) => t.title === f.name) ? { name: track.title || '' } : {}),
     })),
     onProjectUpdated: replaceProject,
+  });
+  // "Separate vocals" (demucs) — one slot shared by the stem control and the
+  // autopilot kickoff; the terminal frame carries the project with its stem.
+  const separation = useMusicVideoVocalSeparation({
+    onSeparated: (projectId, project) => patchProject(projectId, { vocalStemFilename: project.vocalStemFilename, updatedAt: project.updatedAt }),
   });
   const midi = useMusicVideoMidiJob({
     onTranscribed: (projectId, midiTranscription) => patchProject(projectId, { midiTranscription }),
@@ -323,15 +331,35 @@ export default function MusicVideo() {
       .finally(() => setPlanning(false));
   };
 
-  // Autopilot kickoff: analyze the song when it has no beat map yet, then plan
-  // every shot against the brief (the planner reads automation.guidance).
+  // Autopilot kickoff: analyze the song, import the track's lyric sheet,
+  // separate the vocal, align the words, then plan every shot against the
+  // brief (the planner reads automation.guidance). Each step only runs when
+  // its result is missing; lyric/vocal/alignment failures still plan.
   const autopilotBlockedReason = creativeSetupPending
     ? 'Save or cancel the creative setup before starting autopilot.'
     : autopilotBlocker(selected);
+  const kickoff = useMusicVideoKickoff({
+    analyze: () => handleAnalyze(),
+    importLyrics: (project) => importMusicVideoTrackLyrics(project.id, { mode: 'if-empty' }, { silent: true })
+      .then(({ project: next, imported }) => {
+        patchProject(next.id, { lyricCues: next.lyricCues, lyricMarkers: next.lyricMarkers, updatedAt: next.updatedAt });
+        if (imported) toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'} from the track`);
+        return next;
+      })
+      .catch((err) => { toast.error(err?.message || 'Could not import the track lyrics'); return null; }),
+    separateVocals: (project) => separation.run(project.id),
+    alignLyrics: (project) => alignMusicVideoLyrics(project.id, {}, { silent: true })
+      .then((next) => {
+        patchProject(next.id, { lyricCues: next.lyricCues, audioAnalysis: next.audioAnalysis, updatedAt: next.updatedAt });
+        toast.success('Aligned words to the vocal');
+        return next;
+      })
+      .catch((err) => { toast.error(err?.message || 'Could not align the words — planning without word timings'); return null; }),
+    plan: (project) => handlePlan(project),
+  });
   const handleKickoff = () => {
-    if (!selected || analyzing || planning || autopilotBlockedReason) return;
-    (selected.audioAnalysis ? Promise.resolve(selected) : handleAnalyze())
-      .then((proj) => (proj?.audioAnalysis ? handlePlan(proj) : null));
+    if (!selected || analyzing || planning || kickoff.running || autopilotBlockedReason) return;
+    kickoff.run(selected);
   };
   // Saving a brief hands the project to autopilot, so mode follows it.
   const saveAutomation = (automation) => updateMusicVideoProject(selected.id, { automation, mode: 'autonomous' }, { silent: true })
@@ -458,6 +486,18 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Lyric import failed'))
       .finally(() => setImportingLyrics(false));
   };
+  // "Use track lyrics": replace the lines with the linked track's sheet.
+  const handleImportTrackLyrics = () => {
+    const projectId = selected.id;
+    setImportingLyrics(true);
+    importMusicVideoTrackLyrics(projectId, { mode: 'replace' }, { silent: true })
+      .then(({ project, imported, markers }) => {
+        patchProject(projectId, { lyricCues: project.lyricCues, lyricMarkers: project.lyricMarkers, updatedAt: project.updatedAt });
+        toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'}${markers ? ` and ${markers} section/direction marker${markers === 1 ? '' : 's'}` : ''} from the track`);
+      })
+      .catch((err) => toast.error(err?.message || 'Could not import the track lyrics'))
+      .finally(() => setImportingLyrics(false));
+  };
   // Alignment is a click, never an import side effect. The panel shows the
   // whisper setup error itself, so this request stays silent.
   const handleAlignLyrics = (cueId) => {
@@ -465,7 +505,7 @@ export default function MusicVideo() {
     setAligningLyrics(true);
     return alignMusicVideoLyrics(projectId, cueId ? { cueId } : {}, { silent: true })
       .then((project) => {
-        patchProject(projectId, { lyricCues: project.lyricCues, updatedAt: project.updatedAt });
+        patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt });
         toast.success(cueId ? 'Re-aligned that line' : 'Aligned words to the vocal');
       })
       .finally(() => setAligningLyrics(false));
@@ -722,7 +762,8 @@ export default function MusicVideo() {
               project={selected}
               onSave={saveAutomation}
               onKickoff={handleKickoff}
-              kickoffBusy={analyzing || planning}
+              kickoffBusy={analyzing || planning || kickoff.running}
+              kickoffStep={kickoff.stepLabel}
               kickoffBlockedReason={autopilotBlockedReason}
             />
             <CreativeSetupPanel key={`creative-${selected.id}`} project={selected} onPendingChange={setCreativeSetupPending}
@@ -766,6 +807,7 @@ export default function MusicVideo() {
                 midiBound={midiTargetsSelected}
                 onChangeTrack={handleChangeTrack}
                 onProjectUpdated={replaceProject}
+                separation={separation}
               />
               <AnalysisPanel
                 audioAnalysis={selected.audioAnalysis}
@@ -779,6 +821,7 @@ export default function MusicVideo() {
                 onEditLocal={editProjectLocal}
                 onSave={saveProjectFields}
                 onImport={handleImportLyrics}
+                onImportTrack={handleImportTrackLyrics}
                 importing={importingLyrics}
                 onAlign={handleAlignLyrics}
                 aligning={aligningLyrics}

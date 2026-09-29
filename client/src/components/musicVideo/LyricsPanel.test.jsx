@@ -60,3 +60,28 @@ describe('LyricsPanel word alignment', () => {
     });
   });
 });
+
+describe('LyricsPanel track lyrics', () => {
+  it('offers the linked track\'s lyric sheet, and shows its sections and directions over the lines', () => {
+    const onImportTrack = vi.fn();
+    renderPanel({
+      onImportTrack,
+      project: {
+        ...PROJECT,
+        lyricMarkers: [
+          { type: 'section', label: 'Chorus', kind: 'chorus', line: 0 },
+          { type: 'direction', label: 'Whispered spoken', kind: 'whispered', line: 0 },
+        ],
+      },
+    });
+    expect(screen.getByText('Chorus')).toBeTruthy();
+    expect(screen.getByText('[Whispered spoken]')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Use track lyrics/ }));
+    expect(onImportTrack).toHaveBeenCalledOnce();
+  });
+
+  it('has no track-lyrics button without a linked track', () => {
+    renderPanel({ onImportTrack: vi.fn(), project: { ...PROJECT, trackId: null } });
+    expect(screen.queryByRole('button', { name: /Use track lyrics/ })).toBeNull();
+  });
+});

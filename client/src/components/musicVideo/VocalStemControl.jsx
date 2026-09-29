@@ -1,20 +1,28 @@
 import { useState } from 'react';
-import { Mic, X } from 'lucide-react';
+import { Mic, Wand2, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import { uploadMusicVideoVocalStem, removeMusicVideoVocalStem } from '../../services/apiMusicVideo.js';
 
 const HELP = 'Optional. A full-length vocal bounce from the same session as the song, starting at 0:00. '
   + 'Lip-sync performance shots are conditioned on it instead of the full mix. The final video keeps the song.';
 
+const SEPARATE_HELP = 'Split the vocal out of the song with demucs and attach it as the stem. '
+  + 'The first run installs demucs (a few minutes); after that a song takes seconds on Apple Silicon or an NVIDIA GPU.';
+
 /**
- * Attach, replace or remove the project's vocal stem (#8977). The server
+ * Attach, replace or remove the project's vocal stem (#8977), or separate one
+ * from the song (`separation`, a useMusicVideoVocalSeparation slot). The server
  * refuses a stem whose length does not match the song, since its timing would
  * not line up; the error toast says why.
  */
-export default function VocalStemControl({ project, hasAudio, onUpdated }) {
+export default function VocalStemControl({ project, hasAudio, onUpdated, separation = null }) {
   const [busy, setBusy] = useState(false);
   const inputId = `mv-vocal-stem-${project.id}`;
   const stem = project.vocalStemFilename || null;
+  const separating = Boolean(separation?.active && separation.context === project.id);
+  const separationLabel = separating
+    ? `${separation.stageLabel || 'Separating vocals…'}${separation.stage === 'separating' && separation.percent ? ` ${separation.percent}%` : ''}`
+    : 'Separate vocals';
 
   const run = (call, success, failure) => {
     setBusy(true);
@@ -35,7 +43,7 @@ export default function VocalStemControl({ project, hasAudio, onUpdated }) {
   };
   const remove = () => run(() => removeMusicVideoVocalStem(project.id, { silent: true }), 'Vocal stem removed', 'Failed to remove the vocal stem');
 
-  const disabled = busy || !hasAudio;
+  const disabled = busy || !hasAudio || separating;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" title={hasAudio ? HELP : 'Link a track first'}>
       <input id={inputId} type="file" accept="audio/*" className="sr-only" onChange={upload} disabled={disabled} />
@@ -43,10 +51,23 @@ export default function VocalStemControl({ project, hasAudio, onUpdated }) {
         className={`flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-port-border/40'}`}>
         <Mic size={13} /> {busy ? 'Working…' : stem ? 'Replace vocal stem' : 'Add vocal stem'}
       </label>
+      {separation && (
+        <button type="button" onClick={() => separation.start(project.id)} disabled={busy || !hasAudio || separation.active}
+          title={hasAudio ? SEPARATE_HELP : 'Link a track first'} aria-live="polite"
+          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
+          <Wand2 size={13} /> {separationLabel}
+        </button>
+      )}
+      {separating && separation.jobId && (
+        <button type="button" onClick={separation.cancel}
+          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0">
+          Cancel
+        </button>
+      )}
       {stem ? (
         <>
           <span className="text-port-text-muted break-all">Lip-sync uses {stem}</span>
-          <button type="button" onClick={remove} disabled={busy} aria-label="Remove vocal stem"
+          <button type="button" onClick={remove} disabled={busy || separating} aria-label="Remove vocal stem"
             className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
             <X size={13} /> Remove
           </button>
