@@ -532,6 +532,11 @@ export const musicVideoProjectCreateSchema = z.object({
   visualSpec: musicVideoVisualSpecSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
+  lyricCues: lyricCueList.optional(),
+  phrases: phraseList.optional(),
+  pacing: musicVideoPacingSchema.nullable().optional(),
+  composition: musicVideoCompositionSchema.nullable().optional(),
+  soundBed: musicVideoSoundBedSchema.nullable().optional(),
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
