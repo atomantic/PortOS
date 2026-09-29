@@ -9,7 +9,7 @@
 import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { access, lstat, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from 'fs/promises';
+import { access, lstat, mkdtemp, readdir, rm, stat, unlink, writeFile } from 'fs/promises';
 import { PassThrough } from 'node:stream';
 import { hostname, tmpdir } from 'os';
 import { basename, join, resolve, relative, isAbsolute } from 'path';
@@ -660,7 +660,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
  * escape hatch from "PG required but dump failed" (data at risk):
  *   { status: 'ok', sizeBytes, tableCount }
  *   { status: 'skipped', reason: 'not_configured' }   (explicit file escape hatch only)
- *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'version_mismatch'|'dump_error'|'empty_dump'|'timeout', error }
+ *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'version_mismatch'|'dump_error'|'empty_dump'|'inspect_error'|'timeout', error }
  *     (pg_unreachable fires whenever Postgres is required — i.e. not the file
  *      escape hatch — but the DB is down at backup time; version_mismatch means
  *      no installed pg_dump is new enough for the running server)
@@ -765,8 +765,18 @@ export async function dumpPostgres(outputPath) {
         resolvePromise({ status: 'failed', reason: 'empty_dump', error: 'dump file missing or 0 bytes' });
         return;
       }
-      const sql = await readFile(outputPath, 'utf-8').catch(() => '');
-      const tableCount = (sql.match(/^CREATE TABLE /gm) || []).length;
+      // Stream the dump for its table count — reading it whole would scale
+      // server heap with database size. Own the rejection here: this is an
+      // event callback, so a throw would leave the outer Promise unsettled.
+      const inspected = await inspectDatabaseDump(outputPath).catch((err) => {
+        console.warn(`⚠️ pg_dump inspection failed: ${err.code || err.message}`);
+        return null;
+      });
+      if (!inspected) {
+        resolvePromise({ status: 'failed', reason: 'inspect_error', error: 'dump could not be read for verification' });
+        return;
+      }
+      const tableCount = inspected.tableCount;
       console.log(`💾 pg_dump complete: ${Math.round(info.size / 1024)}KB, ${tableCount} tables`);
       // Don't return the absolute dump path: this result is persisted into
       // state.pgBackup and surfaced to the client via GET /api/backup/status,
