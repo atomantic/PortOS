@@ -571,3 +571,22 @@ describe('UsagePage free-tier section (#7408)', () => {
     expect(await screen.findByText('No free-tier usage recorded in this period.')).toBeInTheDocument();
   });
 });
+
+describe('UsagePage custom date range inputs', () => {
+  it('keeps a half-typed date instead of resetting it, and commits once complete', async () => {
+    api.getUsage.mockResolvedValue(usage);
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const from = await screen.findByLabelText('From date');
+    const callsBefore = api.getUsage.mock.calls.length;
+
+    // Partially typed segments surface as value "" (happy-dom lacks badInput, so
+    // assert the complete-date path plus that a stray year-0002 date never commits).
+    fireEvent.change(from, { target: { value: '0002-09-29' } });
+    expect(from.value).toBe('0002-09-29');
+    expect(api.getUsage.mock.calls.length).toBe(callsBefore);
+
+    fireEvent.change(from, { target: { value: '2026-09-29' } });
+    await waitFor(() => expect(api.getUsage.mock.calls.length).toBeGreaterThan(callsBefore));
+    expect(from.value).toBe('2026-09-29');
+  });
+});
