@@ -201,7 +201,7 @@ export default function WritersRoom() {
           </aside>
         )}
 
-        <section className="min-h-0 flex flex-col flex-1">
+        <section aria-label="Work editor" className="min-h-0 flex flex-col flex-1">
           {loadingWork && <div className="p-6 text-sm text-gray-500">Loading work…</div>}
           {!loadingWork && !activeWork && (
             <div className="flex-1 flex items-center justify-center p-8">
