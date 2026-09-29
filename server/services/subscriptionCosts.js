@@ -104,11 +104,12 @@ const utcToday = () => new Date().toISOString().split('T')[0];
  */
 export async function getSubscriptionSavings({ report, providers = [], from = null, to = null, firstActivityDay = null, today = utcToday() }) {
   const costs = await getSubscriptionCosts();
-  const { byFamily, unmatched } = attributeReportCostToFamilies(report);
+  const { byFamily, sources, unmatched } = attributeReportCostToFamilies(report);
   const entries = resolveSubscriptionFamilies(providers, costs, [...byFamily.keys()]).map((f) => ({
     ...f,
     monthlyCost: costs[f.family] ?? 0,
-    apiCost: byFamily.get(f.family) || 0
+    apiCost: byFamily.get(f.family) || 0,
+    source: sources.get(f.family)
   }));
   return buildSubscriptionSavings({
     entries,

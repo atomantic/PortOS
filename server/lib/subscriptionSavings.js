@@ -90,17 +90,26 @@ export function costMultiplier(apiCost, periodCost) {
  * (uninstalled provider, `legacy`, `unknown`, a pay-as-you-go API provider)
  * lands in `unmatched` and is reported on its own rather than being credited to
  * a plan no one was paying.
+ *
+ * `sources` carries each family's provenance (`measured` / `estimate` /
+ * `mixed`) so the savings table can say when a plan's API figure is a guess —
+ * an estimated row usually UNDERSTATES, which reads as a plan that "cost more
+ * than it was worth".
  */
 export function attributeReportCostToFamilies(report) {
   const byFamily = new Map();
+  const sources = new Map();
   let unmatched = 0;
   for (const row of report?.providers || []) {
     const cost = Number(row?.estimatedCost) || 0;
     if (cost <= 0) continue;
     if (!row.family) { unmatched += cost; continue; }
     byFamily.set(row.family, (byFamily.get(row.family) || 0) + cost);
+    const source = row.source || 'estimate';
+    const seen = sources.get(row.family);
+    sources.set(row.family, seen && seen !== source ? 'mixed' : source);
   }
-  return { byFamily, unmatched };
+  return { byFamily, sources, unmatched };
 }
 
 /**
@@ -134,6 +143,7 @@ export function buildSubscriptionSavings({ entries = [], range, unmatchedApiCost
       configured,
       periodCost,
       apiCost,
+      source: entry.source ?? null,
       savings: configured ? roundCents(apiCost - periodCost) : 0,
       multiplier: configured ? costMultiplier(apiCost, periodCost) : null
     };

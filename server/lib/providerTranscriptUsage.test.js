@@ -652,6 +652,22 @@ describe('parseAgyTranscript', () => {
     expect(parsed.countedKeys).toEqual(['step-0', 'step-1', 'step-2']);
   });
 
+  it('prices each model call\'s replayed context, including steps before the window', () => {
+    const text = [
+      agyStep({ index: 0, type: 'USER_INPUT', createdAt: '2026-07-01T09:00:00Z', content: 'u'.repeat(100) }),
+      agyStep({ index: 1, type: 'PLANNER_RESPONSE', createdAt: '2026-07-01T09:01:00Z', content: 'p'.repeat(50) }),
+      agyStep({ index: 2, type: 'VIEW_FILE', createdAt: '2026-07-01T10:00:00Z', content: 'v'.repeat(200) }),
+      agyStep({ index: 3, type: 'PLANNER_RESPONSE', createdAt: '2026-07-01T10:01:00Z', content: 'q'.repeat(30) })
+    ].join('\n');
+    // Whole transcript: call 1 replays 100 chars, call 2 replays 100+50+200.
+    expect(parseAgyTranscript(text).contextChars).toBe(100 + 350);
+    // A later run sees only call 2, but still pays for the history it replays.
+    const later = parseAgyTranscript(text, { from: Date.parse('2026-07-01T09:30:00Z') });
+    expect(later.contextChars).toBe(350);
+    expect(later.charsIn).toBe(200);
+    expect(later.charsOut).toBe(30);
+  });
+
   it('windows steps by created_at and reports how many it saw', () => {
     const text = [
       agyStep({ index: 0, type: 'GENERIC', createdAt: '2026-07-01T09:00:00Z', content: 'a'.repeat(80) }),

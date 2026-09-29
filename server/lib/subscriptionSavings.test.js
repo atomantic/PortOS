@@ -103,7 +103,20 @@ describe('attributeReportCostToFamilies', () => {
   });
 
   it('is empty-safe on a missing report', () => {
-    expect(attributeReportCostToFamilies(null)).toEqual({ byFamily: new Map(), unmatched: 0 });
+    expect(attributeReportCostToFamilies(null)).toEqual({ byFamily: new Map(), sources: new Map(), unmatched: 0 });
+  });
+
+  it('reports a family as estimated or mixed unless every row is measured', () => {
+    const { sources } = attributeReportCostToFamilies({
+      providers: [
+        { family: 'agy', estimatedCost: 1, source: 'estimate' },
+        { family: 'grok', estimatedCost: 1, source: 'measured' },
+        { family: 'grok', estimatedCost: 1, source: 'estimate' },
+        { family: 'claude', estimatedCost: 1, source: 'measured' },
+        { family: 'codex', estimatedCost: 1 }
+      ]
+    });
+    expect(Object.fromEntries(sources)).toEqual({ agy: 'estimate', grok: 'mixed', claude: 'measured', codex: 'estimate' });
   });
 });
 
