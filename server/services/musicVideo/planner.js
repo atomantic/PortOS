@@ -43,6 +43,7 @@ import { extractJson } from '../../lib/jsonExtract.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
 import { planShots, resolveClipCapacitySec, validSections } from './shotPlan.js';
 import { getProject, addProjectScenes } from './projects.js';
+import { deliveryNotesWithin } from './lyricMarkers.js';
 
 const SCENE_LABEL_MAX = 120;
 const SCENE_TEXT_MAX = 2000;
@@ -115,6 +116,7 @@ export function buildScenePlanPrompt(project, shots) {
   const guidance = project.automation?.guidance?.trim();
   const guidanceLine = guidance ? `Director guidance: ${quote(guidance, PROMPT_GUIDANCE_MAX)}` : '';
   const hasLyrics = shots.some((s) => s.lyricText);
+  const hasDelivery = shots.some((s) => s.delivery?.length);
   const shotLines = shots.map((s, i) => {
     const duration = (s.endSec - s.startSec).toFixed(1);
     const energy = typeof s.sectionEnergy === 'number' ? s.sectionEnergy.toFixed(2) : 'unknown';
@@ -122,6 +124,7 @@ export function buildScenePlanPrompt(project, shots) {
     const parts = [`${i}. ${section} — ${duration}s, energy ${energy}`];
     parts.push(s.lyricText ? `lyrics: "${quote(s.lyricText, PROMPT_LYRIC_MAX)}"` : 'instrumental');
     if (s.visualIntent) parts.push(`intent: ${quote(s.visualIntent, PROMPT_LYRIC_MAX)}`);
+    if (s.delivery?.length) parts.push(`delivery: ${quote(s.delivery.join('; '), PROMPT_LYRIC_MAX)}`);
     if (s.hook) parts.push('OPENING HOOK');
     return parts.join('; ');
   }).join('\n');
@@ -133,7 +136,7 @@ ${musicVideoCreativeContext(concept)}
 ${briefLines}
 ${guidanceLine}
 
-The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent):
+The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent${hasDelivery ? '; optional delivery directions from the lyric sheet' : ''}):
 ${shotLines}
 
 For EACH shot above, propose the shot for a generative video model:
@@ -141,7 +144,7 @@ For EACH shot above, propose the shot for a generative video model:
 - "prompt": the motion for that shot — camera move, subject motion, mood — building on the frame. Higher-energy sections read more kinetic; calmer sections more static/lingering.
 - Shots in the same section are one edited sequence: keep subject and setting continuous, but vary framing (wide / medium / close), angle, or action from shot to shot so consecutive shots cut rather than repeat.
 - The OPENING HOOK shot must grab attention immediately.
-${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text.\n' : ''}- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
+${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text.\n' : ''}${hasDelivery ? '- Follow the delivery directions: spoken or whispered lines play as intimate close-ups; shouts land as hard-hitting cuts or impacts; a silence or stop is a held, frozen or cut-to-black beat.\n' : ''}- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
 
 Respond with ONLY a JSON array, one object per shot, in shot-index order (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
 [{ "index": 0, "framePrompt": "<the opening reference still, ready to render>", "prompt": "<the shot's motion, ready to render>" }]`;
@@ -261,6 +264,15 @@ export async function planProject(id, { seedPrompts = true, providerId, model, d
     pacing: project.pacing,
     clipCapacitySec: resolveClipCapacitySec(project.videoSettings),
   });
+  // Lyric-sheet stage directions ([Spoken, close], [Shouts], [Stop — silence])
+  // placed by the timed lines, so the first-pass prompts can frame them.
+  const markers = project.lyricMarkers || [];
+  if (markers.length) {
+    for (const shot of shots) {
+      const delivery = deliveryNotesWithin(project.lyricCues, markers, shot.startSec, shot.endSec);
+      if (delivery.length) shot.delivery = delivery;
+    }
+  }
   const sceneInputs = sceneInputsFromShots(shots);
 
   let promptsSeeded = false;

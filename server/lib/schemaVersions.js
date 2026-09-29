@@ -619,7 +619,14 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // loss back, so the gate rejects the ahead transfer. The older peer is
   // never handed `mode: "code"` (an enum value it cannot store). It keeps
   // the concat/composed project it already understands.
-  musicVideoProjects: 7,
+  // v8 = lyric-sheet structure (`lyricMarkers`: section headers and stage
+  // directions anchored to lyric-line indices) and lyric-derived analysis
+  // section names (`audioAnalysis.sections[].labelSource`/`analysisLabel`).
+  // A v7 receiver stores the body verbatim but mis-executes it: its lyric
+  // import replaces the lines without replacing the markers, leaving them
+  // anchored to the wrong lines, and that edit wins LWW onto the upgraded
+  // peer. Records without either field need no rewrite.
+  musicVideoProjects: 8,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

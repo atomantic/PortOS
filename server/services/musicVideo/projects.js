@@ -95,10 +95,12 @@ async function seedTrackMetadata(input) {
   const track = await getTrack(input.trackId).catch(() => null);
   if (!track) return input;
   let lyricCues = input.lyricCues;
+  let lyricMarkers = input.lyricMarkers;
   if ((!lyricCues || lyricCues.length === 0) && track.lyrics) {
     const parsed = parseLyricCues(track.lyrics);
     if (parsed.cues && parsed.cues.length > 0) {
       lyricCues = parsed.cues;
+      lyricMarkers = parsed.markers;
     }
   }
   let name = input.name;
@@ -117,6 +119,7 @@ async function seedTrackMetadata(input) {
     ...input,
     ...(name ? { name } : {}),
     ...(lyricCues ? { lyricCues } : {}),
+    ...(lyricMarkers ? { lyricMarkers } : {}),
     ...(concept ? { concept } : {}),
   };
 }
@@ -129,10 +132,12 @@ async function seedTrackMetadataOnUpdate(id, patch) {
   const track = await getTrack(patch.trackId).catch(() => null);
   if (!track) return patch;
   let lyricCues = patch.lyricCues;
+  let lyricMarkers = patch.lyricMarkers;
   if (!lyricCues && track.lyrics) {
     const parsed = parseLyricCues(track.lyrics);
     if (parsed.cues && parsed.cues.length > 0) {
       lyricCues = parsed.cues;
+      lyricMarkers = parsed.markers;
     }
   }
   let concept = patch.concept;
@@ -147,6 +152,7 @@ async function seedTrackMetadataOnUpdate(id, patch) {
   return {
     ...patch,
     ...(lyricCues ? { lyricCues } : {}),
+    ...(lyricMarkers ? { lyricMarkers } : {}),
     ...(concept ? { concept } : {}),
   };
 }

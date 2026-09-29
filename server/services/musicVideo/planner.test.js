@@ -471,6 +471,30 @@ Here is my answer:
     expect(lyricShots[0].endSec).toBeGreaterThanOrEqual(15);
   });
 
+  it('hands the lyric sheet\'s delivery directions to the first-pass prompt for the shot they fall in', async () => {
+    getProject.mockResolvedValue(makeProject({
+      lyricCues: [
+        { id: 'lc-1', text: 'come closer', startSec: 2, endSec: 4 },
+        { id: 'lc-2', text: 'let it out', startSec: 12, endSec: 14 },
+      ],
+      lyricMarkers: [
+        { type: 'direction', label: 'Whispered spoken', kind: 'whispered', line: 0 },
+        { type: 'direction', label: 'Shouts', kind: 'shouted', line: 1 },
+      ],
+    }));
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
+    runPromptThroughProvider.mockResolvedValue({ text: '[]' });
+
+    await planProject('mv-1');
+
+    const { prompt } = runPromptThroughProvider.mock.calls[0][0];
+    const lines = prompt.split('\n');
+    expect(lines.find((line) => line.includes('"come closer"'))).toMatch(/delivery: Whispered spoken/);
+    expect(lines.find((line) => line.includes('"let it out"'))).toMatch(/delivery: Shouts/);
+    expect(prompt).toMatch(/whispered lines play as intimate close-ups/);
+  });
+
   it('still honors the planned spans when the cached analysis has no beat grid', async () => {
     getProject.mockResolvedValue(makeProject({
       audioAnalysis: { bpm: null, beats: [], downbeats: [], sections: SECTIONS, durationSec: 30 },

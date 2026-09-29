@@ -4,10 +4,10 @@ import { alignProjectLyrics } from './lyricAlign.js';
 import {
   alignDirectorWords,
   encodePcm16Wav,
-  explainSttFailure,
   lyricAlignChunkSec,
   lyricAlignFfmpegArgs,
   mergeChunkWords,
+  mergeTranscripts,
   pickAlignmentPath,
   planAudioChunks,
   sliceWav,
@@ -115,6 +115,60 @@ describe('alignDirectorWords', () => {
     expect(aligned.words[3].startSec).toBe(7);
   });
 
+  it('does not let a word the recognizer missed latch onto the same word a verse later', () => {
+    // "the" in line one was not heard. A next-equal-word matcher would take the
+    // "the" of line three for it and strand line two between them.
+    const aligned = alignDirectorWords([
+      { id: 'a', text: 'into the night', startSec: null, endSec: null },
+      { id: 'b', text: 'running far away', startSec: null, endSec: null },
+      { id: 'c', text: 'under the moon', startSec: null, endSec: null },
+    ], [
+      { text: 'into', startSec: 1, endSec: 1.3 },
+      { text: 'night', startSec: 1.6, endSec: 2 },
+      { text: 'running', startSec: 3, endSec: 3.4 },
+      { text: 'far', startSec: 3.4, endSec: 3.7 },
+      { text: 'away', startSec: 3.7, endSec: 4.2 },
+      { text: 'under', startSec: 6, endSec: 6.3 },
+      { text: 'the', startSec: 6.3, endSec: 6.4 },
+      { text: 'moon', startSec: 6.4, endSec: 7 },
+    ]);
+    expect(aligned[0].words.map((word) => word.conf)).toEqual(['matched', 'interpolated', 'matched']);
+    expect(aligned[0].words[1].startSec).toBeGreaterThanOrEqual(1.3);
+    expect(aligned[0].words[1].endSec).toBeLessThanOrEqual(1.6);
+    expect(aligned[1]).toMatchObject({ startSec: 3, endSec: 4.2 });
+    expect(aligned[1].words.every((word) => word.conf === 'matched')).toBe(true);
+    expect(aligned[2].words[1]).toMatchObject({ w: 'the', startSec: 6.3, conf: 'matched' });
+  });
+
+  it('matches a curly-apostrophe sheet word to the recognizer\'s straight one', () => {
+    const [aligned] = alignDirectorWords(
+      [{ id: 'a', text: 'I’m gonna stay', startSec: null, endSec: null }],
+      [
+        { text: "I'm", startSec: 1, endSec: 1.2 },
+        { text: 'gona', startSec: 1.2, endSec: 1.5 },
+        { text: 'stay', startSec: 1.5, endSec: 2 },
+      ],
+    );
+    expect(aligned.words.map((word) => [word.w, word.conf])).toEqual([
+      ['I’m', 'matched'], ['gonna', 'matched'], ['stay', 'matched'],
+    ]);
+  });
+
+  it('gives a one-word line the recognizer timed as an instant a playable span', () => {
+    const aligned = alignDirectorWords([
+      { id: 'a', text: 'Hush.', startSec: null, endSec: null },
+      { id: 'b', text: 'can you feel', startSec: null, endSec: null },
+    ], [
+      { text: 'Hush.', startSec: 20.5, endSec: 20.5 },
+      { text: 'can', startSec: 21, endSec: 21.2 },
+      { text: 'you', startSec: 21.2, endSec: 21.4 },
+      { text: 'feel', startSec: 21.4, endSec: 21.8 },
+    ]);
+    expect(aligned[0]).toMatchObject({ startSec: 20.5, endSec: 20.75 });
+    expect(aligned[0].words[0]).toMatchObject({ w: 'Hush.', conf: 'matched' });
+    expect(aligned[1]).toMatchObject({ startSec: 21, endSec: 21.8 });
+  });
+
   it('fills only the cue times the director left empty', () => {
     const [aligned] = alignDirectorWords(
       [{ id: 'a', text: 'walking home', startSec: 1, endSec: null }],
@@ -145,24 +199,49 @@ describe('lyric alignment audio', () => {
     expect(() => sliceWav(stereo, 0, 0.01)).toThrow(/16-bit mono/);
   });
 
-  it('uses the vocal stem when one is attached, and does not fall back when that file is missing', async () => {
+  it('uses the vocal stem with the mix beside it, and does not fall back when the stem file is missing', async () => {
     const resolveMaster = vi.fn(async () => '/library/mix.wav');
     await expect(pickAlignmentPath({ vocalStemFilename: 'v.wav' }, {
       resolveStem: () => '/library/v.wav',
       resolveMaster,
-    })).resolves.toEqual({ path: '/library/v.wav', source: 'vocal-stem' });
-    expect(resolveMaster).not.toHaveBeenCalled();
+    })).resolves.toEqual({ path: '/library/v.wav', source: 'vocal-stem', mixPath: '/library/mix.wav' });
 
     await expect(pickAlignmentPath({}, {
       resolveStem: () => null,
       resolveMaster,
-    })).resolves.toEqual({ path: '/library/mix.wav', source: 'master' });
+    })).resolves.toEqual({ path: '/library/mix.wav', source: 'master', mixPath: null });
 
     const missing = new ServerError('missing', { status: 404, code: 'MUSIC_VIDEO_VOCAL_STEM_MISSING' });
     await expect(pickAlignmentPath({ vocalStemFilename: 'gone.wav' }, {
       resolveStem: () => { throw missing; },
       resolveMaster,
     })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_VOCAL_STEM_MISSING' });
+  });
+});
+
+describe('mergeTranscripts', () => {
+  const words = (list) => list.map(([text, startSec]) => ({ text, startSec, endSec: startSec + 0.3 }));
+
+  it('keeps the stem where it is clean and takes the mix only where the stem loops', () => {
+    const stem = words([
+      ['hold', 1], ['me', 1.4], ['close', 1.8],
+      ['Na-na-na-na-na-na', 4],
+      ['no', 9], ['no', 9.4], ['no', 9.8], ['no', 10.2], ['no', 10.6], ['no', 11],
+    ]);
+    // The mix mishears the clean stretch, and stretches words across the loop too.
+    const mix = words([
+      ['old', 1], ['me', 1.4], ['clothes', 1.8],
+      ['tonight', 4.1],
+      ['never', 9], ['let', 9.4], ['me', 9.8], ['go', 10.2],
+    ]);
+    const merged = mergeTranscripts(stem, mix, 'hold me close tonight\nnever let me go');
+    expect(merged.map((word) => word.text)).toEqual(['hold', 'me', 'close', 'tonight', 'never', 'let', 'me', 'go']);
+  });
+
+  it('keeps a repeat the lyrics really sing, and drops a looped run with nothing to replace it', () => {
+    const sung = words([['hey', 1], ['hey', 1.4], ['hey', 1.8], ['hey', 2.2]]);
+    expect(mergeTranscripts(sung, [], 'hey hey hey hey')).toHaveLength(4);
+    expect(mergeTranscripts(sung, [], 'hey there')).toHaveLength(0);
   });
 });
 
@@ -176,39 +255,37 @@ describe('alignProjectLyrics', () => {
     ],
   };
 
-  function harness(transcribe, record = project) {
+  function harness(transcribe, record = project, { resolveAudio } = {}) {
     const updateProject = vi.fn(async (id, patch) => ({ id, ...record, ...patch }));
     const decodeAudio = vi.fn(async () => encodePcm16Wav(16000 * 3));
     const getProject = vi.fn(async () => record);
+    const release = vi.fn(async () => {});
     return {
       updateProject,
       decodeAudio,
       transcribe,
+      release,
       run: (opts = {}) => alignProjectLyrics(record.id, {
         ...opts,
         deps: {
           getProject,
           updateProject,
-          resolveAudio: async () => ({ path: 'song.wav', source: 'master' }),
+          resolveAudio: resolveAudio || (async () => ({ path: 'song.wav', source: 'master', mixPath: null })),
           decodeAudio,
-          transcribe,
+          resolveTranscriber: async () => ({ kind: 'test', transcribe, release }),
         },
       }),
     };
   }
 
   it('writes matched and interpolated words, and does not replace a time the director set', async () => {
-    const transcribe = vi.fn(async () => ({
-      text: 'walking home',
-      words: [
-        { text: 'walking', startSec: 0.5, endSec: 1 },
-        { text: 'home', startSec: 1, endSec: 1.5 },
-      ],
-      latencyMs: 4,
-    }));
-    const { run, updateProject } = harness(transcribe);
+    const transcribe = vi.fn(async () => [
+      { text: 'walking', startSec: 0.5, endSec: 1 },
+      { text: 'home', startSec: 1, endSec: 1.5 },
+    ]);
+    const { run, updateProject, release } = harness(transcribe);
     const saved = await run();
-    expect(transcribe).toHaveBeenCalledWith(expect.any(Buffer), expect.objectContaining({ verbose: true }));
+    expect(transcribe).toHaveBeenCalledWith(expect.any(Buffer), expect.objectContaining({ prompt: 'walking home\nnot sung here' }));
     expect(saved.lyricCues[0]).toMatchObject({
       startSec: 1,
       endSec: 1.5,
@@ -220,6 +297,58 @@ describe('alignProjectLyrics', () => {
     expect(saved.lyricCues[1].words.every((word) => word.conf === 'interpolated')).toBe(true);
     expect(saved.lyricCues[1].words.every((word) => word.startSec >= 2 && word.endSec <= 2.8)).toBe(true);
     expect(updateProject).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('transcribes the stem and the mix, and aligns to their merge', async () => {
+    const transcribe = vi.fn()
+      .mockResolvedValueOnce([
+        { text: 'walking', startSec: 0.5, endSec: 1 },
+        { text: 'no', startSec: 1.2, endSec: 1.3 }, { text: 'no', startSec: 1.3, endSec: 1.4 },
+        { text: 'no', startSec: 1.4, endSec: 1.5 }, { text: 'no', startSec: 1.5, endSec: 1.6 },
+      ])
+      .mockResolvedValueOnce([
+        { text: 'walking', startSec: 0.5, endSec: 1 },
+        { text: 'home', startSec: 1.1, endSec: 1.6 },
+      ]);
+    const { run, decodeAudio } = harness(transcribe, project, {
+      resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem', mixPath: 'song.wav' }),
+    });
+    const saved = await run();
+    expect(decodeAudio.mock.calls.map(([path]) => path)).toEqual(['stem.wav', 'song.wav']);
+    expect(saved.lyricCues[0].words[1]).toMatchObject({ w: 'home', startSec: 1.1, conf: 'matched' });
+  });
+
+  it('names the analysis sections after the lyric sheet once the lines are timed', async () => {
+    const record = {
+      ...project,
+      lyricCues: [
+        { id: 'lc-1', text: 'walking home', startSec: null, endSec: null },
+        { id: 'lc-2', text: 'under neon', startSec: null, endSec: null },
+      ],
+      lyricMarkers: [
+        { type: 'section', label: 'Verse 1', kind: 'verse', line: 0 },
+        { type: 'section', label: 'Chorus', kind: 'chorus', line: 1 },
+      ],
+      audioAnalysis: {
+        bpm: 120, beats: [], downbeats: [], durationSec: 12,
+        sections: [
+          { label: 'Section 1', startSec: 0, endSec: 2, energy: 0.2 },
+          { label: 'Section 2', startSec: 2, endSec: 5, energy: 0.5 },
+          { label: 'Section 3', startSec: 5, endSec: 9, energy: 0.9 },
+          { label: 'Section 4', startSec: 9, endSec: 12, energy: 0.3 },
+        ],
+      },
+    };
+    const transcribe = vi.fn(async () => [
+      { text: 'walking', startSec: 2.2, endSec: 3 }, { text: 'home', startSec: 3, endSec: 4.5 },
+      { text: 'under', startSec: 5.1, endSec: 6 }, { text: 'neon', startSec: 6, endSec: 8.8 },
+    ]);
+    const saved = await harness(transcribe, record).run();
+    expect(saved.audioAnalysis.sections.map((section) => [section.label, section.labelSource ?? null])).toEqual([
+      ['Intro', 'lyrics'], ['Verse 1', 'lyrics'], ['Chorus', 'lyrics'], ['Outro', 'lyrics'],
+    ]);
+    expect(saved.audioAnalysis.sections[2]).toMatchObject({ analysisLabel: 'Section 3', startSec: 5, endSec: 9, energy: 0.9 });
   });
 
   it('re-aligns one windowed line without moving the other line', async () => {
@@ -236,23 +365,21 @@ describe('alignProjectLyrics', () => {
         { id: 'lc-2', text: 'not sung here', startSec: 2, endSec: 2.8 },
       ],
     };
-    const transcribe = vi.fn(async () => ({ text: '', words: [], latencyMs: 1 }));
+    const transcribe = vi.fn(async () => []);
     const saved = await harness(transcribe, record).run({ cueId: 'lc-2' });
+    expect(transcribe).toHaveBeenCalledWith(expect.any(Buffer), expect.objectContaining({ startSec: 2, endSec: 2.8 }));
     expect(saved.lyricCues[0].words).toEqual(record.lyricCues[0].words);
     expect(saved.lyricCues[1].words.every((word) => word.conf === 'interpolated')).toBe(true);
     expect(saved.lyricCues[1].words.every((word) => word.startSec >= 2 && word.endSec <= 2.8)).toBe(true);
   });
 
-  it('reports an unreachable speech-to-text server instead of saving empty timings', async () => {
-    const transcribe = vi.fn(async () => { throw new Error('fetch failed'); });
-    const { run, updateProject } = harness(transcribe);
-    await expect(run()).rejects.toMatchObject({
-      status: 503,
-      code: 'LYRIC_ALIGN_STT_UNAVAILABLE',
-      message: expect.stringMatching(/Settings → Voice/),
-    });
+  it('stops the runner and saves nothing when transcription fails', async () => {
+    const failure = new ServerError('no whisper', { status: 503, code: 'LYRIC_ALIGN_STT_UNAVAILABLE' });
+    const transcribe = vi.fn(async () => { throw failure; });
+    const { run, updateProject, release } = harness(transcribe);
+    await expect(run()).rejects.toBe(failure);
     expect(updateProject).not.toHaveBeenCalled();
-    expect(explainSttFailure(new Error('fetch failed'))).toMatch(/not running/);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it('does not transcribe when the project has no lyric lines', async () => {

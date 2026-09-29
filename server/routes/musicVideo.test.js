@@ -278,17 +278,24 @@ describe('musicVideo routes', () => {
       expect(r.body).toMatchObject({ imported: 2, format: 'lrc' });
       expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
         lyricCues: [{ text: 'one', startSec: 1, endSec: 3 }, { text: 'two', startSec: 3, endSec: null }],
+        lyricMarkers: [],
       });
     });
 
-    it('appends plain lines after the existing cues', async () => {
+    it('appends plain lines after the existing cues, anchoring the sheet\'s markers after them', async () => {
       const existing = { id: 'lc-old', text: 'old', startSec: 1, endSec: 2 };
-      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [existing] });
+      const marker = { type: 'section', label: 'Verse 1', kind: 'verse', line: 0 };
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [existing], lyricMarkers: [marker] });
       const r = await request(app).post('/api/music-video/mv-1/lyrics/import')
-        .send({ text: 'new line', mode: 'append' });
+        .send({ text: '[Chorus]\nnew line\n[Shouts]', mode: 'append' });
       expect(r.status).toBe(200);
       expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
         lyricCues: [existing, { text: 'new line', startSec: null, endSec: null }],
+        lyricMarkers: [
+          marker,
+          { type: 'section', label: 'Chorus', kind: 'chorus', line: 1 },
+          { type: 'direction', label: 'Shouts', kind: 'shouted', line: 2 },
+        ],
       });
     });
 
@@ -299,6 +306,47 @@ describe('musicVideo routes', () => {
       svc.getProject.mockResolvedValue(null);
       const missing = await request(app).post('/api/music-video/mv-x/lyrics/import').send({ text: 'a' });
       expect(missing.status).toBe(404);
+      expect(svc.updateProject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/lyrics/import-track', () => {
+    const SHEET = '[Verse 1]\nWalking home\n[Spoken, close]\nunder neon\n[Chorus]\nHold on';
+
+    it('replaces the lines with the linked track\'s sheet, keeping its headers and directions as markers', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: 't1', lyricCues: [{ id: 'lc-old', text: 'old' }] });
+      getTrack.mockResolvedValue({ id: 't1', lyrics: SHEET });
+      const r = await request(app).post('/api/music-video/mv-1/lyrics/import-track').send({});
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ imported: 3, markers: 3, skipped: null });
+      expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
+        lyricCues: [
+          { text: 'Walking home', startSec: null, endSec: null },
+          { text: 'under neon', startSec: null, endSec: null },
+          { text: 'Hold on', startSec: null, endSec: null },
+        ],
+        lyricMarkers: [
+          { type: 'section', label: 'Verse 1', kind: 'verse', line: 0 },
+          { type: 'direction', label: 'Spoken, close', kind: 'spoken', line: 1 },
+          { type: 'section', label: 'Chorus', kind: 'chorus', line: 2 },
+        ],
+      });
+    });
+
+    it('if-empty never replaces lines the project already has, and skips a track with no lyrics', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: 't1', lyricCues: [{ id: 'lc-1', text: 'mine' }] });
+      getTrack.mockResolvedValue({ id: 't1', lyrics: SHEET });
+      const kept = await request(app).post('/api/music-video/mv-1/lyrics/import-track').send({ mode: 'if-empty' });
+      expect(kept.status).toBe(200);
+      expect(kept.body).toMatchObject({ imported: 0, skipped: 'has-lyrics' });
+
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: 't1', lyricCues: [] });
+      getTrack.mockResolvedValue({ id: 't1', lyrics: '' });
+      const none = await request(app).post('/api/music-video/mv-1/lyrics/import-track').send({ mode: 'if-empty' });
+      expect(none.body).toMatchObject({ imported: 0, skipped: 'no-track-lyrics' });
+      const explicit = await request(app).post('/api/music-video/mv-1/lyrics/import-track').send({});
+      expect(explicit.status).toBe(422);
+      expect(explicit.body.code).toBe('NO_TRACK_LYRICS');
       expect(svc.updateProject).not.toHaveBeenCalled();
     });
   });
