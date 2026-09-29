@@ -367,21 +367,54 @@ export async function unarchiveApp(id) {
 }
 
 /**
- * Migrate app from legacy disabledTaskTypes array to taskTypeOverrides object.
- * Persists changes immediately so migration only runs once per app.
+ * Migrate one app in `data` from the legacy disabledTaskTypes array to a
+ * taskTypeOverrides object, in place. Returns true when it changed anything.
+ * Operates on the caller's `data` so it never depends on loadApps() returning
+ * the same cached object.
  */
-async function migrateTaskTypeOverrides(id) {
-  const data = await loadApps();
+function migrateTaskTypeOverridesInData(data, id) {
   const app = data?.apps?.[id];
-  if (!app?.disabledTaskTypes || app.taskTypeOverrides) return;
+  if (!app?.disabledTaskTypes || app.taskTypeOverrides) return false;
   const overrides = {};
   for (const taskType of app.disabledTaskTypes) {
     overrides[taskType] = { enabled: false };
   }
   app.taskTypeOverrides = overrides;
   delete app.disabledTaskTypes;
-  await saveApps(data);
   console.log(`📋 Migrated ${id} from disabledTaskTypes to taskTypeOverrides`);
+  return true;
+}
+
+/**
+ * Persist the legacy → taskTypeOverrides migration for one app. Writes to disk
+ * when it migrated, so it only runs once per app.
+ */
+async function migrateTaskTypeOverrides(id) {
+  const data = await loadApps();
+  if (migrateTaskTypeOverridesInData(data, id)) await saveApps(data);
+}
+
+/**
+ * Start a task-type override commit for one app: migrate the legacy field,
+ * let `apply(overrides)` mutate the (possibly empty) overrides map, then clear
+ * the legacy field and stamp updatedAt. Mutates `data` in place; the caller
+ * saves via saveAndAnnounceTaskTypes. Every override write path goes through
+ * here so none can skip the migration.
+ */
+async function commitTaskTypeOverrides(data, id, apply) {
+  migrateTaskTypeOverridesInData(data, id);
+  const appRecord = data.apps[id];
+  const overrides = appRecord.taskTypeOverrides || {};
+  await apply(overrides, appRecord);
+  appRecord.taskTypeOverrides = overrides;
+  delete appRecord.disabledTaskTypes; // Remove legacy field
+  appRecord.updatedAt = new Date().toISOString();
+  return appRecord;
+}
+
+async function saveAndAnnounceTaskTypes(data) {
+  await saveApps(data);
+  appsEvents.emit('changed', { action: 'update-task-types', timestamp: Date.now() });
 }
 
 /**
@@ -439,7 +472,8 @@ export async function updateAppLayeredIntelligence(id, updates = {}) {
 }
 
 /**
- * Get task type overrides for an app
+ * Get task type overrides for an app. NOTE: not a pure read — it first migrates
+ * a legacy `disabledTaskTypes` array to `taskTypeOverrides`, which writes to disk.
  */
 export async function getAppTaskTypeOverrides(id) {
   await migrateTaskTypeOverrides(id);
@@ -485,7 +519,8 @@ export async function getAppTaskTypeIntervalMs(appId, taskType) {
  * schedule form rewrites ~26 types at once) apply IDENTICAL field semantics —
  * the alternative was a second copy of the absent-vs-null ladder below, which
  * is exactly where "cleared back to inherit" and "left alone" drift apart.
- * Returns the watcher state keys the caller must reset for a disable.
+ * Returns nothing; callers clear watcher state separately via
+ * resetWatchersIfDisabled.
  */
 function mergeTaskTypeOverride(overrides, taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata } = {}) {
   const updated = { ...(overrides[taskType] || {}) };
@@ -531,8 +566,10 @@ function mergeTaskTypeOverride(overrides, taskType, { enabled, interval, interva
  * enable) instead of dispatching the backlog opened while it was off. See
  * prWatcher.js / cosTaskGenerator.js.
  */
-async function resetWatcherStateOnDisable(appRecord, id, taskType, enabled) {
-  if (enabled !== false) return;
+async function resetWatchersIfDisabled(appRecord, id, taskType, patch) {
+  // Only an explicit `enabled: false` is a disable; undefined (a non-toggling
+  // patch) and true must leave watcher state alone.
+  if (patch?.enabled !== false) return;
   if (taskType === 'pr-watcher') {
     delete appRecord.prWatcherState;
     await resetWatcherCooldown('pr-watcher', id);
@@ -566,22 +603,15 @@ export async function updateAppTaskTypeOverrides(id, patches = {}) {
   const data = await loadApps();
   if (!data.apps[id]) return null;
 
-  // Migrate legacy format if needed
-  await migrateTaskTypeOverrides(id);
+  const appRecord = await commitTaskTypeOverrides(data, id, async (overrides, record) => {
+    for (const [taskType, patch] of Object.entries(patches)) {
+      mergeTaskTypeOverride(overrides, taskType, patch);
+      await resetWatchersIfDisabled(record, id, taskType, patch);
+    }
+  });
+  await saveAndAnnounceTaskTypes(data);
 
-  const overrides = data.apps[id].taskTypeOverrides || {};
-  for (const [taskType, patch] of Object.entries(patches)) {
-    mergeTaskTypeOverride(overrides, taskType, patch);
-    await resetWatcherStateOnDisable(data.apps[id], id, taskType, patch?.enabled);
-  }
-
-  data.apps[id].taskTypeOverrides = overrides;
-  delete data.apps[id].disabledTaskTypes; // Remove legacy field
-  data.apps[id].updatedAt = new Date().toISOString();
-  await saveApps(data);
-  appsEvents.emit('changed', { action: 'update-task-types', timestamp: Date.now() });
-
-  return { id, ...data.apps[id] };
+  return { id, ...appRecord };
 }
 
 /**
@@ -651,17 +681,13 @@ export async function bulkUpdateAppTaskTypeOverride(taskType, { enabled } = {}) 
     .map(([id]) => id);
 
   for (const id of activeIds) {
-    const overrides = data.apps[id].taskTypeOverrides || {};
-    mergeTaskTypeOverride(overrides, taskType, { enabled });
-    await resetWatcherStateOnDisable(data.apps[id], id, taskType, enabled);
-
-    data.apps[id].taskTypeOverrides = overrides;
-    delete data.apps[id].disabledTaskTypes;
-    data.apps[id].updatedAt = new Date().toISOString();
+    await commitTaskTypeOverrides(data, id, async (overrides, record) => {
+      mergeTaskTypeOverride(overrides, taskType, { enabled });
+      await resetWatchersIfDisabled(record, id, taskType, { enabled });
+    });
   }
 
-  await saveApps(data);
-  appsEvents.emit('changed', { action: 'update-task-types', timestamp: Date.now() });
+  await saveAndAnnounceTaskTypes(data);
 
   return { count: activeIds.length };
 }
@@ -673,27 +699,20 @@ export async function toggleAllAppTaskTypes(id, enabled) {
   const data = await loadApps();
   if (!data.apps[id]) return null;
 
-  await migrateTaskTypeOverrides(id);
+  const appRecord = await commitTaskTypeOverrides(data, id, async (overrides, record) => {
+    for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
+      const existing = overrides[taskType] || {};
+      overrides[taskType] = { ...existing, enabled };
+    }
+    // Disabling everything disables the watchers too — same reset as any other
+    // path that moves their gate, so a later re-enable baselines promptly.
+    for (const watcher of ['pr-watcher', 'issue-watcher']) {
+      await resetWatchersIfDisabled(record, id, watcher, { enabled });
+    }
+  });
+  await saveAndAnnounceTaskTypes(data);
 
-  const overrides = data.apps[id].taskTypeOverrides || {};
-  for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
-    const existing = overrides[taskType] || {};
-    overrides[taskType] = { ...existing, enabled };
-  }
-
-  // Disabling everything disables the watchers too — same reset as any other
-  // path that moves their gate, so a later re-enable baselines promptly.
-  for (const watcher of ['pr-watcher', 'issue-watcher']) {
-    await resetWatcherStateOnDisable(data.apps[id], id, watcher, enabled);
-  }
-
-  data.apps[id].taskTypeOverrides = overrides;
-  delete data.apps[id].disabledTaskTypes;
-  data.apps[id].updatedAt = new Date().toISOString();
-  await saveApps(data);
-  appsEvents.emit('changed', { action: 'update-task-types', timestamp: Date.now() });
-
-  return { id, ...data.apps[id] };
+  return { id, ...appRecord };
 }
 
 /**
