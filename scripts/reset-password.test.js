@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -129,6 +129,19 @@ describe('runResetPassword', () => {
     await withTempDataDir(async (dataDir) => {
       const result = await runResetPassword('--disable', { dataDir });
       expect(result).toEqual({ code: 0, message: '🔓 Password auth is already disabled — nothing to do.' });
+    });
+  });
+
+  it('refuses to proceed when settings.json exists but cannot be read, rather than treating it as empty and overwriting it', async () => {
+    await withTempDataDir(async (dataDir) => {
+      // A directory in settings.json's place reads as EISDIR — present but
+      // unreadable, distinct from ENOENT (genuinely absent). Collapsing this
+      // to `{}` would make the write path silently discard every real
+      // setting on disk; it must instead refuse without writing anything.
+      await mkdir(join(dataDir, 'settings.json'));
+      const result = await runResetPassword('a-new-password', { dataDir });
+      expect(result.code).toBe(1);
+      expect(result.message).toMatch(/could not be read/);
     });
   });
 });

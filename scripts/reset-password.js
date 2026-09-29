@@ -23,7 +23,7 @@
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { hashPassword, SALT_BYTES } from '../lib/portosAuthCore.js';
-import { atomicWrite, safeJSONParse, tryReadFile, PATHS } from '../server/lib/fileUtils.js';
+import { atomicWrite, safeJSONParse, tryReadFileStrict, PATHS } from '../server/lib/fileUtils.js';
 import { isPlainObject } from '../server/lib/objects.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
@@ -70,8 +70,14 @@ export const buildPasswordSettings = async (settings, newPassword) => {
   return { ...settings, secrets, passwordRiskRevision: randomBytes(16).toString('hex') };
 };
 
+// Strict read: a present-but-unreadable settings.json (a transient lock, a
+// permission error) must never be treated as "absent" — collapsing it to {}
+// would make the write below silently discard every other setting on disk.
 const loadSettings = async (settingsFile) => {
-  const raw = await tryReadFile(settingsFile);
+  const { ok, value: raw } = await tryReadFileStrict(settingsFile);
+  if (!ok) {
+    throw new Error(`settings.json exists but could not be read (permission or I/O error): ${settingsFile}`);
+  }
   const parsed = safeJSONParse(raw ?? '{}', {});
   return isPlainObject(parsed) ? parsed : {};
 };
@@ -92,7 +98,12 @@ export const runResetPassword = async (arg, { dataDir = PATHS.data } = {}) => {
   }
 
   const settingsFile = join(dataDir, 'settings.json');
-  const settings = await loadSettings(settingsFile);
+  let settings;
+  try {
+    settings = await loadSettings(settingsFile);
+  } catch (err) {
+    return { code: 1, message: `❌ ${err.message}` };
+  }
 
   if (arg === '--status') {
     return {
@@ -107,8 +118,12 @@ export const runResetPassword = async (arg, { dataDir = PATHS.data } = {}) => {
   if (arg === '--disable') {
     const next = buildDisabledSettings(settings);
     if (!next) return { code: 0, message: '🔓 Password auth is already disabled — nothing to do.' };
-    await writeJSON(settingsFile, next);
+    // Revoke sessions BEFORE committing the new auth state: if the process is
+    // interrupted between the two writes, an old session must not stay valid
+    // under whatever auth state lands — better to have revoked and nothing
+    // else changed than to have changed auth state with stale sessions live.
     await writeJSON(sessionsFile, { tokens: [] });
+    await writeJSON(settingsFile, next);
     return { code: 0, message: `✅ Password auth disabled and all sessions revoked.\n${restartReminder}` };
   }
 
@@ -118,8 +133,8 @@ export const runResetPassword = async (arg, { dataDir = PATHS.data } = {}) => {
   } catch (err) {
     return { code: 1, message: `❌ ${err.message}` };
   }
-  await writeJSON(settingsFile, next);
   await writeJSON(sessionsFile, { tokens: [] });
+  await writeJSON(settingsFile, next);
   return { code: 0, message: `✅ Password reset and all sessions revoked.\n${restartReminder}` };
 };
 
