@@ -504,6 +504,10 @@ describe('runAgentCompletionCleanup — resume pointer', () => {
 // disposition it derives from the spawner's ownership verdict, and the two
 // behaviors each copy was missing. The spawner suites pin only the hand-off.
 describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', () => {
+  // An unreadable record reaches the hold release as an explicit null — the same
+  // shape the runner path passes — rather than the helper's re-read sentinel.
+  beforeEach(() => { getAgent.mockResolvedValue(null); });
+
   const spawnerArgs = (overrides = {}) => ({
     agentId: 'a1',
     task: { id: 't', taskType: 'user', description: 'do it', metadata: { openPR: true } },
@@ -531,7 +535,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
     expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({
       prCreation: 'always', skipMerge: false, agentOutput: 'out', originalTask: task,
     }));
-    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', task, success: true }));
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task, success: true, agentMetadata: null });
   });
 
   it('threads the resolved reviewer options and the task\'s PR completion through to the worktree cleanup', async () => {
@@ -574,7 +578,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
 
     expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', false, expect.objectContaining({ prCreation: 'always' }));
     expect(cleanupAgentWorktree.mock.calls[0][2]).not.toHaveProperty('reviewers');
-    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', task: args.task, success: false }));
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task: args.task, success: false, agentMetadata: null });
   });
 
   // ...and a worktree cleanup that rejects must not either (#3373): the hold is
@@ -585,7 +589,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
 
     await expect(runSpawnerCompletionCleanup(args)).resolves.toBeUndefined();
 
-    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', task: args.task, success: false }));
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task: args.task, success: false, agentMetadata: null });
   });
 
   it('continues cleanup and releases the hold when pipeline persistence fails', async () => {
@@ -593,7 +597,7 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
     const task = { id: 't', metadata: { pipeline: runningPipeline({ currentStage: 1 }) } };
     await runSpawnerCompletionCleanup(spawnerArgs({ task }));
     expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.any(Object));
-    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', task, success: true }));
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task, success: true, agentMetadata: null });
   });
 
   // The dominant path: a harness that opened and landed its own PR. Cleanup can
