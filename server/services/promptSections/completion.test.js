@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
 import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
+import { resolveReviewPolicy } from '../../lib/reviewerConfig.js';
 import { buildTuiCompletionSection } from './completion.js';
 
 const render = (forgeCli = 'gh', reviewers = ['copilot']) => buildTuiCompletionSection({
@@ -9,7 +10,7 @@ const render = (forgeCli = 'gh', reviewers = ['copilot']) => buildTuiCompletionS
   simplifyEnabled: false,
   sentinelPath: '/tmp/example-agent-done',
   mode: COMPLETION_MODES.TUI,
-  reviewers,
+  reviewPolicy: resolveReviewPolicy({ reviewers }, null, null),
   forgeCli,
 });
 

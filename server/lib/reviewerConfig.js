@@ -11,6 +11,7 @@
  * This module must stay Zod-free — it is pure reviewer domain vocabulary.
  */
 import { isPlainObject } from './objects.js';
+import { isTruthyMeta } from './metadataFlags.js';
 import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel } from './providerModels.js';
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
@@ -844,6 +845,39 @@ export function resolveReviewerConfig(metadata, codeReviewDefaults, defaultRevie
     reviewerMaxRounds: resolveReviewerMaxRounds(metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds),
     ...resolveReviewerPins(metadata, codeReviewDefaults)
   };
+}
+
+/**
+ * `resolveReviewerConfig` plus the two run flags the prompt builders need — the
+ * complete reviewer configuration as ONE frozen value, so a prompt builder takes
+ * `reviewPolicy` instead of eight parameters and a ninth knob is added here, not
+ * at every call site.
+ *
+ * - `forgeReviewerUsernames` — the forge logins (`@user` review tokens) requested
+ *   as PR/MR reviewers; the bare `usernames` of `resolveReviewerConfig`.
+ * - `reviewStopMode` — task over Code Review Defaults over `DEFAULT_REVIEW_STOP_MODE`.
+ * - `reviewerApplies` — the `--reviewer-applies` flag. `crossesPublicForge` clamps
+ *   it to `false`: a PR/MR review reads contributor-controlled public content, so
+ *   its reviewer stays review-only and the orchestrating agent applies the fixes.
+ *
+ * @param {Object|undefined} metadata - task metadata
+ * @param {Object|null|undefined} codeReviewDefaults
+ * @param {string[]|null|undefined} defaultReviewers
+ * @param {Object} [opts]
+ * @param {boolean} [opts.crossesPublicForge=false] - the run opens a PR/MR or is a
+ *   review-loop follow-up over one
+ */
+export function resolveReviewPolicy(metadata, codeReviewDefaults, defaultReviewers, { crossesPublicForge = false } = {}) {
+  const { usernames, ...config } = resolveReviewerConfig(metadata, codeReviewDefaults, defaultReviewers);
+  const configuredReviewerApplies = metadata?.reviewerApplies !== undefined
+    ? isTruthyMeta(metadata.reviewerApplies)
+    : (codeReviewDefaults?.reviewerApplies === true);
+  return Object.freeze({
+    ...config,
+    forgeReviewerUsernames: usernames,
+    reviewStopMode: metadata?.reviewStopMode || codeReviewDefaults?.stopMode || DEFAULT_REVIEW_STOP_MODE,
+    reviewerApplies: crossesPublicForge ? false : configuredReviewerApplies
+  });
 }
 
 /** The reviewer a claim flow falls back to when its resolved list is unusable. */
