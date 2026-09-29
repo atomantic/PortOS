@@ -74,13 +74,14 @@ export function buildPromptFromMediaPrompt({ targets, mediaKind, frameCount, max
       '  "videoNegativePrompt": "<what a video model should avoid, or empty string>",',
     );
   }
-  fields.push('  "rationale": "<one concise sentence about the look and, if video, the motion>"');
+  fields.push('  "rationale": "<one concise sentence about the look, the emotion/feel it evokes, and, if video, the motion>"');
 
   const rules = [
     '- Output ONLY valid JSON. Replace every <…> with real content; do NOT emit the literal angle-bracket text.',
     '- Each prompt field must be the COMPLETE ready-to-render text, paragraph-style — not a summary, not a caption of the file, not a list of changes.',
     '- Start directly with the subject or scene content. Never prefix prompts with instructions such as Create, Generate, Make, or Render an image/video of. No conversational preamble.',
-    '- Describe what is actually visible: subject, setting, materials, lighting, color, composition, camera, mood, style.',
+    '- Describe what is actually visible: subject, setting, materials, lighting, color palette, composition, camera, style.',
+    '- Capture the EMOTION and FEEL, not just the literal content. A flat machine label ("a woman with her fingers near her lips") is a failure; read expression, gaze, posture, gesture tension, and atmosphere, and say what they convey ("a woman overcome with passion, her fingers pressing awkwardly into her lips, eyes half-lost"). Name the mood in evocative, concrete language (longing, unease, tenderness, restless energy) and tie it to the visual choices that produce it (color temperature, contrast, grain, softness, framing).',
     '- Do not invent brands, logos, or named characters that are not visible.',
   ];
   if (wantImage) {
