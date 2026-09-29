@@ -6,21 +6,11 @@ import { ensureAntigravityPrintArgs, ensureAntigravityTuiArgs, ANTIGRAVITY_CLI_I
 import { unifyProviderModes } from './providerModes.js';
 import { modelContextWindowPatch } from './modelCatalog.js';
 import { normalizeModelAccess } from './modelAccess.js';
+import { CODEX_SHIPPED_MODELS } from './codexShippedModels.js';
 
 const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
-const CODEX_MODELS = [
-  'gpt-6-astra',
-  'gpt-6.1-sol',
-  'gpt-6-sol',
-  'gpt-6-luna',
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna',
-  'gpt-5.5',
-  'gpt-5.4',
-  'gpt-5.4-mini',
-];
+const CODEX_MODELS = CODEX_SHIPPED_MODELS;
 const CODEX_MODEL_DEFAULTS = {
   defaultModel: 'gpt-5.6-terra',
   lightModel: 'gpt-5.6-luna',

@@ -13,6 +13,7 @@
  * shape (#8497).
  */
 import { spawn } from 'child_process';
+import { withCodexShippedModels } from './codexShippedModels.js';
 
 const DEFAULT_TIMEOUT_MS = 15000;
 
@@ -23,7 +24,8 @@ const DEFAULT_TIMEOUT_MS = 15000;
  *   read (a toolkit provider record, or `null` for a bare harness probe with
  *   no per-record overrides — `services/providerRuntimeInstaller.js`).
  * @param {{ timeoutMs?: number, label?: string }} [options]
- * @returns {Promise<string[]>} de-duplicated, non-hidden model ids.
+ * @returns {Promise<string[]>} de-duplicated, non-hidden model ids, followed by
+ *   any shipped preset id the CLI's (lagging) catalog does not list yet.
  */
 export function probeCodexModelsViaAppServer(command, args, provider, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -81,7 +83,7 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
               settle(new Error(`${label} returned no model ids`));
               return;
             }
-            settle(null, [...new Set(ids)]);
+            settle(null, withCodexShippedModels(ids));
             return;
           }
         } catch { /* not JSON, or not a message we're waiting on — ignore */ }

@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
+import { withCodexShippedModels } from './internal/codexShippedModels.js';
 
 // Temp dir, NOT a cwd-rooted one — see providerStatus.test.js (#3823).
 let TEST_DATA_DIR;
@@ -1843,7 +1844,7 @@ rl.on('line', (line) => {
 
       const updated = await providerService.refreshProviderModels(p.id);
       expect(updated).not.toBeNull();
-      expect(updated.models).toEqual(['gpt-6-astra', 'gpt-5.6-sol']);
+      expect(updated.models).toEqual(withCodexShippedModels(['gpt-6-astra', 'gpt-5.6-sol']));
     });
 
     it.skipIf(process.platform === 'win32')('refreshes a Codex TUI provider too', async () => {
@@ -1863,7 +1864,7 @@ rl.on('line', (line) => {
 
       const updated = await providerService.refreshProviderModels(p.id);
       expect(updated).not.toBeNull();
-      expect(updated.models).toEqual(['gpt-6-astra', 'gpt-5.6-terra']);
+      expect(updated.models).toEqual(withCodexShippedModels(['gpt-6-astra', 'gpt-5.6-terra']));
     });
 
     it.skipIf(process.platform === 'win32')('refreshes a shipped codex-tui repointed at a wrapper command', async () => {
@@ -1886,7 +1887,7 @@ rl.on('line', (line) => {
 
       const updated = await providerService.refreshProviderModels('codex-tui');
       expect(updated, 'the id clause on the TUI arm matches').not.toBeNull();
-      expect(updated.models).toEqual(['gpt-6-astra', 'gpt-5.6-sol']);
+      expect(updated.models).toEqual(withCodexShippedModels(['gpt-6-astra', 'gpt-5.6-sol']));
     });
 
     it.skipIf(process.platform !== 'win32')('resolves the Windows codex.cmd shim before refreshing', async () => {
