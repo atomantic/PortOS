@@ -585,47 +585,46 @@ async function countOpenIssuesUnfiltered(cfg, repoPath, env) {
 }
 
 /**
- * Shared claim-issue detector for both forges (config in FORGE_ISSUE_CONFIG).
- * Counts open issues that pass the same skip-list the claim agent applies,
- * honoring the author filter ('self' = only issues YOU filed (`@me`), the
+ * Shape for a transient (non-parking) probe failure. Carries the CLI that
+ * failed so the caller can attribute the fault to `gh` vs `glab` instead of
+ * guessing from the task-type name — a `claim-work` request only resolves to
+ * its forge-specific type internally, so the name is not a reliable signal.
+ * `remedy` rides along when the probe named a fault that won't self-clear (a
+ * permission the token doesn't have), so the on-demand toast can print the way
+ * out instead of "try again shortly".
+ */
+const forgeTransient = (cfg, reason, remedy = null, detail = null) => ({
+  actionable: false, count: 0, cli: cfg.cli, reason, remedy, detail, transient: true
+});
+
+/**
+ * List a repo's open issues that pass the author-trust gate — the one place the
+ * author filter is resolved, for both the claim detector and the prompt-context
+ * listing. Honors the author filter ('self' = only issues YOU filed (`@me`), the
  * default and the slashdo `/do:next --self` security boundary; 'collaborators' =
  * you plus everyone with repo/project access; 'owner' = only the repo owner's
- * issues; 'any' = every author). The in-flight scan runs only when the list is
- * non-empty, so an empty queue parks without a wasted branch/PR scan.
+ * issues; 'any' = every author). Neither caller can skip the `collaborators`
+ * post-filter because it lives here.
+ *
+ * Returns one of:
+ *  - `{ transient }` — a probe failure (the forge-flavored transient result);
+ *    skip this dispatch and retry next tick rather than parking a full cadence.
+ *  - `{ parkedOrgOwner: true, resolvedEnv }` — the `owner` filter resolved to a
+ *    non-authoring owner (a GitHub ORG / GitLab GROUP), so no issue can match.
+ *  - `{ issues, truncated, authorApplied, resolvedEnv }` — the trusted listing.
+ * `resolvedEnv` is the env the CLI calls ran under, so a caller's follow-up
+ * probes authenticate as the same account.
  */
-async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], excludeNonActionableLabels = false, requireComplete = false } = {}, contextOnly = false, env) {
-  const cfg = FORGE_ISSUE_CONFIG[forgeKey];
-  const repoPath = app?.repoPath;
-  if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
-  if (cfg.cli === 'gh') env = await resolveGithubDetectorEnv(repoPath, env);
-
-  // Shared shape for a "parked" (no actionable work) result where only `reason`
-  // and `total` (the open-issue denominator) vary. `count`/`inFlightCount`/
-  // `filteredCount` are always 0 on these paths — the issues are excluded
-  // upstream (author filter / empty repo), never by the skip-list — so the toast
-  // reads a clean "0 of N open" with no redundant "N filtered".
-  const parked = (reason, total = 0) => ({
-    actionable: false, count: 0, total, inFlightCount: 0, filteredCount: 0, items: [], reason
-  });
-
-  // Shared shape for a transient (non-parking) probe failure. Carries the CLI
-  // that failed so the caller can attribute the fault to `gh` vs `glab` instead
-  // of guessing from the task-type name — a `claim-work` request only resolves to
-  // its forge-specific type internally, so the name is not a reliable signal.
-  // `remedy` rides along when the probe named a fault that won't self-clear (a
-  // permission the token doesn't have), so the on-demand toast can print the way
-  // out instead of "try again shortly".
-  const transient = (reason, remedy = null, detail = null) => ({
-    actionable: false, count: 0, cli: cfg.cli, reason, remedy, detail, transient: true
-  });
+async function fetchTrustedForgeIssues(cfg, repoPath, { issueAuthorFilter = 'self' } = {}, env) {
+  const resolvedEnv = cfg.cli === 'gh' ? await resolveGithubDetectorEnv(repoPath, env) : env;
+  const transient = (reason, remedy, detail) => ({ transient: forgeTransient(cfg, reason, remedy, detail) });
 
   const args = [...cfg.listArgs];
   // Resolve the author filter symmetrically with resolveIssueAuthorFilterBlock:
   // 'any' = no filter; 'collaborators' = you + everyone with repo/project access
   // (applied to the listing, since neither CLI's `--author` accepts a SET);
   // 'owner' = repo/project owner; everything else (the 'self' default plus any
-  // out-of-vocab value) = the @me security boundary. Transient resolver failures
-  // skip this dispatch and retry next tick rather than parking a full cadence.
+  // out-of-vocab value) = the @me security boundary.
   let authorApplied = false;
   // Trusted login set for `collaborators` mode (null on every other path).
   // Neither CLI's `--author` accepts a SET, so the gate fans out into ONE
@@ -638,27 +637,24 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   if (issueAuthorFilter === 'any') {
     // no --author filter
   } else if (issueAuthorFilter === 'collaborators') {
-    const { logins, error, remedy, detail } = await resolveTrustedLogins(cfg, repoPath, env);
+    const { logins, error, remedy, detail } = await resolveTrustedLogins(cfg, repoPath, resolvedEnv);
     if (error) return transient(error, remedy, detail);
     trustedLogins = logins;
     authorApplied = true;
   } else if (issueAuthorFilter === 'owner') {
-    const { owner, isOrg, error, detail } = await cfg.resolveOwner(repoPath, env);
+    const { owner, isOrg, error, detail } = await cfg.resolveOwner(repoPath, resolvedEnv);
     if (error) return transient(error, null, detail);
-    if (isOrg) {
-      // The owner filter resolved to a non-authoring owner (a GitHub ORG or a
-      // GitLab GROUP), which can never be an issue author — `--author <owner>` is
-      // guaranteed to match zero. Skip that empty query and report the real open
-      // count with the forge-flavored short-circuit reason (`owner-is-org` /
-      // `owner-is-group`), so the toast steers the user to 'self'/'any' instead of
-      // implying a personal-username mismatch (the failure that motivated this).
-      const openCount = contextOnly ? 0 : await countOpenIssuesUnfiltered(cfg, repoPath, env);
-      return parked(cfg.ownerIsOrgReason, openCount);
-    }
+    // The owner filter resolved to a non-authoring owner (a GitHub ORG or a
+    // GitLab GROUP), which can never be an issue author — `--author <owner>` is
+    // guaranteed to match zero. Skip that empty query; the caller reports the
+    // forge-flavored short-circuit reason (`owner-is-org` / `owner-is-group`), so
+    // the toast steers the user to 'self'/'any' instead of implying a
+    // personal-username mismatch (the failure that motivated this).
+    if (isOrg) return { parkedOrgOwner: true, resolvedEnv };
     args.push('--author', owner);
     authorApplied = true;
   } else {
-    const { author, error, detail } = await cfg.resolveSelf(repoPath, env);
+    const { author, error, detail } = await cfg.resolveSelf(repoPath, resolvedEnv);
     if (error) return transient(error, null, detail);
     args.push('--author', author);
     authorApplied = true;
@@ -669,7 +665,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   // `collaborators` per-login fan-out below.
   let listingTruncated = false;
   const listIssues = async (extraArgs = []) => {
-    const res = await runCli(cfg.cli, [...args, ...extraArgs], repoPath, env);
+    const res = await runCli(cfg.cli, [...args, ...extraArgs], repoPath, resolvedEnv);
     if (res.code !== 0) return { error: cfg.listFail, detail: redactCliDetail(res.stderr) };
     let parsed;
     try {
@@ -715,23 +711,44 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   // boundary, so "can't tell who filed it" resolves to "not trusted".
   if (trustedLogins) issues = issues.filter((i) => trustedLogins.has(i.authorLogin));
 
-  // Prompt context observes author and configured label policy without hiding
-  // blocked/assigned work that a non-claim task may need to inspect. Claim
-  // preloads opt into the same structural label exclusions as the detector.
-  if (contextOnly) {
-    const excluded = new Set((Array.isArray(issueExcludeLabels) ? issueExcludeLabels : []).map((label) => String(label).trim().toLowerCase()));
-    if (excludeNonActionableLabels) {
-      for (const label of NON_ACTIONABLE_ISSUE_LABELS) excluded.add(label);
-    }
-    return {
-      truncated: listingTruncated || (trustedLogins?.size || 0) > MAX_COLLABORATOR_AUTHOR_QUERIES,
-      issues: issues.filter((issue) => !(issue.labels || []).some((label) =>
-        excluded.has(String(typeof label === 'string' ? label : label?.name).trim().toLowerCase())
-      ))
-    };
-  }
+  return {
+    issues,
+    truncated: listingTruncated || (trustedLogins?.size || 0) > MAX_COLLABORATOR_AUTHOR_QUERIES,
+    authorApplied,
+    resolvedEnv
+  };
+}
 
-  if (requireComplete && (listingTruncated || (trustedLogins?.size || 0) > MAX_COLLABORATOR_AUTHOR_QUERIES)) return transient('incomplete-issue-page');
+/**
+ * Shared claim-issue detector for both forges (config in FORGE_ISSUE_CONFIG).
+ * Counts open issues that pass the same skip-list the claim agent applies, over
+ * the author-trusted listing from `fetchTrustedForgeIssues`. The in-flight scan
+ * runs only when the list is non-empty, so an empty queue parks without a
+ * wasted branch/PR scan.
+ */
+async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], requireComplete = false } = {}, env) {
+  const cfg = FORGE_ISSUE_CONFIG[forgeKey];
+  const repoPath = app?.repoPath;
+  if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
+
+  // Shared shape for a "parked" (no actionable work) result where only `reason`
+  // and `total` (the open-issue denominator) vary. `count`/`inFlightCount`/
+  // `filteredCount` are always 0 on these paths — the issues are excluded
+  // upstream (author filter / empty repo), never by the skip-list — so the toast
+  // reads a clean "0 of N open" with no redundant "N filtered".
+  const parked = (reason, total = 0) => ({
+    actionable: false, count: 0, total, inFlightCount: 0, filteredCount: 0, items: [], reason
+  });
+
+  const listing = await fetchTrustedForgeIssues(cfg, repoPath, { issueAuthorFilter }, env);
+  if (listing.transient) return listing.transient;
+  const { resolvedEnv } = listing;
+  if (listing.parkedOrgOwner) {
+    return parked(cfg.ownerIsOrgReason, await countOpenIssuesUnfiltered(cfg, repoPath, resolvedEnv));
+  }
+  const { issues, truncated, authorApplied } = listing;
+
+  if (requireComplete && truncated) return forgeTransient(cfg, 'incomplete-issue-page');
 
   if (issues.length === 0) {
     // An empty *filtered* list is ambiguous: the repo may truly have no open
@@ -752,7 +769,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     // when the other-authored issues are all blocked/assigned/decomposed
     // epics. Counting claimable ones would cost the full skip-list scan here.
     if (authorApplied) {
-      const openCount = await countOpenIssuesUnfiltered(cfg, repoPath, env);
+      const openCount = await countOpenIssuesUnfiltered(cfg, repoPath, resolvedEnv);
       if (openCount > 0) return parked('no-authored-issues', openCount);
     }
     return parked('no-open-issues');
@@ -760,12 +777,12 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
 
   const hasAssignedIssue = issues.some((issue) => Array.isArray(issue.assignees) && issue.assignees.length > 0);
   const [inFlight, currentLoginResult] = await Promise.all([
-    inFlightIssueNumbers(repoPath, cfg.inFlightForge, env),
+    inFlightIssueNumbers(repoPath, cfg.inFlightForge, resolvedEnv),
     hasAssignedIssue
-      ? resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, env)
+      ? resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, resolvedEnv)
       : Promise.resolve({ login: null })
   ]);
-  if (currentLoginResult.error) return transient(currentLoginResult.error, null, currentLoginResult.detail);
+  if (currentLoginResult.error) return forgeTransient(cfg, currentLoginResult.error, null, currentLoginResult.detail);
   const currentLogin = currentLoginResult.login || null;
   const total = issues.length;
   // How many of the OPEN issues were skipped only because a claim/PR is already
@@ -811,17 +828,33 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   };
 }
 
-/** List prompt inputs using the same author-resolution boundary as claiming. */
-export async function listConfiguredForgeIssues(cli, app, options, env) {
-  const result = await detectForgeIssues(
-    cli === 'glab' ? 'claim-issue-gitlab' : 'claim-issue', app, options, true, env
-  );
-  const ok = !result.transient && result.reason !== 'no-repo-path';
+/**
+ * List prompt inputs using the same author-resolution boundary as claiming.
+ * Prompt context observes author and configured label policy without hiding
+ * blocked/assigned work that a non-claim task may need to inspect. Claim
+ * preloads opt into the same structural label exclusions as the detector.
+ */
+export async function listConfiguredForgeIssues(cli, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], excludeNonActionableLabels = false } = {}, env) {
+  const cfg = FORGE_ISSUE_CONFIG[cli === 'glab' ? 'claim-issue-gitlab' : 'claim-issue'];
+  const repoPath = app?.repoPath;
+  if (!repoPath) return { ok: false, issues: [], truncated: false, error: 'no-repo-path' };
+
+  const listing = await fetchTrustedForgeIssues(cfg, repoPath, { issueAuthorFilter }, env);
+  if (listing.transient) {
+    return { ok: false, issues: [], truncated: false, error: listing.transient.detail || listing.transient.reason || '' };
+  }
+  if (listing.parkedOrgOwner) return { ok: true, issues: [], truncated: false };
+
+  const excluded = new Set((Array.isArray(issueExcludeLabels) ? issueExcludeLabels : []).map((label) => String(label).trim().toLowerCase()));
+  if (excludeNonActionableLabels) {
+    for (const label of NON_ACTIONABLE_ISSUE_LABELS) excluded.add(label);
+  }
   return {
-    ok,
-    issues: result.issues || [],
-    truncated: result.truncated === true,
-    ...(ok ? {} : { error: result.detail || result.reason || '' }),
+    ok: true,
+    truncated: listing.truncated,
+    issues: listing.issues.filter((issue) => !(issue.labels || []).some((label) =>
+      excluded.has(String(typeof label === 'string' ? label : label?.name).trim().toLowerCase())
+    ))
   };
 }
 
