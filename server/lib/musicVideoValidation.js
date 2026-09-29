@@ -16,6 +16,7 @@ import {
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
   MUSIC_VIDEO_AUTOMATION_TOOL_IDS,
 } from './musicVideoAutomation.js';
+import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
@@ -657,7 +658,7 @@ export const musicVideoManualAnalysisSchema = z.object({
 // `model` picks the MuScriptor size tier; the service clamps unknown values to
 // its default, this only types the field.
 export const musicVideoTranscribeMidiRequestSchema = z.object({
-  model: z.enum(['small', 'medium', 'large']).optional(),
+  model: z.enum(MUSCRIPTOR_MODELS).optional(),
 }).strict();
 
 // The persisted MIDI-transcription pointer (a .mid basename under data/music/,
