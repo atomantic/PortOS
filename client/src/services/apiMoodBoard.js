@@ -51,10 +51,10 @@ export const removeMoodBoardItem = (id, itemId, options) =>
 
 // Board analyze runs server-side so it survives navigation: start (or join) the
 // job, and read its live state on return. `null` = no run since server start.
-export const startMoodBoardAnalyze = (id, { providerId, model } = {}, options = {}) =>
+export const startMoodBoardAnalyze = (id, { providerId, model, effort } = {}, options = {}) =>
   request(`/mood-boards/${encodeURIComponent(id)}/analyze`, {
     method: 'POST',
-    body: JSON.stringify({ providerId, model }),
+    body: JSON.stringify({ providerId, model, effort }),
     ...options,
   });
 
@@ -63,10 +63,10 @@ export const getMoodBoardAnalyze = (id, options = {}) =>
 
 // Distill stored per-item analyses into the board's own composite style prompt
 // and persist it on the board (`style`). Resolves to the updated board.
-export const composeMoodBoardPrompt = (id, { providerId, model } = {}, options = {}) =>
+export const composeMoodBoardPrompt = (id, { providerId, model, effort } = {}, options = {}) =>
   request(`/mood-boards/${encodeURIComponent(id)}/compose-prompt`, {
     method: 'POST',
-    body: JSON.stringify({ providerId, model }),
+    body: JSON.stringify({ providerId, model, effort }),
     ...options,
   });
 

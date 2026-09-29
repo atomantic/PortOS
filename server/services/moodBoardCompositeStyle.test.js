@@ -9,8 +9,11 @@ vi.mock('./promptRunner.js', async (importActual) => {
   return { ...actual, runPromptThroughProvider: vi.fn() };
 });
 
+vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
+
 const aiProvider = await import('./aiProvider.js');
 const promptRunner = await import('./promptRunner.js');
+const providers = await import('./providers.js');
 const { composeBoardPrompt } = await import('./moodBoardCompositeStyle.js');
 
 const apiProvider = { id: 'ollama', type: 'api', defaultModel: 'qwen' };
@@ -28,11 +31,29 @@ const analyzed = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  providers.getProviderById.mockResolvedValue(null);
   aiProvider.resolveAPIProvider.mockResolvedValue(apiProvider);
   promptRunner.runPromptThroughProvider.mockResolvedValue({ text: composedText, model: 'qwen', provider: apiProvider });
 });
 
 describe('composeBoardPrompt', () => {
+  it('runs the picked vision CLI provider with its model and effort instead of swapping to an API provider', async () => {
+    const codex = { id: 'codex', type: 'cli', command: 'codex', enabled: true };
+    providers.getProviderById.mockResolvedValue(codex);
+    promptRunner.runPromptThroughProvider.mockResolvedValue({ text: composedText, model: 'gpt-5.6-luna', provider: codex });
+    const style = await composeBoardPrompt({
+      board: { id: 'mb-1', name: 'Foundry', items: [analyzed] },
+      providerId: 'codex',
+      model: 'gpt-5.6-luna',
+      effort: 'high',
+    });
+    expect(aiProvider.resolveAPIProvider).not.toHaveBeenCalled();
+    expect(promptRunner.runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+      provider: codex, model: 'gpt-5.6-luna', effort: 'high',
+    }));
+    expect(style.providerId).toBe('codex');
+  });
+
   it('refuses a board whose items carry neither an analysis nor a caption', async () => {
     await expect(composeBoardPrompt({
       board: { id: 'mb-1', name: 'Empty', items: [{ id: 'i1', type: 'image', mediaKey: 'image:a.png', caption: null }] },

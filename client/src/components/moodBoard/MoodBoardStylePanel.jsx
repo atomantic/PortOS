@@ -58,6 +58,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
   const jobRunningRef = useRef(false);
   jobRunningRef.current = jobRunning;
   const [savingStyle, setSavingStyle] = useState(false);
+  const [effort, setEffort] = useState('');
   const [rendererMode, setRendererMode] = useState('');
   const capturedKeyRef = useRef(null);
 
@@ -124,6 +125,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     const updated = await composeMoodBoardPrompt(board.id, {
       providerId: selectedProviderId || undefined,
       model: selectedModel || undefined,
+      effort: effort || undefined,
     }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(err?.message || 'Could not compose a board style from the item analyses');
       return null;
@@ -194,6 +196,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     const started = await startMoodBoardAnalyze(board.id, {
       providerId: selectedProviderId,
       model: selectedModel || undefined,
+      effort: effort || undefined,
     }, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Could not start the board analysis');
       return null;
@@ -284,6 +287,8 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
             availableModels={availableModels}
             onProviderChange={setSelectedProviderId}
             onModelChange={setSelectedModel}
+            effort={effort}
+            onEffortChange={setEffort}
             disabled={busy || providersLoading}
             layout="row"
           />
