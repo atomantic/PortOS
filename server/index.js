@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
+import { defaultRequestBody } from './lib/defaultRequestBody.js';
 import { mountAssetRoutes, mountClientDist } from './services/assetMounts.js';
 import { existsSync } from 'fs';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
@@ -284,6 +285,7 @@ app.use(hostControlRouteGate);
 // Every per-file upload cap is derived from this value — see lib/uploadLimits.js.
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ limit: JSON_BODY_LIMIT, extended: true }));
+app.use(defaultRequestBody);
 // …and the policy-store slices that change execution, which need the body.
 app.use(hostControlBodyGate);
 
