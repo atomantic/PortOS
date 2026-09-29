@@ -91,7 +91,7 @@ it('lands a changed snapshot from a detached worktree so the PR branch stays att
     schemaVersion: 2,
     reportVersion: 1,
     categories: ['security'],
-    measurements: [['2026-09-10T10:00:00Z', 0, 82, 5, 0, 2, 12, 12]],
+    measurements: [['2026-09-10', 0, 82, 5, 0, 2, 12, 12]],
   });
   expect(body.endsWith('\n')).toBe(true);
   expect(body).not.toMatch(/measurementId|Users|summary|app_id|agent-|github/);
@@ -511,7 +511,7 @@ it('migrates a legacy file to v2 without inventing measurements or writing the l
   const [path, body] = deps.writeFile.mock.calls[0];
   expect(path).toBe(join(worktreePath, '.quality.json'));
   expect(path.startsWith(app.repoPath)).toBe(false);
-  expect(JSON.parse(body).measurements).toEqual([['2026-09-10T10:00:00Z', 0, 82, 5, 0, 2, 12, 12]]);
+  expect(JSON.parse(body).measurements).toEqual([['2026-09-10', 0, 82, 5, 0, 2, 12, 12]]);
   expect(deps.git.execGit).toHaveBeenCalledWith(
     ['rm', '-f', '--', APP_QUALITY_LEGACY_SNAPSHOT_FILENAME], worktreePath);
   expect(deps.git.commit).toHaveBeenCalledWith(worktreePath,

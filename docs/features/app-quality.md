@@ -131,7 +131,7 @@ left as it is.
 The checked-in schema is v2. It stores an opaque origin fingerprint, sorted
 category and enum dictionaries, and fixed rows
 `[assessedAt, categoryIndex, score, worstSeverity, coverageIndex, confidenceIndex, scannedFiles, totalFiles]`.
-Scores stay nullable. Timestamps stay ISO instants. The file does not store
+Scores stay nullable. `assessedAt` is a UTC date (`YYYY-MM-DD`); older files with full ISO instants are still read. The file does not store
 summaries, paths, app names, agent ids, or `measurementId`. Same-timestamp
 ordering uses a transient digest of the row, computed when the file is read.
 
@@ -163,8 +163,9 @@ be harder to validate, while the database is already the history.
 when the committed file is still v1. `npm run quality:snapshot -- --migrate`
 converts a v1 file or the historical filename to canonical v2 using only the
 rows already stored, through the same pull request. A second publish of the
-same normalized v2 snapshot does not open another pull request. Duplicate rows
-for one UTC day and category are rejected rather than silently dropped.
+same normalized v2 snapshot does not open another pull request. Rows sharing
+one UTC day and category collapse to the latest on every read and write, so a
+second run the same day replaces the first and older files upgrade on their next save.
 
 ## Weekly quality schedule
 
