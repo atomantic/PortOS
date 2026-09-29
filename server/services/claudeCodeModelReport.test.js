@@ -7,7 +7,7 @@ describe('claude code model report', () => {
     const a = summarizeTranscriptDays(days, { from: '2026-09-01', to: '2026-09-30' });
     const opus = a.models.find((m) => m.model === 'claude-opus-5-5');
     expect(opus.estimatedCost).toBeGreaterThan(0);
-    expect(a.models.find((m) => m.model.startsWith('qwen')).estimatedCost).toBe(0);
+    expect(a.models.some((m) => m.model.startsWith('qwen'))).toBe(false); // local backends are not Claude models
     expect(summarizeTranscriptDays(days, { from: '2026-10-01' }).models).toEqual([]);
     const fleet = mergeModelRows([a.models, a.models]);
     expect(fleet.totals.estimatedCost).toBeCloseTo(opus.estimatedCost * 2, 1);
