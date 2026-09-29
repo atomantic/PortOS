@@ -8,7 +8,20 @@ import * as jiraService from '../services/jira.js';
 import * as jiraReports from '../services/jiraReports.js';
 import { getAppById } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, jiraTicketKeySchema } from '../lib/validation.js';
+
+const validateTicketParam = (req, res, next, value) => {
+  const parsed = jiraTicketKeySchema.safeParse(value);
+  if (!parsed.success) {
+    return next(new ServerError('Invalid Jira ticket id', { status: 400, code: 'VALIDATION_ERROR' }));
+  }
+  next();
+};
+
+const jiraCommentSchema = z.object({ comment: z.string().min(1).max(32768) });
+const jiraTransitionSchema = z.object({
+  transitionId: z.union([z.string().min(1).max(64), z.number().int()])
+});
 
 const jiraInstanceSchema = z.object({
   id: z.string().min(1),
@@ -52,6 +65,8 @@ const reportParamsSchema = z.object({
 });
 
 const router = express.Router();
+router.param('ticketId', validateTicketParam);
+router.param('issueKey', validateTicketParam);
 
 /**
  * GET /api/jira/instances
@@ -208,14 +223,7 @@ router.put('/instances/:instanceId/tickets/:ticketId', asyncHandler(async (req, 
  * Add comment to JIRA ticket
  */
 router.post('/instances/:instanceId/tickets/:ticketId/comments', asyncHandler(async (req, res) => {
-  const { comment } = req.body;
-
-  if (!comment) {
-    throw new ServerError('Comment is required', {
-      status: 400,
-      code: 'INVALID_INPUT'
-    });
-  }
+  const { comment } = validateRequest(jiraCommentSchema, req.body);
 
   const result = await jiraService.addComment(
     req.params.instanceId,
@@ -255,14 +263,7 @@ router.delete('/instances/:instanceId/tickets/:ticketId', asyncHandler(async (re
  * Transition JIRA ticket status
  */
 router.post('/instances/:instanceId/tickets/:ticketId/transition', asyncHandler(async (req, res) => {
-  const { transitionId } = req.body;
-
-  if (!transitionId) {
-    throw new ServerError('Transition ID is required', {
-      status: 400,
-      code: 'INVALID_INPUT'
-    });
-  }
+  const { transitionId } = validateRequest(jiraTransitionSchema, req.body);
 
   const result = await jiraService.transitionTicket(
     req.params.instanceId,

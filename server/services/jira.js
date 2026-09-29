@@ -6,11 +6,15 @@
 import fs from 'fs/promises';
 import { createBoundedStateMap } from '../lib/boundedStateMap.js';
 import { createHttpClient } from '../lib/httpClient.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import path from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { hostFromOriginUrl } from '../lib/workTracker.js';
 import { countConfiguredInstances } from '../lib/instanceFeatureRegistry.js';
+
+const instanceNotFound = (instanceId) =>
+  new ServerError(`JIRA instance ${instanceId} not found`, { status: 404, code: 'NOT_FOUND' });
 
 const JIRA_CONFIG_FILE = path.join(PATHS.data, 'jira.json');
 
@@ -207,7 +211,7 @@ export async function testConnection(instanceId) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
@@ -236,7 +240,7 @@ export async function getProjects(instanceId) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
@@ -323,7 +327,7 @@ async function resolveInstance(instanceId) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   return instance;
@@ -566,7 +570,7 @@ export async function searchIssues(instanceId, jql, { fields = 'summary,status,l
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
@@ -600,7 +604,7 @@ export async function addLabels(instanceId, ticketId, labels = []) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const toAdd = (Array.isArray(labels) ? labels : []).filter(l => typeof l === 'string' && l.trim());
@@ -634,7 +638,7 @@ export async function updateTicket(instanceId, ticketId, updates) {
     }
   };
 
-  await client.put(`/rest/api/2/issue/${ticketId}`, payload);
+  await client.put(`/rest/api/2/issue/${encodeURIComponent(ticketId)}`, payload);
 
   return {
     success: true,
@@ -651,12 +655,12 @@ export async function addComment(instanceId, ticketId, comment) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
 
-  await client.post(`/rest/api/2/issue/${ticketId}/comment`, {
+  await client.post(`/rest/api/2/issue/${encodeURIComponent(ticketId)}/comment`, {
     body: comment
   });
 
@@ -671,11 +675,11 @@ export async function getTransitions(instanceId, ticketId) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
-  const response = await client.get(`/rest/api/2/issue/${ticketId}/transitions`);
+  const response = await client.get(`/rest/api/2/issue/${encodeURIComponent(ticketId)}/transitions`);
 
   return response.data.transitions.map(t => ({
     id: t.id,
@@ -693,11 +697,11 @@ export async function deleteTicket(instanceId, ticketId) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
-  await client.delete(`/rest/api/2/issue/${ticketId}`);
+  await client.delete(`/rest/api/2/issue/${encodeURIComponent(ticketId)}`);
 
   return { success: true, ticketId };
 }
@@ -710,12 +714,12 @@ export async function transitionTicket(instanceId, ticketId, transitionId) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
 
-  await client.post(`/rest/api/2/issue/${ticketId}/transitions`, {
+  await client.post(`/rest/api/2/issue/${encodeURIComponent(ticketId)}/transitions`, {
     transition: { id: transitionId }
   });
 
@@ -832,7 +836,7 @@ export async function getBoardColumns(instanceId, projectKey, boardId) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
@@ -885,11 +889,11 @@ export async function getActiveSprints(instanceId, boardId) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
-  const response = await client.get(`/rest/agile/1.0/board/${boardId}/sprint`, {
+  const response = await client.get(`/rest/agile/1.0/board/${encodeURIComponent(boardId)}/sprint`, {
     params: { state: 'active' }
   });
 
@@ -910,7 +914,7 @@ export async function searchEpics(instanceId, projectKey, query) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
@@ -943,7 +947,7 @@ export async function getBoards(instanceId, projectKey) {
   const instance = config.instances[instanceId];
 
   if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
+    throw instanceNotFound(instanceId);
   }
 
   const client = createJiraClient(instance);
