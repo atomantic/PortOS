@@ -2596,3 +2596,8 @@ export const htmlCompositionContractSchema = htmlCompositionContractSchemaFor(12
 
 // Jira issue key (ABC-123) or numeric id — the value is interpolated into upstream REST paths.
 export const jiraTicketKeySchema = z.string().max(64).regex(/^([A-Za-z][A-Za-z0-9_]*-\d+|\d+)$/, 'Invalid Jira ticket id');
+
+// Prompt stage names and variable keys become `stages/<name>.md` / a
+// variables.json key, so they must be a single safe path segment (#9152).
+export const promptStageNameSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, 'invalid stage name').max(80);
+export const promptVariableKeySchema = z.string().regex(/^[A-Za-z0-9_-]+$/, 'invalid variable key').max(80);
