@@ -46,6 +46,14 @@ vi.mock('../components/moodBoard/MoodBoardStylePanel', () => ({
   default: () => <div data-testid="board-style-panel" />,
 }));
 
+vi.mock('../components/media/MediaLightbox', () => ({
+  default: ({ item, onClose }) => (
+    <div data-testid="lightbox" data-src={item.previewUrl}>
+      <button type="button" onClick={onClose}>close-lightbox</button>
+    </div>
+  ),
+}));
+
 vi.mock('../components/media/PromptFromMedia', () => ({
   PromptFromMediaModal: ({ open, item, onResult, children }) => (open && item ? (
     <div data-testid="pfm-modal">
@@ -111,6 +119,20 @@ beforeEach(() => {
   mockLocalizeMoodBoardMedia.mockResolvedValue({ board: null, localized: 0, failed: 0 });
   currentId = 'a';
   analysisDelay = null;
+});
+
+describe('MoodBoardDetail image preview', () => {
+  it('opens the standard lightbox when an image item is clicked and closes it', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'i1', type: 'image', imageUrl: '/data/images/one.png', caption: 'one' }],
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview image' }));
+    expect(screen.getByTestId('lightbox').dataset.src).toBe('/data/images/one.png');
+    fireEvent.click(screen.getByText('close-lightbox'));
+    expect(screen.queryByTestId('lightbox')).toBeNull();
+  });
 });
 
 describe('MoodBoardDetail stale-response guards', () => {
