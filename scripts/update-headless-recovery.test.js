@@ -73,6 +73,7 @@ if (${stallDelete} && args.startsWith('delete')) {
 `
   );
 
+  writeFileSync(join(repo, 'scripts', 'SLASHDO_VERSION'), '0.0.0\n');
   writeFileSync(join(repo, 'scripts', 'trusted-rebuilds.js'), `process.exit(${failAfterDelete ? 1 : 0});\n`);
   for (const stub of STUB_SCRIPTS) {
     writeFileSync(join(repo, 'scripts', stub), 'process.exit(0);\n');

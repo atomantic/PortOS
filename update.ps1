@@ -448,20 +448,21 @@ if (Test-Path $migrationsScript) {
 Step "migrations" "done" "Migrations complete"
 
 # Install/update slash-do commands. Replaces the previous interactive prompt
-# with an always-on `npx slash-do@latest` call so the user-global command
+# with an always-on pinned `npx slash-do@<version>` call so the user-global command
 # pool stays current across updates. Failures are non-fatal.
 # Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
 # all detected envs instead of hanging on readline (update.ps1 has no TTY).
+$SlashdoVersion = (Get-Content (Join-Path $RootDir "scripts/SLASHDO_VERSION") -Raw).Trim()
 Step "slash-do" "running" "Installing/updating slash-do commands..."
 # npx writes status to stderr; scope the same Continue downgrade as Invoke-Logged
 # around this stdin-piped call so it isn't aborted by a NativeCommandError (#1811).
 # $LASTEXITCODE set inside the script block still propagates to the check below.
 & {
     $ErrorActionPreference = 'Continue'
-    "a" | & npx --yes slash-do@latest >> $UpdateLog 2>&1
+    "a" | & npx --yes "slash-do@$SlashdoVersion" >> $UpdateLog 2>&1
 }
 if ($LASTEXITCODE -ne 0) {
-    Write-SafeHost "⚠️  slash-do install/update failed. Continuing (re-run later: npx slash-do@latest)." -ForegroundColor Yellow
+    Write-SafeHost "⚠️  slash-do install/update failed. Continuing (re-run later: npx slash-do@$SlashdoVersion)." -ForegroundColor Yellow
     $global:LASTEXITCODE = 0
 }
 Step "slash-do" "done" "slash-do commands installed/updated"
