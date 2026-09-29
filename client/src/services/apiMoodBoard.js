@@ -119,3 +119,17 @@ export const importMoodBoardXPost = (id, url, options) =>
 // Resolves `{ board, localized, failed }`.
 export const localizeMoodBoardMedia = (id, options) =>
   request(`/mood-boards/${encodeURIComponent(id)}/localize-media`, { method: 'POST', ...options });
+
+export const composeMoodBoardCollage = (id, body, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/collage`, {
+    method: 'POST',
+    body: JSON.stringify(body ?? {}),
+    ...options,
+  });
+
+export const extractMoodBoardItemFrames = (id, itemId, count, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/extract-frames`, {
+    method: 'POST',
+    body: JSON.stringify({ count }),
+    ...options,
+  });

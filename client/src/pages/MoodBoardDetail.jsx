@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
@@ -20,6 +20,7 @@ import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import { PromptFromMediaModal } from '../components/media/PromptFromMedia';
 import MoodBoardStylePanel from '../components/moodBoard/MoodBoardStylePanel';
+import MoodBoardCollagePanel from '../components/moodBoard/MoodBoardCollagePanel';
 import { copyToClipboard } from '../lib/clipboard';
 import {
   getMoodBoard,
@@ -33,6 +34,7 @@ import {
   importMoodBoardPinterest,
   importMoodBoardXPost,
   localizeMoodBoardMedia,
+  extractMoodBoardItemFrames,
 } from '../services/api';
 import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource } from '../lib/moodBoardItemSrc';
 import {
@@ -77,6 +79,10 @@ function MoodBoardEditor({ id }) {
   // (not a snapshot) so the modal's stored-analysis view stays fresh after the
   // persist PATCH updates the board state.
   const [analyzeItemId, setAnalyzeItemId] = useState(null);
+
+  // Per-video frame extraction: requested frame count + the item in flight.
+  const [frameCount, setFrameCount] = useState(4);
+  const [extractingItemId, setExtractingItemId] = useState(null);
 
   // Pinterest link/sync.
   const [pinUrl, setPinUrl] = useState('');
@@ -268,6 +274,18 @@ function MoodBoardEditor({ id }) {
     setBoard((prev) => (prev
       ? { ...prev, items: (prev.items || []).map((it) => (it.id === itemId ? updated : it)) }
       : prev));
+  };
+
+  const handleExtractFrames = async (itemId) => {
+    if (!mountedRef.current) return;
+    setExtractingItemId(itemId);
+    const res = await extractMoodBoardItemFrames(id, itemId, frameCount, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not extract frames'); return null; });
+    if (!mountedRef.current) return;
+    setExtractingItemId(null);
+    if (!res?.board) return;
+    setBoard(res.board);
+    toast.success(res.added ? `Added ${res.added} frame${res.added === 1 ? '' : 's'} to the board` : 'Those frames are already on the board');
   };
 
   const handleRemoveItem = async (itemId) => {
@@ -462,6 +480,8 @@ function MoodBoardEditor({ id }) {
 
       <MoodBoardStylePanel board={board} onBoardChange={setBoard} />
 
+      <MoodBoardCollagePanel board={board} onBoardChange={setBoard} />
+
       {/* Desktop 2-column layout: items on left, add forms on right column */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_400px] gap-6 items-start">
         {/* Left column: Mood board items */}
@@ -616,6 +636,29 @@ function MoodBoardEditor({ id }) {
                           <span className="text-[10px] text-gray-500 truncate" title={item.source}>{item.source}</span>
                         ) : <span />}
                         <div className="flex items-center gap-1">
+                          {videoSrc ? (
+                            <span className="inline-flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={1}
+                                max={24}
+                                value={frameCount}
+                                aria-label="Frames to extract"
+                                onChange={(e) => setFrameCount(Math.max(1, Math.min(24, Math.floor(Number(e.target.value)) || 1)))}
+                                className="w-10 bg-port-bg border border-port-border rounded px-1 py-0.5 text-white text-[11px] outline-none focus:border-port-accent"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleExtractFrames(item.id)}
+                                disabled={extractingItemId === item.id}
+                                title={`Extract ${frameCount} frame${frameCount === 1 ? '' : 's'} and add to board`}
+                                aria-label="Extract frames to board"
+                                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white disabled:opacity-50 transition-colors"
+                              >
+                                <Clapperboard className={`w-3.5 h-3.5 ${extractingItemId === item.id ? 'animate-pulse' : ''}`} aria-hidden="true" />
+                              </button>
+                            </span>
+                          ) : null}
                           {analysisSource ? (
                             <button
                               type="button"
