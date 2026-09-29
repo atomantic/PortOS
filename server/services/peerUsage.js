@@ -499,7 +499,10 @@ export async function getFleetClaudeCodeModels({ from = null, to = null, apiBill
     ...peers.filter((e) => e.claudeCode).map((e) => row(e, false)),
   ];
   const combined = mergeModelRows(instances.filter((i) => i.usesSubscriptions).map((i) => i.models));
-  return { instances, ...combined };
+  // Peers we know of that published no history (older build, or not scanned yet)
+  // — named so the UI can say why they are missing rather than dropping them.
+  const pending = peers.filter((e) => !e.claudeCode).map((e) => e.name || e.instanceId);
+  return { instances, pendingInstances: pending, ...combined };
 }
 
 /**

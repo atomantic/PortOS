@@ -71,6 +71,7 @@ export default function ClaudeCodeModelTokensCard({ period, from, to, isCustom }
   }, [period, from, to, isCustom]);
 
   const instances = report?.instances || [];
+  const pending = report?.pendingInstances || [];
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3">
@@ -105,10 +106,15 @@ export default function ClaudeCodeModelTokensCard({ period, from, to, isCustom }
           ))}
         </div>
       )}
+      {pending.length > 0 && (
+        <p className="text-xs text-port-warning">
+          No token history yet from {pending.join(", ")} — it needs to update PortOS (or finish its first scan) before it appears here.
+        </p>
+      )}
       <p className="text-[10px] sm:text-xs text-gray-500">
         Read from each machine&rsquo;s local Claude Code session transcripts, so it includes sessions run outside PortOS, and
         history is kept after the CLI prunes old transcripts. Cost is an informational API-rate equivalent from the shared
-        pricing table (cache reads and writes at their own tiers; local models free). Instances on an older PortOS build
+        pricing table (cache reads and writes at their own tiers). Only Claude models are listed. Instances on an older PortOS build
         contribute nothing until they update. claude.ai and unfederated devices are not included.
       </p>
     </div>
