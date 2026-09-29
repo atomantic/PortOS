@@ -47,6 +47,7 @@ import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
 import { isPlainObject } from './objects.js';
 import { PORTS } from './ports.js';
 
+import { isTruthyMeta } from './metadataFlags.js';
 const LLAMA_SERVER_BASE_URL = `http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`;
 const VLLM_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.VLLM_QWEN}/v1`;
 const SGLANG_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.SGLANG_QWEN}/v1`;
@@ -272,7 +273,7 @@ const numberInRange = (value, min, max) => {
 // `'true'`/`'false'`. Accept both wire forms without treating an absent or
 // malformed value as an intentional override.
 const readBoolean = (value) =>
-  value === true || value === 'true'
+  isTruthyMeta(value)
     ? true
     : value === false || value === 'false'
       ? false

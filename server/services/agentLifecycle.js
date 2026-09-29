@@ -319,7 +319,6 @@ export async function spawnViaRunner(agentId, task, opts) {
       duration: 0,
       outputBuffer: '',
       errorAnalysis,
-      isTruthyMetaFn: isTruthyMeta,
       error: message,
       completionReason: 'spawn-rejected',
       workspacePath,
@@ -660,7 +659,6 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         duration,
         outputBuffer,
         errorAnalysis,
-        isTruthyMetaFn: isTruthyMeta,
         workspacePath: agent.workspacePath || null,
         prExpected: runnerPrClaimExpected,
         // The run window the commit criterion is evaluated against (#3637).

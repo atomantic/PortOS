@@ -148,9 +148,7 @@ function resolveCliErrorAnalysis({ finalSuccess, task, model, rawStreamBuffer, o
 
 /**
  * Spawn agent directly (fallback when runner not available).
- * `isTruthyMetaFn` is the lifecycle's shared metadata predicate, passed in by
- * the caller and threaded on to `finalizeAgent`. Completion cleanup is not
- * injected: `runSpawnerCompletionCleanup` is imported at top level, since
+ * Completion cleanup is not injected: `runSpawnerCompletionCleanup` is imported at top level, since
  * nothing in its static closure reaches this module or agentLifecycle.js.
  */
 export async function spawnDirectly({
@@ -165,7 +163,6 @@ export async function spawnDirectly({
   agentDir,
   executionId,
   laneName,
-  isTruthyMetaFn,
   prOpenedBy,
   safetyProfile = null,
 }) {
@@ -269,7 +266,6 @@ export async function spawnDirectly({
           duration: 0, outputBuffer: '', workspacePath, prExpected: false,
           error: message, completionReason: 'spawn-error',
           errorAnalysis: { category: 'actionable', error: message, suggestedFix: message },
-          isTruthyMetaFn,
         });
         cosEvents.emit('agent:error', { agentId, taskId: task.id, error: message });
         return null;
@@ -778,7 +774,6 @@ export async function spawnDirectly({
     // `agentOpensOwnPr` are two predicates (#3358).
     const prOwnership = resolvePrOwnership({
       task,
-      isTruthyMeta: isTruthyMetaFn,
       persistedPrOpenedBy: prOpenedBy,
       providerId: provider?.id,
       providerCommand: provider?.command,
@@ -809,7 +804,6 @@ export async function spawnDirectly({
         outputBuffer,
         errorAnalysis,
         terminatedByUser,
-        isTruthyMetaFn,
         error: finalError || undefined,
         completionReason: terminatedByUser ? 'user-terminated' : undefined,
         workspacePath: cwd,

@@ -493,7 +493,6 @@ describe('stream error containment', () => {
     providerCommand: provider.command,
     leanMode: false,
     worktreeInfo: { branchName: 'agent/t', worktreePath: '/tmp/wt', baseBranch: 'main' },
-    isTruthyMetaFn: (v) => v === true || v === 'true',
   });
 
   const minimalArgs = {
@@ -513,7 +512,6 @@ describe('stream error containment', () => {
     agentDir: '/tmp',
     executionId: null,
     laneName: null,
-    isTruthyMetaFn: vi.fn().mockReturnValue(false),
   };
 
   // Re-import the mocked cosAgentLifecycle module reference once — mocking is module-scoped.
@@ -1224,7 +1222,7 @@ describe('stream error containment', () => {
       metadata: { openPR: true, reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean' },
     };
 
-    spawnDirectly({ ...minimalArgs, task, prOpenedBy: stampPrOpenedBy(task), isTruthyMetaFn: (v) => v === true });
+    spawnDirectly({ ...minimalArgs, task, prOpenedBy: stampPrOpenedBy(task) });
     await new Promise((r) => setTimeout(r, 10));
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));
@@ -1249,7 +1247,7 @@ describe('stream error containment', () => {
 
   it('hands a read-only CLI run to PortOS using the prompt ownership stamp', async () => {
     const task = { id: 'task-read-only', description: 'analyze the code', metadata: { openPR: true, readOnly: true } };
-    const spawnPromise = spawnDirectly({ ...minimalArgs, task, prOpenedBy: stampPrOpenedBy(task), isTruthyMetaFn: (v) => v === true });
+    const spawnPromise = spawnDirectly({ ...minimalArgs, task, prOpenedBy: stampPrOpenedBy(task) });
     await vi.waitFor(() => expect(fakeProcess.listenerCount('close')).toBeGreaterThan(0));
     fakeProcess.emit('close', 0);
     await spawnPromise;
@@ -1265,7 +1263,7 @@ describe('stream error containment', () => {
   // value would stamp resume pointers on every completed run, or on none.
   it('hands the dispatch the run verdict — failure on a non-zero exit, success on a clean one', async () => {
     const task = { id: 'task-rp', description: 'do stuff', metadata: {} };
-    spawnDirectly({ ...minimalArgs, task, isTruthyMetaFn: (v) => v === true });
+    spawnDirectly({ ...minimalArgs, task });
     await new Promise((r) => setTimeout(r, 10));
     fakeProcess.emit('close', 1);
     await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(
@@ -1274,7 +1272,7 @@ describe('stream error containment', () => {
 
     runSpawnerCompletionCleanup.mockClear();
     fakeProcess = makeFakeProcess();
-    spawnDirectly({ ...minimalArgs, task: { id: 'task-rp-ok', description: 'do stuff', metadata: {} }, isTruthyMetaFn: (v) => v === true });
+    spawnDirectly({ ...minimalArgs, task: { id: 'task-rp-ok', description: 'do stuff', metadata: {} } });
     await new Promise((r) => setTimeout(r, 10));
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));

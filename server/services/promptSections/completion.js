@@ -13,6 +13,7 @@ import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
 import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
 
+import { isTruthyMeta } from '../../lib/metadataFlags.js';
 export const NO_CHANGE_AUDIT_GUIDANCE = 'This audit may legitimately conclude that no change is needed. First verify the data this audit owns against authoritative sources. If the audited data is current, leave the worktree clean and do not run the commit, push, PR, or review steps below; write the completion sentinel when this provider uses one, or exit without committing when it does not. If a change is needed, continue through the normal workflow below.';
 
 function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
@@ -869,7 +870,6 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
  */
 
 /** Same coercion the callers pass in; a default so external callers needn't. */
-const isTruthyMetaDefault = (v) => v === true || v === 'true';
 
 /**
  * A git ref rendered into a shell command line in the prompt, or `fallback` when
@@ -1083,7 +1083,7 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
  *
  * @returns {string} a `PR_OPENED_BY` value
  */
-export function promptOpensOwnPr(task, { providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn = isTruthyMetaDefault }) {
+export function promptOpensOwnPr(task, { providerType, providerId, providerCommand, leanMode, worktreeInfo }) {
   if (!LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) return PR_OPENED_BY.PORTOS;
   if (!agentOwnsPrWorkflow({ providerType, leanMode })) return PR_OPENED_BY.PORTOS;
   // No worktree ⇒ no branch to name in `git push -u origin <branch>`, and the
@@ -1095,12 +1095,12 @@ export function promptOpensOwnPr(task, { providerType, providerId, providerComma
   if (!worktreeInfo) return PR_OPENED_BY.PORTOS;
 
   const metadata = task?.metadata || {};
-  if (!isTruthyMetaFn(metadata.openPR)) return PR_OPENED_BY.PORTOS;
+  if (!isTruthyMeta(metadata.openPR)) return PR_OPENED_BY.PORTOS;
   // The completion branches that hand back a contract which never opens a PR.
-  if (isTruthyMetaFn(metadata.noCodeOutput) || metadata.creativeDirector) return PR_OPENED_BY.PORTOS;
-  if (isTruthyMetaFn(metadata.discardWorktree)) return PR_OPENED_BY.PORTOS;
-  if (isTruthyMetaFn(metadata.readOnly)) return PR_OPENED_BY.PORTOS;
-  if (isTruthyMetaFn(metadata.reviewLoopFollowUp)) return PR_OPENED_BY.PORTOS;
+  if (isTruthyMeta(metadata.noCodeOutput) || metadata.creativeDirector) return PR_OPENED_BY.PORTOS;
+  if (isTruthyMeta(metadata.discardWorktree)) return PR_OPENED_BY.PORTOS;
+  if (isTruthyMeta(metadata.readOnly)) return PR_OPENED_BY.PORTOS;
+  if (isTruthyMeta(metadata.reviewLoopFollowUp)) return PR_OPENED_BY.PORTOS;
   // A PR a human lands gets neither a review loop nor a merge gate.
   if (resolvePrCompletion(metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task)) return PR_OPENED_BY.PORTOS;
 

@@ -23,7 +23,7 @@ import { validatePublicReviewModel } from './modelAbuseGuard.js';
 import { loadPublicReviewSpawnInput } from './publicReviewSpawnInput.js';
 import { registerAgent } from './cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
-import { isTruthyMeta, useRunner } from './agentState.js';
+import { useRunner } from './agentState.js';
 import { cloudSwarmThreadCapacity, localEndpointOfProvider, providerBaseUrl } from './cosLocalEndpointSlots.js';
 import { describeLocalPromptBudget, planLocalPromptBudget } from '../lib/localPromptBudget.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
@@ -116,7 +116,7 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
   const privatePrompt = privateSecurity
     ? await import('./privateSecurityAssessment.js').then(({ preparePrivateSecurityAssessment }) => preparePrivateSecurityAssessment(task, provider, selectedModel))
     : null;
-  const promptResult = privateSecurity ? privatePrompt : await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
+  const promptResult = privateSecurity ? privatePrompt : await buildAgentPrompt(task, config, workspacePath, worktreeInfo, {
     providerType: provider.type,
     providerId: provider.id,
     providerCommand: provider.command,
@@ -187,9 +187,8 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
     providerCommand: provider.command,
     leanMode,
     worktreeInfo,
-    isTruthyMetaFn: isTruthyMeta,
   });
-  const claimFlowTask = isClaimFlowTask(task, isTruthyMeta);
+  const claimFlowTask = isClaimFlowTask(task);
   const [forgeTarget, primaryCheckoutBaseline] = await Promise.all([
     resolvedApp
       ? resolveAppForgeTarget(resolvedApp, { repoPath: workspacePath }).then(r => r.target)
@@ -220,7 +219,6 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
     executionMode,
     publicReviewPosture,
     resolvedAppName,
-    isTruthyMetaFn: isTruthyMeta,
   }));
 
   emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
@@ -281,7 +279,6 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
       agentDir,
       executionId: toolExecution.id,
       laneName,
-      isTruthyMetaFn: isTruthyMeta,
       leanMode,
       prOpenedBy,
       useDurableRunner: dispatchUseRunner,
@@ -303,7 +300,6 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
     agentDir,
     executionId: toolExecution.id,
     laneName,
-    isTruthyMetaFn: isTruthyMeta,
     prOpenedBy,
     safetyProfile,
   });

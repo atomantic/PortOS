@@ -7,6 +7,7 @@ import { resolveSlashdoInvocation, buildSlashdoSection, unreachableReviewerInclu
 import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
 import { DEFAULT_REVIEWER, resolveReviewerConfig, buildReviewerEffortNote, buildReviewersCsv } from '../../lib/validation.js';
 
+import { isTruthyMeta } from '../../lib/metadataFlags.js';
 /**
  * The ONE reviewer contract a slashdo invocation runs under — resolved before the
  * body is pruned, before a `--review-with` is pinned, and before any per-reviewer
@@ -194,7 +195,7 @@ export async function applySlashdoInvocation(task, {
 
   // Plan-only supplies destination/approval flags as slashdo args, so preserve
   // the task description bridge that those flags would otherwise suppress.
-  const includeTaskContext = task.metadata?.planOnly === true || task.metadata?.planOnly === 'true';
+  const includeTaskContext = isTruthyMeta(task.metadata?.planOnly);
   const section = buildSlashdoSection(resolved, body, {
     bodyPath,
     reviewWith,

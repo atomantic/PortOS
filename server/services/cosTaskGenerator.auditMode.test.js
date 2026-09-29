@@ -104,7 +104,6 @@ import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js'
 import { generateTaskFromJob } from './autonomousJobs/skillTemplates.js';
 import { buildLightContextPrompt } from './agentPromptBuilder.js';
 import { declaresNoCommitCriterion } from './taskTypeHooks.js';
-import { isTruthyMeta } from './agentState.js';
 import {
   AUDIT_TASK_TYPES,
   FILE_ISSUES_DELIVERY_SETTINGS,
@@ -141,7 +140,7 @@ const generate = (taskType, options = {}) =>
  * enforcement at all.
  */
 const renderPrompt = (task) =>
-  `${task.description}\n\n${buildLightContextPrompt(task, WORKSPACE, null, isTruthyMeta, { isTui: true })}`;
+  `${task.description}\n\n${buildLightContextPrompt(task, WORKSPACE, null, { isTui: true })}`;
 
 /**
  * Affirmative code-delivery directives. Matched as numbered workflow STEPS and
@@ -254,7 +253,7 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
 
   it('requires a persisted report for CLI audits that normally finish by exiting', async () => {
     const task = await generate('better-complexity');
-    const prompt = buildLightContextPrompt(task, WORKSPACE, null, isTruthyMeta, { isTui: false });
+    const prompt = buildLightContextPrompt(task, WORKSPACE, null, { isTui: false });
     expect(prompt).toContain('## Required audit assessment handoff');
     expect(prompt).toContain('including agents that normally finish by exiting');
     expect(prompt).toContain('.agent-done');
@@ -376,7 +375,7 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(task.metadata).toMatchObject({ fileIssues: false, useWorktree: true, openPR: true });
     const prompt = buildLightContextPrompt(task, WORKSPACE, {
       branch: 'cos/example', worktreePath: WORKSPACE,
-    }, isTruthyMeta, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
+    }, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
     expect(prompt).toContain('gh pr create');
     expect(prompt).toContain('## Merge Gate');
     expect(prompt).toContain('--merge --delete-branch');

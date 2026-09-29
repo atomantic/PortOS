@@ -25,6 +25,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 
+import { isTruthyMeta } from '../../lib/metadataFlags.js';
 const h3Error = (message, code) => new ServerError(message, { status: 400, code });
 
 // The canonical coercion, matching `routes/videoGen.js`. The route's schema
@@ -33,7 +34,6 @@ const h3Error = (message, code) => new ServerError(message, { status: 400, code 
 // 'false' | undefined` is the whole input space — and `'false'` is why a plain
 // truthiness check is wrong (`Boolean('false')` is true, which would read an
 // explicit opt-OUT as an opt-in).
-const isRequestedTrue = (value) => value === true || value === 'true';
 
 /**
  * @param {object} opts
@@ -52,7 +52,7 @@ export const minimaxH3ControlError = ({ model, negativePrompt, disableAudio, til
       'MINIMAX_H3_NEGATIVE_PROMPT_UNSUPPORTED',
     );
   }
-  if (isRequestedTrue(disableAudio)) {
+  if (isTruthyMeta(disableAudio)) {
     return h3Error(
       'MiniMax H3 jointly generates video and audio; its audio track cannot be disabled.',
       'MINIMAX_H3_AUDIO_REQUIRED',

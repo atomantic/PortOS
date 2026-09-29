@@ -24,6 +24,7 @@ import { csvIdsParam } from './sharedSchemas.js';
 import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
 import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 
+import { isTruthyMeta } from './metadataFlags.js';
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
 // type there flows through to consumers automatically. Kept as a frozen
 // re-export so existing `import { INGREDIENT_TYPES }` callers are unaffected.
@@ -43,7 +44,7 @@ const ingredientTypeGate = z.string().trim().min(1).max(32)
 // boolean; anything else (including absent) collapses to undefined so an
 // `.optional()` field reads cleanly as "not set" rather than truthy-by-presence.
 const booleanish = z.preprocess((v) => {
-  if (v === true || v === 'true') return true;
+  if (isTruthyMeta(v)) return true;
   if (v === false || v === 'false') return false;
   return undefined;
 }, z.boolean());

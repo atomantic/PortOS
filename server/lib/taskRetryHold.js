@@ -1,3 +1,4 @@
+import { isTruthyMeta } from './metadataFlags.js';
 /**
  * Retry hold — the intermediate task state between a failed run's verdict and the
  * resume pointer its retry needs (#3373).
@@ -80,7 +81,7 @@ export function clearedRetryHoldMetadata() {
  */
 export function isRetryHeld(metadata) {
   const value = metadata?.[RETRY_HOLD_KEY];
-  if (value === true || value === 'true') return true;
+  if (isTruthyMeta(value)) return true;
   return typeof value === 'string' && value !== '' && value !== 'false' && value !== 'null' && value !== 'undefined';
 }
 
@@ -92,7 +93,7 @@ export function isRetryHeld(metadata) {
 export function isRetryHoldOwner(metadata, agentId) {
   if (!isRetryHeld(metadata)) return false;
   const value = metadata[RETRY_HOLD_KEY];
-  if (value === true || value === 'true') return true;
+  if (isTruthyMeta(value)) return true;
   return !!agentId && value === agentId;
 }
 

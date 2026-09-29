@@ -1,3 +1,4 @@
+import { isTruthyMeta } from './metadataFlags.js';
 /**
  * PR disposition for CoS agent tasks — how a pull request completes.
  *
@@ -82,7 +83,7 @@ export const isSelfReviewMode = (mode) => mode === PR_REVIEW_MODES.SELF;
  */
 export function resolvePrCompletion(metadata = {}) {
   if (PR_COMPLETION_SET.has(metadata?.prCompletion)) return metadata.prCompletion;
-  return metadata?.reviewLoop === true || metadata?.reviewLoop === 'true'
+  return isTruthyMeta(metadata?.reviewLoop)
     ? PR_COMPLETIONS.REVIEW_THEN_MERGE
     : PR_COMPLETIONS.MERGE_ON_GREEN;
 }

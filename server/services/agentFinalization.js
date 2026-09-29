@@ -62,6 +62,7 @@ import { extractSimplifySummaries } from './agentSummaryExtraction.js';
 import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { issueNumberFromRef } from './issueReconcile.js';
 
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 /**
  * Release the execution lane and complete tool-execution tracking for a
  * finishing agent. Pulled OUT of finalizeAgent so callers can fire it
@@ -287,9 +288,8 @@ function hasIssuePartialTrailer(body, issueNumber) {
 }
 
 function isVerifiedNoChangeTask(task) {
-  const isPersistedTrue = (value) => value === true || value === 'true';
-  return (isPersistedTrue(task?.metadata?.autonomousJob) || isPersistedTrue(task?.metadata?.isInvestigation))
-    && isPersistedTrue(task?.metadata?.noChangeSuccess);
+  return (isTruthyMeta(task?.metadata?.autonomousJob) || isTruthyMeta(task?.metadata?.isInvestigation))
+    && isTruthyMeta(task?.metadata?.noChangeSuccess);
 }
 
 /**
@@ -783,10 +783,9 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   // Leave-open review follow-ups are the deliberate exception: their deliverable
   // IS the review-fix commits, while merge-shaped follow-ups were settled from
   // forge state immediately above.
-  const reviewLoopFollowUp = task.metadata?.reviewLoopFollowUp === true
-    || task.metadata?.reviewLoopFollowUp === 'true';
+  const reviewLoopFollowUp = isTruthyMeta(task.metadata?.reviewLoopFollowUp);
   const reviewLoopLeaveOpen = reviewLoopFollowUp
-    && (task.metadata?.reviewLoopLeaveOpen === true || task.metadata?.reviewLoopLeaveOpen === 'true');
+    && isTruthyMeta(task.metadata?.reviewLoopLeaveOpen);
   if (declaresNoCommitCriterion(task) && !reviewLoopLeaveOpen) return noFidelityVerdict();
   const claimFlow = isClaimFlowDispatch(task);
   const claimed = claimFlow
@@ -1214,7 +1213,6 @@ export async function finalizeAgent({
   outputBuffer,
   errorAnalysis: reportedErrorAnalysis,
   terminatedByUser = false,
-  isTruthyMetaFn,
   error,
   completionReason,
   workspacePath = null,
@@ -1441,8 +1439,8 @@ export async function finalizeAgent({
     cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
 
-  if (verdict.success && isTruthyMetaFn) {
-    await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
+  if (verdict.success) {
+    await persistSimplifySummaries(agentId, task, outputBuffer);
   }
 
   const taskType = task?.taskType || 'user';
@@ -1900,8 +1898,8 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
  * Persist task/simplify summaries for agents that ran with /simplify.
  * Shared by handleAgentCompletion (runner mode) and spawnDirectly (direct mode).
  */
-export async function persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn) {
-  if (!isTruthyMetaFn(task.metadata?.simplify)) return;
+export async function persistSimplifySummaries(agentId, task, outputBuffer) {
+  if (!isTruthyMeta(task.metadata?.simplify)) return;
   const summaries = extractSimplifySummaries(outputBuffer);
   if (!summaries) return;
   // Persist whenever *either* summary is present — e.g. if the /simplify

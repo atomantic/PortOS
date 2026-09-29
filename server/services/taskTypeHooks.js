@@ -203,8 +203,8 @@ export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
  * clean by construction even on the run that fixed and merged the PR.
  */
 export function isNonCommittingCoordinatorTask(task) {
-  if (task?.metadata?.reviewLoopFollowUp === true || task?.metadata?.reviewLoopFollowUp === 'true') return true;
-  if (task?.metadata?.prRemediationFollowUp === true || task?.metadata?.prRemediationFollowUp === 'true') return true;
+  if (isTruthyMeta(task?.metadata?.reviewLoopFollowUp)) return true;
+  if (isTruthyMeta(task?.metadata?.prRemediationFollowUp)) return true;
   const type = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null;
   return NON_COMMITTING_COORDINATOR_TASK_TYPES.has(type);
 }

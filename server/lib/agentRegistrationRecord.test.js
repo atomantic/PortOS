@@ -29,7 +29,6 @@ const args = (taskMetadata, provider = { id: 'claude', command: 'claude' }) => (
   executionMode: 'direct',
   publicReviewPosture: null,
   resolvedAppName: null,
-  isTruthyMetaFn: (v) => v === true || v === 'true',
 });
 
 describe('buildAgentRegistration — resume provenance', () => {
