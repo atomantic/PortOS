@@ -13,6 +13,7 @@ vi.mock('../services/moodBoard/index.js', () => ({
   updateBoard: vi.fn(),
   deleteBoard: vi.fn(),
   addBoardItem: vi.fn(),
+  backfillGalleryPrompts: vi.fn(),
   updateBoardItem: vi.fn(),
   removeBoardItem: vi.fn(),
   linkPinterestBoard: vi.fn(),
@@ -157,6 +158,17 @@ describe('mood-board routes', () => {
       const res = await request(makeApp()).post('/api/mood-boards/mb-1/compose-prompt').send({ effort: 'high' });
       expect(res.status).toBe(400);
       expect(composeBoardPrompt).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/backfill-prompts', () => {
+    it('404s when the board is missing and returns the updated board otherwise', async () => {
+      svc.backfillGalleryPrompts.mockResolvedValueOnce(null);
+      expect((await request(makeApp()).post('/api/mood-boards/nope/backfill-prompts')).status).toBe(404);
+      svc.backfillGalleryPrompts.mockResolvedValueOnce({ id: 'mb-1', items: [{ id: 'i1', caption: 'p' }] });
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/backfill-prompts');
+      expect(res.status).toBe(200);
+      expect(res.body.items[0].caption).toBe('p');
     });
   });
 

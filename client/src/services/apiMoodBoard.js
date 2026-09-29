@@ -49,6 +49,11 @@ export const removeMoodBoardItem = (id, itemId, options) =>
     ...options,
   });
 
+// Copy gallery generation prompts onto pins that lack any prompt (resolves to
+// the updated board) so analyzing the board skips them.
+export const backfillMoodBoardPrompts = (id, options = {}) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/backfill-prompts`, { method: 'POST', ...options });
+
 // Distill stored per-item analyses into the board's own composite style prompt
 // and persist it on the board (`style`). Resolves to the updated board.
 export const composeMoodBoardPrompt = (id, { providerId, model } = {}, options = {}) =>
