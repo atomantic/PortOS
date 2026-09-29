@@ -329,7 +329,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/memory/stats` | Memory statistics |
 | POST | `/memory/link` | Link two memories |
 | POST | `/memory/consolidate` | Merge similar memories |
-| POST | `/memory/decay` | Apply importance decay |
+| POST | `/memory/decay` | Apply importance decay (`decayRate` in (0, 0.02], default 0.01; else 400) |
 | DELETE | `/memory/expired` | Clear expired memories |
 | GET | `/memory/embeddings/status` | LM Studio connection status |
 
