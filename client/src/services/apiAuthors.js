@@ -20,10 +20,5 @@ export const deleteAuthor = (id, requestOptions = {}) => request(`/authors/${enc
   ...requestOptions,
 });
 
-// Mirror server caps in server/services/authors/logic.js — bump both sides.
-export const AUTHOR_NAME_MAX = 120;
-export const AUTHOR_WRITING_STYLE_MAX = 4000;
-export const AUTHOR_BIO_MAX = 4000;
-export const AUTHOR_PHYSICAL_DESCRIPTION_MAX = 2000;
-export const AUTHOR_HEADSHOT_STYLE_MAX = 2000;
-export const AUTHOR_HEADSHOT_IMAGE_URL_MAX = 1000;
+// Caps come from the server leaf so client inputs and the server sanitizer can't drift.
+export { NAME_MAX as AUTHOR_NAME_MAX, WRITING_STYLE_MAX as AUTHOR_WRITING_STYLE_MAX, BIO_MAX as AUTHOR_BIO_MAX, PHYSICAL_DESCRIPTION_MAX as AUTHOR_PHYSICAL_DESCRIPTION_MAX, HEADSHOT_STYLE_MAX as AUTHOR_HEADSHOT_STYLE_MAX, HEADSHOT_IMAGE_URL_MAX as AUTHOR_HEADSHOT_IMAGE_URL_MAX } from '../../../server/lib/authorLimits.js';

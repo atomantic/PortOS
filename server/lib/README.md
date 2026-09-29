@@ -783,3 +783,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `musicVideoCreativeContext.js` | `musicVideoCreativeContext(concept)` composes the selected universe style and authored cast/place/object bible for planning and generation. |
 | `moodBoardStyleContext.js` | `collectBoardStyleContext(board)` bounds a board's notes, captions, analyzed prompts, and composite style for creative prompts. `moodBoardImageCandidates(board, resolveItem)` lists the poster first, then pinned local images. |
 | `musicVideoAutomation.js` | Music Video automation brief: `MUSIC_VIDEO_AUTOMATION_TOOLS` (image/video backends derived from `generationModes.js` plus `code:render`, each flagged `metered`), `MUSIC_VIDEO_AUTOMATION_TOOL_IDS`, and `normalizeMusicVideoAutomation(patch, current)` (per-sub-field merge, catalog-ordered tools, `budgetUsd: null` = no cap). Dependency-free; the client create drawer imports it. |
+| `albumLimits.js` | Album record length/count caps shared by the albums sanitizer and client editors. |
+| `artistLimits.js` | Artist record length caps shared by the artists sanitizer and client editors. |
+| `authorLimits.js` | Author record length caps shared by the authors sanitizer and client editors. |
+| `trackLimits.js` | Track record length/count caps shared by the tracks sanitizer and client editors. |
+| `shellLimits.js` | `MAX_TOTAL_SESSIONS` shell-session cap shared by the shell service and the Shell UI. |

@@ -26,21 +26,13 @@
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
+import { TITLE_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, DESCRIPTION_MAX, GENRE_MAX, COVER_IMAGE_URL_MAX, TRACK_IDS_MAX, TRACK_ID_MAX, RELEASE_YEAR_MIN, RELEASE_YEAR_MAX } from '../../lib/albumLimits.js';
+export { TITLE_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, DESCRIPTION_MAX, GENRE_MAX, COVER_IMAGE_URL_MAX, TRACK_IDS_MAX, TRACK_ID_MAX, RELEASE_YEAR_MIN, RELEASE_YEAR_MAX };
 
 export const ALBUM_ID_RE = /^album-[A-Za-z0-9-]{1,64}$/;
 
-export const TITLE_MAX = 200;
-export const ARTIST_ID_MAX = 80;
-export const ARTIST_NAME_MAX = 120;
-export const DESCRIPTION_MAX = 4000;
-export const GENRE_MAX = 120;
-export const COVER_IMAGE_URL_MAX = 1000;
-export const TRACK_IDS_MAX = 200;
-export const TRACK_ID_MAX = 80;
 // Sane bounds for a release year — wide enough for archival reissues, narrow
 // enough to reject a fat-fingered/garbage value.
-export const RELEASE_YEAR_MIN = 1850;
-export const RELEASE_YEAR_MAX = 2200;
 
 // Clamp an integer release year into the supported band; null when unparseable
 // so an album without a year stays distinct from one pinned to a bound.

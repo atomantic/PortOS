@@ -116,8 +116,8 @@ export const discoverSeriesVoice = (id, opts = {}, requestOptions = {}) =>
     ...requestOptions,
   });
 
-// Mirror server caps in `server/services/pipeline/series.js` — bump both sides.
-export const SERIES_TITLE_LOGO_MAX = 2000;
+// Cap comes from the server leaf so the client input and the sanitizer can't drift.
+export { TITLE_LOGO_MAX as SERIES_TITLE_LOGO_MAX } from '../../../server/lib/storyArcLimits.js';
 
 // ---- Issues ----
 export const listPipelineIssues = (seriesId, options = {}) =>

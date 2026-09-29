@@ -765,3 +765,8 @@ export * from './databaseWriterRegistry.js';
 export * from './musicVideoCreativeContext.js';
 export * from './moodBoardStyleContext.js';
 export * from './musicVideoAutomation.js';
+export * as albumLimits from './albumLimits.js';
+export * as artistLimits from './artistLimits.js';
+export * as authorLimits from './authorLimits.js';
+export * as trackLimits from './trackLimits.js';
+export * from './shellLimits.js';

@@ -35,6 +35,7 @@ vi.mock('../services/api', () => ({ sendShellImage }));
 vi.mock('../components/ui/Toast', () => ({ default: toastMock }));
 
 import { useShellSession, MAX_SESSIONS } from './useShellSession.js';
+import { MAX_TOTAL_SESSIONS } from '../../../server/lib/shellLimits.js';
 
 const wrapper = ({ children }) => (
   <MemoryRouter initialEntries={['/shell']}>{children}</MemoryRouter>
@@ -153,7 +154,7 @@ describe('useShellSession', () => {
   });
 
   it('exports the shell session cap', () => {
-    expect(MAX_SESSIONS).toBe(20);
+    expect(MAX_SESSIONS).toBe(MAX_TOTAL_SESSIONS);
   });
 
   // Losing the session you are looking at must not strand you on a dead terminal

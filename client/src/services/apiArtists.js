@@ -21,11 +21,5 @@ export const deleteArtist = (id, requestOptions = {}) => request(`/artists/${enc
   ...requestOptions,
 });
 
-// Mirror server caps in server/services/artists/logic.js — bump both sides.
-export const ARTIST_NAME_MAX = 120;
-export const ARTIST_GENRE_MAX = 120;
-export const ARTIST_BIO_MAX = 4000;
-export const ARTIST_MUSICAL_STYLE_MAX = 4000;
-export const ARTIST_PHYSICAL_DESCRIPTION_MAX = 2000;
-export const ARTIST_PORTRAIT_STYLE_MAX = 2000;
-export const ARTIST_PORTRAIT_IMAGE_URL_MAX = 1000;
+// Caps come from the server leaf so client inputs and the server sanitizer can't drift.
+export { NAME_MAX as ARTIST_NAME_MAX, GENRE_MAX as ARTIST_GENRE_MAX, BIO_MAX as ARTIST_BIO_MAX, MUSICAL_STYLE_MAX as ARTIST_MUSICAL_STYLE_MAX, PHYSICAL_DESCRIPTION_MAX as ARTIST_PHYSICAL_DESCRIPTION_MAX, PORTRAIT_STYLE_MAX as ARTIST_PORTRAIT_STYLE_MAX, PORTRAIT_IMAGE_URL_MAX as ARTIST_PORTRAIT_IMAGE_URL_MAX } from '../../../server/lib/artistLimits.js';
