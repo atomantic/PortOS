@@ -68,6 +68,7 @@ export default function RapidReader({
 
   const words = useMemo(() => rapidReaderWords(text), [text]);
   const totalWords = words.length;
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const current = useMemo(() => chunkAt(words, wordIndex, chunkSize), [words, wordIndex, chunkSize]);
   const availableSections = useMemo(() => (Array.isArray(sections) ? sections : [])
     .filter((section) => Number.isInteger(section?.wordIndex) && section.wordIndex >= 0 && section.wordIndex < totalWords)
@@ -197,7 +198,14 @@ export default function RapidReader({
       </div>
 
       {/* Progress bar */}
-      <div className="h-1 bg-port-border/40">
+      <div
+        className="h-1 bg-port-border/40"
+        role="progressbar"
+        aria-label="Reading progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(progress)}
+      >
         <div
           className="h-full bg-port-accent transition-[width] duration-150"
           style={{ width: `${progress}%` }}
@@ -325,6 +333,14 @@ export default function RapidReader({
           </span>
         </div>
       </div>
+
+      {/* Static transcript — the flashing display is not readable by assistive tech */}
+      <details className="border-t border-port-border text-xs text-gray-400" onToggle={(e) => setTranscriptOpen(e.currentTarget.open)}>
+        <summary className="cursor-pointer select-none px-3 py-2 hover:text-white">Full text</summary>
+        {transcriptOpen && (
+          <p className="max-h-48 overflow-y-auto px-3 pb-3 whitespace-pre-wrap text-gray-300">{text}</p>
+        )}
+      </details>
     </div>
   );
 }
@@ -350,15 +366,19 @@ function FocalSlot({ words, focalColor }) {
   const rightHalf = `${right}${target < parts.length - 1 ? ` ${parts.slice(target + 1).join(' ')}` : ''}`;
 
   return (
-    <div className="flex items-baseline justify-center">
-      <span className="text-right" style={{ flex: '1 1 0', whiteSpace: 'pre' }}>
-        {leftHalf}
-      </span>
-      <span style={{ color: focalColor }}>{focal}</span>
-      <span className="text-left" style={{ flex: '1 1 0', whiteSpace: 'pre' }}>
-        {rightHalf}
-      </span>
-    </div>
+    <>
+      {/* Screen readers get the whole word; the focal split below is visual only */}
+      <span className="sr-only">{parts.join(' ')}</span>
+      <div className="flex items-baseline justify-center" aria-hidden="true">
+        <span className="text-right" style={{ flex: '1 1 0', whiteSpace: 'pre' }}>
+          {leftHalf}
+        </span>
+        <span style={{ color: focalColor }}>{focal}</span>
+        <span className="text-left" style={{ flex: '1 1 0', whiteSpace: 'pre' }}>
+          {rightHalf}
+        </span>
+      </div>
+    </>
   );
 }
 

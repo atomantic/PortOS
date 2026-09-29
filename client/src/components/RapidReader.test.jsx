@@ -3,6 +3,21 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { installVoiceHotkeySpy } from '../test/voiceHotkeySpy';
 import RapidReader, { RapidReaderModal } from './RapidReader';
 
+describe('RapidReader accessibility', () => {
+  it('exposes the whole word, a progressbar, and the full text to assistive tech', () => {
+    const { container } = render(<RapidReader text="alpha bravo charlie delta" chunkSize={1} />);
+    expect(container.querySelector('.sr-only').textContent).toBe('alpha');
+    expect(container.querySelector('[aria-hidden="true"].flex')).not.toBeNull();
+    const bar = screen.getByRole('progressbar', { name: 'Reading progress' });
+    expect(bar).toHaveAttribute('aria-valuenow', '25');
+    expect(bar).toHaveAttribute('aria-valuemin', '0');
+    expect(bar).toHaveAttribute('aria-valuemax', '100');
+    const details = container.querySelector('details');
+    act(() => { details.open = true; fireEvent(details, new Event('toggle')); });
+    expect(screen.getByText('alpha bravo charlie delta')).toBeInTheDocument();
+  });
+});
+
 describe('RapidReader keyboard transport', () => {
   const voiceHotkey = installVoiceHotkeySpy();
 
