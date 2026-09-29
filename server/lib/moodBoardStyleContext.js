@@ -31,9 +31,7 @@ const CONTEXT_TOTAL_CHARS_MAX = 24000;
  */
 export function collectBoardStyleContext(board) {
   const items = Array.isArray(board?.items) ? board.items : [];
-  const fragments = [];
-  let dropped = 0;
-  let totalChars = 0;
+  const entries = [];
   for (const it of items) {
     if (!it || typeof it !== 'object') continue;
     const entry = {};
@@ -57,14 +55,26 @@ export function collectBoardStyleContext(board) {
       }
     }
     if (!Object.keys(entry).length) continue;
-    const entrySize = Object.values(entry).reduce((sum, v) => sum + v.length, 0);
-    if (fragments.length >= CONTEXT_ITEMS_MAX || totalChars + entrySize > CONTEXT_TOTAL_CHARS_MAX) {
-      dropped += 1;
-      continue;
-    }
-    totalChars += entrySize;
-    fragments.push({ kind: it.type, ...entry });
+    entries.push({ kind: it.type, ...entry });
   }
+  // Over budget, keep an evenly spaced sample of the WHOLE board rather than the
+  // first N — truncating in board order made the composite describe only the
+  // earliest pins. Order is preserved so the curated sequence still reads through.
+  const entrySize = (e) => Object.values(e).reduce((sum, v) => sum + (typeof v === 'string' ? v.length : 0), 0);
+  const avgSize = entries.length ? entries.reduce((sum, e) => sum + entrySize(e), 0) / entries.length : 0;
+  const budgetItems = Math.min(CONTEXT_ITEMS_MAX, avgSize ? Math.floor(CONTEXT_TOTAL_CHARS_MAX / avgSize) : CONTEXT_ITEMS_MAX);
+  const candidates = entries.length <= budgetItems
+    ? entries
+    : Array.from({ length: budgetItems }, (_, i) => entries[Math.floor(((i + 0.5) * entries.length) / budgetItems)]);
+  const fragments = [];
+  let totalChars = 0;
+  for (const e of candidates) {
+    const size = entrySize(e);
+    if (fragments.length >= CONTEXT_ITEMS_MAX || totalChars + size > CONTEXT_TOTAL_CHARS_MAX) break;
+    totalChars += size;
+    fragments.push(e);
+  }
+  const dropped = entries.length - fragments.length;
   // The board's own composite prompt is the distilled through-line. It is one
   // field, so it gets the description budget rather than the per-item cap —
   // clipping it to 600 would drop the look downstream renders are asked to match.

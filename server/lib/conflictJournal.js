@@ -536,7 +536,7 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // the Conflicts UI offers for restore. `moodBoard` matches the record kind,
   // and the resolver routes restore through restoreBoard → applyBoardRestore
   // (which accepts items, unlike the route's applyBoardPatch).
-  moodBoard: ['name', 'description', 'items', 'style', 'posterImageRef'],
+  moodBoard: ['name', 'description', 'items', 'style', 'posterImageRef', 'collageImageRef'],
   // Writers Room works (#1565): the user-authored manifest fields the merge can
   // restore through `updateWork` (which accepts exactly this set + the liveMode
   // partial-merge). Server-owned / structural fields are excluded — `id`/

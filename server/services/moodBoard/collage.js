@@ -201,6 +201,8 @@ export async function composeBoardCollage(boardId, { framesPerVideo, addFramesTo
       nextBoard = res.board;
       if (res.added) emitRecordUpdated('moodBoard', boardId);
     }
+    nextBoard = await store.updateBoard(boardId, { collageImageRef: filename });
+    emitRecordUpdated('moodBoard', boardId);
     console.log(`🧩 Mood board ${boardId}: collage ${cols}x${rows} (${composites.length} cells, ${skipped} skipped) → ${filename}`);
     return { filename, url: `/data/images/${filename}`, width, height, cols, rows, cells: composites.length, skipped, board: nextBoard };
   } finally {
