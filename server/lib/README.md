@@ -777,6 +777,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `messageBrowserIdentity.js` | Shared Outlook row extraction and identity-safe browser action scripts; exact unique targets and confirmed row removal. |
 
+| `defaultRequestBody.js` | Express middleware that defaults an undefined `req.body` (Express 5 leaves it unset for body-less requests) to `{}` so handlers do not crash with a TypeError 500. |
 | `databaseAuthority.js` | `createDatabaseAuthority(dataDir?)` durably records which backend a verified cutover released admission to and which it retired; `assertDatabasePoolAuthority(pool)` refuses a process whose pool still names the retired source (enforced at boot and on every pooled operation). |
 
 | `databaseMaintenanceJournal.js` | Shared `databaseMaintenanceEndpointSchema` plus durable cross-process database admission fence and operation journal with exclusive coordinator ownership, one-use detached worker reservations, exit-receipt-gated ownership recovery, worker process-group records, immutable recovery-dump and import receipts, durable forward-only stages through `verified`, per-pid target proofs from a restarted server, token-persisting same-operation recovery, and `releaseAdmission` (authority record, then completed archive); source-only cancellation archives an unowned accepted operation. |
