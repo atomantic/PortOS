@@ -95,6 +95,14 @@ export function CostInput({ row, value, onChange, idPrefix }) {
   );
 }
 
+// A plan whose API figure is not fully measured. Estimates for Antigravity (no
+// token counts on disk) and killed sessions understate real usage, so the row
+// says so instead of presenting a low number as a bargain-less plan.
+const SOURCE_LABELS = { estimate: 'estimated', mixed: 'partly estimated' };
+const SourceBadge = ({ source }) => (
+  SOURCE_LABELS[source] ? <Pill tone="context" size="xs" className="ml-2">{SOURCE_LABELS[source]}</Pill> : null
+);
+
 export const NotPriced = () => <span className="text-gray-600">not priced</span>;
 
 export function CellValue({ cell }) {
@@ -195,6 +203,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
                   <label htmlFor={`mobile-subscription-cost-${row.family}`} className="text-sm font-medium text-white truncate">
                     {row.label}
                     {!row.enabled && <Pill tone="context" size="xs" className="ml-2">disabled</Pill>}
+                    <SourceBadge source={row.source} />
                   </label>
                   <CostInput row={row} value={displayValue(drafts, row)} onChange={onChange} idPrefix="mobile" />
                 </div>
@@ -246,6 +255,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
                         {row.label}
                       </label>
                       {!row.enabled && <Pill tone="context" size="xs" className="ml-2">disabled</Pill>}
+                      <SourceBadge source={row.source} />
                     </td>
                     <td className="py-2 px-2">
                       <CostInput row={row} value={displayValue(drafts, row)} onChange={onChange} idPrefix="desktop" />
@@ -287,7 +297,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
             usage no subscription covers (pay-as-you-go API providers or pre-breakdown legacy rows) and is excluded from savings.
           </>
         )}
-        {' '}Savings inherit the estimate&rsquo;s accuracy — rows marked Estimated above understate real usage.
+        {' '}Savings inherit the estimate&rsquo;s accuracy — rows badged estimated above understate real usage.
       </p>
     </div>
   );

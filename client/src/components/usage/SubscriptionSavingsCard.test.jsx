@@ -75,6 +75,15 @@ describe('SubscriptionSavingsCard', () => {
     expect(screen.getAllByText('not priced').length).toBeGreaterThan(0);
   });
 
+  // An estimated plan usually UNDERSTATES its API cost, so a low number must
+  // not read as a plan that was not worth its price.
+  it('badges a plan whose API cost is not fully measured', () => {
+    const rows = savings.families.map((f) => (f.family === 'codex' ? { ...f, source: 'estimate' } : { ...f, source: 'measured' }));
+    render(<SubscriptionSavingsCard savings={{ ...savings, families: rows }} />);
+    expect(screen.getAllByText('estimated').length).toBeGreaterThan(0);
+    expect(screen.queryByText('partly estimated')).toBeNull();
+  });
+
   // The mobile layout used to omit the totals entirely, so a phone user could
   // price their plans and never see what they saved.
   it('renders the totals in both the mobile and desktop layouts', () => {
