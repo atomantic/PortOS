@@ -220,7 +220,7 @@ router.post('/:id/reject', asyncHandler(async (req, res) => {
 router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = validateRequest(memoryIdParamSchema, req.params);
   const hard = req.query.hard === 'true';
-  const result = await memory.deleteMemory(id, hard);
+  const result = await (hard ? memory.purgeMemory(id) : memory.archiveMemory(id));
   res.json(result);
 }));
 

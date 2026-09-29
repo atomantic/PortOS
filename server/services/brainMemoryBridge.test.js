@@ -11,7 +11,7 @@ let bridgeFileContents = null; // null = file absent
 const createMemory = vi.fn(async (data) => ({ id: `mem-${data.content?.slice(0, 6) || 'x'}` }));
 const updateMemory = vi.fn(async () => ({ id: 'updated' }));
 const updateMemoryEmbedding = vi.fn(async () => {});
-const deleteMemory = vi.fn(async () => ({ success: true }));
+const purgeMemory = vi.fn(async () => ({ success: true }));
 const generateMemoryEmbedding = vi.fn(async () => [0.1, 0.2, 0.3]);
 const getMemoryIdsMissingEmbedding = vi.fn(async () => new Set());
 const getById = vi.fn();
@@ -40,7 +40,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   atomicWrite,
 }));
 vi.mock('./memoryBackend.js', () => ({
-  createMemory, updateMemory, updateMemoryEmbedding, deleteMemory, getMemoryIdsMissingEmbedding,
+  createMemory, updateMemory, updateMemoryEmbedding, purgeMemory, getMemoryIdsMissingEmbedding,
 }));
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding }));
 vi.mock('./brainStorage.js', () => {
@@ -138,7 +138,7 @@ describe('brainMemoryBridge — resyncBrainRecord (issue #1080)', () => {
 
     await bridge.resyncBrainRecord('people', 'p2', { hardDelete: true });
 
-    expect(deleteMemory).toHaveBeenCalledWith('mem-existing', true);
+    expect(purgeMemory).toHaveBeenCalledWith('mem-existing');
     expect(updateMemory).not.toHaveBeenCalled();
     expect(createMemory).not.toHaveBeenCalled();
   });
@@ -151,7 +151,7 @@ describe('brainMemoryBridge — resyncBrainRecord (issue #1080)', () => {
     await bridge.resyncBrainRecord('people', 'p2'); // sync:applied path — no hardDelete
 
     expect(updateMemory).toHaveBeenCalledWith('mem-existing', { status: 'archived' });
-    expect(deleteMemory).not.toHaveBeenCalled();
+    expect(purgeMemory).not.toHaveBeenCalled();
   });
 
   it('soft-archives (never hard-deletes) a present-but-archived record even when hardDelete:true', async () => {
@@ -163,7 +163,7 @@ describe('brainMemoryBridge — resyncBrainRecord (issue #1080)', () => {
 
     // Archived ≠ deleted — keep it recoverable, do not drop the row.
     expect(updateMemory).toHaveBeenCalledWith('mem-proj', { status: 'archived' });
-    expect(deleteMemory).not.toHaveBeenCalled();
+    expect(purgeMemory).not.toHaveBeenCalled();
   });
 
   it('no hard-delete call when a deleted record was never mapped', async () => {
@@ -172,7 +172,7 @@ describe('brainMemoryBridge — resyncBrainRecord (issue #1080)', () => {
 
     await bridge.resyncBrainRecord('people', 'never-seen', { hardDelete: true });
 
-    expect(deleteMemory).not.toHaveBeenCalled();
+    expect(purgeMemory).not.toHaveBeenCalled();
     expect(updateMemory).not.toHaveBeenCalled();
   });
 
@@ -218,7 +218,7 @@ describe('brainMemoryBridge — queueResync debounce + dedup', () => {
     bridge.queueResync([{ type: 'people', id: 'p1' }]);
     await bridge.flushPendingResync();
 
-    expect(deleteMemory).toHaveBeenCalledWith('mem-del', true);
+    expect(purgeMemory).toHaveBeenCalledWith('mem-del');
     expect(updateMemory).not.toHaveBeenCalledWith('mem-del', { status: 'archived' });
   });
 
@@ -337,7 +337,7 @@ describe('brainMemoryBridge — entity :upserted/:deleted route through queueRes
     await bridge.flushPendingResync();
 
     // Real local delete → hard prune (drop row + embedding), NOT soft archive.
-    expect(deleteMemory).toHaveBeenCalledWith('mem-del', true);
+    expect(purgeMemory).toHaveBeenCalledWith('mem-del');
     expect(updateMemory).not.toHaveBeenCalledWith('mem-del', { status: 'archived' });
     expect(createMemory).not.toHaveBeenCalled();
   });
@@ -366,7 +366,7 @@ describe('brainMemoryBridge — entity :upserted/:deleted route through queueRes
     // handleJournalDeleted is async; flush the microtask queue.
     await new Promise((r) => setImmediate(r));
 
-    expect(deleteMemory).toHaveBeenCalledWith('mem-day', true);
+    expect(purgeMemory).toHaveBeenCalledWith('mem-day');
     expect(updateMemory).not.toHaveBeenCalled();
   });
 });
@@ -438,7 +438,7 @@ describe('brainMemoryBridge — journal re-embed debounce (daily-log autosave)',
     await vi.advanceTimersByTimeAsync(31_000);
     await bridge.flushPendingResync();
 
-    expect(deleteMemory).toHaveBeenCalledWith('mem-day', true);
+    expect(purgeMemory).toHaveBeenCalledWith('mem-day');
     expect(generateMemoryEmbedding).not.toHaveBeenCalled();
   });
 });
@@ -671,7 +671,7 @@ describe('brainMemoryBridge — SongBook enrollment (issue #4105)', () => {
     brainEvents.emit('songs:deleted', { id: 's1' });
     await bridge.flushPendingResync();
 
-    expect(deleteMemory).toHaveBeenCalledWith('mem-song', true);
+    expect(purgeMemory).toHaveBeenCalledWith('mem-song');
   });
 
   it('includes songs in the bulk sync and the embedding-coverage tally', async () => {

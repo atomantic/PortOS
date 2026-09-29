@@ -88,7 +88,8 @@ import {
   getMemories,
   updateMemory,
   updateMemoryEmbedding,
-  deleteMemory,
+  archiveMemory,
+  purgeMemory,
   approveMemory,
   rejectMemory,
   searchMemories,
@@ -653,16 +654,16 @@ describe('memory service', () => {
   });
 
   // ===========================================================================
-  // deleteMemory
+  // archiveMemory / purgeMemory
   // ===========================================================================
 
-  describe('deleteMemory', () => {
-    it('should soft delete (archive) by default', async () => {
+  describe('archiveMemory / purgeMemory', () => {
+    it('should archive', async () => {
       const mockMemory = { id: 'mem-1', status: 'active', updatedAt: '' };
       const mockIndex = { version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', status: 'active' }] };
       readJSONFile.mockImplementation(makeReadMock(mockMemory, mockIndex));
 
-      const result = await deleteMemory('mem-1');
+      const result = await archiveMemory('mem-1');
 
       expect(result).toEqual({ success: true, id: 'mem-1' });
       expect(rmGuarded).not.toHaveBeenCalled();
@@ -673,12 +674,12 @@ describe('memory service', () => {
       expect(savedMemory.status).toBe('archived');
     });
 
-    it('should hard delete when hard=true', async () => {
+    it('should purge', async () => {
       const mockIndex = { version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', status: 'active' }] };
       const mockEmbeddings = { model: 'test', dimension: 3, vectors: { 'mem-1': [0.1, 0.2, 0.3] } };
       readJSONFile.mockImplementation(makeReadMock(null, mockIndex, mockEmbeddings));
 
-      const result = await deleteMemory('mem-1', true);
+      const result = await purgeMemory('mem-1');
 
       expect(result).toEqual({ success: true, id: 'mem-1' });
       expect(rmGuarded).toHaveBeenCalled();
@@ -691,17 +692,17 @@ describe('memory service', () => {
       const mockIndex = { version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', status: 'active' }] };
       readJSONFile.mockImplementation(makeReadMock(mockMemory, mockIndex));
 
-      await deleteMemory('mem-1');
+      await archiveMemory('mem-1');
 
       expect(emitSpy).toHaveBeenCalledWith('memory:deleted', { id: 'mem-1', hard: false });
     });
 
-    it('should emit memory:deleted with hard=true', async () => {
+    it('should emit memory:deleted with hard=true on purge', async () => {
       const emitSpy = vi.spyOn(cosEvents, 'emit');
       const mockIndex = { version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', status: 'active' }] };
       readJSONFile.mockImplementation(makeReadMock(null, mockIndex));
 
-      await deleteMemory('mem-1', true);
+      await purgeMemory('mem-1');
 
       expect(emitSpy).toHaveBeenCalledWith('memory:deleted', { id: 'mem-1', hard: true });
     });

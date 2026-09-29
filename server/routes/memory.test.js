@@ -17,7 +17,8 @@ vi.mock('../services/memoryBackend.js', () => ({
   createMemory: vi.fn(),
   updateMemory: vi.fn(),
   updateMemoryEmbedding: vi.fn(),
-  deleteMemory: vi.fn(),
+  archiveMemory: vi.fn(),
+  purgeMemory: vi.fn(),
   searchMemories: vi.fn(),
   consolidateMemories: vi.fn(),
   linkMemories: vi.fn(),
@@ -45,7 +46,7 @@ vi.mock('../services/memorySync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 
-import { ensureBackend, getMemories, getTimeline, deleteMemory, applyDecay } from '../services/memoryBackend.js';
+import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, applyDecay } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
 
@@ -68,23 +69,36 @@ describe('Memory Routes', () => {
       const response = await request(app).delete(`/api/memory/${id}`);
 
       expect(response.status).toBe(status);
-      expect(deleteMemory).not.toHaveBeenCalled();
+      expect(archiveMemory).not.toHaveBeenCalled();
+      expect(purgeMemory).not.toHaveBeenCalled();
     });
 
     it('does not route an empty memory id to deletion', async () => {
       const response = await request(app).delete('/api/memory/');
 
       expect(response.status).toBe(404);
-      expect(deleteMemory).not.toHaveBeenCalled();
+      expect(archiveMemory).not.toHaveBeenCalled();
+      expect(purgeMemory).not.toHaveBeenCalled();
     });
 
-    it('deletes a valid memory id', async () => {
-      deleteMemory.mockResolvedValue({ success: true });
+    it('purges a valid memory id when hard=true', async () => {
+      purgeMemory.mockResolvedValue({ success: true });
 
       const response = await request(app).delete('/api/memory/mem-42?hard=true');
 
       expect(response.status).toBe(200);
-      expect(deleteMemory).toHaveBeenCalledWith('mem-42', true);
+      expect(purgeMemory).toHaveBeenCalledWith('mem-42');
+      expect(archiveMemory).not.toHaveBeenCalled();
+    });
+
+    it('archives a valid memory id by default', async () => {
+      archiveMemory.mockResolvedValue({ success: true });
+
+      const response = await request(app).delete('/api/memory/mem-42');
+
+      expect(response.status).toBe(200);
+      expect(archiveMemory).toHaveBeenCalledWith('mem-42');
+      expect(purgeMemory).not.toHaveBeenCalled();
     });
   });
 

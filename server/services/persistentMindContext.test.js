@@ -10,7 +10,7 @@ const mock = vi.hoisted(() => ({
     getMemories: vi.fn(async () => ({ memories: [] })),
     peekMemory: vi.fn(),
     createMemory: vi.fn(async (input) => ({ id: 'memory-automatic-1', ...input })),
-    deleteMemory: vi.fn(async (id) => ({ success: true, id })),
+    archiveMemory: vi.fn(async (id) => ({ success: true, id })),
     updateMemory: vi.fn(),
   },
 }));
@@ -76,7 +76,7 @@ beforeEach(() => {
   mock.memoryApi.peekMemory.mockReset();
   mock.memoryApi.updateMemory.mockReset();
   mock.memoryApi.createMemory.mockClear();
-  mock.memoryApi.deleteMemory.mockReset().mockImplementation(async (id) => ({ success: true, id }));
+  mock.memoryApi.archiveMemory.mockReset().mockImplementation(async (id) => ({ success: true, id }));
 });
 
 afterAll(() => rmSync(CONTEXT_DIR, { recursive: true, force: true }));
@@ -358,11 +358,11 @@ describe('persistent mind memory cleanup', () => {
       memories: [...records.values()].filter((memory) => memory.status === 'active' && (!tags || tags.some((tag) => memory.tags.includes(tag)))).sort((a, b) => sortBy === 'importance' ? b.importance - a.importance : 0).slice(offset, offset + limit),
     }));
     mock.memoryApi.peekMemory.mockImplementation(async (id) => structuredClone(records.get(id)));
-    mock.memoryApi.deleteMemory.mockImplementation(async (id) => { records.get(id).status = 'archived'; });
+    mock.memoryApi.archiveMemory.mockImplementation(async (id) => { records.get(id).status = 'archived'; });
 
     await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 1, preserved: 102 });
-    expect(mock.memoryApi.deleteMemory).toHaveBeenCalledTimes(1);
-    expect(mock.memoryApi.deleteMemory).toHaveBeenCalledWith('ordinary', false);
+    expect(mock.memoryApi.archiveMemory).toHaveBeenCalledTimes(1);
+    expect(mock.memoryApi.archiveMemory).toHaveBeenCalledWith('ordinary');
     await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 0, preserved: 102 });
     const memories = await readPersistentMindMemories();
     expect(memories[0]).toMatchObject({ id: 'memory-0', protection: 'core-identity' });
@@ -397,8 +397,8 @@ describe('persistent mind memory cleanup', () => {
       .mockResolvedValueOnce({ id: 'memory-foreign', status: 'active', sourceAgentId: 'other-agent' });
 
     await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 1, preserved: 0 });
-    expect(mock.memoryApi.deleteMemory).toHaveBeenCalledWith('memory-owned', false);
-    expect(mock.memoryApi.deleteMemory).not.toHaveBeenCalledWith('memory-foreign', expect.anything());
+    expect(mock.memoryApi.archiveMemory).toHaveBeenCalledWith('memory-owned');
+    expect(mock.memoryApi.archiveMemory).not.toHaveBeenCalledWith('memory-foreign');
   });
 });
 

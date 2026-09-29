@@ -140,9 +140,19 @@ export async function updateMemoryEmbedding(id, embedding) {
   return b.updateMemoryEmbedding(id, embedding);
 }
 
-export async function deleteMemory(id, hard) {
+export async function archiveMemory(id) {
   const b = await getBackend();
-  return b.deleteMemory(id, hard);
+  return b.archiveMemory(id);
+}
+
+export async function purgeMemory(id) {
+  const b = await getBackend();
+  return b.purgeMemory(id);
+}
+
+/** @deprecated Call archiveMemory or purgeMemory so the call site says whether it destroys data. */
+export async function deleteMemory(id, hard) {
+  return hard ? purgeMemory(id) : archiveMemory(id);
 }
 
 export async function approveMemory(id) {
