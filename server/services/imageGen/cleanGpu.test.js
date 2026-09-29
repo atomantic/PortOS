@@ -8,7 +8,7 @@ import sharp from 'sharp';
 // FLUX runner or enqueues a live job on the shared install. `vi.hoisted` gives
 // the hoisted vi.mock factory a stable path; the seam's `ensureDir` creates it.
 const { TMP } = vi.hoisted(() => ({
-  TMP: `${process.env.TMPDIR || '/tmp'}/portos-cleangpu-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  TMP: `/tmp/portos-cleangpu-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 }));
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
