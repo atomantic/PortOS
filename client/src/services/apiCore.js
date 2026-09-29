@@ -68,7 +68,9 @@ export async function request(endpoint, options = {}) {
   if (!response) {
     const msg = 'Server unreachable — check your connection and try again';
     if (!silent) toast.error(msg);
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.code = 'SERVER_UNREACHABLE';
+    throw err;
   }
 
   if (!response.ok) {
@@ -150,4 +152,13 @@ export function uploadBody(data, filename) {
     return body;
   }
   return JSON.stringify({ data, ...(filename ? { filename } : {}) });
+}
+
+export function isServerUnreachable(err) {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+  if (!err) return false;
+  if (err.code === 'SERVER_UNREACHABLE' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') return true;
+  if (err.status === 502 || err.status === 503 || err.status === 504) return true;
+  const msg = typeof err === 'string' ? err : err.message || '';
+  return /server unreachable|failed to fetch|networkerror|load failed|econnrefused|net::err/i.test(msg);
 }

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
 import { getAuthStatus, getPasswordRiskStatus } from '../services/apiAuth.js';
+import { isServerUnreachable } from '../services/apiCore.js';
 import { safeReadStorage, safeWriteStorage, safeRemoveStorage } from '../lib/safeStorage.js';
+import socket from '../services/socket.js';
 import Modal from './ui/Modal.jsx';
 
 const ACKNOWLEDGEMENT_KEY = 'portos-password-risk-v1';
@@ -17,18 +19,30 @@ export default function PasswordRiskWarning() {
   const generation = useRef(0);
   const load = useCallback(() => {
     const current = ++generation.current;
-    const showCheckError = async () => {
+    const showCheckError = async (initialErr) => {
       // Older servers and transient failures may make the risk endpoint unavailable.
       // The login gate's public endpoint can still confirm password protection.
-      const auth = await getAuthStatus({ silent: true }).catch(() => null);
-      if (current !== generation.current) return;
-      if (auth?.enabled === true) {
-        setStatus({ enabled: true });
-        setError('');
-        return;
+      try {
+        const auth = await getAuthStatus({ silent: true });
+        if (current !== generation.current) return;
+        if (auth?.enabled === true) {
+          setStatus({ enabled: true });
+          setError('');
+          return;
+        }
+        setStatus(null);
+        setError('PortOS could not confirm password protection. Check Security settings or retry.');
+      } catch (authErr) {
+        if (current !== generation.current) return;
+        if (isServerUnreachable(authErr) || isServerUnreachable(initialErr)) {
+          // If the server is unreachable (restarting, updating, offline),
+          // do not clear known status or show a confusing warning about setting a password.
+          setError('');
+          return;
+        }
+        setStatus(null);
+        setError('PortOS could not confirm password protection. Check Security settings or retry.');
       }
-      setStatus(null);
-      setError('PortOS could not confirm password protection. Check Security settings or retry.');
     };
     getPasswordRiskStatus({ silent: true }).then((value) => {
       if (current !== generation.current) return;
@@ -40,20 +54,28 @@ export default function PasswordRiskWarning() {
       setAccepted(false);
       setStatus(value);
       setError('');
-    }).catch(() => {
+    }).catch((err) => {
       if (current !== generation.current) return;
-      return showCheckError();
+      if (isServerUnreachable(err)) {
+        setError('');
+        return;
+      }
+      return showCheckError(err);
     });
   }, []);
 
   useEffect(() => {
     load();
     window.addEventListener('focus', load);
+    window.addEventListener('online', load);
     window.addEventListener('portos:auth-changed', load);
+    socket.on('connect', load);
     return () => {
       generation.current += 1;
       window.removeEventListener('focus', load);
+      window.removeEventListener('online', load);
       window.removeEventListener('portos:auth-changed', load);
+      socket.off('connect', load);
     };
   }, [load, pathname]);
 
