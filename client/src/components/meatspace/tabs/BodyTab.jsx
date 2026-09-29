@@ -23,6 +23,8 @@ function parseNum(v) {
   return isNaN(n) ? null : n;
 }
 
+const sortEyeExams = (exams) => [...exams].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
 function buildEyePayload(form) {
   const payload = { date: form.date };
   for (const key of ['leftSphere', 'leftCylinder', 'leftAxis', 'rightSphere', 'rightCylinder', 'rightAxis']) {
@@ -37,7 +39,7 @@ export default function BodyTab() {
   const [eyeLoading, setEyeLoading] = useState(true);
   const [showEyeForm, setShowEyeForm] = useState(false);
   const [eyeForm, setEyeForm] = useState(EMPTY_EYE_FORM);
-  const [editingEyeIdx, setEditingEyeIdx] = useState(null);
+  const [editingEyeId, setEditingEyeId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
@@ -50,13 +52,13 @@ export default function BodyTab() {
   const handleAddEye = async () => {
     if (!eyeForm.date) return;
     const exam = await api.addEyeExam(buildEyePayload(eyeForm));
-    setEyeData(prev => ({ ...prev, exams: [...(prev?.exams || []), exam] }));
+    setEyeData(prev => ({ ...prev, exams: sortEyeExams([...(prev?.exams || []), exam]) }));
     setEyeForm(EMPTY_EYE_FORM);
     setShowEyeForm(false);
   };
 
-  const startEditEye = (exam, idx) => {
-    setEditingEyeIdx(idx);
+  const startEditEye = (exam) => {
+    setEditingEyeId(exam.id);
     setEyeForm({
       date: exam.date,
       leftSphere: exam.leftSphere ?? '',
@@ -69,19 +71,19 @@ export default function BodyTab() {
   };
 
   const handleUpdateEye = async () => {
-    if (editingEyeIdx == null) return;
-    const updated = await api.updateEyeExam(editingEyeIdx, buildEyePayload(eyeForm));
+    if (editingEyeId == null) return;
+    const updated = await api.updateEyeExam(editingEyeId, buildEyePayload(eyeForm));
     setEyeData(prev => ({
       ...prev,
-      exams: prev.exams.map((e, i) => i === editingEyeIdx ? updated : e)
+      exams: sortEyeExams(prev.exams.map(e => e.id === editingEyeId ? updated : e))
     }));
-    setEditingEyeIdx(null);
+    setEditingEyeId(null);
     setEyeForm(EMPTY_EYE_FORM);
   };
 
-  const handleDeleteEye = async (idx) => {
-    await api.removeEyeExam(idx);
-    setEyeData(prev => ({ ...prev, exams: prev.exams.filter((_, i) => i !== idx) }));
+  const handleDeleteEye = async (id) => {
+    await api.removeEyeExam(id);
+    setEyeData(prev => ({ ...prev, exams: prev.exams.filter(e => e.id !== id) }));
   };
 
   const eyeExams = eyeData?.exams || [];
@@ -109,7 +111,7 @@ export default function BodyTab() {
               Eye Prescriptions ({eyeLoading ? '...' : eyeExams.length})
             </h3>
           </div>
-          {!showEyeForm && editingEyeIdx == null && (
+          {!showEyeForm && editingEyeId == null && (
             <button
               onClick={() => { setShowEyeForm(true); setEyeForm({ ...EMPTY_EYE_FORM, date: new Date().toISOString().split('T')[0] }); }}
               className="flex items-center gap-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
@@ -119,10 +121,10 @@ export default function BodyTab() {
           )}
         </div>
 
-        {(showEyeForm || editingEyeIdx != null) && (
+        {(showEyeForm || editingEyeId != null) && (
           <div className="bg-port-card border border-port-border rounded-xl p-4 mb-3">
             <h4 className="text-sm font-medium text-gray-300 mb-3">
-              {editingEyeIdx != null ? 'Edit Eye Exam' : 'New Eye Exam'}
+              {editingEyeId != null ? 'Edit Eye Exam' : 'New Eye Exam'}
             </h4>
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 mb-3">
               <div className="col-span-2 sm:col-span-4 lg:col-span-1">
@@ -170,14 +172,14 @@ export default function BodyTab() {
             </div>
             <div className="flex gap-2">
               <button
-                onClick={editingEyeIdx != null ? handleUpdateEye : handleAddEye}
+                onClick={editingEyeId != null ? handleUpdateEye : handleAddEye}
                 disabled={!eyeForm.date}
                 className="flex items-center gap-1 px-3 py-1 bg-port-accent/20 text-port-accent rounded text-sm hover:bg-port-accent/30 disabled:opacity-40"
               >
-                <Check size={14} /> {editingEyeIdx != null ? 'Save' : 'Add'}
+                <Check size={14} /> {editingEyeId != null ? 'Save' : 'Add'}
               </button>
               <button
-                onClick={() => { setShowEyeForm(false); setEditingEyeIdx(null); setEyeForm(EMPTY_EYE_FORM); }}
+                onClick={() => { setShowEyeForm(false); setEditingEyeId(null); setEyeForm(EMPTY_EYE_FORM); }}
                 className="flex items-center gap-1 px-3 py-1 text-gray-400 hover:text-gray-200 text-sm"
               >
                 <X size={14} /> Cancel
@@ -210,10 +212,9 @@ export default function BodyTab() {
                 </tr>
               </thead>
               <tbody>
-                {[...eyeExams].reverse().map((exam, revIdx) => {
-                  const realIdx = eyeExams.length - 1 - revIdx;
+                {[...eyeExams].reverse().map((exam) => {
                   return (
-                    <tr key={realIdx} className="border-b border-port-border/50 hover:bg-port-bg/30">
+                    <tr key={exam.id} className="border-b border-port-border/50 hover:bg-port-bg/30">
                       <td className="py-1.5 px-3 font-mono text-gray-400">{exam.date}</td>
                       <td className="py-1.5 px-2 text-right font-mono text-gray-300">{formatSph(exam.leftSphere)}</td>
                       <td className="py-1.5 px-2 text-right font-mono text-gray-300">{formatSph(exam.leftCylinder)}</td>
@@ -224,23 +225,23 @@ export default function BodyTab() {
                       <td className="py-1.5 px-2 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <button
-                            onClick={() => startEditEye(exam, realIdx)}
+                            onClick={() => startEditEye(exam)}
                             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-accent transition-colors"
                             title="Edit" aria-label="Edit"
                           >
                             <Pencil size={12} />
                           </button>
-                          {isConfirming(realIdx) ? (
+                          {isConfirming(exam.id) ? (
                             <ConfirmButtonPair
                               prompt="Delete?"
                               confirmIcon={Trash2}
                               ariaLabel={`Confirm delete eye exam ${exam.date}`}
-                              onConfirm={() => confirmDelete(() => handleDeleteEye(realIdx))}
+                              onConfirm={() => confirmDelete(() => handleDeleteEye(exam.id))}
                               onCancel={cancelDelete}
                             />
                           ) : (
                             <button
-                              onClick={() => requestDelete(realIdx)}
+                              onClick={() => requestDelete(exam.id)}
                               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
                               title="Delete" aria-label="Delete"
                             >

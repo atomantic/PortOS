@@ -56,7 +56,12 @@ import {
   getBodyHistory,
   addBodyEntry,
   getBloodPressureHistory,
-  addBloodPressureReading
+  addBloodPressureReading,
+  addEyeExam,
+  getEyeExams,
+  updateEyeExam,
+  removeEyeExam,
+  resolveEyeExamId
 } from './meatspaceHealth.js';
 
 beforeEach(() => {
@@ -234,5 +239,47 @@ describe('addBloodPressureReading', () => {
     getDateString.mockReturnValue('2024-06-01');
     const result = await addBloodPressureReading({ systolic: 118, diastolic: 76 });
     expect(result.date).toBe('2024-06-01');
+  });
+});
+
+// =============================================================================
+// EYE EXAMS — addressed by stable id, not array position (#9139)
+// =============================================================================
+
+describe('eye exams by id', () => {
+  let disk;
+  beforeEach(() => {
+    disk = { exams: [] };
+    readJSONFile.mockImplementation(async () => structuredClone(disk));
+    writeFile.mockImplementation(async (_f, payload) => { disk = JSON.parse(payload); });
+  });
+
+  it('deletes the intended exam after an out-of-date-order add', async () => {
+    const a = await addEyeExam({ date: '2026-03-01' });
+    const b = await addEyeExam({ date: '2025-01-01' });
+    expect(disk.exams.map(e => e.date)).toEqual(['2025-01-01', '2026-03-01']);
+    await removeEyeExam(b.id);
+    expect(disk.exams.map(e => e.id)).toEqual([a.id]);
+  });
+
+  it('keeps addressing the right exam after a date edit', async () => {
+    const a = await addEyeExam({ date: '2025-01-01' });
+    const b = await addEyeExam({ date: '2025-06-01' });
+    const c = await addEyeExam({ date: '2025-09-01' });
+    await updateEyeExam(a.id, { date: '2026-01-01' });
+    await removeEyeExam(b.id);
+    expect(disk.exams.map(e => e.id)).toEqual([c.id, a.id]);
+  });
+
+  it('stamps ids onto a legacy id-less file and resolves numeric legacy indexes', async () => {
+    disk = { exams: [{ date: '2026-03-01' }, { date: '2025-01-01' }] };
+    const { exams } = await getEyeExams();
+    expect(exams.every(e => e.id)).toBe(true);
+    expect(disk.exams.map(e => e.date)).toEqual(['2025-01-01', '2026-03-01']);
+    expect(disk.exams.every(e => e.id)).toBe(true);
+    expect(await resolveEyeExamId('0')).toBe(exams[0].id);
+    expect(await resolveEyeExamId('9')).toBeNull();
+    await removeEyeExam(await resolveEyeExamId('0'));
+    expect(disk.exams.map(e => e.date)).toEqual(['2026-03-01']);
   });
 });

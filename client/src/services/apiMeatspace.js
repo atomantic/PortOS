@@ -142,11 +142,11 @@ export const addEyeExam = (data) => request('/meatspace/eyes', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateEyeExam = (index, data) => request(`/meatspace/eyes/${index}`, {
+export const updateEyeExam = (id, data) => request(`/meatspace/eyes/${encodeURIComponent(id)}`, {
   method: 'PUT',
   body: JSON.stringify(data)
 });
-export const removeEyeExam = (index) => request(`/meatspace/eyes/${index}`, {
+export const removeEyeExam = (id) => request(`/meatspace/eyes/${encodeURIComponent(id)}`, {
   method: 'DELETE'
 });
 
