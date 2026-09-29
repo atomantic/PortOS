@@ -108,6 +108,7 @@ import {
 } from './cosTaskPreStepBlocks.js';
 import { detectIdleLeftoverBranches, formatUserActionDetectorBlock } from './userActionDetectors.js';
 
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 // Back-compat shim — these five were public here before the pre-step layer moved
 // to its own module, so a deep import of this file keeps resolving them.
 export {
@@ -193,7 +194,7 @@ export function isCooldownExemptTask(task) {
   const meta = task?.metadata;
   if (!meta) return false;
   return meta.pipeline?.currentStage > 0
-    || meta.perpetual === true || meta.perpetual === 'true'
+    || isTruthyMeta(meta.perpetual)
     || hasQuotaBurnProvenance(meta);
 }
 
@@ -1961,7 +1962,7 @@ export function applyAppWorktreeDefault(metadata, app) {
       metadata.useWorktree = true; // openPR implies useWorktree
     } else if (app.defaultOpenPR === false || taskTypeDisabledWorktree) {
       metadata.openPR = false;
-    } else if ((app.defaultUseWorktree === true || metadata.useWorktree === true || metadata.useWorktree === 'true') && app.defaultOpenPR !== false) {
+    } else if ((app.defaultUseWorktree === true || isTruthyMeta(metadata.useWorktree)) && app.defaultOpenPR !== false) {
       metadata.openPR = true;
       metadata.useWorktree = true;
     }
@@ -1970,7 +1971,7 @@ export function applyAppWorktreeDefault(metadata, app) {
   // Apply defaultUseWorktree (only if not already set by task-type or openPR above)
   if (metadata.useWorktree === undefined) {
     // openPR implies useWorktree — don't let app default override explicit openPR: true
-    const explicitOpenPR = metadata.openPR === true || metadata.openPR === 'true';
+    const explicitOpenPR = isTruthyMeta(metadata.openPR);
     if (explicitOpenPR) {
       metadata.useWorktree = true;
     } else if (app.defaultUseWorktree === true) {
@@ -1981,7 +1982,7 @@ export function applyAppWorktreeDefault(metadata, app) {
   }
 
   // Final invariant: openPR implies useWorktree (normalize in both directions)
-  const finalOpenPR = metadata.openPR === true || metadata.openPR === 'true';
+  const finalOpenPR = isTruthyMeta(metadata.openPR);
   const finalWorktreeOff = metadata.useWorktree === false || metadata.useWorktree === 'false';
   if (finalOpenPR && finalWorktreeOff) {
     // openPR wins — force useWorktree on

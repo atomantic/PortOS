@@ -103,7 +103,6 @@ const failedRun = (errorAnalysis, providerId = 'antigravity-tui') => finalizeAge
   outputBuffer: '',
   errorAnalysis,
   terminatedByUser: false,
-  isTruthyMetaFn: () => false,
   error: errorAnalysis?.message,
   completionReason: 'fallback-signal',
   workspacePath: '/w',
@@ -291,7 +290,6 @@ describe('finalizeAgent provider sidelining', () => {
       outputBuffer: '',
       errorAnalysis: analysis,
       terminatedByUser: true,
-      isTruthyMetaFn: () => false,
       completionReason: 'terminated',
       workspacePath: '/w',
       prExpected: false,
@@ -323,7 +321,6 @@ describe('finalizeAgent — Creative Director scratch cleanup (#4650)', () => {
       duration: 1000,
       outputBuffer: '',
       terminatedByUser: false,
-      isTruthyMetaFn: () => false,
       workspacePath: dir,
       prExpected: false,
     });

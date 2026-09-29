@@ -1,3 +1,4 @@
+import { isTruthyMeta } from './metadataFlags.js';
 import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.js';
 /**
  * The agent record a spawn registers, projected from the task it is running.
@@ -14,9 +15,8 @@ import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.j
  *
  * Pure and synchronous: everything it needs is already resolved by the caller.
  * `primaryCheckoutBaseline` and `providerEndpoint` arrive as VALUES rather than
- * being read here (both were `await`/service calls inline), and `isTruthyMetaFn`
- * is injected the same way `inlinePrLifecycleSection` takes it — which keeps
- * this leaf out of the agent-state and local-endpoint graphs.
+ * being read here (both were `await`/service calls inline), which keeps this
+ * leaf out of the agent-state and local-endpoint graphs.
  */
 
 // From the module that DECLARES it, not the `validation.js` catch-all barrel:
@@ -61,7 +61,6 @@ export function buildAgentRegistration({
   executionMode,
   publicReviewPosture,
   resolvedAppName,
-  isTruthyMetaFn,
 }) {
   return {
     instanceId,
@@ -91,7 +90,7 @@ export function buildAgentRegistration({
     worktreeBranch: worktreeInfo?.branchName || null,
     isWorktree: !!worktreeInfo,
     isPersistentWorktree: !!worktreeInfo?.isPersistentWorktree,
-    isRecovery: isTruthyMetaFn(task.metadata?.isRecovery),
+    isRecovery: isTruthyMeta(task.metadata?.isRecovery),
     recoveryOrigin: processAuditRecoveryOriginSchema.safeParse(task.metadata?.recoveryOrigin).data || null,
     taskDescription: task.description,
     taskType: task.taskType,
@@ -200,7 +199,7 @@ export function buildAgentRegistration({
     // which mysteriously stopped.
     resumedFromAgentId: task.metadata?.resumedFromAgentId || null,
     // Preserve privacy after the task becomes an archived agent.
-    machineLocal: isTruthyMetaFn(task.metadata?.machineLocal),
+    machineLocal: isTruthyMeta(task.metadata?.machineLocal),
     taskAnalysisType: task.metadata?.analysisType || null,
     taskReviewType: task.metadata?.reviewType || null,
     taskApp: task.metadata?.app || null,
@@ -209,7 +208,7 @@ export function buildAgentRegistration({
     // continues a MANUAL drain in the user-initiated on-demand lane rather than
     // the auto-run-gated queue lane. `isTruthyMeta` accepts the boolean set at
     // spawn AND the string `"true"` a COS-TASKS.md round-trip yields.
-    taskOnDemand: isTruthyMetaFn(task.metadata?.onDemand),
+    taskOnDemand: isTruthyMeta(task.metadata?.onDemand),
     // WHO asked for that on-demand run. `perpetualRefillPlan` needs it to tell
     // a human Run (which keeps draining) from an automated origin such as a
     // quota burn (which is one unit and stops).
@@ -253,22 +252,22 @@ export function buildAgentRegistration({
     jiraBranch: task.metadata?.jiraBranch || null,
     jiraInstanceId: task.metadata?.jiraInstanceId || null,
     jiraCreatePR: task.metadata?.jiraCreatePR ?? null,
-    configOpenPR: isTruthyMetaFn(task.metadata?.openPR),
+    configOpenPR: isTruthyMeta(task.metadata?.openPR),
     // Claim prompts own their external claim/<item> worktree and forge
     // lifecycle even though CoS must keep configOpenPR/configUseWorktree off
     // to avoid provisioning a nested worktree. Preserve that distinction in
     // the run record so completion diagnostics cannot mistake the claim path
     // for the generic commit-only handoff.
     configClaimFlow: claimFlowTask,
-    configSimplify: isTruthyMetaFn(task.metadata?.simplify),
-    configReviewLoop: isTruthyMetaFn(task.metadata?.reviewLoop),
+    configSimplify: isTruthyMeta(task.metadata?.simplify),
+    configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),
     configReviewers: normalizeReviewers(task.metadata),
     configUseWorktree: !!worktreeInfo,
     configWorktreeAutoDetected: !!worktreeInfo && !explicitWorktree,
     // A read-only run is given no worktree on purpose (agentWorkspacePrep) and
     // commits nothing, so it is not "coding on main" either. Projected as its own
     // key because the card has no other way to tell it from a commit-only handoff.
-    configReadOnly: isTruthyMetaFn(task.metadata?.readOnly),
+    configReadOnly: isTruthyMeta(task.metadata?.readOnly),
     // Coding on the default branch is the LEFTOVER posture: no CoS worktree, no
     // JIRA feature branch, no claim worktree of its own, and not read-only. Each
     // new branch-owning or non-committing flow has to be excluded here, or its
@@ -276,11 +275,11 @@ export function buildAgentRegistration({
     // claimed from the Issues page came to be badged "main" while the claim
     // command was working in its own `claim/<item>` worktree.
     configCodingOnMain: !worktreeInfo && !jiraBranchName && !claimFlowTask
-      && !isTruthyMetaFn(task.metadata?.readOnly),
+      && !isTruthyMeta(task.metadata?.readOnly),
     // Feature-agent provenance must survive the in-memory runner handoff and
     // server restarts so featureAgents can clear currentAgentId and record the
     // run when the shared CoS lifecycle emits agent:completed.
     featureAgentId: task.metadata?.featureAgentId || null,
-    featureAgentRun: isTruthyMetaFn(task.metadata?.featureAgentRun)
+    featureAgentRun: isTruthyMeta(task.metadata?.featureAgentRun)
   };
 }

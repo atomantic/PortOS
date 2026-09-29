@@ -12,6 +12,7 @@
 import { NON_AUTO_RETRY_BLOCK_CATEGORIES } from './taskBlockCategories.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
 
+import { isTruthyMeta } from './metadataFlags.js';
 export { NON_AUTO_RETRY_BLOCK_CATEGORIES };
 
 // Stable headline every investigation task created by `agentErrorAnalysis` has
@@ -97,7 +98,6 @@ export function clientInvestigationFingerprint({ description, app } = {}) {
 // Task metadata survives a markdown round-trip, so booleans come back as the
 // strings 'true'/'false'. Local to keep this module import-free of the services
 // layer, where the generic `isTruthyMeta` lives.
-const truthyMeta = (value) => value === true || value === 'true';
 
 /**
  * Is this task an investigation task? Prefers the durable metadata marker and
@@ -105,7 +105,7 @@ const truthyMeta = (value) => value === true || value === 'true';
  * the marker existed are still recognized. Pure.
  */
 export function isInvestigationTask(task) {
-  if (truthyMeta(task?.metadata?.isInvestigation)) return true;
+  if (isTruthyMeta(task?.metadata?.isInvestigation)) return true;
   return typeof task?.description === 'string'
     && task.description.trimStart().startsWith(INVESTIGATION_HEADLINE_PREFIX);
 }

@@ -489,7 +489,7 @@ describe('parseExplicitReviewWith', () => {
 
 describe('resolvePrOwnership', () => {
   const resolve = (overrides = {}) => resolvePrOwnership({
-    task: { metadata: { openPR: true } }, isTruthyMeta: Boolean,
+    task: { metadata: { openPR: true } }, 
     providerId: 'codex', providerCommand: 'codex', ...overrides,
   });
 

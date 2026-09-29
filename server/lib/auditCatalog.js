@@ -1,3 +1,4 @@
+import { isTruthyMeta } from './metadataFlags.js';
 /**
  * Shared catalog of scheduled AUDIT task types — the ones that can either
  * implement a fix or just file tracker issues, matching the quota-burn
@@ -629,7 +630,7 @@ export function auditDoWorkRequiresWorktree(taskType) {
  */
 function explicitFileIssues(metadata) {
   const raw = metadata?.fileIssues;
-  if (raw === true || raw === 'true') return true;
+  if (isTruthyMeta(raw)) return true;
   if (raw === false || raw === 'false') return false;
   return null;
 }

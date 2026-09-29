@@ -13,6 +13,7 @@ import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
 import { buildCliReviewerOutcomeInstructions } from './reviewerOutcome.js';
 
+import { isTruthyMeta } from '../../lib/metadataFlags.js';
 // A large model reviewing a large diff should not be cut off at the HTTP
 // route's 600000ms cap (`server/routes/codeReview.js`) — the bridge spreads
 // this straight into `runLocalCodeReview`'s own `timeoutMs`, so there is no
@@ -29,7 +30,7 @@ const LOCAL_LLM_REVIEW_TIMEOUT_MS = 1_800_000;
  * slashdo bodies (`/do:rpr`, the local-agent review loop) that section ignores.
  */
 export function isMergeOnlyFollowUp(metadata = {}) {
-  return metadata?.reviewLoopMergeOnly === true || metadata?.reviewLoopMergeOnly === 'true';
+  return isTruthyMeta(metadata?.reviewLoopMergeOnly);
 }
 
 /**
@@ -44,7 +45,7 @@ export function isMergeOnlyFollowUp(metadata = {}) {
  */
 export function isSelfReviewFollowUp(metadata = {}) {
   return isMergeOnlyFollowUp(metadata)
-    && (metadata?.reviewLoopSelfReview === true || metadata?.reviewLoopSelfReview === 'true');
+    && (isTruthyMeta(metadata?.reviewLoopSelfReview));
 }
 
 /**
@@ -743,7 +744,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // nothing here can transition it), so that run reviews and stops. Derived here
   // beside `inline` because it selects phase text, and a flag read 400 lines
   // below the one it pairs with is how the two ladders drifted apart.
-  const leaveOpen = metadata.reviewLoopLeaveOpen === true || metadata.reviewLoopLeaveOpen === 'true';
+  const leaveOpen = isTruthyMeta(metadata.reviewLoopLeaveOpen);
   const prUrl = metadata.reviewLoopPRUrl || '';
   const prBranch = metadata.reviewLoopPRBranch || '';
   const prNumber = metadata.reviewLoopPRNumber ?? '';

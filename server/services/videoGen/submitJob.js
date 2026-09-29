@@ -31,6 +31,7 @@ import {
 } from './prepareParams.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
 
+import { isTruthyMeta } from '../../lib/metadataFlags.js';
 const submitValidatedVideoGenJob = async (body, uploads) => {
   let fableLoomRenderSettings = null;
   if (body.fableLoom) {
@@ -266,11 +267,11 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     ...(isDefaultSpeedProfile(body.speedProfileId) ? {} : { speedProfileId: body.speedProfileId }),
     ...(isFullDecode(body.draftDecode) ? {} : { draftDecode: body.draftDecode }),
     ...(isDefaultVideoStreamingMode(body.streamingMode) ? {} : { streamingMode: body.streamingMode }),
-    disableAudio: body.disableAudio === true || body.disableAudio === 'true',
+    disableAudio: isTruthyMeta(body.disableAudio),
     // Absent means "use the settings.videoGen.displaySleep default" — only
     // forward it when the form actually sent an explicit choice.
     ...(body.displaySleep !== undefined
-      ? { displaySleep: body.displaySleep === true || body.displaySleep === 'true' }
+      ? { displaySleep: isTruthyMeta(body.displaySleep) }
       : {}),
     sourceImagePath,
     audioFilePath,
@@ -291,7 +292,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     icReferencePaths,
     icStrength: body.icStrength,
     icAttentionStrength: body.icAttentionStrength,
-    icSkipStage2: body.icSkipStage2 === true || body.icSkipStage2 === 'true',
+    icSkipStage2: isTruthyMeta(body.icSkipStage2),
     ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
     ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
     ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),

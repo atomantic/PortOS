@@ -23,6 +23,7 @@
 import { LOCAL_LLM_REVIEWERS, normalizeReviewerEffort, normalizeReviewerModel } from './reviewerConfig.js';
 import { taskContextBlock } from './cosTaskPrompt.js';
 
+import { isTruthyMeta } from './metadataFlags.js';
 /**
  * The three answers the review may return, ordered least → most disruptive.
  *
@@ -271,8 +272,7 @@ export function mergeOutcomeObjective(task) {
   const metadata = task?.metadata;
   if (!metadata || typeof metadata !== 'object') return null;
   // Stored Markdown metadata may carry booleans as strings.
-  const truthy = (value) => value === true || value === 'true';
-  if (!truthy(metadata.reviewLoopFollowUp) || truthy(metadata.reviewLoopLeaveOpen)) return null;
+  if (!isTruthyMeta(metadata.reviewLoopFollowUp) || isTruthyMeta(metadata.reviewLoopLeaveOpen)) return null;
   const number = Number(metadata.reviewLoopPRNumber);
   const branch = typeof metadata.reviewLoopPRBranch === 'string' ? metadata.reviewLoopPRBranch.trim() : '';
   // Both are required: the number is what the forge is asked about, and the

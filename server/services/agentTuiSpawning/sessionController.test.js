@@ -78,7 +78,6 @@ function makeController({
     rawFile: '/tmp/workspace/raw.txt',
     executionId: 'exec-1',
     laneName: 'lane-1',
-    isTruthyMetaFn: () => false,
     directLaunch: true,
     prOwnership: { prOpenedBy: 'agent-inline', prClaimExpected: true, taskOpenPR: true },
     mergeGateIsOwed,

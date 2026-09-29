@@ -831,12 +831,12 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
   });
 
   it('records claimFlow separately from CoS-managed PR/worktree flags', () => {
-    expect(AGENT_REGISTRATION_SRC).toContain('configOpenPR: isTruthyMetaFn(task.metadata?.openPR)');
+    expect(AGENT_REGISTRATION_SRC).toContain('configOpenPR: isTruthyMeta(task.metadata?.openPR)');
     // Derived from \`isClaimFlowTask\`, not re-implemented inline: the predicate also
     // recognises a claim run by its \`analysisType\`, which an inline
     // \`isTruthyMeta(task.metadata?.claimFlow)\` would silently drop. Hoisted to one
     // const because \`configCodingOnMain\` reads the same fact.
-    expect(AGENT_SPAWN_DISPATCH_SRC).toContain('const claimFlowTask = isClaimFlowTask(task, isTruthyMeta);');
+    expect(AGENT_SPAWN_DISPATCH_SRC).toContain('const claimFlowTask = isClaimFlowTask(task);');
     expect(AGENT_REGISTRATION_SRC).toContain('configClaimFlow: claimFlowTask');
     expect(AGENT_REGISTRATION_SRC.indexOf('configClaimFlow')).toBeGreaterThan(AGENT_REGISTRATION_SRC.indexOf('configOpenPR'));
   });
@@ -1028,5 +1028,5 @@ describe('runAgentSpawn source — quota-burn provenance projection (#6406)', ()
 
 // Archive classification must survive the task-to-agent metadata projection.
 it('preserves the machine-local privacy marker in spawned agent metadata', () => {
-  expect(AGENT_REGISTRATION_SRC).toContain('machineLocal: isTruthyMetaFn(task.metadata?.machineLocal)');
+  expect(AGENT_REGISTRATION_SRC).toContain('machineLocal: isTruthyMeta(task.metadata?.machineLocal)');
 });

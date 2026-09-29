@@ -267,7 +267,6 @@ export async function spawnTuiAgent({
   agentDir,
   executionId,
   laneName,
-  isTruthyMetaFn,
   prOpenedBy,
   leanMode = false,
   useDurableRunner = false,
@@ -320,7 +319,6 @@ export async function spawnTuiAgent({
   // off to read the same answer.
   const prOwnership = resolvePrOwnership({
     task,
-    isTruthyMeta: isTruthyMetaFn,
     persistedPrOpenedBy: prOpenedBy,
     providerId: provider?.id,
     providerCommand: provider?.command,
@@ -363,7 +361,6 @@ export async function spawnTuiAgent({
     rawFile,
     executionId,
     laneName,
-    isTruthyMetaFn,
     directLaunch,
     prOwnership,
     mergeGateIsOwed,

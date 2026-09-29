@@ -272,7 +272,6 @@ describe('runAgentCompletionCleanup — agentOpensOwnPr mirrors the prompt gate'
     promptOpensOwnPr(task, {
       providerType, providerId, providerCommand, leanMode,
       worktreeInfo: worktree,
-      isTruthyMetaFn: (v) => v === true || v === 'true',
     });
 
   // `prClaimVerified` is the caller's answer to "did finalize's PR-claim check
