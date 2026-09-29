@@ -30,6 +30,7 @@ import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { PATHS, shortId, importFileToDir } from '../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
+import { MUSCRIPTOR_MODELS } from '../lib/muscriptorModels.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { hfChildEnv } from './hfToken.js';
 import { isGatedRepoError, extractGatedRepo } from '../lib/hfErrors.js';
@@ -44,7 +45,7 @@ const MUSCRIPTOR_SCRIPT = join(__dirname, '../../scripts/transcribe_muscriptor.p
 
 // MuScriptor model sizes (weights auto-download on first use). Medium is the
 // library default — a quality/speed balance; small is the CPU-friendly tier.
-export const MUSCRIPTOR_MODELS = Object.freeze(['small', 'medium', 'large']);
+export { MUSCRIPTOR_MODELS };
 export const DEFAULT_MUSCRIPTOR_MODEL = 'medium';
 
 /** Clamp a requested model size onto the known set (route validates shape; this guards the value). */
