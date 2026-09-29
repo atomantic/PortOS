@@ -49,11 +49,6 @@ export const removeMoodBoardItem = (id, itemId, options) =>
     ...options,
   });
 
-// Copy gallery generation prompts onto pins that lack any prompt (resolves to
-// the updated board) so analyzing the board skips them.
-export const backfillMoodBoardPrompts = (id, options = {}) =>
-  request(`/mood-boards/${encodeURIComponent(id)}/backfill-prompts`, { method: 'POST', ...options });
-
 // Board analyze runs server-side so it survives navigation: start (or join) the
 // job, and read its live state on return. `null` = no run since server start.
 export const startMoodBoardAnalyze = (id, { providerId, model } = {}, options = {}) =>
