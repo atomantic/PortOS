@@ -18,7 +18,7 @@ import useProviderModels from '../../hooks/useProviderModels';
 import useVisionModelIds from '../../hooks/useVisionModelIds';
 import useImageRenderSettings from '../../hooks/useImageRenderSettings';
 import useSingleImageRender from '../../hooks/useSingleImageRender';
-import { promptFromMedia, updateMoodBoard, updateMoodBoardItem, composeMoodBoardPrompt } from '../../services/api';
+import { promptFromMedia, updateMoodBoard, updateMoodBoardItem, composeMoodBoardPrompt, backfillMoodBoardPrompts } from '../../services/api';
 import { isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
 import { formatCount } from '../../utils/formatters';
 import { moodBoardItemAnalysisSource, moodBoardPosterSrc } from '../../lib/moodBoardItemSrc';
@@ -147,7 +147,12 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     }
     setBusy(true);
     let failures = 0;
-    const pending = plan.pending;
+    // Adopt gallery prompts for older pins first so they aren't re-analyzed.
+    const filled = await backfillMoodBoardPrompts(board.id, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
+    const activePlan = filled ? boardAnalyzePlan(filled.items) : plan;
+    if (filled) onBoardChange(filled);
+    const pending = activePlan.pending;
     for (let i = 0; i < pending.length; i += 1) {
       const item = pending[i];
       const source = moodBoardItemAnalysisSource(item);
@@ -175,7 +180,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
       replaceItem(saved);
     }
     setProgress('');
-    const analyzedNow = plan.analyzed + (pending.length - failures);
+    const analyzedNow = activePlan.analyzed + (pending.length - failures);
     if (analyzedNow < 1) {
       setBusy(false);
       toast.error('No item could be analyzed, so the board style was not composed');

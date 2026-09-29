@@ -17,6 +17,7 @@ const {
 vi.mock('../../services/api', () => ({
   promptFromMedia: (...args) => mockPrompt(...args),
   composeMoodBoardPrompt: (...args) => mockCompose(...args),
+  backfillMoodBoardPrompts: async () => null,
   updateMoodBoardItem: (...args) => mockUpdateItem(...args),
   updateMoodBoard: (...args) => mockUpdateBoard(...args),
 }));
