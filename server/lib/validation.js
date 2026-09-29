@@ -1501,6 +1501,19 @@ export const usageMessagesSchema = z.object({
   inputTokenCount: z.number().int().nonnegative().optional().default(0)
 });
 
+/** Body for POST /api/usage/tokens — same guard as messages: no string or negative totals. */
+export const usageTokensSchema = z.object({
+  inputTokens: z.number().int().nonnegative().optional().default(0),
+  outputTokens: z.number().int().nonnegative().optional().default(0)
+});
+
+/** Body for POST /api/usage/session — model/providerName become persisted keys/values. */
+export const usageSessionSchema = z.object({
+  providerId: z.string().min(1),
+  providerName: z.string().max(200).optional(),
+  model: z.string().max(200).nullish()
+});
+
 /**
  * What the user pays monthly for each provider family's quota plan, keyed by
  * family id. Used by BOTH write paths — `PUT /api/usage/subscriptions` (wrapped
