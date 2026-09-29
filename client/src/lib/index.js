@@ -41,6 +41,7 @@ export * from './catalogTypes.js';
 export * from './creativeDirectorPlan.js';
 export * from './creativeDirectorPreview.js';
 export * from './editorialRoadmap.js';
+export * from './eidoverseDraftReconcile.js';
 export * from './eidoverseWorldReset.js';
 export * from './federatedMediaReadiness.js';
 export * from './falVideoHandoff.js';

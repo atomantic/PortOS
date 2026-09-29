@@ -27,6 +27,7 @@ grep -i "what you want to do" client/src/lib/README.md
 
 | `navFeatures.js` | `filterNavByFeatures(navEntries, isFeatureEnabled)` — drops nav-manifest entries whose optional instance feature (`post`, `datadog`, `jira`, `gsd`) is off. The single gate for BROWSE surfaces (sidebar, ⌘K); routes stay reachable by URL, bookmark, and voice. Pair with `useInstanceFeatures`. |
 | `pageNavTabs.js` | `buildPageNavTabs(manifestTabs, presentation, pageName)` — merges `getPageNavTabs(group)` (nav-manifest, owns id/label/order) with a page-owned presentation map (icon, layout flags), throwing at import time when a manifest tab has no entry. `buildSectionNavTabs(sectionTabs, presentation, section)` does the same for `getSectionNavTabs(section)`, resolving icons by path out of `NAV_PRESENTATION`. The one way a tabbed page or section builds its tab bar. |
+| `eidoverseDraftReconcile.js` | Pure three-way merge of the Eidoverse world-config drafts (recipe, asset overrides, label aliases) with a server response, plus the single `shouldReplaceDraft` rule for when a response may overwrite the draft. |
 | `eidoverseFrame.js` | Versioned hosted Eidoverse message guards, exact section navigation allowlist, and browser label preferences. |
 | `eidoverseWorldReset.js` | Client reset-reconciliation maps for Eidoverse source kinds and district asset slots; parity-tested against the authoritative server world-design contracts. |
 | `postQuickSession.js` | Pure Quick POST duration presets, local-observation estimator, deterministic budget composer, and preview metadata. |
