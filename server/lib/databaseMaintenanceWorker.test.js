@@ -125,14 +125,8 @@ function launch(id, token) {
       const child=await spawnDatabaseMaintenanceWorker(${JSON.stringify(id)},${JSON.stringify(token)});
       child.stdout.on('data',chunk=>process.stdout.write(chunk));
       child.stderr.on('data',chunk=>process.stderr.write(chunk));
-      // Pipe writes are asynchronous on Windows. Drain both forwarded streams
-      // before forced exit so refusal diagnostics reach the parent test.
-      const finish=code=>{
-        clearInterval(released);
-        process.stdout.write('',()=>process.stderr.write('',()=>process.exit(code ?? 1)));
-      };
-      child.on('error',()=>finish(1));
-      child.on('close',finish);
+      child.on('error',()=>{process.exitCode=1;process.exit();});
+      child.on('close',code=>{process.exitCode=code;process.exit();});
       const released=setInterval(()=>{
         if(existsSync(${JSON.stringify(controlDirFor(token))})) return;
         try{process.kill(child.pid,0);}catch{clearInterval(released);setTimeout(()=>{process.stdout.write('\\nRELEASED\\n',()=>process.exit(0));},300);}
@@ -325,7 +319,13 @@ describe('owned maintenance worker entry', () => {
     writeFileSync(join(root, 'data', 'database-writers', writer.id, 'reservation.json'), 'private-example-marker');
     const operation = journal.begin({ source, target });
     const token = journal.acquireCoordinator(operation.id);
-    const outcome = await launch(operation.id, token);
+    // This contract is the worker entry refusal, before platform-specific
+    // transfer. Reserve the real one-use owner and invoke the fixed worker
+    // directly; detached supervisor launch is exercised by the tests above.
+    journal.reserveCoordinatorWorker(operation.id, token);
+    const workerUrl = new URL('../../scripts/database-maintenance-worker.mjs', import.meta.url).href;
+    const outcome = await run(`process.argv=[process.execPath,'worker',${JSON.stringify(operation.id)},${JSON.stringify(token)}];
+      await import(${JSON.stringify(workerUrl)});`);
     expect(outcome.status).toBe(1);
     expect(outcome.stdout).toBe('');
     expect(outcome.stderr).toContain('ownership, writer, or transfer evidence is incomplete');
