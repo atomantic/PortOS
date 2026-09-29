@@ -221,6 +221,8 @@ const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
  */
 const DEFAULT_CACHE_MULTIPLIERS = { read: 0.1, write: 1.25 };
 const CACHE_MULTIPLIER_RULES = [
+  // GPT-6.1 Sol cached input is $0.10/MTok against a $2 input rate.
+  { test: /^gpt-6\.1-sol$/, read: 0.05, write: 1.25 },
   { test: /^grok-4\.7$/, read: 0.25, write: 1 },
   { test: /^grok/, read: 0.15, write: 1.25 },
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
