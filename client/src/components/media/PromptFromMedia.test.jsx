@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, Link } from 'react-router';
-import PromptFromMedia from './PromptFromMedia';
+import PromptFromMedia, { PromptFromMediaModal } from './PromptFromMedia';
 import * as api from '../../services/apiMediaJobs';
 
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
@@ -147,7 +147,7 @@ describe('PromptFromMedia', () => {
   });
 
   it('skips the disclosure toggle when hosted as an always-open card', async () => {
-    renderPanel({ alwaysOpen: true, initialSource: null });
+    renderPanel({ alwaysOpen: true, initialSource: null, showHistory: true });
     await screen.findByText('No saved examinations yet.');
     expect(screen.queryByRole('button', { name: /toggle prompt from media/i })).toBeNull();
     expect(screen.getByRole('button', { name: /pick image/i })).toBeInTheDocument();
@@ -175,7 +175,7 @@ it('does not duplicate a saved examination already received through history refr
     items: [{ id: 'saved', source: { filename: 'still.png' }, createdAt: '2026-01-01T00:00:00Z' }], hasMore: false,
   });
   api.promptFromMedia.mockResolvedValueOnce({ imagePrompt: 'Mountains', examinationId: 'saved' });
-  renderPanel();
+  renderPanel({ showHistory: true });
   await screen.findByText(/still.png ·/);
   fireEvent.click(screen.getByRole('button', { name: 'Create prompt' }));
   await screen.findByDisplayValue('Mountains');
@@ -196,4 +196,21 @@ it('clears the saved examination when returning to the analyzer index', async ()
   await waitFor(() => expect(screen.queryByDisplayValue('Previous examination')).toBeNull());
   expect(screen.queryByRole('button', { name: 'Clear selected media' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Create prompt' })).toBeDisabled();
+});
+
+it('omits saved examinations when initialSource is passed by default', () => {
+  renderPanel();
+  expect(screen.queryByText('Saved examinations')).toBeNull();
+  expect(api.listMediaPromptExaminations).not.toHaveBeenCalled();
+});
+
+it('omits saved examinations in PromptFromMediaModal', () => {
+  render(
+    <MemoryRouter>
+      <PromptFromMediaModal item={INITIAL} open onClose={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByText('Prompt from this')).toBeInTheDocument();
+  expect(screen.queryByText('Saved examinations')).toBeNull();
+  expect(api.listMediaPromptExaminations).not.toHaveBeenCalled();
 });
