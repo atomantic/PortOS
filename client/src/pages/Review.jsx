@@ -468,6 +468,7 @@ export default function Review() {
           mobileSelectId="actions-view-select"
           controlsIdPrefix="actions-view"
         />
+        <div role="tabpanel" id={`actions-view-${actionView}`} aria-labelledby={`tab-${actionView}`} className="space-y-3">
         {/* Triage summary */}
         <section className="flex flex-wrap gap-2">
           {queue && <span className="text-sm text-port-text">{queue.partial || queueError ? 'At least ' : ''}{formatCount(queueItems.filter(item => item.required === true).length)} required</span>}
@@ -668,6 +669,7 @@ export default function Review() {
             <p className="text-sm mt-1">This hub will fill up as agents surface alerts, actions, and briefing context.</p>
           </div>
         )}
+        </div>
       </div>
       <ActionDetail
         item={selectedAction}
