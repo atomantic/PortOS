@@ -1393,6 +1393,64 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     });
   });
 
+  it('selects track first in create drawer, auto-fills name, reads track metadata, and passes concept/style on create', async () => {
+    listMusicVideoProjects.mockResolvedValue([]);
+    listTracks.mockResolvedValue([{
+      id: 'track-cool',
+      title: 'Neon Horizon',
+      artist: 'SynthWave Artist',
+      lyrics: 'Line 1\nLine 2\nLine 3',
+      concept: 'Futuristic city chase',
+      prompt: 'Cyberpunk neon aesthetics',
+      durationSec: 180,
+    }]);
+    createMusicVideoProject.mockResolvedValue({ ...PROJECT_NO_CLIP, id: 'mv-cool', name: 'Neon Horizon' });
+    renderMV();
+    await openCreateForm();
+
+    const trackSelect = await screen.findByLabelText(/Track/i);
+    fireEvent.change(trackSelect, { target: { value: 'track-cool' } });
+
+    // Project name was auto-filled from track title
+    expect(screen.getByPlaceholderText('Project name')).toHaveValue('Neon Horizon');
+    // Track info badge showing lyrics and concept detected
+    expect(screen.getByText(/3 lyric lines loaded/i)).toBeInTheDocument();
+    expect(screen.getByText(/Concept loaded/i)).toBeInTheDocument();
+    expect(screen.getByText(/Style prompt loaded/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Create/ }));
+    await waitFor(() => expect(createMusicVideoProject).toHaveBeenCalled());
+    const [body] = createMusicVideoProject.mock.calls[0];
+    expect(body).toMatchObject({
+      name: 'Neon Horizon',
+      trackId: 'track-cool',
+    });
+  });
+
+  it('changing a track in the edit view auto-seeds track concept and style if not set', async () => {
+    const project = { ...PROJECT_NO_CLIP, trackId: null, concept: null };
+    listTracks.mockResolvedValue([{
+      id: 'track-new',
+      title: 'Solar Flare',
+      concept: 'Space journey',
+      prompt: 'Cosmic sci-fi',
+    }]);
+    updateMusicVideoProject.mockResolvedValue({ ...project, trackId: 'track-new', concept: { prompt: 'Space journey', style: 'Cosmic sci-fi' } });
+    await openProject(project);
+
+    const changeTrackSelect = screen.getByLabelText('Change track');
+    fireEvent.change(changeTrackSelect, { target: { value: 'track-new' } });
+
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      project.id,
+      {
+        trackId: 'track-new',
+        concept: { prompt: 'Space journey', style: 'Cosmic sci-fi' },
+      },
+      { silent: true },
+    ));
+  });
+
   it('autopilot kickoff analyzes the song, then plans the shots against the brief', async () => {
     const project = { ...PROJECT_NO_CLIP, scenes: [], automation: { tools: ['image:local'], guidance: 'noir', budgetUsd: null } };
     analyzeMusicVideoProject.mockResolvedValue({ ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, status: 'analyzed' });

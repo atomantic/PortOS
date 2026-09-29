@@ -136,11 +136,13 @@ export function buildProjectRecord(input, { id, now }) {
     midiTranscription: null,
     // #8964 — editable timed lyric cues + phrase annotations (timed against
     // the current audio source) and the shot planner's pacing range.
-    lyricCues: [],
-    phrases: [],
-    pacing: null,
+    lyricCues: Array.isArray(input.lyricCues) ? normalizeLyricCues(input.lyricCues) : [],
+    phrases: Array.isArray(input.phrases) ? normalizePhrases(input.phrases) : [],
+    pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
-    composition: null,
+    composition: input.composition ? normalizeComposition(input.composition) : null,
+    // #8988 — optional sound-design bed mixed under the song.
+    soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,

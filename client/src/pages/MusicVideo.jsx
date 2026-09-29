@@ -133,7 +133,11 @@ export default function MusicVideo() {
     routeProjectId,
     navigate,
     onTrackImported: (track) => setTracks((prev) => [...prev, track]),
-    onCreateComplete: (track) => setForm((f) => ({ ...f, trackId: track.id })),
+    onCreateComplete: (track) => setForm((f) => ({
+      ...f,
+      trackId: track.id,
+      ...(!f.name || tracks.some((t) => t.title === f.name) ? { name: track.title || '' } : {}),
+    })),
     onProjectUpdated: replaceProject,
   });
   const midi = useMusicVideoMidiJob({
@@ -238,7 +242,7 @@ export default function MusicVideo() {
     }
     if (creating) return;
     setCreating(true);
-    // Only the ids go up: the server snapshots the universe/board style into the concept.
+    // Only the ids go up: the server snapshots the universe/board style and track metadata into the concept.
     createMusicVideoProject({
       name: form.name.trim(),
       mode: form.mode,
@@ -391,7 +395,15 @@ export default function MusicVideo() {
       toast.error('Wait for the current render to finish before changing the track');
       return;
     }
-    updateMusicVideoProject(selected.id, { trackId }, { silent: true })
+    const selectedTrack = tracks.find((t) => t.id === trackId);
+    const patch = { trackId };
+    if (selectedTrack?.concept && !selected.concept?.prompt) {
+      patch.concept = { ...(selected.concept || {}), prompt: selectedTrack.concept };
+    }
+    if (selectedTrack?.prompt && !selected.concept?.style) {
+      patch.concept = { ...(patch.concept || selected.concept || {}), style: selectedTrack.prompt };
+    }
+    updateMusicVideoProject(selected.id, patch, { silent: true })
       .then((proj) => replaceProject(proj))
       .catch((err) => toast.error(err?.message || 'Failed to change track'));
   };
@@ -743,8 +755,36 @@ export default function MusicVideo() {
                   unaccepted — after download-time acknowledgement it stays
                   off the board. */}
 
-              {/* Concept & style — optional global direction for the whole video,
-                  set before "AI Plan" (see commitConcept above for what reads it). */}
+              {/* Track audio source is first in the edit workspace */}
+              <TrackPanel
+                project={selected}
+                tracks={tracks}
+                trackName={trackName}
+                audioFilename={projectAudioFilename(selected)}
+                youtube={youtube}
+                renderBound={renderTargetsSelected}
+                midiBound={midiTargetsSelected}
+                onChangeTrack={handleChangeTrack}
+                onProjectUpdated={replaceProject}
+              />
+              <AnalysisPanel
+                audioAnalysis={selected.audioAnalysis}
+                scenes={selected.scenes || []}
+                tempo={tempo}
+                onReanalyze={handleAnalyze}
+                analyzing={analyzing}
+              />
+              <LyricsPanel
+                project={selected}
+                onEditLocal={editProjectLocal}
+                onSave={saveProjectFields}
+                onImport={handleImportLyrics}
+                importing={importingLyrics}
+                onAlign={handleAlignLyrics}
+                aligning={aligningLyrics}
+              />
+
+              {/* Concept & style — global direction for the video */}
               <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
                   <label htmlFor="mv-concept" className="block text-xs text-port-text-muted mb-1">Concept</label>
@@ -779,26 +819,19 @@ export default function MusicVideo() {
                 onSave={saveVisualSpec}
                 onAddReference={() => setPickerTarget({ type: 'reference' })}
               />
-              <TreatmentPanel key={`treatment-${selected.id}`} project={selected} treatment={treatment} />
-              <HandoffControls
-                projectId={selected.id}
-                busy={takes.busy}
-                onExport={takes.exportHandoff}
-                onExportBundle={takes.exportHandoffBundle}
-                onImport={takes.importHandoffFiles}
-                onOpenContactSheet={() => setContactSheetOpen(true)}
-              />
-              <TrackPanel
+              <TypographyPanel
                 project={selected}
-                tracks={tracks}
-                trackName={trackName}
-                audioFilename={projectAudioFilename(selected)}
-                youtube={youtube}
-                renderBound={renderTargetsSelected}
-                midiBound={midiTargetsSelected}
-                onChangeTrack={handleChangeTrack}
-                onProjectUpdated={replaceProject}
+                onEditLocal={editProjectLocal}
+                onSave={saveProjectFields}
               />
+              <TreatmentPanel key={`treatment-${selected.id}`} project={selected} treatment={treatment} />
+              {selected.composition?.mode === 'code' && (
+                <CodeVideoPanel
+                  project={selected}
+                  audioUrl={projectAudioFilename(selected) ? trackAudioUrl(projectAudioFilename(selected)) : null}
+                  onProject={replaceProject}
+                />
+              )}
               <RenderStatusPanel
                 rendering={renderTargetsSelected}
                 progress={renderJob.progress}
@@ -823,33 +856,13 @@ export default function MusicVideo() {
                 revision={{ ...revisions, genScenes: sceneMedia.genScenes, genVideoScenes: sceneMedia.genVideoScenes }}
                 autoReview={autoReview}
               />
-              <LyricsPanel
-                project={selected}
-                onEditLocal={editProjectLocal}
-                onSave={saveProjectFields}
-                onImport={handleImportLyrics}
-                importing={importingLyrics}
-                onAlign={handleAlignLyrics}
-                aligning={aligningLyrics}
-              />
-              <TypographyPanel
-                project={selected}
-                onEditLocal={editProjectLocal}
-                onSave={saveProjectFields}
-              />
-              {selected.composition?.mode === 'code' && (
-                <CodeVideoPanel
-                  project={selected}
-                  audioUrl={projectAudioFilename(selected) ? trackAudioUrl(projectAudioFilename(selected)) : null}
-                  onProject={replaceProject}
-                />
-              )}
-              <AnalysisPanel
-                audioAnalysis={selected.audioAnalysis}
-                scenes={selected.scenes || []}
-                tempo={tempo}
-                onReanalyze={handleAnalyze}
-                analyzing={analyzing}
+              <HandoffControls
+                projectId={selected.id}
+                busy={takes.busy}
+                onExport={takes.exportHandoff}
+                onExportBundle={takes.exportHandoffBundle}
+                onImport={takes.importHandoffFiles}
+                onOpenContactSheet={() => setContactSheetOpen(true)}
               />
             </div>
 
