@@ -48,6 +48,7 @@ import RecordRenderPinRow from '../components/imageGen/RecordRenderPinRow';
 import CharacterEvolutionLens from '../components/character/CharacterEvolutionLens';
 import { EVOLUTION_STAGES, isDeclaredEvolution } from '../lib/characterEvolution.js';
 import { CHARACTER_ARC_LIMITS, TRANSITION_KINDS, TRANSITION_KIND_LABELS } from '../../../server/lib/seriesCharacterArc.js';
+import { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX } from '../../../server/lib/universeBibleLimits.js';
 
 const EDITOR_TABS = [
   { id: 'issues', label: 'Issues & arc' },
@@ -425,7 +426,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           onChange={(e) => patchSeries({ logline: e.target.value })}
           placeholder="One-sentence pitch"
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-          maxLength={500}
+          maxLength={LOGLINE_MAX}
         />
       </Field>
       <Field compact label="Target issues / episodes">
@@ -482,7 +483,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           onChange={(e) => patchSeries({ premise: e.target.value })}
           rows={5}
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-          maxLength={8000}
+          maxLength={PREMISE_MAX}
           placeholder="Longer free-form premise. World, tone, central conflict, hooks. Fed verbatim into every issue's stage prompts."
         />
       </Field>
@@ -493,7 +494,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           onChange={(e) => patchSeries({ styleNotes: e.target.value })}
           rows={3}
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-          maxLength={4000}
+          maxLength={STYLE_NOTES_MAX}
           placeholder="moebius linework, washed sepia, slow zooms, ambient drones. Reused as the visual prefix for every image-gen call from this series."
         />
       </Field>
