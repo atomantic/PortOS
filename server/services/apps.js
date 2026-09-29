@@ -475,14 +475,12 @@ export async function updateAppLayeredIntelligence(id, updates = {}) {
  * Get task type overrides for an app. NOTE: not a pure read — it first migrates
  * a legacy `disabledTaskTypes` array to `taskTypeOverrides`, which writes to disk.
  */
-export async function getAppTaskTypeOverridesMigrating(id) {
+export async function getAppTaskTypeOverrides(id) {
   await migrateTaskTypeOverrides(id);
   const app = await getAppById(id);
   if (!app) return {};
   return app.taskTypeOverrides || {};
 }
-
-export const getAppTaskTypeOverrides = getAppTaskTypeOverridesMigrating;
 
 /**
  * Check if a task type is enabled for a specific app
