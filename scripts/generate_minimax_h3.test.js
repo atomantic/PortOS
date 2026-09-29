@@ -1087,7 +1087,8 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
   // what the filesystem will do, so readiness is proven by an actual write.
   // POSIX-only: `os.chmod` on Windows toggles a file's read-only bit and cannot
   // make a directory unwritable.
-  it.skipIf(process.platform === 'win32')('disables the cache when its existing directory refuses a write', () => {
+  // Root ignores the 0o500 mode, so the write succeeds and nothing is refused.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('disables the cache when its existing directory refuses a write', () => {
     const output = runPython(`${importRunner}\n${[
       'import os, sys, tempfile',
       captureWarnings,

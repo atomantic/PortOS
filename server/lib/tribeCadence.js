@@ -35,7 +35,11 @@ export function daysSinceDate(dateStr) {
   if (Number.isNaN(start.getTime())) return null;
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.floor((today - start) / 86400000);
+  // Both operands are LOCAL midnights, so the gap is a whole number of days give
+  // or take an hour when a DST change falls between them (23h or 25h days).
+  // `floor` turned a spring-forward crossing into one day too few — rounding
+  // recovers the calendar-day count in every zone.
+  return Math.round((today - start) / 86400000);
 }
 
 // Cadence health for a tribe member: external / missing / overdue / soon /

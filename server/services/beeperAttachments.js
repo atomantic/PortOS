@@ -270,14 +270,20 @@ async function streamAssetToStore(mxcId, { maxBytes, extension }) {
     }
   };
 
+  const out = createWriteStream(tmpPath);
   const failure = await pipeline(
     Readable.fromWeb(response.body),
     counter,
-    createWriteStream(tmpPath),
+    out,
   ).then(() => null).catch((err) => err);
   clearIdle();
 
   if (failure) {
+    // pipeline can reject while the file's async open is still in flight (an
+    // abort landing right after the stream was created); the fd then opens and
+    // creates the file AFTER the rm below, leaving an orphan partial. A
+    // destroyed stream always emits 'close', so wait for it before removing.
+    if (!out.closed) await new Promise((resolve) => out.once('close', resolve));
     await rm(tmpPath, { force: true }).catch(() => {});
     throw exceeded ? failure : new ServerError(
       `Attachment download failed: ${failure.message}`,

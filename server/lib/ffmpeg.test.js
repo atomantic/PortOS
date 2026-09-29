@@ -347,14 +347,21 @@ describe('bt709TagFilter / supportsSetparamsFilter', () => {
   });
 
   it('caches a real probe result instead of re-shelling out per encode', async () => {
+    // Time an UNCACHED probe on this host and compare a burst of cached calls to
+    // it, rather than to an absolute budget: a fixed millisecond ceiling fails on
+    // a contended worker (GC pause, CPU steal) with no cache regression at all,
+    // while the ratio holds because both sides slow down together.
+    const probeStarted = performance.now();
     const first = await supportsSetparamsFilter();
+    const uncachedMs = performance.now() - probeStarted;
     // Only a real answer is cached, so this is only assertable when the host
     // actually has ffmpeg — a missing binary is "unknown", not "unsupported".
     if (!first) return;
-    const started = Date.now();
-    expect(await supportsSetparamsFilter()).toBe(true);
-    // A cache hit is a property read; a second `-filters` listing is not.
-    expect(Date.now() - started).toBeLessThan(50);
+    const burstStarted = performance.now();
+    for (let i = 0; i < 50; i += 1) expect(await supportsSetparamsFilter()).toBe(true);
+    // A cache hit is a property read; a second `-filters` listing per call is
+    // fifty process spawns, which cannot come in under one.
+    expect(performance.now() - burstStarted).toBeLessThan(uncachedMs);
   });
 
   it('pins all three properties in the filter string', () => {

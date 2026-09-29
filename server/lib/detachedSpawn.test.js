@@ -13,6 +13,7 @@ import { pathToFileURL } from 'url';
 import { pinPlatform } from './testHelper.js';
 import { killProcessTree } from './bufferedSpawn.js';
 import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable, isDetachedRunning, __detachedSpawnTesting } from './detachedSpawn.js';
+import { isProcessAlive } from '../test/processAlive.js';
 
 // Only a win32 cancel reaches killProcessTree, so stubbing it is inert for
 // every POSIX test here — and it lets the win32 tests assert the delegation on
@@ -75,9 +76,7 @@ const waitUntil = async (predicate, { timeoutMs = 5000 } = {}) => {
 
 // `process.kill(pid, 0)` is the portable liveness probe; the `ps`-based helpers
 // below are POSIX-only and unusable in the win32 tests.
-const isAliveForTest = (pid) => {
-  try { process.kill(pid, 0); return true; } catch { return false; }
-};
+const isAliveForTest = isProcessAlive;
 
 // Best-effort: kill whatever detached child a test left running under this
 // control dir, and WAIT for it to actually exit, before the control dir gets

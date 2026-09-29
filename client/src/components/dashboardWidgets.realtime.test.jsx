@@ -99,8 +99,11 @@ describe('dashboard resource subscriptions', () => {
   });
 
   it('advances overdue coloring and schedule countdowns with no network reads', async () => {
-    vi.setSystemTime(new Date('2026-01-01T12:00:00Z'));
-    api.listThreads.mockResolvedValue({ threads: [{ id: 'example', title: 'Example deadline', status: 'open', dueAt: '2026-01-01T12:00:30Z' }], total: 1 });
+    // Local noon, not a UTC instant: the widget prints the due date in the
+    // machine's zone, so 12:00Z reads "Jan 2" anywhere east of UTC+12.
+    const now = new Date(2026, 0, 1, 12, 0, 0);
+    vi.setSystemTime(now);
+    api.listThreads.mockResolvedValue({ threads: [{ id: 'example', title: 'Example deadline', status: 'open', dueAt: new Date(now.getTime() + 30000).toISOString() }], total: 1 });
     api.getCosUpcomingTasks.mockResolvedValue([{ taskType: 'example', description: 'Example task', status: 'scheduled', eligibleAt: Date.now() + 120000 }]);
     render(<MemoryRouter><OpenThreadsWidget /><UpcomingTasksWidget /></MemoryRouter>);
     await flush();

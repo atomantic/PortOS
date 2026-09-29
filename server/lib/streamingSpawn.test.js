@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runStreamingCommand } from './streamingSpawn.js';
+import { isProcessAlive } from '../test/processAlive.js';
 
 const NODE = process.execPath;
 
@@ -116,10 +117,7 @@ describe('runStreamingCommand — process-group teardown', () => {
   // pid is what lets the assertion probe the real outcome.
   const FORKING_WRAPPER = ['-c', 'sleep 30 & echo $!; wait'];
 
-  const probeAlive = (pid) => {
-    // Signal 0 tests for existence without delivering anything.
-    try { process.kill(pid, 0); return true; } catch { return false; }
-  };
+  const probeAlive = isProcessAlive;
 
   it.skipIf(process.platform === 'win32')('takes the grandchild down with the wrapper on timeout', async () => {
     let grandchildPid = null;
