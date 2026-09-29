@@ -158,14 +158,6 @@ describe('socket.js — initSocket', () => {
     }
     createdSockets.length = 0;
     authEvents.removeAllListeners('sessions:revoked-all');
-    meatspaceEvents.removeAllListeners();
-    modelLifecycleEvents.removeAllListeners();
-    eidoverseWorldEvents.removeAllListeners();
-    layaMlxEvents.removeAllListeners();
-    jevEvents.removeAllListeners();
-    providerQuotaEvents.removeAllListeners();
-    usageBackfillEvents.removeAllListeners();
-    instanceEvents.removeAllListeners();
   });
 
   it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {
@@ -292,9 +284,22 @@ describe('socket.js — initSocket', () => {
     const settingsCount = settingsEvents.listenerCount('settings:updated');
     const dashboardCounts = dashboardEvents.eventNames().map(event => [event, dashboardEvents.listenerCount(event)]);
     const cosCount = queueListeners.cos.length;
+    // Every real emitter setupEventForwarding bridges, plus the mocked queues.
+    const emitters = [meatspaceEvents, modelLifecycleEvents, eidoverseWorldEvents, layaMlxEvents, jevEvents, providerQuotaEvents, usageBackfillEvents, instanceEvents];
+    const snapshot = () => [
+      emitters.map(emitter => emitter.eventNames().map(event => [event, emitter.listenerCount(event)])),
+      Object.entries(queueListeners).map(([name, list]) => [name, list.length]),
+    ];
+    const before = snapshot();
     io = makeIo();
     initSocket(io);
     initSocket(io);
+    expect(snapshot()).toEqual(before);
+    io.emitted.length = 0;
+    jevEvents.emit('status');
+    meatspaceEvents.emit('changed', { resources: ['body'] });
+    expect(io.emitted).toEqual([['jev:status', {}], ['meatspace:changed', { resources: ['body'] }]]);
+    io.emitted.length = 0;
     expect(settingsEvents.listenerCount('settings:updated')).toBe(settingsCount);
     expect(dashboardEvents.eventNames().map(event => [event, dashboardEvents.listenerCount(event)])).toEqual(dashboardCounts);
     expect(queueListeners.cos).toHaveLength(cosCount);
