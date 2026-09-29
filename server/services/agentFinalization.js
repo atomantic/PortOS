@@ -911,13 +911,21 @@ export function withOutputHookTimeout(promise, { agentId, timeoutMs = OUTPUT_HOO
  * The persisted marker closes the sequential normal/recovery gap; the per-agent
  * promise closes the smaller same-process race where two completion paths both
  * observe a running, unmarked agent before either hook finishes.
+ *
+ * @returns {Promise<
+ *   | { ran: false }                                  // no hook for the task type (or audit type)
+ *   | { ran: false, recoveryPayloadUnavailable: true } // recovery, payload-dependent hook, no payload
+ *   | { ran: false, alreadyDispatched: true }          // persisted marker found
+ *   | { ran: true, outcome: * }                        // hook ran
+ *   | { ran: true, threw: true }                       // hook threw (logged)
+ *   | { timedOut: true }                               // hook still running past the backstop
+ * >}
  */
 export function dispatchTaskOutputHookOnce({
   agentId,
   task,
   success,
   workspacePath = null,
-  readPayload = true,
   recovery = false,
 }) {
   const existing = outputHookDispatches.get(agentId);
@@ -947,7 +955,6 @@ export function dispatchTaskOutputHookOnce({
       task,
       success,
       workspacePath,
-      readPayload,
       recovery,
     }).catch(err => {
       emitLog('error', `❌ processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
@@ -1002,7 +1009,6 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
     task,
     success,
     workspacePath,
-    readPayload: !!workspacePath,
     recovery: true,
   });
 }
@@ -1806,12 +1812,66 @@ async function publishAppSnapshotFileAfterAudit(appId) {
 }
 
 /**
+ * Where a hook's `.agent-done` payload may be read from. A live completion falls
+ * back to the task's repoPath; a recovery run trusts only the persisted
+ * workspace — without it there is nothing safe to read, so no payload.
+ */
+function hookPayloadDir({ task, workspacePath, recovery }) {
+  return recovery
+    ? (workspacePath || null)
+    : (workspacePath || task?.metadata?.repoPath || null);
+}
+
+/**
+ * Read this agent's sentinel payload from `cwd`, trying in order: strict parse,
+ * lenient JSON salvage, bare legacy payload, then transcript rescue. Returns the
+ * payload or null.
+ */
+async function readHookPayload({ agentId, taskType, cwd }) {
+  const { doneSentinelPath, parseSentinelPayload, salvageSentinelPayload } = await import('../lib/agentSentinel.js');
+  const { tryReadFile } = await import('../lib/fileUtils.js');
+  // This run's own sentinel (see doneSentinelName) — in a shared workspace a
+  // sibling agent's file must not be consumed as this run's deliverable.
+  const contents = await tryReadFile(doneSentinelPath(cwd, agentId));
+  const strict = parseSentinelPayload(contents).payload;
+  if (strict != null) return strict;
+  // A less-capable (often local) reasoner can emit an almost-valid
+  // `{ summary, payload }` envelope — ```json-fenced, prose-trailed, or with
+  // raw newlines in the markdown body — that strict parse rejects, dropping a
+  // real proposal as "unparseable-response" and filing nothing. Before giving
+  // up, run the robust LLM-JSON extractor over the raw sentinel.
+  const salvaged = await salvageSentinelPayload(contents);
+  if (salvaged.payload != null) {
+    emitLog('info', `Recovered structured .agent-done payload for ${agentId} (${taskType}) via lenient JSON extraction`, { agentId });
+    return salvaged.payload;
+  }
+  if (contents != null) {
+    // Compatibility for programmatic-I/O prompts that predate the structured
+    // `{ summary, payload }` envelope and wrote the hook payload directly.
+    const bare = await recoverBareSentinelPayload(contents, taskType);
+    if (bare != null) {
+      emitLog('info', `Recovered legacy bare .agent-done payload for ${agentId} (${taskType})`, { agentId });
+    }
+    return bare;
+  }
+  // No sentinel at all: the model may have PRINTED its deliverable into the
+  // TUI instead of writing the file (#3640). Only when `contents == null` — a
+  // sentinel the agent DID write, whose content simply isn't a payload, keeps
+  // its own (correct) missing-output verdict.
+  const rescued = await rescueTranscriptPayload({ agentId, taskType });
+  if (rescued != null) {
+    emitLog('info', `Recovered printed payload for ${agentId} (${taskType}) from the transcript — no .agent-done was written`, { agentId });
+  }
+  return rescued;
+}
+
+/**
  * Read the finished agent's `.agent-done` payload and run the task type's
  * `processTaskOutput` hook, if it registers one. No-op for the vast majority of
  * task types (no hook). The hook receives `{ appId, success, payload, ... }` and
  * loads its own app/config — finalizeAgent stays domain-agnostic.
  */
-async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, assessedAt, readPayload = true, recovery = false }) {
+async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, assessedAt, recovery = false }) {
   // Shared resolver with evaluateSuccessCriteria's gate — "runs a hook" and "gets
   // the programmatic-I/O criterion" must stay the same question (#2727).
   const taskType = resolveTaskHookType(task);
@@ -1819,7 +1879,7 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   if (isAuditTaskType(taskType)) {
     const { recordAuditQuality } = await import('./appQuality.js');
     const recorded = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
-      workspacePath: readPayload ? (workspacePath || task?.metadata?.repoPath) : null })
+      workspacePath: hookPayloadDir({ task, workspacePath, recovery }) })
       .catch(err => emitLog('warn', `⚠️ Audit quality was not saved for ${agentId}: ${err.message}`, { agentId }));
     if (recorded === true) await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
@@ -1829,49 +1889,8 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   const hook = await getTaskOutputHook(taskType);
   if (!hook) return { ran: false };
 
-  const cwd = readPayload ? (workspacePath || task?.metadata?.repoPath || null) : null;
-  let payload = null;
-  if (cwd) {
-    const { doneSentinelPath, parseSentinelPayload, salvageSentinelPayload } = await import('../lib/agentSentinel.js');
-    const { tryReadFile } = await import('../lib/fileUtils.js');
-    // This run's own sentinel (see doneSentinelName) — in a shared workspace a
-    // sibling agent's file must not be consumed as this run's deliverable.
-    const contents = await tryReadFile(doneSentinelPath(cwd, agentId));
-    payload = parseSentinelPayload(contents).payload;
-    // A less-capable (often local) reasoner can emit an almost-valid
-    // `{ summary, payload }` envelope — ```json-fenced, prose-trailed, or with
-    // raw newlines in the markdown body — that strict parse rejects, dropping a
-    // real proposal as "unparseable-response" and filing nothing. Before giving
-    // up, run the robust LLM-JSON extractor over the raw sentinel.
-    if (payload == null) {
-      const salvaged = await salvageSentinelPayload(contents);
-      if (salvaged.payload != null) {
-        payload = salvaged.payload;
-        emitLog('info', `Recovered structured .agent-done payload for ${agentId} (${taskType}) via lenient JSON extraction`, { agentId });
-      }
-    }
-    // Compatibility for programmatic-I/O prompts that predate the structured
-    // `{ summary, payload }` envelope and wrote the hook payload directly.
-    if (payload == null && contents != null) {
-      const bare = await recoverBareSentinelPayload(contents, taskType);
-      if (bare != null) {
-        payload = bare;
-        emitLog('info', `Recovered legacy bare .agent-done payload for ${agentId} (${taskType})`, { agentId });
-      }
-    }
-    // No sentinel at all: the model may have PRINTED its deliverable into the
-    // TUI instead of writing the file (#3640). `contents == null` — not just a
-    // null payload — so a sentinel the agent DID write, whose content simply
-    // isn't a payload, keeps its own (correct) missing-output verdict instead of
-    // being overridden by something older in the transcript.
-    if (payload == null && contents == null) {
-      const rescued = await rescueTranscriptPayload({ agentId, taskType });
-      if (rescued != null) {
-        payload = rescued;
-        emitLog('info', `Recovered printed payload for ${agentId} (${taskType}) from the transcript — no .agent-done was written`, { agentId });
-      }
-    }
-  }
+  const cwd = hookPayloadDir({ task, workspacePath, recovery });
+  const payload = cwd ? await readHookPayload({ agentId, taskType, cwd }) : null;
   if (recovery && payload == null && !canRunTaskOutputHookWithoutPayload(taskType)) {
     return { ran: false, recoveryPayloadUnavailable: true };
   }

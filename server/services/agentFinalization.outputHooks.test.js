@@ -292,6 +292,17 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(hook).not.toHaveBeenCalled();
     expect(updateAgent).not.toHaveBeenCalled();
   });
+
+  it('reads a live completion from task.metadata.repoPath but denies a recovery run that fallback', async () => {
+    await dispatchTaskOutputHookOnce({ agentId: 'agent-live', task: TASK, success: true });
+    expect(hook).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: '/example/repo' }));
+
+    persistedAgent.metadata = {};
+    canRunTaskOutputHookWithoutPayload.mockReturnValueOnce(false);
+    await expect(dispatchRecoveredTaskOutputHook({ agentId: 'agent-recovered', task: TASK, success: true }))
+      .resolves.toEqual({ ran: false, recoveryPayloadUnavailable: true });
+    expect(hook).toHaveBeenCalledOnce();
+  });
 });
 
 describe('recovery path wiring (#3182, #8440)', () => {
