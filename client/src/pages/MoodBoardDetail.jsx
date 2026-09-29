@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
@@ -35,7 +35,12 @@ import {
   localizeMoodBoardMedia,
 } from '../services/api';
 import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource } from '../lib/moodBoardItemSrc';
-import { moodBoardAnalysisFromResult } from '../lib/moodBoardAnalysis';
+import {
+  moodBoardAnalysisFromResult,
+  moodBoardItemPrompt,
+  isMoodBoardItemAnalyzed,
+  moodBoardItemHasPrompt,
+} from '../lib/moodBoardAnalysis';
 import { timeAgo } from '../utils/formatters';
 import useMounted from '../hooks/useMounted';
 
@@ -191,6 +196,7 @@ function MoodBoardEditor({ id }) {
       type: 'image',
       mediaKey: typeof picked.key === 'string' && picked.key.startsWith('image:') ? picked.key : null,
       imageUrl: picked.previewUrl || null,
+      prompt: promptText || null,
       caption: promptText || null,
     });
   };
@@ -202,17 +208,34 @@ function MoodBoardEditor({ id }) {
       type: 'video',
       mediaKey: `video:${picked.filename}`,
       imageUrl: picked.previewUrl || null,
+      prompt: promptText || null,
       caption: promptText || null,
     });
   };
 
-  const handleUpdateCaption = async (itemId, nextCaption) => {
+  const handleUpdateItemText = async (item, nextText) => {
     if (!mountedRef.current) return;
-    const item = await updateMoodBoardItem(id, itemId, { caption: nextCaption || null }, { silent: true }).catch(() => null);
+    const isAnalyzed = isMoodBoardItemAnalyzed(item);
+    const patch = {};
+    if (isAnalyzed) {
+      patch.analysis = { ...item.analysis, prompt: nextText || '' };
+      patch.prompt = nextText || null;
+      if (!item.caption || item.caption.trim() === (item.analysis?.prompt || '').trim()) {
+        patch.caption = nextText ? nextText.slice(0, 2000) : null;
+      }
+    } else if (item.prompt) {
+      patch.prompt = nextText || null;
+      if (!item.caption || item.caption.trim() === item.prompt.trim()) {
+        patch.caption = nextText ? nextText.slice(0, 2000) : null;
+      }
+    } else {
+      patch.caption = nextText || null;
+    }
+    const updated = await updateMoodBoardItem(id, item.id, patch, { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
-    if (!item) { toast.error('Failed to update caption'); return; }
+    if (!updated) { toast.error('Failed to update'); return; }
     setBoard((prev) => (prev
-      ? { ...prev, items: (prev.items || []).map((it) => (it.id === itemId ? item : it)) }
+      ? { ...prev, items: (prev.items || []).map((it) => (it.id === item.id ? updated : it)) }
       : prev));
   };
 
@@ -457,79 +480,134 @@ function MoodBoardEditor({ id }) {
                 const src = moodBoardItemSrc(item);
                 const videoSrc = moodBoardItemVideoSrc(item);
                 const analysisSource = moodBoardItemAnalysisSource(item);
+                const isAnalyzed = isMoodBoardItemAnalyzed(item);
+                const hasPrompt = moodBoardItemHasPrompt(item);
+                const promptText = moodBoardItemPrompt(item);
+                const displayText = promptText || item.caption || '';
                 return (
                   <div key={item.id} className="bg-port-card border border-port-border rounded-md overflow-hidden flex flex-col">
-                    {item.type === 'video' && videoSrc ? (
-                      playingItemId === item.id ? (
-                        // eslint-disable-next-line jsx-a11y/media-has-caption -- reference clips have no caption track
-                        <video
-                          src={videoSrc}
-                          poster={src || undefined}
-                          controls
-                          autoPlay
-                          playsInline
-                          className="w-full aspect-square object-cover bg-black"
-                        />
+                    <div className="relative w-full aspect-square bg-port-bg">
+                      {item.type === 'video' && videoSrc ? (
+                        playingItemId === item.id ? (
+                          // eslint-disable-next-line jsx-a11y/media-has-caption -- reference clips have no caption track
+                          <video
+                            src={videoSrc}
+                            poster={src || undefined}
+                            controls
+                            autoPlay
+                            playsInline
+                            className="w-full h-full object-cover bg-black"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setPlayingItemId(item.id)}
+                            aria-label="Play video"
+                            className="relative w-full h-full bg-port-bg text-gray-600 group block"
+                          >
+                            {src ? (
+                              <img
+                                src={src}
+                                alt={displayText}
+                                loading="lazy"
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  // A synced board can carry a poster URL whose file
+                                  // only exists on the sending machine (a downloaded
+                                  // video's thumbnail is named `<id>.jpg`, not
+                                  // `<filename-stem>.jpg`). The receiver regenerates
+                                  // the stem-named poster when it pulls the video, so
+                                  // fall back to that derived name on a 404.
+                                  const fallback = moodBoardItemSrc({ ...item, imageUrl: null });
+                                  if (fallback && e.currentTarget.getAttribute('src') !== fallback) {
+                                    e.currentTarget.src = fallback;
+                                  }
+                                }}
+                              />
+                            ) : (
+                              <span className="w-full h-full flex items-center justify-center">
+                                <Film className="w-8 h-8" aria-hidden="true" />
+                              </span>
+                            )}
+                            <span className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-80 group-hover:opacity-100 transition-opacity">
+                              <Play className="w-8 h-8 text-white drop-shadow" aria-hidden="true" />
+                            </span>
+                          </button>
+                        )
+                      ) : item.type === 'image' || item.type === 'video' ? (
+                        src ? (
+                          <img src={src} alt={displayText} loading="lazy" className="w-full h-full object-cover bg-port-bg" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-port-bg text-gray-600">
+                            <ImageIcon className="w-8 h-8" aria-hidden="true" />
+                          </div>
+                        )
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => setPlayingItemId(item.id)}
-                          aria-label="Play video"
-                          className="relative w-full aspect-square bg-port-bg text-gray-600 group"
-                        >
-                          {src ? (
-                            <img
-                              src={src}
-                              alt={item.caption || ''}
-                              loading="lazy"
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                // A synced board can carry a poster URL whose file
-                                // only exists on the sending machine (a downloaded
-                                // video's thumbnail is named `<id>.jpg`, not
-                                // `<filename-stem>.jpg`). The receiver regenerates
-                                // the stem-named poster when it pulls the video, so
-                                // fall back to that derived name on a 404.
-                                const fallback = moodBoardItemSrc({ ...item, imageUrl: null });
-                                if (fallback && e.currentTarget.getAttribute('src') !== fallback) {
-                                  e.currentTarget.src = fallback;
-                                }
-                              }}
-                            />
+                        <div className="w-full h-full p-3 overflow-y-auto bg-port-bg text-sm text-gray-200 whitespace-pre-wrap">
+                          {item.text}
+                        </div>
+                      )}
+
+                      {/* Status indicator: whether it has been analyzed (or already has a prompt) */}
+                      {(isAnalyzed || hasPrompt) && (
+                        <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-1 pointer-events-none z-10">
+                          {isAnalyzed ? (
+                            <span
+                              data-testid="item-indicator-analyzed"
+                              className="pointer-events-auto text-[10px] font-medium px-1.5 py-0.5 rounded bg-port-accent/90 text-white shadow-sm flex items-center gap-1 backdrop-blur-sm"
+                              title="Analyzed with image-to-prompt"
+                            >
+                              <ScanEye className="w-3 h-3" aria-hidden="true" />
+                              Analyzed
+                            </span>
                           ) : (
-                            <span className="w-full h-full flex items-center justify-center">
-                              <Film className="w-8 h-8" aria-hidden="true" />
+                            <span
+                              data-testid="item-indicator-prompt"
+                              className="pointer-events-auto text-[10px] font-medium px-1.5 py-0.5 rounded bg-port-success/90 text-white shadow-sm flex items-center gap-1 backdrop-blur-sm"
+                              title="Already has a prompt"
+                            >
+                              <Sparkles className="w-3 h-3" aria-hidden="true" />
+                              Prompt
                             </span>
                           )}
-                          <span className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-80 group-hover:opacity-100 transition-opacity">
-                            <Play className="w-8 h-8 text-white drop-shadow" aria-hidden="true" />
-                          </span>
-                        </button>
-                      )
-                    ) : item.type === 'image' || item.type === 'video' ? (
-                      src ? (
-                        <img src={src} alt={item.caption || ''} loading="lazy" className="w-full aspect-square object-cover bg-port-bg" />
-                      ) : (
-                        <div className="w-full aspect-square flex items-center justify-center bg-port-bg text-gray-600">
-                          <ImageIcon className="w-8 h-8" aria-hidden="true" />
                         </div>
-                      )
-                    ) : (
-                      <div className="w-full aspect-square p-3 overflow-y-auto bg-port-bg text-sm text-gray-200 whitespace-pre-wrap">
-                        {item.text}
-                      </div>
-                    )}
+                      )}
+                    </div>
                     <div className="p-2 flex flex-col gap-1">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[10px] font-medium text-gray-400 flex items-center gap-1">
+                          {isAnalyzed ? (
+                            <span className="text-port-accent flex items-center gap-0.5">
+                              <ScanEye className="w-3 h-3" aria-hidden="true" /> Analyzed prompt
+                            </span>
+                          ) : hasPrompt ? (
+                            <span className="text-port-success flex items-center gap-0.5">
+                              <Sparkles className="w-3 h-3" aria-hidden="true" /> Prompt
+                            </span>
+                          ) : (
+                            <span>Caption</span>
+                          )}
+                        </span>
+                        {item.caption && promptText && item.caption.trim() !== promptText.trim() ? (
+                          <span
+                            className="text-[10px] text-gray-500 truncate max-w-[120px]"
+                            title={`Default caption: ${item.caption}`}
+                          >
+                            {item.caption}
+                          </span>
+                        ) : null}
+                      </div>
                       <input
                         type="text"
-                        key={item.caption || ""}
-                        aria-label="Item caption"
-                        defaultValue={item.caption || ''}
-                        placeholder="Add a caption…"
+                        key={`${item.id}-${displayText}`}
+                        aria-label={isAnalyzed ? "Analyzed prompt" : hasPrompt ? "Item prompt" : "Item caption"}
+                        defaultValue={displayText}
+                        title={displayText}
+                        placeholder={hasPrompt ? "Add a prompt…" : "Add a caption…"}
                         maxLength={2000}
                         onBlur={(e) => {
                           const next = e.target.value.trim();
-                          if (next !== (item.caption || '')) handleUpdateCaption(item.id, next);
+                          if (next !== displayText) handleUpdateItemText(item, next);
                         }}
                         className="w-full bg-transparent border-0 border-b border-transparent focus:border-port-border text-xs text-gray-300 px-0 py-0.5 outline-none"
                       />

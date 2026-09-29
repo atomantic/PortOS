@@ -112,6 +112,10 @@ describe('moodBoardItemCreateSchema', () => {
   it('rejects a video item whose ref is a bare id (no extension) — it would 404 as a filename', () => {
     expect(moodBoardItemCreateSchema.safeParse({ type: 'video', mediaKey: 'video:job-123' }).success).toBe(false);
   });
+  it('accepts an image item with prompt alongside imageUrl', () => {
+    const item = moodBoardItemCreateSchema.parse({ type: 'image', imageUrl: 'https://x/y.png', prompt: 'a prompt' });
+    expect(item.prompt).toBe('a prompt');
+  });
 });
 
 describe('isVideoItemMediaKey', () => {
@@ -133,6 +137,9 @@ describe('isVideoItemMediaKey', () => {
 describe('moodBoardItemUpdateSchema', () => {
   it('accepts a caption-only patch', () => {
     expect(moodBoardItemUpdateSchema.parse({ caption: 'c' }).caption).toBe('c');
+  });
+  it('accepts a prompt patch', () => {
+    expect(moodBoardItemUpdateSchema.parse({ prompt: 'new prompt' }).prompt).toBe('new prompt');
   });
   it('accepts a null caption (clear)', () => {
     expect(moodBoardItemUpdateSchema.parse({ caption: null }).caption).toBeNull();
