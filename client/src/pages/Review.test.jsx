@@ -582,3 +582,29 @@ describe('Review Hub triage summary (#6926)', () => {
     expect(summaryValue('Alerts')).toBe('2');
   });
 });
+
+describe('Review Hub Daily Briefing fullscreen dialog (#9121)', () => {
+  it('acts as a focus-trapped, Escape-dismissable dialog and returns focus to the toggle', async () => {
+    api.getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: '2026-09-29T00:00:00Z', content: 'Briefing body' });
+    render(<Review />);
+
+    const toggle = await screen.findByRole('button', { name: 'Fullscreen' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    toggle.focus();
+    fireEvent.click(toggle);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Daily Briefing' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+    // Tab from the last (only) focusable wraps inside instead of escaping to the page behind.
+    const exit = screen.getByRole('button', { name: 'Exit fullscreen' });
+    exit.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Fullscreen' })).toHaveFocus();
+  });
+});

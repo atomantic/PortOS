@@ -42,6 +42,8 @@ import AgentCard from '../components/cos/tabs/AgentCard';
 import TabPills from '../components/ui/TabPills';
 import useUrlParams from '../hooks/useUrlParams';
 import useAsyncAction from '../hooks/useAsyncAction';
+import useEscapeKey from '../hooks/useEscapeKey';
+import useFocusTrap from '../hooks/useFocusTrap';
 import { timeAgo, formatDateTime, formatCount, localDateKey } from '../utils/formatters';
 import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
 import { useActionQueue } from '../hooks/useActionQueue';
@@ -154,6 +156,10 @@ export default function Review() {
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [briefingFullscreen, setBriefingFullscreen] = useState(false);
+  const briefingRef = useRef(null);
+  // Fullscreen acts as a modal: trap Tab, dismiss on Escape, and hand focus back to the toggle.
+  useFocusTrap(briefingFullscreen, briefingRef);
+  useEscapeKey(briefingFullscreen, () => setBriefingFullscreen(false));
   const [counts, setCounts] = useState(null);
   const countsRequestId = useRef(0);
 
@@ -586,7 +592,12 @@ export default function Review() {
 
         {/* Daily Briefing remains available as compatibility/history context. */}
         {showLegacyReviewSurface && briefing && briefing.source !== 'none' && (
-          <section className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : ''}`}>
+          <section
+            ref={briefingRef}
+            role={briefingFullscreen ? 'dialog' : undefined}
+            aria-modal={briefingFullscreen ? 'true' : undefined}
+            aria-label={briefingFullscreen ? 'Daily Briefing' : undefined}
+            className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : ''}`}>
             <div className="flex items-center justify-between gap-2 mb-2">
               <h3 className="text-sm font-semibold text-white flex items-center gap-2">
                 <FileText size={16} className="text-gray-400" />
