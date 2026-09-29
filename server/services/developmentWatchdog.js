@@ -33,14 +33,14 @@ function reviewFollowUpPrNumber(task, target) {
   return Number.isSafeInteger(urlNumber) && urlNumber > 0 ? urlNumber : null;
 }
 
-export function mayReadApp(state, appId) {
+function mayReadApp(state, appId) {
   const role = normalizePersistentMindMaintainer(state.config?.persistentMindMaintainer);
   const caps = normalizePersistentMindCapabilities(state.config?.persistentMindCapabilities);
   return role.enabled && caps.readPortos
     && role.appIds.includes(appId) && (!caps.allowedAppIds || caps.allowedAppIds.includes(appId));
 }
 
-export function mayCreateTasksForApp(state, appId) {
+function mayCreateTasksForApp(state, appId) {
   const caps = normalizePersistentMindCapabilities(state.config?.persistentMindCapabilities);
   return mayReadApp(state, appId) && caps.createTasks;
 }

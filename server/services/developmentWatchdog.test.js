@@ -43,7 +43,7 @@ vi.mock('./userActions.js', () => ({ listUserActions: async () => [] }));
 vi.mock('./reviewQueue.js', () => ({ buildQueue: async () => ({ sources: {}, partial: false, nextCursor: null }) }));
 vi.mock('./persistentMindVisibility.js', () => ({ readPersistentMindVisibility: async () => ({}) }));
 vi.mock('./persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({}) }));
-import { runDevelopmentWatchdog, readDevelopmentWatchdogSnapshot, mayReadApp, mayCreateTasksForApp } from './developmentWatchdog.js';
+import { runDevelopmentWatchdog, readDevelopmentWatchdogSnapshot } from './developmentWatchdog.js';
 import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanceContext.js';
 
 beforeEach(() => {
@@ -328,20 +328,21 @@ it('withholds batches after Improve is disabled or grants are revoked during pre
   expect(m.adds).toEqual([]); expect(m.record).not.toHaveBeenCalled();
 });
 
-describe('development watchdog authorization predicates', () => {
-  const grant = (role = {}, caps = {}) => ({ config: {
-    persistentMindMaintainer: { enabled: true, appIds: ['app'], ...role },
-    persistentMindCapabilities: { readPortos: true, createTasks: true, ...caps },
-  } });
+describe('development watchdog authorization grants', () => {
   it.each([
-    ['all granted', grant(), true, true],
-    ['role disabled', grant({ enabled: false }), false, false],
-    ['readPortos false', grant({}, { readPortos: false }), false, false],
-    ['createTasks false (read only)', grant({}, { createTasks: false }), true, false],
-    ['app outside role.appIds', grant({ appIds: ['other'] }), false, false],
-    ['app outside allowedAppIds', grant({}, { allowedAppIds: ['other'] }), false, false],
-  ])('%s', (_name, state, read, create) => {
-    expect(mayReadApp(state, 'app')).toBe(read);
-    expect(mayCreateTasksForApp(state, 'app')).toBe(create);
+    ['all granted', {}, {}, { read: true, create: true }],
+    ['role disabled', { enabled: false }, {}, { read: false, create: false }],
+    ['readPortos false', {}, { readPortos: false }, { read: false, create: false }],
+    ['createTasks false (read only)', {}, { createTasks: false }, { read: true, create: false }],
+    ['app outside role.appIds', { appIds: ['other'] }, {}, { read: false, create: false }],
+    ['app outside allowedAppIds', {}, { allowedAppIds: ['other'] }, { read: false, create: false }],
+  ])('%s', async (_name, role, caps, want) => {
+    m.backlog = [{ ref: '42' }];
+    Object.assign(m.state.config.persistentMindMaintainer, role);
+    Object.assign(m.state.config.persistentMindCapabilities, caps);
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    // read grant: the app is scanned; create grant: work is queued
+    expect(Boolean(receipt.apps?.length && receipt.apps[0].complete)).toBe(want.read);
+    expect(m.adds).toHaveLength(want.create ? 1 : 0);
   });
 });
