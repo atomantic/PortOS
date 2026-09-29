@@ -1168,13 +1168,13 @@ export default function AIProviders() {
                       <span className="text-xs text-gray-500">
                         {section.hint || `${formatCount(section.ready)} of ${formatCount(sectionProviders.length)} can run`}
                       </span>
-                      {section.link && (
-                        <Link to={section.link} onClick={(e) => e.stopPropagation()} className="text-xs text-port-accent hover:underline">
-                          harness →
-                        </Link>
-                      )}
                     </span>
                   )}
+                  headerActions={section.link ? (
+                    <Link to={section.link} className="text-xs text-port-accent hover:underline">
+                      harness →
+                    </Link>
+                  ) : null}
                 >
                   {sectionProviders.map(provider => (
                     <ProviderCard
