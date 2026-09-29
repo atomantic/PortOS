@@ -212,18 +212,18 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Qwen2.5-3B-Instruct-GGUF'
   },
   {
-    key: 'granite4.1-3b',
-    name: 'Granite 4.1 3B',
+    key: 'granite4.2-3b',
+    name: 'Granite 4.2 3B',
     category: 'lightweight',
-    recommendedFor: ['lightweight'],
+    recommendedFor: ['lightweight', 'reasoning'],
     params: '3B',
-    size: '2.1 GB',
+    size: '2.2 GB',
     family: 'granite',
-    description: "Apache-licensed IBM Granite — small, tool-capable, and tuned for tight instruction-following rather than chat flourish.",
-    capabilities: ['chat', 'tools'],
+    description: "Apache-licensed IBM Granite 4.2 — small, tool-capable, with thinking mode, tuned for tight instruction-following rather than chat flourish.",
+    capabilities: ['chat', 'tools', 'reasoning'],
     context: 131072,
-    ollama: 'granite4.1:3b',
-    lmstudio: 'lmstudio-community/granite-4.1-3b-GGUF'
+    ollama: 'granite4.2:3b',
+    lmstudio: 'lmstudio-community/granite-4.2-3b-GGUF'
   },
   {
     key: 'nemotron-3-nano-4b',
@@ -311,18 +311,18 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'NousResearch/Hermes-3-Llama-3.1-8B-GGUF'
   },
   {
-    key: 'granite4.1-8b',
-    name: 'Granite 4.1 8B',
+    key: 'granite4.2-8b',
+    name: 'Granite 4.2 8B',
     category: 'general',
-    recommendedFor: ['general', 'multilingual'],
+    recommendedFor: ['general', 'reasoning', 'multilingual'],
     params: '8B',
     size: '5.3 GB',
     family: 'granite',
-    description: 'Apache-licensed IBM Granite instruct model with a 128K context — clean, constrained output for structured and editorial work.',
-    capabilities: ['chat', 'tools', 'multilingual'],
+    description: 'Apache-licensed IBM Granite 4.2 instruct model with a 128K context, thinking mode, RAG, and tool use — clean, constrained output for structured and editorial work.',
+    capabilities: ['chat', 'tools', 'reasoning', 'multilingual'],
     context: 131072,
-    ollama: 'granite4.1:8b',
-    lmstudio: 'lmstudio-community/granite-4.1-8b-GGUF'
+    ollama: 'granite4.2:8b',
+    lmstudio: 'lmstudio-community/granite-4.2-8b-GGUF'
   },
   {
     key: 'ministral-3-8b',
@@ -1067,6 +1067,8 @@ const RETIRED_MODEL_MAPPINGS = [
     ollama: 'hf.co/lmstudio-community/granite-3.2-8b-instruct-GGUF:Q4_K_M',
     lmstudio: 'lmstudio-community/granite-3.2-8b-instruct-GGUF'
   },
+  { ollama: 'granite4.1:3b', lmstudio: 'lmstudio-community/granite-4.1-3b-GGUF' },
+  { ollama: 'granite4.1:8b', lmstudio: 'lmstudio-community/granite-4.1-8b-GGUF' },
   { ollama: 'gemma2', lmstudio: 'lmstudio-community/gemma-2-9b-it-GGUF' },
   { ollama: 'phi3', lmstudio: 'lmstudio-community/Phi-3.1-mini-128k-instruct-GGUF' },
   { ollama: 'deepseek-r1', lmstudio: 'lmstudio-community/DeepSeek-R1-Distill-Qwen-7B-GGUF' },
