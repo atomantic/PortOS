@@ -37,7 +37,7 @@ function analysisSource(item) {
   return local ? { kind: 'image', filename: local.filename } : null;
 }
 
-export function analysisFromResult(item, result) {
+function analysisFromResult(item, result) {
   if (!result) return null;
   const preferVideo = item?.type === 'video';
   const primary = preferVideo ? result.videoPrompt : result.imagePrompt;
