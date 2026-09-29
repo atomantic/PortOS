@@ -65,6 +65,8 @@ vi.mock('./perpetualWork.js', async importOriginal => ({
   detectActionableWork: vi.fn(async () => ({ actionable: true, count: 3, signature: '42,43,44' })),
 }));
 
+import { detectActionableWork } from './perpetualWork.js';
+import { recordPerpetualStall } from './taskSchedule.js';
 import { generateManagedAppImprovementTaskForType, prepareManagedAppImprovementTask, resolveClaimWorkMetadata } from './cosTaskGenerator.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };
@@ -183,4 +185,53 @@ it('prepares a scheduled perpetual swarm with matching filters and per-app execu
   expect(prepared.task.description).toContain('model:');
   expect(prepared.task.description).toContain('effort:');
   expect(prepared.pendingPerpetualDispatch).toMatchObject({ taskType: 'claim-issue', appId: APP.id });
+});
+
+// A skipped prepare hands back WHY through its `skip` field — the one shape of
+// "nothing", instead of a bare null plus a module-level side channel (#9182).
+describe('prepareManagedAppImprovementTask skip result', () => {
+  const transient = { actionable: false, transient: true, cli: 'gh', reason: 'gh-list-failed' };
+  const prepareClaim = (appId) => prepareManagedAppImprovementTask('claim-issue', { ...APP, id: appId }, STATE);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getTaskIntervalMock.mockResolvedValue({ type: 'on-demand', perpetual: true, taskMetadata: {} });
+    getAppTaskTypeOverridesMock.mockResolvedValue({});
+  });
+
+  it('carries the transient detector verdict on the skip and leaves the streak below the stall threshold quiet', async () => {
+    vi.mocked(detectActionableWork).mockResolvedValue({ ...transient, remedy: 'Allow gh outbound.', detail: 'bad fd' });
+    const prepared = await prepareClaim('app-skip-verdict');
+    expect(prepared).toEqual({
+      task: null,
+      pendingPerpetualDispatch: null,
+      skip: { gate: 'perpetual-work', reason: 'gh-list-failed', cli: 'gh', remedy: 'Allow gh outbound.', detail: 'bad fd' },
+    });
+    expect(recordPerpetualStall).not.toHaveBeenCalled();
+  });
+
+  it('persists a stall on the 3rd CONSECUTIVE transient probe, and an actionable probe in between restarts the count', async () => {
+    const appId = 'app-skip-streak';
+    vi.mocked(detectActionableWork).mockResolvedValue(transient);
+    await prepareClaim(appId);
+    await prepareClaim(appId);
+    expect(recordPerpetualStall).not.toHaveBeenCalled();
+
+    // Recovery: the probe reports work again, which must clear the streak.
+    vi.mocked(detectActionableWork).mockResolvedValue({ actionable: true, count: 1, signature: null });
+    expect((await prepareClaim(appId)).skip).toBeNull();
+    recordPerpetualStall.mockClear();
+
+    vi.mocked(detectActionableWork).mockResolvedValue(transient);
+    await prepareClaim(appId);
+    await prepareClaim(appId);
+    expect(recordPerpetualStall).not.toHaveBeenCalled();
+    await prepareClaim(appId);
+    expect(recordPerpetualStall).toHaveBeenCalledWith('claim-issue', appId, expect.objectContaining({ consecutive: 3, cli: 'gh' }));
+  });
+
+  it('names the gate for an install-wide target request that has no managed app to run on', async () => {
+    const prepared = await prepareManagedAppImprovementTask('model-comparison-refresh', APP, STATE);
+    expect(prepared).toMatchObject({ task: null, pendingPerpetualDispatch: null, skip: { gate: 'install-wide-target', reason: null } });
+  });
 });

@@ -167,6 +167,9 @@ export async function drainOnDemandRequests(ctx, adapter) {
     // discovered by re-finding the task object, so it survives regardless of
     // which task-object variant `addTask` below hands back (#6871).
     let pendingPerpetualDispatch = null;
+    // Why prepare declined to build a task (null when it built one or there was
+    // no managed app) — handed to emitOnDemandEmpty so the toast can say why.
+    let skip = null;
     // Determine target app (if any)
     let targetApp = null;
 
@@ -236,8 +239,9 @@ export async function drainOnDemandRequests(ctx, adapter) {
         // for every step until the migration starts pinning one.
         runOverrides: request.burn?.overrides?.params ?? null
       });
-      task = prepared?.task ?? null;
-      pendingPerpetualDispatch = prepared?.pendingPerpetualDispatch ?? null;
+      task = prepared.task;
+      pendingPerpetualDispatch = prepared.pendingPerpetualDispatch;
+      skip = prepared.skip;
       if (task) {
         await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
       }
@@ -295,7 +299,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
       // `userInitiated` only: a drain refill ends by converging (that's the point),
       // and nobody is waiting on it, so toasting "nothing to do" for every automated
       // hop would turn a healthy overnight drain into a pile of notifications.
-      await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: schedule.tasks[request.taskType], preflightCardId: cardId });
+      await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: schedule.tasks[request.taskType], preflightCardId: cardId, skip });
     }
     // Every other exit from this iteration (a task that capacity refused, or a
     // refill with no task) still owes the card a close — a card left open would

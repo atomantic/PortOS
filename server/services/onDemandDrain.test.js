@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => ({
   clearOnDemandRequest: vi.fn(async () => {}),
   applyOnDemandRunResets: vi.fn(async () => true),
   recordExecution: vi.fn(async () => {}),
-  prepareManagedAppImprovementTask: vi.fn(async () => ({ task: { id: 'gen-1', priority: 'HIGH' }, pendingPerpetualDispatch: null })),
+  prepareManagedAppImprovementTask: vi.fn(async () => ({ task: { id: 'gen-1', priority: 'HIGH' }, pendingPerpetualDispatch: null, skip: null })),
   generateSelfImprovementTaskForType: vi.fn(async () => ({ id: 'self-1', priority: 'HIGH' })),
   recordDeferredPerpetualDispatch: vi.fn(async () => {}),
   applyOnDemandConsent: vi.fn((t) => t),
@@ -147,7 +147,7 @@ beforeEach(() => {
   mocks.applyOnDemandRunResets.mockResolvedValue(true);
   mocks.getActiveApps.mockResolvedValue([APP]);
   mocks.addTask.mockResolvedValue({ id: 'persisted-1' });
-  mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: { id: 'gen-1', priority: 'HIGH' }, pendingPerpetualDispatch: null });
+  mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: { id: 'gen-1', priority: 'HIGH' }, pendingPerpetualDispatch: null, skip: null });
   mocks.generateSelfImprovementTaskForType.mockResolvedValue({ id: 'self-1', priority: 'HIGH' });
   mocks.drainProgrammaticOnDemandRequests.mockResolvedValue(new Set());
   mocks.applyOnDemandConsent.mockImplementation((t) => t);
@@ -241,18 +241,19 @@ describe.each(ENGINES)('%s — on-demand metadata stamp', (_name, makeAdapter) =
 describe.each(ENGINES)('%s — empty-result feedback', (_name, makeAdapter) => {
   it('reports an empty result for a user-initiated Run', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
-    mocks.prepareManagedAppImprovementTask.mockResolvedValue(null);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: null, pendingPerpetualDispatch: null, skip: { gate: 'security-preflight', reason: 'no-external-open-prs', cli: null, remedy: null, detail: null } });
     mocks.applyOnDemandRunResets.mockResolvedValue(true);
     const { adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
     expect(mocks.emitOnDemandEmpty).toHaveBeenCalledTimes(1);
-    expect(mocks.emitOnDemandEmpty.mock.calls[0][0]).toMatchObject({ targetApp: APP });
+    // The skip is handed over explicitly — no side channel to read back later.
+    expect(mocks.emitOnDemandEmpty.mock.calls[0][0]).toMatchObject({ targetApp: APP, skip: { gate: 'security-preflight', reason: 'no-external-open-prs' } });
   });
 
   it('stays silent for an automated drain refill', async () => {
     // A converging overnight drain must not turn into a pile of toasts.
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
-    mocks.prepareManagedAppImprovementTask.mockResolvedValue(null);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: null, pendingPerpetualDispatch: null, skip: { gate: 'security-preflight', reason: 'no-external-open-prs', cli: null, remedy: null, detail: null } });
     mocks.applyOnDemandRunResets.mockResolvedValue(false);
     const { adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
@@ -401,7 +402,7 @@ describe.each(ENGINES)('%s — app-review marker discipline (#978)', (_name, mak
 
   it('binds the active agent only once a task actually exists', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
-    mocks.prepareManagedAppImprovementTask.mockResolvedValue(null);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: null, pendingPerpetualDispatch: null, skip: { gate: 'security-preflight', reason: 'no-external-open-prs', cli: null, remedy: null, detail: null } });
     const { adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
     // The cooldown still advanced — only the bind is deferred, so a null
@@ -599,7 +600,7 @@ describe('preflight task card', () => {
 
   it('leaves no card open when the run produces nothing', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
-    mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: null, pendingPerpetualDispatch: null });
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: null, pendingPerpetualDispatch: null, skip: null });
     const { adapter } = generatorAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
     // emitOnDemandEmpty owns the specific reason; this is the backstop close.
