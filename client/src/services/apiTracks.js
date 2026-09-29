@@ -131,7 +131,5 @@ export const renderTrackCode = (id, formData, requestOptions = {}) => request(`/
   ...requestOptions,
 });
 
-// Mirror server caps in server/services/tracks/logic.js — bump both sides.
-export const TRACK_TITLE_MAX = 200;
-export const TRACK_LYRICS_MAX = 20000;
-export const TRACK_PROMPT_MAX = 8000;
+// Caps come from the server leaf so client inputs and the server sanitizer can't drift.
+export { TITLE_MAX as TRACK_TITLE_MAX, LYRICS_MAX as TRACK_LYRICS_MAX, PROMPT_MAX as TRACK_PROMPT_MAX } from '../../../server/lib/trackLimits.js';

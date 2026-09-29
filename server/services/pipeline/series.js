@@ -20,6 +20,7 @@ import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
 import { sanitizeStyleGuide } from '../../lib/styleGuide.js';
 import { sanitizeProseExportSettings } from '../../lib/proseExportSettings.js';
 import { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX } from '../../lib/universeBibleLimits.js';
+import { TITLE_LOGO_MAX } from '../../lib/storyArcLimits.js';
 import { sanitizeSeverityWeights, sanitizeBlockingSeverities } from '../../lib/editorial/severityConfig.js';
 import { CHECK_SEVERITIES } from '../../lib/editorial/checkInfra/taxonomy.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
@@ -75,7 +76,7 @@ export const STYLE_PROMPT_OVERRIDE_MODE_DEFAULT = 'prepend';
 // Title/logo design concept — prose description injected into cover + TV
 // title-screen prompts as the "logo design" cue. Generated from the universe's
 // style notes on series creation; editable in the bible.
-export const TITLE_LOGO_MAX = 2000;
+export { TITLE_LOGO_MAX };
 // Derived cover thumbnail — the filename of a rendered volume/issue cover,
 // stamped by seriesCoverImage.refreshSeriesCoverImage so the pipeline series
 // list can show a thumbnail (like the universe reference image) without

@@ -27,16 +27,11 @@
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
+import { NAME_MAX, GENRE_MAX, BIO_MAX, MUSICAL_STYLE_MAX, PHYSICAL_DESCRIPTION_MAX, PORTRAIT_STYLE_MAX, PORTRAIT_IMAGE_URL_MAX } from '../../lib/artistLimits.js';
+export { NAME_MAX, GENRE_MAX, BIO_MAX, MUSICAL_STYLE_MAX, PHYSICAL_DESCRIPTION_MAX, PORTRAIT_STYLE_MAX, PORTRAIT_IMAGE_URL_MAX };
 
 export const ARTIST_ID_RE = /^artist-[A-Za-z0-9-]{1,64}$/;
 
-export const NAME_MAX = 120;
-export const GENRE_MAX = 120;
-export const BIO_MAX = 4000;
-export const MUSICAL_STYLE_MAX = 4000;
-export const PHYSICAL_DESCRIPTION_MAX = 2000;
-export const PORTRAIT_STYLE_MAX = 2000;
-export const PORTRAIT_IMAGE_URL_MAX = 1000;
 
 /**
  * Normalize a raw artist record into the canonical stored shape. Returns null

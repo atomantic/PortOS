@@ -38,3 +38,6 @@ export const SERIES_DESIGN_FIELDS = Object.freeze({
   continuingTensions: 'Continuing tensions',
   endingCondition: 'Ending condition',
 });
+
+// Title/logo design concept prose (series bible) — see services/pipeline/series.js.
+export const TITLE_LOGO_MAX = 2000;

@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Plus, Loader2, X } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { updatePipelineSeries } from '../../../services/api';
+import { ARC_LIMITS } from '../../../../../server/lib/storyArcLimits.js';
 
 const THEME_COLORS = [
   'border-sky-400/40 bg-sky-500/10 text-sky-200',
@@ -14,9 +15,7 @@ const THEME_COLORS = [
   'border-orange-400/40 bg-orange-500/10 text-orange-200',
 ];
 
-// Theme pill limits — mirror server/lib/storyArc.js ARC_LIMITS.
-const THEME_MAX = 100;
-const THEMES_PER_ARC_MAX = 20;
+const { THEME_MAX, THEMES_PER_ARC_MAX } = ARC_LIMITS;
 
 // Inline-editable theme pills. Click a pill to rename, hover for the × to
 // remove, trailing dashed "+ Add theme" pill opens an inline input. Each

@@ -20,9 +20,6 @@ export const deleteAlbum = (id, requestOptions = {}) => request(`/albums/${encod
   ...requestOptions,
 });
 
-// Mirror server caps in server/services/albums/logic.js — bump both sides.
-export const ALBUM_TITLE_MAX = 200;
-export const ALBUM_DESCRIPTION_MAX = 4000;
-export const ALBUM_GENRE_MAX = 120;
+// Caps come from the server leaf so client inputs and the server sanitizer can't drift.
+export { TITLE_MAX as ALBUM_TITLE_MAX, DESCRIPTION_MAX as ALBUM_DESCRIPTION_MAX, GENRE_MAX as ALBUM_GENRE_MAX, RELEASE_YEAR_MAX as ALBUM_RELEASE_YEAR_MAX } from '../../../server/lib/albumLimits.js';
 export const ALBUM_RELEASE_YEAR_MIN = 1850;
-export const ALBUM_RELEASE_YEAR_MAX = 2200;

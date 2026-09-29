@@ -53,31 +53,19 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeChiptuneScore } from '../../lib/chiptuneScore.js';
 import { normalizeWaveSketch } from '../../lib/waveSketch.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
+import { TITLE_MAX, ALBUM_ID_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, CONCEPT_MAX, LYRICS_MAX, PROMPT_MAX, ENGINE_MAX, MODEL_ID_MAX, EXECUTION_PROFILE_MAX, AUDIO_FILENAME_MAX, RENDER_ID_MAX, RENDER_SOURCE_MAX, RENDERS_MAX } from '../../lib/trackLimits.js';
+export { TITLE_MAX, ALBUM_ID_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, CONCEPT_MAX, LYRICS_MAX, PROMPT_MAX, ENGINE_MAX, MODEL_ID_MAX, EXECUTION_PROFILE_MAX, AUDIO_FILENAME_MAX, RENDER_ID_MAX, RENDER_SOURCE_MAX, RENDERS_MAX };
 
 export const TRACK_ID_RE = /^track-[A-Za-z0-9-]{1,64}$/;
 
-export const TITLE_MAX = 200;
-export const ALBUM_ID_MAX = 80;
-export const ARTIST_ID_MAX = 80;
-export const ARTIST_NAME_MAX = 120;
-export const CONCEPT_MAX = 8000;
-export const LYRICS_MAX = 20000;
-export const PROMPT_MAX = 8000;
-export const ENGINE_MAX = 60;
-export const MODEL_ID_MAX = 120;
-export const EXECUTION_PROFILE_MAX = 80;
-export const AUDIO_FILENAME_MAX = 256;
-export const RENDER_ID_MAX = 80;
 // Render provenance slug (see `source` above). A lowercase slug rather than a
 // closed enum so a later import source is a value, not a sanitizer change; the
 // routes that WRITE a source validate it against the sources they support.
-export const RENDER_SOURCE_MAX = 40;
 const RENDER_SOURCE_RE = /^[a-z0-9-]{1,40}$/;
 export const RENDER_SOURCES = Object.freeze({ UPLOAD: 'upload', SUNO: 'suno', YOUTUBE: 'youtube' });
 // Cap the render history per track so a runaway generate loop can't grow the
 // record unboundedly. Oldest renders fall off first (slice(-RENDERS_MAX)); the
 // audio bytes stay in the shared library (they may be referenced elsewhere).
-export const RENDERS_MAX = 100;
 // A track clip's usable duration band — wide enough for a long-form generation,
 // bounded so a garbage value can't poison the record.
 export const DURATION_MIN_SEC = 1;

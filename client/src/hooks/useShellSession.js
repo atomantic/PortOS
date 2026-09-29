@@ -15,9 +15,10 @@ import {
 import { readFileAsBase64 } from '../utils/fileUpload';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
+import { MAX_TOTAL_SESSIONS } from '../../../server/lib/shellLimits.js';
 
-// Must match MAX_TOTAL_SESSIONS in server/services/shell.js
-export const MAX_SESSIONS = 20;
+// Shared with the server (lib/shellLimits.js) so the "at cap" UI can't drift.
+export const MAX_SESSIONS = MAX_TOTAL_SESSIONS;
 
 // recoverToSurvivor's no-op fallback, for the one caller already sitting at bare
 // /shell and content to stay there when nothing is free to adopt.
