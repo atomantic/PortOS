@@ -43,7 +43,7 @@ vi.mock('./userActions.js', () => ({ listUserActions: async () => [] }));
 vi.mock('./reviewQueue.js', () => ({ buildQueue: async () => ({ sources: {}, partial: false, nextCursor: null }) }));
 vi.mock('./persistentMindVisibility.js', () => ({ readPersistentMindVisibility: async () => ({}) }));
 vi.mock('./persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({}) }));
-import { runDevelopmentWatchdog, readDevelopmentWatchdogSnapshot } from './developmentWatchdog.js';
+import { runDevelopmentWatchdog, readDevelopmentWatchdogSnapshot, mayReadApp, mayCreateTasksForApp } from './developmentWatchdog.js';
 import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanceContext.js';
 
 beforeEach(() => {
@@ -326,4 +326,22 @@ it('withholds batches after Improve is disabled or grants are revoked during pre
   });
   expect((await runDevelopmentWatchdog({ force: true })).decisions[0].reason).toBe('authority-changed');
   expect(m.adds).toEqual([]); expect(m.record).not.toHaveBeenCalled();
+});
+
+describe('development watchdog authorization predicates', () => {
+  const grant = (role = {}, caps = {}) => ({ config: {
+    persistentMindMaintainer: { enabled: true, appIds: ['app'], ...role },
+    persistentMindCapabilities: { readPortos: true, createTasks: true, ...caps },
+  } });
+  it.each([
+    ['all granted', grant(), true, true],
+    ['role disabled', grant({ enabled: false }), false, false],
+    ['readPortos false', grant({}, { readPortos: false }), false, false],
+    ['createTasks false (read only)', grant({}, { createTasks: false }), true, false],
+    ['app outside role.appIds', grant({ appIds: ['other'] }), false, false],
+    ['app outside allowedAppIds', grant({}, { allowedAppIds: ['other'] }), false, false],
+  ])('%s', (_name, state, read, create) => {
+    expect(mayReadApp(state, 'app')).toBe(read);
+    expect(mayCreateTasksForApp(state, 'app')).toBe(create);
+  });
 });
