@@ -22,6 +22,7 @@ import { PromptFromMediaModal } from '../components/media/PromptFromMedia';
 import MediaLightbox from '../components/media/MediaLightbox';
 import MoodBoardStylePanel from '../components/moodBoard/MoodBoardStylePanel';
 import MoodBoardCollagePanel from '../components/moodBoard/MoodBoardCollagePanel';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 import { copyToClipboard } from '../lib/clipboard';
 import {
   getMoodBoard,
@@ -75,7 +76,6 @@ function MoodBoardEditor({ id }) {
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const [playingItemId, setPlayingItemId] = useState(null);
-  const [previewItemId, setPreviewItemId] = useState(null);
 
   // Per-item prompt-from-media analysis (#4188 Phase 3). Track the item by id
   // (not a snapshot) so the modal's stored-analysis view stays fresh after the
@@ -148,6 +148,29 @@ function MoodBoardEditor({ id }) {
     ? ((Array.isArray(board?.items) ? board.items : []).find((it) => it.id === analyzeItemId) || null)
     : null;
   const analyzeSource = useMemo(() => moodBoardItemAnalysisSource(analyzeItem), [analyzeItem]);
+
+  const items = Array.isArray(board?.items) ? board.items : [];
+  // Still images only (videos play inline); prev/next walks this subset.
+  // Lives above early returns so hooks run unconditionally.
+  const previewables = useMemo(() => {
+    return items
+      .filter((it) => it.type === 'image' && moodBoardItemSrc(it))
+      .map((it) => {
+        const url = moodBoardItemSrc(it);
+        return {
+          kind: 'image',
+          key: `moodboard:${it.id}`,
+          id: it.id,
+          filename: decodeURIComponent(url.split(/[?#]/)[0].split('/').pop() || ''),
+          previewUrl: url,
+          downloadUrl: url,
+          prompt: moodBoardItemPrompt(it) || it.caption || '',
+        };
+      });
+  }, [items]);
+  const resolvePreview = useCallback(async () => null, []);
+  const [preview, setPreview] = usePreviewRoute(previewables, { resolveItem: resolvePreview });
+  const previewIndex = preview ? previewables.findIndex((it) => it.id === preview.id || it.key === preview.key || it.filename === preview.filename) : -1;
 
   const handleSaveMeta = async () => {
     if (!mountedRef.current) return;
@@ -387,23 +410,6 @@ function MoodBoardEditor({ id }) {
     );
   }
 
-  const items = Array.isArray(board.items) ? board.items : [];
-  // Still images only (videos play inline); prev/next walks this subset.
-  const previewables = items
-    .filter((it) => it.type === 'image' && moodBoardItemSrc(it))
-    .map((it) => {
-      const url = moodBoardItemSrc(it);
-      return {
-        kind: 'image',
-        key: `moodboard:${it.id}`,
-        id: it.id,
-        filename: decodeURIComponent(url.split(/[?#]/)[0].split('/').pop() || ''),
-        previewUrl: url,
-        downloadUrl: url,
-        prompt: moodBoardItemPrompt(it) || it.caption || '',
-      };
-    });
-  const previewIndex = previewables.findIndex((it) => it.id === previewItemId);
 
   const linkedFeedUrl = board.pinterest?.feedUrl || '';
   const linkedBoardUrl = board.pinterest?.boardUrl || '';
@@ -577,7 +583,10 @@ function MoodBoardEditor({ id }) {
                         src ? (
                           <button
                             type="button"
-                            onClick={() => setPreviewItemId(item.id)}
+                            onClick={() => {
+                              const target = previewables.find((p) => p.id === item.id);
+                              if (target) setPreview(target);
+                            }}
                             aria-label="Preview image"
                             className="block w-full h-full cursor-zoom-in"
                           >
@@ -948,11 +957,11 @@ function MoodBoardEditor({ id }) {
       {previewIndex >= 0 ? (
         <MediaLightbox
           item={previewables[previewIndex]}
-          onClose={() => setPreviewItemId(null)}
+          onClose={() => setPreview(null)}
           hasPrevious={previewIndex > 0}
           hasNext={previewIndex < previewables.length - 1}
-          onPrevious={() => setPreviewItemId(previewables[previewIndex - 1].id)}
-          onNext={() => setPreviewItemId(previewables[previewIndex + 1].id)}
+          onPrevious={() => setPreview(previewables[previewIndex - 1])}
+          onNext={() => setPreview(previewables[previewIndex + 1])}
         />
       ) : null}
 
