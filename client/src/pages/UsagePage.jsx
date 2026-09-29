@@ -402,6 +402,32 @@ function ProviderCostRows({ provider }) {
 
 // Time-filter pills + custom range, driven by URL search params so every
 // report view is shareable/bookmarkable (linkable-routes convention).
+// A native date input reports "" while its mm/dd/yyyy segments are only
+// partly typed, so binding it straight to the URL param wiped the field
+// mid-keystroke. Hold the draft locally and commit only complete dates (or an
+// explicit clear); re-sync when the committed value changes underneath.
+function RangeDateInput({ id, value, onCommit }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  const handleChange = (e) => {
+    const next = e.target.value;
+    setDraft(next);
+    if (next === '' && e.target.validity.badInput) return;
+    // Typing a year passes through 0002, 0020, 0202 — valid dates, not intent.
+    if (next !== '' && Number(next.slice(0, 4)) < 1900) return;
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <input
+      id={id}
+      type="date"
+      value={draft}
+      onChange={handleChange}
+      className="bg-transparent text-xs text-white outline-none [color-scheme:dark]"
+    />
+  );
+}
+
 function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -418,21 +444,9 @@ function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
       ))}
       <div className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${isCustom ? 'border-port-accent bg-port-accent/10' : 'border-port-border'}`}>
         <label htmlFor="usage-from" className="text-xs text-gray-400">From</label>
-        <input
-          id="usage-from"
-          type="date"
-          value={from}
-          onChange={(e) => onRange(e.target.value, to)}
-          className="bg-transparent text-xs text-white outline-none [color-scheme:dark]"
-        />
+        <RangeDateInput id="usage-from" value={from} onCommit={(v) => onRange(v, to)} />
         <label htmlFor="usage-to" className="text-xs text-gray-400">To</label>
-        <input
-          id="usage-to"
-          type="date"
-          value={to}
-          onChange={(e) => onRange(from, e.target.value)}
-          className="bg-transparent text-xs text-white outline-none [color-scheme:dark]"
-        />
+        <RangeDateInput id="usage-to" value={to} onCommit={(v) => onRange(from, v)} />
       </div>
     </div>
   );
