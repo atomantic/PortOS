@@ -119,7 +119,7 @@ export default function ToolsTab({ agentId, agent }) {
   const handleBrowseFeed = async () => {
     if (!selectedAccountId) return;
     setFeedLoading(true);
-    const feed = await api.getAgentFeed(selectedAccountId, feedSort, 25);
+    const feed = await api.getAgentFeed({ accountId: selectedAccountId, sort: feedSort, limit: 25 });
     setFeedPosts(feed.posts || feed || []);
     setFeedLoading(false);
   };
@@ -127,7 +127,7 @@ export default function ToolsTab({ agentId, agent }) {
   const handleFindRelevant = async () => {
     if (!agentId || !selectedAccountId) return;
     setFeedLoading(true);
-    const posts = await api.getAgentRelevantPosts(agentId, selectedAccountId, 10);
+    const posts = await api.getAgentRelevantPosts({ agentId, accountId: selectedAccountId, maxResults: 10 });
     setFeedPosts(posts);
     setFeedLoading(false);
   };
@@ -145,7 +145,7 @@ export default function ToolsTab({ agentId, agent }) {
     if (!agentId || !selectedAccountId) return;
     setGenerating(true);
     const contentConfig = agent?.aiConfig?.content || agent?.aiConfig;
-    const generated = await api.generateAgentPost(agentId, selectedAccountId, selectedSubmolt, contentConfig?.providerId, contentConfig?.model);
+    const generated = await api.generateAgentPost({ agentId, accountId: selectedAccountId, submolt: selectedSubmolt, providerId: contentConfig?.providerId, model: contentConfig?.model });
     setPostTitle(generated.title);
     setPostContent(generated.content);
     setGenerating(false);
@@ -166,7 +166,7 @@ export default function ToolsTab({ agentId, agent }) {
   const handlePublishPost = async () => {
     if (!postTitle || !postContent) return;
     setPublishing(true);
-    const result = await api.publishAgentPost(agentId, selectedAccountId, selectedSubmolt, postTitle, postContent).catch(() => null);
+    const result = await api.publishAgentPost({ agentId, accountId: selectedAccountId, submolt: selectedSubmolt, title: postTitle, content: postContent }).catch(() => null);
 
     if (!result) {
       setPublishing(false);
@@ -178,11 +178,11 @@ export default function ToolsTab({ agentId, agent }) {
       if (result?.verificationFailed) {
         toast.error('Post verification failed — draft preserved for retry');
       } else {
-        await api.updateAgentDraft(agentId, activeDraftId, {
+        await api.updateAgentDraft({ agentId, draftId: activeDraftId, data: {
           status: 'published',
           publishedPostId: result?.id || result?._id || result?.post_id || null,
           publishedAt: new Date().toISOString()
-        }).catch(err => console.warn('⚠️ Failed to mark draft published: ' + err.message));
+        } }).catch(err => console.warn('⚠️ Failed to mark draft published: ' + err.message));
         setActiveDraftId(null);
         toast.success('Post published');
       }
@@ -204,10 +204,10 @@ export default function ToolsTab({ agentId, agent }) {
     if (!selectedPost) return;
     setGeneratingComment(true);
     const contentConfig = agent?.aiConfig?.content || agent?.aiConfig;
-    const generated = await api.generateAgentComment(
-      agentId, selectedAccountId, selectedPost.id, replyToId || undefined,
-      contentConfig?.providerId, contentConfig?.model
-    );
+    const generated = await api.generateAgentComment({
+      agentId, accountId: selectedAccountId, postId: selectedPost.id, parentId: replyToId || undefined,
+      providerId: contentConfig?.providerId, model: contentConfig?.model
+    });
     setCommentContent(generated.content);
     setGeneratingComment(false);
 
@@ -228,9 +228,9 @@ export default function ToolsTab({ agentId, agent }) {
   const handlePublishComment = async () => {
     if (!selectedPost || !commentContent) return;
     setPublishingComment(true);
-    const result = await api.publishAgentComment(
-      agentId, selectedAccountId, selectedPost.id, commentContent, replyToId || undefined
-    ).catch(() => null);
+    const result = await api.publishAgentComment({
+      agentId, accountId: selectedAccountId, postId: selectedPost.id, content: commentContent, parentId: replyToId || undefined
+    }).catch(() => null);
 
     if (!result) {
       setPublishingComment(false);
@@ -242,10 +242,10 @@ export default function ToolsTab({ agentId, agent }) {
       if (result?.verificationFailed) {
         toast.error('Comment verification failed — draft preserved for retry');
       } else {
-        await api.updateAgentDraft(agentId, activeDraftId, {
+        await api.updateAgentDraft({ agentId, draftId: activeDraftId, data: {
           status: 'published',
           publishedAt: new Date().toISOString()
-        }).catch(err => console.warn('⚠️ Failed to mark comment draft published: ' + err.message));
+        } }).catch(err => console.warn('⚠️ Failed to mark comment draft published: ' + err.message));
         setActiveDraftId(null);
         toast.success('Comment published');
       }
@@ -268,7 +268,7 @@ export default function ToolsTab({ agentId, agent }) {
     if (!agentId || !selectedAccountId) return;
     setEngaging(true);
     setEngageResult(null);
-    const result = await api.engageAgent(agentId, selectedAccountId, 1, 3);
+    const result = await api.engageAgent({ agentId, accountId: selectedAccountId, maxComments: 1, maxVotes: 3 });
     setEngageResult(result);
     setEngaging(false);
     toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
@@ -280,7 +280,7 @@ export default function ToolsTab({ agentId, agent }) {
     if (!agentId || !selectedAccountId) return;
     setChecking(true);
     setCheckResult(null);
-    const result = await api.checkAgentPosts(agentId, selectedAccountId, 7, 2, 10).catch(() => null);
+    const result = await api.checkAgentPosts({ agentId, accountId: selectedAccountId, days: 7, maxReplies: 2, maxUpvotes: 10 }).catch(() => null);
     setChecking(false);
     if (!result) return;
     setCheckResult(result);

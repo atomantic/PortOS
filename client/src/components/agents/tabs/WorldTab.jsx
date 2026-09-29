@@ -266,16 +266,16 @@ export default function WorldTab({ agentId }) {
     const y = random ? undefined : (moveY !== '' ? parseInt(moveY, 10) : undefined);
 
     if (wsConnected && !random && x != null && y != null) {
-      await api.moltworldWsMove(x, y, moveThinking || undefined).catch(() => null);
+      await api.moltworldWsMove({ x, y, thought: moveThinking || undefined }).catch(() => null);
       setMoving(false);
       toast.success(`Move sent via WS to (${x}, ${y})`);
       refreshAfterAction();
       return;
     }
 
-    const result = await api.moltworldExplore(
-      accountId, agentId, x, y, moveThinking || undefined
-    ).catch(() => null);
+    const result = await api.moltworldExplore({
+      accountId, agentId, x, y, thinking: moveThinking || undefined
+    }).catch(() => null);
     setMoving(false);
     if (!result) { fetchRateLimits(); return; }
     updateFromJoinResponse(result);
@@ -297,7 +297,7 @@ export default function WorldTab({ agentId }) {
       return;
     }
 
-    const result = await api.moltworldThink(accountId, thought, agentId).catch(() => null);
+    const result = await api.moltworldThink({ accountId, agentId, thought }).catch(() => null);
     setThinking(false);
     if (!result) { fetchRateLimits(); return; }
     toast.success('Thought sent');
@@ -308,11 +308,11 @@ export default function WorldTab({ agentId }) {
   const handleBuild = async () => {
     if (!accountId || buildX === '' || buildY === '') return;
     setBuilding(true);
-    const result = await api.moltworldBuild(
+    const result = await api.moltworldBuild({
       accountId, agentId,
-      parseInt(buildX, 10), parseInt(buildY, 10), parseInt(buildZ || '0', 10),
-      blockType, buildAction
-    ).catch(() => null);
+      x: parseInt(buildX, 10), y: parseInt(buildY, 10), z: parseInt(buildZ || '0', 10),
+      type: blockType, action: buildAction
+    }).catch(() => null);
     setBuilding(false);
     if (!result) { fetchRateLimits(); return; }
     toast.success(`Block ${buildAction}d at (${buildX}, ${buildY}, ${buildZ})`);
@@ -333,9 +333,9 @@ export default function WorldTab({ agentId }) {
       return;
     }
 
-    const result = await api.moltworldSay(
-      accountId, sayMessage, sayTo || undefined, agentId
-    ).catch(() => null);
+    const result = await api.moltworldSay({
+      accountId, agentId, message: sayMessage, sayTo: sayTo || undefined
+    }).catch(() => null);
     setSaying(false);
     if (!result) { fetchRateLimits(); return; }
     updateFromJoinResponse(result);
@@ -358,7 +358,7 @@ export default function WorldTab({ agentId }) {
     if (params.y != null) params.y = parseInt(params.y, 10);
     if (params.z != null) params.z = parseInt(params.z, 10);
 
-    await api.moltworldAddToQueue(agentId, newActionType, params).catch(() => null);
+    await api.moltworldAddToQueue({ agentId, actionType: newActionType, params }).catch(() => null);
     setShowAddForm(false);
     setNewActionParams({});
     toast.success('Action queued');
