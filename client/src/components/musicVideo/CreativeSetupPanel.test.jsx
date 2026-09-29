@@ -39,7 +39,7 @@ describe('creative setup', () => {
     fireEvent.click(screen.getByText('Save creative setup'));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0][0]).toMatchObject({
-      concept: { universeId: 'u1', universeStyle: 'Example universe\nInk silhouettes', moodBoardStyle: expect.stringContaining('Loose brush strokes'), subjects: [
+      concept: { universeId: 'u1', subjects: [
         { kind: 'character', name: 'Example singer', role: 'band', description: 'Silver coat', canonId: 'c1' },
         { kind: 'object', name: 'Glass guitar', description: 'Transparent blue glass' },
       ] }, visualSpec: { moodBoardId: 'b1' },
@@ -57,7 +57,7 @@ describe('creative setup', () => {
     expect(screen.queryByText(/Unsaved singer/)).toBeNull();
   });
 
-  it('cannot save a pending universe under the previously loaded style and clears style on deselection', async () => {
+  it('cannot save while a newly chosen universe is still loading and sends a null id on deselection', async () => {
     let resolveNext;
     getUniverse.mockResolvedValueOnce({ id: 'u1', name: 'Example universe', styleNotes: 'Old style', characters: [] })
       .mockImplementationOnce(() => new Promise((resolve) => { resolveNext = resolve; }));
@@ -69,7 +69,7 @@ describe('creative setup', () => {
     expect(screen.getByText('Save creative setup').disabled).toBe(true);
     fireEvent.change(screen.getByLabelText('Universe'), { target: { value: '' } });
     fireEvent.click(screen.getByText('Save creative setup'));
-    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ concept: expect.objectContaining({ universeId: null, universeStyle: '' }) })));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ concept: expect.objectContaining({ universeId: null }) })));
     await act(async () => { resolveNext({ id: 'u2', name: 'Other universe', styleNotes: 'Wrong style' }); });
   });
 

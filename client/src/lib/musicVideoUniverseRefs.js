@@ -9,31 +9,6 @@
 // can never produce a spec the server would reject.
 
 import { uuidv4 } from './uuid.js';
-import { collectBoardStyleContext } from '../../../server/lib/moodBoardStyleContext.js';
-
-// Authored style snapshots copied into a project's concept (universeStyle /
-// moodBoardStyle, bounded by the server's 4000-char schema cap) so later edits
-// to the source universe or board never silently restyle a video.
-const STYLE_SNAPSHOT_MAX = 4000;
-
-export function universeStyleSnapshot(universe) {
-  if (!universe) return '';
-  const embrace = universe.influences?.embrace || [];
-  const avoid = universe.influences?.avoid || [];
-  return [
-    universe.name,
-    universe.styleNotes,
-    embrace.length ? `Embrace: ${embrace.join(', ')}` : '',
-    avoid.length ? `Avoid: ${avoid.join(', ')}` : '',
-  ].filter(Boolean).join('\n').slice(0, STYLE_SNAPSHOT_MAX);
-}
-
-export function moodBoardStyleSnapshot(board) {
-  const context = board ? collectBoardStyleContext(board) : null;
-  if (!context) return '';
-  return [context.name, context.description, ...context.items.map((item) => Object.values(item).join('; '))]
-    .filter(Boolean).join('\n').slice(0, STYLE_SNAPSHOT_MAX);
-}
 
 export const MUSIC_VIDEO_MAX_REFERENCES = 24;
 

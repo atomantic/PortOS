@@ -45,9 +45,7 @@ import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
 import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.jsx';
 import AutomationPanel from '../components/musicVideo/AutomationPanel.jsx';
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
-import { getUniverse, listUniverseNames } from '../services/apiUniverseBuilder.js';
-import { getMoodBoard } from '../services/apiMoodBoard.js';
-import { universeStyleSnapshot, moodBoardStyleSnapshot } from '../lib/musicVideoUniverseRefs.js';
+import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import ProjectToolbar from '../components/musicVideo/ProjectToolbar.jsx';
 import TrackPanel from '../components/musicVideo/TrackPanel.jsx';
 import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
@@ -240,24 +238,15 @@ export default function MusicVideo() {
     }
     if (creating) return;
     setCreating(true);
-    // Snapshot the chosen universe/board style into the concept at creation,
-    // the same authored copy the creative setup panel saves.
-    Promise.all([
-      form.universeId ? getUniverse(form.universeId, { silent: true }) : null,
-      form.moodBoardId ? getMoodBoard(form.moodBoardId, { silent: true }) : null,
-    ])
-      .then(([universe, board]) => createMusicVideoProject({
-        name: form.name.trim(),
-        mode: form.mode,
-        trackId: form.trackId || null,
-        concept: {
-          universeId: form.universeId || null,
-          universeStyle: universeStyleSnapshot(universe),
-          moodBoardStyle: moodBoardStyleSnapshot(board),
-        },
-        ...(form.moodBoardId ? { visualSpec: { moodBoardId: form.moodBoardId } } : {}),
-        ...(form.mode === 'autonomous' ? { automation: automationFromDraft(form.automation) } : {}),
-      }, { silent: true }))
+    // Only the ids go up: the server snapshots the universe/board style into the concept.
+    createMusicVideoProject({
+      name: form.name.trim(),
+      mode: form.mode,
+      trackId: form.trackId || null,
+      concept: { universeId: form.universeId || null },
+      ...(form.moodBoardId ? { visualSpec: { moodBoardId: form.moodBoardId } } : {}),
+      ...(form.mode === 'autonomous' ? { automation: automationFromDraft(form.automation) } : {}),
+    }, { silent: true })
       .then((proj) => {
         setProjects((prev) => [...prev, proj]);
         selectProject(proj.id);
