@@ -21,7 +21,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'portos-comparison-test-'));
   PATHS.data = dir;
   seed = JSON.parse(await readFile(join(PATHS.root, 'data.reference/model-comparison.json'), 'utf8'));
-  observation = seed.observations[0];
+  observation = seed.observations.find(row => row.quality && row.inputPerMillion);
   app = express();
   app.use(express.json());
   app.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [{ id: 'example-provider', name: 'Example provider', models: [observation.model], enabled: true }, { id: 'disabled', name: 'Disabled', models: ['hidden-model'], enabled: false }] }) }));
