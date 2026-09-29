@@ -61,7 +61,7 @@ const withLock = createMutex();
 const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 
 /** Pure: `[from, to]` minus every window, as inclusive ms intervals. */
-export function subtractWindows(from, to, windows) {
+function subtractWindows(from, to, windows) {
   let pieces = [[from, to]];
   for (const [ws, we] of windows) {
     pieces = pieces.flatMap(([a, b]) => {
@@ -76,7 +76,7 @@ export function subtractWindows(from, to, windows) {
 }
 
 /** Pure: split an inclusive interval at UTC midnights → `[{ day, from, to }]`. */
-export function splitByUtcDay(from, to) {
+function splitByUtcDay(from, to) {
   const out = [];
   for (let cursor = from; cursor <= to;) {
     const dayStart = Math.floor(cursor / DAY_MS) * DAY_MS;
@@ -183,8 +183,10 @@ async function parseSession(family, session, from, to, byCwd) {
  * configured provider is skipped WITHOUT advancing its watermark, so enabling
  * one later still bills what was skipped (within the first-scan lookback).
  */
-export function refreshInteractiveUsage({ home = homedir(), runsDir = PATHS.runs, providers = null, now = Date.now() } = {}) {
-  return withLock(async () => {
+// A const, not a function declaration: the boot timer below is its only production
+// caller, and tests drive it directly with a fixture home/runs dir.
+export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs, providers = null, now = Date.now() } = {}) => (
+  withLock(async () => {
     const state = await readJSONFile(INTERACTIVE_SCAN_FILE, { watermarks: {} });
     const watermarks = { ...(state?.watermarks || {}) };
     const to = now - SETTLE_MS;
@@ -240,8 +242,8 @@ export function refreshInteractiveUsage({ home = homedir(), runsDir = PATHS.runs
 
     await atomicWrite(INTERACTIVE_SCAN_FILE, { watermarks, updatedAt: new Date(now).toISOString() });
     return summary;
-  });
-}
+  })
+);
 
 export function startInteractiveUsageRefresh({ intervalMs = 30 * 60_000, firstDelayMs = 90_000 } = {}) {
   const run = () => refreshInteractiveUsage().catch((err) => {
