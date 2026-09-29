@@ -1060,7 +1060,7 @@ describe('dumpPostgres status classification', () => {
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       let dumpSize = 0;
       vi.spyOn(fs, 'stat').mockImplementation(async () => ({ size: dumpSize }));
-      vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE memories (...);\n');
+      createReadStream.mockImplementation(() => Readable.from([Buffer.from('CREATE TABLE memories (...);\n')]));
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
 
@@ -1093,21 +1093,35 @@ describe('dumpPostgres status classification', () => {
     expect(result.reason).toBe('empty_dump');
   });
 
-  it('returns ok with sizeBytes and tableCount on a good dump', async () => {
+  it('returns ok with streamed sizeBytes and tableCount on a good dump', async () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
-    vi.spyOn(fs, 'readFile').mockResolvedValue(
-      'CREATE TABLE memories (...);\nCREATE TABLE memory_links (...);\n'
-    );
+    const readFileSpy = vi.spyOn(fs, 'readFile');
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from(
+      'CREATE TABLE public.memories (\n    id uuid\n);\nCREATE TABLE public.memory_links (\n    id uuid\n);\n'
+    )]));
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const p = dumpPostgres('/tmp/x.sql');
     await flush();
     proc.emit('close', 0);
     const result = await p;
-    expect(result.status).toBe('ok');
-    expect(result.sizeBytes).toBe(2048);
-    expect(result.tableCount).toBe(2);
+    expect(result).toMatchObject({ status: 'ok', sizeBytes: 2048, tableCount: 2 });
+    expect(readFileSpy).not.toHaveBeenCalled();
+  });
+
+  it('settles failed/inspect_error when streaming the dump fails', async () => {
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
+    createReadStream.mockImplementation(() => new Readable({
+      read() { this.destroy(Object.assign(new Error('boom'), { code: 'EIO' })); }
+    }));
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = dumpPostgres('/tmp/x.sql');
+    await flush();
+    proc.emit('close', 0);
+    await expect(p).resolves.toMatchObject({ status: 'failed', reason: 'inspect_error' });
   });
 });
 
