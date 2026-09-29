@@ -65,8 +65,8 @@ it('serializes canonical v2 rows with stable indexes and no provenance', () => {
     coverage: [...QUALITY_COVERAGE_VALUES],
     confidence: [...QUALITY_CONFIDENCE_VALUES],
     measurements: [
-      ['2026-09-20T00:00:00.000Z', 0, 82, 5, 0, 2, 120, 120],
-      ['2026-09-21T00:00:00.000Z', 1, null, 0, 3, 0, 0, 4],
+      ['2026-09-20', 0, 82, 5, 0, 2, 120, 120],
+      ['2026-09-21', 1, null, 0, 3, 0, 0, 4],
     ],
   });
   expect(text).toBe([
@@ -90,8 +90,8 @@ it('serializes canonical v2 rows with stable indexes and no provenance', () => {
     '    "high"',
     '  ],',
     '  "measurements": [',
-    '    ["2026-09-20T00:00:00.000Z",0,82,5,0,2,120,120],',
-    '    ["2026-09-21T00:00:00.000Z",1,null,0,3,0,0,4]',
+    '    ["2026-09-20",0,82,5,0,2,120,120],',
+    '    ["2026-09-21",1,null,0,3,0,0,4]',
     '  ]',
     '}',
     '',
@@ -136,7 +136,7 @@ it('reads retired task categories and emits them under their current audit name'
   expect(JSON.parse(parsed.canonical).categories).toEqual(['ui-lifecycle']);
 });
 
-it('rejects future, unrecognized, malformed, duplicate-day, and invalid-index documents', () => {
+it('rejects future, unrecognized, malformed, and invalid-index documents; collapses duplicate days', () => {
   expect(classifyQualitySnapshot('category\tscore\n').status).toBe('unrecognized');
   expect(classifyQualitySnapshot('{"quality":true}').status).toBe('unrecognized');
   expect(classifyQualitySnapshot(JSON.stringify({ schemaVersion: 3, repository })).status).toBe('future');
@@ -147,7 +147,11 @@ it('rejects future, unrecognized, malformed, duplicate-day, and invalid-index do
     security,
     { ...security, assessedAt: '2026-09-19T22:30:00-04:00', score: 10 },
   ]);
-  expect(classifyQualitySnapshot(JSON.stringify(sameDay)).status).toBe('malformed');
+  const collapsed = classifyQualitySnapshot(JSON.stringify(sameDay));
+  expect(collapsed.status).toBe('v1');
+  expect(collapsed.records).toHaveLength(1);
+  expect(collapsed.records[0].score).toBe(10);
+  expect(JSON.parse(collapsed.canonical).measurements).toEqual([['2026-09-20', 0, 10, 5, 0, 2, 120, 120]]);
   const nextDay = v1Document([
     security,
     { ...security, assessedAt: '2026-09-20T20:30:00-04:00', score: 70 },
@@ -160,7 +164,19 @@ it('rejects future, unrecognized, malformed, duplicate-day, and invalid-index do
     measurements: [['2026-09-20T00:00:00.000Z', 4, 82, 5, 0, 2, 120, 120]],
   }));
   expect(badIndex.status).toBe('malformed');
-  expect(serializeQualitySnapshot(repository, [security, { ...security, score: 1 }])).toBeNull();
+  // Same day, same category: the later run replaces the earlier one.
+  const replaced = serializeQualitySnapshot(repository, [
+    { ...security, assessedAt: '2026-09-20T09:00:00.000Z', score: 1 },
+    { ...security, assessedAt: '2026-09-20T18:00:00.000Z', score: 2 },
+    { ...security, assessedAt: '2026-09-20T03:00:00.000Z', score: 3 },
+  ]);
+  expect(JSON.parse(replaced).measurements).toEqual([['2026-09-20', 0, 2, 5, 0, 2, 120, 120]]);
+  // An exact-timestamp tie resolves the same way whatever the input order.
+  const a = { ...security, score: 11 };
+  const b = { ...security, score: 12 };
+  expect(serializeQualitySnapshot(repository, [a, b])).toBe(serializeQualitySnapshot(repository, [b, a]));
+  // A date-only file (the canonical form) round-trips byte-for-byte.
+  expect(classifyQualitySnapshot(replaced).canonical).toBe(replaced);
 });
 
 it('keeps v1 tie ids and orders v2 rows with a transient digest', () => {

@@ -6,7 +6,8 @@
  * `quality-snapshot.json` body normalize to the same records; a future schema
  * is recognized and left for the publisher to report, not reinterpreted.
  *
- * Rows are `[assessedAt, categoryIndex, score, worstSeverity, coverageIndex,
+ * `assessedAt` is a UTC date (`YYYY-MM-DD`); one row per day per category, latest
+ * run wins. Rows are `[assessedAt, categoryIndex, score, worstSeverity, coverageIndex,
  * confidenceIndex, scannedFiles, totalFiles]`. `measurementId` is not stored.
  * Same-timestamp selection uses the v1 id while a file still has one, otherwise
  * a transient digest of the normalized row (`releaseTieId`). The digest is not
@@ -38,7 +39,10 @@ const REPORT_KEYS = new Set(['version', 'category', 'score', 'worstSeverity', 'c
 const PLACEHOLDER_SUMMARY = 'Numeric assessment';
 // Z and numeric offsets are both ISO instants. Zod's default datetime() rejects
 // offsets, which would treat one UTC day as two when the date prefix differs.
-const timestampSchema = z.iso.datetime({ offset: true });
+const datetimeSchema = z.iso.datetime({ offset: true });
+// Rows are stored date-only; full instants are still read (v1 and older v2 files).
+const timestampSchema = { safeParse: value => (typeof value === 'string' && z.iso.date().safeParse(value).success
+  ? { success: true } : datetimeSchema.safeParse(value)) };
 
 function compareText(a, b) {
   if (a < b) return -1;
@@ -63,16 +67,25 @@ function isInt(value, min, max) {
   return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 }
 
-function duplicateDays(records) {
-  const seen = new Set();
+/**
+ * One row per UTC day per category: the latest assessment that day wins, and a
+ * timestamp tie goes to the later-sorting row. Older files that stored several
+ * runs per day collapse here, on every parse and every write, so no install has
+ * to migrate. Returns null when a timestamp has no day.
+ */
+function collapseToDays(records) {
+  const latest = new Map();
   for (const record of records) {
     const day = utcDay(record.assessedAt);
-    if (!day) return true;
+    if (!day) return null;
     const key = `${day}|${record.category}`;
-    if (seen.has(key)) return true;
-    seen.add(key);
+    const kept = latest.get(key);
+    if (!kept || compareRecords(kept, record) < 0
+      || (compareRecords(kept, record) === 0 && compareText(releaseTieId(kept), releaseTieId(record)) < 0)) {
+      latest.set(key, record);
+    }
   }
-  return false;
+  return [...latest.values()].map(record => ({ ...record, assessedAt: `${utcDay(record.assessedAt)}T00:00:00.000Z` }));
 }
 
 function numericReport(report) {
@@ -97,7 +110,7 @@ function normalizeRecord(record, measurementId = null) {
   });
   if (!report) return null;
   return {
-    assessedAt: record.assessedAt,
+    assessedAt: /^\d{4}-\d{2}-\d{2}$/.test(record.assessedAt) ? `${record.assessedAt}T00:00:00.000Z` : record.assessedAt,
     category: report.category,
     score: report.score,
     worstSeverity: report.worstSeverity,
@@ -127,7 +140,7 @@ function canonicalize(repository, records) {
   const coverageIndex = new Map(QUALITY_COVERAGE_VALUES.map((value, index) => [value, index]));
   const confidenceIndex = new Map(QUALITY_CONFIDENCE_VALUES.map((value, index) => [value, index]));
   const measurements = [...records].sort(compareRecords).map(record => [
-    record.assessedAt,
+    utcDay(record.assessedAt),
     categoryIndex.get(record.category),
     record.score,
     record.worstSeverity,
@@ -162,8 +175,8 @@ export function serializeQualitySnapshot(repository, records) {
     if (!next) return null;
     normalized.push(next);
   }
-  if (duplicateDays(normalized)) return null;
-  return canonicalize(repository, normalized);
+  const days = collapseToDays(normalized);
+  return days ? canonicalize(repository, days) : null;
 }
 
 /**
@@ -203,10 +216,11 @@ function parseV1(value) {
     if (!record) return { status: 'malformed' };
     records.push(record);
   }
-  if (duplicateDays(records)) return { status: 'malformed' };
-  const canonical = canonicalize(value.repository, records);
+  const days = collapseToDays(records);
+  if (!days) return { status: 'malformed' };
+  const canonical = canonicalize(value.repository, days);
   return canonical
-    ? { status: 'v1', repository: value.repository, records, canonical }
+    ? { status: 'v1', repository: value.repository, records: days, canonical }
     : { status: 'malformed' };
 }
 
@@ -260,13 +274,14 @@ function parseV2(value) {
     }
     records.push(record);
   }
-  if (duplicateDays(records)) return { status: 'malformed' };
+  const days = collapseToDays(records);
+  if (!days) return { status: 'malformed' };
   // Readable, but not ours to rewrite: canonicalizing would drop the rows a
   // newer install wrote. Readers use the known records; writers leave the file.
-  if (unknownRows) return { status: 'future-categories', repository: value.repository, records, canonical: null };
-  const canonical = canonicalize(value.repository, records);
+  if (unknownRows) return { status: 'future-categories', repository: value.repository, records: days, canonical: null };
+  const canonical = canonicalize(value.repository, days);
   return canonical
-    ? { status: 'v2', repository: value.repository, records, canonical }
+    ? { status: 'v2', repository: value.repository, records: days, canonical }
     : { status: 'malformed' };
 }
 
