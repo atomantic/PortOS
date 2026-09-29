@@ -85,7 +85,7 @@ const H_STYLES = [
   'text-xs font-semibold text-gray-300 mt-2 mb-0.5',
 ];
 
-function parseBlocks(md, baseLevel, linkifyText) {
+function parseBlocks(md, baseLevel, linkifyText, preserveLineBreaks) {
   const lines = (md || '').split('\n');
   const blocks = [];
   let i = 0;
@@ -169,7 +169,14 @@ function parseBlocks(md, baseLevel, linkifyText) {
       if (lines[i].includes('|') && RE_TABLE_SEP.test(lines[i + 1] || '')) break;
       para.push(lines[i]); i++;
     }
-    if (para.length) blocks.push(<p key={`p${i}`} className="text-xs text-gray-300 my-0.5">{parseInline(para.join(' '), linkifyText)}</p>);
+    if (para.length) {
+      // Line-oriented sources (agent output) keep each source line on its own
+      // row; prose sources fold soft-wrapped lines into one paragraph.
+      const body = preserveLineBreaks
+        ? para.flatMap((l, j) => (j ? [<br key={`br${j}`} />, ...parseInline(l, linkifyText)] : parseInline(l, linkifyText)))
+        : parseInline(para.join(' '), linkifyText);
+      blocks.push(<p key={`p${i}`} className="text-xs text-gray-300 my-0.5">{body}</p>);
+    }
     if (para.length === 0) i++; // skip unconsumed line to prevent infinite loop
   }
 
@@ -180,10 +187,10 @@ function parseBlocks(md, baseLevel, linkifyText) {
 // literal text into links — how a CoS run card resolves the bare `#7640` an
 // agent wrote in its summary against that run's own tracker. Omit it and the
 // text renders exactly as before.
-export default function MarkdownOutput({ content, baseLevel = 3, linkifyText = null }) {
+export default function MarkdownOutput({ content, baseLevel = 3, linkifyText = null, preserveLineBreaks = false }) {
   return (
     <div className="markdown-output min-w-0 overflow-hidden break-words">
-      {parseBlocks(content, baseLevel, linkifyText)}
+      {parseBlocks(content, baseLevel, linkifyText, preserveLineBreaks)}
     </div>
   );
 }

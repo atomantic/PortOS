@@ -118,3 +118,16 @@ it('refuses a resolver destination that would not pass as a markdown link href',
   expect(screen.queryByRole('link')).toBeNull();
   expect(screen.getByText('click me')).toBeInTheDocument();
 });
+
+describe('preserveLineBreaks', () => {
+  const src = 'first line\nsecond line';
+  it('folds soft-wrapped lines into one row by default', () => {
+    const { container } = render(<MarkdownOutput content={src} />);
+    expect(container.querySelector('br')).toBeNull();
+  });
+  it('keeps each source line on its own row when asked', () => {
+    const { container } = render(<MarkdownOutput content={src} preserveLineBreaks />);
+    expect(container.querySelectorAll('br')).toHaveLength(1);
+    expect(container.querySelector('p').textContent).toBe('first linesecond line');
+  });
+});
