@@ -133,6 +133,7 @@ router.post('/:id/synthesize-style', asyncHandler(async (req, res) => {
 const composePromptSchema = z.object({
   providerId: z.string().trim().max(128).optional(),
   model: z.string().trim().max(256).optional(),
+  effort: z.string().trim().max(64).optional(),
 }).strict();
 // Copy gallery generation prompts onto pins that lack any prompt, so the board
 // analyze step doesn't re-run vision on them. Resolves to the updated board.

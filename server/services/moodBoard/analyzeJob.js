@@ -73,7 +73,7 @@ function update(job, patch) {
   publish(job);
 }
 
-async function run(job, { providerId, model }) {
+async function run(job, { providerId, model, effort }) {
   const { boardId } = job;
   const filled = await backfillGalleryPrompts(boardId);
   if (!filled) throw new Error('Mood board not found');
@@ -89,6 +89,7 @@ async function run(job, { providerId, model }) {
       targets: source.kind === 'video' ? ['image', 'video'] : ['image'],
       providerId,
       model,
+      effort,
     }).catch((err) => {
       console.warn(`⚠️ mood-board ${boardId} item ${item.id} analysis failed: ${err.message}`);
       return null;
@@ -108,7 +109,7 @@ async function run(job, { providerId, model }) {
     return;
   }
   update(job, { phase: 'composing' });
-  const style = await composeBoardPrompt({ board, providerId, model });
+  const style = await composeBoardPrompt({ board, providerId, model, effort });
   await updateBoard(boardId, { style });
   update(job, { status: 'done', phase: null, finishedAt: new Date().toISOString() });
 }
@@ -119,7 +120,7 @@ export function getAnalyzeJob(boardId) {
 }
 
 /** Start (or join, when one is already running) the analyze job for a board. */
-export function startAnalyzeJob(boardId, { providerId, model } = {}) {
+export function startAnalyzeJob(boardId, { providerId, model, effort } = {}) {
   const existing = jobs.get(boardId);
   if (existing?.status === 'running') return { ...existing };
   const job = {
@@ -135,7 +136,7 @@ export function startAnalyzeJob(boardId, { providerId, model } = {}) {
   };
   jobs.set(boardId, job);
   publish(job);
-  run(job, { providerId, model }).catch((err) => {
+  run(job, { providerId, model, effort }).catch((err) => {
     console.error(`❌ mood-board ${boardId} analyze failed: ${err.message}`);
     update(job, { status: 'failed', phase: null, error: err.message, finishedAt: new Date().toISOString() });
   });

@@ -149,15 +149,15 @@ describe('mood-board routes', () => {
       svc.getBoard.mockResolvedValueOnce(board);
       composeBoardPrompt.mockResolvedValueOnce(style);
       svc.updateBoard.mockResolvedValueOnce({ ...board, style });
-      const res = await request(makeApp()).post('/api/mood-boards/mb-1/compose-prompt').send({ providerId: 'ollama', model: 'qwen' });
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/compose-prompt').send({ providerId: 'ollama', model: 'qwen', effort: 'high' });
       expect(res.status).toBe(200);
-      expect(composeBoardPrompt).toHaveBeenCalledWith({ board, providerId: 'ollama', model: 'qwen' });
+      expect(composeBoardPrompt).toHaveBeenCalledWith({ board, providerId: 'ollama', model: 'qwen', effort: 'high' });
       expect(svc.updateBoard).toHaveBeenCalledWith('mb-1', { style });
       expect(res.body.style.prompt).toBe('ink wash dusk');
     });
 
     it('400s on an unknown body key', async () => {
-      const res = await request(makeApp()).post('/api/mood-boards/mb-1/compose-prompt').send({ effort: 'high' });
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/compose-prompt').send({ bogus: 'high' });
       expect(res.status).toBe(400);
       expect(composeBoardPrompt).not.toHaveBeenCalled();
     });

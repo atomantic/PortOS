@@ -9,6 +9,8 @@
  */
 
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
+import { getProviderById } from './providers.js';
+import { isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, runPromptThroughProvider } from './promptRunner.js';
 import { trimTo } from '../lib/textUtils.js';
@@ -69,7 +71,25 @@ Rules:
 - An empty negativePrompt is valid when the analyses share no consistent avoid.`;
 }
 
-export async function composeBoardPrompt({ board, providerId, model } = {}) {
+/**
+ * The mood-board pickers list API providers AND vision-capable CLI providers
+ * (Codex, Claude Code) because the same selection drives per-pin analysis. The
+ * composite step is text-only, so honor that pick here too — resolving through
+ * the API-only path swapped a chosen CLI provider for the first API provider
+ * (e.g. Ollama) and then sent it the CLI provider's model id.
+ */
+async function resolveComposeProvider(providerId) {
+  if (providerId) {
+    const requested = await getProviderById(providerId).catch(() => null);
+    if (requested && requested.enabled !== false
+      && (requested.type === 'api' || isVisionCapableCliProvider(requested))) {
+      return requested;
+    }
+  }
+  return resolveAPIProvider(providerId);
+}
+
+export async function composeBoardPrompt({ board, providerId, model, effort } = {}) {
   const analyzed = analyzedItems(board);
   if (!analyzed.length) {
     throw new ServerError(
@@ -87,7 +107,7 @@ export async function composeBoardPrompt({ board, providerId, model } = {}) {
     );
   }
 
-  const provider = await resolveAPIProvider(providerId);
+  const provider = await resolveComposeProvider(providerId);
   assertProvider(provider, {
     message: 'Composing a board style needs an API-based provider. Configure one under Settings → Providers.',
     code: 'NO_API_PROVIDER',
@@ -99,6 +119,7 @@ export async function composeBoardPrompt({ board, providerId, model } = {}) {
     prompt: buildCompositeStylePrompt({ context, analyzedItemCount: fed }),
     source: 'mood-board-composite-style',
     model: model || undefined,
+    effort: effort || undefined,
   });
   let parsed;
   try {
