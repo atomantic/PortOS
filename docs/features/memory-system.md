@@ -162,7 +162,7 @@ Before agent task execution:
 | GET /api/memory/stats | Memory statistics |
 | POST /api/memory/link | Link two memories |
 | POST /api/memory/consolidate | Merge similar memories |
-| POST /api/memory/decay | Apply importance decay |
+| POST /api/memory/decay | Apply importance decay (`decayRate` in (0, 0.02], default 0.01; else 400) |
 | DELETE /api/memory/expired | Clear expired memories |
 | GET /api/memory/embeddings/status | LM Studio connection status |
 | GET /api/memory/backend/status | Active storage backend status |
