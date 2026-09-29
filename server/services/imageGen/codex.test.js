@@ -625,7 +625,8 @@ describe('codex provider — image harvest', () => {
   // "Cannot redefine property: copyFile" because module namespaces aren't
   // configurable in ESM. macOS/Linux are the platforms PortOS actually
   // runs on; this regression-locks the fix where it matters.
-  const itPosix = process.platform === 'win32' ? it.skip : it;
+  // Also skip as root: root ignores the 0o555 mode, so the copy never fails.
+  const itPosix = process.platform === 'win32' || process.getuid?.() === 0 ? it.skip : it;
   itPosix('routes async errors in the close handler through finalizeJobFailure (no unhandled rejections)', async () => {
     const sessionId = '11111111-1111-4111-8111-111111111111';
     const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);

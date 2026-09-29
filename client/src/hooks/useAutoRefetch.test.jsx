@@ -13,6 +13,12 @@ const fireVisibilityChange = () => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Tests that assert an EXACT call count while a short interval is ticking run on
+// fake time. On the real clock a loaded worker can stretch a 20ms sleep past
+// several ticks (or past the 60ms interval itself), so "exactly one fetch so
+// far" became a race between the test's own timers and the hook's.
+const advance = (ms) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
 // A fetchFn whose every call stays pending until the test settles it, with a
 // live count of overlapping calls.
 const deferredFetch = () => {
@@ -36,6 +42,7 @@ describe('useAutoRefetch', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setVisibility('visible');
   });
 
@@ -56,36 +63,41 @@ describe('useAutoRefetch', () => {
   });
 
   it('skips fetches while the tab is hidden and refires when visible', async () => {
+    vi.useFakeTimers();
     const fetchFn = vi.fn().mockResolvedValue('x');
     renderHook(() => useAutoRefetch(fetchFn, 20));
-    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    await advance(0);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
 
     setVisibility('hidden');
-    await new Promise((r) => setTimeout(r, 80));
+    await advance(80);
     const callsWhileHidden = fetchFn.mock.calls.length;
     expect(callsWhileHidden).toBe(1);
 
     setVisibility('visible');
     act(() => fireVisibilityChange());
-    await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThan(callsWhileHidden));
+    await advance(0);
+    expect(fetchFn.mock.calls.length).toBeGreaterThan(callsWhileHidden);
   });
 
   it('skips entirely when enabled is false and starts/stops on toggle', async () => {
     const fetchFn = vi.fn().mockResolvedValue('x');
+    vi.useFakeTimers();
     const { rerender } = renderHook(
       ({ enabled }) => useAutoRefetch(fetchFn, 20, { enabled }),
       { initialProps: { enabled: false } },
     );
 
-    await new Promise((r) => setTimeout(r, 80));
+    await advance(80);
     expect(fetchFn).not.toHaveBeenCalled();
 
     rerender({ enabled: true });
-    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    await advance(0);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
 
     rerender({ enabled: false });
     const callsAfterDisable = fetchFn.mock.calls.length;
-    await new Promise((r) => setTimeout(r, 80));
+    await advance(80);
     expect(fetchFn).toHaveBeenCalledTimes(callsAfterDisable);
   });
 
@@ -146,15 +158,17 @@ describe('useAutoRefetch', () => {
   });
 
   it('skips the on-mount fetch when immediate is false', async () => {
+    vi.useFakeTimers();
     const fetchFn = vi.fn().mockResolvedValue('x');
     renderHook(() => useAutoRefetch(fetchFn, 60, { immediate: false }));
 
     // Give the effect a chance to run; no fetch should fire yet.
-    await new Promise((r) => setTimeout(r, 20));
+    await advance(20);
     expect(fetchFn).not.toHaveBeenCalled();
 
     // The interval still ticks after `intervalMs`.
-    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1), { timeout: 500 });
+    await advance(40);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it('exposes a refetch handle that fetches on demand and updates data', async () => {
@@ -266,32 +280,37 @@ describe('useAutoRefetch', () => {
     });
 
     it('skips while hidden and refires on visibility', async () => {
+      vi.useFakeTimers();
       const fetchFn = vi.fn().mockResolvedValue(null);
       renderHook(() => useAutoRefetch(fetchFn, 20, { pollOnly: true }));
-      await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+      await advance(0);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
 
       setVisibility('hidden');
-      await new Promise((r) => setTimeout(r, 80));
+      await advance(80);
       const callsWhileHidden = fetchFn.mock.calls.length;
       expect(callsWhileHidden).toBe(1);
 
       setVisibility('visible');
       act(() => fireVisibilityChange());
-      await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThan(callsWhileHidden));
+      await advance(0);
+      expect(fetchFn.mock.calls.length).toBeGreaterThan(callsWhileHidden);
     });
 
     it('respects enabled toggling', async () => {
       const fetchFn = vi.fn().mockResolvedValue(null);
+      vi.useFakeTimers();
       const { rerender } = renderHook(
         ({ enabled }) => useAutoRefetch(fetchFn, 20, { enabled, pollOnly: true }),
         { initialProps: { enabled: false } },
       );
 
-      await new Promise((r) => setTimeout(r, 80));
+      await advance(80);
       expect(fetchFn).not.toHaveBeenCalled();
 
       rerender({ enabled: true });
-      await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+      await advance(0);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
     });
 
     it('exposes a working refetch that swallows errors via warn', async () => {
