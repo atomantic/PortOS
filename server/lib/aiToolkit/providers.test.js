@@ -1904,7 +1904,7 @@ rl.on('line', (line) => {
           models: ['gpt-5.3-codex-spark'], defaultModel: 'gpt-5.3-codex-spark',
         });
         const updated = await providerService.refreshProviderModels(p.id);
-        expect(updated.models).toEqual(['gpt-6-astra']);
+        expect(updated.models).toEqual(withCodexShippedModels(['gpt-6-astra']));
       } finally {
         process.env.PATH = previousPath;
         await rm(shimDir, { recursive: true, force: true });
