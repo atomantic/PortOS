@@ -691,15 +691,46 @@ describe('MusicVideo project video renderer', () => {
     });
 
     expect(await screen.findByLabelText('fal.ai scene clip duration')).toHaveProperty('value', '6');
+    // No model pin: the default Hailuo-02 image-to-video take, priced before it is paid for.
+    expect((await screen.findByTestId('fal-cutaway-plan')).textContent).toContain('est. $0.27 (6s at 768P)');
     fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'fal',
       falDuration: 6,
+      falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video',
+      falResolution: '768P',
       mode: 'image',
       sourceImageFile: 'img1',
     })));
     expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('modelId');
     expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('disableAudio');
+  });
+
+  it('renders a cutaway on the picked fal.ai model at the shot-covering length, sending exactly the take it prices', async () => {
+    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: '', falEnabled: true, models: [] });
+    generateVideo.mockResolvedValue({ jobId: 'fal-h3-job' });
+    await openProject({
+      ...PROJECT_NO_CLIP,
+      videoSettings: { backend: 'fal', falModelId: 'minimax/h3-max/image-to-video', falResolution: '1080P' },
+      scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 7.2 }],
+    });
+
+    // A 7.2s shot on H3 Max (5–15s whole seconds) renders 8s at $0.16/s.
+    expect((await screen.findByTestId('fal-cutaway-plan')).textContent).toContain('est. $1.28 (8s at 1080P)');
+    fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+    await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'fal', falModelId: 'minimax/h3-max/image-to-video', falDuration: 8, falResolution: '1080P',
+    })));
+
+    // Switching model clears the resolution pin — its alphabet is per model.
+    fireEvent.change(await screen.findByLabelText('fal.ai cutaway model'), {
+      target: { value: 'fal-ai/kling-video/v3/pro/image-to-video' },
+    });
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      'mv-2',
+      { videoSettings: { falModelId: 'fal-ai/kling-video/v3/pro/image-to-video', falResolution: null } },
+      { silent: true },
+    ));
   });
 
   it('blocks fal.ai scene generation with a clear preflight reason when no API key is configured', async () => {
@@ -737,7 +768,7 @@ describe('MusicVideo project video renderer', () => {
       expect(generateVideo).not.toHaveBeenCalled();
     });
 
-    it('names the lip-sync provider, model, song window and cost, then renders on fal.ai without a clip-length pin', async () => {
+    it('names the lip-sync provider, model, song window and estimated cost, then renders on fal.ai without a clip-length pin', async () => {
       getVideoGenStatus.mockResolvedValueOnce({
         connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
         models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }],
@@ -748,12 +779,14 @@ describe('MusicVideo project video renderer', () => {
       const plan = await screen.findByTestId('performance-plan');
       expect(plan.textContent).toContain('minimax/h3-max/lip-sync/image-to-video');
       expect(plan.textContent).toMatch(/shot starts 1\.7[78]s into the take/);
-      expect(plan.textContent).toContain('cost unknown');
+      // The padded 5.05s window at the 1080P lip-sync default ($0.16/s).
+      expect(plan.textContent).toContain('est. $0.81 (5.05s at 1080P)');
       fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
       await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
-        backend: 'fal', mode: 'image', sourceImageFile: 'img1',
+        backend: 'fal', mode: 'image', sourceImageFile: 'img1', falResolution: '1080P',
       })));
       expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('falDuration');
+      expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('falModelId');
     });
 
     it('persists a scene switched to a performance shot', async () => {
@@ -767,11 +800,13 @@ describe('MusicVideo project video renderer', () => {
     });
 
     it('offers a lyric-boundary split for a shot longer than one lip-sync take and applies the split board', async () => {
-      const longShot = { ...PERFORMANCE_SCENE, startSec: 2, endSec: 26 };
-      const project = { ...performanceProject({ backend: 'fal' }), scenes: [longShot] };
+      // 38s: past one ~30s lip-sync take.
+      const longShot = { ...PERFORMANCE_SCENE, startSec: 2, endSec: 40 };
+      const base = performanceProject({ backend: 'fal' });
+      const project = { ...base, audioAnalysis: { ...base.audioAnalysis, durationSec: 60 }, scenes: [longShot] };
       const pieces = [
-        { ...longShot, label: 'Verse · 1/2', endSec: 14 },
-        { ...longShot, sceneId: 's1b', order: 1, label: 'Verse · 2/2', startSec: 14, videoHistoryId: null },
+        { ...longShot, label: 'Verse · 1/2', endSec: 21 },
+        { ...longShot, sceneId: 's1b', order: 1, label: 'Verse · 2/2', startSec: 21, videoHistoryId: null },
       ];
       splitMusicVideoScene.mockResolvedValue({ project: { ...project, scenes: pieces }, scenes: pieces });
       await openProject(project);

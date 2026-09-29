@@ -1,4 +1,14 @@
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
+import {
+  FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
+} from '../../lib/falVideoModels.js';
+import { SOURCE_AUDIO_LIPSYNC } from '../../lib/musicVideoShotTiming.js';
+
+const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto';
+const falOptionLabel = (model) => {
+  const rate = describeFalVideoRate(model.id);
+  return rate ? `${model.label} · ${rate}` : model.label;
+};
 
 // The project's saved scene-video render pins (backend → generation mode →
 // model → audio-reactive LoRA/strength, or Grok clip duration). Every control
@@ -12,12 +22,18 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
     audioReactiveReady, audioReactiveSelected, change,
   } = videoSettings;
   // fal.ai (#8968) is image-to-video only here — every scene render already
-  // starts from the director's chosen reference frame, so no generation-mode
-  // picker or model knob is exposed; the server resolves fal.ai's verified
-  // image-to-video model by default (videoGen/fal.js#FAL_DEFAULT_IMAGE_MODEL).
+  // starts from the director's chosen reference frame, so the model picker
+  // offers the curated start-frame models (lib/falVideoModels.js), each with
+  // its list rate; blank is the default (Hailuo-02 image-to-video). The
+  // resolution alphabet is per model, so a model change clears the pin.
+  // Performance (lip-sync) takes always render on the lip-sync route, with
+  // their own resolution pin (default 1080P).
   // The audio-reactive lane stays local-only (root AGENTS.md's environmental-
   // motion contract needs an independently verified provider capability).
   const locked = saving || generating;
+  const falModel = getFalVideoModel(settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);
+  const falResolutions = falVideoResolutions(falModel);
+  const lipSync = SOURCE_AUDIO_LIPSYNC.fal;
   return (
     <>
       <label htmlFor="mv-video-backend" className="sr-only">Scene video renderer</label>
@@ -147,6 +163,43 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
       )}
       {settings.backend === 'fal' && (
         <>
+          <label htmlFor="mv-fal-model" className="sr-only">fal.ai cutaway model</label>
+          <select
+            id="mv-fal-model"
+            value={settings.falModelId || ''}
+            onChange={(e) => change({ falModelId: e.target.value || null, falResolution: null })}
+            disabled={locked}
+            title="fal.ai image-to-video model for this project's cutaway scenes (list price per generated second)"
+            className={`${falSelectCls} sm:max-w-[280px]`}
+          >
+            <option value="">{`Default · ${falOptionLabel(getFalVideoModel(FAL_DEFAULT_IMAGE_VIDEO_MODEL))}`}</option>
+            {FAL_IMAGE_VIDEO_MODELS.filter((model) => model.id !== FAL_DEFAULT_IMAGE_VIDEO_MODEL).map((model) => (
+              <option key={model.id} value={model.id}>{falOptionLabel(model)}</option>
+            ))}
+            {/* A model pinned on a peer with a newer catalog: kept, but it
+                cannot be priced here. */}
+            {settings.falModelId && !falModel && (
+              <option value={settings.falModelId}>{`${settings.falModelId} · cost unknown`}</option>
+            )}
+          </select>
+          {falResolutions.length > 0 && (
+            <>
+              <label htmlFor="mv-fal-resolution" className="sr-only">fal.ai cutaway resolution</label>
+              <select
+                id="mv-fal-resolution"
+                value={falResolutions.includes(settings.falResolution) ? settings.falResolution : ''}
+                onChange={(e) => change({ falResolution: e.target.value || null })}
+                disabled={locked}
+                title="Output resolution for fal.ai cutaway renders — higher costs more per second"
+                className={falSelectCls}
+              >
+                <option value="">{`${falModel.resolution.default} (model default)`}</option>
+                {falResolutions.map((res) => (
+                  <option key={res} value={res}>{`${res} · ${describeFalVideoRate(falModel.id, res)}`}</option>
+                ))}
+              </select>
+            </>
+          )}
           <label htmlFor="mv-fal-duration" className="sr-only">fal.ai scene clip duration</label>
           <input
             id="mv-fal-duration"
@@ -156,10 +209,24 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
             value={settings.falDuration ?? ''}
             onChange={(e) => change({ falDuration: e.target.value === '' ? null : Number(e.target.value) })}
             disabled={locked}
-            placeholder="model default"
-            title="Clip length in seconds for this project's fal.ai scene renders (blank uses the model's default)"
+            placeholder="shot length"
+            title="Clip length in seconds for this project's fal.ai cutaway renders. Blank renders the shortest length the model offers that covers each shot (the model default for an untimed scene)."
             className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-24"
           />
+          <label htmlFor="mv-fal-lipsync-resolution" className="sr-only">fal.ai lip-sync resolution</label>
+          <select
+            id="mv-fal-lipsync-resolution"
+            value={settings.falLipSyncResolution || ''}
+            onChange={(e) => change({ falLipSyncResolution: e.target.value || null })}
+            disabled={locked}
+            title={`Output resolution for performance (lip-sync) takes on ${lipSync.label}`}
+            className={falSelectCls}
+          >
+            <option value="">{`Lip-sync ${lipSync.defaultResolution} (default)`}</option>
+            {lipSync.resolutions.map((res) => (
+              <option key={res} value={res}>{`Lip-sync ${res} · ${describeFalVideoRate(lipSync.modelId, res)}`}</option>
+            ))}
+          </select>
         </>
       )}
     </>

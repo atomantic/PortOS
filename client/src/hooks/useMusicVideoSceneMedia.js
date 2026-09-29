@@ -7,7 +7,7 @@ import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import {
-  approximateMotionCues, grokCoverage, isPerformanceScene, performanceBlockedReason,
+  approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
 } from '../lib/musicVideoShotTiming.js';
 
 // Audio-reactive generation conditions motion on the song itself, so the prompt
@@ -245,12 +245,14 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // Request the 6/10s clip that COVERS this shot; the saved pin is only
         // the fallback for a scene not yet timed on the song.
         ? { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : settings.grokDuration }
-        // fal.ai (#8968) — image-to-video only (see VideoRenderSettings); an
-        // absent falDuration lets the server fall back to the resolved
-        // model's own default rather than forcing a value.
+        // fal.ai (#8968) — image-to-video only (see VideoRenderSettings). The
+        // request is exactly the take the scene card prices (falSceneTake):
+        // a cutaway names its model, the length covering the shot (or the
+        // pinned length) and its resolution; a performance clip's length
+        // follows its song slice (server-side), so it sends only the lip-sync
+        // resolution.
         : settings.backend === 'fal'
-          // A performance clip's length follows its song slice (server-side).
-          ? (performance ? {} : { falDuration: settings.falDuration || undefined })
+          ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
           : settings.backend === 'local'
             ? { modelId: settings.modelId || undefined, disableAudio: true }
             // A named model is local-only machinery at the server boundary and

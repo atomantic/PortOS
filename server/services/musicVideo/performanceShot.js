@@ -38,6 +38,7 @@ import { basename, join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import {
   clipRelativeCues,
   isPerformanceScene,
@@ -122,11 +123,14 @@ export async function findStalePerformanceTakes(project, masterPath) {
  * Prepare a Music Video scene render's performance inputs.
  *
  * Returns `null` for a cutaway scene (nothing to add), or
- * `{ audioFilePath, shotInstruction, modelId, enableTranscription }` for a
- * performance scene on a capable backend. Throws a 4xx ServerError when the
- * scene is a performance shot the backend or its timing cannot deliver.
+ * `{ audioFilePath, shotInstruction, modelId, resolution, enableTranscription }`
+ * for a performance scene on a capable backend. `resolution` is the take's
+ * output resolution: the request's own when the lip-sync route offers it, else
+ * the project's `videoSettings.falLipSyncResolution`, else the capability
+ * default (1080P). Throws a 4xx ServerError when the scene is a performance
+ * shot the backend or its timing cannot deliver.
  */
-export async function preparePerformanceShot({ musicVideo, backend, sourceImagePath, mode }) {
+export async function preparePerformanceShot({ musicVideo, backend, sourceImagePath, mode, resolution = null }) {
   if (!musicVideo?.projectId || !musicVideo?.sceneId) return null;
   const project = await getProject(musicVideo.projectId);
   const scene = project?.scenes?.find((s) => s.sceneId === musicVideo.sceneId);
@@ -150,6 +154,9 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   if (songDurationSec == null) throw refuse('Could not read the song duration for this performance shot', 'MUSIC_VIDEO_AUDIO_UNREADABLE');
   const plan = planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec, capability });
   if (!plan.ok) throw refuse(plan.message, plan.code);
+  const offered = getFalVideoModel(capability.modelId)?.resolution?.options || capability.resolutions || [];
+  const pick = (value) => (typeof value === 'string' ? offered.find((o) => o.toLowerCase() === value.trim().toLowerCase()) : null);
+  const takeResolution = pick(resolution) || pick(project.videoSettings?.falLipSyncResolution) || capability.defaultResolution;
 
   // An optional vocal stem conditions the provider in place of the mix. It
   // is re-checked here because the file could have been replaced on disk or
@@ -199,6 +206,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
       minAudioSec: capability.minAudioSec,
       maxAudioSec: capability.maxAudioSec,
       transcription: capability.transcription,
+      resolution: takeResolution,
     },
     // The provider's output length follows the submitted audio.
     generatedCoverageSec: plan.windowSec,
@@ -207,6 +215,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     audioFilePath,
     shotInstruction,
     modelId: capability.modelId,
+    resolution: takeResolution,
     enableTranscription: capability.transcription === true,
   };
 }

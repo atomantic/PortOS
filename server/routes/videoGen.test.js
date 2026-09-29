@@ -868,9 +868,11 @@ describe('videoGen routes', () => {
       { backend: 'grok', input: { grokDuration: 10 },
         minimal: { grokPath: '/example/grok', aspectRatio: '16:9', width: undefined, height: undefined, duration: undefined },
         tagged: { grokPath: '/example/grok', aspectRatio: '9:16', width: 576, height: 1024, duration: 10 } },
-      { backend: 'fal', input: { falModelId: 'example/model', falDuration: 6 },
+      // The chosen model, its resolution and an explicit audio request thread
+      // through to the queued job (videoGen/fal.js resolves them per model).
+      { backend: 'fal', input: { falModelId: 'bytedance/seedance-2.5/image-to-video', falDuration: 6, falResolution: '1080p', falGenerateAudio: 'true' },
         minimal: { modelId: undefined, aspectRatio: undefined, width: undefined, height: undefined, duration: undefined },
-        tagged: { modelId: 'example/model', aspectRatio: '9:16', width: 576, height: 1024, duration: 6 } },
+        tagged: { modelId: 'bytedance/seedance-2.5/image-to-video', aspectRatio: '9:16', width: 576, height: 1024, duration: 6, resolution: '1080p', generateAudio: true } },
       { backend: 'reactor', input: { reactorClipId: 'example-clip', reactorSeconds: 6, reactorSeed: 0, reactorAspect: '9:16' },
         minimal: { continueFromClipId: undefined, seconds: undefined, seed: undefined, aspect: undefined },
         tagged: { continueFromClipId: 'example-clip', seconds: 6, seed: 0, aspect: '9:16' } },

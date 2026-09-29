@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
-import { formatDurationSec } from '../../utils/formatters.js';
+import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
@@ -9,8 +9,13 @@ import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/music
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card' };
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 import {
-  grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
+  falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
 } from '../../lib/musicVideoShotTiming.js';
+import { getFalVideoModel } from '../../lib/falVideoModels.js';
+
+// "est. $0.81 (5.05s at 1080P)" — or null when the take cannot be priced.
+const falEstimate = (take) => (take?.costUsd == null ? null
+  : `est. ${formatUsd(take.costUsd)} (${take.seconds}s${take.resolution ? ` at ${take.resolution}` : ''})`);
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -43,6 +48,9 @@ const COVERAGE_TOLERANCE_SEC = 0.25;
  * verified source-audio conditioning is blocked here with the reason, and a
  * capable one names the provider, model, song window and cost before the
  * director spends anything. `songDurationSec` bounds the planned window.
+ * `falVideoSettings` (the project's saved render pins) prices a fal take with
+ * `falSceneTake` — the same answer the submit payload is built from — so the
+ * card shows each take's estimated cost before it is paid for.
  * A shot longer than that lane renders in one take (the lip-sync audio window,
  * or Grok's longest clip) offers `onSplit(sceneId, backend)`, which cuts it
  * into contiguous scenes at lyric pauses / phrase boundaries server-side.
@@ -53,7 +61,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit,
+  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
@@ -94,6 +102,11 @@ export default function SceneCard({
     ? (capability ? (plan.ok ? null : plan.message) : performanceBlockedReason(lipSyncBackend))
     : null;
   const grokPlan = !performance && lipSyncBackend === 'grok' && timedSpan != null ? grokCoverage(timedSpan) : null;
+  const falTake = lipSyncBackend === 'fal' && layer === 'footage'
+    ? falSceneTake({ scene, videoSettings: falVideoSettings || {}, songDurationSec })
+    : null;
+  const falCost = falEstimate(falTake);
+  const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
   const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
@@ -225,7 +238,13 @@ export default function SceneCard({
       {performance && !performanceBlocked && (
         <p className="text-[11px] text-port-text-muted break-words" data-testid="performance-plan">
           Lip-sync via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
-          {plan.editInSec > 0 ? ` · shot starts ${plan.editInSec.toFixed(2)}s into the take` : ''} · {capability.costLabel}
+          {plan.editInSec > 0 ? ` · shot starts ${plan.editInSec.toFixed(2)}s into the take` : ''} · {performanceCost}
+        </p>
+      )}
+      {falTake && !falTake.performance && (
+        <p className="text-[11px] text-port-text-muted break-words" data-testid="fal-cutaway-plan">
+          fal.ai renders {falTake.seconds != null ? `a ${falTake.seconds}s ` : 'a '}clip on {getFalVideoModel(falTake.modelId)?.label || falTake.modelId}
+          {' · '}{falCost || 'cost unknown — billed to your fal.ai account'}
         </p>
       )}
       {grokPlan && (
@@ -343,7 +362,7 @@ export default function SceneCard({
           className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
           title={videoBlockedReason || performanceBlocked
             || (!scene.referenceImageId ? 'Generate a reference frame first'
-              : performance ? `Lip-sync this scene's frame to the song via ${capability.label} — ${capability.costLabel}`
+              : performance ? `Lip-sync this scene's frame to the song via ${capability.label} — ${performanceCost}`
                 : "Generate this scene's video from its reference frame (i2v)")}>
           {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
           {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}

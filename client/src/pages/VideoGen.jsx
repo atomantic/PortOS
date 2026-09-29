@@ -97,10 +97,13 @@ import { loomEpisodeToDraftScenes } from '../lib/episodeSceneImport.js';
 import LoraPicker from '../components/imageGen/LoraPicker';
 import { VIDEO_RESOLUTIONS, resolutionOptionsForModel } from '../lib/videoGenResolutions';
 import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
+import {
+  FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, FAL_VIDEO_MODELS, estimateFalVideoCostUsd,
+} from '../lib/falVideoModels.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
 import ReactorPanel from '../components/videoGen/ReactorPanel';
-import { formatCount, timeAgo } from '../utils/formatters';
+import { formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
@@ -1607,13 +1610,22 @@ export default function VideoGen() {
           ) : isFal ? (
             <div className="grid grid-cols-2 gap-3">
               <FormField label="fal.ai model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                {/* Free text stays: any fal endpoint id renders (on the legacy
+                    body, cost unknown); the list suggests the curated ones
+                    whose request body and price PortOS knows. */}
                 <input
                   type="text"
+                  list="fal-video-model-suggestions"
                   value={falModelId}
                   onChange={(e) => setFalModelId(e.target.value)}
-                  placeholder="fal-ai/minimax/hailuo-02/standard/text-to-video"
+                  placeholder={mode === 'image' ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL}
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
                 />
+                <datalist id="fal-video-model-suggestions">
+                  {FAL_VIDEO_MODELS.filter((m) => m.kind === (mode === 'image' ? 'i2v' : 't2v')).map((m) => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </datalist>
               </FormField>
               <FormField label="Clip length (sec)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                 <input
@@ -1627,7 +1639,17 @@ export default function VideoGen() {
                 />
               </FormField>
               <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
-                Renders on fal.ai's queue API — leave the model blank to use PortOS's default (text-to-video, or image-to-video in Image mode). Counts against your fal.ai balance.
+                Renders on fal.ai's queue API — leave the model blank to use PortOS's default (text-to-video, or image-to-video in Image mode). Counts against your fal.ai balance
+                {(() => {
+                  const estimate = estimateFalVideoCostUsd({
+                    modelId: falModelId?.trim() || (mode === 'image' ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL),
+                    seconds: falDuration === '' ? null : Number(falDuration),
+                    width, height,
+                  });
+                  return estimate == null
+                    ? ' — cost unknown for this model.'
+                    : ` — about ${formatUsd(estimate)} at list price, at the model's default resolution with provider audio off.`;
+                })()}
               </p>
             </div>
           ) : isReactor ? (

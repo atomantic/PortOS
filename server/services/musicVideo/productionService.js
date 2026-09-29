@@ -50,6 +50,7 @@ import {
   chooseProductionRoute,
   loadPoolEnv,
   poolPricing,
+  stepPriceUsd,
   sceneRequirement,
 } from './productionPool.js';
 
@@ -130,6 +131,7 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
 
   const reserved = await mutateProjectRecord(projectId, (current) => reserveProductionStep(current, runId, {
     kind: stepKind, sceneId, revisionId, route: choice.route, rationale: choice.rationale, processId: PROCESS_ID,
+    costUsd: stepPriceUsd({ route: choice.route, project, scene, stepKind }),
   })).catch((err) => ({ error: err }));
   if (reserved.error) {
     const code = reserved.error.code;
@@ -283,7 +285,7 @@ export async function startProduction(projectId, { directive, pool: requested, l
   const pool = normalizeProductionPool(requested);
   await assertPoolEligible(pool, await deps.loadEnv());
   const out = await mutateProjectRecord(projectId, (current) => startProductionOnProject(current, {
-    directive, pool, limits, reviewer, processId: PROCESS_ID, pricing: poolPricing(pool),
+    directive, pool, limits, reviewer, processId: PROCESS_ID, pricing: poolPricing(pool, current),
   }));
   console.log(`🎬 Music Video production ${short(out.run.id)} started: ${out.run.pool.length} allowed route(s), ≤${out.run.limits.maxGenerations} generations, ≤${out.run.limits.maxReviewAttempts} reviews`);
   advanceInBackground(projectId, out.run.id);

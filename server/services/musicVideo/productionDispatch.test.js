@@ -60,4 +60,23 @@ describe('production scene dispatch (#9066)', () => {
       backend: 'grok', mode: 'image', sourceImageFile: 'frame-example.png', grokDuration: 6, musicVideo: clipTag,
     }), {});
   });
+
+  it('submits a fal clip as exactly the take the step was priced for (falSceneTake)', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    const falProject = { ...project, videoSettings: { backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', falResolution: '1080p' } };
+    // A 4s cutaway on Veo 3.1 Fast (4/6/8s clips) renders 4s at the pinned resolution.
+    await dispatchProductionStep({ stepKind: 'clip', project: falProject, scene, route: { kind: 'video', mode: 'fal', model: null }, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls[0][0]).toMatchObject({
+      backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', falDuration: 4, falResolution: '1080p',
+    });
+    // A performance take sends only its lip-sync resolution: its length follows the song slice.
+    await dispatchProductionStep({
+      stepKind: 'clip', project: falProject, scene: { ...scene, shotMode: 'performance' },
+      route: { kind: 'video', mode: 'fal', model: null }, tag: clipTag, settings,
+    });
+    const performance = submitVideoGenJob.mock.calls[1][0];
+    expect(performance).toMatchObject({ backend: 'fal', falResolution: '1080P' });
+    expect(performance).not.toHaveProperty('falDuration');
+    expect(performance).not.toHaveProperty('falModelId');
+  });
 });
