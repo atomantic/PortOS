@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { commandOutput } from '../lib/commandExists.js';
+import { sleep } from '../lib/fileUtils.js';
 
 // Docker Desktop's local settings API. No TCP management port is exposed.
 function desktopRequest(path, body, pipe = 'dockerBackendApiServer') {
@@ -44,7 +45,7 @@ export async function ensureFleetDockerIntegration(project, { emit = () => {} } 
   // The Desktop action returns before its proxy has bound the socket.
   for (let attempt = 0; attempt < 10; attempt++) {
     if (await ready()) return;
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await sleep(1000);
   }
   throw new Error('Docker WSL integration is not ready. In Docker Desktop, restart the WSL integration, then retry host setup.');
 }

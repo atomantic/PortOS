@@ -41,6 +41,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn(async () => null),
   dataPath: (...segs) => `/mock/data/${segs.join('/')}`,
   ensureDir: vi.fn(async () => {}),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   // atomicWrite replaced the raw writeFile(JSON.stringify) sites (#1837); route
   // it through the mocked fs/promises.writeFile (writeFileMock) so the existing
   // writeFileMock.toHaveBeenCalled / JSON.parse(calls[0][1]) asserts keep working.

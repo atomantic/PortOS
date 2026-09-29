@@ -37,7 +37,7 @@ import { mkdir, open, stat } from 'fs/promises';
 import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGuarded, sleep, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -475,7 +475,7 @@ async function harvestStagedImage(stagingPath, timeoutMs) {
       }
     }
     const remainingMs = Math.max(1, deadline - Date.now());
-    await new Promise((r) => setTimeout(r, Math.min(250, remainingMs)));
+    await sleep(Math.min(250, remainingMs));
   }
   return { found: false, invalid: sawInvalid };
 }

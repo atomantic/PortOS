@@ -5,6 +5,7 @@
 
 import { EventEmitter } from 'events';
 import { readResponseJson } from './readResponseJson.js';
+import { sleep } from './fileCore.js';
 
 const BASE_URL = 'https://api.telegram.org/bot';
 const POLL_TIMEOUT_SEC = 30;
@@ -70,7 +71,7 @@ export function createTelegramBot(token, opts = {}) {
         const json = await readResponseJson(res);
         if (!json.ok) {
           // Retry after a delay on API errors
-          await new Promise(r => setTimeout(r, RETRY_DELAY_API_ERROR_MS));
+          await sleep(RETRY_DELAY_API_ERROR_MS);
           continue;
         }
         updates = json.result;
@@ -80,7 +81,7 @@ export function createTelegramBot(token, opts = {}) {
         if (err?.name !== 'AbortError') {
           console.warn(`⚠️ Telegram poll error, retrying: ${err?.message || String(err)}`);
         }
-        await new Promise(r => setTimeout(r, RETRY_DELAY_NETWORK_ERROR_MS));
+        await sleep(RETRY_DELAY_NETWORK_ERROR_MS);
         continue;
       }
 
