@@ -4,7 +4,7 @@ import { getAccount } from './messageAccounts.js';
 import { getMessage, removeMessageFromCache } from './messageSync.js';
 import { findOrOpenPage, getPages, isAuthPage, evaluateOnPage } from './messagePlaywrightSync.js';
 import { recordCorrection } from './messageTriageRules.js';
-import { UUID_RE } from '../lib/fileUtils.js';
+import { UUID_RE, sleep } from '../lib/fileUtils.js';
 
 const PROVIDER_URLS = {
   outlook: 'https://outlook.office.com/mail/',
@@ -34,7 +34,7 @@ async function ensureProviderPage(accountType) {
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
-    await new Promise(r => setTimeout(r, pollInterval));
+    await sleep(pollInterval);
     const pages = await getPages().catch(() => []);
     const hostname = new URL(url).hostname;
     page = pages.find(p => p.url?.includes(hostname));

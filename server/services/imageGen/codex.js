@@ -36,7 +36,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
-import { atomicWrite, copyFileGuarded, ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { atomicWrite, copyFileGuarded, ensureDir, PATHS, sleep } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -498,7 +498,7 @@ async function harvestLatestImage(sessionId, timeoutMs) {
     const latest = await latestGeneratedImageFile(sessionId);
     if (latest) return latest;
     const remainingMs = Math.max(1, deadline - Date.now());
-    await new Promise((r) => setTimeout(r, Math.min(250, remainingMs)));
+    await sleep(Math.min(250, remainingMs));
   }
   return null;
 }
@@ -562,7 +562,7 @@ async function harvestGeneratedImage(sessionId, timeoutMs) {
     const sessionImage = await harvestSessionLogImage(sessionId);
     if (sessionImage) return { buffer: sessionImage.buffer, sessionLogPath: sessionImage.path };
 
-    await new Promise((r) => setTimeout(r, 250));
+    await sleep(250);
   }
   return null;
 }

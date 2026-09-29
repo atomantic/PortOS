@@ -2,7 +2,7 @@ import { request as httpRequest } from 'node:http';
 import { createTailscaleServers, watchCertReload } from '../../lib/tailscale-https.js';
 import { certPaths } from '../../lib/certPaths.js';
 import { isPortReachable } from '../lib/connectivity.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, sleep } from '../lib/fileUtils.js';
 import { PORTS } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { EIDOVERSE_PORT } from './eidoverse.js';
@@ -105,7 +105,7 @@ export function createEidoverseHost({
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (await targetIsReady()) return status();
       if (attempt < attempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        await sleep(intervalMs);
       }
     }
     throw new ServerError('Eidoverse Worlds did not become ready in time.', {

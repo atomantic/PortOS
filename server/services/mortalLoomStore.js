@@ -15,7 +15,7 @@ import { stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { invalidateMeatspace, invalidateMortalLoomChanges } from './meatspaceEvents.js';
 import { randomUUID } from 'crypto';
-import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir, sleep } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isEvictedStats, materializeAndWait, readIfMaterialized, requestMaterialization } from '../lib/icloudFile.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getSettings, settingsEvents } from './settings.js';
@@ -71,7 +71,7 @@ async function withTransientRetry(fn) {
     if (!isTransientFsError(caught) || attempt >= TRANSIENT_RETRY_DELAYS_MS.length) {
       throw caught;
     }
-    await new Promise((r) => setTimeout(r, TRANSIENT_RETRY_DELAYS_MS[attempt]));
+    await sleep(TRANSIENT_RETRY_DELAYS_MS[attempt]);
   }
 }
 

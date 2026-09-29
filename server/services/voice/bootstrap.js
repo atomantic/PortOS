@@ -6,7 +6,7 @@ import { execFile } from '../../lib/childProcess.js';
 import { promisify } from 'util';
 import { basename, join } from 'path';
 import { createServer } from 'net';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, sleep } from '../../lib/fileUtils.js';
 import { execPm2, getAppStatus } from '../pm2.js';
 import { expandPath, piperVoiceTildePath, voiceHome, IS_WIN, PIPER_BIN_NAME } from './config.js';
 import { isReasoningModel } from './llm.js';
@@ -153,8 +153,8 @@ const waitForWhisper = async (host, port, timeoutMs = 8000) => {
       .then(() => true)
       .catch(() => false);
     if (ok) return true;
-    const sleep = Math.min(250, Math.max(0, deadline - Date.now()));
-    if (sleep > 0) await new Promise((r) => setTimeout(r, sleep));
+    const waitMs = Math.min(250, Math.max(0, deadline - Date.now()));
+    if (waitMs > 0) await sleep(waitMs);
   }
   return false;
 };
