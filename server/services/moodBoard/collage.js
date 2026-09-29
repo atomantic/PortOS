@@ -22,7 +22,7 @@ import { PATHS, ensureDir, atomicWrite } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess, probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { assetBasename } from '../../lib/localImageFilename.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
-import { boardItemLocalImage } from './logic.js';
+import { boardItemLocalImage, squareGridDims, frameSampleTimes } from './logic.js';
 import * as store from './db.js';
 
 export const MAX_FRAMES_PER_VIDEO = 24;
@@ -31,23 +31,6 @@ const MAX_COLLAGE_SIDE_PX = 8192;
 const GAP_PX = 4;
 const BG = { r: 15, g: 15, b: 15 };
 const RESIZE_CONCURRENCY = 6;
-
-/**
- * Grid dimensions that keep the composite as square as possible: the smallest
- * column count whose square covers `count`, then only as many rows as needed
- * (e.g. 5 → 3×2, 10 → 4×3, 16 → 4×4). Cells are square, so the image aspect
- * follows the grid aspect.
- */
-export function squareGridDims(count) {
-  const n = Math.max(1, Math.floor(count) || 1);
-  const cols = Math.ceil(Math.sqrt(n));
-  return { cols, rows: Math.ceil(n / cols) };
-}
-
-/** Evenly spaced sample times — the midpoint of each of `count` equal segments. */
-export function frameSampleTimes(durationSec, count) {
-  return Array.from({ length: count }, (_, i) => ((i + 0.5) * durationSec) / count);
-}
 
 function videoFilename(item) {
   if (item?.type !== 'video' || typeof item.mediaKey !== 'string' || !item.mediaKey.startsWith('video:')) return null;

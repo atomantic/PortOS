@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { squareGridDims, frameSampleTimes } from './collage.js';
+import { squareGridDims, frameSampleTimes } from './logic.js';
 
 describe('squareGridDims', () => {
   it.each([

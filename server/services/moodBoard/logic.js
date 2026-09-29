@@ -467,3 +467,22 @@ export function applyLocalizedImageUrls(board, replacements) {
   if (!changed) return { board, changed: 0 };
   return { board: { ...board, items: nextItems, updatedAt: nowIso() }, changed };
 }
+
+// ─── Collage geometry ────────────────────────────────────────────────────────
+
+/**
+ * Grid dimensions that keep the composite as square as possible: the smallest
+ * column count whose square covers `count`, then only as many rows as needed
+ * (e.g. 5 → 3×2, 10 → 4×3, 16 → 4×4). Cells are square, so the image aspect
+ * follows the grid aspect.
+ */
+export function squareGridDims(count) {
+  const n = Math.max(1, Math.floor(count) || 1);
+  const cols = Math.ceil(Math.sqrt(n));
+  return { cols, rows: Math.ceil(n / cols) };
+}
+
+/** Evenly spaced sample times — the midpoint of each of `count` equal segments. */
+export function frameSampleTimes(durationSec, count) {
+  return Array.from({ length: count }, (_, i) => ((i + 0.5) * durationSec) / count);
+}
