@@ -12,7 +12,9 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 //
 // Deliberately NOT here: a per-site `text-left` (the base-layer rule in
 // index.css already left-aligns wrapped flex-button labels), animation, or
-// nesting support. Open state defaults to internal — the controlled
+// nesting support inside the header button (a link/button in `label` is invalid
+// nested-interactive markup — pass it as `headerActions`, which renders as a
+// sibling of the button). Open state defaults to internal — the controlled
 // `open`/`onOpenChange` pair below is opt-in for the one call site that has to
 // drive it from outside the header.
 //
@@ -79,6 +81,10 @@ export default function CollapsibleSection({
   // "More" disclosure. The attribute sits on a wrapper the caller can't
   // restyle, so a `bodyClassName` display utility can't defeat it.
   keepMounted = false,
+  // Interactive chrome (a link, an icon button) shown at the end of the header
+  // row. Rendered OUTSIDE the toggle `<button>` — an interactive element nested
+  // in a button is invalid HTML and drops out of the accessibility tree.
+  headerActions = null,
   children,
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
@@ -91,14 +97,13 @@ export default function CollapsibleSection({
   };
   const tone = SIZES[size] || SIZES.sm;
   const Chevron = open ? ChevronDown : ChevronRight;
-  return (
-    <div className={className}>
+  const header = (
       <button
         type="button"
         aria-expanded={open}
         onClick={toggle}
         aria-controls={id && (open || keepMounted) ? id : undefined}
-        className={`flex w-full items-center ${tone.button} ${buttonClassName}`.trim()}
+        className={`flex ${headerActions ? 'min-w-0 flex-1' : 'w-full'} items-center ${tone.button} ${buttonClassName}`.trim()}
       >
         <Chevron size={tone.iconSize} className="shrink-0" />
         {Icon ? <Icon size={tone.iconSize} className="shrink-0" /> : null}
@@ -111,6 +116,17 @@ export default function CollapsibleSection({
           ? <span className={`min-w-0 truncate ${tone.summary}`.trim()}>{summary}</span>
           : null}
       </button>
+  );
+  return (
+    <div className={className}>
+      {headerActions
+        ? (
+          <div className="flex w-full items-center gap-2">
+            {header}
+            <div className="shrink-0">{headerActions}</div>
+          </div>
+        )
+        : header}
       {keepMounted
         ? <div id={id} hidden={!open}><div className={bodyClassName}>{children}</div></div>
         : open ? <div id={id} className={bodyClassName}>{children}</div> : null}
