@@ -97,12 +97,13 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 # via npx. Failures are non-fatal — PortOS still works without the
 # user-global command pool.
 Write-Host ""
-Write-Host "Installing/updating slash-do commands (npx slash-do@latest)..." -ForegroundColor Yellow
+$SlashdoVersion = (Get-Content (Join-Path $PSScriptRoot "scripts/SLASHDO_VERSION") -Raw).Trim()
+Write-Host "Installing/updating slash-do commands (npx slash-do@$SlashdoVersion)..." -ForegroundColor Yellow
 # Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
 # all detected envs instead of hanging on readline when stdin is not a TTY.
-"a" | & npx --yes slash-do@latest
+"a" | & npx --yes "slash-do@$SlashdoVersion"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "⚠️  slash-do install failed — skipping (you can re-run later: npx slash-do@latest)" -ForegroundColor Yellow
+    Write-Host "⚠️  slash-do install failed — skipping (you can re-run later: npx slash-do@$SlashdoVersion)" -ForegroundColor Yellow
     $global:LASTEXITCODE = 0
 }
 

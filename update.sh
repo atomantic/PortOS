@@ -419,15 +419,16 @@ fi
 step "migrations" "done" "Migrations complete"
 
 # Install/update slash-do commands. Replaces the previous interactive prompt
-# with an always-on `npx slash-do@latest` call so the user-global command
+# with an always-on pinned `npx slash-do@<version>` call so the user-global command
 # pool stays current across updates without user intervention. Failures are
 # non-fatal — the PR Reviewer schedule task is the only consumer and it
 # fails gracefully if the binary is missing.
 # Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
 # all detected envs instead of hanging on readline (update.sh has no TTY).
+SLASHDO_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/scripts/SLASHDO_VERSION")"
 step "slash-do" "running" "Installing/updating slash-do commands..."
-if ! echo a | run npx --yes slash-do@latest; then
-  log "⚠️  slash-do install/update failed. Continuing without it (re-run later: npx slash-do@latest)."
+if ! echo a | run npx --yes "slash-do@${SLASHDO_VERSION}"; then
+  log "⚠️  slash-do install/update failed. Continuing without it (re-run later: npx slash-do@${SLASHDO_VERSION})."
 fi
 step "slash-do" "done" "slash-do commands installed/updated"
 log ""
