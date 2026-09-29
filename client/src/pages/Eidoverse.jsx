@@ -558,7 +558,7 @@ export default function Eidoverse() {
   const frameStage = (
     <>
       {phase === 'ready' && (
-        <main className="relative min-h-0 flex-1 overflow-hidden bg-port-bg">
+        <section className="relative min-h-0 flex-1 overflow-hidden bg-port-bg">
           <iframe
             ref={frame.frameRef}
             src={hostUrl}
@@ -584,7 +584,7 @@ export default function Eidoverse() {
               </div>
             </div>
           )}
-        </main>
+        </section>
       )}
 
       {['loading', 'starting', 'connecting'].includes(phase) && (

@@ -1299,7 +1299,7 @@ export default function Tribe() {
 
       <TabPills tabs={TABS} activeTab={activeTab} onChange={setActiveTab} ariaLabel="Tribe sections" />
 
-      <main className="flex-1 overflow-auto p-4">
+      <section className="flex-1 overflow-auto p-4">
         <div className="mx-auto grid max-w-7xl gap-4">
           {loading && (
             <div className="flex min-h-[220px] items-center justify-center">
@@ -1513,7 +1513,7 @@ export default function Tribe() {
             </>
           )}
         </div>
-      </main>
+      </section>
     </div>
   );
 }

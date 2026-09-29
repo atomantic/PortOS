@@ -24,7 +24,7 @@ describe('WritersRoom empty state', () => {
       </MemoryRouter>,
     );
 
-    const main = screen.getByRole('main');
+    const main = screen.getByRole('region', { name: 'Work editor' });
     expect(within(main).getByText('Create a work or pick one from the library to start writing.')).toBeInTheDocument();
     expect(within(main).queryByText(/Write for 10/)).toBeNull();
 
