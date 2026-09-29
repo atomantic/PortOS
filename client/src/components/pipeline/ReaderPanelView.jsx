@@ -10,31 +10,10 @@
 
 import { Link } from 'react-router';
 import { Loader2, Sparkles, Users, AlertTriangle, Scale, Split, ArrowRight } from 'lucide-react';
+import { PANEL_PERSONA_IDS, PANEL_QUESTIONS, personaLabel } from '../../../../server/lib/editorial/panelDisagreement.js';
 import { useReaderPanel } from '../../hooks/useReaderPanel';
 
-// Mirror server/lib/editorial/panelDisagreement.js persona + question labels
-// (keep in sync — the two are small, stable vocabularies).
-const PERSONA_LABELS = {
-  editor: 'The Editor',
-  'genre-reader': 'The Genre Reader',
-  writer: 'The Writer',
-  'first-reader': 'The First Reader',
-};
-const PERSONA_ORDER = ['editor', 'genre-reader', 'writer', 'first-reader'];
-const QUESTION_LABELS = [
-  ['momentum_loss', 'Momentum lost'],
-  ['earned_ending', 'Earned ending'],
-  ['cut_candidate', 'Cut candidate'],
-  ['missing_scene', 'Missing scene'],
-  ['thinnest_character', 'Thinnest character'],
-  ['best_scene', 'Best scene'],
-  ['worst_scene', 'Worst scene'],
-  ['would_recommend', 'Would recommend'],
-  ['haunts_you', 'Haunts you'],
-  ['next_book', 'Next book'],
-];
-
-const personaLabel = (id) => PERSONA_LABELS[id] || id;
+const PERSONA_ORDER = PANEL_PERSONA_IDS;
 const IssueTags = ({ issues }) => (
   issues?.length ? (
     <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
@@ -57,7 +36,7 @@ function PersonaColumn({ response }) {
         {response.verdict ? <p className="mt-1 text-[11px] text-gray-400 italic">“{response.verdict}”</p> : null}
       </div>
       <dl className="p-2.5 space-y-2 overflow-y-auto">
-        {QUESTION_LABELS.map(([qid, label]) => {
+        {PANEL_QUESTIONS.map(({ id: qid, label }) => {
           const a = answers[qid];
           if (!a || !a.text) return null;
           return (
