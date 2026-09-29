@@ -10,6 +10,8 @@ export {
   MUSIC_VIDEO_SHOT_MODES,
   SOURCE_AUDIO_LIPSYNC,
   approximateMotionCues,
+  falSceneTake,
+  falTakeRequestFields,
   grokCoverage,
   isPerformanceScene,
   performanceBlockedReason,

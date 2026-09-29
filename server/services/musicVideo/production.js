@@ -312,10 +312,12 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
  * 409 when the run is not running in this process, the slot already has a
  * live step (a concurrent advance or a double submit), or a limit would be
  * exceeded — so a job past the budget is refused before it is paid for.
+ * `costUsd` is the step's own estimate when the caller can price the scene
+ * (a fal take); absent, the route's start-time price applies.
  * Returns `{ project, run, step }`.
  */
 export function reserveProductionStep(project, runId, {
-  kind, sceneId, revisionId = null, route, rationale = '', processId,
+  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = null,
 }, now = new Date().toISOString()) {
   let step = null;
   const out = mutateRun(project, runId, (run) => {
@@ -329,7 +331,9 @@ export function reserveProductionStep(project, runId, {
     if (run.usage.generations >= run.limits.maxGenerations) {
       throw productionError(409, 'PRODUCTION_SPEND_LIMIT', `This production run reached its ${run.limits.maxGenerations}-generation limit`);
     }
-    const price = run.pricing?.[routeKey(route)];
+    // A scene-specific estimate (a fal take priced by its own length and
+    // resolution) wins over the route's flat start-time price.
+    const price = typeof stepCostUsd === 'number' ? stepCostUsd : run.pricing?.[routeKey(route)];
     const costUsd = typeof price === 'number' ? price : null;
     if (run.limits.spendCapUsd !== null) {
       if (costUsd === null) throw productionError(409, 'PRODUCTION_COST_UNKNOWN', 'This route has no known price, so the dollar cap cannot bound it');

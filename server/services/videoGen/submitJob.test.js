@@ -203,20 +203,26 @@ describe('submitVideoGenJob', () => {
       mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
       mocks.preparePerformanceShot.mockResolvedValue({
         audioFilePath: '/example/uploads/mv-performance-1.wav', shotInstruction,
-        modelId: 'minimax/h3-max/lip-sync/image-to-video', enableTranscription: true,
+        modelId: 'minimax/h3-max/lip-sync/image-to-video', resolution: '1080P', enableTranscription: true,
       });
 
-      await submitVideoGenJob({ prompt: 'singer', backend: 'fal', falDuration: 6, musicVideo, mode: 'image' }, {});
+      // A cutaway model/resolution pin and an audio request ride the same body;
+      // the performance plan's lip-sync model and resolution replace them.
+      await submitVideoGenJob({
+        prompt: 'singer', backend: 'fal', falDuration: 6, falModelId: 'minimax/h3-max/image-to-video',
+        falResolution: '1080p', falGenerateAudio: true, musicVideo, mode: 'image',
+      }, {});
       expect(mocks.preparePerformanceShot).toHaveBeenCalledWith({
-        musicVideo, backend: 'fal', sourceImagePath: '/example/images/frame.png', mode: 'image',
+        musicVideo, backend: 'fal', sourceImagePath: '/example/images/frame.png', mode: 'image', resolution: '1080p',
       });
       const { params } = mocks.enqueueJob.mock.calls[0][0];
       expect(params).toMatchObject({
-        mode: 'fal', modelId: 'minimax/h3-max/lip-sync/image-to-video',
+        mode: 'fal', modelId: 'minimax/h3-max/lip-sync/image-to-video', resolution: '1080P',
         audioFilePath: '/example/uploads/mv-performance-1.wav',
         lipSync: { enableTranscription: true }, shotInstruction, musicVideo,
       });
       expect(params.duration).toBeUndefined();
+      expect(params.generateAudio).toBeUndefined();
     });
 
     it('refuses a performance shot the backend cannot render and releases what was staged', async () => {

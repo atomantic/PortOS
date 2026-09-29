@@ -136,7 +136,7 @@ function StartForm({ project, production }) {
     <div className="space-y-2">
       <p className="text-port-text-muted">
         Plans the board, generates the missing frames and clips, renders and reviews the draft, and revises failed sections — on the server, so you can close this tab.
-        Only the routes you allow are ever used, and it never exceeds the limits below. Metered routes have no known price, so a dollar cap refuses them.
+        Only the routes you allow are ever used, and it never exceeds the limits below. fal.ai video is charged each take's estimated list price (its model, length and resolution); other metered routes have no known price, so a dollar cap refuses them.
       </p>
       <fieldset className="min-w-0" aria-labelledby={idFor('pool-label')}>
         <span id={idFor('pool-label')} className="block text-[11px] text-port-text-muted mb-1">Allowed image and video routes</span>

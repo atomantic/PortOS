@@ -300,6 +300,18 @@ const generateBodySchema = z.object({
     (v) => (v == null || v === '' ? undefined : Number(v)),
     optionalNum(1, 60, 'falDuration'),
   ),
+  // Output resolution for a curated fal model (lib/falVideoModels.js). Loosely
+  // validated: the alphabet is per model ('768P' vs '720p'), so the provider
+  // resolves it against the chosen model and falls back to that model's
+  // default rather than 400ing a render over a stale pin.
+  falResolution: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(16).optional()),
+  // Ask a fal model that can synthesize audio to do so. Off by default: a
+  // PortOS clip is silent unless the caller wants provider audio (a Music
+  // Video's master song is its only soundtrack).
+  falGenerateAudio: z.preprocess(
+    (v) => (v === 'true' ? true : v === 'false' || v === '' ? undefined : v),
+    z.boolean().optional(),
+  ),
   // reactor.inc fast-h3 (#6214): the clip id to chain from
   // (continue_from_clip_id — frame-accurate continuation, unlike fal/grok
   // which start a fresh render each time) and clip length in seconds. The

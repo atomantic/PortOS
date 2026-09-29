@@ -891,6 +891,7 @@ export default function MusicVideo() {
                   videoBlockedReason={videoSettings.videoBlockedReason}
                   lipSyncBackend={videoSettings.audioReactiveSelected ? 'local' : videoSettings.settings.backend}
                   songDurationSec={selected.audioAnalysis?.durationSec ?? null}
+                  falVideoSettings={videoSettings.settings}
                   canContinueShot={canContinueShot}
                   onMove={moveScene}
                   onDelete={handleDeleteScene}

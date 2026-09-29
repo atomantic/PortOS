@@ -187,6 +187,7 @@ export * from './codexCliOutput.js';
 export * from './contextBudget.js';
 export * from './cursor.js';
 export * from './grok.js';
+export * from './falVideoModels.js';
 export * from './grokVideoClip.js';
 export * from './musicVideoShotTiming.js';
 export * from './reactorStartingFrame.js';

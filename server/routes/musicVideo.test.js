@@ -198,17 +198,20 @@ describe('musicVideo routes', () => {
     expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { videoSettings });
   });
 
-  it('PATCH /:id accepts the fal.ai video backend with a bounded clip duration (#8968)', async () => {
-    const videoSettings = { backend: 'fal', falDuration: 6 };
+  it('PATCH /:id accepts the fal.ai video backend with a bounded clip duration, model and resolutions (#8968)', async () => {
+    const videoSettings = {
+      backend: 'fal', falDuration: 6, falModelId: 'minimax/h3-max/image-to-video', falResolution: '1080P', falLipSyncResolution: '2K',
+    };
     const r = await request(app).patch('/api/music-video/mv-1').send({ videoSettings });
     expect(r.status).toBe(200);
     expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { videoSettings });
   });
 
-  it('PATCH /:id rejects an out-of-range fal.ai clip duration', async () => {
-    const r = await request(app).patch('/api/music-video/mv-1')
-      .send({ videoSettings: { backend: 'fal', falDuration: 90 } });
-    expect(r.status).toBe(400);
+  it('PATCH /:id rejects an out-of-range fal.ai clip duration or a lip-sync resolution fal does not offer', async () => {
+    for (const videoSettings of [{ backend: 'fal', falDuration: 90 }, { backend: 'fal', falLipSyncResolution: '720p' }]) {
+      const r = await request(app).patch('/api/music-video/mv-1').send({ videoSettings });
+      expect(r.status).toBe(400);
+    }
     expect(svc.updateProject).not.toHaveBeenCalled();
   });
 

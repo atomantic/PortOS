@@ -45,6 +45,7 @@ export * from './eidoverseDraftReconcile.js';
 export * from './eidoverseWorldReset.js';
 export * from './federatedMediaReadiness.js';
 export * from './falVideoHandoff.js';
+export * from './falVideoModels.js';
 export * from './fableLoomReadiness.js';
 export * from './glbFailure.js';
 export * from './grokVideoClip.js';

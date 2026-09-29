@@ -116,7 +116,10 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(si.audio.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(si.audio.conditioning).toEqual({ source: 'master', sha256: si.audio.sha256 });
     expect(si).toMatchObject({ referenceImageId: 'frame.png', performance: 'sings the held note', generatedCoverageSec: 5.05 });
-    expect(si.capability).toMatchObject({ provider: 'fal', minAudioSec: 5, maxAudioSec: 14.8 });
+    // The take's own resolution defaults to 1080P for a music video (fal's own
+    // default is 768P) and is recorded on the immutable instruction.
+    expect(si.capability).toMatchObject({ provider: 'fal', minAudioSec: 5, maxAudioSec: 30, resolution: '1080P' });
+    expect(prepared.resolution).toBe('1080P');
 
     // Sample-exact window content: exactly 5.05s of samples, the song marker at
     // the in-point, and the slice staged where the queue will clean it up.
@@ -128,8 +131,9 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     for (let i = 1; i < samples.length / 2; i++) if (samples.readInt16LE(i * 2) > samples.readInt16LE(peak * 2)) peak = i;
     expect(peak).toBe(Math.round((MARKER_SEC - 18.225) * RATE));
 
-    // Generation payload: the reference frame plus these exact bytes, with no
-    // prompt/duration a lip-sync route would contradict. Submitted exactly once.
+    // Generation payload: the reference frame plus these exact bytes at the
+    // take's resolution, with no prompt/duration a lip-sync route would
+    // contradict — and no prompt is required to submit one. Submitted once.
     await mkdir(PATHS.images, { recursive: true });
     await writeFile(join(PATHS.images, 'frame.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
     const deliveredPath = join(PATHS.data, 'delivered.mp4');
@@ -147,14 +151,21 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
       throw new Error(`unexpected fetch: ${url}`);
     }));
     const job = await fal.generateVideo({
-      apiKey: 'test-key', modelId: prepared.modelId, prompt: 'singer at the mic',
+      apiKey: 'test-key', modelId: prepared.modelId, resolution: prepared.resolution,
       sourceImagePath: join(PATHS.images, 'frame.png'), audioFilePath: prepared.audioFilePath,
       lipSync: { enableTranscription: prepared.enableTranscription }, shotInstruction: si,
     });
     expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
     expect(posts).toHaveLength(1);
     expect(posts[0].url).toBe('https://queue.fal.run/minimax/h3-max/lip-sync/image-to-video');
-    expect(Object.keys(posts[0].body).sort()).toEqual(['audio_url', 'enable_transcription', 'image_url']);
+    expect(Object.keys(posts[0].body).sort()).toEqual(['audio_url', 'enable_transcription', 'image_url', 'resolution']);
+    expect(posts[0].body.resolution).toBe('1080P');
+    // The history record carries what was rendered and what it should cost:
+    // 5.05s at the 1080P list rate of $0.16/s.
+    const { loadHistory } = await import('../videoGen/history.js');
+    expect((await loadHistory()).find((h) => h.id === job.jobId)).toMatchObject({
+      modelId: 'fal:minimax/h3-max/lip-sync/image-to-video', resolution: '1080P', estimatedCostUsd: 0.808, lipSync: true,
+    });
     expect(Buffer.from(posts[0].body.audio_url.replace(/^data:audio\/wav;base64,/, ''), 'base64').equals(sliceWav)).toBe(true);
 
     // Final timeline: the take lands with its instruction, the renderer reads
@@ -223,17 +234,23 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(existsSync(PATHS.uploads) ? await readdir(PATHS.uploads) : []).toEqual([]);
   });
 
-  it('uses the full span of a long shot and stays under the provider maximum', async () => {
-    getProject.mockResolvedValue(project({ startSec: 10, endSec: 24.7 }));
-    const { shotInstruction: si } = await preparePerformanceShot({
-      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: '/x/frame.png', mode: 'image',
-    });
-    expect(si.audioWindow).toEqual({ startSec: 10, endSec: 24.7, durationSec: 14.7 });
-    expect(si.edit.inSec).toBe(0);
+  it('uses the full span of a long shot in one take, at the project\'s lip-sync resolution pin', async () => {
+    // 26s: past the old 14.8s cap (fal accepts up to 15 minutes; PortOS keeps
+    // a take to 30s so it stays one editable phrase).
+    getProject.mockResolvedValue({ ...project({ startSec: 2, endSec: 28 }), videoSettings: { backend: 'fal', falLipSyncResolution: '768P' } });
+    const args = { musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: '/x/frame.png', mode: 'image' };
+    const pinned = await preparePerformanceShot(args);
+    expect(pinned.shotInstruction.audioWindow).toEqual({ startSec: 2, endSec: 28, durationSec: 26 });
+    expect(pinned.shotInstruction.edit.inSec).toBe(0);
+    expect(pinned.resolution).toBe('768P');
+    // A request naming a resolution the lip-sync route offers wins over the
+    // pin; one it does not (a cutaway model's '720p') falls back to the pin.
+    expect((await preparePerformanceShot({ ...args, resolution: '2k' })).resolution).toBe('2K');
+    expect((await preparePerformanceShot({ ...args, resolution: '720p' })).resolution).toBe('768P');
   });
 
   it('refuses a shot longer than the provider synchronizes instead of letting it truncate', async () => {
-    getProject.mockResolvedValue(project({ startSec: 5, endSec: 20 }));
+    getProject.mockResolvedValue(project({ startSec: 0, endSec: 30 }));
     await expect(preparePerformanceShot({
       musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: '/x/frame.png',
     })).rejects.toMatchObject({ status: 400, code: 'MUSIC_VIDEO_PERFORMANCE_TOO_LONG' });

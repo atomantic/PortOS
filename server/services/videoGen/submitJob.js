@@ -174,6 +174,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       backend,
       sourceImagePath: prepared.sourceImagePath,
       mode: body.mode,
+      resolution: body.falResolution,
     }).catch(async (error) => {
       await cleanupStaged();
       throw error;
@@ -185,6 +186,10 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     // would contradict it, so none is sent.
     duration: undefined,
     audioFilePath: performance.audioFilePath,
+    // The lip-sync route's own output resolution (a cutaway resolution pin
+    // names another model's alphabet, so the performance plan resolves it).
+    resolution: performance.resolution,
+    generateAudio: undefined,
     lipSync: { enableTranscription: performance.enableTranscription },
     shotInstruction: performance.shotInstruction,
   } : null;

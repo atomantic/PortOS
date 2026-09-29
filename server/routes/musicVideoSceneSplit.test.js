@@ -27,9 +27,9 @@ app.use('/api/music-video', musicVideoRoutes);
 app.use(errorMiddleware);
 
 const LYRICS = [
-  { text: 'first line', startSec: 30, endSec: 37 },
-  { text: 'second line', startSec: 39, endSec: 46 },
-  { text: 'third line', startSec: 47.5, endSec: 55 },
+  { text: 'first line', startSec: 30, endSec: 45 },
+  { text: 'second line', startSec: 47, endSec: 68 },
+  { text: 'third line', startSec: 70, endSec: 85 },
 ];
 
 let project;
@@ -49,18 +49,18 @@ describe('POST /:id/scenes/:sceneId/split', () => {
   it('splits an over-long performance shot at the lyric pauses, keeping the original id, takes and neighbours', async () => {
     const before = await projects.addProjectScene(project.id, { label: 'Intro', startSec: 0, endSec: 30 });
     const shot = await projects.addProjectScene(project.id, {
-      label: 'Verse', prompt: 'singer at the mic', startSec: 30, endSec: 56, shotMode: 'performance', loop: false,
+      label: 'Verse', prompt: 'singer at the mic', startSec: 30, endSec: 86, shotMode: 'performance', loop: false,
     });
-    const after = await projects.addProjectScene(project.id, { label: 'Outro', startSec: 56, endSec: 70 });
+    const after = await projects.addProjectScene(project.id, { label: 'Outro', startSec: 86, endSec: 100 });
     await projects.updateScene(project.id, shot.sceneId, { referenceImageId: 'singer.png', videoHistoryId: 'clip-whole-verse' });
 
     // No backend in the body: the project's pinned fal lane bounds the take.
     const res = await split(shot.sceneId);
     expect(res.status).toBe(200);
     const pieces = res.body.scenes;
-    // 26s over a ~14.75s lip-sync window fits two takes, but any two-way cut
+    // 56s over the ~29.95s lip-sync take fits two takes, but any two-way cut
     // lands inside "second line" — so it takes a third and cuts in both pauses.
-    expect(pieces.map((p) => [p.startSec, p.endSec])).toEqual([[30, 38], [38, 46.75], [46.75, 56]]);
+    expect(pieces.map((p) => [p.startSec, p.endSec])).toEqual([[30, 46], [46, 69], [69, 86]]);
     expect(pieces[0].sceneId).toBe(shot.sceneId);
     expect(pieces.map((p) => p.label)).toEqual(['Verse · 1/3', 'Verse · 2/3', 'Verse · 3/3']);
     expect(pieces.map((p) => p.lyricText)).toEqual(['first line', 'second line', 'third line']);
@@ -71,7 +71,7 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     expect(stored.scenes.map((s) => [s.sceneId, s.order])).toEqual([
       [before.sceneId, 0], [shot.sceneId, 1], [pieces[1].sceneId, 2], [pieces[2].sceneId, 3], [after.sceneId, 4],
     ]);
-    // The lip-synced clip was generated for 30–56s: it stays a candidate take
+    // The lip-synced clip was generated for 30–86s: it stays a candidate take
     // but is no longer selected, so the render never re-cuts it.
     expect(stored.scenes[1].videoHistoryId).toBeNull();
     expect(stored.scenes[1].takes.map((t) => t.assetId)).toEqual(['singer.png', 'clip-whole-verse']);

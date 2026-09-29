@@ -325,6 +325,34 @@ describe('music video production run (#9066)', () => {
     expect(theRun().limits.spendCapUsd).toBe(5);
   });
 
+  it('prices fal.ai clips from the catalog so a dollar cap bounds them, charging each scene its own take', async () => {
+    // Scene A is a 4s performance (lip-sync window padded to 5.05s), B a 4s
+    // cutaway on H3 Max (covered by its 5s minimum), both at 1080P list rates.
+    seedProject({
+      videoSettings: { backend: 'fal', falModelId: 'minimax/h3-max/image-to-video', falResolution: '1080P' },
+      audioAnalysis: { sections: [{ startSec: 0, endSec: 8, label: 'Verse' }], durationSec: 30 },
+    });
+    store.get('mv-example').scenes[0].shotMode = 'performance';
+    const falPool = [POOL[0], { kind: 'video', mode: 'fal', model: null }];
+    const usable = env.isVideoModeUsable;
+    env.isVideoModeUsable = (_settings, mode) => mode === 'local' || mode === 'fal';
+    try {
+      await start({ pool: falPool, limits: { ...LIMITS, spendCapUsd: 1.5 } });
+      // The run's start-time price for the route: a default-length cutaway.
+      expect(theRun().pricing).toEqual({ 'image:local:flux2-dev': 0, 'video:fal:': 0.8 });
+      completeJob('job-1');
+      completeJob('job-2');
+      await settle();
+    } finally {
+      env.isVideoModeUsable = usable;
+    }
+    const clips = theRun().steps.filter((s) => s.kind === 'clip');
+    // A's lip-sync take is charged 5.05s × $0.16; B's $0.80 would pass the cap.
+    expect(clips.map((s) => [s.sceneId, s.costUsd])).toEqual([['mvs-a', 0.808]]);
+    expect(theRun()).toMatchObject({ status: 'limit-reached', usage: { spentUsd: 0.808 }, stopReason: expect.stringMatching(/\$1\.5 cap/) });
+    expect(dispatch.mock.calls.filter(([a]) => a.stepKind === 'clip').map(([a]) => a.scene.sceneId)).toEqual(['mvs-a']);
+  });
+
   it('after a restart nothing dispatches until an explicit resume, which neither duplicates live jobs nor re-charges them', async () => {
     seedProject();
     await start();

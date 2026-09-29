@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
-import { MUSIC_VIDEO_SHOT_MODES } from './musicVideoShotTiming.js';
+import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
@@ -62,6 +62,17 @@ export const musicVideoVideoSettingsSchema = z.object({
   // not PortOS, owns the set of valid durations per model. null/omitted lets
   // the backend's model default apply.
   falDuration: z.number().min(1).max(60).nullable().optional(),
+  // fal.ai cutaway model (lib/falVideoModels.js) and its output resolution.
+  // Loosely validated like routes/videoGen.js's falModelId/falResolution: a
+  // peer on a newer catalog may pin a model this install does not curate yet,
+  // and the resolution alphabet is per model — the provider resolves both (an
+  // uncurated id renders on the legacy body with its cost reported unknown).
+  // null/omitted = the default model (Hailuo-02 image-to-video) / its default.
+  falModelId: z.string().min(1).max(200).nullable().optional(),
+  falResolution: z.string().min(1).max(16).nullable().optional(),
+  // Output resolution of a performance (lip-sync) take — fal's own alphabet
+  // for the lip-sync route. null/omitted = MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION.
+  falLipSyncResolution: z.enum(SOURCE_AUDIO_LIPSYNC.fal.resolutions).nullable().optional(),
   generationMode: z.enum(['image', 'audioReactive']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),

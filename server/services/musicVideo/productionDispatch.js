@@ -23,9 +23,9 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
-import { approximateMotionCues, grokCoverage } from '../../lib/musicVideoShotTiming.js';
+import { approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage } from '../../lib/musicVideoShotTiming.js';
 import { sceneFramePrompt, sceneShotPrompt } from './handoff.js';
-import { conditioningReferences } from './productionPool.js';
+import { conditioningReferences, falRouteVideoSettings } from './productionPool.js';
 
 const unprompted = (scene, what) => new ServerError(
   `"${scene.label || scene.sceneId}" has no ${what} prompt to generate from`,
@@ -70,6 +70,17 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   return { jobId };
 }
 
+/**
+ * The fal request fields for a scene clip — built from the same `falSceneTake`
+ * that productionPool.stepPriceUsd charged the step, so the run pays for exactly
+ * what it submits.
+ */
+const falClipParams = (project, scene, route) => falTakeRequestFields(falSceneTake({
+  scene,
+  videoSettings: falRouteVideoSettings(project, route),
+  songDurationSec: project.audioAnalysis?.durationSec ?? null,
+}));
+
 /** Enqueue a scene's i2v clip on exactly `route` through the video submit service. Returns `{ jobId }`. */
 async function dispatchClip({ project, scene, route, tag }) {
   if (!scene.referenceImageId) {
@@ -84,8 +95,7 @@ async function dispatchClip({ project, scene, route, tag }) {
   const byBackend = {
     local: { modelId: route.model, disableAudio: true },
     grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: true },
-    // A performance clip's length follows its song slice (server-side).
-    fal: { ...(route.model ? { falModelId: route.model } : {}), ...(scene.shotMode === 'performance' || !project.videoSettings?.falDuration ? {} : { falDuration: project.videoSettings.falDuration }) },
+    fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },
   };
   const { submitVideoGenJob } = await import('../videoGen/submitJob.js');
