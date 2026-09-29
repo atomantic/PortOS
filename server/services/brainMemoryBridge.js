@@ -543,7 +543,7 @@ async function hardDeleteMappedMemory(brainType, id) {
   const key = bridgeKey(brainType, id);
   const memoryId = map[key];
   if (!memoryId) return false;
-  await memory.deleteMemory(memoryId, true); // hard: DELETE row + drop embedding
+  await memory.purgeMemory(memoryId);
   delete map[key];
   await saveBridgeMap();
   console.log(`🧠🔗 Hard-deleted brain→memory: ${brainType}/${id} → ${memoryId}`);
