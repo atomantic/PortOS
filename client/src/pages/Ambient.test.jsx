@@ -129,3 +129,21 @@ describe('Ambient resource updates', () => {
     expect(screen.getByText('Later meeting')).toBeTruthy();
   });
 });
+
+describe('Ambient idle controls', () => {
+  const header = () => screen.getByRole('button', { name: /exit$/i }).parentElement;
+
+  it('re-shows the hidden controls on keyboard activity and keeps a focused control visible', async () => {
+    await mount();
+    await flush(() => vi.advanceTimersByTime(3100));
+    expect(header().className).toContain('opacity-0');
+    // A focused control is never invisible: the wrapper carries the focus-within override.
+    expect(header().className).toContain('focus-within:opacity-100');
+    await flush(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' })));
+    expect(header().className).not.toMatch(/(^|\s)opacity-0/);
+    await flush(() => vi.advanceTimersByTime(3100));
+    expect(header().className).toContain('opacity-0');
+    await flush(() => screen.getByRole('button', { name: /exit$/i }).focus());
+    expect(header().className).not.toMatch(/(^|\s)opacity-0/);
+  });
+});

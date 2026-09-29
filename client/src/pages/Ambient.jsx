@@ -6,6 +6,7 @@ import { useSocketResource } from '../hooks/useSocketResource';
 import { useSocket } from '../hooks/useSocket';
 import { formatClockTime, formatDateFull, formatTimeOfDay } from '../utils/formatters';
 import DeathClockCountdown from '../components/DeathClockCountdown';
+import { shouldIgnoreGlobalKey } from '../lib/a11yKeyboard';
 
 const CALENDAR_EVENTS = ['calendar:sync:completed'];
 const DEATH_CLOCK_EVENTS = ['meatspace:death-clock:changed'];
@@ -86,7 +87,7 @@ export default function Ambient() {
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') navigate('/');
-      if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+      if ((e.key === 'f' || e.key === 'F') && !shouldIgnoreGlobalKey(e)) toggleFullscreen();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -100,10 +101,14 @@ export default function Ambient() {
     };
     window.addEventListener('mousemove', resetIdle);
     window.addEventListener('touchstart', resetIdle);
+    window.addEventListener('keydown', resetIdle);
+    window.addEventListener('focusin', resetIdle);
     idleTimer.current = setTimeout(() => setIdle(true), IDLE_DELAY);
     return () => {
       window.removeEventListener('mousemove', resetIdle);
       window.removeEventListener('touchstart', resetIdle);
+      window.removeEventListener('keydown', resetIdle);
+      window.removeEventListener('focusin', resetIdle);
       if (idleTimer.current) clearTimeout(idleTimer.current);
     };
   }, []);
@@ -129,7 +134,7 @@ export default function Ambient() {
     // text on black, and a day theme's light surface would leave it unreadable.
     <div className={`fixed inset-0 bg-black text-white z-[9999] overflow-hidden flex flex-col ${idle ? 'cursor-none' : ''}`}>
       <div className={`absolute top-4 left-4 right-4 flex justify-between items-center z-10 transition-opacity duration-500 ${
-        idle ? 'opacity-0 pointer-events-none' : 'opacity-100'
+        idle ? 'opacity-0 pointer-events-none focus-within:opacity-100 focus-within:pointer-events-auto' : 'opacity-100'
       }`}>
         <button
           onClick={() => navigate('/')}
