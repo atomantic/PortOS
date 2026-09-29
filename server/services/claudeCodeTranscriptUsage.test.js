@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
-import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -56,6 +56,12 @@ describe('claude code transcript usage', () => {
     const { days, updatedAt } = await svc.readLocalTranscriptUsage();
     expect(days['2026-01-05']['model-x'].messages).toBe(2);
     expect(updatedAt).toBeTruthy();
+  });
+
+  it('refuses to overwrite a damaged store with a partial rescan', async () => {
+    await writeFile(svc.TRANSCRIPT_USAGE_FILE, '{ not json');
+    await expect(svc.refreshLocalTranscriptUsage({ root, force: true })).rejects.toThrow();
+    expect(await readFile(svc.TRANSCRIPT_USAGE_FILE, 'utf8')).toBe('{ not json');
   });
 
   it('rebuilds peer-supplied days to the fixed shape', () => {
