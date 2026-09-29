@@ -723,13 +723,16 @@ function InternalUsageMetrics() {
         {/* 7-Day Activity */}
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Last 7 Days</h3>
-          <div className="flex items-end gap-1 sm:gap-2 h-24 sm:h-32">
+          <div className="flex items-end gap-1 sm:gap-2 h-32 sm:h-40">
             {usage.last7Days?.map((day, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center">
-                <div
-                  className="w-full bg-port-accent/60 rounded-t"
-                  style={{ height: `${(day.sessions / maxActivity) * 100}%`, minHeight: day.sessions > 0 ? 4 : 0 }}
-                />
+              <div key={i} className="flex-1 h-full flex flex-col items-center">
+                {/* percent heights need a definite-height parent, so the bar sits in a flex-1 slot */}
+                <div className="flex-1 w-full flex items-end min-h-0">
+                  <div
+                    className="w-full bg-port-accent/60 rounded-t"
+                    style={{ height: `${(day.sessions / maxActivity) * 100}%`, minHeight: day.sessions > 0 ? 4 : 0 }}
+                  />
+                </div>
                 <div className="text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2">{day.label}</div>
                 <div className="text-[10px] sm:text-xs text-gray-400">{day.sessions}</div>
               </div>
@@ -744,7 +747,7 @@ function InternalUsageMetrics() {
             {(() => {
               const maxHour = Math.max(1, ...(usage.hourlyActivity || []));
               return usage.hourlyActivity?.map((count, hour) => (
-                <div key={hour} className="flex-1 flex flex-col items-center">
+                <div key={hour} className="flex-1 h-full flex items-end">
                   <div
                     className="w-full bg-port-accent/40 rounded-t"
                     style={{ height: `${(count / maxHour) * 100}%`, minHeight: count > 0 ? 2 : 0 }}
