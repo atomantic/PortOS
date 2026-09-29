@@ -1,25 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenModes';
 import { BOARD_POSTER_SIZE } from '../../lib/moodBoardAnalysis';
 
 const {
-  mockRender, mockCompose, mockPrompt, mockUpdateItem, mockUpdateBoard,
+  mockRender, mockCompose, mockStart, mockGetJob, mockGetBoard, mockUpdateBoard, socketHandlers,
 } = vi.hoisted(() => ({
+  mockStart: vi.fn(),
+  mockGetJob: vi.fn(),
+  mockGetBoard: vi.fn(),
+  socketHandlers: new Map(),
   mockRender: vi.fn(async () => 'job-9'),
   mockCompose: vi.fn(),
-  mockPrompt: vi.fn(),
-  mockUpdateItem: vi.fn(),
   mockUpdateBoard: vi.fn(),
 }));
 
 vi.mock('../../services/api', () => ({
-  promptFromMedia: (...args) => mockPrompt(...args),
   composeMoodBoardPrompt: (...args) => mockCompose(...args),
-  backfillMoodBoardPrompts: async () => null,
-  updateMoodBoardItem: (...args) => mockUpdateItem(...args),
+  startMoodBoardAnalyze: (...args) => mockStart(...args),
+  getMoodBoardAnalyze: (...args) => mockGetJob(...args),
+  getMoodBoard: (...args) => mockGetBoard(...args),
   updateMoodBoard: (...args) => mockUpdateBoard(...args),
+}));
+
+vi.mock('../../services/socket', () => ({
+  default: {
+    on: (evt, fn) => socketHandlers.set(evt, fn),
+    off: (evt) => socketHandlers.delete(evt),
+  },
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -77,10 +86,10 @@ beforeEach(() => {
     ...analyzedBoard,
     style: { ...analyzedBoard.style, prompt: 'composed ink' },
   });
-  mockPrompt.mockResolvedValue({ imagePrompt: 'a pin in ink', imageNegativePrompt: 'gloss', providerId: 'vision-1', model: 'vlm' });
-  mockUpdateItem.mockImplementation(async (_id, _itemId, patch) => ({
-    id: 'b', type: 'image', mediaKey: 'image:b.png', analysis: patch.analysis,
-  }));
+  mockGetJob.mockResolvedValue(null);
+  mockGetBoard.mockResolvedValue(analyzedBoard);
+  mockStart.mockResolvedValue({ boardId: 'mb-1', status: 'running', phase: 'preparing', total: 0, done: 0 });
+  socketHandlers.clear();
   mockUpdateBoard.mockImplementation(async (_id, patch) => ({ ...analyzedBoard, ...patch }));
 });
 
@@ -91,30 +100,30 @@ describe('MoodBoardStylePanel', () => {
     expect(screen.queryByRole('button', { name: 'Analyze board' })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Compose board style' }));
     await waitFor(() => expect(mockCompose).toHaveBeenCalledWith('mb-1', { providerId: 'vision-1', model: 'vlm' }, { silent: true }));
-    expect(mockPrompt).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
     expect(onBoardChange).toHaveBeenCalledWith(expect.objectContaining({
       style: expect.objectContaining({ prompt: 'composed ink' }),
     }));
   });
 
-  it('analyzes unread gallery pins, then composes the board style', async () => {
-    const board = {
-      id: 'mb-1',
-      items: [{ id: 'b', type: 'image', mediaKey: 'image:b.png' }],
-    };
+  it('starts the server-side analyze job and shows its progress', async () => {
+    const board = { id: 'mb-1', items: [{ id: 'b', type: 'image', mediaKey: 'image:b.png' }] };
     render(<MoodBoardStylePanel board={board} onBoardChange={vi.fn()} />);
     expect(screen.queryByRole('button', { name: 'Compose board style' })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Analyze board' }));
-    await waitFor(() => expect(mockCompose).toHaveBeenCalled());
-    expect(mockPrompt).toHaveBeenCalledWith(expect.objectContaining({
-      sourceKind: 'image',
-      filename: 'b.png',
-      targets: ['image'],
-      providerId: 'vision-1',
-    }), { silent: true });
-    expect(mockUpdateItem).toHaveBeenCalledWith('mb-1', 'b', expect.objectContaining({
-      analysis: expect.objectContaining({ prompt: 'a pin in ink' }),
-    }), { silent: true });
+    expect(mockStart).toHaveBeenCalledWith('mb-1', { providerId: 'vision-1', model: 'vlm' }, { silent: true });
+    await act(async () => {
+      socketHandlers.get('mood-board:analyze')({ boardId: 'mb-1', status: 'running', phase: 'analyzing', total: 4, done: 1 });
+    });
+    expect(screen.getByRole('button', { name: /Analyzing 2 of 4/ })).toBeDisabled();
+  });
+
+  it('picks the run back up after navigating away and returning', async () => {
+    mockGetJob.mockResolvedValue({ boardId: 'mb-1', status: 'running', phase: 'analyzing', total: 5, done: 2 });
+    const board = { id: 'mb-1', items: [{ id: 'b', type: 'image', mediaKey: 'image:b.png' }] };
+    render(<MoodBoardStylePanel board={board} onBoardChange={vi.fn()} />);
+    expect(await screen.findByRole('button', { name: /Analyzing 3 of 5/ })).toBeDisabled();
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it('renders the poster on the selected image service and pins the filename', async () => {

@@ -8,7 +8,8 @@
  * any enabled image service and is the board's reference image — the same
  * role a universe's base-style probe plays.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import socket from '../../services/socket';
 import { ScanEye, Sparkles, ImageIcon } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
@@ -18,14 +19,13 @@ import useProviderModels from '../../hooks/useProviderModels';
 import useVisionModelIds from '../../hooks/useVisionModelIds';
 import useImageRenderSettings from '../../hooks/useImageRenderSettings';
 import useSingleImageRender from '../../hooks/useSingleImageRender';
-import { promptFromMedia, updateMoodBoard, updateMoodBoardItem, composeMoodBoardPrompt, backfillMoodBoardPrompts } from '../../services/api';
+import { getMoodBoard, getMoodBoardAnalyze, startMoodBoardAnalyze, updateMoodBoard, composeMoodBoardPrompt } from '../../services/api';
 import { isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
 import { formatCount } from '../../utils/formatters';
-import { moodBoardItemAnalysisSource, moodBoardPosterSrc } from '../../lib/moodBoardItemSrc';
+import { moodBoardPosterSrc } from '../../lib/moodBoardItemSrc';
 import {
   boardAnalyzePlan,
   boardPosterRenderCfg,
-  moodBoardAnalysisFromResult,
   posterStyleKey,
 } from '../../lib/moodBoardAnalysis';
 import { modeLabel } from '../../lib/imageGenBackends';
@@ -50,8 +50,13 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     setNegative(savedNegative);
   }
 
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState('');
+  const [composing, setComposing] = useState(false);
+  const [job, setJob] = useState(null);
+  const jobRunning = job?.status === 'running';
+  const busy = composing || jobRunning;
+  const boardId = board?.id;
+  const jobRunningRef = useRef(false);
+  jobRunningRef.current = jobRunning;
   const [savingStyle, setSavingStyle] = useState(false);
   const [rendererMode, setRendererMode] = useState('');
   const capturedKeyRef = useRef(null);
@@ -115,12 +120,6 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     scopeId: board?.id,
   });
 
-  const replaceItem = (item) => {
-    onBoardChange((prev) => (prev
-      ? { ...prev, items: (prev.items || []).map((it) => (it.id === item.id ? item : it)) }
-      : prev));
-  };
-
   const compose = async () => {
     const updated = await composeMoodBoardPrompt(board.id, {
       providerId: selectedProviderId || undefined,
@@ -139,65 +138,74 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     return updated;
   };
 
+  // The analyze run lives on the server, so leaving the page never cancels it.
+  // Restore its state on mount and follow the push events while it runs.
+  const applyJob = useCallback(async (next) => {
+    if (!mountedRef.current) return;
+    setJob(next);
+    // Pull in the analyses saved so far, and the composed style once it ends.
+    const fresh = await getMoodBoard(boardId, { silent: true }).catch(() => null);
+    if (mountedRef.current && fresh) onBoardChange(fresh);
+  }, [boardId, mountedRef, onBoardChange]);
+
+  useEffect(() => {
+    if (!boardId) return undefined;
+    let cancelled = false;
+    getMoodBoardAnalyze(boardId, { silent: true })
+      .then((current) => {
+        if (cancelled || !current) return;
+        // A finished run from earlier is only news if it just ended.
+        if (current.status === 'running') applyJob(current);
+      })
+      .catch(() => {});
+    const onEvent = (evt) => {
+      if (evt?.boardId !== boardId) return;
+      const wasRunning = jobRunningRef.current;
+      if (evt.status === 'running') applyJob(evt);
+      else {
+        applyJob(evt);
+        if (wasRunning) {
+          if (evt.status === 'done') toast.success('Board style composed from item analyses');
+          else toast.error(evt.error || 'Board analysis failed');
+        }
+      }
+    };
+    socket.on('mood-board:analyze', onEvent);
+    return () => {
+      cancelled = true;
+      socket.off('mood-board:analyze', onEvent);
+    };
+  }, [boardId, applyJob]);
+
+  const jobProgress = jobRunning
+    ? (job.phase === 'composing'
+      ? 'Composing board style…'
+      : job.total > 0
+        ? `Analyzing ${formatCount(Math.min(job.done + 1, job.total))} of ${formatCount(job.total)}`
+        : 'Preparing…')
+    : '';
+
   const analyzeBoard = async () => {
     if (!board?.id || busy) return;
     if (!selectedProviderId) {
       toast.error('Select a vision-capable provider to analyze the board');
       return;
     }
-    setBusy(true);
-    let failures = 0;
-    // Adopt gallery prompts for older pins first so they aren't re-analyzed.
-    const filled = await backfillMoodBoardPrompts(board.id, { silent: true }).catch(() => null);
-    if (!mountedRef.current) return;
-    const activePlan = filled ? boardAnalyzePlan(filled.items) : plan;
-    if (filled) onBoardChange(filled);
-    const pending = activePlan.pending;
-    for (let i = 0; i < pending.length; i += 1) {
-      const item = pending[i];
-      const source = moodBoardItemAnalysisSource(item);
-      if (!source) continue;
-      setProgress(`Analyzing ${formatCount(i + 1)} of ${formatCount(pending.length)}`);
-      const data = await promptFromMedia({
-        sourceKind: source.kind === 'video' ? 'video' : 'image',
-        filename: source.filename,
-        targets: source.kind === 'video' ? ['image', 'video'] : ['image'],
-        providerId: selectedProviderId,
-        model: selectedModel || undefined,
-      }, { silent: true }).catch(() => null);
-      if (!mountedRef.current) return;
-      const analysis = moodBoardAnalysisFromResult(item, data);
-      if (!analysis) {
-        failures += 1;
-        continue;
-      }
-      const saved = await updateMoodBoardItem(board.id, item.id, { analysis }, { silent: true }).catch(() => null);
-      if (!mountedRef.current) return;
-      if (!saved) {
-        failures += 1;
-        continue;
-      }
-      replaceItem(saved);
-    }
-    setProgress('');
-    const analyzedNow = activePlan.analyzed + (pending.length - failures);
-    if (analyzedNow < 1) {
-      setBusy(false);
-      toast.error('No item could be analyzed, so the board style was not composed');
-      return;
-    }
-    if (failures > 0) {
-      toast.error(`${formatCount(failures)} item${failures === 1 ? '' : 's'} could not be analyzed`);
-    }
-    await compose();
-    if (mountedRef.current) setBusy(false);
+    const started = await startMoodBoardAnalyze(board.id, {
+      providerId: selectedProviderId,
+      model: selectedModel || undefined,
+    }, { silent: true }).catch((err) => {
+      toast.error(err?.message || 'Could not start the board analysis');
+      return null;
+    });
+    if (mountedRef.current && started) setJob(started);
   };
 
   const composeOnly = async () => {
     if (!board?.id || busy) return;
-    setBusy(true);
+    setComposing(true);
     await compose();
-    if (mountedRef.current) setBusy(false);
+    if (mountedRef.current) setComposing(false);
   };
 
   const saveStyle = async () => {
@@ -291,7 +299,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
               >
                 <ScanEye className="w-4 h-4" aria-hidden="true" />
-                {busy && progress ? progress : 'Analyze board'}
+                {jobRunning ? jobProgress : 'Analyze board'}
               </button>
             ) : null}
             {showCompose ? (

@@ -328,6 +328,26 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     payloadSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
 
   },
+  'mood-board:analyze': {
+    direction: 'server-to-client',
+    summary: 'Progress of a mood board analyze run (prompt-from-media over pins, then style compose) so a reopened board page can resume showing it.',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        boardId: { type: 'string' },
+        status: { type: 'string', enum: ['running', 'done', 'failed'] },
+        phase: { type: ['string', 'null'] },
+        total: { type: 'integer' },
+        done: { type: 'integer' },
+        failures: { type: 'integer' },
+        error: { type: ['string', 'null'] },
+        startedAt: { type: 'string' },
+        finishedAt: { type: ['string', 'null'] },
+      },
+      required: ['boardId', 'status'],
+      additionalProperties: false,
+    },
+  },
   'brain:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate Brain summary/settings after a persisted change.',
