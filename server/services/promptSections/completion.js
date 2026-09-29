@@ -2,7 +2,7 @@
  * Completion workflow, worktree, and sentinel prompt sections.
  */
 
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isCliReviewer, isToolFreeReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
+import { DEFAULT_REVIEWER, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isCliReviewer, isToolFreeReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
@@ -11,7 +11,7 @@ import { shellQuote } from '../../lib/shellQuote.js';
 import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
-import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
+import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
 
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 export const NO_CHANGE_AUDIT_GUIDANCE = 'This audit may legitimately conclude that no change is needed. First verify the data this audit owns against authoritative sources. If the audited data is current, leave the worktree clean and do not run the commit, push, PR, or review steps below; write the completion sentinel when this provider uses one, or exit without committing when it does not. If a change is needed, continue through the normal workflow below.';
@@ -659,7 +659,9 @@ export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommand
  * `prCompletion` selects the review gate or CI-only merge gate. Leave-open
  * callers do not invoke this helper.
  */
-function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, forgeCli = 'gh' } = {}) {
+function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewPolicy, forgeCli = 'gh' }) {
+  const { reviewers, optionalReviewers, reviewStopMode } = reviewPolicy;
+  const usernames = normalizeReviewUsernames(reviewPolicy.forgeReviewerUsernames);
   const mergeGateForge = forgeCli === 'glab' ? 'gitlab' : 'github';
   // No review loop → CI is the whole gate, so emit the shared CI procedure that
   // the manual-TUI workflow and the merge follow-up agent also use. The PR URL
@@ -725,11 +727,12 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
  * Resolve the review-loop invocation shared by buildTuiCompletionSection and
  * buildCliCompletionSection: the normalized reviewer usernames, the
  * `--review-with ...` argument text, and the effort-pin note. Both callers
- * used to re-derive this identical trio from the same 8-field reviewer-config
- * bundle independently.
+ * used to re-derive this identical trio from the same reviewer policy
+ * independently.
  */
-function resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies }) {
-  const reviewUsernames = normalizeReviewUsernames(usernames);
+function resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewPolicy }) {
+  const { reviewers, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies } = reviewPolicy;
+  const reviewUsernames = normalizeReviewUsernames(reviewPolicy.forgeReviewerUsernames);
   const reviewArgs = willOpenPR
     ? (runsReviewLoop ? buildReviewWithArgs(reviewers, { stopMode: reviewStopMode, reviewerApplies, usernames: reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts }) : '--review-with none')
     : '';
@@ -794,7 +797,7 @@ function localReviewCompletionInstruction(localReviewRequired = true) {
  * this IS a Claude session, so `/simplify` and `/do:pr` are both safe to emit
  * without a second provider check.
  */
-export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, mode = COMPLETION_MODES.TUI, rendersInlinePrLifecycle = false, portosMergesBranch = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
+export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, mode = COMPLETION_MODES.TUI, rendersInlinePrLifecycle = false, portosMergesBranch = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   if (mode === COMPLETION_MODES.TUI_SLASHDO_FREE) {
@@ -807,7 +810,8 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   // `/do:pr` may inherit a saved `review-with` default. Explicitly opt out
   // when the task's Review Loop control is off so that default cannot start a
   // Copilot (or other external) review unexpectedly.
-  const { reviewUsernames, reviewArgs, effortNote } = resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies });
+  const { reviewUsernames, reviewArgs, effortNote } = resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewPolicy });
+  const { reviewers } = reviewPolicy;
   // A saved slashdo `merge: true` default would otherwise merge a PR that must
   // stay open — dropping our own merge steps isn't enough, `/do:pr` has to be
   // told not to merge (see lib/prDisposition.js).
@@ -840,7 +844,7 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   // alone when it doesn't (nothing else merges a no-review-loop PR). The one
   // exception is a PR a human lands (JIRA-tracked; see lib/prDisposition.js).
   const merge = (willOpenPR && !leavePrOpen && !policyLeavesOpen)
-    ? buildPostPRMergeSteps(3, { prCompletion, reviewers, usernames: reviewUsernames, optionalReviewers, reviewStopMode, forgeCli })
+    ? buildPostPRMergeSteps(3, { prCompletion, reviewPolicy, forgeCli })
     : { lines: (leavePrOpen || policyLeavesOpen) && willOpenPR ? [LEAVE_PR_OPEN_STEP(3, leavePrOpen)] : [], nextStep: (leavePrOpen || policyLeavesOpen) && willOpenPR ? 4 : 3 };
   const sentinelStep = merge.nextStep;
 
@@ -1148,7 +1152,7 @@ export function inlinePrLifecycleSection(task, opts) {
  */
 export function buildInlineReviewLoopSection({
   taskId, branchName, runsReviewLoop, leaveOpen, localAgentLoopBody, localAgentLoopBodyPath = null, writesSentinel = false,
-  reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies, localPhaseReviewers = [], localPhaseCanShortCircuit = false, localPhaseReviewRequired = false, reviewerPositions = [], forgeCli = 'gh', workflowStep,
+  reviewPolicy, localPhaseReviewers = [], localPhaseCanShortCircuit = false, localPhaseReviewRequired = false, reviewerPositions = [], forgeCli = 'gh', workflowStep,
 }) {
   // Where control goes after the merge. A TUI run still owes PortOS its
   // `.agent-done` sentinel — telling it to "exit" here is how a finished merge
@@ -1160,14 +1164,7 @@ export function buildInlineReviewLoopSection({
     reviewLoopPRUrl: '$PR_URL',
     reviewLoopPRNumber: '$PR_NUMBER',
     reviewLoopPRBranch: branchName || '<branch>',
-    reviewLoopReviewers: reviewers,
-    reviewLoopReviewerUsernames: usernames,
-    reviewLoopOptionalReviewers: optionalReviewers,
-    reviewLoopReviewerMaxRounds: reviewerMaxRounds,
-    reviewLoopReviewerModels: reviewerModels,
-    reviewLoopReviewerEfforts: reviewerEfforts,
-    reviewLoopStopMode: reviewStopMode,
-    reviewLoopReviewerApplies: reviewerApplies,
+    ...reviewPolicyToLoopMetadata(reviewPolicy),
     reviewLoopLeaveOpen: leaveOpen,
     // No reviewer configured ⇒ the merge-gate variant (CI is the whole gate),
     // exactly as the merge-only follow-up gets.
@@ -1190,7 +1187,7 @@ export function buildInlineReviewLoopSection({
  * (`lib/agentCompletionMode.js`) rather than re-testing `worktreeInfo` /
  * `willOpenPR` — the caller already resolved those into `mode`.
  */
-export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
+export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, simplifyEnabled = false, leavePrOpen = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = postPrReview ?? (prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE);
   if (canTypeSlashCommands && mode === COMPLETION_MODES.WORKTREE_NO_PUSH) {
@@ -1199,7 +1196,8 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
-    const { reviewUsernames, reviewArgs, effortNote } = resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies });
+    const { reviewUsernames, reviewArgs, effortNote } = resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewPolicy });
+    const { reviewers } = reviewPolicy;
     // `--no-merge` overrides a saved slashdo `merge: true` default, which would
     // otherwise merge a PR this task must leave open (see lib/prDisposition.js).
     const reviewerArg = (reviewArgs ? ` ${reviewArgs}` : '') + ((leavePrOpen || policyLeavesOpen) ? ' --no-merge' : '');
@@ -1221,7 +1219,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     if (leavePrOpen || policyLeavesOpen) {
       lines.push(LEAVE_PR_OPEN_STEP(step, leavePrOpen));
     } else {
-      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewers, usernames: reviewUsernames, optionalReviewers, reviewStopMode, forgeCli });
+      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewPolicy, forgeCli });
       lines.push(...merge.lines);
     }
     return lines.join('\n');

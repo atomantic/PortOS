@@ -32,6 +32,7 @@ import {
   claimSafeReviewers,
   prioritizeToolFreeReviewers,
   resolveReviewerConfig,
+  resolveReviewPolicy,
   resolveClaimReviewerConfig,
   reviewerTokenSlug,
   reviewerModelFlag,
@@ -1029,5 +1030,26 @@ describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
   it('tells the agent where the pending review goes instead', () => {
     expect(REVIEW_UNAVAILABLE_REPORTING_NOTE).toContain('run summary');
     expect(REVIEW_UNAVAILABLE_REPORTING_NOTE).toContain('do NOT post a PR/MR comment');
+  });
+});
+
+describe('resolveReviewPolicy', () => {
+  const defaults = { stopMode: 'on-clean', reviewerApplies: true, usernames: ['alice'] };
+
+  it('bundles the roster with stop-mode and reviewer-applies, task over defaults', () => {
+    const policy = resolveReviewPolicy({ reviewers: ['codex'], reviewStopMode: 'on-findings', reviewerApplies: 'false' }, defaults, null);
+    expect(policy).toMatchObject({ reviewers: ['codex'], forgeReviewerUsernames: ['alice'], reviewStopMode: 'on-findings', reviewerApplies: false });
+    const fromDefaults = resolveReviewPolicy({ reviewers: ['codex'] }, defaults, null);
+    expect(fromDefaults).toMatchObject({ reviewStopMode: 'on-clean', reviewerApplies: true });
+    expect(resolveReviewPolicy({ reviewers: ['codex'] }, null, null).reviewStopMode).toBe(DEFAULT_REVIEW_STOP_MODE);
+  });
+
+  it('clamps reviewerApplies off when the run crosses the public forge, even if configured on', () => {
+    const policy = resolveReviewPolicy({ reviewers: ['codex'], reviewerApplies: true }, defaults, null, { crossesPublicForge: true });
+    expect(policy.reviewerApplies).toBe(false);
+  });
+
+  it('is frozen so one builder cannot mutate the value another reads', () => {
+    expect(Object.isFrozen(resolveReviewPolicy({ reviewers: ['codex'] }, null, null))).toBe(true);
   });
 });
