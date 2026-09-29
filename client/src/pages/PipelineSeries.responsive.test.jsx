@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import PipelineSeries from './PipelineSeries';
+import { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX } from '../../../server/lib/universeBibleLimits.js';
 
 const getPipelineSeries = vi.fn();
 const listPipelineIssues = vi.fn();
@@ -73,6 +74,17 @@ describe('Pipeline series detail — mobile layout', () => {
     const page = (await screen.findByRole('heading', { name: 'Example Series' })).closest('.h-full');
     expect(page).toHaveClass('overflow-y-auto');
     expect(page).toHaveClass('lg:overflow-hidden');
+  });
+
+  it('caps premise, logline and style notes at the server limits (#9140)', async () => {
+    getPipelineSeries.mockResolvedValue({ id: 'series-1', name: 'Example Series', premise: 'x'.repeat(12_000) });
+    renderPage();
+    await screen.findByRole('heading', { name: 'Example Series' });
+    const premise = screen.getByPlaceholderText(/Longer free-form premise/);
+    expect(premise).toHaveAttribute('maxlength', String(PREMISE_MAX));
+    expect(premise.value).toHaveLength(12_000);
+    expect(screen.getByPlaceholderText(/moebius linework/)).toHaveAttribute('maxlength', String(STYLE_NOTES_MAX));
+    expect(document.querySelector(`[maxlength="${LOGLINE_MAX}"]`)).not.toBeNull();
   });
 });
 
