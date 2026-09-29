@@ -95,6 +95,7 @@ export { default as useRunWithPicker } from './useRunWithPicker.js';
 export * from './useRecentImageGallery.js';
 export { default as useReviewerModelOptions } from './useReviewerModelOptions.js';
 export { default as useRowDraft } from './useRowDraft.js';
+export { default as useTerminalFullscreen } from './useTerminalFullscreen.js';
 export { default as useTheme } from './useTheme.js';
 export { default as useThreejsModelFamilies } from './useThreejsModelFamilies.js';
 export { default as useUniverse } from './useUniverse.js';
