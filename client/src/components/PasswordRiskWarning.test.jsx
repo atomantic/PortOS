@@ -3,8 +3,16 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { Link, MemoryRouter } from 'react-router';
 import PasswordRiskWarning from './PasswordRiskWarning.jsx';
 import { getAuthStatus, getPasswordRiskStatus } from '../services/apiAuth.js';
+import socket from '../services/socket.js';
 
 vi.mock('../services/apiAuth.js', () => ({ getAuthStatus: vi.fn(), getPasswordRiskStatus: vi.fn() }));
+vi.mock('../services/socket.js', () => ({
+  default: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), connected: true },
+}));
+const fireSocketEvent = (event) => {
+  for (const [name, handler] of socket.on.mock.calls) if (name === event) handler({});
+};
+
 const renderWarning = () => render(<MemoryRouter><PasswordRiskWarning /><Link to="/">Home</Link><Link to="/apps">Apps</Link></MemoryRouter>);
 beforeEach(() => {
   vi.resetAllMocks();
@@ -109,5 +117,61 @@ describe('password risk warning', () => {
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('checkbox')).toBeInTheDocument();
+  });
+
+  it('does not show password warning when server is unreachable', async () => {
+    const unreachableErr = Object.assign(new Error('Server unreachable — check your connection and try again'), {
+      code: 'SERVER_UNREACHABLE',
+    });
+    getPasswordRiskStatus.mockRejectedValue(unreachableErr);
+    getAuthStatus.mockRejectedValue(unreachableErr);
+    renderWarning();
+    await waitFor(() => expect(getPasswordRiskStatus).toHaveBeenCalled());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('preserves protected status and avoids warning during server restart, then recovers on reconnect', async () => {
+    // Initially protected
+    getPasswordRiskStatus.mockResolvedValue({ enabled: true, revision: 'pw-1' });
+    renderWarning();
+    await waitFor(() => expect(getPasswordRiskStatus).toHaveBeenCalled());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Server goes down (restart during update)
+    const unreachableErr = Object.assign(new Error('Server unreachable — check your connection and try again'), {
+      code: 'SERVER_UNREACHABLE',
+    });
+    getPasswordRiskStatus.mockRejectedValue(unreachableErr);
+    getAuthStatus.mockRejectedValue(unreachableErr);
+
+    fireEvent(window, new Event('focus'));
+    await waitFor(() => expect(getPasswordRiskStatus).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    // Reconnects after restart still protected
+    getPasswordRiskStatus.mockResolvedValue({ enabled: true, revision: 'pw-1' });
+    fireSocketEvent('connect');
+    await waitFor(() => expect(getPasswordRiskStatus).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('shows password risk warning when server reconnects without a password', async () => {
+    // Initial unreachable state (e.g. fresh reload while server is updating)
+    const unreachableErr = Object.assign(new Error('Server unreachable — check your connection and try again'), {
+      code: 'SERVER_UNREACHABLE',
+    });
+    getPasswordRiskStatus.mockRejectedValue(unreachableErr);
+    getAuthStatus.mockRejectedValue(unreachableErr);
+    renderWarning();
+    await waitFor(() => expect(getPasswordRiskStatus).toHaveBeenCalled());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Server comes back online and reports no password set
+    getPasswordRiskStatus.mockResolvedValue({ enabled: false, revision: 'unprotected-rev' });
+    fireSocketEvent('connect');
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox')).toBeInTheDocument();
   });
 });
