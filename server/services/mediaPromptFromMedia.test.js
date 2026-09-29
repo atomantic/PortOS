@@ -98,6 +98,12 @@ beforeEach(() => {
 });
 
 describe('buildPromptFromMediaPrompt', () => {
+  it('asks for emotion and feel, not just literal content', () => {
+    const prompt = buildPromptFromMediaPrompt({ targets: ['image'], mediaKind: 'image', frameCount: 1 });
+    expect(prompt).toMatch(/EMOTION and FEEL/);
+    expect(prompt).toMatch(/expression, gaze, posture/);
+  });
+
   it('asks only for image fields when that is the target', () => {
     const prompt = buildPromptFromMediaPrompt({ targets: ['image'], mediaKind: 'image', frameCount: 1 });
     expect(prompt).toContain('imagePrompt');

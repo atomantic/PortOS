@@ -48,6 +48,13 @@ export const importMusicVideoLyrics = (id, body, options = {}) => request(`/musi
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Align director lyric lines to the vocal (#9074). Body `{}` aligns every line;
+// `{ cueId }` re-aligns one line. Resolves to the updated project. Runs only
+// when the caller invokes it — there is no boot or import hook.
+export const alignMusicVideoLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/align`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // ---- Director scene board ----
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
   method: 'POST', body: JSON.stringify(scene), ...options,
@@ -134,6 +141,14 @@ export const cancelMusicVideoMidiTranscription = (jobId, options = {}) =>
 // the SSE URL below (subscribe with useSseProgress). cancel stops an in-flight job.
 export const renderMusicVideoProject = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/render`, { method: 'POST', ...options });
+export const getMusicVideoCodeDocument = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/code/document`, options);
+export const generateMusicVideoCode = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/code/generate`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const regenerateMusicVideoCodeSection = (id, sectionId, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/code/sections/${encodeURIComponent(sectionId)}/regenerate`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
 
 // EventSource URL for a render job's progress stream (consumed by useSseProgress).
 export const musicVideoRenderEventsUrl = (jobId) =>
@@ -204,6 +219,20 @@ export const stopMusicVideoAutoReview = (id, runId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/auto-reviews/${encodeURIComponent(runId)}/stop`, { method: 'POST', ...options });
 export const cancelMusicVideoAutoReview = (id, runId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/auto-reviews/${encodeURIComponent(runId)}/cancel`, { method: 'POST', ...options });
+
+// ---- Server-owned production run (#9066) ----
+// Start body: { directive?, pool: [{ kind: 'image'|'video', mode, model? }], limits: { maxGenerations,
+// maxReviewAttempts, spendCapUsd? }, providerId?, model? } → { project, run }. The run advances
+// server-side and reports over the `music-video:production` socket event.
+export const startMusicVideoProduction = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/production-runs`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Body: { limits?: partial limits (may only RAISE), acceptBasis?: true } — acceptBasis continues a run halted `needs-replan`.
+export const resumeMusicVideoProduction = (id, runId, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/production-runs/${encodeURIComponent(runId)}/resume`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const stopMusicVideoProduction = (id, runId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/production-runs/${encodeURIComponent(runId)}/stop`, { method: 'POST', ...options });
+export const cancelMusicVideoProduction = (id, runId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/production-runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST', ...options });
 
 // ---- Pre-production treatment (#8980) ----
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to the

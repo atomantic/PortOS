@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Plus, Trash2, Upload } from 'lucide-react';
 
 // Client-minted ids keep a freshly added row addressable across saves without
@@ -15,6 +15,73 @@ const PACING_FIELDS = [
 ];
 
 const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs';
+const round3 = (n) => Math.round(n * 1000) / 1000;
+const MIN_WORD_SEC = 0.02;
+
+/** Move the boundary after `index` by deltaSec. The next word's start follows. */
+function nudgeWordBoundary(words, index, deltaSec) {
+  const next = words.map((word) => ({ ...word }));
+  const word = next[index];
+  if (!word || !Number.isFinite(deltaSec)) return words;
+  const following = next[index + 1];
+  const ceiling = following ? following.endSec - MIN_WORD_SEC : word.endSec + Math.abs(deltaSec) + 1;
+  const boundary = round3(Math.min(ceiling, Math.max(word.startSec + MIN_WORD_SEC, word.endSec + deltaSec)));
+  word.endSec = boundary;
+  if (following) following.startSec = boundary;
+  return next;
+}
+
+function WordTimingRow({ cue, onPreview, onCommit }) {
+  const words = cue.words || [];
+  const drag = useRef(null);
+  if (words.length === 0) return null;
+  const apply = (index, delta, commit) => {
+    const next = nudgeWordBoundary(drag.current?.words || words, index, delta);
+    if (commit) onCommit(next);
+    else onPreview(next);
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1 pl-1">
+      {words.map((word, index) => (
+        <span key={`${word.w}-${index}`} className="inline-flex items-center gap-0.5">
+          <span
+            className={word.conf === 'interpolated' ? 'text-port-warning' : 'text-port-accent'}
+            title={word.conf === 'interpolated' ? 'Interpolated — the vocal did not match this word' : 'Matched to the vocal'}
+          >{word.w}</span>
+          <button type="button" aria-label={`Nudge the end of ${word.w} earlier`}
+            onClick={() => onCommit(nudgeWordBoundary(words, index, -0.05))}
+            className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 px-1 text-port-text-muted">−</button>
+          <span
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={`Drag the end of ${word.w}`}
+            title="Drag this word boundary"
+            className="inline-block w-1.5 h-4 cursor-ew-resize touch-none rounded bg-port-border"
+            onPointerDown={(event) => {
+              event.currentTarget.setPointerCapture(event.pointerId);
+              drag.current = { index, origin: event.clientX, words: words.map((entry) => ({ ...entry })) };
+            }}
+            onPointerMove={(event) => {
+              if (!drag.current || drag.current.index !== index) return;
+              apply(index, (event.clientX - drag.current.origin) * 0.01, false);
+            }}
+            onPointerUp={(event) => {
+              if (!drag.current || drag.current.index !== index) return;
+              const delta = (event.clientX - drag.current.origin) * 0.01;
+              const base = drag.current.words;
+              drag.current = null;
+              onCommit(nudgeWordBoundary(base, index, delta));
+            }}
+            onPointerCancel={() => { drag.current = null; }}
+          />
+          <button type="button" aria-label={`Nudge the end of ${word.w} later`}
+            onClick={() => onCommit(nudgeWordBoundary(words, index, 0.05))}
+            className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 px-1 text-port-text-muted">+</button>
+        </span>
+      ))}
+    </div>
+  );
+}
 
 /**
  * Timed lyric cues, musical-phrase annotations and shot pacing for the AI
@@ -22,19 +89,30 @@ const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-
  * board immediately (`onEditLocal`) and persist on blur (`onSave`, a project
  * PATCH that replaces the list whole). Import parses pasted LRC, SRT/WebVTT or
  * plain lines server-side; plain lines arrive untimed and are timed here.
- * Changing the project's audio clears every timing (the text stays) — those
- * rows show as untimed until they are re-timed against the new track.
+ * Align words runs only from its button: matched words use the accent colour
+ * and interpolated words use the warning colour. Drag or nudge a boundary to
+ * correct it. Changing a line's text drops its word timings. Changing the
+ * project's audio clears every timing (the text stays).
  */
-export default function LyricsPanel({ project, onEditLocal, onSave, onImport, importing }) {
+export default function LyricsPanel({ project, onEditLocal, onSave, onImport, importing, onAlign, aligning = false }) {
   const cues = project.lyricCues || [];
   const phrases = project.phrases || [];
   const pacing = project.pacing || {};
   const [importText, setImportText] = useState('');
   const [importFormat, setImportFormat] = useState('auto');
   const [importMode, setImportMode] = useState('replace');
+  const [alignError, setAlignError] = useState('');
   const timedCount = cues.filter((c) => typeof c.startSec === 'number').length;
+  const hasAudio = Boolean(project.trackId || project.uploadedAudioFilename);
 
-  const editCue = (id, patch) => onEditLocal({ lyricCues: cues.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
+  const editCue = (id, patch) => onEditLocal({
+    lyricCues: cues.map((c) => {
+      if (c.id !== id) return c;
+      const next = { ...c, ...patch };
+      if (Object.hasOwn(patch, 'words') && patch.words == null) delete next.words;
+      return next;
+    }),
+  });
   const editPhrase = (id, patch) => onEditLocal({ phrases: phrases.map((p) => (p.id === id ? { ...p, ...patch } : p)) });
   const saveCues = (next = cues) => onSave({ lyricCues: next });
   const savePhrases = (next = phrases) => onSave({ phrases: next });
@@ -56,6 +134,19 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
   const submitImport = () => {
     if (!importText.trim()) return;
     onImport({ text: importText, format: importFormat, mode: importMode }, () => setImportText(''));
+  };
+
+  const runAlign = (cueId) => {
+    if (!onAlign || aligning) return;
+    setAlignError('');
+    Promise.resolve(onAlign(cueId)).catch((err) => {
+      setAlignError(err?.message || 'Speech-to-text is not running. Enable the local whisper server in Settings → Voice, then try Align words again.');
+    });
+  };
+  const editWords = (id, words, save) => {
+    const next = cues.map((cue) => (cue.id === id ? { ...cue, words } : cue));
+    onEditLocal({ lyricCues: next });
+    if (save) onSave({ lyricCues: next });
   };
 
   return (
@@ -118,24 +209,49 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
         <section className="space-y-1 min-w-0">
           <div className="flex items-center justify-between">
             <h4 className="font-medium text-port-text">Lyric lines</h4>
-            <button type="button" onClick={() => replaceCues([...cues, { id: mintId('lc'), text: 'New line', startSec: null, endSec: null }])}
-              className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0"><Plus size={13} /> Line</button>
+            <span className="flex items-center gap-2">
+              {onAlign && (
+                <button type="button" onClick={() => runAlign()} disabled={aligning || cues.length === 0 || !hasAudio}
+                  title={hasAudio ? 'Align each word to the vocal' : 'Attach a song before aligning words'}
+                  className="min-h-[44px] sm:min-h-0 text-port-accent disabled:opacity-50">
+                  {aligning ? 'Aligning…' : 'Align words'}
+                </button>
+              )}
+              <button type="button" onClick={() => replaceCues([...cues, { id: mintId('lc'), text: 'New line', startSec: null, endSec: null }])}
+                className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0"><Plus size={13} /> Line</button>
+            </span>
           </div>
+          {alignError && <p role="alert" className="text-port-error">{alignError}</p>}
           {cues.length === 0 && <p className="text-port-text-muted">No lyrics — instrumental tracks plan from sections and beats alone.</p>}
           <div className="max-h-64 overflow-y-auto space-y-1 pr-1">
             {cues.map((cue, i) => (
-              <div key={cue.id} className="flex flex-wrap items-center gap-1">
-                <input type="number" min={0} step={0.01} aria-label={`Line ${i + 1} start (s)`} placeholder="start"
-                  value={cue.startSec ?? ''} onChange={(e) => editCue(cue.id, { startSec: toSec(e.target.value) })}
-                  onBlur={() => saveCues()} className={`${inputCls} w-16`} />
-                <input type="number" min={0} step={0.01} aria-label={`Line ${i + 1} end (s)`} placeholder="end"
-                  value={cue.endSec ?? ''} onChange={(e) => editCue(cue.id, { endSec: toSec(e.target.value) })}
-                  onBlur={() => saveCues()} className={`${inputCls} w-16`} />
-                <input type="text" maxLength={500} aria-label={`Line ${i + 1} text`}
-                  value={cue.text} onChange={(e) => editCue(cue.id, { text: e.target.value })}
-                  onBlur={() => saveCues()} className={`${inputCls} min-w-0 flex-1 basis-40`} />
-                <button type="button" onClick={() => replaceCues(cues.filter((c) => c.id !== cue.id))}
-                  aria-label={`Delete line ${i + 1}`} className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
+              <div key={cue.id} className="space-y-1 border-b border-port-border/50 pb-1">
+                <div className="flex flex-wrap items-center gap-1">
+                  <input type="number" min={0} step={0.01} aria-label={`Line ${i + 1} start (s)`} placeholder="start"
+                    value={cue.startSec ?? ''} onChange={(e) => editCue(cue.id, { startSec: toSec(e.target.value) })}
+                    onBlur={() => saveCues()} className={`${inputCls} w-16`} />
+                  <input type="number" min={0} step={0.01} aria-label={`Line ${i + 1} end (s)`} placeholder="end"
+                    value={cue.endSec ?? ''} onChange={(e) => editCue(cue.id, { endSec: toSec(e.target.value) })}
+                    onBlur={() => saveCues()} className={`${inputCls} w-16`} />
+                  <input type="text" maxLength={500} aria-label={`Line ${i + 1} text`}
+                    value={cue.text} onChange={(e) => {
+                      const text = e.target.value;
+                      // Omit words. null would fail the cue schema, and a whole-list
+                      // save without the key drops timings that no longer match the text.
+                      editCue(cue.id, cue.words && text !== cue.text ? { text, words: undefined } : { text });
+                    }}
+                    onBlur={() => saveCues()} className={`${inputCls} min-w-0 flex-1 basis-40`} />
+                  {onAlign && (
+                    <button type="button" onClick={() => runAlign(cue.id)} disabled={aligning}
+                      aria-label={`Re-align line ${i + 1}`}
+                      className="min-h-[44px] sm:min-h-0 text-port-accent disabled:opacity-50">Re-align</button>
+                  )}
+                  <button type="button" onClick={() => replaceCues(cues.filter((c) => c.id !== cue.id))}
+                    aria-label={`Delete line ${i + 1}`} className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
+                </div>
+                <WordTimingRow cue={cue}
+                  onPreview={(words) => editWords(cue.id, words, false)}
+                  onCommit={(words) => editWords(cue.id, words, true)} />
               </div>
             ))}
           </div>

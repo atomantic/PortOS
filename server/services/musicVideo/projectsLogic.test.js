@@ -118,6 +118,16 @@ describe('cloneProjectRecord', () => {
     ]);
   });
 
+  it('starts a clone with no auto-review runs, and adds no field when the source has none', () => {
+    const withRuns = cloneProjectRecord({
+      ...baseProject(),
+      autoReviews: [{ id: 'ar-1', status: 'running', attempts: [{ revisionId: 'rev-1' }] }, { id: 'ar-2', status: 'complete' }],
+    }, { id: 'mv-2', now: '2026-01-02T00:00:00.000Z' });
+    expect(withRuns.autoReviews).toEqual([]);
+    const without = cloneProjectRecord(baseProject(), { id: 'mv-3', now: '2026-01-02T00:00:00.000Z' });
+    expect(without).not.toHaveProperty('autoReviews');
+  });
+
   it('can fork the board without carrying generated media', () => {
     const source = {
       ...baseProject(),
@@ -288,6 +298,20 @@ describe('applyProjectPatch', () => {
     expect(second.visualSpec.references[0].id).toBe(ref.id);
   });
 
+  it('stores the automation brief only when set, merges patches per sub-field, and clears with null', () => {
+    expect('automation' in baseProject()).toBe(false);
+    const created = buildProjectRecord({
+      name: 'Auto', mode: 'autonomous',
+      automation: { tools: ['video:fal', 'image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25 },
+    }, { id: 'mv-a', now: 'n' });
+    // De-duplicated, in catalog order (image before video).
+    expect(created.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25 });
+    const edited = applyProjectPatch(created, { automation: { guidance: 'darker' } });
+    expect(edited.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'darker', budgetUsd: 25 });
+    expect(applyProjectPatch(edited, { automation: { budgetUsd: null } }).automation.budgetUsd).toBeNull();
+    expect(applyProjectPatch(edited, { automation: null }).automation).toBeNull();
+  });
+
   it('persists explicit renderer settings and merges later partial changes', () => {
     const project = buildProjectRecord({
       name: 'A',
@@ -325,6 +349,19 @@ describe('setAudioAnalysis', () => {
     const next = setAudioAnalysis(baseProject(), analysis);
     expect(next.audioAnalysis).toEqual(analysis);
     expect(next.status).toBe('analyzed');
+  });
+
+  it('keeps a feature track through validation, drops it with the audio source, and leaves legacy analyses without one (#9073)', () => {
+    const features = {
+      envelopes: { fps: 30, rms: [0, 1], low: [0, 1], mid: [0, 1], high: [0, 1] },
+      onsets: { low: [0.5], mid: [], high: [] },
+      truncatedAtSec: null,
+    };
+    const withFeatures = setAudioAnalysis({ ...baseProject(), trackId: 't1' }, { ...analysis, version: 2, features });
+    expect(withFeatures.audioAnalysis.features).toEqual(features);
+    expect(setAudioAnalysis(baseProject(), analysis).audioAnalysis.features).toBeUndefined();
+    expect(() => setAudioAnalysis(baseProject(), { ...analysis, features: { ...features, envelopes: { ...features.envelopes, low: [2] } } })).toThrow();
+    expect(applyProjectPatch(withFeatures, { trackId: 't2' }).audioAnalysis).toBeNull();
   });
 
   it('does not regress a later lifecycle status', () => {
@@ -520,6 +557,20 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(next).not.toHaveProperty('imageMode');
     expect(next).not.toHaveProperty('imageModelId');
     expect(next.videoSettings).toEqual({ modelId: 'shared-video-model' });
+  });
+
+  it('keeps the production-run checkpoint install-local: never on the wire, never taken from a peer, kept over a newer remote (#9066)', async () => {
+    const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
+    const runs = [{ id: 'mvpr-local', status: 'running', pool: [{ kind: 'image', mode: 'codex', model: null }] }];
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'local', productionRuns: runs };
+    expect(sanitizeRecordForWire('musicVideoProject', local)).not.toHaveProperty('productionRuns');
+
+    const foreign = [{ id: 'mvpr-foreign', status: 'running' }];
+    expect(mergeProjectRecord(null, { id: 'mv-2', updatedAt: '2026-01-02T00:00:00Z', productionRuns: foreign }).next)
+      .not.toHaveProperty('productionRuns');
+    const { next } = mergeProjectRecord(local, { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit', productionRuns: foreign });
+    expect(next.name).toBe('remote edit');
+    expect(next.productionRuns).toEqual(runs);
   });
 
   it('remote with a newer updatedAt wins', () => {

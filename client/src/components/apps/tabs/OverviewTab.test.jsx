@@ -134,3 +134,48 @@ describe('OverviewTab native app actions', () => {
     expect(screen.getByRole('button', { name: 'Open Example iOS App in Xcode' }).disabled).toBe(false);
   });
 });
+
+describe('OverviewTab launch video card', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage?.clear();
+    api.getAppSpriteBindings.mockResolvedValue({ bindings: [] });
+  });
+
+  it('renders the launch video card for standard apps and permits dismissal', async () => {
+    const user = userEvent.setup();
+    renderOverview({ ...APP, id: 'standard-app', name: 'Standard App' });
+    await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('standard-app'));
+
+    expect(screen.getByRole('heading', { name: 'Launch videos' })).toBeTruthy();
+    const dismissButton = screen.getByRole('button', { name: 'Dismiss launch video card' });
+    expect(dismissButton).toBeTruthy();
+
+    await user.click(dismissButton);
+
+    expect(screen.queryByRole('heading', { name: 'Launch videos' })).toBeNull();
+    expect(window.localStorage.getItem('portos:launch-video-card-dismissed:standard-app')).toBe('true');
+  });
+
+  it('does not render launch video card when previously dismissed', async () => {
+    window.localStorage.setItem('portos:launch-video-card-dismissed:standard-app', 'true');
+    renderOverview({ ...APP, id: 'standard-app', name: 'Standard App' });
+    await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('standard-app'));
+
+    expect(screen.queryByRole('heading', { name: 'Launch videos' })).toBeNull();
+  });
+
+  it('does not render launch video card for PortOS baseline app', async () => {
+    renderOverview({ ...APP, id: 'portos-default', name: 'PortOS' });
+    await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('portos-default'));
+
+    expect(screen.queryByRole('heading', { name: 'Launch videos' })).toBeNull();
+  });
+
+  it('does not render launch video card for Eidoverse Worlds app', async () => {
+    renderOverview({ ...APP, id: 'eidoverse-worlds', name: 'Eidoverse Worlds', pm2ProcessNames: ['eidoverse-worlds'] });
+    await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('eidoverse-worlds'));
+
+    expect(screen.queryByRole('heading', { name: 'Launch videos' })).toBeNull();
+  });
+});

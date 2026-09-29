@@ -10,7 +10,9 @@ const mockUpdateMoodBoard = vi.fn();
 const mockAddMoodBoardItem = vi.fn();
 const mockUpdateMoodBoardItem = vi.fn();
 const mockSyncMoodBoardPinterest = vi.fn();
+const mockImportMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardXPost = vi.fn();
+const mockLocalizeMoodBoardMedia = vi.fn();
 
 vi.mock('../services/api', () => ({
   getMoodBoard: (...args) => mockGetMoodBoard(...args),
@@ -21,7 +23,9 @@ vi.mock('../services/api', () => ({
   linkMoodBoardPinterest: vi.fn(),
   unlinkMoodBoardPinterest: vi.fn(),
   syncMoodBoardPinterest: (...args) => mockSyncMoodBoardPinterest(...args),
+  importMoodBoardPinterest: (...args) => mockImportMoodBoardPinterest(...args),
   importMoodBoardXPost: (...args) => mockImportMoodBoardXPost(...args),
+  localizeMoodBoardMedia: (...args) => mockLocalizeMoodBoardMedia(...args),
 }));
 
 const mockToastError = vi.fn();
@@ -38,6 +42,18 @@ vi.mock('../components/ui/Toast', () => ({
 // test is the page's own wiring (open, persist via onResult, stored-analysis
 // children), not the analyzer internals, which have their own suite.
 let analysisDelay = null;
+vi.mock('../components/moodBoard/MoodBoardStylePanel', () => ({
+  default: () => <div data-testid="board-style-panel" />,
+}));
+
+vi.mock('../components/media/MediaLightbox', () => ({
+  default: ({ item, onClose }) => (
+    <div data-testid="lightbox" data-src={item.previewUrl}>
+      <button type="button" onClick={onClose}>close-lightbox</button>
+    </div>
+  ),
+}));
+
 vi.mock('../components/media/PromptFromMedia', () => ({
   PromptFromMediaModal: ({ open, item, onResult, children }) => (open && item ? (
     <div data-testid="pfm-modal">
@@ -92,16 +108,49 @@ const flush = async () => {
   await Promise.resolve();
 };
 
-const renderPage = () => render(
-  <MemoryRouter><MoodBoardDetail /></MemoryRouter>,
+const renderPage = (initialEntries = ['/mood-boards/a']) => render(
+  <MemoryRouter initialEntries={initialEntries}><MoodBoardDetail /></MemoryRouter>,
 );
 
 const boardNameValue = () => screen.getByLabelText('Name').value;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLocalizeMoodBoardMedia.mockResolvedValue({ board: null, localized: 0, failed: 0 });
   currentId = 'a';
   analysisDelay = null;
+});
+
+describe('MoodBoardDetail image preview', () => {
+  it('opens the standard lightbox when an image item is clicked and closes it', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'i1', type: 'image', imageUrl: '/data/images/one.png', caption: 'one' }],
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview image' }));
+    expect(screen.getByTestId('lightbox').dataset.src).toBe('/data/images/one.png');
+    fireEvent.click(screen.getByText('close-lightbox'));
+    expect(screen.queryByTestId('lightbox')).toBeNull();
+  });
+
+  it('opens lightbox automatically when initial URL has preview search param', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'i1', type: 'image', imageUrl: '/data/images/one.png', caption: 'one' }],
+    });
+    renderPage(['/mood-boards/a?preview=i1']);
+    expect((await screen.findByTestId('lightbox')).dataset.src).toBe('/data/images/one.png');
+  });
+
+  it('opens lightbox automatically when initial URL has item search param', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'i1', type: 'image', imageUrl: '/data/images/one.png', caption: 'one' }],
+    });
+    renderPage(['/mood-boards/a?item=i1']);
+    expect((await screen.findByTestId('lightbox')).dataset.src).toBe('/data/images/one.png');
+  });
 });
 
 describe('MoodBoardDetail stale-response guards', () => {
@@ -231,6 +280,62 @@ describe('MoodBoardDetail stale-response guards', () => {
   });
 });
 
+describe('MoodBoardDetail private Pinterest import', () => {
+  it('imports a board directly through the signed-in PortOS browser action', async () => {
+    const boardUrl = 'https://www.pinterest.com/example-user/example-board/';
+    const importedBoard = {
+      id: 'a',
+      name: 'Board A',
+      items: [{
+        id: 'mbi-1',
+        type: 'image',
+        imageUrl: '/data/images/pinterest-example.jpg',
+        caption: 'Example pin',
+        source: 'https://www.pinterest.com/pin/9999999999999999999/',
+      }],
+    };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    mockImportMoodBoardPinterest.mockResolvedValueOnce({ board: importedBoard, added: 1, found: 1, skipped: 0 });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    fireEvent.change(screen.getByLabelText('Board URL'), { target: { value: boardUrl } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import pins' }));
+
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Added 1 of 1 Pinterest pins'));
+    expect(mockImportMoodBoardPinterest).toHaveBeenCalledWith('a', boardUrl, { silent: true });
+    expect(screen.getByAltText('Example pin')).toHaveAttribute('src', '/data/images/pinterest-example.jpg');
+  });
+});
+
+describe('MoodBoardDetail external media re-hosting', () => {
+  it('imports external pins into the gallery on load and swaps in the localized board', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'mbi-1', type: 'image', imageUrl: 'https://example.com/a.jpg' }],
+    });
+    mockLocalizeMoodBoardMedia.mockResolvedValueOnce({
+      board: { id: 'a', name: 'Board A', items: [{ id: 'mbi-1', type: 'image', imageUrl: '/data/images/board-1.jpg' }] },
+      localized: 1,
+      failed: 0,
+    });
+    renderPage();
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Imported 1 external image into the gallery'));
+    expect(mockLocalizeMoodBoardMedia).toHaveBeenCalledWith('a', { silent: true });
+    expect(document.querySelector('img[src="/data/images/board-1.jpg"]')).not.toBeNull();
+  });
+
+  it('does not call the importer when every pin is already local', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'mbi-1', type: 'image', imageUrl: '/data/images/x.jpg' }],
+    });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(mockLocalizeMoodBoardMedia).not.toHaveBeenCalled();
+  });
+});
+
 describe('MoodBoardDetail X post import', () => {
   it('imports a post URL and merges the returned board', async () => {
     mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
@@ -350,7 +455,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
       .mockResolvedValueOnce({ id: 'b', name: 'Board B', items: [] });
     const { rerender } = renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
-    fireEvent.click(screen.getByRole('button', { name: 'Analyze with AI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prompt from media' }));
     fireEvent.click(screen.getByRole('button', { name: 'mock-generate' }));
 
     currentId = 'b';
@@ -378,7 +483,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
 
     // One analyzable item → exactly one analyze button; the text item and the
     // external-URL pin get none.
-    expect(screen.getAllByRole('button', { name: 'Analyze with AI' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Prompt from media' })).toHaveLength(1);
   });
 
   it('persists a run onto the item and flips the card to its analyzed state', async () => {
@@ -398,7 +503,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Analyze with AI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prompt from media' }));
     expect(screen.getByTestId('pfm-modal')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'mock-generate' }));
@@ -411,12 +516,14 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
           providerId: 'openai',
           model: 'gpt-4o',
         },
+        // The caption mirrors the analysis prompt when the item had none.
+        caption: 'a moody castle at dusk',
       }, { silent: true });
     });
 
     // The persisted item flows back into board state: the card badge flips and
     // the modal now shows the stored analysis.
-    await screen.findByRole('button', { name: 'View AI analysis' });
+    await screen.findByRole('button', { name: 'View prompt from media' });
     expect(screen.getByLabelText('Saved analysis prompt')).toHaveValue('a moody castle at dusk');
   });
 
@@ -433,11 +540,114 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'View AI analysis' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View prompt from media' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     await waitFor(() => {
       expect(mockUpdateMoodBoardItem).toHaveBeenCalledWith('a', 'i1', { analysis: null }, { silent: true });
     });
-    await screen.findByRole('button', { name: 'Analyze with AI' });
+    await screen.findByRole('button', { name: 'Prompt from media' });
+  });
+
+  it('displays the analyzed prompt indicator and value over the default caption', async () => {
+    const analyzedItem = {
+      id: 'i1',
+      type: 'image',
+      mediaKey: 'image:pic.png',
+      caption: 'default caption from pin',
+      analysis: {
+        prompt: 'detailed analyzed prompt',
+      },
+    };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [analyzedItem] });
+    mockUpdateMoodBoardItem.mockResolvedValueOnce({
+      ...analyzedItem,
+      analysis: { prompt: 'updated analyzed prompt' },
+    });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    expect(screen.getByTestId('item-indicator-analyzed')).toBeInTheDocument();
+    expect(screen.getByText('Analyzed prompt')).toBeInTheDocument();
+    expect(screen.getByText('default caption from pin')).toBeInTheDocument();
+
+    const input = screen.getByLabelText('Analyzed prompt');
+    expect(input).toHaveValue('detailed analyzed prompt');
+
+    fireEvent.change(input, { target: { value: 'updated analyzed prompt' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(mockUpdateMoodBoardItem).toHaveBeenCalledWith('a', 'i1', {
+        analysis: {
+          prompt: 'updated analyzed prompt',
+        },
+        prompt: 'updated analyzed prompt',
+      }, { silent: true });
+    });
+  });
+
+  it('displays the prompt indicator and value for items with prompt but no analysis', async () => {
+    const itemWithPrompt = {
+      id: 'i2',
+      type: 'image',
+      mediaKey: 'image:pic2.png',
+      prompt: 'explicit prompt text',
+      caption: 'default caption',
+    };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [itemWithPrompt] });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    expect(screen.getByTestId('item-indicator-prompt')).toBeInTheDocument();
+    expect(screen.getByTestId('item-indicator-prompt')).toHaveTextContent('Prompt');
+    const input = screen.getByLabelText('Item prompt');
+    expect(input).toHaveValue('explicit prompt text');
+  });
+
+  it('displays only default caption with no indicator when item has not been analyzed or given a prompt', async () => {
+    const pinItem = {
+      id: 'i3',
+      type: 'image',
+      imageUrl: '/data/images/pin.jpg',
+      caption: 'simple pin description',
+    };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [pinItem] });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    expect(screen.queryByTestId('item-indicator-analyzed')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('item-indicator-prompt')).not.toBeInTheDocument();
+    expect(screen.getByText('Caption')).toBeInTheDocument();
+    const input = screen.getByLabelText('Item caption');
+    expect(input).toHaveValue('simple pin description');
+  });
+});
+
+describe('MoodBoardDetail desktop layout', () => {
+  it('renders mood board items on the left and add forms on the right column', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a',
+      name: 'Board A',
+      items: [{ id: 'mbi-1', type: 'image', imageUrl: '/data/images/pic.jpg', caption: 'Pic 1' }],
+    });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    const itemsSection = screen.getByRole('region', { name: 'Mood board items' });
+    const addAside = screen.getByRole('complementary', { name: 'Add to mood board' });
+
+    expect(itemsSection).toBeInTheDocument();
+    expect(addAside).toBeInTheDocument();
+
+    const parentGrid = itemsSection.parentElement;
+    expect(parentGrid).toBe(addAside.parentElement);
+    expect(parentGrid.className).toContain('lg:grid-cols-');
+    expect(parentGrid.firstElementChild).toBe(itemsSection);
+    expect(parentGrid.lastElementChild).toBe(addAside);
+
+    // Verify add forms are contained within the right aside
+    expect(addAside).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
+    expect(addAside).toContainElement(screen.getByRole('button', { name: 'Import pins' }));
+    expect(addAside).toContainElement(screen.getByRole('button', { name: 'Import' }));
   });
 });

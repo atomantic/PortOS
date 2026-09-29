@@ -3,16 +3,19 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({ uploadGalleryVideo: vi.fn() }));
+vi.mock('../../services/api', () => ({ uploadGalleryVideo: vi.fn(), exportCodeAnimation: vi.fn(), cancelCodeAnimationExport: vi.fn() }));
+vi.mock('../../hooks/useSseProgress', () => ({ useSseProgress: vi.fn(() => ({ latest: null })) }));
 
 import CodeAnimationPreview, { prepareAnimationHtml } from './CodeAnimationPreview';
+import { exportCodeAnimation } from '../../services/api';
+import { useSseProgress } from '../../hooks/useSseProgress';
 
 const MESSAGES = { ready: 'ca:ready', record: 'ca:record', recorded: 'ca:recorded', progress: 'ca:progress', error: 'ca:error' };
 const HTML = '<!DOCTYPE html><html><head><title>x</title></head><body><canvas></canvas></body></html>';
 
-const renderPreview = ({ audioUrl = null } = {}) => render(
+const renderPreview = ({ audioUrl = null, jobId } = {}) => render(
   <MemoryRouter>
-    <CodeAnimationPreview html={HTML} audioUrl={audioUrl} messages={MESSAGES} audioGlobal="ANIMATION_AUDIO_URL" frame={{ width: 1920, height: 1080, durationSeconds: 5 }} title="Lantern" />
+    <CodeAnimationPreview html={HTML} audioUrl={audioUrl} messages={MESSAGES} audioGlobal="ANIMATION_AUDIO_URL" frame={{ width: 1920, height: 1080, durationSeconds: 5 }} title="Lantern" jobId={jobId} />
   </MemoryRouter>,
 );
 
@@ -64,7 +67,7 @@ describe('CodeAnimationPreview', () => {
     await postFromFrame(target, { type: MESSAGES.ready, meta: { duration: 5 } });
     expect(screen.getByText('Animation ready')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /record video/i }));
+    await user.click(screen.getByRole('button', { name: /record \(real-time\)/i }));
     expect(postMessage).toHaveBeenCalledWith({ type: MESSAGES.record }, '*');
 
     // A message from any other window is ignored.
@@ -104,5 +107,19 @@ describe('CodeAnimationPreview', () => {
     const frame = await screen.findByTitle('Code animation preview');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(frame.getAttribute('srcdoc')).not.toContain('ANIMATION_AUDIO_URL');
+  });
+});
+
+describe('CodeAnimationPreview frame-exact export', () => {
+  it('offers export only for a saved job, queues it, and follows the composition job stream', async () => {
+    const user = userEvent.setup();
+    exportCodeAnimation.mockResolvedValue({ jobId: 'media-1', notes: [] });
+    const { unmount } = renderPreview();
+    expect(screen.queryByRole('button', { name: /export mp4/i })).toBeNull();
+    unmount();
+    renderPreview({ jobId: 'job-1' });
+    await user.click(screen.getByRole('button', { name: /export mp4/i }));
+    expect(exportCodeAnimation).toHaveBeenCalledWith('job-1', { silent: true });
+    expect(useSseProgress).toHaveBeenLastCalledWith('/api/html-composition/media-1/events', { enabled: true });
   });
 });

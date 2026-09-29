@@ -4347,4 +4347,35 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
       }
     }
     expect(offenders, `Conditionally-rendered error text that announces nothing — render <Banner tone="error"> (it supplies role="alert" itself), or add role="alert" for an error the user's own action produced and role="status" for a passive load failure (WCAG 4.1.3):\n${offenders.join('\n')}`).toEqual([]);  });
+
+  it('keeps interactive elements out of a CollapsibleSection label (#9165)', () => {
+    // The label renders inside the header <button>; a link or button there is
+    // nested-interactive (WCAG 4.1.2). It belongs in `headerActions`.
+    const offenders = [];
+    const interactiveIn = (label) => /<(Link|NavLink|a|button)[\s/>]/.test(label ?? '');
+    expect(interactiveIn('<span><Link to="/x">go</Link></span>')).toBe(true);
+    expect(interactiveIn('<span><a href="/x">go</a></span>')).toBe(true);
+    expect(interactiveIn('<span>plain <b>text</b></span>')).toBe(false);
+    for (const file of trackedJsxFiles()) {
+      const src = maskedSourceOf(file);
+      for (const node of forEachOpeningTag(src, 'CollapsibleSection')) {
+        if (interactiveIn(attributeValue(node.tag, 'label'))) offenders.push(`${file}:${lineOf(src, node.index)}`);
+      }
+    }
+    expect(offenders, `Interactive element inside a CollapsibleSection label — pass it as headerActions so it sits beside the toggle button, not inside it:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('renders exactly one <main> landmark — the app shell owns it (#9163)', () => {
+    // Layout.jsx renders the skip-link target <main id="main-content">; a page
+    // rendering its own <main> nests a second landmark inside it (WCAG 1.3.1).
+    // Layout-free entry pages own their <main>.
+    const OWN_MAIN = new Set(['src/components/Layout.jsx', 'src/pages/EidoverseGuest.jsx', 'src/pages/FableLoomHostedJoin.jsx']);
+    const offenders = [];
+    for (const file of trackedJsxFiles()) {
+      if (OWN_MAIN.has(file.replace(/^.*?(src\/)/, '$1'))) continue;
+      const src = maskedSourceOf(file);
+      for (const node of forEachOpeningTag(src, 'main')) offenders.push(`${file}:${lineOf(src, node.index)}`);
+    }
+    expect(offenders, `Nested <main> — use <section> (the app shell's <main id="main-content"> is the only landmark):\n${offenders.join('\n')}`).toEqual([]);
+  });
 });

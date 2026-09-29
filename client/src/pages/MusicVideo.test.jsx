@@ -53,6 +53,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   reorderMusicVideoScenes: vi.fn(),
   splitMusicVideoScene: vi.fn(),
   importMusicVideoLyrics: vi.fn(),
+  alignMusicVideoLyrics: vi.fn(),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),
@@ -81,8 +82,11 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   startMusicVideoRevision: vi.fn(),
   resumeMusicVideoRevision: vi.fn(),
   cancelMusicVideoRevision: vi.fn(),
+  getMusicVideoCodeDocument: vi.fn(async () => ({ html: '<!doctype html><html><body></body></html>', durationSec: 2, fps: 24, width: 1280, height: 720, song: { sections: [] }, timeline: { sections: [] } })),
+  generateMusicVideoCode: vi.fn(),
+  regenerateMusicVideoCodeSection: vi.fn(),
 }));
-vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn() }));
+vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn(), listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn(), uploadGalleryImage: vi.fn() }));
 vi.mock('../hooks/useProviderModels', () => ({
@@ -153,13 +157,13 @@ vi.mock('../hooks/useSseProgress.js', () => ({
   isTerminalSseFrame: (frame) => TERMINAL_TYPES.has(frame?.type),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
-vi.mock('../components/PageHeader', () => ({ default: ({ title }) => <div>{title}</div> }));
+vi.mock('../components/PageHeader', () => ({ default: ({ title, actions }) => <div>{title}{actions}</div> }));
 
 import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
-  deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender,
-  importMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
+  deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject,
+  importMusicVideoLyrics, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
@@ -979,12 +983,32 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     expect(screen.getByLabelText('Lyrics to import')).toHaveValue('');
 
     fireEvent.change(line, { target: { value: 'second line, retold' } });
+    expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
     fireEvent.blur(line);
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
       'mv-3',
       { lyricCues: [cues[0], { ...cues[1], text: 'second line, retold' }] },
       { silent: true },
     ));
+  });
+
+  it('aligns words only after the button click and shows the returned timings', async () => {
+    const cues = [{
+      id: 'lc-1', text: 'walking home', startSec: 0.5, endSec: 1.5,
+      words: [
+        { w: 'walking', startSec: 0.5, endSec: 1, conf: 'matched' },
+        { w: 'home', startSec: 1, endSec: 1.5, conf: 'interpolated' },
+      ],
+    }];
+    await openProject({ ...PROJECT_ANALYZED, lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: null, endSec: null }] });
+    expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
+    alignMusicVideoLyrics.mockResolvedValue({ id: 'mv-3', lyricCues: cues, updatedAt: 't' });
+    fireEvent.click(screen.getByRole('button', { name: 'Align words' }));
+    await waitFor(() => expect(alignMusicVideoLyrics).toHaveBeenCalledWith('mv-3', {}, { silent: true }));
+    expect(await screen.findByText('walking')).toHaveClass('text-port-accent');
+    expect(screen.getByText('home')).toHaveClass('text-port-warning');
+    fireEvent.click(screen.getByRole('button', { name: 'Re-align line 1' }));
+    await waitFor(() => expect(alignMusicVideoLyrics).toHaveBeenLastCalledWith('mv-3', { cueId: 'lc-1' }, { silent: true }));
   });
 
   it('flags a non-looping shot longer than its clip and trims it; a legacy scene is left alone', async () => {
@@ -1032,7 +1056,7 @@ describe('MusicVideo typography composition (#8984)', () => {
       composition: expect.objectContaining({ mode: 'concat', textCues: [expect.objectContaining({ text: 'first line', startSec: 1, endSec: 3, template: 'fade' })] }),
     }, { silent: true }));
 
-    fireEvent.change(screen.getByLabelText('Final render'), { target: { value: 'composed' } });
+    fireEvent.change(document.getElementById('mv-typo-mode'), { target: { value: 'composed' } });
     fireEvent.change(screen.getByLabelText('Text cue 1 motion'), { target: { value: 'typewriter' } });
     fireEvent.change(text, { target: { value: 'first line, typed' } });
     fireEvent.blur(text);
@@ -1343,10 +1367,98 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     fireEvent.click(within(createInput.closest('div')).getByRole('button', { name: /Import/i }));
     await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalled());
 
-    const createBtn = screen.getByRole('button', { name: /^Create$/ });
+    const createBtn = screen.getByRole('button', { name: /^Create/ });
     expect(createBtn).toHaveProperty('disabled', true);
     fireEvent.click(createBtn);
     expect(createMusicVideoProject).not.toHaveBeenCalled();
+  });
+
+  it('creates an autopilot project by default with the chosen tools, guidance and budget', async () => {
+    listMusicVideoProjects.mockResolvedValue([]);
+    createMusicVideoProject.mockResolvedValue({ ...PROJECT_NO_CLIP, id: 'mv-new', name: 'Auto MV', mode: 'autonomous' });
+    renderMV();
+    await openCreateForm();
+    fireEvent.change(await screen.findByPlaceholderText('Project name'), { target: { value: 'Auto MV' } });
+    fireEvent.click(screen.getByLabelText(/fal\.ai video/));
+    fireEvent.change(screen.getByLabelText('Guidance'), { target: { value: ' one long take ' } });
+    fireEvent.change(screen.getByLabelText('Budget cap (USD)'), { target: { value: '40' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create autopilot project/ }));
+    await waitFor(() => expect(createMusicVideoProject).toHaveBeenCalled());
+    const [body] = createMusicVideoProject.mock.calls[0];
+    expect(body).toMatchObject({ name: 'Auto MV', mode: 'autonomous', trackId: null });
+    expect(body.automation).toEqual({
+      tools: ['image:external', 'image:local', 'video:local', 'video:fal', 'code:render'],
+      guidance: 'one long take',
+      budgetUsd: 40,
+    });
+  });
+
+  it('selects track first in create drawer, auto-fills name, reads track metadata, and passes concept/style on create', async () => {
+    listMusicVideoProjects.mockResolvedValue([]);
+    listTracks.mockResolvedValue([{
+      id: 'track-cool',
+      title: 'Neon Horizon',
+      artist: 'SynthWave Artist',
+      lyrics: 'Line 1\nLine 2\nLine 3',
+      concept: 'Futuristic city chase',
+      prompt: 'Cyberpunk neon aesthetics',
+      durationSec: 180,
+    }]);
+    createMusicVideoProject.mockResolvedValue({ ...PROJECT_NO_CLIP, id: 'mv-cool', name: 'Neon Horizon' });
+    renderMV();
+    await openCreateForm();
+
+    const trackSelect = await screen.findByLabelText(/Track/i);
+    fireEvent.change(trackSelect, { target: { value: 'track-cool' } });
+
+    // Project name was auto-filled from track title
+    expect(screen.getByPlaceholderText('Project name')).toHaveValue('Neon Horizon');
+    // Track info badge showing lyrics and concept detected
+    expect(screen.getByText(/3 lyric lines loaded/i)).toBeInTheDocument();
+    expect(screen.getByText(/Concept loaded/i)).toBeInTheDocument();
+    expect(screen.getByText(/Style prompt loaded/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Create/ }));
+    await waitFor(() => expect(createMusicVideoProject).toHaveBeenCalled());
+    const [body] = createMusicVideoProject.mock.calls[0];
+    expect(body).toMatchObject({
+      name: 'Neon Horizon',
+      trackId: 'track-cool',
+    });
+  });
+
+  it('changing a track in the edit view auto-seeds track concept and style if not set', async () => {
+    const project = { ...PROJECT_NO_CLIP, trackId: null, concept: null };
+    listTracks.mockResolvedValue([{
+      id: 'track-new',
+      title: 'Solar Flare',
+      concept: 'Space journey',
+      prompt: 'Cosmic sci-fi',
+    }]);
+    updateMusicVideoProject.mockResolvedValue({ ...project, trackId: 'track-new', concept: { prompt: 'Space journey', style: 'Cosmic sci-fi' } });
+    await openProject(project);
+
+    const changeTrackSelect = screen.getByLabelText('Change track');
+    fireEvent.change(changeTrackSelect, { target: { value: 'track-new' } });
+
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      project.id,
+      {
+        trackId: 'track-new',
+        concept: { prompt: 'Space journey', style: 'Cosmic sci-fi' },
+      },
+      { silent: true },
+    ));
+  });
+
+  it('autopilot kickoff analyzes the song, then plans the shots against the brief', async () => {
+    const project = { ...PROJECT_NO_CLIP, scenes: [], automation: { tools: ['image:local'], guidance: 'noir', budgetUsd: null } };
+    analyzeMusicVideoProject.mockResolvedValue({ ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, status: 'analyzed' });
+    planMusicVideoProject.mockResolvedValue({ project: { ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis }, scenesAdded: 3, promptsSeeded: true });
+    await openProject(project);
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
+    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
+    expect(analyzeMusicVideoProject).toHaveBeenCalledWith(project.id, { silent: true });
   });
 
   it('blocks relinking the track while a render is in progress for the selected project', async () => {
@@ -1454,6 +1566,20 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     },
     scenes: [{ sceneId: 's1', order: 0, prompt: 'waves', framePrompt: 'harbor at dawn', referenceImageId: null, videoHistoryId: null, takes: [] }],
   };
+
+  it('carries authored character identity and source styles into actual frame requests', async () => {
+    await openProject({ ...SPEC_PROJECT, concept: { ...SPEC_PROJECT.concept,
+      universeStyle: 'Ink silhouettes', moodBoardStyle: 'Watercolor', subjects: [
+        { id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' },
+      ],
+    } });
+    fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining('character (protagonist): Example singer — Silver coat'),
+    }), { silent: true }));
+    expect(generateImage.mock.calls[0][0].prompt).toContain('Mood board style: Watercolor');
+    expect(generateImage.mock.calls[0][0].prompt).toContain('Universe style: Ink silhouettes');
+  });
 
   it('sends flagged references as conditioning inputs and names the capability gap when the backend refuses them', async () => {
     generateImage.mockRejectedValueOnce(Object.assign(

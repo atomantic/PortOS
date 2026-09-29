@@ -170,6 +170,36 @@ describe('projectsFile federation (#1770)', () => {
     expect(swapped.phrases).toEqual([{ ...saved.phrases[0], startSec: null, endSec: null }]);
   });
 
+  it('keeps a nudged word boundary through reload and clone, and drops words when the audio changes (#9074)', async () => {
+    const p = await file.createProject({ name: 'Karaoke', trackId: 't1' });
+    const nudged = [
+      { w: 'walking', startSec: 1, endSec: 1.55, conf: 'matched' },
+      { w: 'home', startSec: 1.55, endSec: 2, conf: 'matched' },
+    ];
+    await file.updateProject(p.id, {
+      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged }],
+    });
+    const saved = await file.getProject(p.id);
+    expect(saved.lyricCues[0].words).toEqual(nudged);
+    expect(saved.lyricCues[0].text).toBe('walking home');
+    expect((await file.cloneProject(p.id)).lyricCues[0].words).toEqual(nudged);
+
+    const retitled = await file.updateProject(p.id, {
+      lyricCues: [{ id: 'lc-1', text: 'walking house', startSec: 1, endSec: 2, words: nudged }],
+    });
+    expect(retitled.lyricCues[0]).toMatchObject({ text: 'walking house', startSec: 1, endSec: 2 });
+    expect(retitled.lyricCues[0].words).toBeUndefined();
+
+    await file.updateProject(p.id, {
+      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged }],
+    });
+    const swapped = await file.updateProject(p.id, { trackId: 't2' });
+    expect(swapped.lyricCues[0].text).toBe('walking home');
+    expect(swapped.lyricCues[0].words).toBeUndefined();
+    expect(swapped.lyricCues[0].startSec).toBeNull();
+    expect(swapped.lyricCues[0].endSec).toBeNull();
+  });
+
   // #8984 — the composition manifest is editable record state like the lyric
   // cues: normalized on save, carried by clone and peer sync, and its timings
   // (cue times, poster frame) cleared with the audio source, text kept.

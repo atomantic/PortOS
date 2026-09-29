@@ -113,7 +113,7 @@ export default function ContactsTab() {
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-2">
           <Contact size={16} className="text-port-accent" />
-          <h3 className="text-lg font-semibold text-white">macOS Contacts</h3>
+          <h2 className="text-lg font-semibold text-white">macOS Contacts</h2>
         </div>
         <p className="text-sm text-gray-400 mb-4">
           Reads your local AddressBook databases read-only into a machine-local cache.

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { stageConfigUpdateSchema, validateRequest } from '../lib/validation.js';
+import { promptStageNameSchema, promptVariableKeySchema, stageConfigUpdateSchema, validateRequest } from '../lib/validation.js';
 import {
   SYSTEM_STAGE_KEYS,
   isProtectedStage,
@@ -24,6 +24,17 @@ import {
 export function createPortOSPromptsRoutes(aiToolkit) {
   const router = Router();
   const promptsService = aiToolkit.services.prompts;
+
+  // Stage names and variable keys are joined into file paths by the toolkit;
+  // Express decodes %2F in params, so reject anything but a single safe segment.
+  router.param('stage', (req, res, next, value) => {
+    validateRequest(promptStageNameSchema, value);
+    next();
+  });
+  router.param('key', (req, res, next, value) => {
+    validateRequest(promptVariableKeySchema, value);
+    next();
+  });
 
   // GET /api/prompts - List all stages (wrapped in {stages: ...}) plus the
   // system-stage key list, so the Prompt Manager badges/filters them off the
@@ -53,6 +64,10 @@ export function createPortOSPromptsRoutes(aiToolkit) {
     const { key, name, category, content } = req.body;
     if (!key || !content) {
       throw new ServerError('key and content are required', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    validateRequest(promptVariableKeySchema, key);
+    if (promptsService.getVariable(key)) {
+      throw new ServerError(`Variable ${key} already exists`, { status: 409, code: 'CONFLICT' });
     }
     await promptsService.createVariable(key, { name, category, content });
     res.json({ success: true, key });
@@ -142,6 +157,10 @@ export function createPortOSPromptsRoutes(aiToolkit) {
     if (!stageName || !name) {
       throw new ServerError('stageName and name are required', { status: 400, code: 'VALIDATION_ERROR' });
     }
+    validateRequest(promptStageNameSchema, stageName);
+    if (promptsService.getStage(stageName)) {
+      throw new ServerError(`Stage ${stageName} already exists`, { status: 409, code: 'CONFLICT' });
+    }
     const config = { name, description, model, returnsJson, variables };
     await promptsService.createStage(stageName, config, template);
     res.json({ success: true, stageName });
@@ -154,6 +173,9 @@ export function createPortOSPromptsRoutes(aiToolkit) {
   // to `{}` — skip the disk write in that case to avoid an atomicWrite
   // churn on stage-config.json (the toolkit rewrites the entire file).
   router.put('/:stage', asyncHandler(async (req, res) => {
+    if (!promptsService.getStage(req.params.stage)) {
+      throw new ServerError('Stage not found', { status: 404, code: 'NOT_FOUND' });
+    }
     const { template, ...rawConfig } = req.body;
 
     if (Object.keys(rawConfig).length > 0) {

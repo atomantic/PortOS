@@ -13,12 +13,15 @@ vi.mock('../services/moodBoard/index.js', () => ({
   updateBoard: vi.fn(),
   deleteBoard: vi.fn(),
   addBoardItem: vi.fn(),
+  backfillGalleryPrompts: vi.fn(),
   updateBoardItem: vi.fn(),
   removeBoardItem: vi.fn(),
   linkPinterestBoard: vi.fn(),
   unlinkPinterestBoard: vi.fn(),
   syncPinterestBoard: vi.fn(),
   importXPost: vi.fn(),
+  composeBoardCollage: vi.fn(),
+  extractItemFrames: vi.fn(),
 }));
 
 // The synthesis service pulls the aiProvider/promptRunner stack — stub it so
@@ -27,8 +30,13 @@ vi.mock('../services/moodBoardStyleSynthesis.js', () => ({
   synthesizeBoardStyle: vi.fn(),
 }));
 
+vi.mock('../services/moodBoardCompositeStyle.js', () => ({
+  composeBoardPrompt: vi.fn(),
+}));
+
 import * as svc from '../services/moodBoard/index.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
+import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
 import moodBoardRoutes from './moodBoard.js';
 
 const makeApp = () => {
@@ -127,6 +135,45 @@ describe('mood-board routes', () => {
     });
   });
 
+  describe('POST /:id/compose-prompt', () => {
+    it('404s when the board is missing', async () => {
+      svc.getBoard.mockResolvedValueOnce(null);
+      const res = await request(makeApp()).post('/api/mood-boards/nope/compose-prompt').send({});
+      expect(res.status).toBe(404);
+      expect(composeBoardPrompt).not.toHaveBeenCalled();
+    });
+
+    it('persists the composed style on the board', async () => {
+      const board = { id: 'mb-1', name: 'A', items: [] };
+      const style = { prompt: 'ink wash dusk', negativePrompt: null, rationale: 'tactile', analyzedItemCount: 1, providerId: 'ollama', model: 'qwen', composedAt: '2026-08-14T00:00:00.000Z' };
+      svc.getBoard.mockResolvedValueOnce(board);
+      composeBoardPrompt.mockResolvedValueOnce(style);
+      svc.updateBoard.mockResolvedValueOnce({ ...board, style });
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/compose-prompt').send({ providerId: 'ollama', model: 'qwen', effort: 'high' });
+      expect(res.status).toBe(200);
+      expect(composeBoardPrompt).toHaveBeenCalledWith({ board, providerId: 'ollama', model: 'qwen', effort: 'high' });
+      expect(svc.updateBoard).toHaveBeenCalledWith('mb-1', { style });
+      expect(res.body.style.prompt).toBe('ink wash dusk');
+    });
+
+    it('400s on an unknown body key', async () => {
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/compose-prompt').send({ bogus: 'high' });
+      expect(res.status).toBe(400);
+      expect(composeBoardPrompt).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/backfill-prompts', () => {
+    it('404s when the board is missing and returns the updated board otherwise', async () => {
+      svc.backfillGalleryPrompts.mockResolvedValueOnce(null);
+      expect((await request(makeApp()).post('/api/mood-boards/nope/backfill-prompts')).status).toBe(404);
+      svc.backfillGalleryPrompts.mockResolvedValueOnce({ id: 'mb-1', items: [{ id: 'i1', caption: 'p' }] });
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/backfill-prompts');
+      expect(res.status).toBe(200);
+      expect(res.body.items[0].caption).toBe('p');
+    });
+  });
+
   describe('POST /:id/x-post', () => {
     it('validates the body and passes it to the service', async () => {
       svc.importXPost.mockResolvedValueOnce({ board: { id: 'mb-1' }, added: 2 });
@@ -140,6 +187,24 @@ describe('mood-board routes', () => {
       const res = await request(makeApp()).post('/api/mood-boards/mb-1/x-post').send({ url: 'not a url' });
       expect(res.status).toBe(400);
       expect(svc.importXPost).not.toHaveBeenCalled();
+    });
+  });
+  describe('collage + frame extraction', () => {
+    it('applies collage defaults and rejects out-of-range frame counts', async () => {
+      svc.composeBoardCollage.mockResolvedValueOnce({ filename: 'c.jpg' });
+      const ok = await request(makeApp()).post('/api/mood-boards/mb-1/collage').send({});
+      expect(ok.status).toBe(200);
+      expect(svc.composeBoardCollage).toHaveBeenCalledWith('mb-1', { framesPerVideo: 3, addFramesToBoard: false, cellSize: 512 });
+      const bad = await request(makeApp()).post('/api/mood-boards/mb-1/collage').send({ framesPerVideo: 99 });
+      expect(bad.status).toBe(400);
+    });
+
+    it('requires a count for per-item frame extraction', async () => {
+      svc.extractItemFrames.mockResolvedValueOnce({ added: 4 });
+      const ok = await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({ count: 4 });
+      expect(ok.status).toBe(200);
+      expect(svc.extractItemFrames).toHaveBeenCalledWith('mb-1', 'i1', { count: 4 });
+      expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({})).status).toBe(400);
     });
   });
 });

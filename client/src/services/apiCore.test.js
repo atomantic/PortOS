@@ -13,7 +13,7 @@ vi.mock('../components/ui/Toast', () => {
 });
 
 import toast from '../components/ui/Toast';
-import { throwApiError, request, uploadBody } from './apiCore.js';
+import { throwApiError, request, uploadBody, isServerUnreachable } from './apiCore.js';
 
 const makeResponse = ({ status = 400, ok = false, json = null } = {}) => ({
   status,
@@ -103,6 +103,36 @@ describe('request() error path (now delegating to throwApiError)', () => {
     await expect(request('/x', { silent: true })).rejects.toMatchObject({ code: 'PLATFORM_UNAVAILABLE' });
     expect(toast).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('rejects with SERVER_UNREACHABLE code when fetch fails to connect', async () => {
+    global.fetch.mockRejectedValue(new Error('Connection refused'));
+    await expect(request('/x', { silent: true })).rejects.toMatchObject({
+      message: expect.stringContaining('Server unreachable'),
+      code: 'SERVER_UNREACHABLE',
+    });
+  });
+});
+
+describe('isServerUnreachable', () => {
+  it('identifies server unreachable error codes and messages', () => {
+    expect(isServerUnreachable(new Error('Server unreachable — check your connection and try again'))).toBe(true);
+    expect(isServerUnreachable(Object.assign(new Error('down'), { code: 'SERVER_UNREACHABLE' }))).toBe(true);
+    expect(isServerUnreachable(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }))).toBe(true);
+    expect(isServerUnreachable(Object.assign(new Error('not found'), { code: 'ENOTFOUND' }))).toBe(true);
+    expect(isServerUnreachable(Object.assign(new Error('gateway timeout'), { status: 504 }))).toBe(true);
+    expect(isServerUnreachable(Object.assign(new Error('bad gateway'), { status: 502 }))).toBe(true);
+    expect(isServerUnreachable(Object.assign(new Error('service unavailable'), { status: 503 }))).toBe(true);
+    expect(isServerUnreachable(new TypeError('Failed to fetch'))).toBe(true);
+    expect(isServerUnreachable(new TypeError('NetworkError when attempting to fetch resource'))).toBe(true);
+  });
+
+  it('returns false for reachable server errors and empty values', () => {
+    expect(isServerUnreachable(null)).toBe(false);
+    expect(isServerUnreachable(undefined)).toBe(false);
+    expect(isServerUnreachable(new Error('Invalid password'))).toBe(false);
+    expect(isServerUnreachable(Object.assign(new Error('Not found'), { status: 404 }))).toBe(false);
+    expect(isServerUnreachable(Object.assign(new Error('Unauthorized'), { status: 401 }))).toBe(false);
   });
 });
 

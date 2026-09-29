@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   analyzePcm,
+  ANALYSIS_VERSION,
   analyzeAudioFile,
   decodeAudioToPcm,
   buildManualAnalysis,
@@ -542,5 +543,88 @@ describe('snapSectionsToGrid', () => {
     );
     expect(spans(result.sections)).toEqual([[0, 18], [18, 30]]);
     expect(result.beatAligned).toEqual([true, true]);
+  });
+});
+
+describe('analyzePcm feature track (#9073)', () => {
+  const SR = ANALYSIS_SAMPLE_RATE;
+  const HOP_SEC = 1 / 30;
+
+  // (Starts a quarter second in: a hit at sample 0 is an onset from silence in every band.)
+  // A 60Hz thump on every beat plus a noise burst on beats 2 and 4 of each bar.
+  function drumTrack({ bpm = 120, durationSec = 16, offsetSec = 0.25 } = {}) {
+    const out = new Float32Array(Math.round(durationSec * SR));
+    let seed = 99;
+    const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed / 0x7fffffff) * 2 - 1; };
+    const period = 60 / bpm;
+    const kicks = [];
+    const noises = [];
+    for (let beat = 0; offsetSec + beat * period < durationSec - 0.3; beat++) {
+      const t = offsetSec + beat * period;
+      const start = Math.round(t * SR);
+      kicks.push(t);
+      for (let k = 0; k < 0.08 * SR; k++) out[start + k] += 0.8 * Math.exp(-k / (0.03 * SR)) * Math.sin((2 * Math.PI * 60 * k) / SR);
+      if (beat % 2 === 1) {
+        noises.push(t);
+        for (let k = 0; k < 0.04 * SR; k++) out[start + k] += 0.5 * Math.exp(-k / (0.015 * SR)) * rand();
+      }
+    }
+    return { samples: out, kicks, noises };
+  }
+
+  const nearest = (times, t) => Math.min(...times.map((x) => Math.abs(x - t)));
+
+  it('finds low onsets on every beat and mid/high onsets on the noise bursts, each within one hop', () => {
+    const { samples, kicks, noises } = drumTrack();
+    const { features } = analyzePcm(samples, SR);
+    expect(features.onsets.low.length).toBeGreaterThan(0);
+    for (const kick of kicks) expect(nearest(features.onsets.low, kick)).toBeLessThanOrEqual(HOP_SEC);
+    for (const band of ['mid', 'high']) {
+      for (const noise of noises) expect(nearest(features.onsets[band], noise)).toBeLessThanOrEqual(HOP_SEC);
+      // Nothing fires where only the low thump plays (beats 1 and 3).
+      const thumpOnly = kicks.filter((t) => !noises.includes(t));
+      for (const t of thumpOnly) expect(features.onsets[band].every((o) => Math.abs(o - t) > HOP_SEC)).toBe(true);
+    }
+  });
+
+  it('emits normalized 0..1 envelopes on the fixed grid that cover the whole song', () => {
+    const { samples } = drumTrack({ durationSec: 10 });
+    const { features, version } = analyzePcm(samples, SR);
+    const { envelopes } = features;
+    expect(version).toBe(ANALYSIS_VERSION);
+    expect(envelopes.fps).toBeCloseTo(30, 1);
+    for (const name of ['rms', 'low', 'mid', 'high']) {
+      expect(envelopes[name].length).toBeGreaterThanOrEqual(Math.floor(10 * envelopes.fps));
+      expect(Math.min(...envelopes[name])).toBeGreaterThanOrEqual(0);
+      expect(Math.max(...envelopes[name])).toBeLessThanOrEqual(1);
+    }
+    // Bass energy peaks on the thump, not between beats.
+    const at = (t) => envelopes.low[Math.round(t * envelopes.fps)];
+    expect(at(1.27)).toBeGreaterThan(at(1.5) + 0.3);
+    expect(features.truncatedAtSec).toBeNull();
+  });
+
+  it('records where a capped decode stopped rather than returning empty arrays', () => {
+    const { samples } = drumTrack({ durationSec: 4 });
+    const { features } = analyzePcm(samples, SR, { truncatedAtSec: 4 });
+    expect(features.truncatedAtSec).toBe(4);
+    expect(features.envelopes.low.length).toBeGreaterThan(0);
+  });
+
+  it('reports null features (never empty arrays) for audio too short to analyse, and zeros for silence', () => {
+    expect(analyzePcm(new Float32Array(100), SR).features).toBeNull();
+    const silent = analyzePcm(new Float32Array(SR), SR).features;
+    expect(silent.envelopes.low.every((v) => v === 0)).toBe(true);
+    expect(silent.onsets.low).toEqual([]);
+  });
+
+  it('carries a prior feature track (or its absence) through a manual tempo override', () => {
+    const { samples } = drumTrack({ durationSec: 8 });
+    const auto = analyzePcm(samples, SR);
+    const manual = buildManualAnalysisFromCached(auto, { bpm: 100, offsetSec: 0 });
+    expect(manual.features).toEqual(auto.features);
+    const legacy = buildManualAnalysisFromCached({ sections: [], durationSec: 8 }, { bpm: 100 });
+    expect(legacy.features).toBeNull();
+    expect(buildManualAnalysis(samples, SR, { bpm: 100 }).features).not.toBeNull();
   });
 });

@@ -300,7 +300,7 @@ it('leaves scheduled brakes intact and does not spend dispatches on rejected wor
   expect((await runDevelopmentWatchdog({ force: true })).decisions[0].outcome).toBe('already-owned');
   expect(m.record).not.toHaveBeenCalled(); expect(m.execution).not.toHaveBeenCalled();
   m.duplicate = false;
-  m.prepare.mockResolvedValue(null);
+  m.prepare.mockResolvedValue({ task: null, pendingPerpetualDispatch: null, skip: { gate: 'perpetual-work', reason: null, cli: null, remedy: null, detail: null } });
   expect((await runDevelopmentWatchdog({ force: true })).decisions[0].reason).toBe('claim-schedule-no-work');
   expect(m.adds).toEqual([]); expect(m.record).not.toHaveBeenCalled();
 });
@@ -326,4 +326,23 @@ it('withholds batches after Improve is disabled or grants are revoked during pre
   });
   expect((await runDevelopmentWatchdog({ force: true })).decisions[0].reason).toBe('authority-changed');
   expect(m.adds).toEqual([]); expect(m.record).not.toHaveBeenCalled();
+});
+
+describe('development watchdog authorization grants', () => {
+  it.each([
+    ['all granted', {}, {}, { read: true, create: true }],
+    ['role disabled', { enabled: false }, {}, { read: false, create: false }],
+    ['readPortos false', {}, { readPortos: false }, { read: false, create: false }],
+    ['createTasks false (read only)', {}, { createTasks: false }, { read: true, create: false }],
+    ['app outside role.appIds', { appIds: ['other'] }, {}, { read: false, create: false }],
+    ['app outside allowedAppIds', {}, { allowedAppIds: ['other'] }, { read: false, create: false }],
+  ])('%s', async (_name, role, caps, want) => {
+    m.backlog = [{ ref: '42' }];
+    Object.assign(m.state.config.persistentMindMaintainer, role);
+    Object.assign(m.state.config.persistentMindCapabilities, caps);
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    // read grant: the app is scanned; create grant: work is queued
+    expect(Boolean(receipt.apps?.length && receipt.apps[0].complete)).toBe(want.read);
+    expect(m.adds).toHaveLength(want.create ? 1 : 0);
+  });
 });

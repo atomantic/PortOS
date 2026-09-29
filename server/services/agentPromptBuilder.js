@@ -10,9 +10,11 @@ import { join } from 'path';
 import { stat } from 'fs/promises';
 import { getMemorySection } from './memoryRetriever.js';
 import { getToolsSummaryForPrompt } from './tools.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig, resolveReviewPolicy } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
@@ -113,15 +115,14 @@ export function isUiAuditTask(task) {
   return UI_AUDIT_TASK_TYPE_SET.has(taskType);
 }
 
-export function isClaimFlowTask(task, isTruthyMetaFn = (value) => value === true || value === 'true') {
+export function isClaimFlowTask(task) {
   // Delegates to isClaimFlowDispatch (taskTypeHooks.js) so the prompt-side
   // claim posture and the finalization/learning-side exemption resolve the
   // SAME task shapes — that predicate reads the marker plus the full
   // analysisType → taskAnalysisType → taskType chain, covering an archived
   // projection or a bare taskType this narrower chain used to miss (the #6613
-  // writer/reader split, one shape over). The isTruthyMetaFn seam stays for
-  // the suites that inject it.
-  return isTruthyMetaFn(task?.metadata?.claimFlow)
+  // writer/reader split, one shape over).
+  return isTruthyMeta(task?.metadata?.claimFlow)
     || isClaimFlowDispatch(task);
 }
 
@@ -234,7 +235,7 @@ PortOS launched you autonomously. Nobody is watching this session and nothing ca
 
 /** Load and safely stage the review recipe shared by full and light prompts. */
 async function prepareReviewLoopRecipe(task, {
-  providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
+  providerType, providerId, providerCommand, leanMode, worktreeInfo,
   codeReviewDefaults, defaultReviewers,
 }) {
   // Preload slashdo's local-agent review-loop recipe once for review-loop
@@ -243,7 +244,7 @@ async function prepareReviewLoopRecipe(task, {
   // CLI-reviewer invocation. Cheap + cached; only read for follow-ups — and not
   // for a merge-only follow-up, which has no reviewer to invoke and renders a
   // section that ignores this body entirely.
-  const isFollowUpNeedingRecipes = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp)
+  const isFollowUpNeedingRecipes = isTruthyMeta(task.metadata?.reviewLoopFollowUp)
     && !isMergeOnlyFollowUp(task.metadata || {});
   // …and a slashdo-free harness driving its OWN review loop inline needs the
   // identical recipe (`buildInlineReviewLoopSection`). Same predicate the render
@@ -255,7 +256,7 @@ async function prepareReviewLoopRecipe(task, {
   // would otherwise
   // read + `atomicWrite` 56KB and then render nothing from it.
   const isInlineNeedingRecipes = inlinePrLifecycleSection(task, {
-    providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
+    providerType, providerId, providerCommand, leanMode, worktreeInfo,
   }) === 'review-loop'
     && resolveReviewerConfig(task.metadata, codeReviewDefaults, defaultReviewers).reviewers.some(isCliReviewer);
   const localAgentLoopBody = (isFollowUpNeedingRecipes || isInlineNeedingRecipes)
@@ -304,7 +305,6 @@ async function prepareReviewLoopRecipe(task, {
  * @param {Object} config - CoS configuration
  * @param {string} workspaceDir - Working directory (may be a worktree)
  * @param {Object|null} worktreeInfo - Worktree details if using a worktree
- * @param {Function} isTruthyMetaFn - isTruthyMeta function (passed to avoid circular dep)
  * @param {Object} options
  * @param {string} [options.providerType='api'] - `'tui' | 'cli' | 'api'`
  * `providerId` + `providerCommand` + `leanMode` together decide whether the
@@ -332,7 +332,7 @@ async function prepareReviewLoopRecipe(task, {
  *   of a single string, for providers spawned with `--append-system-prompt-file`.
  *   Ignored on the full/api path, which always returns a string.
  */
-export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, isTruthyMetaFn = (v) => v === true || v === 'true', options = {}) {
+export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, options = {}) {
   // Undo the queue-path description/context split so a round-tripped generated
   // prompt (swarm, scheduled claim-work, other system tasks) renders once
   // instead of double-printing its first line under a `### Context` header.
@@ -391,7 +391,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     isFollowUpNeedingRecipes, localAgentLoopBody,
     localAgentLoopBodyForInline, localAgentLoopBodyPath,
   } = await prepareReviewLoopRecipe(task, {
-    providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
+    providerType, providerId, providerCommand, leanMode, worktreeInfo,
     codeReviewDefaults, defaultReviewers,
   });
 
@@ -399,8 +399,8 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);
     const lightOptions = { isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli };
     return options.split === true
-      ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions)
-      : buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions);
+      ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, lightOptions)
+      : buildLightContextPrompt(task, workspaceDir, worktreeInfo, lightOptions);
   }
 
   // Creative Director tasks (scene evaluation, treatment/plan run via API) judge
@@ -427,9 +427,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const compactionSection = task.metadata?.compaction?.needed ? buildCompactionSection(task) : '';
 
   // Build worktree context section if applicable
-  const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+  const willOpenPR = isTruthyMeta(task.metadata?.openPR);
   const whenDone = task.metadata?.whenDone === 'commit-push' ? 'commit-push' : 'leave-uncommitted';
-  const claimFlow = isClaimFlowTask(task, isTruthyMetaFn);
+  const claimFlow = isClaimFlowTask(task);
   // Worktree with no PR: PortOS merges the branch back on exit, so every
   // commit/push instruction below is commit-only (see portosMergesBranchOnExit).
   const portosMergesBranch = portosMergesBranchOnExit({ worktreeInfo, willOpenPR });
@@ -437,13 +437,13 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // A discard (reasoning-only) worktree: the agent reasons in it but it's thrown
   // away on exit with no commit/merge/PR (see agentWorktreeCleanup.js). Suppresses
   // all commit/push/PR completion guidance in favor of the sentinel-only contract.
-  const discardWorktree = isTruthyMetaFn(task.metadata?.discardWorktree);
+  const discardWorktree = isTruthyMeta(task.metadata?.discardWorktree);
   // No-code / API-action task (e.g. Creative Director agents): deliverable is an
   // HTTP PATCH, not a commit — suppress the /do:push completion workflow. Also
   // derive from a CD task's own `creativeDirector` marker so tasks queued as
   // `pending` BEFORE this flag existed (persisted across an upgrade) are still
   // recognized without a metadata migration.
-  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || isCreativeDirectorTask;
+  const noCodeOutput = isTruthyMeta(task.metadata?.noCodeOutput) || isCreativeDirectorTask;
   // A tool-free public-review stage has no sentinel, API, or command to reach
   // for: its reply IS the deliverable. Wins over every other completion contract.
   const toolFreeReasoning = isPublicReviewNoToolProfile(task.metadata?.executionProfile);
@@ -451,12 +451,12 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // is the JSON payload in the sentinel, not an API action — so it takes the
   // programmatic-output contract ahead of the no-code one.
   const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
-  const noChangeSuccess = isTruthyMetaFn(task.metadata?.noChangeSuccess);
-  const isReadOnly = isTruthyMetaFn(task.metadata?.readOnly);
+  const noChangeSuccess = permitsNoChangeCompletion(task);
+  const isReadOnly = isTruthyMeta(task.metadata?.readOnly);
   // The review-loop follow-up that addresses PR feedback and merges (spawned by
   // the previous agent's cleanup hook). Its own procedure section renders far
   // below; the flag is read up here because it is an input to the mode decision.
-  const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
+  const isReviewLoopFollowUp = isTruthyMeta(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
 
   // Build pipeline context section if this is a pipeline stage
@@ -471,7 +471,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // only commit (not push) — keep this wording aligned with the worktree
   // section above. TUI agents own the full simplify+push+PR sequence in the
   // Completion Workflow section below, so this section is suppressed for TUI.
-  const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
+  const simplifyEnabled = isTruthyMeta(task.metadata?.simplify);
   // `/simplify` is a Claude Code built-in slash command — only a Claude session
   // that loaded its commands can run it. Everyone else (API/CLI) gets the inline
   // equivalent describing the same reuse/quality/efficiency self-review so the
@@ -496,21 +496,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // a task pinning no reviewer config would silently drop the configured gating
   // reviewers / stop-mode / reviewer-applies here while the non-PR-owning CLI
   // follow-up path honored them — same defaults, different gating by provider.
-  const {
-    reviewers: taskReviewers,
-    usernames: taskReviewerUsernames,
-    optionalReviewers: taskOptionalReviewers,
-    reviewerMaxRounds: taskReviewerMaxRounds,
-    reviewerModels: taskReviewerModels,
-    reviewerEfforts: taskReviewerEfforts
-  } = resolveReviewerConfig(task.metadata, codeReviewDefaults, defaultReviewers);
-  const taskReviewStopMode = task.metadata?.reviewStopMode || codeReviewDefaults?.stopMode || DEFAULT_REVIEW_STOP_MODE;
-  const configuredTaskReviewerApplies = task.metadata?.reviewerApplies !== undefined
-    ? isTruthyMetaFn(task.metadata?.reviewerApplies)
-    : (codeReviewDefaults?.reviewerApplies === true);
-  // A PR/MR review consumes public contributor-controlled content. Its reviewer
-  // must stay review-only; the orchestrating agent validates and applies fixes.
-  const taskReviewerApplies = willOpenPR ? false : configuredTaskReviewerApplies;
+  // A PR/MR review consumes public contributor-controlled content, so opening a
+  // PR clamps `reviewerApplies` off (the policy documents the rule).
+  const reviewPolicy = resolveReviewPolicy(task.metadata, codeReviewDefaults, defaultReviewers, { crossesPublicForge: willOpenPR });
 
   // TUI completion section — delegate to the shared light-path builder so
   // both prompt paths emit byte-identical workflows. (Background: TUI owns
@@ -586,14 +574,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     baseBranch: worktreeInfo?.baseBranch || null,
     sentinelPath,
     leavePrOpen: leavesPrForHuman(task),
-    reviewers: taskReviewers,
-    usernames: taskReviewerUsernames,
-    optionalReviewers: taskOptionalReviewers,
-    reviewerMaxRounds: taskReviewerMaxRounds,
-    reviewerModels: taskReviewerModels,
-    reviewerEfforts: taskReviewerEfforts,
-    reviewStopMode: taskReviewStopMode,
-    reviewerApplies: taskReviewerApplies
+    reviewPolicy
   });
 
   // Which completion section this mode gets. A mode with no entry renders
@@ -625,7 +606,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     toolsSection, planningContextSection,
   } = await buildFullPathOptionalSections({
     task, workspaceDir, agentId, worktreeInfo, isTui, prCompletion, willOpenPR,
-    taskReviewers, isReviewLoopFollowUp, isFollowUpNeedingRecipes, localAgentLoopBody,
+    reviewPolicy, isReviewLoopFollowUp, isFollowUpNeedingRecipes, localAgentLoopBody,
     skipDevContext,
   });
 
@@ -704,7 +685,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
  */
 async function buildFullPathOptionalSections({
   task, workspaceDir, agentId, worktreeInfo, isTui, prCompletion, willOpenPR,
-  taskReviewers, isReviewLoopFollowUp, isFollowUpNeedingRecipes, localAgentLoopBody,
+  reviewPolicy, isReviewLoopFollowUp, isFollowUpNeedingRecipes, localAgentLoopBody,
   skipDevContext,
 }) {
   // Build review loop section if enabled. The agent itself does NOT open the PR
@@ -718,9 +699,9 @@ async function buildFullPathOptionalSections({
   // review inline — the system-side post-exit handler never fires for TUI.
   const reviewLoopSection = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE && willOpenPR && !isTui ? `
 ## Code Review
-After your task completes, the system will spawn a follow-up agent that runs the review-and-fix loop until all configured reviewers are satisfied, then merges the PR. The follow-up uses **${taskReviewers.join(' → ')}** (in order). ${taskReviewers[0] === DEFAULT_REVIEWER
+After your task completes, the system will spawn a follow-up agent that runs the review-and-fix loop until all configured reviewers are satisfied, then merges the PR. The follow-up uses **${reviewPolicy.reviewers.join(' → ')}** (in order). ${reviewPolicy.reviewers[0] === DEFAULT_REVIEWER
     ? 'Copilot leads the list, so for GitHub PRs the system pre-requests its initial review automatically (skipped on GitLab MRs and other non-GitHub forges); the follow-up then drives the rest of the chain.'
-    : taskReviewers.includes(DEFAULT_REVIEWER)
+    : reviewPolicy.reviewers.includes(DEFAULT_REVIEWER)
       ? 'The follow-up invokes the CLI reviewers itself and requests Copilot at its turn (Copilot is GitHub-only, so it is skipped on non-GitHub forges).'
       : 'The follow-up agent will invoke the configured CLI reviewers directly to critique the PR diff, then iterate on their feedback.'} You do not need to open the PR, trigger the review, or address feedback yourself — focus on producing high-quality, well-tested code so the review passes go cleanly.
 ` : '';
@@ -890,8 +871,8 @@ Begin working on the task now.`;
  * Falls back gracefully when worktree/jira/pipeline metadata is absent — only
  * the present sections render.
  */
-export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, options = {}) {
-  const { taskSections, contractSections } = buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, options);
+export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, options = {}) {
+  const { taskSections, contractSections } = buildLightContextSections(task, workspaceDir, worktreeInfo, options);
   return [...taskSections, ...contractSections, BEGIN_WORKING_LINE].join('\n\n') + '\n';
 }
 
@@ -906,8 +887,8 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
  *
  * @returns {{ userPrompt: string, systemPrompt: string|null }}
  */
-export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, options = {}) {
-  const { taskSections, contractSections } = buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, options);
+export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, options = {}) {
+  const { taskSections, contractSections } = buildLightContextSections(task, workspaceDir, worktreeInfo, options);
   return {
     userPrompt: [...taskSections, BEGIN_WORKING_LINE].join('\n\n') + '\n',
     systemPrompt: contractSections.length ? contractSections.join('\n\n') + '\n' : null,
@@ -916,29 +897,29 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, i
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
-function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, providerModel = null, leanMode = false, agentId = null, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null, localAgentLoopBodyPath = null, forgeCli = null } = {}) {
+function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = true, providerId = null, providerCommand = null, providerModel = null, leanMode = false, agentId = null, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null, localAgentLoopBodyPath = null, forgeCli = null } = {}) {
   // Idempotent with the reconcile in buildAgentPrompt; also protects the
   // directly-exported buildLightContextPrompt/Parts entry points.
   task = reconcileSplitContext(task);
-  const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
-  const claimFlow = isClaimFlowTask(task, isTruthyMetaFn);
+  const willOpenPR = isTruthyMeta(task.metadata?.openPR);
+  const claimFlow = isClaimFlowTask(task);
   // Worktree with no PR: PortOS merges the branch back on exit, so the commit
   // guidance and completion workflow are commit-only (portosMergesBranchOnExit).
   const portosMergesBranch = portosMergesBranchOnExit({ worktreeInfo, willOpenPR });
   const prCompletion = resolvePrCompletion(task.metadata);
-  const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
-  const isReadOnly = isTruthyMetaFn(task.metadata?.readOnly);
-  const discardWorktree = isTruthyMetaFn(task.metadata?.discardWorktree);
+  const simplifyEnabled = isTruthyMeta(task.metadata?.simplify);
+  const isReadOnly = isTruthyMeta(task.metadata?.readOnly);
+  const discardWorktree = isTruthyMeta(task.metadata?.discardWorktree);
   // A no-code / API-action task (e.g. a Creative Director plan/treatment/evaluate
   // agent): its deliverable is an HTTP PATCH, not a commit — suppress the
   // /do:push completion workflow (see buildActionOutputCompletionSection). Also
   // derive from a CD task's `creativeDirector` marker so pre-upgrade `pending`
   // tasks (queued before this flag existed) are recognized without a migration.
-  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
+  const noCodeOutput = isTruthyMeta(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
   const toolFreeReasoning = isPublicReviewNoToolProfile(task.metadata?.executionProfile);
   const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
-  const noChangeSuccess = isTruthyMetaFn(task.metadata?.noChangeSuccess);
-  const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
+  const noChangeSuccess = permitsNoChangeCompletion(task);
+  const isReviewLoopFollowUp = isTruthyMeta(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else
   // the install's configured Code Review Defaults threaded from buildAgentPrompt;
@@ -946,23 +927,9 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // [--reviewer-applies]`. All five fields fall back to the defaults with
   // task-over-default precedence (see the matching block in buildAgentPrompt and
   // resolveReviewLoopOptions) — not just the reviewer list.
-  const {
-    reviewers: lightReviewers,
-    usernames: lightReviewerUsernames,
-    optionalReviewers: lightOptionalReviewers,
-    reviewerMaxRounds: lightReviewerMaxRounds,
-    reviewerModels: lightReviewerModels,
-    reviewerEfforts: lightReviewerEfforts
-  } = resolveReviewerConfig(task.metadata, codeReviewDefaults, defaultReviewers);
-  const lightReviewStopMode = task.metadata?.reviewStopMode || codeReviewDefaults?.stopMode || DEFAULT_REVIEW_STOP_MODE;
-  const configuredLightReviewerApplies = task.metadata?.reviewerApplies !== undefined
-    ? isTruthyMetaFn(task.metadata?.reviewerApplies)
-    : (codeReviewDefaults?.reviewerApplies === true);
   // Inline PR/MR lifecycles and review-loop follow-ups cross the public-forge
-  // boundary. Preserve reviewer-applies only for non-public local review work.
-  const lightReviewerApplies = (willOpenPR || isReviewLoopFollowUp)
-    ? false
-    : configuredLightReviewerApplies;
+  // boundary; `reviewerApplies` survives only for non-public local review work.
+  const reviewPolicy = resolveReviewPolicy(task.metadata, codeReviewDefaults, defaultReviewers, { crossesPublicForge: willOpenPR || isReviewLoopFollowUp });
   const resolvedForgeCli = manualForgeCli(forgeCli, worktreeInfo);
   // Can this session TYPE a Claude Code slash command (`/do:pr`, `/do:push`,
   // `/simplify`)? One predicate, both prompt paths (#3114): `canTypeSlashCommands`
@@ -995,18 +962,18 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // so the completion step's cross-reference can't name the wrong one.
   const inlineSection = claimFlow || [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW].includes(completionMode) ? null : inlinePrLifecycleSection(task, {
     providerType: isTui ? PROVIDER_TYPES.TUI : PROVIDER_TYPES.CLI,
-    providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
+    providerId, providerCommand, leanMode, worktreeInfo,
   });
   const rendersInlinePrLifecycle = inlineSection !== null;
   // Slashdo already partitions reviewers. Plain-git completion prompts need the
   // same split spelled out: local CLIs/local LLMs inspect the committed branch
   // before it is public; Copilot and @login reviewers can only run after a PR.
   const isLocalReviewer = reviewer => isCliReviewer(reviewer) || isToolFreeReviewer(reviewer);
-  const localReviewers = lightReviewers.filter(isLocalReviewer);
-  const localReviewRequired = hasRequiredReviewer(localReviewers, lightOptionalReviewers);
+  const localReviewers = reviewPolicy.reviewers.filter(isLocalReviewer);
+  const localReviewRequired = hasRequiredReviewer(localReviewers, reviewPolicy.optionalReviewers);
   const reviewerPositions = [
-    ...lightReviewers.map((reviewer, position) => ({ reviewer, position })),
-    ...lightReviewerUsernames.map((username, index) => ({ reviewer: `@${username}`, position: lightReviewers.length + index })),
+    ...reviewPolicy.reviewers.map((reviewer, position) => ({ reviewer, position })),
+    ...reviewPolicy.forgeReviewerUsernames.map((username, index) => ({ reviewer: `@${username}`, position: reviewPolicy.reviewers.length + index })),
   ];
   const localReviewSection = inlineSection === 'review-loop'
     ? buildLocalReviewLoopSection({
@@ -1015,19 +982,16 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       baseBranch: worktreeInfo?.baseBranch || null,
       localAgentLoopBody,
       localAgentLoopBodyPath,
-      reviewers: lightReviewers,
-      optionalReviewers: lightOptionalReviewers,
-      reviewerMaxRounds: lightReviewerMaxRounds,
-      reviewerModels: lightReviewerModels,
-      reviewerEfforts: lightReviewerEfforts,
-      reviewStopMode: lightReviewStopMode,
-      reviewerApplies: lightReviewerApplies,
+      reviewPolicy,
       reviewerPositions,
     })
     : '';
-  const prSideReviewers = lightReviewers.filter(reviewer => !isLocalReviewer(reviewer));
+  // The post-PR section renders only the reviewers that need an open PR (the
+  // local ones already ran pre-PR); every other knob is the shared policy's.
+  const prSideReviewers = reviewPolicy.reviewers.filter(reviewer => !isLocalReviewer(reviewer));
+  const prSidePolicy = Object.freeze({ ...reviewPolicy, reviewers: prSideReviewers });
   const runsPrSideReviewLoop = inlineSection === 'review-loop'
-    && (prSideReviewers.length > 0 || lightReviewerUsernames.length > 0);
+    && (prSideReviewers.length > 0 || reviewPolicy.forgeReviewerUsernames.length > 0);
   const localPhaseCanShortCircuit = localReviewSection !== ''
     && runsPrSideReviewLoop;
 
@@ -1099,10 +1063,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     branchName: worktreeInfo?.branchName || null,
     baseBranch: worktreeInfo?.baseBranch || null,
     leavePrOpen: leavesPrForHuman(task),
-    reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies,
+    reviewPolicy,
     forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null
   }));
-  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null }));
+  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null }));
 
   ({
     [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
@@ -1154,14 +1118,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       // Only the TUI completion workflow ends on a sentinel write; a CLI run
       // signals completion by exiting.
       writesSentinel: isTui,
-      reviewers: prSideReviewers,
-      usernames: lightReviewerUsernames,
-      optionalReviewers: lightOptionalReviewers,
-      reviewerMaxRounds: lightReviewerMaxRounds,
-      reviewerModels: lightReviewerModels,
-      reviewerEfforts: lightReviewerEfforts,
-      reviewStopMode: lightReviewStopMode,
-      reviewerApplies: lightReviewerApplies,
+      reviewPolicy: prSidePolicy,
       localPhaseReviewers: localReviewers,
       localPhaseCanShortCircuit,
       localPhaseReviewRequired: localReviewSection ? localReviewRequired : false,

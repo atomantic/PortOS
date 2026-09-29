@@ -33,7 +33,7 @@ function renderBlock(block, i, linkifyText) {
   if (block.type === 'lifecycle') {
     return <div key={i} className="py-0.5 text-xs text-gray-400 break-words">{block.line}</div>;
   }
-  return <MarkdownOutput key={i} content={block.content} linkifyText={linkifyText} />;
+  return <MarkdownOutput key={i} content={block.content} linkifyText={linkifyText} preserveLineBreaks />;
 }
 
 // `linkifyText` is forwarded to MarkdownOutput so a caller that knows the

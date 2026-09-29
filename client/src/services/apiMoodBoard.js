@@ -49,6 +49,27 @@ export const removeMoodBoardItem = (id, itemId, options) =>
     ...options,
   });
 
+// Board analyze runs server-side so it survives navigation: start (or join) the
+// job, and read its live state on return. `null` = no run since server start.
+export const startMoodBoardAnalyze = (id, { providerId, model, effort } = {}, options = {}) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/analyze`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model, effort }),
+    ...options,
+  });
+
+export const getMoodBoardAnalyze = (id, options = {}) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/analyze`, options);
+
+// Distill stored per-item analyses into the board's own composite style prompt
+// and persist it on the board (`style`). Resolves to the updated board.
+export const composeMoodBoardPrompt = (id, { providerId, model, effort } = {}, options = {}) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/compose-prompt`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model, effort }),
+    ...options,
+  });
+
 // Board → universe style synthesis (#4188 Phase 4). Stateless review step:
 // sends the universe's CURRENT style context (styleNotes/influences/locked)
 // plus the chosen LLM; resolves to `{ proposed, diff, rationale, llm }`.
@@ -83,11 +104,39 @@ export const syncMoodBoardPinterest = (id, options) =>
     ...options,
   });
 
+// One-shot import through the signed-in PortOS CDP browser. Resolves
+// `{ board, added, found, skipped }`; no credentials or recurring link stored.
+export const importMoodBoardPinterest = (id, url, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/pinterest/import`, {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+    ...options,
+  });
+
 // One-shot import: paste a public x.com/twitter.com post URL, server pulls its
 // attached photos/video into the board. Resolves `{ board, added }`.
 export const importMoodBoardXPost = (id, url, options) =>
   request(`/mood-boards/${encodeURIComponent(id)}/x-post`, {
     method: 'POST',
     body: JSON.stringify({ url }),
+    ...options,
+  });
+
+// Download every external image on the board into the local gallery.
+// Resolves `{ board, localized, failed }`.
+export const localizeMoodBoardMedia = (id, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/localize-media`, { method: 'POST', ...options });
+
+export const composeMoodBoardCollage = (id, body, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/collage`, {
+    method: 'POST',
+    body: JSON.stringify(body ?? {}),
+    ...options,
+  });
+
+export const extractMoodBoardItemFrames = (id, itemId, count, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/extract-frames`, {
+    method: 'POST',
+    body: JSON.stringify({ count }),
     ...options,
   });

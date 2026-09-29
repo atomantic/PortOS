@@ -101,3 +101,17 @@ it('preserves Gmail API-by-ID archive and delete without browser calls', async (
   expect(mocks.modify).toHaveBeenCalledWith({ userId: 'me', id: 'api-target', requestBody: { removeLabelIds: ['INBOX'] } });
   expect(mocks.evaluate).not.toHaveBeenCalled();
 });
+
+describe('executeAction caller-error statuses', () => {
+  beforeEach(() => { mocks.account.mockReset(); mocks.message.mockReset(); });
+  it('answers a stale message or account with 404 NOT_FOUND', async () => {
+    mocks.account.mockResolvedValueOnce({ id: accountId, type: 'gmail' });
+    mocks.message.mockResolvedValueOnce(null);
+    await expect(executeAction(accountId, 'gone', 'archive')).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND', message: 'Message not found' });
+    mocks.account.mockResolvedValueOnce(null);
+    await expect(executeAction(accountId, 'gone', 'archive')).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND', message: 'Account not found' });
+  });
+  it('answers a bad action with 400', async () => {
+    await expect(executeAction(accountId, 'm', 'explode')).rejects.toMatchObject({ status: 400 });
+  });
+});

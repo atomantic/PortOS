@@ -38,7 +38,8 @@ import { getProject, listProjects, updateProject, mutateProjectRecord } from './
 import { applyProjectPatch } from './projectsLogic.js';
 import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { renderableCues, sectionCardCues } from './composition.js';
-import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
+import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
+import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch, renderSongComposition } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { findStalePerformanceTakes } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
@@ -596,7 +597,119 @@ export async function planMusicVideoRender(project) {
   return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed };
 }
 
-export async function renderMusicVideo(projectId) {
+// An existing HTML composition directory is rendered through the music-video
+// owner (#9075). The caller names the directory; excerpts pass the master's
+// in-point as startSec. This is not the code-rendered project mode below.
+async function renderMusicVideoCode(projectId, { codeDirectory, startSec = 0 }) {
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const existingJob = projectRenders.get(projectId);
+  if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
+    throw new ServerError('Render already in progress for this project', {
+      status: 409, code: 'RENDER_IN_PROGRESS', context: { jobId: existingJob === PENDING ? null : existingJob },
+    });
+  }
+  projectRenders.set(projectId, PENDING);
+  const jobId = randomUUID();
+  try {
+    const audioPath = await resolveMasterAudioPath(project);
+    return await renderSongComposition({ project, directory: codeDirectory, jobId, audioPath, startSec });
+  } finally {
+    if (projectRenders.get(projectId) === PENDING) projectRenders.delete(projectId);
+  }
+}
+
+// Code-rendered mode (#9076) seeks a composition instead of concatenating
+// footage. It shares this module's job map so the existing SSE and cancel
+// routes apply, and it never asks a footage model for pixels.
+async function renderCodeMode(projectId, project, handOff) {
+  const plan = prepareCodeRender(project);
+  // Resolve the master before any rendering mark. A missing track throws here
+  // and the caller releases the pending slot without leaving a job running.
+  const audioPath = await resolveMasterAudioPath(project);
+  await ensureDir(PATHS.videos);
+  await ensureDir(PATHS.videoThumbnails);
+  const renderingOn = await ensureInstanceId();
+  const jobId = randomUUID();
+  const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
+  const outputPath = join(PATHS.videos, filename);
+  const sheetName = filename.replace(/\.mp4$/, '-proof.png');
+  const job = {
+    id: jobId, projectId, status: 'running', clients: [], process: null,
+    totalDuration: plan.durationSec, overlayAbort: new AbortController(),
+  };
+  jobs.set(jobId, job);
+  projectRenders.set(projectId, jobId);
+  handOff();
+  const priorStatus = project.status && project.status !== 'rendering' ? project.status : 'ready';
+  await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename }).catch((err) => {
+    console.error(`❌ Music-video code render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
+  });
+  console.log(`🎬 Rendering code music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} frames=${Math.round(plan.durationSec * plan.fps)} footage=off`);
+  const { signal } = job.overlayAbort;
+  const finish = async (patch) => {
+    projectRenders.delete(projectId);
+    await updateProject(projectId, settledRender(patch.status, patch.extra || {})).catch((err) => {
+      console.error(`❌ Music-video code render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
+    });
+    closeJobAfterDelay(jobs, jobId);
+  };
+  encodeCodeComposition({
+    ...plan,
+    audioPath,
+    outputPath,
+    directory: `compositions/music-video/${projectId}/${jobId}`,
+    signal,
+    onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
+  }).then(async () => {
+    job.overlayAbort = null;
+    job.status = 'complete';
+    let proof = null;
+    try {
+      await writeCodeProofSheet(outputPath, join(PATHS.videoThumbnails, sheetName), plan.sectionTimes, {
+        width: plan.width, height: plan.height, fps: plan.fps,
+      });
+      proof = sheetName;
+    } catch (err) {
+      console.warn(`⚠️ Music-video code proof sheet failed [${jobId.slice(0, 8)}]: ${err.message}`);
+    }
+    const atSec = typeof project.composition?.posterSec === 'number' ? project.composition.posterSec : (plan.sectionTimes[0] || 0);
+    const thumb = await generateThumbnail(outputPath, jobId, { atSec });
+    await appendToVideoHistory({
+      id: jobId,
+      prompt: `Music Video: ${project.name}`,
+      modelId: 'music-video-code',
+      seed: 0,
+      width: plan.width,
+      height: plan.height,
+      numFrames: Math.round(plan.durationSec * plan.fps),
+      fps: plan.fps,
+      filename,
+      thumbnail: thumb,
+      createdAt: new Date().toISOString(),
+      musicVideoProjectId: projectId,
+    });
+    await finish({ status: 'complete', extra: { renderHistoryId: jobId } });
+    console.log(`✅ Code music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
+    broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}`, proof: proof ? `/data/video-thumbnails/${proof}` : null } });
+  }).catch(async (err) => {
+    const canceled = signal.aborted || err?.code === 'CANCELED';
+    job.status = canceled ? 'canceled' : 'error';
+    const reason = canceled ? 'Render cancelled' : `Code render failed: ${err.message}`;
+    job.lastError = reason;
+    const log = canceled ? console.log : console.error;
+    log(`${canceled ? '🛑' : '❌'} Music-video code render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+    await unlink(outputPath).catch(() => {});
+    broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+    await finish({ status: canceled ? priorStatus : 'failed' });
+  });
+  return { jobId };
+}
+
+export async function renderMusicVideo(projectId, options = {}) {
+  if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
+    return renderMusicVideoCode(projectId, options);
+  }
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -613,6 +726,9 @@ export async function renderMusicVideo(projectId) {
 
   let handedOff = false;
   try {
+    if (project.composition?.mode === 'code') {
+      return await renderCodeMode(projectId, project, () => { handedOff = true; });
+    }
     const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);

@@ -243,50 +243,58 @@ export async function updateMemoryEmbedding(id, embedding) {
 }
 
 /**
- * Delete a memory (soft delete by default)
+ * Archive a memory: mark it archived; the row and embedding stay, so it is restorable.
  */
-export async function deleteMemory(id, hard = false) {
+export async function archiveMemory(id) {
   return withMemoryLock(async () => {
-    if (hard) {
-      // Hard delete - remove files
-      await deleteMemoryFiles(id);
+    // Note: We can't call updateMemory here as it would cause deadlock (both use withMemoryLock)
+    // Instead, we handle the archive logic directly within this lock
+    const memory = await loadMemory(id);
+    if (memory) {
+      memory.status = 'archived';
+      memory.updatedAt = new Date().toISOString();
+      await saveMemory(memory);
 
-      // Remove from index
+      // Update index
       const index = await loadIndex();
-      index.memories = index.memories.filter(m => m.id !== id);
-      index.count = index.memories.length;
-      await saveIndex(index);
-
-      // Remove embedding
-      const embeddings = await loadEmbeddings();
-      delete embeddings.vectors[id];
-      await saveEmbeddings(embeddings);
-
-      // Remove from BM25 index
-      memoryBM25.removeMemoryFromIndex(id)
-        .catch(err => console.error(`⚠️ BM25 remove error: ${err.message}`));
-    } else {
-      // Soft delete - mark as archived
-      // Note: We can't call updateMemory here as it would cause deadlock (both use withMemoryLock)
-      // Instead, we handle the soft delete logic directly within this lock
-      const memory = await loadMemory(id);
-      if (memory) {
-        memory.status = 'archived';
-        memory.updatedAt = new Date().toISOString();
-        await saveMemory(memory);
-
-        // Update index
-        const index = await loadIndex();
-        const idx = index.memories.findIndex(m => m.id === id);
-        if (idx !== -1) {
-          index.memories[idx].status = 'archived';
-          await saveIndex(index);
-        }
+      const idx = index.memories.findIndex(m => m.id === id);
+      if (idx !== -1) {
+        index.memories[idx].status = 'archived';
+        await saveIndex(index);
       }
     }
 
-    console.log(`🧠 Memory deleted: ${id} (hard: ${hard})`);
-    cosEvents.emit('memory:deleted', { id, hard });
+    console.log(`🧠 Memory archived: ${id}`);
+    cosEvents.emit('memory:deleted', { id, hard: false });
+
+    return { success: true, id };
+  });
+}
+
+/**
+ * Purge a memory: destroy its files, index entry, embedding and BM25 entry. Not restorable.
+ */
+export async function purgeMemory(id) {
+  return withMemoryLock(async () => {
+    await deleteMemoryFiles(id);
+
+    // Remove from index
+    const index = await loadIndex();
+    index.memories = index.memories.filter(m => m.id !== id);
+    index.count = index.memories.length;
+    await saveIndex(index);
+
+    // Remove embedding
+    const embeddings = await loadEmbeddings();
+    delete embeddings.vectors[id];
+    await saveEmbeddings(embeddings);
+
+    // Remove from BM25 index
+    memoryBM25.removeMemoryFromIndex(id)
+      .catch(err => console.error(`⚠️ BM25 remove error: ${err.message}`));
+
+    console.log(`🧠 Memory purged: ${id}`);
+    cosEvents.emit('memory:deleted', { id, hard: true });
 
     return { success: true, id };
   });

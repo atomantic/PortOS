@@ -67,6 +67,11 @@
   // Wrap time for seamless loops; negative time wraps too.
   const loopT = (t, duration) => ((t % duration) + duration) % duration;
 
+  // The output frame a time belongs to. Shutter motion blur samples times on
+  // both sides of each frame's centre, so per-frame flicker keyed to
+  // floor(t * fps) would change mid-shutter; rounding holds it for the frame.
+  const frameIdx = (t, fps) => Math.round(t * fps);
+
   // Seeded PRNG (mulberry32). Create one per element/scene with a fixed seed,
   // inside seek(t), so the same t always draws the same frame.
   function rng(seed) {
@@ -95,6 +100,93 @@
         for (let time = offsetSec; time < durationSec; time += beatSec) times.push(Math.round(time * 1000) / 1000);
         return times;
       },
+    });
+  }
+
+  // Index of the last entry of a sorted array that is <= t, or -1.
+  function lastAtOrBefore(sorted, t) {
+    let lo = 0;
+    let hi = sorted.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (sorted[mid] <= t) { found = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return found;
+  }
+
+  // Loud-band aliases for the onset lists: "kick-ish", "snare-ish", "hat-ish".
+  // Frequency-band heuristics, not stem separation.
+  const HIT_BANDS = Object.freeze({ kick: 'low', snare: 'mid', hat: 'high', low: 'low', mid: 'mid', high: 'high' });
+
+  // Pure lookups over a song's analysis JSON (the project's `audioAnalysis`),
+  // so a scrubbed or re-rendered frame reads exactly the same values: nothing
+  // here holds state or listens to audio. `data.features` may be null (analysis
+  // predates the feature track); `ready` says so and env/hit then return 0.
+  function song(data = {}) {
+    const features = data && data.features;
+    const envelopes = features && features.envelopes;
+    const onsets = (features && features.onsets) || {};
+    const fps = envelopes && envelopes.fps > 0 ? envelopes.fps : 0;
+    const beatTimes = (data && data.beats) || [];
+    const barTimes = (data && data.downbeats) || [];
+    const sections = (data && data.sections) || [];
+
+    // Envelope value at time t: linear between frames, 0 outside the covered span.
+    function env(name, t) {
+      const series = envelopes && envelopes[name];
+      if (!series || !series.length || t < 0) return 0;
+      const pos = t * fps;
+      const i = Math.floor(pos);
+      if (i >= series.length) return 0;
+      const a = series[i];
+      const b = i + 1 < series.length ? series[i + 1] : a;
+      return a + (b - a) * (pos - i);
+    }
+
+    // Decaying pulse: each onset at or before t contributes 0.5 ** (age / halfLife).
+    // Sums are capped at 12 half-lives back, where a pulse is below 0.03%.
+    function hit(kind, t, halfLife = 0.12) {
+      const times = onsets[HIT_BANDS[kind] || kind];
+      if (!times || !times.length || !(halfLife > 0)) return 0;
+      let total = 0;
+      for (let i = lastAtOrBefore(times, t); i >= 0 && t - times[i] <= halfLife * 12; i--) {
+        total += Math.pow(0.5, (t - times[i]) / halfLife);
+      }
+      return total;
+    }
+
+    // Index of the beat (or bar) that started most recently, -1 before the first.
+    const beatAt = (t) => lastAtOrBefore(beatTimes, t);
+    const barAt = (t) => lastAtOrBefore(barTimes, t);
+
+    // 0..1 progress through the current beat. Before the first / after the last
+    // beat the nearest interval is extended so the phase keeps cycling.
+    function beatPhase(t) {
+      const n = beatTimes.length;
+      if (n === 0) return 0;
+      const i = beatAt(t);
+      if (i >= 0 && i < n - 1) return (t - beatTimes[i]) / (beatTimes[i + 1] - beatTimes[i]);
+      const interval = n > 1 ? (i < 0 ? beatTimes[1] - beatTimes[0] : beatTimes[n - 1] - beatTimes[n - 2]) : (data.bpm ? 60 / data.bpm : 0);
+      return interval > 0 ? loopT(t - beatTimes[i < 0 ? 0 : n - 1], interval) / interval : 0;
+    }
+
+    // The section containing t as { index, label, startSec, endSec, energy,
+    // progress } (progress 0..1), or null between/outside sections.
+    function sectionAt(t) {
+      for (let index = 0; index < sections.length; index++) {
+        const section = sections[index];
+        if (t >= section.startSec && t < section.endSec) {
+          return { ...section, index, progress: (t - section.startSec) / (section.endSec - section.startSec) };
+        }
+      }
+      return null;
+    }
+
+    return Object.freeze({
+      ready: !!envelopes,
+      truncatedAtSec: (features && features.truncatedAtSec) ?? null,
+      env, hit, beatAt, barAt, beatPhase, sectionAt,
     });
   }
 
@@ -142,7 +234,7 @@
   }
 
   root.PortosMotion = Object.freeze({
-    clamp, spring, SPRINGS, preset, track, indicator, swapAlpha, loopT, rng, beats,
-    VOICES, mixCues, toPcm, renderCues,
+    clamp, spring, SPRINGS, preset, track, indicator, swapAlpha, loopT, frameIdx, rng, beats,
+    VOICES, mixCues, toPcm, renderCues, song,
   });
 })(globalThis);

@@ -40,8 +40,10 @@ vi.mock('../services/browserService.js', () => ({
   getHealthStatus: vi.fn(),
   getBrowserStatus: vi.fn(),
   getBrowserLogs: vi.fn(),
+  getRecentLogs: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));
 
+const browserService = await import('../services/browserService.js');
 const router = (await import('./browser.js')).default;
 
 function makeApp() {
@@ -159,5 +161,20 @@ describe('POST /api/browser/navigate — SSRF guard', () => {
     const r = await navigate('not a url');
     expect(r.status).toBe(400);
     expect(navigateToUrlPinned).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/browser/logs — lines query', () => {
+  it.each(['100000000', '-5', 'abc', '0'])('rejects lines=%s with 400', async (v) => {
+    const r = await request(makeApp()).get(`/api/browser/logs?lines=${v}`);
+    expect(r.status).toBe(400);
+    expect(browserService.getRecentLogs).not.toHaveBeenCalled();
+  });
+
+  it('defaults to 50 lines and forwards a valid value', async () => {
+    expect((await request(makeApp()).get('/api/browser/logs')).status).toBe(200);
+    expect(browserService.getRecentLogs).toHaveBeenLastCalledWith(50);
+    await request(makeApp()).get('/api/browser/logs?lines=200');
+    expect(browserService.getRecentLogs).toHaveBeenLastCalledWith(200);
   });
 });

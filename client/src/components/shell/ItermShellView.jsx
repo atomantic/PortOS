@@ -5,6 +5,7 @@ import * as api from '../../services/api';
 import { readClipboard } from '../../lib/clipboard';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import { useItermSession } from '../../hooks/useItermSession';
+import useTerminalFullscreen from '../../hooks/useTerminalFullscreen';
 import TerminalHotKeys from './TerminalHotKeys';
 import ShellSourceSwitch from './ShellSourceSwitch';
 import ItermSessionTabs, { itermLocation } from './ItermSessionTabs';
@@ -26,6 +27,7 @@ export default function ItermShellView() {
   const [showPasteInput, setShowPasteInput] = useState(false);
   const [fetchedStatus, setFetchedStatus] = useState(null);
   const pasteInputRef = useRef(null);
+  const { containerRef, toggleRef } = useTerminalFullscreen(isFullscreen, () => setIsFullscreen(false));
 
   const {
     terminalRef, sessions, listed, status, activeSession, connected,
@@ -83,7 +85,11 @@ export default function ItermShellView() {
   const geometry = activeSession ? `${activeSession.cols}×${activeSession.rows} · sized by iTerm` : null;
 
   return (
-    <div className={isFullscreen
+    <div ref={containerRef}
+      role={isFullscreen ? 'dialog' : undefined}
+      aria-modal={isFullscreen ? 'true' : undefined}
+      aria-label={isFullscreen ? 'Terminal fullscreen view' : undefined}
+      className={isFullscreen
       ? 'fixed inset-0 z-[70] flex flex-col bg-port-bg p-2'
       : 'h-full flex flex-col gap-2 md:gap-3 p-2 md:p-6'}>
       {!isFullscreen && (
@@ -99,6 +105,7 @@ export default function ItermShellView() {
           )}
           <button
             onClick={() => setIsFullscreen(true)}
+            ref={toggleRef}
             className="ml-auto flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px] shrink-0"
             title="Fullscreen terminal"
             aria-label="Fullscreen terminal"

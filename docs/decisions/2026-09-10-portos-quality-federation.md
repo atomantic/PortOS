@@ -168,9 +168,8 @@ remains the bounded release projection: one row per UTC day and category, the
 
 Readers accept v1 `.quality.json` and, only when that file is absent, the
 historical `quality-snapshot.json` filename. A read never mutates the checkout.
-Malformed rows, unknown keys, invalid dictionary indexes, duplicate UTC
-day/category winners, a mismatched origin fingerprint, and oversize files fail
-closed. A future `schemaVersion` is recognized and left unparsed.
+Malformed rows, unknown keys, invalid dictionary indexes, a mismatched origin fingerprint, and oversize files fail
+closed. Rows are date-only (`YYYY-MM-DD`); duplicate UTC day/category rows collapse to the latest run instead of failing. A future `schemaVersion` is recognized and left unparsed.
 
 `npm run quality:snapshot` writes canonical v2 whenever the database has current
 evidence, including when the committed file is still valid v1. It does not

@@ -139,7 +139,13 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
   runPromptThroughProvider: vi.fn()
 }));
 
+vi.mock('./domainUsage.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, recordDomainUsage: vi.fn(async () => {}) };
+});
+
 import { runPromptThroughProvider } from './promptRunner.js';
+import { recordDomainUsage } from './domainUsage.js';
 import * as repoCloner from './repoCloner.js';
 import * as storage from './brainStorage.js';
 import { deleteMemoryAssets } from './chatgptImport.js';
@@ -918,6 +924,21 @@ describe('brain service', () => {
         error: null
       }));
       expect(result.message).toContain('Retrying');
+    });
+
+    it('does not count a manual retry toward the daily brain budget', async () => {
+      storage.getInboxLogById.mockResolvedValue({ id: 'inbox-001', capturedText: 'test' });
+      storage.updateInboxLog.mockResolvedValue({});
+      recordDomainUsage.mockClear();
+      runPromptThroughProvider.mockRejectedValue(new Error('boom'));
+
+      await retryClassification('inbox-001');
+      // The background classification finishes (fails) by writing needs_review.
+      await vi.waitFor(() => expect(storage.updateInboxLog).toHaveBeenCalledWith(
+        'inbox-001', expect.objectContaining({ status: 'needs_review' })
+      ));
+
+      expect(recordDomainUsage).not.toHaveBeenCalled();
     });
 
     it('should throw if entry not found', async () => {

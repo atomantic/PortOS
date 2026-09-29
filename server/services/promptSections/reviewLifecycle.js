@@ -13,6 +13,7 @@ import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
 import { buildCliReviewerOutcomeInstructions } from './reviewerOutcome.js';
 
+import { isTruthyMeta } from '../../lib/metadataFlags.js';
 // A large model reviewing a large diff should not be cut off at the HTTP
 // route's 600000ms cap (`server/routes/codeReview.js`) — the bridge spreads
 // this straight into `runLocalCodeReview`'s own `timeoutMs`, so there is no
@@ -29,7 +30,7 @@ const LOCAL_LLM_REVIEW_TIMEOUT_MS = 1_800_000;
  * slashdo bodies (`/do:rpr`, the local-agent review loop) that section ignores.
  */
 export function isMergeOnlyFollowUp(metadata = {}) {
-  return metadata?.reviewLoopMergeOnly === true || metadata?.reviewLoopMergeOnly === 'true';
+  return isTruthyMeta(metadata?.reviewLoopMergeOnly);
 }
 
 /**
@@ -44,7 +45,7 @@ export function isMergeOnlyFollowUp(metadata = {}) {
  */
 export function isSelfReviewFollowUp(metadata = {}) {
   return isMergeOnlyFollowUp(metadata)
-    && (metadata?.reviewLoopSelfReview === true || metadata?.reviewLoopSelfReview === 'true');
+    && (isTruthyMeta(metadata?.reviewLoopSelfReview));
 }
 
 /**
@@ -743,7 +744,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // nothing here can transition it), so that run reviews and stops. Derived here
   // beside `inline` because it selects phase text, and a flag read 400 lines
   // below the one it pairs with is how the two ladders drifted apart.
-  const leaveOpen = metadata.reviewLoopLeaveOpen === true || metadata.reviewLoopLeaveOpen === 'true';
+  const leaveOpen = isTruthyMeta(metadata.reviewLoopLeaveOpen);
   const prUrl = metadata.reviewLoopPRUrl || '';
   const prBranch = metadata.reviewLoopPRBranch || '';
   const prNumber = metadata.reviewLoopPRNumber ?? '';
@@ -993,26 +994,41 @@ ${cliReviewerProcedure}${(rprBody && (hasCopilot || hasGithubUser)) ? `\n### /do
 }
 
 /**
+ * A `reviewPolicy` (see `resolveReviewPolicy`) as the persisted `reviewLoop*`
+ * metadata keys `buildReviewLoopFollowUpSection` reads. The keys are stored on
+ * follow-up tasks and read by other installs, so they keep their names; this is
+ * the one place a policy field maps onto one.
+ */
+export function reviewPolicyToLoopMetadata(reviewPolicy) {
+  return {
+    reviewLoopReviewers: reviewPolicy.reviewers,
+    reviewLoopReviewerUsernames: reviewPolicy.forgeReviewerUsernames,
+    reviewLoopOptionalReviewers: reviewPolicy.optionalReviewers,
+    reviewLoopReviewerMaxRounds: reviewPolicy.reviewerMaxRounds,
+    reviewLoopReviewerModels: reviewPolicy.reviewerModels,
+    reviewLoopReviewerEfforts: reviewPolicy.reviewerEfforts,
+    reviewLoopStopMode: reviewPolicy.reviewStopMode,
+    reviewLoopReviewerApplies: reviewPolicy.reviewerApplies,
+  };
+}
+
+/**
  * Build the local half of an inline review workflow. Local CLIs and local LLMs
  * can inspect the worktree directly, so they must finish before the branch is
  * pushed; forge-side reviewers remain in the post-PR section.
  */
 export function buildLocalReviewLoopSection({
   taskId, branchName, baseBranch, localAgentLoopBody, localAgentLoopBodyPath = null,
-  reviewers, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies, reviewerPositions = [],
+  reviewPolicy, reviewerPositions = [],
 }) {
-  const localReviewers = (reviewers || []).filter(reviewer => isCliReviewer(reviewer) || isToolFreeReviewer(reviewer));
+  const localReviewers = reviewPolicy.reviewers.filter(reviewer => isCliReviewer(reviewer) || isToolFreeReviewer(reviewer));
   if (!localReviewers.length) return '';
-  const localReviewRequired = hasRequiredReviewer(localReviewers, optionalReviewers);
+  const localReviewRequired = hasRequiredReviewer(localReviewers, reviewPolicy.optionalReviewers);
+  // The pre-PR phase reviews only the local reviewers; forge logins can act only
+  // once a PR exists, so they are left to the post-PR section.
   return buildReviewLoopFollowUpSection({
     reviewLoopPRBranch: branchName || '<branch>',
-    reviewLoopReviewers: localReviewers,
-    reviewLoopOptionalReviewers: optionalReviewers,
-    reviewLoopReviewerMaxRounds: reviewerMaxRounds,
-    reviewLoopReviewerModels: reviewerModels,
-    reviewLoopReviewerEfforts: reviewerEfforts,
-    reviewLoopStopMode: reviewStopMode,
-    reviewLoopReviewerApplies: reviewerApplies,
+    ...reviewPolicyToLoopMetadata({ ...reviewPolicy, reviewers: localReviewers, forgeReviewerUsernames: [] }),
     sourceTaskId: taskId || 'unknown',
   }, { localAgentLoopBody, localAgentLoopBodyPath, localOnly: true, baseBranch, reviewerPositions, localPhaseReviewRequired: localReviewRequired });
 }

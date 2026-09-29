@@ -702,7 +702,6 @@ describe('spawnTuiAgent runtime', () => {
       providerCommand: provider?.command ?? null,
       leanMode: overrides.leanMode ?? false,
       worktreeInfo: overrides.worktreeInfo ?? { branchName: 'agent/t', worktreePath: '/tmp/ws', baseBranch: 'main' },
-      isTruthyMetaFn: (v) => v === true || v === 'true',
     });
   }
 
@@ -718,7 +717,7 @@ describe('spawnTuiAgent runtime', () => {
     const agentDir = overrides.agentDir ?? '/tmp/agentdir';
     const executionId = overrides.executionId ?? null;
     const laneName = overrides.laneName ?? null;
-    const helpers = overrides.helpers ?? { isTruthyMetaFn: (v) => !!v };
+    const helpers = overrides.helpers ?? {};
     return spawnTuiAgent({
       agentId,
       task,
@@ -1050,7 +1049,6 @@ describe('spawnTuiAgent runtime', () => {
     const spawnPromise = runSpawn({
       provider: { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', envVars: {} },
       task,
-      helpers: { isTruthyMetaFn: (value) => value === true || value === 'true' },
     });
     await flushMicrotasks();
 
@@ -1081,7 +1079,6 @@ describe('spawnTuiAgent runtime', () => {
         description: 'do the thing',
         metadata: { openPR: true, prCompletion: 'review-then-merge' },
       },
-      helpers: { isTruthyMetaFn: (value) => value === true || value === 'true' },
     });
     await flushMicrotasks();
 
@@ -1125,7 +1122,6 @@ describe('spawnTuiAgent runtime', () => {
         description: 'do the thing',
         metadata: { openPR: true, prCompletion: 'review-then-merge' },
       },
-      helpers: { isTruthyMetaFn: (value) => value === true || value === 'true' },
     });
     await flushMicrotasks();
 

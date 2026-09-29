@@ -2,6 +2,8 @@
 // child-process access — these sanitize/shape the inputs that
 // server/services/git.js passes to execGit.
 
+import { ServerError } from './errorHandler.js';
+
 // Long-lived shared branches that must never be deleted by the branch-cleanup
 // paths, nor handed to the branch-reconcile coordinator agent — they are not
 // disposable work. `gh-pages` is the GitHub Pages publishing branch: deleting it
@@ -52,11 +54,11 @@ export function validateFilePaths(files) {
   return fileList.map(f => {
     // Reject paths with null bytes or command separators
     if (GIT_UNSAFE_CHARS.test(f)) {
-      throw new Error(`Invalid character in file path: ${f}`);
+      throw new ServerError(`Invalid character in file path: ${f}`, { status: 400, code: 'VALIDATION_ERROR' });
     }
     // Reject absolute paths or parent directory traversal
     if (!isGitStageableFilePath(f)) {
-      throw new Error(`Invalid file path: ${f}`);
+      throw new ServerError(`Invalid file path: ${f}`, { status: 400, code: 'VALIDATION_ERROR' });
     }
     return f;
   });
@@ -73,4 +75,34 @@ export function validateFilePaths(files) {
  */
 export function toLiteralPathspec(path) {
   return `:(literal)${path}`;
+}
+
+/**
+ * True when `ref` is safe to hand to git as a bare branch/ref argument: not
+ * option-shaped (leading "-"), and free of whitespace/control characters and the
+ * sequences git-check-ref-format forbids (`..`, `@{`, and `~ ^ : ? * [ \`,
+ * a trailing "/", ".", or ".lock").
+ * @param {unknown} ref
+ * @returns {boolean}
+ */
+export function isSafeGitRef(ref) {
+  if (typeof ref !== 'string' || ref.length < 1 || ref.length > 255) return false;
+  if (ref.startsWith('-') || ref.startsWith('/')) return false;
+  // eslint-disable-next-line no-control-regex
+  if (/[\s\x00-\x1f\x7f~^:?*[\\]/.test(ref)) return false;
+  if (ref.includes('..') || ref.includes('@{')) return false;
+  return !(ref.endsWith('/') || ref.endsWith('.lock') || ref.endsWith('.'));
+}
+
+/**
+ * Defense in depth for callers that bypass HTTP (CoS services import
+ * services/git.js directly): throw a 400 ServerError for an unsafe ref.
+ * @param {unknown} ref
+ * @returns {string} the ref, unchanged
+ */
+export function assertSafeRef(ref) {
+  if (!isSafeGitRef(ref)) {
+    throw new ServerError('Invalid git ref name', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  return ref;
 }

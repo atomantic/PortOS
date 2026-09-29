@@ -280,19 +280,54 @@ function registerAuthRevocationHandler(io) {
   });
 }
 
-const forwardMeatspaceChange = payload => ioInstance?.emit('meatspace:changed', payload);
+const noPayload = () => ({});
 
+// 1:1 emitter → Socket.IO bridges. `payload` maps the event args to the frame;
+// omitted means forward the first argument unchanged.
+const SIMPLE_BRIDGES = [
+  { emitter: modelLifecycleEvents, event: 'image-to-3d:changed', channel: 'image-to-3d:changed' },
+  { emitter: modelLifecycleEvents, event: 'threejs-model:changed', channel: 'threejs-model:changed' },
+  { emitter: meatspaceEvents, event: 'death-clock:changed', channel: 'meatspace:death-clock:changed' },
+  { emitter: meatspaceEvents, event: 'changed', channel: 'meatspace:changed' },
+  { emitter: usageBackfillEvents, event: 'updated', channel: 'usage-backfill:updated', payload: noPayload },
+  { emitter: eidoverseWorldEvents, event: 'updated', channel: 'eidoverse:projection', payload: noPayload },
+  { emitter: jevEvents, event: 'status', channel: 'jev:status', payload: noPayload },
+  { emitter: jevEvents, event: 'stats', channel: 'jev:stats', payload: noPayload },
+  { emitter: jevEvents, event: 'heads', channel: 'jev:heads', payload: noPayload },
+  { emitter: layaMlxEvents, event: 'updated', channel: 'laya:status', payload: noPayload },
+  { emitter: providerQuotaEvents, event: 'updated', channel: 'provider-quota:updated', payload: noPayload },
+  // Importer analyze-phase stage progress; each frame carries a `runId` so the
+  // client ignores stragglers from a prior run.
+  { emitter: importerEvents, event: 'progress', channel: 'importer:progress' },
+  { emitter: catalogEvents, event: 'progress', channel: 'catalog:extract:progress' },
+  { emitter: aiStatusEvents, event: 'status', channel: 'ai:status' },
+  // The call-host tab already gets `voice:call:state` from its own socket
+  // handler (server/sockets/voice.js); this fans it out to every OTHER tab.
+  { emitter: callStateEvents, event: 'state', channel: 'voice:call:state' },
+  // A storyboard render filed durably by writersRoomSceneImageHook (#1363).
+  { emitter: writersRoomEvents, event: 'scene-image', channel: 'writers-room:scene-image' },
+  // Scene reference frame / i2v clip filed durably by the music-video hooks
+  // (#1760), an opt-in auto-review run advancing (#8988), and a server-owned
+  // production run advancing (#9066) — all without a client refetch.
+  { emitter: musicVideoEvents, event: 'scene-image', channel: 'music-video:scene-image' },
+  { emitter: musicVideoEvents, event: 'scene-video', channel: 'music-video:scene-video' },
+  { emitter: musicVideoEvents, event: 'auto-review', channel: 'music-video:auto-review' },
+  { emitter: musicVideoEvents, event: 'production', channel: 'music-video:production' },
+];
+
+let forwardingRegistered = false;
+
+// Registers every process-wide emitter → Socket.IO bridge exactly once, however
+// many times initSocket runs. Forwarders read the module-level `ioInstance` at
+// emit time (never capture `io`), so a re-init forwards through the latest io.
+// A bridge only goes live by being listed here or in SIMPLE_BRIDGES.
 function setupEventForwarding() {
-  modelLifecycleEvents.on('image-to-3d:changed', data => ioInstance?.emit('image-to-3d:changed', data));
-  modelLifecycleEvents.on('threejs-model:changed', data => ioInstance?.emit('threejs-model:changed', data));
-  meatspaceEvents.on('death-clock:changed', data => ioInstance?.emit('meatspace:death-clock:changed', data));
-  usageBackfillEvents.on('updated', () => ioInstance?.emit('usage-backfill:updated', {}));
-  eidoverseWorldEvents.on('updated', () => ioInstance?.emit('eidoverse:projection', {}));
-  jevEvents.on('status', () => ioInstance?.emit('jev:status', {}));
-  jevEvents.on('stats', () => ioInstance?.emit('jev:stats', {}));
-  jevEvents.on('heads', () => ioInstance?.emit('jev:heads', {}));
-  layaMlxEvents.on('updated', () => ioInstance?.emit('laya:status', {}));
-  providerQuotaEvents.on('updated', () => ioInstance?.emit('provider-quota:updated', {}));
+  if (forwardingRegistered) return;
+  forwardingRegistered = true;
+  for (const { emitter, event, channel, payload } of SIMPLE_BRIDGES) {
+    emitter.on(event, (...args) => ioInstance?.emit(channel, payload ? payload(...args) : args[0]));
+  }
+  runEventLogEvents.on('mind:event', (event) => broadcastToCos('cos:mind:event', event));
   setupCosEventForwarding();
   setupErrorEventForwarding();
   setupAppsEventForwarding();
@@ -300,8 +335,6 @@ function setupEventForwarding() {
   setupAgentEventForwarding();
   setupBrainEventForwarding();
   setupDigitalTwinEventForwarding();
-  meatspaceEvents.off('changed', forwardMeatspaceChange);
-  meatspaceEvents.on('changed', forwardMeatspaceChange);
   setupMoltworldWsEventForwarding();
   setupMoltworldQueueEventForwarding();
   setupInstanceEventForwarding();
@@ -310,25 +343,14 @@ function setupEventForwarding() {
   setupUpdateEventForwarding();
   setupLoopEventForwarding();
   setupMediaGenEventForwarding();
-  setupAIStatusEventForwarding();
-  setupImporterEventForwarding();
-  setupCatalogEventForwarding();
-  setupWritersRoomEventForwarding();
-  setupMusicVideoEventForwarding();
   setupProactiveSpeechForwarding();
-  setupPersistentMindEventForwarding();
-  setupCallStateEventForwarding();
   setupBeeperEventForwarding();
   setupRecordEventForwarding();
   setupFableLoomRunForwarding();
 }
 
-let persistentMindEventForwardingSetup = false;
 // Bounded invalidations only: records remain behind their existing HTTP gates.
-let recordEventForwardingSetup = false;
 function setupRecordEventForwarding() {
-  if (recordEventForwardingSetup) return;
-  recordEventForwardingSetup = true;
   const forward = ({ recordKind, recordId }) => {
     if (recordKind === 'creativeDirectorProject') {
       ioInstance?.emit('creative-director:project:changed', { id: recordId });
@@ -341,32 +363,15 @@ function setupRecordEventForwarding() {
   recordEvents.on('invalidated', forward);
 }
 
-function setupPersistentMindEventForwarding() {
-  if (persistentMindEventForwardingSetup) return;
-  persistentMindEventForwardingSetup = true;
-  runEventLogEvents.on('mind:event', (event) => broadcastToCos('cos:mind:event', event));
-}
-
-// The call-host tab already gets `voice:call:state` directly from its own
-// socket handler (server/sockets/voice.js — it drives that socket's opening-
-// line delivery too). This is the read-only fan-out to every OTHER tab, so a
-// view like the Mind tab's active-call chip can show/hide without being the
-// tab carrying the audio.
-let callStateForwardingSetup = false;
-function setupCallStateEventForwarding() {
-  if (callStateForwardingSetup) return;
-  callStateForwardingSetup = true;
-  callStateEvents.on('state', (snapshot) => {
-    if (ioInstance) ioInstance.emit('voice:call:state', snapshot);
-  });
-}
-
 export function initSocket(io) {
   registerAuthRevocationHandler(io);
   registerFableLoomHostedNamespace(io);
 
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
+    // Each registrar hangs its own per-socket cleanup on 'disconnect' (13+
+    // today), past Node's default cap of 10 — which warned on every connect.
+    socket.setMaxListeners(50);
     for (const registerHandlers of SOCKET_HANDLER_REGISTRARS) {
       registerHandlers(socket, io);
     }
@@ -385,75 +390,7 @@ export function initSocket(io) {
   });
 }
 
-// Bridge importer analyze-phase stage progress onto Socket.IO so the Importer
-// page can render a live checklist while a (multi-minute, multi-pass) analyze
-// runs. Single-user trust model: broadcast to all clients; each frame carries
-// a `runId` so the client ignores stragglers from a prior run.
-let importerForwardingSetup = false;
-function setupImporterEventForwarding() {
-  if (importerForwardingSetup) return;
-  importerForwardingSetup = true;
-  importerEvents.on('progress', (data) => {
-    if (ioInstance) ioInstance.emit('importer:progress', data);
-  });
-}
-
-let catalogForwardingSetup = false;
-function setupCatalogEventForwarding() {
-  if (catalogForwardingSetup) return;
-  catalogForwardingSetup = true;
-  catalogEvents.on('progress', (data) => {
-    if (ioInstance) ioInstance.emit('catalog:extract:progress', data);
-  });
-}
-
-let writersRoomForwardingSetup = false;
-function setupWritersRoomEventForwarding() {
-  if (writersRoomForwardingSetup) return;
-  writersRoomForwardingSetup = true;
-  // A storyboard render filed durably by writersRoomSceneImageHook — bridge it
-  // so the boards update reactively without a refetch (#1363).
-  writersRoomEvents.on('scene-image', (data) => {
-    if (ioInstance) ioInstance.emit('writers-room:scene-image', data);
-  });
-}
-
-let musicVideoForwardingSetup = false;
-function setupMusicVideoEventForwarding() {
-  if (musicVideoForwardingSetup) return;
-  musicVideoForwardingSetup = true;
-  // A scene reference-frame render filed durably by musicVideoSceneImageHook —
-  // bridge it so the director board updates reactively without a refetch
-  // (#1760 Phase 1b).
-  musicVideoEvents.on('scene-image', (data) => {
-    if (ioInstance) ioInstance.emit('music-video:scene-image', data);
-  });
-  // A scene i2v clip filed durably by musicVideoSceneVideoHook — bridge it so
-  // the board picks up the resulting `videoHistoryId` without a refetch
-  // (#1760 Phase 1).
-  musicVideoEvents.on('scene-video', (data) => {
-    if (ioInstance) ioInstance.emit('music-video:scene-video', data);
-  });
-  // An opt-in auto-review run advanced (#8988) — the board submits any
-  // sections it hands out and shows the run's checkpoint without a refetch.
-  musicVideoEvents.on('auto-review', (data) => {
-    if (ioInstance) ioInstance.emit('music-video:auto-review', data);
-  });
-}
-
-let aiStatusForwardingSetup = false;
-function setupAIStatusEventForwarding() {
-  if (aiStatusForwardingSetup) return;
-  aiStatusForwardingSetup = true;
-  aiStatusEvents.on('status', (data) => {
-    if (ioInstance) ioInstance.emit('ai:status', data);
-  });
-}
-
-let proactiveSpeechForwardingSetup = false;
 function setupProactiveSpeechForwarding() {
-  if (proactiveSpeechForwardingSetup) return;
-  proactiveSpeechForwardingSetup = true;
   wireProactiveTriggers({ io: ioInstance });
 }
 
@@ -498,10 +435,7 @@ function invalidateMindVisibility() {
 }
 
 // Process-wide listeners forward through the current IO and subscriber sets.
-let cosForwardingSetup = false;
 function setupCosEventForwarding() {
-  if (cosForwardingSetup) return;
-  cosForwardingSetup = true;
   // Dashboard invalidations deliberately omit decisions, prompts and settings.
   for (const event of ['goals:changed', 'backup:changed']) {
     dashboardEvents.on(event, () => ioInstance?.emit(event, {}));
@@ -755,11 +689,8 @@ function setupPeerAgentEventForwarding() {
   instanceEvents.on('peer:agent:completed', (data) => broadcastToInstances('instances:peer:agent:completed', data));
 }
 
-// Set up review event forwarding (idempotent — safe if called more than once)
-let reviewForwardingSetup = false;
+// Set up review event forwarding
 function setupReviewEventForwarding() {
-  if (reviewForwardingSetup) return;
-  reviewForwardingSetup = true;
   // Global invalidations reach the bell/dashboard even without a CoS room
   // subscription. They carry no record payload and are never peer-forwarded.
   for (const event of ['tasks:changed', 'tasks:user:changed', 'tasks:cos:changed', 'agent:completed', 'agent:feedback', 'memory:approved', 'memory:rejected']) {
@@ -786,11 +717,8 @@ function setupReviewEventForwarding() {
   });
 }
 
-// Set up update event forwarding (idempotent — safe if called more than once)
-let updateForwardingSetup = false;
+// Set up update event forwarding
 function setupUpdateEventForwarding() {
-  if (updateForwardingSetup) return;
-  updateForwardingSetup = true;
   updateEvents.on('update:available', (data) => {
     if (ioInstance) {
       ioInstance.emit('portos:update:available', data);
@@ -817,19 +745,13 @@ function broadcastToBeeper(event, data) { broadcastToSet(beeperSubscribers, even
 // content is PII and machine-local (#7's ADR), so the frames here carry
 // invalidation only: ids, kinds and transport liveness, never bodies, display
 // names or handles. The browser refetches from the PortOS mirror.
-let beeperForwardingSetup = false;
 function setupBeeperEventForwarding() {
-  if (beeperForwardingSetup) return;
-  beeperForwardingSetup = true;
   beeperSocketEvents.on('invalidate', (data) => broadcastToBeeper('beeper:invalidate', data));
   beeperSocketEvents.on('state', (data) => broadcastToBeeper('beeper:realtime', data));
 }
 
-// Set up loop event forwarding (idempotent)
-let loopForwardingSetup = false;
+// Set up loop event forwarding
 function setupLoopEventForwarding() {
-  if (loopForwardingSetup) return;
-  loopForwardingSetup = true;
   loopEvents.on('created', (data) => broadcastToLoops('loop:created', data));
   loopEvents.on('stopped', (data) => broadcastToLoops('loop:stopped', data));
   loopEvents.on('resumed', (data) => broadcastToLoops('loop:resumed', data));
@@ -843,10 +765,7 @@ function setupLoopEventForwarding() {
 
 // Bridge both image-gen AND video-gen events from their internal EventEmitters
 // onto Socket.IO so client UIs can subscribe via `image-gen:*` / `video-gen:*`.
-let mediaGenForwardingSetup = false;
 function setupMediaGenEventForwarding() {
-  if (mediaGenForwardingSetup) return;
-  mediaGenForwardingSetup = true;
   imageGenEvents.on('started', (data) => {
     if (ioInstance) ioInstance.emit('image-gen:started', data);
   });
@@ -967,10 +886,7 @@ function setupMediaGenEventForwarding() {
   });
 }
 
-let fableLoomRunForwardingSetup = false;
 function setupFableLoomRunForwarding() {
-  if (fableLoomRunForwardingSetup) return;
-  fableLoomRunForwardingSetup = true;
   fableLoomRunEvents.on('editorial', run => {
     broadcastToSet(fableLoomSubscribers, 'fableloom:editorial:run', run);
   });

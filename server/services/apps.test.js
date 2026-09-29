@@ -31,7 +31,7 @@ vi.mock('./taskScheduleRegistry.js', () => ({
 
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { resetExecutionHistory } from './taskSchedule.js';
-import { createApp, deleteApp, getAllApps, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateApp, updateAppTaskTypeOverride } from './apps.js';
+import { bulkUpdateAppTaskTypeOverride, createApp, deleteApp, getAllApps, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateApp, updateAppTaskTypeOverride } from './apps.js';
 
 describe('pr-watcher cooldown reset', () => {
   beforeEach(() => {
@@ -473,5 +473,22 @@ describe('PortOS production process manifest', () => {
     expect(seed.processes[0]).toEqual(app.processes[0]);
     if (existing) expect(app.description).toBe('Custom description');
     expect(atomicWrite.mock.calls.at(-1)[1].apps[PORTOS_APP_ID].pm2ProcessNames).toEqual(expectedNames);
+  });
+});
+
+describe('bulkUpdateAppTaskTypeOverride legacy migration', () => {
+  it('migrates a legacy disabledTaskTypes app instead of dropping its disable list', async () => {
+    invalidateCache();
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValue({
+      apps: { 'app-legacy': { name: 'Legacy', disabledTaskTypes: ['x'] } },
+    });
+
+    await bulkUpdateAppTaskTypeOverride('y', { enabled: true });
+
+    const saved = atomicWrite.mock.calls.at(-1)[1].apps['app-legacy'];
+    expect(saved.disabledTaskTypes).toBeUndefined();
+    expect(saved.taskTypeOverrides.x.enabled).toBe(false);
+    expect(saved.taskTypeOverrides.y.enabled).toBe(true);
   });
 });

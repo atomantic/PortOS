@@ -271,13 +271,13 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     expect(missing).toEqual({ success: false, error: 'Memory not found' });
   });
 
-  it('soft-deletes by default and hard-deletes on request', async () => {
+  it('archives and purges', async () => {
     const soft = await memoryDB.createMemory({ type: 'fact', content: 'Soft delete me.' });
-    await memoryDB.deleteMemory(soft.id);
+    await memoryDB.archiveMemory(soft.id);
     expect(await statusOf(soft.id)).toBe('archived');
 
     const hard = await memoryDB.createMemory({ type: 'fact', content: 'Hard delete me.' });
-    await memoryDB.deleteMemory(hard.id, true);
+    await memoryDB.purgeMemory(hard.id);
     expect(await memoryDB.peekMemory(hard.id)).toBeNull();
   });
 

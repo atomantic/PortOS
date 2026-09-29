@@ -194,7 +194,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const handleEngage = async () => {
     if (!agentId || !quickAccountId) return;
     setEngaging(true);
-    const result = await api.engageAgent(agentId, quickAccountId, 1, 3);
+    const result = await api.engageAgent({ agentId, accountId: quickAccountId, maxComments: 1, maxVotes: 3 });
     setEngaging(false);
     toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
     refetchRateLimits();
@@ -203,7 +203,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const handleCheckPosts = async () => {
     if (!agentId || !quickAccountId) return;
     setChecking(true);
-    const result = await api.checkAgentPosts(agentId, quickAccountId, 7, 2, 10).catch(() => null);
+    const result = await api.checkAgentPosts({ agentId, accountId: quickAccountId, days: 7, maxReplies: 2, maxUpvotes: 10 }).catch(() => null);
     setChecking(false);
     if (!result) return;
     toast.success(`Checked ${result.postsChecked} posts: ${result.engagement?.upvoted?.length || 0} upvotes, ${result.engagement?.replied?.length || 0} replies`);
@@ -214,7 +214,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const handleExplore = async () => {
     if (!agentId || !quickAccountId) return;
     setExploring(true);
-    const result = await api.moltworldExplore(quickAccountId, agentId).catch(() => null);
+    const result = await api.moltworldExplore({ accountId: quickAccountId, agentId }).catch(() => null);
     setExploring(false);
     if (!result) return;
     toast.success(`Explored (${result.x}, ${result.y}) — ${result.nearby || 0} agents nearby`);
@@ -223,7 +223,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   const handleBuild = async () => {
     if (!agentId || !quickAccountId) return;
-    const result = await api.moltworldBuild(quickAccountId, agentId, 0, 0, 0, 'stone', 'place').catch(() => null);
+    const result = await api.moltworldBuild({ accountId: quickAccountId, agentId, x: 0, y: 0, z: 0, type: 'stone', action: 'place' }).catch(() => null);
     if (result) toast.success('Block placed');
     refetchRateLimits();
   };
@@ -236,9 +236,9 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   const handleAccountSubmit = async (e) => {
     e.preventDefault();
-    const result = await api.registerPlatformAccount(
-      agentId, accountForm.platform, accountForm.name, accountForm.description
-    );
+    const result = await api.registerPlatformAccount({
+      agentId, platform: accountForm.platform, name: accountForm.name, description: accountForm.description
+    });
     resetAccountForm();
     fetchAccounts();
 

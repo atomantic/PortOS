@@ -526,7 +526,7 @@ harm. "Best practice says otherwise" is not one.`,
     id: 'api-contract-audit',
     label: 'API & route contracts',
     summary: 'Endpoint validation, status codes, query/param types, and error payloads.',
-    labels: '`bug`, `area:api`, `plan`',
+    labels: '`bug`, `plan`',
     dedupeSearch: 'api route contract validation status code',
     mission: `
 # API contract audit — file issues, change nothing

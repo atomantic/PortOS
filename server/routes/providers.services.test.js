@@ -296,7 +296,7 @@ describe('POST /api/providers/services/:slug/refresh-catalog', () => {
   it('asks the signing-in program for a harness catalog, and reports a missing binary as failed, never []', async () => {
     harnessModels.mockResolvedValue({ ok: false, reason: 'Claude Code is not installed on this host.', models: [], updated: [] });
     const res = await request(app()).post('/api/providers/services/claude-subscription/refresh-catalog');
-    expect(harnessModels).toHaveBeenCalledWith('claude');
+    expect(harnessModels).toHaveBeenCalledWith('claude', { probeOnly: true });
     expect(res.body.service.catalog).toMatchObject({ state: 'failed', models: ['claude-example'], error: 'Claude Code is not installed on this host.' });
     expect(probe).not.toHaveBeenCalled();
 
@@ -337,6 +337,32 @@ describe('POST /api/providers/services/:slug/refresh-catalog', () => {
     const failed = await request(app()).post('/api/providers/example-claude-tui/refresh-models');
     expect(failed.status).toBe(502);
     expect(failed.body.error).toContain('not installed');
+  });
+
+  it('replaces only the refreshed preset narrowing, preserving it on failure and on service refresh', async () => {
+    const preset = { id: 'example-claude-cli', name: 'Example Claude', type: 'cli', command: 'claude', models: ['claude-example'], catalogNarrowing: ['claude-example'], harnessId: 'claude', method: 'cli', serviceId: 'claude-subscription' };
+    const sibling = { ...preset, id: 'example-claude-sibling' };
+    providerService.getAllProviders.mockResolvedValue({ providers: [preset, sibling] });
+    providerService.getProviderById.mockResolvedValue(preset);
+    harnessModels.mockResolvedValue({ ok: false, reason: 'Catalog unavailable' });
+    expect((await request(app()).post(`/api/providers/${preset.id}/refresh-models`)).status).toBe(502);
+    for (const [patches] of providerService.applyProviderPatches.mock.calls) {
+      expect(patches[preset.id]?.catalogNarrowing).not.toBeNull();
+    }
+
+    harnessModels.mockResolvedValue({ ok: true, models: ['claude-new', 'claude-example'] });
+    providerService.applyProviderPatches.mockClear();
+    expect((await request(app()).post('/api/providers/services/claude-subscription/refresh-catalog')).status).toBe(200);
+    for (const [patches] of providerService.applyProviderPatches.mock.calls) {
+      expect(patches[preset.id]?.catalogNarrowing).not.toBeNull();
+    }
+
+    providerService.applyProviderPatches.mockClear();
+    expect((await request(app()).post(`/api/providers/${preset.id}/refresh-models`)).status).toBe(200);
+    const patches = Object.assign({}, ...providerService.applyProviderPatches.mock.calls.map(([value]) => value));
+    expect(patches[preset.id]).toMatchObject({ models: ['claude-new', 'claude-example'], catalogNarrowing: null });
+    expect(patches[sibling.id]?.catalogNarrowing).not.toBeNull();
+    expect(patches[sibling.id]?.models ?? sibling.models).toEqual(['claude-example']);
   });
 
   it('refuses a row with no definition to list through, and 404s an unknown slug', async () => {

@@ -528,6 +528,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // the ahead-version push until it upgrades. Video bytes ride the existing
   // asset manifest (`video:<filename>` ref → PATHS.videos, receiver regenerates
   // the poster thumbnail on pull).
+  // A board's composite `style` prompt, `posterImageRef` and `collageImageRef` are additive on
+  // that same v2 record: whole-record LWW plus every local mutator spreads the
+  // board, so an older peer preserves both keys and does not execute against
+  // them. The poster file rides the asset manifest as a gallery image. No bump.
   moodBoards: 2,
   // v1 = Writers Room works (PostgreSQL `writers_room_works` + decomposed
   // `writers_room_draft_versions`) federated via the per-record peer-sync push
@@ -602,7 +606,20 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // and submits performance scenes to a cutaway-only lane — edits that then win
   // LWW onto the upgraded peer. Pre-#8977 records need no rewrite (absent
   // `shotMode` = cutaway; takes without an instruction render as before).
-  musicVideoProjects: 4,
+  // v5 = authored universe style and cast/place/object snapshots in concept.
+  // Older peers ignore these when generating, losing character continuity.
+  // v6 = word-level lyric timings (`lyricCues[].words`, #9074). A v5 receiver
+  // stores the body verbatim but mis-executes it: an audio-source change clears
+  // startSec/endSec and leaves `words` aligned to the OLD vocal, and that edit
+  // wins LWW onto the upgraded peer. Gating makes a v5 receiver reject the
+  // ahead-version transfer until it upgrades. Records without `words` need no
+  // rewrite.
+  // v7 = composition mode `code` (#9076). A v6 peer's normalizeComposition
+  // collapses an unknown mode to `concat` and would last-writer-wins that
+  // loss back, so the gate rejects the ahead transfer. The older peer is
+  // never handed `mode: "code"` (an enum value it cannot store). It keeps
+  // the concat/composed project it already understands.
+  musicVideoProjects: 7,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

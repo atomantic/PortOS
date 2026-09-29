@@ -18,6 +18,22 @@
 const IMAGE_PREFIX = 'image:';
 const VIDEO_PREFIX = 'video:';
 
+// The board's canonical poster, served from the gallery. Null when the board
+// has not been rendered yet. The filename is a basename (the write schema
+// rejects separators); encode it so a space in a gallery name still resolves.
+export function moodBoardPosterSrc(board) {
+  const name = typeof board?.posterImageRef === 'string' ? board.posterImageRef.trim() : '';
+  if (!name || name.includes('/') || name.includes('\\')) return null;
+  return `/data/images/${encodeURIComponent(name)}`;
+}
+
+// The board's last compiled collage (persisted so it survives a reload).
+export function moodBoardCollageSrc(board) {
+  const name = typeof board?.collageImageRef === 'string' ? board.collageImageRef.trim() : '';
+  if (!name || name.includes('/') || name.includes('\\')) return null;
+  return `/data/images/${encodeURIComponent(name)}`;
+}
+
 export function moodBoardItemSrc(item) {
   if (item?.imageUrl) return item.imageUrl;
   if (typeof item?.mediaKey === 'string' && item.mediaKey.startsWith(IMAGE_PREFIX)) {

@@ -187,7 +187,7 @@ export default function ProviderCard({
           to split, and it is narrower than the viewport by the sidebar. */}
       <div className="flex flex-col @2xl:flex-row @2xl:items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <h3 className="text-lg font-semibold text-white">{displayName}</h3>
+          <h2 className="text-lg font-semibold text-white">{displayName}</h2>
           <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
             {unified ? 'CLI / TUI' : provider.type.toUpperCase()}
           </span>

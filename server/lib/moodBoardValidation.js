@@ -46,6 +46,7 @@ const imageUrlSchema = z.string().trim().min(1).max(2048).refine(
 
 const captionSchema = z.string().max(2000).nullable().optional();
 const sourceSchema = z.string().max(2048).nullable().optional();
+const promptSchema = z.string().trim().max(8000).nullable().optional();
 
 // Board create. description optional (defaults to '' in the record builder).
 export const moodBoardCreateSchema = z.object({
@@ -53,11 +54,39 @@ export const moodBoardCreateSchema = z.object({
   description: z.string().max(5000).optional(),
 }).strict();
 
+// Gallery filename for the board's canonical poster. Same traversal rule as
+// the asset manifest (`sanitizeAssetFilename`): separators and `.` / `..`
+// are rejected; an image extension is required so a video ref can't be
+// stored as the still the poster slot renders.
+const posterFilenameSchema = z.string().trim().min(1).max(255).refine(
+  (v) => !v.includes('/') && !v.includes('\\') && v !== '.' && v !== '..'
+    && /\.(png|jpe?g|gif|webp)$/i.test(v),
+  'posterImageRef must be a gallery image filename',
+);
+
+// Composite board style — one ready-to-render prompt distilled from the
+// per-item prompt-from-media analyses. Written by POST /compose-prompt and
+// editable from the board page. `null` on the PATCH clears it. Additive on
+// the wire (whole-record LWW); bounds match the per-item analysis caps.
+export const moodBoardStyleSchema = z.object({
+  prompt: z.string().trim().min(1).max(8000),
+  negativePrompt: z.string().max(8000).nullable().optional(),
+  rationale: z.string().max(1200).nullable().optional(),
+  analyzedItemCount: z.number().int().min(0).max(500).optional(),
+  providerId: z.string().max(128).nullable().optional(),
+  model: z.string().max(256).nullable().optional(),
+  composedAt: z.string().datetime({ offset: true }).nullable().optional(),
+}).strict();
+
 // Board PATCH — only the editable board-level fields. items[] is managed via
-// the dedicated item endpoints, never a bulk board PATCH.
+// the dedicated item endpoints, never a bulk board PATCH. `style` / 
+// `posterImageRef` are the composite prompt and the canonical poster.
 export const moodBoardUpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   description: z.string().max(5000).optional(),
+  style: moodBoardStyleSchema.nullable().optional(),
+  posterImageRef: posterFilenameSchema.nullable().optional(),
+  collageImageRef: posterFilenameSchema.nullable().optional(),
 }).strict();
 
 // Add-item. An `image` item requires at least one of mediaKey / imageUrl; a
@@ -72,6 +101,7 @@ export const moodBoardItemCreateSchema = z.object({
   mediaKey: mediaKeySchema.nullable().optional(),
   imageUrl: imageUrlSchema.nullable().optional(),
   text: z.string().trim().max(10000).nullable().optional(),
+  prompt: promptSchema,
   caption: captionSchema,
   source: sourceSchema,
 }).strict().superRefine((val, ctx) => {
@@ -150,5 +180,20 @@ export const moodBoardItemUpdateSchema = z.object({
   text: z.string().trim().max(10000).nullable().optional(),
   imageUrl: imageUrlSchema.nullable().optional(),
   mediaKey: mediaKeySchema.nullable().optional(),
+  prompt: promptSchema,
   analysis: moodBoardItemAnalysisSchema.nullable().optional(),
+}).strict();
+
+// Collage compilation + video frame extraction. `framesPerVideo` is how many
+// evenly spaced frames each video pin contributes to the grid; the per-item
+// extract endpoint always appends its frames to the board, so it only takes a
+// count. Bounds mirror MAX_FRAMES_PER_VIDEO in moodBoard/collage.js.
+export const moodBoardCollageSchema = z.object({
+  framesPerVideo: z.number().int().min(1).max(24).optional().default(3),
+  addFramesToBoard: z.boolean().optional().default(false),
+  cellSize: z.number().int().min(128).max(1024).optional().default(512),
+}).strict();
+
+export const moodBoardExtractFramesSchema = z.object({
+  count: z.number().int().min(1).max(24),
 }).strict();

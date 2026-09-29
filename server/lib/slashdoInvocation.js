@@ -22,6 +22,7 @@
  * providers receive a self-contained body. Explicitly pinned reviewer choices
  * prune unreachable variants before either form is rendered.
  */
+import { isTruthyMeta } from './metadataFlags.js';
 import { isClaudeProvider, isOpencodeProvider } from './providerModels.js';
 import { inferTuiCommand } from './providerVendors.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
@@ -628,7 +629,6 @@ export function resolvePrOpenedBy({
  *
  * @param {Object} opts
  * @param {Object} opts.task
- * @param {(value: unknown) => boolean} opts.isTruthyMeta
  * @param {string|undefined} opts.persistedPrOpenedBy - `metadata.prOpenedBy`
  * @param {boolean|undefined} [opts.persistedOwnsPrWorkflow] - the legacy
  *   `metadata.ownsPrWorkflow` boolean (#3733)
@@ -639,7 +639,6 @@ export function resolvePrOpenedBy({
  */
 export function resolvePrOwnership({
   task,
-  isTruthyMeta,
   persistedPrOpenedBy,
   persistedOwnsPrWorkflow,
   providerId = null,

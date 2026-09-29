@@ -35,6 +35,7 @@ import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
+import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -128,15 +129,20 @@ export function buildProjectRecord(input, { id, now }) {
     // renders (the shared universe/series/sprite field pair). Present only
     // when set, so existing records keep their on-disk shape byte-stable.
     ...persistedRenderPinFields(input),
+    // Automation-first brief (tools, guidance, budget). Present only when set,
+    // so director-authored records keep their on-disk shape byte-stable.
+    ...(input.automation ? { automation: normalizeMusicVideoAutomation(input.automation) } : {}),
     audioAnalysis: null,
     midiTranscription: null,
     // #8964 — editable timed lyric cues + phrase annotations (timed against
     // the current audio source) and the shot planner's pacing range.
-    lyricCues: [],
-    phrases: [],
-    pacing: null,
+    lyricCues: Array.isArray(input.lyricCues) ? normalizeLyricCues(input.lyricCues) : [],
+    phrases: Array.isArray(input.phrases) ? normalizePhrases(input.phrases) : [],
+    pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
-    composition: null,
+    composition: input.composition ? normalizeComposition(input.composition) : null,
+    // #8988 — optional sound-design bed mixed under the song.
+    soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
@@ -215,6 +221,11 @@ export function cloneProjectRecord(source, {
     // A revision is in-progress work against the SOURCE's takes; the clone
     // starts with none (its carried-over notes can open a fresh one).
     revisions: [],
+    // #9102: an auto-review run is tied to the SOURCE's revisions/excerpts, so a
+    // clone starts with none (terminal runs too — their links are source-scoped).
+    ...(Array.isArray(source.autoReviews) ? { autoReviews: [] } : {}),
+    // #9066: a production run executes against the SOURCE's scenes and jobs.
+    ...(Array.isArray(source.productionRuns) ? { productionRuns: [] } : {}),
     renderHistoryId: null,
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
@@ -240,6 +251,10 @@ export function applyProjectPatch(project, patch) {
   const timedPatch = {
     ...patch,
     ...(patch.visualSpec ? { visualSpec: normalizeVisualSpec(patch.visualSpec, project.visualSpec) } : {}),
+    // Automation brief merges per sub-field; null clears it.
+    ...('automation' in patch ? {
+      automation: patch.automation ? normalizeMusicVideoAutomation(patch.automation, project.automation) : null,
+    } : {}),
     ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
     // #8984 — the composition manifest is replaced whole; null clears it.
@@ -302,8 +317,8 @@ export function applyProjectPatch(project, patch) {
   // The MIDI transcription was produced from the OLD audio too — clear it with
   // the analysis so a stale .mid can't masquerade as the new track's score.
   // Lyric-cue and phrase timings were aligned to the OLD audio as well: keep the
-  // director's text but clear the times (#8964), unless this same patch supplied
-  // fresh lists of its own.
+  // director's text but clear the times and word timings (#8964, #9074), unless
+  // this same patch supplied fresh lists of its own.
   return touch(project, {
     ...invalidateTimedText(project),
     // Composition cue times and the poster frame were set against the old
@@ -606,6 +621,8 @@ export function mergeProjectRecord(local, remoteRaw) {
   remote = { ...remote };
   if (Object.hasOwn(local, 'imageMode')) remote.imageMode = local.imageMode;
   if (Object.hasOwn(local, 'imageModelId')) remote.imageModelId = local.imageModelId;
+  // #9066: this install's production-run checkpoint survives a newer remote.
+  if (Object.hasOwn(local, 'productionRuns')) remote.productionRuns = local.productionRuns;
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && Object.hasOwn(local.videoSettings, 'backend')) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'

@@ -1,7 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, logsQuerySchema } from '../lib/validation.js';
 import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
 import { assertPublicHttpUrl } from '../lib/safeUrlFetch.js';
@@ -17,6 +17,10 @@ const router = express.Router();
 const NAVIGATE_SETTLE_MS = 1000;
 
 // Validation schemas
+// Reuses the PM2 logs bound (1..5000) but keeps this route's historical 50-line default.
+const browserLogsQuerySchema = logsQuerySchema.pick({ lines: true }).extend({
+  lines: z.coerce.number().int().min(1).max(5000).default(50),
+});
 // SSRF guard (shared with catalog URL ingest): reject non-http(s) schemes
 // (file:/chrome:/javascript:) and loopback / link-local / cloud-metadata host
 // LITERALS so an agent-driven navigate can't directly target local-file
@@ -168,7 +172,7 @@ router.get('/version', asyncHandler(async (req, res) => {
 
 // GET /api/browser/logs - Recent PM2 logs
 router.get('/logs', asyncHandler(async (req, res) => {
-  const lines = parseInt(req.query.lines || '50', 10);
+  const { lines } = validateRequest(browserLogsQuerySchema, req.query);
   const logs = await browserService.getRecentLogs(lines);
   res.json(logs);
 }));

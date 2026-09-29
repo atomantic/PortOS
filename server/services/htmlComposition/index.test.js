@@ -1,12 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { findFfmpeg, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
+import { findFfmpeg, probeVideoDuration, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { loadHistory } from '../videoGen/history.js';
 import { videoGenEvents } from '../videoGen/events.js';
@@ -62,6 +62,17 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     browserSession = await browser.newBrowserCDPSession();
   }, 30000);
 
+  // Each render writes its composition dir, MP4 and thumbnail under the data
+  // root; dropping them per test keeps the run root's peak size (and what a
+  // killed run strands) small (#9113). The Chrome profile must survive.
+  afterEach(async () => {
+    await rm(join(PATHS.data, 'compositions'), { recursive: true, force: true });
+    // Empty (not remove) the output dirs: later tests readdir them.
+    for (const dir of [PATHS.videos, PATHS.videoThumbnails]) {
+      for (const name of await readdir(dir).catch(() => [])) await rm(join(dir, name), { recursive: true, force: true });
+    }
+  });
+
   afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));
 
   it('awaits every seek, encodes exactly 12 frames, keeps the target hidden and registers a thumbnail', async () => {
@@ -115,6 +126,51 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     const blended = at(345);
     expect(blended[1]).toBeGreaterThan(30);
     expect(blended[1]).toBeLessThan(220);
+  }, 60000);
+
+  // A 20px square crossing the 1280px frame in three frames (#9077).
+  const whip = motionBlur => `<!doctype html><html><head><style>body { margin: 0; background: white; } #block { position:absolute; top:100px; width:20px; height:20px; background:rgb(255,0,0); }</style>
+</head><body><div id="block"></div><script>
+globalThis.portosComposition = { durationSec:1, fps:12, width:1280, height:720, motionBlur:${motionBlur},
+  seek(t) { document.getElementById('block').style.left = Math.round(t * 5120) + 'px'; } };
+</script></body></html>`;
+  const frameRow = (filename, frame) => {
+    const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, filename), '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 40 * 1024 * 1024 });
+    const frameBytes = 1280 * 720 * 3;
+    return x => pixels[frame * frameBytes + (110 * 1280 + x) * 3 + 1]; // green: 255 on white, low on red
+  };
+
+  it('streaks a whip continuously with an auto shutter where integer motionBlur leaves separated copies', async () => {
+    // Frame one (t=1/12) centres the square at x≈427. Integer 4 samples
+    // t..t+3/48 → copies at 427/533/640/747 with white gaps between them.
+    const stepped = await renderComposition(await composition(whip(4)));
+    const steppedGreen = frameRow(stepped.filename, 1);
+    const steppedProfile = Array.from({ length: 300 }, (_, i) => steppedGreen(445 + i));
+    expect(Math.max(...steppedProfile)).toBeGreaterThan(252);
+    expect(Math.min(...steppedProfile)).toBeLessThan(200);
+    // A full shutter centred on the frame spans x≈213..640: an unbroken streak.
+    const streaked = await renderComposition(await composition(whip("{ shutter: 1, samples: 'auto' }")));
+    const streakGreen = frameRow(streaked.filename, 1);
+    const profile = Array.from({ length: 380 }, (_, i) => streakGreen(240 + i));
+    // Each pixel sees the square for ~1/20 of the shutter, so the streak is
+    // faint but even: no white gap and no brighter copy anywhere along it.
+    expect(Math.max(...profile)).toBeLessThan(252);
+    expect(Math.max(...profile) - Math.min(...profile)).toBeLessThanOrEqual(4);
+    expect(Object.keys(streaked.sampleHistogram).map(Number).some(count => count >= 9)).toBe(true);
+  }, 120000);
+
+  it('stops a still composition at one capture per frame with an auto shutter', async () => {
+    const html = fixture('', "motionBlur:{ samples: 'auto' }").replace("(40 + t * 480) + 'px'", "'40px'");
+    const result = await renderComposition(await composition(html));
+    expect(result.sampleHistogram).toEqual({ 1: 12 });
+  }, 60000);
+
+  it('applies a render-time motionBlur choice over a page that declares none, and omitting it keeps the page value (#9080)', async () => {
+    const still = contract => fixture('', contract).replace("(40 + t * 480) + 'px'", "'40px'");
+    const film = await renderComposition({ ...(await composition(still())), motionBlur: 'film' });
+    expect(film.sampleHistogram).toEqual({ 1: 12 });
+    const kept = await renderComposition(await composition(still('motionBlur:1')));
+    expect(kept.sampleHistogram).toBeUndefined();
   }, 60000);
 
   it('renders a gated launch composition and uses its declared poster beat', async () => {
@@ -293,6 +349,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     ['durationSec', 'durationSec:0'], ['fps', 'fps:12.5'], ['width', 'width:123'],
     ['durationSec', 'durationSec:1.01'], ['seek', 'seek:null'],
     ['motionBlur', 'motionBlur:0'], ['motionBlur', 'motionBlur:5'], ['motionBlur', 'motionBlur:2.5'],
+    ['motionBlur', 'motionBlur:{shutter:2}'], ['motionBlur', 'motionBlur:{samples:200}'], ['motionBlur', "motionBlur:{samples:'auto',frames:4}"],
   ])('names the invalid %s before capture', async (field, contract) => {
     const input = await composition(fixture('', contract));
     await expect(renderComposition(input)).rejects.toThrow(field);
@@ -330,4 +387,99 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     finally { videoGenEvents.off('progress', onProgress); await closed; }
     expect((await readdir(PATHS.videos)).some(name => name.includes(input.jobId))).toBe(false);
   });
+
+  const pcmOf = (path, extra = []) => execFileSync(ffmpeg, ['-v', 'error', ...extra, '-i', path, '-vn', '-f', 'f32le', '-ac', '1', '-ar', '48000', '-'], { maxBuffer: 64 * 1024 * 1024 });
+  const rms = (pcm, startSec, endSec) => {
+    const from = Math.floor(startSec * 48000);
+    const to = Math.min(pcm.length / 4, Math.floor(endSec * 48000));
+    let sum = 0;
+    for (let n = from; n < to; n++) sum += pcm.readFloatLE(n * 4) ** 2;
+    return Math.sqrt(sum / Math.max(1, to - from));
+  };
+
+  it('reads song.json inside the sandbox and treats a missing feature block as null', async () => {
+    const html = `<!doctype html><html><body style="margin:0"><script>
+      globalThis.portosComposition = { durationSec: 1, fps: 12, width: 1280, height: 720,
+        async seek() {
+          const song = await (await fetch('song.json')).json();
+          const ok = song.features === null && !Array.isArray(song.features) && song.beats[0] === 0 && song.words[0].w === 'go';
+          document.body.style.background = ok ? 'rgb(0,255,0)' : 'rgb(255,0,0)';
+        } };
+    </script></body></html>`;
+    const input = await composition(html);
+    await mkdir(PATHS.music, { recursive: true });
+    const master = join(PATHS.music, 'song-null-features.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-y', master]);
+    const result = await renderComposition({
+      ...input, owner: 'music-video', audio: { path: master, startSec: 0 }, maxDurationSec: 180,
+      song: { beats: [0], downbeats: [0], sections: [], features: [], words: [{ w: 'go', startSec: 0, endSec: 0.4, conf: 'matched' }] },
+    });
+    const pixel = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, result.filename), '-frames:v', '1', '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    expect(pixel[1]).toBeGreaterThan(200);
+    expect(pixel[0]).toBeLessThan(40);
+    expect(existsSync(join(PATHS.data, input.directory, 'song.json'))).toBe(false);
+  }, 30000);
+
+  it('renders a 180s song without looping or fading the master', async () => {
+    const html = `<!doctype html><html><body style="margin:0"><script>
+      globalThis.portosComposition = { durationSec: 180, fps: 12, width: 1280, height: 720, async seek() {} };
+    </script></body></html>`;
+    const input = await composition(html);
+    await mkdir(PATHS.music, { recursive: true });
+    const master = join(PATHS.music, 'song-180.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=180', '-y', master]);
+    const frames = [];
+    const onProgress = (event) => { if (event.generationId === input.jobId) frames.push(event); };
+    videoGenEvents.on('progress', onProgress);
+    let result;
+    try { result = await renderComposition({ ...input, owner: 'music-video', audio: { path: master, startSec: 0 }, maxDurationSec: 180, song: { beats: [], features: null, words: null } }); }
+    finally { videoGenEvents.off('progress', onProgress); }
+    const output = join(PATHS.videos, result.filename);
+    expect(await probeVideoStreamInfo(output)).toMatchObject({ frameCount: 180 * 12 });
+    expect(Math.abs(await probeVideoDuration(output) - 180)).toBeLessThanOrEqual(1 / 12);
+    const audio = pcmOf(output);
+    expect(Math.abs(audio.length / 4 / 48000 - 180)).toBeLessThanOrEqual(1 / 12);
+    expect(rms(audio, 179.85, 179.98)).toBeGreaterThan(rms(audio, 20, 20.5) * 0.5);
+    expect(frames.some((event) => event.step > 0 && event.totalSteps === 2160 && event.etaMs > 0 && /Rendering frame \d+\/2160/.test(event.message))).toBe(true);
+  }, 300000);
+
+  it('muxes a 60–75s excerpt aligned to that range of the master', async () => {
+    const html = `<!doctype html><html><body style="margin:0"><script>
+      globalThis.portosComposition = { durationSec: 15, fps: 12, width: 1280, height: 720, async seek() {} };
+    </script></body></html>`;
+    const input = await composition(html);
+    await mkdir(PATHS.music, { recursive: true });
+    const master = join(PATHS.music, 'song-excerpt.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=60', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=15', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=105', '-filter_complex', '[0][1][2]concat=n=3:v=0:a=1', '-y', master]);
+    const result = await renderComposition({
+      ...input, owner: 'music-video', audio: { path: master, startSec: 60 }, maxDurationSec: 180, song: { features: null },
+    });
+    const output = pcmOf(join(PATHS.videos, result.filename));
+    const reference = pcmOf(master, ['-ss', '60', '-t', '15']);
+    const opening = pcmOf(master, ['-ss', '0', '-t', '15']);
+    const frameSamples = Math.round(48000 / 12);
+    const samples = (buf) => buf.length / 4;
+    const scoreAgainst = (other, lag) => {
+      let sum = 0;
+      let count = 0;
+      const nOut = samples(output);
+      const nOther = samples(other);
+      for (let n = 0; n < nOut; n += 8) {
+        const m = n + lag;
+        if (m < 0 || m >= nOther) continue;
+        sum += output.readFloatLE(n * 4) * other.readFloatLE(m * 4);
+        count += 1;
+      }
+      return count ? sum / count : 0;
+    };
+    let bestLag = 0;
+    let best = -Infinity;
+    for (let lag = -frameSamples; lag <= frameSamples; lag += 40) {
+      const value = scoreAgainst(reference, lag);
+      if (value > best) { best = value; bestLag = lag; }
+    }
+    expect(Math.abs(bestLag)).toBeLessThanOrEqual(frameSamples);
+    expect(best).toBeGreaterThan(Math.abs(scoreAgainst(opening, 0)) * 4);
+    expect(await probeVideoStreamInfo(join(PATHS.videos, result.filename))).toMatchObject({ frameCount: 15 * 12 });
+  }, 60000);
 });

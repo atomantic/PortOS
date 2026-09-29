@@ -218,7 +218,7 @@ describe('verifyPrClaim (#3358)', () => {
     findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
     const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
     expect(verdict.ok).toBe(true);
-    expect(verdict.noChangesToShip).toBe(true);
+    expect(verdict.branchProvenEmpty).toBe(true);
     expect(verdict.category).toBeUndefined();
   });
 
@@ -408,7 +408,7 @@ describe('finalizeAgent — a PR-shaped run with no PR is not a success (#3358)'
     expect(findPullRequestForBranchMock).toHaveBeenCalledWith('cos/sys-1/agent-1', { cwd: '/w', env: null });
     const [, result] = completeAgentMock.mock.calls[0];
     expect(result).toMatchObject({ success: true, validationPassed: true });
-    expect(finalized.prVerdict).toMatchObject({ ok: true, branch: 'cos/sys-1/agent-1', noChangesToShip: true });
+    expect(finalized.prVerdict).toMatchObject({ ok: true, branch: 'cos/sys-1/agent-1', branchProvenEmpty: true });
   });
 
   it('leaves validation undeclared when a marked no-op audit cannot reach the forge', async () => {
@@ -591,10 +591,10 @@ describe('finalizeAgent — records the PR verdict in the lifecycle ledger', () 
       data: expect.objectContaining({
         verified: true,
         branch: 'cos/sys-1/agent-1',
-        noChangesToShip: true,
+        branchProvenEmpty: true,
       })
     })]);
-    expect(finalized.prVerdict).toMatchObject({ branch: 'cos/sys-1/agent-1', noChangesToShip: true });
+    expect(finalized.prVerdict).toMatchObject({ branch: 'cos/sys-1/agent-1', branchProvenEmpty: true });
   });
 
   it('does not record a premature miss while cleanup can still create a PR', async () => {
@@ -721,7 +721,7 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
       arrange: () => onBranch('claim/issue-1'),
       success: true,
       cleanupEvidence: { ok: true, branch: 'claim/issue-1' },
-      ledger: { verified: true, branch: 'claim/issue-1', category: null, noChangesToShip: false },
+      ledger: { verified: true, branch: 'claim/issue-1', category: null, branchProvenEmpty: false },
     },
     {
       name: 'verified-claim — a partial-ship trailer passes, carrying its advisory to cleanup',
@@ -731,7 +731,7 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
       },
       success: true,
       cleanupEvidence: { ok: true, branch: 'claim/issue-1', advisory: expect.stringMatching(/partially ships/i) },
-      ledger: { verified: true, branch: 'claim/issue-1', category: null, noChangesToShip: false },
+      ledger: { verified: true, branch: 'claim/issue-1', category: null, branchProvenEmpty: false },
     },
     {
       name: 'invalid-trailer — a PR that does not close its issue fails and is NOT verified evidence',
@@ -742,7 +742,7 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
       success: false,
       completionReason: ISSUE_TRAILER_MISSING_CATEGORY,
       cleanupEvidence: { ok: false, branch: 'claim/issue-1', category: ISSUE_TRAILER_MISSING_CATEGORY, message: anyMessage },
-      ledger: { verified: false, branch: 'claim/issue-1', category: ISSUE_TRAILER_MISSING_CATEGORY, noChangesToShip: false },
+      ledger: { verified: false, branch: 'claim/issue-1', category: ISSUE_TRAILER_MISSING_CATEGORY, branchProvenEmpty: false },
     },
     {
       name: 'missing-pr — commits on the branch, no PR',
@@ -754,7 +754,7 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
       success: false,
       completionReason: PR_MISSING_CATEGORY,
       cleanupEvidence: { ok: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, message: anyMessage, commitsAhead: 3, inconclusive: false },
-      ledger: { verified: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, noChangesToShip: false },
+      ledger: { verified: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, branchProvenEmpty: false },
     },
     {
       name: 'missing-pr — an UNREADABLE commit count leaves the miss standing, flagged inconclusive',
@@ -766,7 +766,7 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
       success: false,
       completionReason: PR_MISSING_CATEGORY,
       cleanupEvidence: { ok: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, message: anyMessage, commitsAhead: null, inconclusive: true },
-      ledger: { verified: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, noChangesToShip: false },
+      ledger: { verified: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, branchProvenEmpty: false },
     },
     {
       name: 'empty-branch — a PROVEN empty branch completes, and cleanup must not open a PR for it',
@@ -776,8 +776,8 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
         findPullRequestForBranchMock.mockResolvedValue(noPr);
       },
       success: true,
-      cleanupEvidence: { ok: true, branch: 'claim/issue-1', noChangesToShip: true },
-      ledger: { verified: true, branch: 'claim/issue-1', category: null, noChangesToShip: true },
+      cleanupEvidence: { ok: true, branch: 'claim/issue-1', branchProvenEmpty: true },
+      ledger: { verified: true, branch: 'claim/issue-1', category: null, branchProvenEmpty: true },
     },
     {
       name: 'forge-unavailable — the probe failed: the run is held, but NOTHING goes on the ledger',
@@ -852,9 +852,9 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
     git.ahead = 0;
     findPullRequestForBranchMock.mockResolvedValue(noPr);
     const proven = await finalize({ prExpected: false, task: auditTask() });
-    expect(proven.prVerdict).toEqual({ ok: true, branch: 'cos/sys-1/agent-1', noChangesToShip: true });
+    expect(proven.prVerdict).toEqual({ ok: true, branch: 'cos/sys-1/agent-1', branchProvenEmpty: true });
     expect(prVerified().map((e) => e.data)).toEqual([
-      { verified: true, branch: 'cos/sys-1/agent-1', category: null, noChangesToShip: true },
+      { verified: true, branch: 'cos/sys-1/agent-1', category: null, branchProvenEmpty: true },
     ]);
 
     vi.clearAllMocks();

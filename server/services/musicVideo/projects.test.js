@@ -32,6 +32,9 @@ vi.mock('../sharing/recordEvents.js', () => ({
 const getSettings = vi.fn(async () => ({}));
 vi.mock('../settings.js', () => ({ getSettings: (...a) => getSettings(...a) }));
 
+const getTrack = vi.fn(async () => null);
+vi.mock('../tracks/index.js', () => ({ getTrack: (...a) => getTrack(...a) }));
+
 const projects = await import('./projects.js');
 
 function reset() {
@@ -41,6 +44,8 @@ function reset() {
   autoSubscribeRecordToAllPeers.mockClear();
   getSettings.mockClear();
   getSettings.mockResolvedValue({});
+  getTrack.mockClear();
+  getTrack.mockResolvedValue(null);
 }
 beforeEach(reset);
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -139,3 +144,78 @@ describe('create-time video-backend seeding (#3231 Phase 4)', () => {
     expect(p.videoSettings.backend).toBe('local');
   });
 });
+
+describe('track metadata and lyrics auto-reading on create and update', () => {
+  it('automatically reads lyrics, concept, prompt, and title from linked track at creation', async () => {
+    getTrack.mockResolvedValue({
+      id: 'track-1',
+      title: 'Midnight Echoes',
+      lyrics: '[00:01.00] Echoes in the dark\n[00:04.00] Shining like a spark',
+      concept: 'A cyberpunk nocturnal story',
+      prompt: 'Neon noir 80s anime style',
+    });
+
+    const project = await projects.createProject({ trackId: 'track-1' });
+
+    expect(project.name).toBe('Midnight Echoes');
+    expect(project.lyricCues).toHaveLength(2);
+    expect(project.lyricCues[0].text).toBe('Echoes in the dark');
+    expect(project.lyricCues[1].text).toBe('Shining like a spark');
+    expect(project.concept).toMatchObject({
+      prompt: 'A cyberpunk nocturnal story',
+      style: 'Neon noir 80s anime style',
+    });
+  });
+
+  it('preserves explicitly authored project fields over track defaults at creation', async () => {
+    getTrack.mockResolvedValue({
+      id: 'track-1',
+      title: 'Midnight Echoes',
+      lyrics: 'Line from track',
+      concept: 'Track concept',
+      prompt: 'Track style',
+    });
+
+    const project = await projects.createProject({
+      name: 'Custom Name',
+      trackId: 'track-1',
+      lyricCues: [{ text: 'Custom cue' }],
+      concept: { prompt: 'Custom concept', style: 'Custom style' },
+    });
+
+    expect(project.name).toBe('Custom Name');
+    expect(project.lyricCues).toHaveLength(1);
+    expect(project.lyricCues[0].text).toBe('Custom cue');
+    expect(project.concept).toMatchObject({
+      prompt: 'Custom concept',
+      style: 'Custom style',
+    });
+  });
+
+  it('automatically reads lyrics and concept when changing track via updateProject', async () => {
+    getTrack.mockImplementation(async (id) => {
+      if (id === 'track-2') {
+        return {
+          id: 'track-2',
+          title: 'Morning Sun',
+          lyrics: 'Golden light breaks through',
+          concept: 'Dawn over the horizon',
+          prompt: 'Impressionist pastel colors',
+        };
+      }
+      return null;
+    });
+
+    const project = await projects.createProject({ name: 'Initial Project' });
+    const updated = await projects.updateProject(project.id, { trackId: 'track-2' });
+
+    expect(updated.trackId).toBe('track-2');
+    expect(updated.lyricCues).toHaveLength(1);
+    expect(updated.lyricCues[0].text).toBe('Golden light breaks through');
+    expect(updated.concept).toMatchObject({
+      prompt: 'Dawn over the horizon',
+      style: 'Impressionist pastel colors',
+    });
+  });
+});
+

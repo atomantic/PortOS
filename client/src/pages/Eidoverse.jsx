@@ -13,14 +13,17 @@ import { Link, useLocation, useNavigate } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useSocketResource } from '../hooks/useSocketResource';
+import useConfigDraftRevision from '../hooks/useConfigDraftRevision';
 import useEidoverseFrame from '../hooks/useEidoverseFrame';
 import EidoverseWorldDrawer from '../components/eidoverse/EidoverseWorldDrawer';
 import EidoverseTravel from '../components/eidoverse/EidoverseTravel';
 import EidoverseUpdateBanner from '../components/eidoverse/EidoverseUpdateBanner';
 import {
-  EIDOVERSE_SOURCE_KIND as SOURCE_KIND,
-  eidoverseResetAssetSlotsForDistrict,
-} from '../lib/eidoverseWorldReset';
+  draftsFromWorld,
+  mergeDraft,
+  reconcileAfterReset,
+  shouldReplaceDraft,
+} from '../lib/eidoverseDraftReconcile';
 import {
   getApp,
   getEidoverseWorldProjectionStatus,
@@ -86,100 +89,12 @@ const worldIdentityFor = (world) => ({
   avatar: world?.identity?.avatar || world?.human?.avatar,
 });
 
-const DELETE_DRAFT_VALUE = Symbol('delete-draft-value');
-const isDraftRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-const draftValuesEqual = (left, right) => Object.is(left, right)
-  || JSON.stringify(left) === JSON.stringify(right);
-function mergeServerDraftChanges(current, submitted, before, after) {
-  if (draftValuesEqual(before, after)) return current;
-  if (isDraftRecord(current) && isDraftRecord(submitted)
-    && isDraftRecord(before) && isDraftRecord(after)) {
-    const merged = { ...current };
-    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const key of keys) {
-      if (draftValuesEqual(before[key], after[key])) continue;
-      const value = mergeServerDraftChanges(current[key], submitted[key], before[key], after[key]);
-      if (value === DELETE_DRAFT_VALUE) delete merged[key];
-      else merged[key] = value;
-    }
-    return merged;
-  }
-  if (!draftValuesEqual(current, submitted)) return current;
-  return after === undefined ? DELETE_DRAFT_VALUE : structuredClone(after);
-}
-
-const reconcileActionDraft = (current, submitted, before, after) => {
-  const merged = mergeServerDraftChanges(current, submitted, before, after);
-  return merged === DELETE_DRAFT_VALUE ? {} : merged;
-};
-
-function mergeSubmittedKeys(current = {}, submitted = {}, after = {}, keys = []) {
-  const merged = { ...current };
-  for (const key of keys) {
-    if (!draftValuesEqual(current?.[key], submitted?.[key])) continue;
-    if (Object.hasOwn(after || {}, key)) merged[key] = structuredClone(after[key]);
-    else delete merged[key];
-  }
-  return merged;
-}
-
-function reconcileResetRecipe(current, submitted, after, reset) {
-  if (reset.scope === 'all') {
-    return reconcileActionDraft(current, submitted, submitted, after);
-  }
-  if (reset.scope === 'assets') {
-    const keys = new Set([
-      ...Object.keys(current?.assets || {}),
-      ...Object.keys(submitted?.assets || {}),
-      ...Object.keys(after?.assets || {}),
-    ]);
-    return {
-      ...current,
-      assets: mergeSubmittedKeys(current?.assets, submitted?.assets, after?.assets, keys),
-    };
-  }
-  const district = after?.districts?.find(({ id }) => id === reset.districtId);
-  const sources = district?.sources || [];
-  const kinds = sources.map((source) => SOURCE_KIND[source]).filter(Boolean);
-  const slots = eidoverseResetAssetSlotsForDistrict(reset.districtId, sources);
-  return {
-    ...current,
-    includes: mergeSubmittedKeys(current?.includes, submitted?.includes, after?.includes, sources),
-    limits: mergeSubmittedKeys(current?.limits, submitted?.limits, after?.limits, sources),
-    scale: mergeSubmittedKeys(current?.scale, submitted?.scale, after?.scale, kinds),
-    assets: mergeSubmittedKeys(current?.assets, submitted?.assets, after?.assets, slots),
-  };
-}
-
-function reconcileResetAssetOverrides(current, submitted, after, reset, sources = []) {
-  if (reset.scope === 'all' || reset.scope === 'assets') {
-    return reconcileActionDraft(current, submitted, submitted, after);
-  }
-  return mergeSubmittedKeys(
-    current,
-    submitted,
-    after,
-    eidoverseResetAssetSlotsForDistrict(reset.districtId, sources),
-  );
-}
-
-function reconcileResetAliases(current, submitted, after, reset, sources) {
-  if (reset.scope === 'all') return reconcileActionDraft(current, submitted, submitted, after);
-  if (reset.scope !== 'district') return current;
-  const kinds = sources.map((source) => SOURCE_KIND[source]).filter(Boolean);
-  const keys = new Set([...Object.keys(current), ...Object.keys(submitted), ...Object.keys(after)]);
-  return mergeSubmittedKeys(current, submitted, after,
-    [...keys].filter((key) => kinds.some((kind) => key.startsWith(`${kind}-`))));
-}
-
 export default function Eidoverse() {
   const location = useLocation();
   const navigate = useNavigate();
   const { pathname } = location;
   const solo = pathname.replace(/\/+$/, '') === '/eidoverse/solo';
   const requestGeneration = useRef(0);
-  const configDraftRevision = useRef(0);
-  const savedDraftRevision = useRef(0);
   const [phase, setPhase] = useState('loading');
   const [error, setError] = useState('');
   const [hostUrl, setHostUrl] = useState('');
@@ -190,15 +105,18 @@ export default function Eidoverse() {
   const [worldName, setWorldName] = useState('');
   const [humanName, setHumanName] = useState('');
   const [cosId, setCosId] = useState('portos-cos');
-  const [recipeDraft, setRecipeDraft] = useState(null);
-  const [assetOverridesDraft, setAssetOverridesDraft] = useState({});
-  const [labelAliasesDraft, setLabelAliasesDraft] = useState({});
+  // One state object so a server response merges all three drafts atomically
+  // against whatever the user has typed by the time it lands.
+  const [drafts, setDrafts] = useState(() => draftsFromWorld(null));
+  const { recipe: recipeDraft, assets: assetOverridesDraft, aliases: labelAliasesDraft } = drafts;
   const [projectionStatus, setProjectionStatus] = useState('idle');
   const [projectionError, setProjectionError] = useState('');
   const [configStatus, setConfigStatus] = useState('');
-  const [draftDirty, setDraftDirty] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
+  const {
+    draftDirty, markDirty, markSaved, supersede, reset: resetDraftRevision, snapshot: snapshotDraft,
+  } = useConfigDraftRevision();
 
   const { data: projectionProgress, updateData: updateProjectionProgress } = useSocketResource(readProjection, {
     events: PROJECTION_EVENTS, enabled: phase === 'ready', immediate: false,
@@ -213,10 +131,9 @@ export default function Eidoverse() {
   }, [projectionProgress]);
 
   const markConfigDirty = useCallback(() => {
-    configDraftRevision.current += 1;
-    setDraftDirty(true);
+    markDirty();
     setConfigStatus((current) => current === 'saving' ? current : '');
-  }, []);
+  }, [markDirty]);
 
   const stageIdentityRename = useCallback((name) => {
     markConfigDirty();
@@ -241,16 +158,13 @@ export default function Eidoverse() {
       ? { ...current, ...updated, identity: updated.identity || updated.human || current.identity }
       : updated);
     if (replaceDraft) {
-      if (updated?.recipe) setRecipeDraft(updated.recipe);
-      setAssetOverridesDraft(updated?.design?.userOverrides?.assets || {});
-      setLabelAliasesDraft(updated?.design?.labelAliases || {});
+      setDrafts((current) => ({ ...draftsFromWorld(updated), recipe: updated?.recipe || current.recipe }));
       if (updated?.world) setWorldName(updated.world);
       if (updated?.identity?.name || updated?.human?.name) setHumanName(updated.identity?.name || updated.human.name);
       if (updated?.cos?.id) setCosId(updated.cos.id);
-      savedDraftRevision.current = configDraftRevision.current;
-      setDraftDirty(false);
+      markSaved();
     }
-  }, [updateProjectionProgress]);
+  }, [markSaved, updateProjectionProgress]);
 
   const prepare = useCallback(() => {
     const generation = ++requestGeneration.current;
@@ -267,15 +181,11 @@ export default function Eidoverse() {
     setIframeReady(false);
     setSetupState(null);
     setWorldState(null);
-    setRecipeDraft(null);
-    setAssetOverridesDraft({});
-    setLabelAliasesDraft({});
+    setDrafts(draftsFromWorld(null));
     setProjectionStatus('idle');
     setProjectionError('');
     setConfigStatus('');
-    setDraftDirty(false);
-    configDraftRevision.current = 0;
-    savedDraftRevision.current = 0;
+    resetDraftRevision();
 
     const load = async () => {
       const featureState = await getInstanceFeatures(silent);
@@ -316,27 +226,23 @@ export default function Eidoverse() {
       setWorldName(result.world?.world || '');
       setCosId(result.world?.cos?.id || 'portos-cos');
       setHumanName(result.world?.identity?.name || result.world?.human?.name || '');
-      setRecipeDraft(result.world?.recipe || null);
-      setAssetOverridesDraft(result.world?.design?.userOverrides?.assets || {});
-      setLabelAliasesDraft(result.world?.design?.labelAliases || {});
+      setDrafts(draftsFromWorld(result.world));
       setHostUrl(result.hostUrl || '');
     }, (reason) => {
       if (!isCurrent()) return;
       setPhase('error');
       setError(reason?.message || 'Eidoverse Worlds could not be loaded.');
     });
-  }, []);
+  }, [resetDraftRevision]);
 
   const runProjection = useCallback(async () => {
     setProjectionStatus('running');
     setProjectionError('');
-    const submittedRevision = configDraftRevision.current;
-    const submittedDraftWasClean = submittedRevision === savedDraftRevision.current;
+    const submittedDraft = snapshotDraft();
     return projectEidoverseWorld(silent).then((result) => {
       // A progress read begun before the mutation response must not regress it.
       updateProjectionProgress(null);
-      const replaceDraft = submittedDraftWasClean
-        && configDraftRevision.current === submittedRevision;
+      const replaceDraft = shouldReplaceDraft(submittedDraft);
       setWorldState((current) => current ? {
         ...current,
         projection: result.projection || current.projection,
@@ -344,11 +250,7 @@ export default function Eidoverse() {
         design: result.design || current.design,
         recipe: result.recipe || current.recipe,
       } : current);
-      if (replaceDraft && result.recipe) {
-        setRecipeDraft(result.recipe);
-        setAssetOverridesDraft(result.design?.userOverrides?.assets || {});
-        setLabelAliasesDraft(result.design?.labelAliases || {});
-      }
+      if (replaceDraft && result.recipe) setDrafts(draftsFromWorld(result));
       setProjectionStatus('complete');
       return result;
     }, async (reason) => {
@@ -360,7 +262,7 @@ export default function Eidoverse() {
       }
       throw reason;
     });
-  }, [applyWorldResponse, updateProjectionProgress]);
+  }, [applyWorldResponse, snapshotDraft, updateProjectionProgress]);
 
   useEffect(() => {
     if (phase !== 'ready' || !hostUrl) return undefined;
@@ -377,31 +279,31 @@ export default function Eidoverse() {
 
   const mutateRecipe = useCallback((mutator) => {
     markConfigDirty();
-    setRecipeDraft((current) => current ? mutator(current) : current);
+    setDrafts((current) => current.recipe ? { ...current, recipe: mutator(current.recipe) } : current);
   }, [markConfigDirty]);
 
   const mutateAssetOverride = useCallback((slot, path) => {
     markConfigDirty();
-    setAssetOverridesDraft((current) => {
-      const next = { ...current };
-      if (path.trim()) next[slot] = path;
-      else delete next[slot];
-      return next;
+    setDrafts((current) => {
+      const assets = { ...current.assets };
+      if (path.trim()) assets[slot] = path;
+      else delete assets[slot];
+      return { ...current, assets };
     });
   }, [markConfigDirty]);
 
   const mutateLabelAlias = useCallback((key, value) => {
     markConfigDirty();
-    setLabelAliasesDraft((current) => {
-      const next = { ...current };
-      if (value.trim()) next[key] = value;
-      else delete next[key];
-      return next;
+    setDrafts((current) => {
+      const aliases = { ...current.aliases };
+      if (value.trim()) aliases[key] = value;
+      else delete aliases[key];
+      return { ...current, aliases };
     });
   }, [markConfigDirty]);
 
   const saveWorldConfig = useCallback(async () => {
-    const submittedRevision = configDraftRevision.current;
+    const submittedDraft = snapshotDraft();
     setConfigStatus('saving');
     const updated = await updateEidoverseWorldConfig({
       world: worldName.trim(),
@@ -417,74 +319,60 @@ export default function Eidoverse() {
     });
     if (!updated) return;
 
-    const draftIsCurrent = configDraftRevision.current === submittedRevision;
-    applyWorldResponse(updated, { replaceDraft: draftIsCurrent });
-    setConfigStatus(draftIsCurrent ? 'saved' : '');
+    const replaceDraft = shouldReplaceDraft({ ...submittedDraft, forceReplace: true });
+    applyWorldResponse(updated, { replaceDraft });
+    setConfigStatus(replaceDraft ? 'saved' : '');
     const nextHostUrl = hostInfo && setupState
       ? hostUrlFor(hostInfo, setupState, window.location, worldIdentityFor(updated))
       : hostUrl;
     if (nextHostUrl !== hostUrl) setHostUrl(nextHostUrl);
     else void runProjection().catch(() => {});
-  }, [applyWorldResponse, assetOverridesDraft, labelAliasesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, setupState, worldName]);
+  }, [applyWorldResponse, assetOverridesDraft, labelAliasesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, setupState, snapshotDraft, worldName]);
 
   const runConfigAction = useCallback(async (payload) => {
-    const submittedRevision = configDraftRevision.current;
-    const submittedDraftWasClean = submittedRevision === savedDraftRevision.current;
-    const submittedRecipeDraft = recipeDraft;
-    const submittedAssetOverrides = assetOverridesDraft;
-    const submittedAliases = labelAliasesDraft;
-    const serverRecipeBeforeAction = worldState?.recipe;
-    const serverAssetOverridesBefore = worldState?.design?.userOverrides?.assets || {};
+    const submittedDraft = snapshotDraft();
+    const submitted = drafts;
+    const serverBefore = {
+      recipe: worldState?.recipe,
+      assets: worldState?.design?.userOverrides?.assets || {},
+    };
     setConfigStatus('saving');
     const updated = await updateEidoverseWorldConfig(payload, silent).catch((reason) => {
       setConfigStatus(reason?.message || 'Could not update the Eidoverse world configuration.');
       return null;
     });
     if (!updated) return;
-    const draftIsCurrent = configDraftRevision.current === submittedRevision;
-    const replaceDraft = draftIsCurrent
-      && (submittedDraftWasClean || payload.reset?.scope === 'all');
-    if (replaceDraft) configDraftRevision.current += 1;
+    const replaceDraft = shouldReplaceDraft({
+      ...submittedDraft,
+      forceReplace: payload.reset?.scope === 'all',
+    });
+    if (replaceDraft) supersede();
     applyWorldResponse(updated, { replaceDraft });
+    const serverAfter = draftsFromWorld(updated);
     if (!replaceDraft && payload.reset) {
-      setLabelAliasesDraft((current) => reconcileResetAliases(
-        current, submittedAliases, updated.design?.labelAliases || {}, payload.reset,
-        updated.recipe?.districts?.find(({ id }) => id === payload.reset.districtId)?.sources || [],
-      ));
-      if (updated.recipe) {
-        setRecipeDraft((current) => reconcileResetRecipe(
-          current,
-          submittedRecipeDraft,
-          updated.recipe,
-          payload.reset,
-        ));
-      }
-      setAssetOverridesDraft((current) => reconcileResetAssetOverrides(
-        current,
-        submittedAssetOverrides,
-        updated.design?.userOverrides?.assets || {},
-        payload.reset,
-        updated.recipe?.districts?.find(({ id }) => id === payload.reset.districtId)?.sources,
-      ));
+      setDrafts((current) => reconcileAfterReset({
+        reset: payload.reset, drafts: current, submitted, serverAfter,
+      }));
     } else if (!replaceDraft && payload.refreshAssets) {
-      if (updated.recipe) {
-        setRecipeDraft((current) => reconcileActionDraft(
-          current,
-          submittedRecipeDraft,
-          serverRecipeBeforeAction,
-          updated.recipe,
-        ));
-      }
-      setAssetOverridesDraft((current) => reconcileActionDraft(
-        current,
-        submittedAssetOverrides,
-        serverAssetOverridesBefore,
-        updated.design?.userOverrides?.assets || {},
-      ));
+      setDrafts((current) => ({
+        ...current,
+        recipe: updated.recipe ? mergeDraft({
+          current: current.recipe,
+          submitted: submitted.recipe,
+          serverBefore: serverBefore.recipe,
+          serverAfter: serverAfter.recipe,
+        }) : current.recipe,
+        assets: mergeDraft({
+          current: current.assets,
+          submitted: submitted.assets,
+          serverBefore: serverBefore.assets,
+          serverAfter: serverAfter.assets,
+        }),
+      }));
     }
     setConfigStatus(replaceDraft ? 'saved' : '');
     void runProjection().catch(() => {});
-  }, [applyWorldResponse, assetOverridesDraft, labelAliasesDraft, recipeDraft, runProjection, worldState]);
+  }, [applyWorldResponse, drafts, runProjection, snapshotDraft, supersede, worldState]);
 
   const actions = (
     <>
@@ -558,7 +446,7 @@ export default function Eidoverse() {
   const frameStage = (
     <>
       {phase === 'ready' && (
-        <main className="relative min-h-0 flex-1 overflow-hidden bg-port-bg">
+        <section className="relative min-h-0 flex-1 overflow-hidden bg-port-bg">
           <iframe
             ref={frame.frameRef}
             src={hostUrl}
@@ -584,7 +472,7 @@ export default function Eidoverse() {
               </div>
             </div>
           )}
-        </main>
+        </section>
       )}
 
       {['loading', 'starting', 'connecting'].includes(phase) && (

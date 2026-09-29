@@ -22,7 +22,7 @@ import { PR_COMPLETIONS } from './prDisposition.js';
  *
  * There is deliberately no "the agent never opened a PR" code: `verifyPrClaim`
  * (services/agentFinalization.js) already owns that question on every completion
- * path, is forge-agnostic, and carries the `noChangesToShip` carve-out (#3358) —
+ * path, is forge-agnostic, and carries the `branchProvenEmpty` carve-out (#3358) —
  * a run that found the work already done ships nothing and must not be told to
  * open a PR for an empty branch.
  */

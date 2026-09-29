@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { parseIndexParam, validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validation.js';
 import {
   bloodTestSchema,
   bodyEntrySchema,
@@ -139,13 +139,14 @@ router.post('/eyes', asyncHandler(async (req, res) => {
 }));
 
 /**
- * PUT /api/meatspace/eyes/:index
- * Update an eye exam
+ * PUT /api/meatspace/eyes/:id
+ * Update an eye exam. A purely numeric :id is a LEGACY array index into the
+ * date-sorted list, still accepted for one release for older callers.
  */
-router.put('/eyes/:index', asyncHandler(async (req, res) => {
-  const index = parseIndexParam(req.params.index);
+router.put('/eyes/:id', asyncHandler(async (req, res) => {
+  const id = await healthService.resolveEyeExamId(req.params.id);
   const data = validateRequest(eyeExamUpdateSchema, req.body);
-  const exam = await healthService.updateEyeExam(index, data);
+  const exam = await healthService.updateEyeExam(id, data);
   if (!exam) {
     throw new ServerError('Eye exam not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -153,12 +154,12 @@ router.put('/eyes/:index', asyncHandler(async (req, res) => {
 }));
 
 /**
- * DELETE /api/meatspace/eyes/:index
- * Remove an eye exam
+ * DELETE /api/meatspace/eyes/:id
+ * Remove an eye exam (numeric :id = legacy index, see PUT).
  */
-router.delete('/eyes/:index', asyncHandler(async (req, res) => {
-  const index = parseIndexParam(req.params.index);
-  const removed = await healthService.removeEyeExam(index);
+router.delete('/eyes/:id', asyncHandler(async (req, res) => {
+  const id = await healthService.resolveEyeExamId(req.params.id);
+  const removed = await healthService.removeEyeExam(id);
   if (!removed) {
     throw new ServerError('Eye exam not found', { status: 404, code: 'NOT_FOUND' });
   }

@@ -23,6 +23,7 @@ import {
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
   musicVideoLyricsImportSchema,
+  musicVideoLyricsAlignSchema,
   musicVideoTakeInputSchema,
   musicVideoTakeReviewSchema,
   musicVideoHandoffImportSchema,
@@ -31,12 +32,15 @@ import {
   musicVideoTreatmentApplySchema,
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
+  musicVideoCodeGenerateSchema,
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
   musicVideoRevisionStartSchema,
   musicVideoRevisionReleaseSchema,
   musicVideoAutoReviewStartSchema,
   musicVideoAutoReviewResumeSchema,
+  musicVideoProductionStartSchema,
+  musicVideoProductionResumeSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -75,6 +79,8 @@ import {
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFile, analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
+import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
+import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import {
@@ -83,8 +89,12 @@ import {
 import {
   startAutoReview, resumeAutoReview, stopAutoReview, cancelAutoReview,
 } from '../services/musicVideo/autoReviewService.js';
+import {
+  startProduction, resumeProduction, stopProduction, cancelProduction, getProduction,
+} from '../services/musicVideo/productionService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
+import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import {
   updateTreatment,
   compileTreatment,
@@ -293,6 +303,14 @@ router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
   res.json({ project: updated, imported: cues.length, format: detected });
 }));
 
+// Word-level alignment (#9074). Nothing here runs until the director clicks
+// Align words or a line's Re-align. An unreachable whisper server is an error,
+// not an empty timing list.
+router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
+  const { cueId } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
+  res.json(await alignProjectLyrics(req.params.id, { cueId }));
+}));
+
 // --- Audio → MIDI transcription (MuScriptor) ---
 // Transcribe the project's source audio into a .mid via the local MuScriptor
 // sidecar. Kickoff returns 202 + a jobId (503 with the install hint when the
@@ -366,6 +384,28 @@ router.get('/render/:jobId/events', (req, res) => {
 router.post('/render/:jobId/cancel', (req, res) => {
   res.json({ ok: cancelRender(req.params.jobId) });
 });
+
+// Code-rendered style (#9076). Document reads build the page from stored
+// section functions and never call a provider. Generate / regenerate are the
+// only provider calls, and both require this click.
+router.get('/:id/code/document', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  if (project.composition?.mode !== 'code') {
+    throw new ServerError('Switch the render style to Code-rendered first', { status: 409, code: 'NOT_CODE_MODE' });
+  }
+  res.json(prepareCodeRender(project));
+}));
+
+router.post('/:id/code/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
+  res.json(await generateMusicVideoCode(req.params.id, body));
+}));
+
+router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
+  res.json(await regenerateMusicVideoCodeSection(req.params.id, req.params.sectionId, body));
+}));
 
 // --- Draft excerpt render (#8986) ---
 // A director-chosen [startSec, endSec) window re-rendered through the same
@@ -457,6 +497,33 @@ router.post('/:id/auto-reviews/:runId/stop', asyncHandler(async (req, res) => {
 
 router.post('/:id/auto-reviews/:runId/cancel', asyncHandler(async (req, res) => {
   res.json(await cancelAutoReview(req.params.id, req.params.runId));
+}));
+
+// --- Server-owned production run (#9066) ---
+// Start/resume write the checkpoint and return at once; the run advances in
+// the background (plan → frames → clips → reviewed draft → revisions) from
+// queue completion events and reports over `music-video:production`. Only
+// these explicit requests start or resume a run — nothing at boot does.
+router.post('/:id/production-runs', asyncHandler(async (req, res) => {
+  const { providerId, model, ...input } = validateRequest(musicVideoProductionStartSchema, req.body || {});
+  res.status(201).json(await startProduction(req.params.id, { ...input, reviewer: { providerId, model } }));
+}));
+
+router.get('/:id/production-runs/:runId', asyncHandler(async (req, res) => {
+  res.json(await getProduction(req.params.id, req.params.runId));
+}));
+
+router.post('/:id/production-runs/:runId/resume', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoProductionResumeSchema, req.body || {});
+  res.json(await resumeProduction(req.params.id, req.params.runId, input));
+}));
+
+router.post('/:id/production-runs/:runId/stop', asyncHandler(async (req, res) => {
+  res.json(await stopProduction(req.params.id, req.params.runId));
+}));
+
+router.post('/:id/production-runs/:runId/cancel', asyncHandler(async (req, res) => {
+  res.json(await cancelProduction(req.params.id, req.params.runId));
 }));
 
 // --- Director scene board ---

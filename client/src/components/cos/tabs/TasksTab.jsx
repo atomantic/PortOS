@@ -242,7 +242,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
       {/* User Tasks */}
       <div>
         <div className="mb-3">
-          <h3 className="text-lg font-semibold text-white">Task queue</h3>
+          <h2 className="text-lg font-semibold text-white">Task queue</h2>
         </div>
 
         <p className="mb-3 text-sm text-gray-400" aria-label="Queue status">

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { APP_DETAIL_TABS, appUsesJira, getAppFeatureOverride, isAppFeatureEnabled } from './constants';
+import { PORTOS_APP_ID } from '../../lib/appIdentity';
+import { APP_DETAIL_TABS, appUsesJira, getAppFeatureOverride, isAppFeatureEnabled, isLaunchVideoDisabled } from './constants';
 
 const featureEntry = (id) => APP_DETAIL_TABS.find(tab => tab.id === id);
 
@@ -57,5 +58,25 @@ describe('managed-app feature overrides', () => {
     expect(isAppFeatureEnabled({ jira: { enabled: true } }, 'jira', false)).toBe(true);
     expect(isAppFeatureEnabled({ workTracker: 'jira' }, 'jira', false)).toBe(true);
     expect(isAppFeatureEnabled({ jira: { enabled: false }, workTracker: 'github' }, 'jira', true)).toBe(false);
+  });
+});
+
+describe('isLaunchVideoDisabled', () => {
+  it('disables launch videos for PortOS baseline app and Eidoverse Worlds app', () => {
+    expect(isLaunchVideoDisabled({ id: PORTOS_APP_ID })).toBe(true);
+    expect(isLaunchVideoDisabled({ id: 'eidoverse-worlds' })).toBe(true);
+    expect(isLaunchVideoDisabled({ id: 'eidoverse' })).toBe(true);
+    expect(isLaunchVideoDisabled({ id: 'custom-id', pm2ProcessNames: ['eidoverse-worlds'] })).toBe(true);
+
+    expect(isLaunchVideoDisabled({ id: 'standard-app', pm2ProcessNames: ['standard-app'] })).toBe(false);
+    expect(isLaunchVideoDisabled(null)).toBe(false);
+  });
+
+  it('hides launch-video detail tab for PortOS and Eidoverse Worlds apps via visibleWhen', () => {
+    const launchVideoTab = featureEntry('launch-video');
+    expect(typeof launchVideoTab.visibleWhen).toBe('function');
+    expect(launchVideoTab.visibleWhen({ id: 'portos-default' })).toBe(false);
+    expect(launchVideoTab.visibleWhen({ id: 'eidoverse-worlds' })).toBe(false);
+    expect(launchVideoTab.visibleWhen({ id: 'my-app' })).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectBoardStyleContext } from './styleContext.js';
+import { collectBoardStyleContext, moodBoardImageCandidates } from './styleContext.js';
 
 const boardWith = (items) => ({
   id: 'mb-1',
@@ -38,6 +38,28 @@ describe('collectBoardStyleContext', () => {
     });
     expect(ctx.items[1]).toMatchObject({ kind: 'text', note: 'lean grim and spiritual' });
     expect(ctx.droppedItems).toBe(0);
+    expect(ctx.stylePrompt).toBeNull();
+  });
+
+  it('carries the composite style prompt and lists the poster ahead of pinned images', () => {
+    const board = {
+      ...boardWith([analyzedItem]),
+      style: { prompt: 'the shared ink-wash look', negativePrompt: 'gloss' },
+      posterImageRef: 'poster.png',
+    };
+    const ctx = collectBoardStyleContext(board);
+    expect(ctx.stylePrompt).toBe('the shared ink-wash look');
+    expect(ctx.styleNegative).toBe('gloss');
+    const candidates = moodBoardImageCandidates(board, (item) => (
+      item.mediaKey === 'image:ref.png' ? { kind: 'image', filename: 'ref.png' } : null
+    ));
+    expect(candidates.map((c) => c.filename)).toEqual(['poster.png', 'ref.png']);
+  });
+
+  it('does not list the poster twice when a pin is the same file', () => {
+    const board = { posterImageRef: 'ref.png', items: [{ caption: 'same', mediaKey: 'image:ref.png' }] };
+    const candidates = moodBoardImageCandidates(board, () => ({ kind: 'image', filename: 'ref.png' }));
+    expect(candidates).toEqual([{ kind: 'image', filename: 'ref.png', label: 'Mood board poster' }]);
   });
 
   it('caps the fragment list and reports the overflow', () => {
@@ -57,5 +79,16 @@ describe('collectBoardStyleContext', () => {
     expect(ctx.droppedItems).toBe(50 - ctx.items.length);
     const total = ctx.items.reduce((sum, it) => sum + it.note.length, 0);
     expect(total).toBeLessThanOrEqual(24000);
+  });
+
+  it('samples across the whole board when over budget instead of keeping only the first items', () => {
+    const many = Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, type: 'text', text: `pin-${i}` }));
+    const ctx = collectBoardStyleContext(boardWith(many));
+    expect(ctx.items).toHaveLength(60);
+    const idx = ctx.items.map((it) => Number(it.note.slice(4)));
+    expect(idx).toEqual([...idx].sort((a, b) => a - b));
+    expect(idx[0]).toBeLessThan(10);
+    expect(idx[idx.length - 1]).toBeGreaterThan(190);
+    expect(ctx.droppedItems).toBe(140);
   });
 });

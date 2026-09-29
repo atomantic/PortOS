@@ -58,6 +58,8 @@ import {
   TRUNCATION_NUDGE_MAX_ATTEMPTS,
   TRUNCATION_NUDGE_TEXT,
   createStallNudgeGate,
+  createAgyResumeGate,
+  AGY_RESUME_MAX_ATTEMPTS,
   STALL_NUDGE_MAX_ATTEMPTS,
   STALL_NUDGE_TEXT,
   STALL_NUDGE_MAX_TOTAL,
@@ -470,7 +472,6 @@ export function createTuiSessionController({
   rawFile,
   executionId,
   laneName,
-  isTruthyMetaFn,
   directLaunch,
   prOwnership,
   mergeGateIsOwed,
@@ -547,6 +548,11 @@ export function createTuiSessionController({
   // createTruncationNudgeGate.
   const detectTruncatedResponse = createTruncatedResponseDetector();
   const truncationNudgeGate = createTruncationNudgeGate();
+  // agy quitting back to its launch shell (see createAgyResumeGate). Only a
+  // login-shell launch has a shell to fall back to; a direct PTY dies with agy
+  // and finishes through handleExit instead.
+  const agyResumeGate = !directLaunch && isAntigravityCommand(tuiConfig.command) ? createAgyResumeGate() : null;
+  let agyResumeAwaitingComposer = false;
   // A request the TUI keeps retrying and the provider never answers. Every
   // reaper reads such a session as busy (the retry ladder repaints the screen),
   // so without this the run holds its lane until the max-runtime ceiling — see
@@ -854,7 +860,7 @@ export function createTuiSessionController({
    * threw — a memory-extraction crash would otherwise strand the worktree and
    * the shell session on disk.
    */
-  const releaseRunResources = async ({ agentData, cleanupSuccess, prClaimVerified, noChangesToShip }) => {
+  const releaseRunResources = async ({ agentData, cleanupSuccess, prClaimVerified, branchProvenEmpty }) => {
     // Pipeline progression → worktree cleanup with the PR disposition →
     // sentinel removal → retry-hold release, in the one owner every completion
     // path shares. Caught so a throw there cannot skip the in-memory teardown
@@ -865,7 +871,7 @@ export function createTuiSessionController({
       success: cleanupSuccess,
       prOwnership,
       prClaimVerified,
-      noChangesToShip,
+      branchProvenEmpty,
       outputBuffer: getOutputBuffer(),
     }).catch(err => emitLog('warn', `TUI completion cleanup failed for ${agentId}: ${err.message}`, { agentId }));
     if (sentinel.cleanup) {
@@ -1068,7 +1074,7 @@ export function createTuiSessionController({
     // throw from finalize itself skips the assignment entirely — in all three
     // cases nothing was verified, so cleanup must ask rather than stand down.
     let prClaimVerified = false;
-    let noChangesToShip = false;
+    let branchProvenEmpty = false;
 
     // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
     // hook crash) still runs the local cleanup — sentinel removal, the shared
@@ -1093,7 +1099,6 @@ export function createTuiSessionController({
         outputBuffer: getOutputBuffer(),
         errorAnalysis,
         terminatedByUser,
-        isTruthyMetaFn,
         error: finalError || undefined,
         completionReason: reason,
         workspacePath: cwd,
@@ -1103,9 +1108,9 @@ export function createTuiSessionController({
       });
       if (finalizeVerdict && typeof finalizeVerdict.success === 'boolean') cleanupSuccess = finalizeVerdict.success;
       prClaimVerified = prClaimWasVerified(finalizeVerdict?.prVerdict);
-      noChangesToShip = finalizeVerdict?.prVerdict?.noChangesToShip === true;
+      branchProvenEmpty = finalizeVerdict?.prVerdict?.branchProvenEmpty === true;
     } finally {
-      await releaseRunResources({ agentData, cleanupSuccess, prClaimVerified, noChangesToShip });
+      await releaseRunResources({ agentData, cleanupSuccess, prClaimVerified, branchProvenEmpty });
     }
   };
 
@@ -1360,6 +1365,17 @@ export function createTuiSessionController({
       // gone quiet. Gated on promptSubmittedAt for the same reason
       // resubmitAfterSignal is: before the prompt is in, there is no turn to
       // resume and the ordinary paste path still owns first delivery.
+      if (agyResumeGate && promptSubmittedAt) {
+        agyResumeGate.observe(stripped);
+        // A relaunched agy is up once its composer footer paints; only then is a
+        // "continue" a message to the model rather than keystrokes into a boot.
+        if (agyResumeAwaitingComposer && AGY_INPUT_READY_PATTERN.test(stripped)) {
+          agyResumeAwaitingComposer = false;
+          if (pasteController?.resubmit({ text: STALL_NUDGE_TEXT, label: 'agy resume nudge' })) {
+            appendLine('🔁 agy resumed its conversation — nudged it to continue');
+          }
+        }
+      }
       const oomSignal = promptSubmittedAt ? detectLocalRuntimeOom(stripped) : null;
       if (oomSignal) {
         const armed = oomNudgeGate.arm(oomSignal, now);
@@ -1715,6 +1731,23 @@ export function createTuiSessionController({
       }
       if (selfClearingGate.armed) {
         resubmitAfterSignal();
+        return;
+      }
+      // agy fell back to the shell it was launched from: type its own resume
+      // command. Checked against the live process tree, not just the banner —
+      // the banner also scrolls past in a session that is still running.
+      const resumeId = agyResumeGate && sessionPhase === 'running' && promptSubmittedAt
+        ? agyResumeGate.takeResume(now, lastOutputAt)
+        : null;
+      if (resumeId) {
+        Promise.resolve(session.hasLiveChild(pid)).then((alive) => {
+          if (alive || isTerminal()) return;
+          const wrote = session.write(sessionId, `${tuiConfig.commandLine} --conversation=${resumeId}\r`);
+          if (wrote === false) return;
+          agyResumeGate.recordRelaunch();
+          agyResumeAwaitingComposer = true;
+          appendLine(`🔁 agy exited to the shell — relaunched it on conversation ${resumeId.slice(0, 8)} (attempt ${agyResumeGate.attempts}/${AGY_RESUME_MAX_ATTEMPTS})`);
+        }).catch((err) => emitLog('error', `TUI agent ${agentId} agy resume failed: ${err?.message || err}`, { agentId }));
         return;
       }
       const stall = retryStallGate.takeStall();

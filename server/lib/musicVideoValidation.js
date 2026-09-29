@@ -11,6 +11,13 @@
 import { z } from 'zod';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_MODES } from './musicVideoShotTiming.js';
+import {
+  MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
+  MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
+  MUSIC_VIDEO_AUTOMATION_TOOL_IDS,
+} from './musicVideoAutomation.js';
+import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
+import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
 // (autonomous); both share the same record + scene board.
@@ -25,6 +32,17 @@ export const musicVideoConceptSchema = z.object({
   prompt: z.string().max(8000).optional(),
   style: z.string().max(2000).optional(),
   universeId: z.string().max(64).nullable().optional(),
+  // Authored snapshots keep the production stable when source canon changes.
+  universeStyle: z.string().max(4000).optional(),
+  moodBoardStyle: z.string().max(4000).optional(),
+  subjects: z.array(z.object({
+    id: z.string().min(1).max(64),
+    kind: z.enum(['character', 'place', 'object']),
+    name: z.string().trim().min(1).max(120),
+    description: z.string().max(1000).optional(),
+    role: z.enum(['protagonist', 'band', 'supporting']).optional(),
+    canonId: z.string().max(64).optional(),
+  }).strict()).max(24).optional(),
 }).strict();
 
 // Renderer settings travel with the project so reopening a director board (or
@@ -54,12 +72,23 @@ export const musicVideoVideoSettingsSchema = z.object({
 // null means "not yet timed" (plain pasted lyrics, or timings invalidated by an
 // audio-source change — see projectsLogic.applyProjectPatch). The id is
 // optional on input; the server mints one so edits stay addressable.
+// `words` (#9074) is derived karaoke timing. Absent on older records and on
+// peers that have not aligned; cleared with the line times when the audio changes.
 const timedSec = z.number().min(0).max(36000).nullable().optional();
+const lyricWordSchema = z.object({
+  w: z.string().min(1).max(80),
+  startSec: z.number().min(0).max(36000),
+  endSec: z.number().min(0).max(36000),
+  conf: z.enum(['matched', 'interpolated']),
+}).strict().refine((word) => word.endSec >= word.startSec, {
+  message: 'word endSec must be >= startSec',
+});
 export const musicVideoLyricCueSchema = z.object({
   id: z.string().min(1).max(64).optional(),
   text: z.string().max(500),
   startSec: timedSec,
   endSec: timedSec,
+  words: z.array(lyricWordSchema).max(400).optional(),
 }).strict();
 
 // A musical-phrase annotation: a span of the song with an optional visual
@@ -189,13 +218,28 @@ export const musicVideoLyricsImportSchema = z.object({
   mode: z.enum(['replace', 'append']).optional(),
 }).strict();
 
+// Word alignment (#9074) runs only when the director clicks. `cueId` re-aligns
+// that line; omitted, every line is aligned.
+export const musicVideoLyricsAlignSchema = z.object({
+  cueId: z.string().min(1).max(64).optional(),
+}).strict();
+
 // ---- Composition manifest (#8984, part of #8966) ---------------------------
 
 // A composed render lays timed text cues over the cut footage; `concat` (and a
-// project with no manifest) is the plain clip concatenation. Cue text is the
-// director's own, rendered as an independent typography layer — never baked
-// into generated pixels. See services/musicVideo/composition.js.
-export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed'];
+// project with no manifest) is the plain clip concatenation. `code` draws the
+// whole song as a seekable composition instead of generated footage. Cue text
+// is the director's own, rendered as an independent typography layer — never
+// baked into generated pixels. See services/musicVideo/composition.js.
+export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code'];
+// One section function. Reject the calls that would make a frame depend on
+// the clock, entropy, or the network — the preview and the render both seek.
+export const MUSIC_VIDEO_CODE_SOURCE_MAX = 20000;
+export const MUSIC_VIDEO_CODE_NONDETERMINISTIC = /\bMath\s*\.\s*random\b|\bDate\s*\.\s*now\b|\bperformance\s*\.\s*now\b|\bgetRandomValues\b|\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b|\bimport\s*\(|\brequire\s*\(/;
+export const isDeterministicCodeSource = (source) => typeof source === 'string'
+  && source.length > 0
+  && source.length <= MUSIC_VIDEO_CODE_SOURCE_MAX
+  && !MUSIC_VIDEO_CODE_NONDETERMINISTIC.test(source);
 export const MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES = ['fade', 'rise', 'typewriter', 'pop'];
 export const MUSIC_VIDEO_TYPOGRAPHY_PLACEMENTS = ['upper', 'center', 'lower'];
 export const MUSIC_VIDEO_TYPOGRAPHY_EMPHASES = ['subtitle', 'hero'];
@@ -211,6 +255,24 @@ export const musicVideoTextCueSchema = z.object({
   emphasis: z.enum(MUSIC_VIDEO_TYPOGRAPHY_EMPHASES).optional(),
 }).strict();
 
+const codeSectionSource = z.string().min(1).max(MUSIC_VIDEO_CODE_SOURCE_MAX)
+  .refine(isDeterministicCodeSource, 'section source must be deterministic and offline');
+
+export const musicVideoCodeVideoSchema = z.object({
+  providerId: z.string().max(120).nullable().optional(),
+  model: z.string().max(200).nullable().optional(),
+  generatedAt: z.string().max(40).nullable().optional(),
+  sections: z.array(z.object({
+    id: z.string().min(1).max(64),
+    source: codeSectionSource,
+  }).strict()).max(40),
+}).strict();
+
+export const musicVideoCodeGenerateSchema = z.object({
+  providerId: z.string().max(120).optional(),
+  model: z.string().max(200).optional(),
+}).strict();
+
 // Replaced whole by a project PATCH (the editor sends the full manifest).
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
@@ -221,6 +283,7 @@ export const musicVideoCompositionSchema = z.object({
     font: z.enum(MUSIC_VIDEO_TYPOGRAPHY_FONTS).optional(),
   }).strict().optional(),
   posterSec: timedSec,
+  codeVideo: musicVideoCodeVideoSchema.nullable().optional(),
 }).strict();
 
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
@@ -404,6 +467,36 @@ export const musicVideoAutoReviewResumeSchema = z.object({
   limits: musicVideoAutoReviewLimitsSchema.partial().optional(),
 }).strict();
 
+// ---- Server-owned production run (#9066) -----------------------------------
+// The allowed pool: explicit image/video render backends (and models) the run
+// may dispatch to — re-checked for eligibility and capability at every
+// dispatch. Every limit but the dollar cap is required; the cap is accepted
+// only when every metered route has a known price (services/musicVideo/production.js).
+const musicVideoProductionRouteSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('image'), mode: z.enum(IMAGE_GEN_MODES), model: z.string().trim().min(1).max(200).nullable().optional() }).strict(),
+  z.object({ kind: z.literal('video'), mode: z.enum(VIDEO_GEN_MODES), model: z.string().trim().min(1).max(200).nullable().optional() }).strict(),
+]);
+
+export const musicVideoProductionLimitsSchema = z.object({
+  maxGenerations: z.number().int().min(1).max(500),
+  maxReviewAttempts: z.number().int().min(1).max(10),
+  spendCapUsd: z.number().min(0).max(100000).nullable().optional(),
+}).strict();
+
+export const musicVideoProductionStartSchema = z.object({
+  directive: z.string().max(4000).optional(),
+  pool: z.array(musicVideoProductionRouteSchema).min(1).max(12),
+  limits: musicVideoProductionLimitsSchema,
+  providerId: z.string().min(1).max(200).nullable().optional(),
+  model: z.string().min(1).max(200).nullable().optional(),
+}).strict();
+
+// Resume may RAISE a limit; `acceptBasis` continues against a changed creative setup.
+export const musicVideoProductionResumeSchema = z.object({
+  limits: musicVideoProductionLimitsSchema.partial().optional(),
+  acceptBasis: z.boolean().optional(),
+}).strict();
+
 // A generation kickoff that failed before reaching the queue (#9011) — names
 // the rejected section whose claim should clear so the next resume can hand
 // it out again immediately instead of waiting out GENERATION_CLAIM_LEASE_MS.
@@ -419,6 +512,15 @@ export const musicVideoSoundBedSchema = z.object({
   volume: z.number().min(0.05).max(1).optional(),
 }).strict();
 
+// Automation-first brief: which render tools the agent may use, the director's
+// free-text guidance, and a spend cap (null = no cap). A patch merges per
+// sub-field; `tools` replaces its list whole. See musicVideoAutomation.js.
+export const musicVideoAutomationSchema = z.object({
+  tools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),
+  guidance: z.string().max(MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX).optional(),
+  budgetUsd: z.number().min(0).max(MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD).nullable().optional(),
+}).strict();
+
 export const musicVideoProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
@@ -430,6 +532,12 @@ export const musicVideoProjectCreateSchema = z.object({
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
+  automation: musicVideoAutomationSchema.nullable().optional(),
+  lyricCues: lyricCueList.optional(),
+  phrases: phraseList.optional(),
+  pacing: musicVideoPacingSchema.nullable().optional(),
+  composition: musicVideoCompositionSchema.nullable().optional(),
+  soundBed: musicVideoSoundBedSchema.nullable().optional(),
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
@@ -441,6 +549,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
+  automation: musicVideoAutomationSchema.nullable().optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
   lyricCues: lyricCueList.optional(),
   phrases: phraseList.optional(),
@@ -549,7 +658,7 @@ export const musicVideoManualAnalysisSchema = z.object({
 // `model` picks the MuScriptor size tier; the service clamps unknown values to
 // its default, this only types the field.
 export const musicVideoTranscribeMidiRequestSchema = z.object({
-  model: z.enum(['small', 'medium', 'large']).optional(),
+  model: z.enum(MUSCRIPTOR_MODELS).optional(),
 }).strict();
 
 // The persisted MIDI-transcription pointer (a .mid basename under data/music/,
@@ -566,7 +675,33 @@ export const musicVideoMidiTranscriptionSchema = z.object({
 // The cached beat/tempo/section map (audioAnalysis.js output). Validated when a
 // record round-trips so a hand-edited/legacy project can't carry a malformed
 // analysis; the analyzer itself produces this shape.
+// Per-band loudness envelopes (0..1 on a fixed fps grid) and onset times for
+// the seekable song feature track (#9073). `null`/absent means "not analyzed"
+// (an analysis cached before the feature track existed); an empty array is
+// never used as that sentinel.
+const envelopeSeriesSchema = z.array(z.number().min(0).max(1)).max(200000);
+const onsetTimesSchema = z.array(z.number().min(0)).max(100000);
+export const musicVideoSongFeaturesSchema = z.object({
+  envelopes: z.object({
+    fps: z.number().positive(),
+    rms: envelopeSeriesSchema,
+    low: envelopeSeriesSchema,
+    mid: envelopeSeriesSchema,
+    high: envelopeSeriesSchema,
+  }).strict(),
+  onsets: z.object({
+    low: onsetTimesSchema,
+    mid: onsetTimesSchema,
+    high: onsetTimesSchema,
+  }).strict(),
+  // Set when the decode was capped, so the tracks stop before the song does.
+  truncatedAtSec: z.number().min(0).nullable().optional(),
+}).strict();
+
 export const musicVideoAudioAnalysisSchema = z.object({
+  // Shape version: absent = 1 (pre feature track), 2 = carries `features`.
+  version: z.number().int().min(1).optional(),
+  features: musicVideoSongFeaturesSchema.nullable().optional(),
   bpm: z.number().nullable(),
   beats: z.array(z.number()),
   downbeats: z.array(z.number()),

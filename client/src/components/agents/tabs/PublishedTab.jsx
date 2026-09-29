@@ -33,7 +33,7 @@ export default function PublishedTab({ agentId }) {
       return;
     }
     setPublishedLoading(true);
-    const data = await api.getAgentPublished(agentId, selectedAccountId, publishedDays);
+    const data = await api.getAgentPublished({ agentId, accountId: selectedAccountId, days: publishedDays });
     setPublished(data);
     setPublishedLoading(false);
   }, [agentId, selectedAccountId, publishedDays]);

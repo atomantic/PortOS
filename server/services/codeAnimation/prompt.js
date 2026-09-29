@@ -41,6 +41,11 @@ export const CODE_ANIMATION_MESSAGES = Object.freeze({
 // URL. Absent when the user supplied no audio or opened the file standalone.
 export const CODE_ANIMATION_AUDIO_GLOBAL = 'ANIMATION_AUDIO_URL';
 
+// The global the frame-exact exporter sets to the soundtrack's measured beat
+// grid ({ bpm, beats, downbeats, hits } — seconds), so audio-reactive motion
+// can be a pure function of t with no live playback (#9078).
+export const CODE_ANIMATION_SONG_GLOBAL = 'ANIMATION_SONG';
+
 export const CODE_ANIMATION_ASPECT_RATIOS = Object.freeze({
   '16:9': { width: 16, height: 9 },
   '9:16': { width: 9, height: 16 },
@@ -138,7 +143,8 @@ function audioSection({ audio, soundtrack, durationSeconds }) {
     if (isNonBlankStr(audio.notes)) lines.push(`What the artist says about the track (tempo, sections, cues): ${trimTo(audio.notes, CODE_ANIMATION_LIMITS.audioNotesMax)}`);
     lines.push(
       `- Read the track URL from \`window.${CODE_ANIMATION_AUDIO_GLOBAL}\` (set by the host before your script runs). Play it through an <audio> element routed into Web Audio (createMediaElementSource → AnalyserNode → destination).`,
-      '- While audio plays, the timeline clock IS `audio.currentTime` so picture and sound never drift. Map the analyser\'s bass / mid / treble energy and detected onsets onto motion, scale, color, and cuts so the picture visibly dances to the music.',
+      '- While audio plays, the timeline clock IS `audio.currentTime` so picture and sound never drift.',
+      `- Make the picture dance from PRECOMPUTED song data as a function of t: when \`window.${CODE_ANIMATION_SONG_GLOBAL}\` is set (\`{ bpm, beats, downbeats, hits }\`, every entry a time in seconds; bpm may be null) derive pulses, cuts, scale, and color from the nearest beats/downbeats/hits before and after t. The frame-exact MP4 export renders renderFrame(t) with NO audio playing, so a live analyser reads silence there. Use the AnalyserNode's bass / mid / treble energy only as a preview fallback when \`window.${CODE_ANIMATION_SONG_GLOBAL}\` is absent.`,
       `- If \`window.${CODE_ANIMATION_AUDIO_GLOBAL}\` is unset (the file was opened on its own), show a small "Load audio" file input in the controls overlay and fall back to a silent clock until a file is chosen.`,
       `- The video lasts ${durationSeconds}s; if the track is longer, fade the audio out over the final second.`,
     );
@@ -206,7 +212,7 @@ function runtimeContract({ width, height, fps, durationSeconds, interactive, has
   return `RUNTIME CONTRACT (required — the PortOS preview host depends on every item):
 1. One <canvas> with an internal resolution of exactly ${width}×${height}px, CSS-scaled to fit the viewport with letterboxing on a black background. Every visible pixel of the film is drawn onto this canvas.
 2. \`window.ANIMATION_META = { title, duration: ${durationSeconds}, fps: ${fps}, width: ${width}, height: ${height} }\`.
-3. \`window.renderFrame(t)\` draws the frame at time t (seconds, 0 ≤ t ≤ ${durationSeconds}) DETERMINISTICALLY: use a seeded PRNG, never Math.random/Date.now/performance.now inside drawing, and derive all motion from t (plus audio analysis while audio plays). Scrubbing to the same t twice must look the same.
+3. \`window.renderFrame(t)\` draws the frame at time t (seconds, 0 ≤ t ≤ ${durationSeconds}) DETERMINISTICALLY: use a seeded PRNG, never Math.random/Date.now/performance.now inside drawing, and derive all motion from t (audio-reactive values from the precomputed song data, never only from live playback). Scrubbing to the same t twice must look the same. PortOS exports the film frame-exactly by calling renderFrame(t) once per frame with its own clock, so renderFrame must fully draw frame t on its own, even when called out of order or slower than real time.
 4. A requestAnimationFrame loop advances a clock and calls renderFrame(clock). The film loops back to 0 at the end unless it is recording.
 5. A minimal controls overlay OUTSIDE the canvas (so it never appears in a recording): play/pause, restart, a scrub bar with the current time, and a Record button. Autoplay on load when the browser allows it; otherwise show a clear play prompt.
 6. \`window.recordAnimation()\` returns a Promise<Blob>: restart at t=0, capture \`canvas.captureStream(${fps})\` with MediaRecorder (prefer "video/webm;codecs=vp9", fall back to "video/webm"), play exactly ${durationSeconds}s, stop, and resolve the Blob.${audioTrack} The Record button calls it; when embedded (window.parent !== window) it posts the result to the host exactly as item 7 does, otherwise it downloads the result as a .webm file.
@@ -294,4 +300,64 @@ export function extractAnimationHtml(text) {
   const endMatch = text.slice(start).match(/<\/html>/i);
   const end = endMatch ? start + endMatch.index + endMatch[0].length : text.length;
   return text.slice(start, end).trim();
+}
+
+const CODE_VIDEO_RULES = `RUNTIME CONTRACT (the host already supplies this — write only the section functions):
+- globalThis.portosComposition.seek(t) covers the whole song. The page reads the inlined song.json document (the same JSON written beside index.html). You do not fetch it.
+- One function per section id: \`function render(ctx, env) { ... }\`. env is { t, localT, frame, width, height, song, palette, section, safe, karaoke }.
+- Use the shared palette (env.palette) and the safe rect (env.safe, 10% inset). Do not draw lyric text — the host paints karaoke after your function, inside the title-safe area, so every active line stays readable.
+- Karaoke, enforced by the host: a word may brighten at most 0.4s before its startSec, and the highlight never begins before startSec.
+- Determinism: no Math.random, Date.now, performance.now, getRandomValues, fetch, WebSocket, XMLHttpRequest, import, or require. Per-frame jitter must use env.frame (the integer frame index), never continuous env.t, so motion-blur sub-frames stay coherent.
+- Canvas 2D only. No external assets, fonts, or network.`;
+
+function promptSong(song) {
+  return {
+    durationSec: song.durationSec,
+    fps: song.fps,
+    sections: song.sections,
+    lyrics: (song.lyrics || []).slice(0, 400),
+    beats: (song.beats || []).slice(0, 400),
+    downbeats: (song.downbeats || []).slice(0, 200),
+  };
+}
+
+/**
+ * Music-video variant of the code-animation contract (#9076). Asks for one
+ * render function per section (or just `onlySectionId` when regenerating).
+ * The host assembles the page; the model does not return a full HTML document.
+ */
+export function buildMusicVideoCodePrompt({ title = '', palette, song, styleLines = [], onlySectionId = null }) {
+  const wanted = (song.sections || []).filter((section) => !onlySectionId || section.id === onlySectionId);
+  const brief = wanted.map((section) => `- ${section.id} [${section.startSec}s, ${section.endSec}s) ${section.label || ''}${section.lyric ? ` — lyric: ${section.lyric}` : ' — instrumental'}`).join('\n');
+  const scope = onlySectionId
+    ? `Return a function for section "${onlySectionId}" only. The host keeps every other section.`
+    : 'Return one function for every section id listed.';
+  return [
+    `You write Canvas 2D section functions for a code-rendered music video${title ? ` titled "${trimTo(title, 200)}"` : ''}. The host seeks them against the song. No footage generation.`,
+    CODE_VIDEO_RULES,
+    `PALETTE:\n${JSON.stringify(palette)}`,
+    styleLines.length ? `STYLE SOURCE:\n${styleLines.join('\n')}` : '',
+    `SONG (song.json):\n${JSON.stringify(promptSong(song))}`,
+    `SECTIONS:\n${brief}`,
+    scope,
+    'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML document, no explanation.',
+  ].filter(Boolean).join('\n\n');
+}
+
+/** Pull `{ sections: [{ id, source }] }` out of a model response. `[]` when absent. */
+export function extractCodeSections(text) {
+  if (!isNonBlankStr(text)) return [];
+  const fences = [...text.matchAll(/```(?:json)?[^\n]*\n([\s\S]*?)```/gi)].map((match) => match[1]);
+  const candidates = fences.length ? fences : [text];
+  for (const candidate of candidates) {
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start < 0 || end <= start) continue;
+    try {
+      const parsed = JSON.parse(candidate.slice(start, end + 1));
+      if (!Array.isArray(parsed?.sections)) continue;
+      return parsed.sections.filter((section) => section && typeof section.id === 'string' && typeof section.source === 'string');
+    } catch { /* the next fence may be the document */ }
+  }
+  return [];
 }

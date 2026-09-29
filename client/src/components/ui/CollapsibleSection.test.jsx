@@ -89,4 +89,18 @@ describe('CollapsibleSection', () => {
     rerender(<CollapsibleSection label="Outfits" size="md">body</CollapsibleSection>);
     expect(container.querySelector('button')).toHaveClass('text-gray-400');
   });
+
+  it('renders headerActions as a sibling of the toggle button, never inside it', () => {
+    const { container } = render(
+      <CollapsibleSection label="Claude" headerActions={<a href="/harness">harness →</a>}>
+        body
+      </CollapsibleSection>,
+    );
+    const button = screen.getByRole('button', { name: 'Claude' });
+    expect(button.querySelector('a, button')).toBeNull();
+    expect(container.querySelectorAll('button a, a button')).toHaveLength(0);
+    const link = screen.getByRole('link', { name: 'harness →' });
+    fireEvent.click(link);
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+  });
 });

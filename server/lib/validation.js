@@ -1,16 +1,8 @@
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
-
-export const gitDeleteBranchBodySchema = z.object({
-  path: z.string().min(1),
-  branch: z.string().min(1),
-  local: z.boolean().default(false),
-  remote: z.boolean().default(false),
-}).refine(({ local, remote }) => local || remote, {
-  message: 'at least one of local or remote must be true',
-});
 import { ServerError } from './errorHandler.js';
+import { isSafeGitRef } from './gitArgs.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
@@ -42,6 +34,49 @@ import { isPlainObject } from './objects.js';
 import { isValidCronExpression, isCronShaped } from './cronValidation.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from './userActionTypes.js';
 import { MIND_BUNDLE_GROUP_CHOICES, MIND_BUNDLE_MAX_CHARS, MIND_BUNDLE_PASSPHRASE_MAX_CHARS, MIND_BUNDLE_PASSPHRASE_MIN_CHARS, PERSISTENT_MIND_BUNDLE_GROUPS, PERSISTENT_MIND_BUNDLE_SCOPES } from './mindBundleFormat.js';
+
+// ---- Git write-route bodies (#9154) -----------------------------------------
+// Refs and files become argv entries for git, so a leading "-" would be parsed
+// as an option; the ref grammar rejects that plus git's own invalid-ref forms.
+export const gitRefNameSchema = z.string().min(1).max(255).refine(isSafeGitRef, {
+  message: 'not a valid git ref name',
+});
+const gitPathField = z.string().min(1);
+
+export const gitPathBodySchema = z.object({ path: gitPathField });
+export const gitStageBodySchema = z.object({
+  path: gitPathField,
+  files: z.array(z.string().min(1)).min(1).max(500),
+});
+export const gitCommitBodySchema = z.object({
+  path: gitPathField,
+  message: z.string().min(1).max(10000),
+});
+export const gitBranchBodySchema = z.object({ path: gitPathField, branch: gitRefNameSchema });
+export const gitOptionalBranchBodySchema = z.object({
+  path: gitPathField,
+  branch: gitRefNameSchema.nullish(),
+});
+export const gitBranchComparisonBodySchema = z.object({
+  path: gitPathField,
+  base: gitRefNameSchema.nullish(),
+  head: gitRefNameSchema.nullish(),
+});
+export const gitDiffBodySchema = z.object({ path: gitPathField, staged: z.boolean().default(false) });
+export const gitCommitsBodySchema = z.object({
+  path: gitPathField,
+  limit: z.number().int().min(1).max(100).default(10),
+});
+export const gitRemoteBranchesBodySchema = z.object({ path: gitPathField, force: z.boolean().default(false) });
+export const gitDeleteBranchBodySchema = z.object({
+  path: gitPathField,
+  branch: gitRefNameSchema,
+  local: z.boolean().default(false),
+  remote: z.boolean().default(false),
+}).refine(({ local, remote }) => local || remote, {
+  message: 'at least one of local or remote must be true',
+});
+
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -1501,6 +1536,19 @@ export const usageMessagesSchema = z.object({
   inputTokenCount: z.number().int().nonnegative().optional().default(0)
 });
 
+/** Body for POST /api/usage/tokens — same guard as messages: no string or negative totals. */
+export const usageTokensSchema = z.object({
+  inputTokens: z.number().int().nonnegative().optional().default(0),
+  outputTokens: z.number().int().nonnegative().optional().default(0)
+});
+
+/** Body for POST /api/usage/session — model/providerName become persisted keys/values. */
+export const usageSessionSchema = z.object({
+  providerId: z.string().min(1),
+  providerName: z.string().max(200).optional(),
+  model: z.string().max(200).nullish()
+});
+
 /**
  * What the user pays monthly for each provider family's quota plan, keyed by
  * family id. Used by BOTH write paths — `PUT /api/usage/subscriptions` (wrapped
@@ -2471,6 +2519,9 @@ export const launchVideoStyleReferenceSchema = z.object({
   filename: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'filename must not contain a path separator'),
 }).strict();
 
+// Off / Light / Film shutter presets; the mapping lives in services/htmlComposition.
+export const htmlCompositionMotionBlurChoiceSchema = z.enum(['off', 'light', 'film']);
+
 export const appLaunchVideoRequestSchema = z.object({
   sourceVideoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   feedback: z.string().trim().min(1).max(4000).optional(),
@@ -2488,6 +2539,8 @@ export const appLaunchVideoRequestSchema = z.object({
   motionStyle: z.enum(LAUNCH_VIDEO_MOTION_STYLES).optional(),
   // Contact-sheet proof → critique → fix passes before the final render.
   critiqueRounds: z.number().int().min(0).max(4).default(2),
+  // Render-time motion blur (#9080); omitted, the composition's own setting stands.
+  motionBlur: htmlCompositionMotionBlurChoiceSchema.optional(),
   // Ask the agent to consult installed motion-design skills (npm run setup:motion).
   motionSkills: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
@@ -2517,6 +2570,8 @@ export const launchVideoStoryboardSchema = z.object({
 export const htmlCompositionRenderSchema = z.object({
   launchVideo: launchVideoOptionsSchema.optional(),
   synthesizeMusic: z.boolean().optional(),
+  // Overrides the page's own portosComposition.motionBlur when present (#9080).
+  motionBlur: htmlCompositionMotionBlurChoiceSchema.optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
   // Several aspect ratios of one timeline, rendered in sequence on one page.
@@ -2536,23 +2591,48 @@ export const htmlCompositionBeatsQuerySchema = z.object({
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename'),
 }).strict();
 
-export const htmlCompositionContractSchema = z.object({
-  durationSec: z.number().min(1).max(120),
-  fps: z.number().int().min(12).max(60),
-  width: z.number().int(),
-  height: z.number().int(),
-  // Subframes averaged per output frame to fake motion blur on fast moves;
-  // 1 (default) keeps the existing single-sample-per-frame behavior.
-  motionBlur: z.number().int().min(1).max(4).default(1),
-  // Extra sizes this one timeline can render (#8960), reframed by the optional
-  // layout({ width, height }) hook before each format's first seek.
-  formats: z.array(z.enum(Object.values(LAUNCH_VIDEO_FORMAT_SIZES))).min(1).max(LAUNCH_VIDEO_FORMATS.length).optional(),
-  layout: z.boolean().default(false),
-}).superRefine((value, ctx) => {
-  if (!['1920x1080', '1080x1920', '1080x1080', '1280x720'].includes(`${value.width}x${value.height}`)) {
-    ctx.addIssue({ code: 'custom', path: ['width'], message: 'width/height must be 1920x1080, 1080x1920, 1080x1080 or 1280x720' });
-  }
-  if (Math.abs(value.durationSec * value.fps - Math.round(value.durationSec * value.fps)) > 1e-8) {
-    ctx.addIssue({ code: 'custom', path: ['durationSec'], message: 'durationSec × fps must be a whole number of frames' });
-  }
-});
+// Public renders stay capped at 120s. A music-video owner passes a higher
+// ceiling (the song length, hard-capped by the caller at 900s) and gets the
+// same frame rules. superRefine lives on this factory because the exported
+// schema is a ZodEffects and cannot be extended in place.
+export function htmlCompositionContractSchemaFor(maxDurationSec = 120) {
+  return z.object({
+    durationSec: z.number().min(1).max(maxDurationSec),
+    fps: z.number().int().min(12).max(60),
+    width: z.number().int(),
+    height: z.number().int(),
+    // Subframes averaged per output frame to fake motion blur on fast moves.
+    // The integer form (1 default) keeps the existing tmix path byte for byte;
+    // the object form (#9077) samples a centred shutter in linear light, with a
+    // fixed count or 'auto' refinement that stops once the average converges.
+    motionBlur: z.union([
+      z.number().int().min(1).max(4),
+      z.object({
+        shutter: z.number().min(0.05).max(1).default(0.5),
+        samples: z.union([z.literal('auto'), z.number().int().min(4).max(64)]).default('auto'),
+        tolerance: z.number().min(1).max(8).default(2),
+      }).strict(),
+    ]).default(1),
+    // Extra sizes this one timeline can render (#8960), reframed by the optional
+    // layout({ width, height }) hook before each format's first seek.
+    formats: z.array(z.enum(Object.values(LAUNCH_VIDEO_FORMAT_SIZES))).min(1).max(LAUNCH_VIDEO_FORMATS.length).optional(),
+    layout: z.boolean().default(false),
+  }).superRefine((value, ctx) => {
+    if (!['1920x1080', '1080x1920', '1080x1080', '1280x720'].includes(`${value.width}x${value.height}`)) {
+      ctx.addIssue({ code: 'custom', path: ['width'], message: 'width/height must be 1920x1080, 1080x1920, 1080x1080 or 1280x720' });
+    }
+    if (Math.abs(value.durationSec * value.fps - Math.round(value.durationSec * value.fps)) > 1e-8) {
+      ctx.addIssue({ code: 'custom', path: ['durationSec'], message: 'durationSec × fps must be a whole number of frames' });
+    }
+  });
+}
+
+export const htmlCompositionContractSchema = htmlCompositionContractSchemaFor(120);
+
+// Jira issue key (ABC-123) or numeric id — the value is interpolated into upstream REST paths.
+export const jiraTicketKeySchema = z.string().max(64).regex(/^([A-Za-z][A-Za-z0-9_]*-\d+|\d+)$/, 'Invalid Jira ticket id');
+
+// Prompt stage names and variable keys become `stages/<name>.md` / a
+// variables.json key, so they must be a single safe path segment (#9152).
+export const promptStageNameSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, 'invalid stage name').max(80);
+export const promptVariableKeySchema = z.string().regex(/^[A-Za-z0-9_-]+$/, 'invalid variable key').max(80);

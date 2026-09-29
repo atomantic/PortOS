@@ -48,6 +48,7 @@
  * maps, and classifiers.
  */
 
+import { REJECTION_REASON_LABELS } from '../lib/layeredIntelligenceRejectionLabels.js';
 import {
   normalizeToken,
   formatTaxonomyToken,
@@ -100,19 +101,8 @@ export const UNKNOWN_REJECTION_REASON = 'unknown-reason';
 // non-merged proposal.
 export const REJECTION_REASON_VALUES = [...REJECTION_REASONS, UNKNOWN_REJECTION_REASON];
 
-// Human-readable gloss, used to render the prompt blocks. A token with no gloss
-// degrades to the raw token rather than being dropped.
-const REJECTION_REASON_LABELS = {
-  'duplicate': 'already tracked elsewhere (duplicate)',
-  'user-rejected': 'the user declined it (closed as not planned)',
-  'scope-mismatch': "outside the app's scope",
-  'missing-context': 'missing context the proposal should have supplied',
-  'quality-issue': 'the proposal itself was low quality or malformed',
-  'environment-blocker': 'blocked on the environment or a dependency',
-  'merge-conflict': 'the implementing change could not be merged',
-  'validation-failed': 'the implementing change failed lint/validation',
-  [UNKNOWN_REJECTION_REASON]: 'closed with no recorded reason'
-};
+// Human-readable gloss (REJECTION_REASON_LABELS, shared with the client) renders
+// the prompt blocks. A token with no gloss degrades to the raw token.
 
 /**
  * Render one token as prose for the reasoner. An unglossed token passes through;

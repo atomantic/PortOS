@@ -11,15 +11,10 @@ import { buildReadinessProbe } from '../lib/shellReadinessProbe.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { createReplayBuffer } from '../lib/terminalReplay.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { MAX_TOTAL_SESSIONS } from '../lib/shellLimits.js';
 
 // Store active shell sessions (persist across socket reconnects)
 const shellSessions = new Map();
-
-// Soft ceiling on concurrent user-spawned interactive shells. Each session is a
-// single idle PTY (a few MB, one OS process), and the deployment is single-user
-// on a private network — so this is a sanity bound against runaway tab-spamming,
-// not a resource/abuse defense. External views (TUI runs) don't count.
-const MAX_TOTAL_SESSIONS = 20;
 
 // Re-exported so a session caller reaches the Enter byte without importing the
 // TUI-handshake module directly. See lib/tuiHandshake.js for why it is CR.

@@ -12,7 +12,7 @@ export default function PromptFromMediaPage() {
         </div>
       </div>
       <div className="bg-port-card border border-port-border rounded-xl p-4">
-        <PromptFromMedia kindDefault="both" alwaysOpen />
+        <PromptFromMedia kindDefault="both" alwaysOpen showHistory />
       </div>
     </div>
   );

@@ -16,6 +16,7 @@ jobs:
     name: Check for an existing full CI run
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       checks: read
@@ -68,6 +69,7 @@ jobs:
   release:
     needs: [verify-ci, full-ci]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Skip version bump commits. Every other reason a release must not ship is
     # reported loudly by the step below rather than silently skipping the job —
     # a silent skip is what leaves a tag with no GitHub Release behind it.

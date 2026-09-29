@@ -313,9 +313,10 @@ async function backfillPresets(graph, providers) {
  * @param {object} connection - the row as saved
  * @param {{providerIds?: string[]|null}} [options] - the derived presets to re-derive
  *   ONTO this row (a binding that just moved here), instead of the ones already naming it
+ * @param {string|null} [options.resetPresetId] preset whose explicit refresh clears its model narrowing
  * @returns {Promise<string[]>} the preset ids rewritten
  */
-export async function rematerializeDerivedPresets(connection, { providerIds = null } = {}) {
+export async function rematerializeDerivedPresets(connection, { providerIds = null, resetPresetId = null } = {}) {
   const instance = instanceForConnection(connection);
   if (!instance) return [];
   const [{ providers }, bootstraps] = await Promise.all([providerService().getAllProviders(), bootstrapApps()]);
@@ -323,7 +324,10 @@ export async function rematerializeDerivedPresets(connection, { providerIds = nu
   const patches = {};
   for (const record of providers) {
     if (!isDerivedPreset(record) || !onRow(record)) continue;
-    const patch = rederivePreset(record, { instance, catalog: connection.catalog, bootstraps })?.patch;
+    // A preset refresh explicitly replaces its model list. Service refreshes
+    // and sibling presets retain their declared narrowing.
+    const candidate = record.id === resetPresetId ? { ...record, catalogNarrowing: null } : record;
+    const patch = rederivePreset(candidate, { instance, catalog: connection.catalog, bootstraps, stored: record })?.patch;
     if (patch && Object.keys(patch).length > 0) patches[record.id] = patch;
   }
   if (Object.keys(patches).length === 0) return [];

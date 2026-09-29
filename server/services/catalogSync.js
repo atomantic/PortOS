@@ -52,7 +52,7 @@ import {
 import { compareSchemaVersions, scopeVersionDiff, formatVersionGap, catalogEnvelopeHasLiveRows, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { friendlifyUniverseTags, LEGACY_UNIVERSE_MARKER_TAG } from '../lib/catalogUniverseTags.js';
 import { canonicalTagKey, setUserCatalogTypes, INGREDIENT_TYPE_IDS } from '../lib/catalogTypes.js';
-import { readUserTypes as readUserTypeSlice, writeUserTypes } from './catalogUserTypes/store.js';
+import { readUserTypes as readUserTypeSlice, updateUserTypes } from './catalogUserTypes/store.js';
 
 const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags', 'media'];
 
@@ -372,9 +372,6 @@ export async function applyRemoteChanges(envelope = {}) {
  * skipped, failed }`.
  */
 export async function applyUserTypesFromPeer(incoming = []) {
-  const localRaw = await readUserTypeSlice();
-  const local = Array.isArray(localRaw) ? localRaw : [];
-  const byId = new Map(local.map((t) => [t.id, t]));
   let applied = 0;
   let skipped = 0;
   // The LWW clock is the LATER of {updatedAt, deletedAt} — a deletion is a
@@ -387,32 +384,37 @@ export async function applyUserTypesFromPeer(incoming = []) {
     const d = typeof t?.deletedAt === 'string' ? t.deletedAt : '';
     return d > u ? d : u;
   };
-  for (const peer of incoming) {
-    const id = typeof peer?.id === 'string' ? peer.id.trim() : '';
-    // Skip a malformed entry or one colliding with a built-in system id —
-    // system types always win and are never represented in this slice.
-    if (!id || INGREDIENT_TYPE_IDS.includes(id)) { skipped++; continue; }
-    const existing = byId.get(id);
-    // LWW: adopt when no local copy, or the peer's clock is STRICTLY newer.
-    // Must be `>`, not `>=` — an equal clock means the peer is echoing a type
-    // we already hold, so re-adopting it re-writes the slice and re-counts it
-    // as an applied change every cycle, and the merge never converges (the peer
-    // keeps re-sending it on the next envelope). Strict `>` mirrors the SQL LWW
-    // guard every other catalog kind uses (`EXCLUDED.updated_at > … .updated_at`
-    // in upsertScrapFromPeer / upsertTagFromPeer): equal clock = no-op = skip.
-    if (!existing || clockOf(peer) > clockOf(existing)) {
-      byId.set(id, { ...peer, id });
-      applied++;
-    } else {
-      skipped++;
+  // The read-merge-write runs inside the serialized updateUserTypes so a
+  // concurrent Settings edit can't be erased by (or erase) this merge. The
+  // mutator can be re-entered by a backend retry, so counters reset per run.
+  await updateUserTypes((localRaw) => {
+    applied = 0;
+    skipped = 0;
+    const local = Array.isArray(localRaw) ? localRaw : [];
+    const byId = new Map(local.map((t) => [t.id, t]));
+    for (const peer of incoming) {
+      const id = typeof peer?.id === 'string' ? peer.id.trim() : '';
+      // Skip a malformed entry or one colliding with a built-in system id —
+      // system types always win and are never represented in this slice.
+      if (!id || INGREDIENT_TYPE_IDS.includes(id)) { skipped++; continue; }
+      const existing = byId.get(id);
+      // LWW: adopt when no local copy, or the peer's clock is STRICTLY newer.
+      // Must be `>`, not `>=` — an equal clock means the peer is echoing a type
+      // we already hold, so re-adopting it re-writes the slice and re-counts it
+      // as an applied change every cycle, and the merge never converges (the peer
+      // keeps re-sending it on the next envelope). Strict `>` mirrors the SQL LWW
+      // guard every other catalog kind uses (`EXCLUDED.updated_at > … .updated_at`
+      // in upsertScrapFromPeer / upsertTagFromPeer): equal clock = no-op = skip.
+      if (!existing || clockOf(peer) > clockOf(existing)) {
+        byId.set(id, { ...peer, id });
+        applied++;
+      } else {
+        skipped++;
+      }
     }
-  }
-  if (applied > 0) {
-    const next = [...byId.values()];
-    await writeUserTypes(next);
-    setUserCatalogTypes(next);
-    console.log(`🧩 Catalog sync: merged ${applied} user type(s) from peer`);
-  }
+    return applied > 0 ? [...byId.values()] : null;
+  }, setUserCatalogTypes);
+  if (applied > 0) console.log(`🧩 Catalog sync: merged ${applied} user type(s) from peer`);
   return { applied, skipped, failed: 0 };
 }
 

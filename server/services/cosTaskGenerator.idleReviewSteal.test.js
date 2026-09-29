@@ -65,7 +65,7 @@ vi.mock('./taskSchedule.js', async (importActual) => ({
   getNextTaskType: vi.fn(async () => null),
 }));
 
-const { generateIdleReviewTask } = await import('./cosTaskGenerator.js');
+const { generateIdleReviewTask, prepareManagedAppImprovementTask } = await import('./cosTaskGenerator.js');
 
 const STATE = { config: { improvementEnabled: true, appReviewCooldownMs: 0 }, stats: {} };
 const request = (overrides = {}) => ({ id: 'demand-1', appId: 'example-app', taskType: 'pr-reviewer', ...overrides });
@@ -112,3 +112,15 @@ describe('idle review stealing a queued on-demand request', () => {
   });
 });
 
+
+describe('prepareManagedAppImprovementTask on a pr-reviewer preflight skip', () => {
+  it('returns the preflight reason on the skip, so a user Run can say why nothing started', async () => {
+    pipeline.securityPreflight.mockResolvedValue({ skipped: true, reason: 'security-guard-not-ready' });
+    const prepared = await prepareManagedAppImprovementTask('pr-reviewer', { id: 'example-app', name: 'Example App' }, STATE);
+    expect(prepared).toEqual({
+      task: null,
+      pendingPerpetualDispatch: null,
+      skip: { gate: 'security-preflight', reason: 'security-guard-not-ready', cli: null, remedy: null, detail: null },
+    });
+  });
+});

@@ -24,5 +24,11 @@ import { EventEmitter } from 'events';
 //   'auto-review'    → { projectId, runId, run, action, project } — an
 //     auto-review run advanced; socket.js bridges it to
 //     `music-video:auto-review` so an open board can submit the sections the
-//     run hands out for generation and show the run's progress.
+//     run hands out for generation and show the run's progress. A run a
+//     production owns (`run.productionRunId`) is dispatched server-side instead.
+//
+// #9066 adds:
+//   'production' → { projectId, runId, run, action, project } — a server-owned
+//     production run advanced (steps, route choices, spend, halts); socket.js
+//     bridges it to `music-video:production`.
 export const musicVideoEvents = new EventEmitter();

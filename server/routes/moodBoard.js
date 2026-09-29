@@ -18,11 +18,15 @@ import {
   moodBoardItemUpdateSchema,
   moodBoardPinterestLinkSchema,
   moodBoardXPostImportSchema,
+  moodBoardCollageSchema,
+  moodBoardExtractFramesSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
 import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
+import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
+import { startAnalyzeJob, getAnalyzeJob } from '../services/moodBoard/analyzeJob.js';
 import { STYLE_NOTES_MAX } from '../services/universeBuilder.js';
 import {
   listBoards,
@@ -32,12 +36,17 @@ import {
   updateBoard,
   deleteBoard,
   addBoardItem,
+  backfillGalleryPrompts,
   updateBoardItem,
   removeBoardItem,
   linkPinterestBoard,
   unlinkPinterestBoard,
   syncPinterestBoard,
+  importPrivatePinterestBoard,
   importXPost,
+  localizeBoardMedia,
+  composeBoardCollage,
+  extractItemFrames,
 } from '../services/moodBoard/index.js';
 
 const router = Router();
@@ -118,6 +127,47 @@ router.post('/:id/synthesize-style', asyncHandler(async (req, res) => {
   res.json(await synthesizeBoardStyle({ board, ...body }));
 }));
 
+// Board-level composite prompt. Reads the per-item analyses already stored on
+// the board (prompt-from-media), distills one still-image prompt, and persists
+// it as `board.style`. The page then renders that prompt as the poster.
+const composePromptSchema = z.object({
+  providerId: z.string().trim().max(128).optional(),
+  model: z.string().trim().max(256).optional(),
+  effort: z.string().trim().max(64).optional(),
+}).strict();
+// Copy gallery generation prompts onto pins that lack any prompt, so the board
+// analyze step doesn't re-run vision on them. Resolves to the updated board.
+router.post('/:id/backfill-prompts', asyncHandler(async (req, res) => {
+  const board = await backfillGalleryPrompts(req.params.id);
+  if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(board);
+}));
+
+// Background analyze job: prompt-from-media over un-analyzed pins, then compose
+// the board style. Survives the page unmounting; progress follows the
+// `mood-board:analyze` socket event and GET restores it on return.
+const analyzeSchema = composePromptSchema.extend({
+  providerId: z.string().trim().min(1).max(128),
+}).strict();
+router.post('/:id/analyze', asyncHandler(async (req, res) => {
+  const body = validateRequest(analyzeSchema, req.body ?? {});
+  const board = await getBoard(req.params.id);
+  if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
+  res.status(202).json(startAnalyzeJob(req.params.id, body));
+}));
+
+router.get('/:id/analyze', asyncHandler(async (req, res) => {
+  res.json(getAnalyzeJob(req.params.id));
+}));
+
+router.post('/:id/compose-prompt', asyncHandler(async (req, res) => {
+  const body = validateRequest(composePromptSchema, req.body ?? {});
+  const board = await getBoard(req.params.id);
+  if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
+  const style = await composeBoardPrompt({ board, ...body });
+  res.json(await updateBoard(req.params.id, { style }));
+}));
+
 // Link the board to a public Pinterest board's RSS feed.
 router.put('/:id/pinterest', asyncHandler(async (req, res) => {
   const data = validateRequest(moodBoardPinterestLinkSchema, req.body);
@@ -136,12 +186,38 @@ router.post('/:id/pinterest/sync', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// One-shot import through the signed-in PortOS CDP browser. No Pinterest
+// credentials are stored and this does not create a background sync.
+router.post('/:id/pinterest/import', asyncHandler(async (req, res) => {
+  const data = validateRequest(moodBoardPinterestLinkSchema, req.body);
+  const result = await importPrivatePinterestBoard(req.params.id, data);
+  res.json(result);
+}));
+
 // One-shot import: paste a public x.com/twitter.com post URL, pull its
 // attached photos/video into the board.
 router.post('/:id/x-post', asyncHandler(async (req, res) => {
   const data = validateRequest(moodBoardXPostImportSchema, req.body);
   const result = await importXPost(req.params.id, data);
   res.json(result);
+}));
+
+// Re-host every external image URL on the board into the local gallery.
+router.post('/:id/localize-media', asyncHandler(async (req, res) => {
+  res.json(await localizeBoardMedia(req.params.id));
+}));
+
+// Compile every image (and sampled video frames) into one square-ish grid image
+// saved to the gallery.
+router.post('/:id/collage', asyncHandler(async (req, res) => {
+  const data = validateRequest(moodBoardCollageSchema, req.body ?? {});
+  res.json(await composeBoardCollage(req.params.id, data));
+}));
+
+// Sample N frames from a video pin and append them to the board as image items.
+router.post('/:id/items/:itemId/extract-frames', asyncHandler(async (req, res) => {
+  const data = validateRequest(moodBoardExtractFramesSchema, req.body);
+  res.json(await extractItemFrames(req.params.id, req.params.itemId, data));
 }));
 
 export default router;

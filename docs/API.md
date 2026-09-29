@@ -329,7 +329,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/memory/stats` | Memory statistics |
 | POST | `/memory/link` | Link two memories |
 | POST | `/memory/consolidate` | Merge similar memories |
-| POST | `/memory/decay` | Apply importance decay |
+| POST | `/memory/decay` | Apply importance decay (`decayRate` in (0, 0.02], default 0.01; else 400) |
 | DELETE | `/memory/expired` | Clear expired memories |
 | GET | `/memory/embeddings/status` | LM Studio connection status |
 
@@ -768,7 +768,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/games` | Game projects |
 | `/api/sprites` | Sprite catalog / export |
 | `/api/threejs-models` | Procedural Three.js models |
-| `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, and generated HTML retrieval |
+| `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, generated HTML retrieval, and frame-exact MP4 export (`POST /:id/export` → HTML-composition media job) |
 | `/api/image-to-3d` | Image-to-3D conversion |
 | `/api/rigging` | Auto-skin rigging and animation retargeting for image-to-3D models |
 | `/api/privacy` | PII vault / trusted-org / broker opt-out |

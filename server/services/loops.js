@@ -11,6 +11,8 @@ import { EventEmitter } from 'events';
 import { join } from 'path';
 import { PATHS, ensureDir, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { randomUUID } from 'crypto';
+import { ServerError } from '../lib/errorHandler.js';
+import { MIN_INTERVAL_MS, parseInterval } from '../lib/loopInterval.js';
 import { createRun } from './runner.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { listSelectableProviders, getActiveProvider } from './providers.js';
@@ -20,18 +22,8 @@ export const loopEvents = new EventEmitter();
 const LOOPS_FILE = join(PATHS.data, 'loops.json');
 const LOOPS_OUTPUT_DIR = join(PATHS.data, 'loops');
 const DEFAULT_TIMEOUT_MS = 300_000;
-const MIN_INTERVAL_MS = 10_000;
 
 const activeLoops = new Map();
-
-function parseInterval(str) {
-  const match = String(str).match(/^(\d+(?:\.\d+)?)\s*(s|m|h|d|ms)?$/i);
-  if (!match) return null;
-  const val = parseFloat(match[1]);
-  const unit = (match[2] || 'm').toLowerCase();
-  const multipliers = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
-  return Math.round(val * (multipliers[unit] || 60_000));
-}
 
 function formatInterval(ms) {
   if (ms >= 86_400_000) return `${ms / 86_400_000}d`;
@@ -270,10 +262,10 @@ async function updatePersistedLoop(id, updates) {
 export async function createLoop({ prompt, interval, name, cwd, providerId, timeout, runImmediately = true }) {
   const intervalMs = typeof interval === 'number' ? interval : parseInterval(interval);
   if (!intervalMs || intervalMs < MIN_INTERVAL_MS) {
-    throw new Error('Interval must be at least 10 seconds');
+    throw new ServerError('Interval must be at least 10 seconds', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (!prompt?.trim()) {
-    throw new Error('Prompt is required');
+    throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   await ensureDir(LOOPS_OUTPUT_DIR);
@@ -327,7 +319,7 @@ function startLoopTimer(loop, runImmediately = false) {
 
 export async function stopLoop(id) {
   const active = activeLoops.get(id);
-  if (!active) throw new Error(`Loop ${id} is not running`);
+  if (!active) throw new ServerError(`Loop ${id} is not running`, { status: 409, code: 'INVALID_STATE' });
 
   clearInterval(active.timer);
   activeLoops.delete(id);
@@ -347,13 +339,13 @@ export async function stopLoop(id) {
 }
 
 export async function resumeLoop(id) {
-  if (activeLoops.has(id)) throw new Error(`Loop ${id} is already running`);
+  if (activeLoops.has(id)) throw new ServerError(`Loop ${id} is already running`, { status: 409, code: 'INVALID_STATE' });
 
   let loopRecord;
   await withLoopsTail(async () => {
     const loops = await loadLoops();
     const loop = loops.find(l => l.id === id);
-    if (!loop) throw new Error(`Loop ${id} not found`);
+    if (!loop) throw new ServerError(`Loop ${id} not found`, { status: 404, code: 'NOT_FOUND' });
     loop.status = 'running';
     loop.stoppedAt = null;
     await saveLoops(loops);
@@ -408,8 +400,8 @@ export async function getLoop(id) {
 export async function triggerLoop(id) {
   const loops = await loadLoops();
   const loop = loops.find(l => l.id === id);
-  if (!loop) throw new Error(`Loop ${id} not found`);
-  if (!activeLoops.has(id)) throw new Error(`Loop ${id} is not running`);
+  if (!loop) throw new ServerError(`Loop ${id} not found`, { status: 404, code: 'NOT_FOUND' });
+  if (!activeLoops.has(id)) throw new ServerError(`Loop ${id} is not running`, { status: 409, code: 'INVALID_STATE' });
 
   runIteration(id);
   return { triggered: true };
@@ -420,14 +412,14 @@ export async function updateLoop(id, updates) {
   await withLoopsTail(async () => {
     const loops = await loadLoops();
     const idx = loops.findIndex(l => l.id === id);
-    if (idx < 0) throw new Error(`Loop ${id} not found`);
+    if (idx < 0) throw new ServerError(`Loop ${id} not found`, { status: 404, code: 'NOT_FOUND' });
 
     const allowed = ['name', 'prompt', 'interval', 'cwd', 'providerId', 'timeout'];
     for (const key of allowed) {
       if (updates[key] !== undefined) {
         if (key === 'interval') {
           const ms = typeof updates[key] === 'number' ? updates[key] : parseInterval(updates[key]);
-          if (!ms || ms < MIN_INTERVAL_MS) throw new Error('Interval must be at least 10 seconds');
+          if (!ms || ms < MIN_INTERVAL_MS) throw new ServerError('Interval must be at least 10 seconds', { status: 400, code: 'VALIDATION_ERROR' });
           loops[idx].intervalMs = ms;
         } else {
           loops[idx][key] = updates[key];

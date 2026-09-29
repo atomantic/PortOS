@@ -48,6 +48,25 @@ import { ensureTaskThread } from './brainTaskThreads.js';
 const ROOT_DIR = PATHS.root;
 
 /**
+ * What a failed completion-cleanup step does to the steps after it. Chosen once,
+ * at the entry point, because it is a property of the CALLER: the runner hands a
+ * throw to its completion handler; the in-process spawners, which run this from
+ * a `finally`, log it and keep going so one bad step cannot strand the worktree
+ * cleanup or the pipeline hand-off behind it.
+ */
+export const STEP_ERROR_POLICY = Object.freeze({
+  PROPAGATE: 'propagate',
+  LOG_AND_CONTINUE: 'log-and-continue',
+});
+
+const STEP_FAILURE_HANDLERS = {
+  [STEP_ERROR_POLICY.PROPAGATE]: (err) => { throw err; },
+  [STEP_ERROR_POLICY.LOG_AND_CONTINUE]: (err, name, { agentId, task }) => {
+    emitLog('warn', `${name} failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
+  },
+};
+
+/**
  * Advance a pipeline to its next stage after the current stage completes.
  * Creates a new task for the next stage or marks the pipeline as complete/failed.
  */
@@ -238,11 +257,11 @@ export async function handlePipelineProgression(task, agentId, success) {
  *
  * @returns {Promise<Object>} the third argument to `cleanupAgentWorktree`
  */
-async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, taskOpenPR, agentOpensOwnPr, prClaimVerified = false, noChangesToShip = false }) {
+async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, taskOpenPR, agentOpensOwnPr, prClaimVerified = false, branchProvenEmpty = false }) {
   // `if-missing` for an agent-owned PR that finalize did NOT verify: cleanup
   // asks the forge once and only stands down when a PR actually exists, so a
   // harness that skipped its completion workflow can't strand the branch.
-  const prCreation = resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, noChangesToShip });
+  const prCreation = resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, branchProvenEmpty });
   // Merge per-task reviewer metadata with the user's Code Review Defaults
   // (Settings → Code Reviewers page). Settings I/O is cached inside the
   // resolver, so this is effectively free even when invoked from a tight CoS
@@ -285,9 +304,9 @@ async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, task
  * be skipped by a throw from the JIRA/pipeline/Creative Director steps — either
  * would leave the task held until the orphan sweep noticed.
  *
- * @param {{ agentId: string, task: object, agent: object, effectiveSuccess: boolean, outputBuffer: string, noChangesToShip?: boolean }} params
+ * @param {{ agentId: string, task: object, agent: object, effectiveSuccess: boolean, outputBuffer: string, branchProvenEmpty?: boolean }} params
  */
-export async function runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false, noChangesToShip = false }) {
+export async function runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false, branchProvenEmpty = false }) {
   // Fetch agent state once for JIRA, plan-question, and the resume pointer. Its
   // worktree fields are stamped once at registerAgent and never mutated, so passing
   // it to the release spares a re-read that would re-split the whole output.txt.
@@ -295,9 +314,11 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
   const agentState = await getAgentState(agentId).catch(() => null);
 
   try {
+    // Inside the `try`: a throw here must still reach the retry-hold release.
+    const prOwnership = resolveRunnerPrOwnership({ task, agent, agentState });
     await runCompletionCleanupSteps({
-      agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified, noChangesToShip,
-    });
+      agentId, task, agent, agentState, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, branchProvenEmpty,
+    }, { onStepError: STEP_ERROR_POLICY.PROPAGATE });
   } finally {
     await releaseRetryHold({
       agentId,
@@ -310,23 +331,23 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
 
 /**
  * One ordered post-finalize sequence for every completion path. Public entry
- * points own retry-hold release independently of these steps.
+ * points own retry-hold release independently of these steps, and choose
+ * `onStepError` (a `STEP_ERROR_POLICY` value) for how a failed step is treated.
+ *
+ * `context.prOwnership` is `{ taskOpenPR, agentOpensOwnPr }`, resolved by the
+ * entry point from its own source of truth.
  */
-async function runCompletionCleanupSteps(context) {
-  // The spawners have always logged failed steps and continued; the runner
-  // propagates them to its completion handler. Both execute the same sequence.
-  const runStep = (name, step) => step().catch(err => {
-    if (!context.continueOnError) throw err;
-    emitLog('warn', `${name} failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId, taskId: context.task?.id });
-  });
+async function runCompletionCleanupSteps(context, { onStepError }) {
+  const onFailure = STEP_FAILURE_HANDLERS[onStepError];
+  if (!onFailure) throw new Error(`Unknown completion-cleanup step error policy: ${onStepError}`);
+  const runStep = (name, step) => step().catch(err => onFailure(err, name, context));
   await runStep('JIRA hand-off', () => completeJiraHandOff(context));
   await runStep('Plan question notification', () => notifyPlanQuestionIfNeeded(context));
   await runStep('Pipeline progression', () => handlePipelineProgression(context.task, context.agentId, context.effectiveSuccess));
   await runStep('Creative Director completion', () => advanceCreativeDirectorIfNeeded(context));
   const cleanupWarnings = await runStep('Worktree cleanup', () => completeWorktreeCleanup(context));
   await runStep('Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
-  // Last, and never fatal: `runStep` RETHROWS on the runner path
-  // (`continueOnError` is unset there), so a janitorial `rm` that hits EPERM
+  // Last, and never fatal under either policy: a janitorial `rm` that hits EPERM
   // must not be able to abort the worktree cleanup and pipeline hand-off above.
   //
   // Gated on the record actually reaching an outcome. `finalizeAgent` runs
@@ -524,14 +545,13 @@ export async function removeCompletionSentinel({ agentId, agent, agentState }) {
   await rmGuarded(resolveDoneSentinelPath(workspace, agentId), { force: true });
 }
 
-async function completeWorktreeCleanup({ agentId, task, agent, agentState, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, noChangesToShip }) {
+async function completeWorktreeCleanup({ agentId, task, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, branchProvenEmpty }) {
   if (task?.metadata?.jiraBranch) return;
-  const ownership = prOwnership ?? resolveRunnerPrOwnership({ task, agent, agentState });
   return cleanupAgentWorktree(agentId, effectiveSuccess, await resolveWorktreeCleanupOptions({
     agentId, task, outputBuffer,
-    taskOpenPR: ownership.taskOpenPR,
-    agentOpensOwnPr: ownership.agentOpensOwnPr,
-    prClaimVerified, noChangesToShip,
+    taskOpenPR: prOwnership.taskOpenPR,
+    agentOpensOwnPr: prOwnership.agentOpensOwnPr,
+    prClaimVerified, branchProvenEmpty,
   }));
 }
 
@@ -569,21 +589,22 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
  * a failed hand-off must release the task with the resume pointer cleanup left.
  *
  * `prOwnership` is `resolvePrOwnership`'s answer for this run;
- * `prClaimVerified` / `noChangesToShip` are read off finalize's return.
+ * `prClaimVerified` / `branchProvenEmpty` are read off finalize's return.
  * `success` is the verdict finalize actually persisted — a PR-claim downgrade
  * must reach cleanup, or a run that opened no PR is cleaned up as a success and
  * loses its retry state (#3358).
  */
-export async function runSpawnerCompletionCleanup({ agentId, task, success, prOwnership, prClaimVerified = false, noChangesToShip = false, outputBuffer }) {
+export async function runSpawnerCompletionCleanup({ agentId, task, success: effectiveSuccess, prOwnership, prClaimVerified = false, branchProvenEmpty = false, outputBuffer }) {
+  let agentState = null;
   try {
     const { getAgent } = await import('./cos.js');
-    const agentState = await getAgent(agentId).catch(() => null);
+    agentState = await getAgent(agentId).catch(() => null);
     await runCompletionCleanupSteps({
-      agentId, task, agentState, effectiveSuccess: success, prOwnership,
-      prClaimVerified, noChangesToShip, outputBuffer, continueOnError: true,
-    });
+      agentId, task, agentState, effectiveSuccess, prOwnership,
+      prClaimVerified, branchProvenEmpty, outputBuffer,
+    }, { onStepError: STEP_ERROR_POLICY.LOG_AND_CONTINUE });
   } finally {
-    await releaseRetryHold({ agentId, task, success })
+    await releaseRetryHold({ agentId, task, success: effectiveSuccess, agentMetadata: agentState?.metadata ?? null })
       .catch(err => emitLog('warn', `Retry-hold release failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id }));
   }
 }

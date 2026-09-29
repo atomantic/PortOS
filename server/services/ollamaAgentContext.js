@@ -1,3 +1,4 @@
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 /**
  * Pre-spawn context-window preparation for Ollama-backed *agent harnesses*
  * (`claude-ollama`, `claude-ollama-tui`, `opencode-ollama`, …).
@@ -135,7 +136,7 @@ export async function dropUnsupportedOllamaThinking(provider, model, effort = nu
   const keep = { provider, effort, dropped: false }
   const wantsThinking = !!effort
     || (typeof provider?.effort === 'string' && provider.effort.trim() !== '')
-    || provider?.thinking === true || provider?.thinking === 'true'
+    || isTruthyMeta(provider?.thinking)
   if (!wantsThinking) return keep
   if (!await ollamaModelRejectsThinking(provider, model)) return keep
 

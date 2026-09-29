@@ -26,6 +26,7 @@ import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } f
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from '../videoGen/modes.js';
 import { getSettings } from '../settings.js';
+import { withStyleSnapshots } from './styleSnapshots.js';
 
 // Shared dispatcher (#2899). ensureSchema() runs inside the selector (mirroring
 // memoryBackend.js) so the backend is self-sufficient regardless of boot ordering.
@@ -72,6 +73,9 @@ export async function listProjectIds(options = {}) {
 // clip render (an explicit `body.backend`), so a target/install video pin can
 // only take effect HERE, at record creation — the same explicit-body seeding
 // trap the universe batch form and sprites page picker hit on the image side.
+import { getTrack } from '../tracks/index.js';
+import { parseLyricCues } from './timedText.js';
+
 // resolveVideoMode usability-gates the pin (a disabled grok pin seeds local);
 // an input that names a backend explicitly wins untouched.
 async function seedVideoBackendDefault(input) {
@@ -84,8 +88,73 @@ async function seedVideoBackendDefault(input) {
   return { ...input, videoSettings: { ...(input?.videoSettings || {}), backend } };
 }
 
+// Automatically read lyrics and creative context from the linked music track
+// in the music creation system when creating a project.
+async function seedTrackMetadata(input) {
+  if (!input?.trackId) return input;
+  const track = await getTrack(input.trackId).catch(() => null);
+  if (!track) return input;
+  let lyricCues = input.lyricCues;
+  if ((!lyricCues || lyricCues.length === 0) && track.lyrics) {
+    const parsed = parseLyricCues(track.lyrics);
+    if (parsed.cues && parsed.cues.length > 0) {
+      lyricCues = parsed.cues;
+    }
+  }
+  let name = input.name;
+  if (!name && track.title) {
+    name = track.title;
+  }
+  let concept = input.concept;
+  if (track.concept || track.prompt) {
+    concept = {
+      ...(concept || {}),
+      ...(track.concept && !concept?.prompt ? { prompt: track.concept } : {}),
+      ...(track.prompt && !concept?.style ? { style: track.prompt } : {}),
+    };
+  }
+  return {
+    ...input,
+    ...(name ? { name } : {}),
+    ...(lyricCues ? { lyricCues } : {}),
+    ...(concept ? { concept } : {}),
+  };
+}
+
+// Automatically read lyrics and creative context when the project's track is changed.
+async function seedTrackMetadataOnUpdate(id, patch) {
+  if (!patch?.trackId) return patch;
+  const project = await getProject(id).catch(() => null);
+  if (!project || project.trackId === patch.trackId) return patch;
+  const track = await getTrack(patch.trackId).catch(() => null);
+  if (!track) return patch;
+  let lyricCues = patch.lyricCues;
+  if (!lyricCues && track.lyrics) {
+    const parsed = parseLyricCues(track.lyrics);
+    if (parsed.cues && parsed.cues.length > 0) {
+      lyricCues = parsed.cues;
+    }
+  }
+  let concept = patch.concept;
+  if ((track.concept && !project.concept?.prompt) || (track.prompt && !project.concept?.style)) {
+    concept = {
+      ...(project.concept || {}),
+      ...(concept || {}),
+      ...(track.concept && !project.concept?.prompt && !concept?.prompt ? { prompt: track.concept } : {}),
+      ...(track.prompt && !project.concept?.style && !concept?.style ? { style: track.prompt } : {}),
+    };
+  }
+  return {
+    ...patch,
+    ...(lyricCues ? { lyricCues } : {}),
+    ...(concept ? { concept } : {}),
+  };
+}
+
 export async function createProject(input) {
-  const project = await (await selectBackend()).createProject(await seedVideoBackendDefault(input));
+  const seeded = await seedTrackMetadata(await seedVideoBackendDefault(input));
+  const snapshotted = await withStyleSnapshots(seeded);
+  const project = await (await selectBackend()).createProject(snapshotted);
   announceNewProject(project.id);
   return project;
 }
@@ -97,7 +166,11 @@ export async function cloneProject(id, options = {}) {
 }
 
 export async function updateProject(id, patch) {
-  const next = await (await selectBackend()).updateProject(id, patch);
+  const backend = await selectBackend();
+  const seeded = await seedTrackMetadataOnUpdate(id, patch);
+  const needsSnapshot = seeded?.concept?.universeId !== undefined || seeded?.visualSpec?.moodBoardId !== undefined;
+  const resolved = needsSnapshot ? await withStyleSnapshots(seeded, await backend.getProject(id)) : seeded;
+  const next = await backend.updateProject(id, resolved);
   emitRecordUpdated('musicVideoProject', id);
   return next;
 }

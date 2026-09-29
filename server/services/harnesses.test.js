@@ -296,6 +296,23 @@ describe('refreshHarnessModels', () => {
       expect.objectContaining({ models: ['opencode/big-pickle', 'opencode/mimo-v2.5-free'] }));
   });
 
+  // Catches the service-catalog refresh wedging the provider-graph queue: it
+  // holds that queue while probing, and any record write here awaits a graph
+  // reconcile queued behind it — the button spun forever and every later
+  // graph operation hung until a restart.
+  it('probeOnly lists the models and writes no provider record', async () => {
+    const run = vi.fn(async (command, args) => (args[0] === 'models' ? OPENCODE_MODELS : '1.18.27'));
+    providerService.listProviders.mockResolvedValue([
+      { id: 'plain-cli', type: 'cli', command: 'opencode', models: [] },
+    ]);
+
+    const result = await refreshHarnessModels('opencode', { run, probeOnly: true, ...found });
+
+    expect(result.ok).toBe(true);
+    expect(result.models).toEqual(['opencode/big-pickle', 'opencode/mimo-v2.5-free']);
+    expect(providerService.updateProvider).not.toHaveBeenCalled();
+  });
+
   // Catches a card's button spawning an unrelated record's bootstrap CLI —
   // minting a credential and hitting its proxy on a click not about it.
   it('probes only the clicked record’s bucket when scoped by providerId', async () => {

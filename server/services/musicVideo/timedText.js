@@ -10,9 +10,9 @@
  *
  * Timings are alignment DERIVED from one specific audio file; the text is the
  * director's own. So an audio-source change keeps every line and label but
- * clears their times (`startSec`/`endSec` → null) — the planner then ignores
- * them until they are re-timed against the new track, instead of cutting the
- * new song on the old song's lyric positions.
+ * clears their times (`startSec`/`endSec` → null) and any word timings — the
+ * planner then ignores them until they are re-timed against the new track,
+ * instead of cutting the new song on the old song's lyric positions.
  */
 
 import { randomUUID } from 'crypto';
@@ -22,6 +22,14 @@ const MAX_CUE_TEXT = 500;
 const MAX_SEC = 36000;
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
+
+/** One sung word: the director's spelling plus a key with punctuation stripped. */
+export function lyricTokens(text) {
+  return String(text || '').split(/\s+/).filter(Boolean).map((w) => {
+    const key = w.toLowerCase().replace(/[^a-z0-9']+/g, '');
+    return key ? { w, key } : null;
+  }).filter(Boolean);
+}
 
 function toTime(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_SEC
@@ -56,10 +64,30 @@ function normalizeList(list, prefix, shape) {
   return out;
 }
 
+// Word timings belong to the current spelling. A text edit drops them; a
+// boundary nudge (same words, new times) keeps them. One bad entry drops the
+// list rather than persisting a partial karaoke line.
+function normalizeWords(text, words) {
+  const tokens = lyricTokens(text);
+  if (!Array.isArray(words) || words.length === 0 || words.length !== tokens.length) return null;
+  const out = [];
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const startSec = toTime(word?.startSec);
+    const endSec = toTime(word?.endSec);
+    const conf = word?.conf === 'matched' || word?.conf === 'interpolated' ? word.conf : null;
+    if (!conf || startSec == null || endSec == null || endSec < startSec || word.w !== tokens[i].w) return null;
+    out.push({ w: tokens[i].w, startSec, endSec, conf });
+  }
+  return out;
+}
+
 /** Normalize an edited cue list: keep ids, trim text, drop empty lines. Order is kept (lyric order). */
 export const normalizeLyricCues = (cues) => normalizeList(cues, 'lc', (cue) => {
   const text = trimTo(cue.text, MAX_CUE_TEXT);
-  return text ? { text } : null;
+  if (!text) return null;
+  const words = normalizeWords(text, cue.words);
+  return words ? { text, words } : { text };
 });
 
 /** Normalize an edited phrase list: keep ids, trim label/intent. */
@@ -70,10 +98,17 @@ export const normalizePhrases = (phrases) => normalizeList(phrases, 'mp', (phras
 
 /** Clear the audio-derived timings on every cue/phrase, keeping the authored text. */
 export function invalidateTimedText(project) {
-  const clear = (list) => (Array.isArray(list) ? list.map((e) => ({ ...e, startSec: null, endSec: null })) : list);
+  const clearTimes = (list) => (Array.isArray(list) ? list.map((e) => ({ ...e, startSec: null, endSec: null })) : list);
+  // `words` is derived from the same audio as the line times. Drop the key so
+  // a later sync does not treat stale karaoke timings as still current.
+  const clearCues = (list) => (Array.isArray(list) ? list.map((e) => {
+    const next = { ...e, startSec: null, endSec: null };
+    delete next.words;
+    return next;
+  }) : list);
   return {
-    ...(Array.isArray(project.lyricCues) ? { lyricCues: clear(project.lyricCues) } : {}),
-    ...(Array.isArray(project.phrases) ? { phrases: clear(project.phrases) } : {}),
+    ...(Array.isArray(project.lyricCues) ? { lyricCues: clearCues(project.lyricCues) } : {}),
+    ...(Array.isArray(project.phrases) ? { phrases: clearTimes(project.phrases) } : {}),
   };
 }
 

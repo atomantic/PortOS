@@ -62,6 +62,8 @@ import { extractSimplifySummaries } from './agentSummaryExtraction.js';
 import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { issueNumberFromRef } from './issueReconcile.js';
 
+import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
 /**
  * Release the execution lane and complete tool-execution tracking for a
  * finishing agent. Pulled OUT of finalizeAgent so callers can fire it
@@ -123,7 +125,7 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, noChangesToShip = false, noChangeProof = null }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null }) {
   if (terminatedByUser) return null;
   const taskType = task?.taskType || 'user';
   // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
@@ -147,16 +149,16 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // a run missing the task id or workspace needed to validate.
   if (taskType === 'user' || !task?.id || !workspacePath) return null;
   // A PortOS-owned audit can validly conclude that its shipped data is current.
-  // `noChangesToShip` is only set by verifyPrClaim after the forge answered that
+  // `branchProvenEmpty` is only set by verifyPrClaim after the forge answered that
   // no PR exists AND the branch was proven empty; the task marker narrows this
   // exception to an explicitly opted-in autonomous job. Do not use the marker
   // as a general no-commit exemption: a real change still needs the commit probe.
-  if (success && noChangesToShip === true && isVerifiedNoChangeTask(task)) return true;
+  if (success && branchProvenEmpty === true && permitsNoChangeCompletion(task)) return true;
   // A marked no-change audit needs a forge answer and an unambiguous empty-branch
   // proof. If either check was inconclusive, leave learning undeclared rather than
   // scoring a correct no-op as a commit miss. A non-empty branch remains a real
   // change path and still uses the ordinary commit criterion below.
-  if (success && isVerifiedNoChangeTask(task) && noChangeProof?.inconclusive === true) return null;
+  if (success && permitsNoChangeCompletion(task) && emptyBranchInconclusiveEvidence?.inconclusive === true) return null;
   // Pipeline/media tasks deliver artifacts, not a commit — the
   // commit criterion doesn't apply, so don't mislabel a clean artifact run as a
   // validation miss (which would also pollute the correlation window). null =
@@ -284,12 +286,6 @@ function hasIssueClosingTrailer(body, issueNumber) {
 
 function hasIssuePartialTrailer(body, issueNumber) {
   return new RegExp(`\\b(refs?|part of)\\s+#${issueNumber}\\b`, 'i').test(body);
-}
-
-function isVerifiedNoChangeTask(task) {
-  const isPersistedTrue = (value) => value === true || value === 'true';
-  return (isPersistedTrue(task?.metadata?.autonomousJob) || isPersistedTrue(task?.metadata?.isInvestigation))
-    && isPersistedTrue(task?.metadata?.noChangeSuccess);
 }
 
 /**
@@ -443,7 +439,7 @@ function prVerdictFromObservation(observation) {
   if (policy.category) verdict.category = policy.category;
   if (observation.message) verdict.message = observation.message;
   if (observation.advisory) verdict.advisory = observation.advisory;
-  if (observation.outcome === PR_OBSERVATION.EMPTY_BRANCH) verdict.noChangesToShip = true;
+  if (observation.outcome === PR_OBSERVATION.EMPTY_BRANCH) verdict.branchProvenEmpty = true;
   if (observation.outcome === PR_OBSERVATION.MISSING_PR) {
     // Both facts ride the miss unconditionally: `commitsAhead` feeds the
     // suggested fix, and an explicit `inconclusive: false` is what tells the
@@ -556,14 +552,14 @@ async function observePrClaim({ task, workspacePath, success, prExpected }) {
  *
  * Four outcome families, never collapsed:
  *   - `ok: true`  — a PR exists with a valid claim trailer, or there was nothing to check
- *   - `ok: true, noChangesToShip: true` — the forge answered "no PR" and the
+ *   - `ok: true, branchProvenEmpty: true` — the forge answered "no PR" and the
  *     branch holds no commits, so there was nothing a PR could have been opened
  *     for; the run concluded that no change was warranted
  *   - `ok: false, category: 'pr-missing'` — the forge answered "no PR" for a
  *     branch that DOES hold commits
  *   - `ok: false, category: 'forge-unreachable'` — we could not ask
  *
- * @returns {Promise<{ ok: boolean, category?: string, message?: string, branch?: string|null, noChangesToShip?: boolean, commitsAhead?: number|null, inconclusive?: boolean }>}
+ * @returns {Promise<{ ok: boolean, category?: string, message?: string, branch?: string|null, branchProvenEmpty?: boolean, commitsAhead?: number|null, inconclusive?: boolean }>}
  * `inconclusive: true` is set for every requested check that cannot reach an
  * unambiguous answer (no resolvable branch, unreachable forge, unreadable claim
  * body, or unreadable commit count). It is omitted for a proven empty branch and
@@ -783,10 +779,9 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   // Leave-open review follow-ups are the deliberate exception: their deliverable
   // IS the review-fix commits, while merge-shaped follow-ups were settled from
   // forge state immediately above.
-  const reviewLoopFollowUp = task.metadata?.reviewLoopFollowUp === true
-    || task.metadata?.reviewLoopFollowUp === 'true';
+  const reviewLoopFollowUp = isTruthyMeta(task.metadata?.reviewLoopFollowUp);
   const reviewLoopLeaveOpen = reviewLoopFollowUp
-    && (task.metadata?.reviewLoopLeaveOpen === true || task.metadata?.reviewLoopLeaveOpen === 'true');
+    && isTruthyMeta(task.metadata?.reviewLoopLeaveOpen);
   if (declaresNoCommitCriterion(task) && !reviewLoopLeaveOpen) return noFidelityVerdict();
   const claimFlow = isClaimFlowDispatch(task);
   const claimed = claimFlow
@@ -916,13 +911,21 @@ export function withOutputHookTimeout(promise, { agentId, timeoutMs = OUTPUT_HOO
  * The persisted marker closes the sequential normal/recovery gap; the per-agent
  * promise closes the smaller same-process race where two completion paths both
  * observe a running, unmarked agent before either hook finishes.
+ *
+ * @returns {Promise<
+ *   | { ran: false }                                  // no hook for the task type (or audit type)
+ *   | { ran: false, recoveryPayloadUnavailable: true } // recovery, payload-dependent hook, no payload
+ *   | { ran: false, alreadyDispatched: true }          // persisted marker found
+ *   | { ran: true, outcome: * }                        // hook ran
+ *   | { ran: true, threw: true }                       // hook threw (logged)
+ *   | { timedOut: true }                               // hook still running past the backstop
+ * >}
  */
 export function dispatchTaskOutputHookOnce({
   agentId,
   task,
   success,
   workspacePath = null,
-  readPayload = true,
   recovery = false,
 }) {
   const existing = outputHookDispatches.get(agentId);
@@ -952,7 +955,6 @@ export function dispatchTaskOutputHookOnce({
       task,
       success,
       workspacePath,
-      readPayload,
       recovery,
     }).catch(err => {
       emitLog('error', `❌ processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
@@ -1007,7 +1009,6 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
     task,
     success,
     workspacePath,
-    readPayload: !!workspacePath,
     recovery: true,
   });
 }
@@ -1179,8 +1180,8 @@ function resolvePrEvidence({ primaryObservation, noChangeObservation }) {
   return {
     completionOk: primary.completionOk,
     completionVerdict: prVerdictFromObservation(primaryObservation),
-    noChangesToShip: provenEmpty(primaryObservation) || provenEmpty(noChangeObservation),
-    noChangeProof: noChangeObservation ? prVerdictFromObservation(noChangeObservation) : null,
+    branchProvenEmpty: provenEmpty(primaryObservation) || provenEmpty(noChangeObservation),
+    emptyBranchInconclusiveEvidence: noChangeObservation ? prVerdictFromObservation(noChangeObservation) : null,
     // The branch the surviving evidence names, for the operator-facing log line.
     evidenceBranch: evidence.branch || noChangeObservation?.branch || null,
     ledgerEntry: evidencePolicy.recordable
@@ -1188,7 +1189,7 @@ function resolvePrEvidence({ primaryObservation, noChangeObservation }) {
         verified: evidencePolicy.completionOk,
         branch: evidence.branch,
         category: evidencePolicy.category,
-        noChangesToShip: provenEmpty(evidence),
+        branchProvenEmpty: provenEmpty(evidence),
       }
       : null,
     cleanupEvidence: prVerdictFromObservation(evidence),
@@ -1214,7 +1215,6 @@ export async function finalizeAgent({
   outputBuffer,
   errorAnalysis: reportedErrorAnalysis,
   terminatedByUser = false,
-  isTruthyMetaFn,
   error,
   completionReason,
   workspacePath = null,
@@ -1240,7 +1240,7 @@ export async function finalizeAgent({
   // A THROW here is not a verdict — fall back to the reported outcome rather
   // than manufacturing a failure out of a check that never ran, and say so by
   // NAME so the ledger gate below doesn't have to infer it from an empty result.
-  const noChangeAudit = !terminatedByUser && reportedSuccess && isVerifiedNoChangeTask(task);
+  const noChangeAudit = !terminatedByUser && reportedSuccess && permitsNoChangeCompletion(task);
   const primaryPrObservation = terminatedByUser
     ? prObservation(PR_OBSERVATION.SKIPPED)
     : await observePrClaim({ task, workspacePath, success: reportedSuccess, prExpected })
@@ -1259,7 +1259,7 @@ export async function finalizeAgent({
     task, workspacePath, success: reportedSuccess, agentId,
   });
   const prEvidence = resolvePrEvidence({ primaryObservation: primaryPrObservation, noChangeObservation });
-  const noChangesToShip = prEvidence.noChangesToShip;
+  const branchProvenEmpty = prEvidence.branchProvenEmpty;
 
   // Record the verdict in the lifecycle ledger (#4540) — but ONLY for an outcome
   // the policy table marks recordable. The sparse result returns the same
@@ -1284,7 +1284,7 @@ export async function finalizeAgent({
         verified,
         branch: branch ?? null,
         category: category ?? null,
-        noChangesToShip: prEvidence.ledgerEntry.noChangesToShip,
+        branchProvenEmpty: prEvidence.ledgerEntry.branchProvenEmpty,
       },
     });
   }
@@ -1357,7 +1357,7 @@ export async function finalizeAgent({
     emitLog('warn', `⚠️ ${prCompletionVerdict.message} — recording ${agentId} as needs-attention (${prCompletionVerdict.category}) rather than complete`, {
       agentId, taskId: task?.id, branch: prCompletionVerdict.branch, category: prCompletionVerdict.category
     });
-  } else if (noChangesToShip) {
+  } else if (branchProvenEmpty) {
     // A no-op run is a legitimate completion, not a silent one — the human still
     // wants to know a task burned an agent and concluded there was nothing to do.
     emitLog('info', `🫧 ${agentId} opened no change request and committed nothing to ${prEvidence.evidenceBranch} — recording the run as complete with no change warranted`, {
@@ -1441,8 +1441,8 @@ export async function finalizeAgent({
     cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
 
-  if (verdict.success && isTruthyMetaFn) {
-    await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
+  if (verdict.success) {
+    await persistSimplifySummaries(agentId, task, outputBuffer);
   }
 
   const taskType = task?.taskType || 'user';
@@ -1566,8 +1566,8 @@ export async function finalizeAgent({
     startedAt: runStartedAt,
     success: verdict.success,
     hookResult,
-    noChangesToShip,
-    noChangeProof: prEvidence.noChangeProof,
+    branchProvenEmpty,
+    emptyBranchInconclusiveEvidence: prEvidence.emptyBranchInconclusiveEvidence,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
@@ -1812,12 +1812,66 @@ async function publishAppSnapshotFileAfterAudit(appId) {
 }
 
 /**
+ * Where a hook's `.agent-done` payload may be read from. A live completion falls
+ * back to the task's repoPath; a recovery run trusts only the persisted
+ * workspace — without it there is nothing safe to read, so no payload.
+ */
+function hookPayloadDir({ task, workspacePath, recovery }) {
+  return recovery
+    ? (workspacePath || null)
+    : (workspacePath || task?.metadata?.repoPath || null);
+}
+
+/**
+ * Read this agent's sentinel payload from `cwd`, trying in order: strict parse,
+ * lenient JSON salvage, bare legacy payload, then transcript rescue. Returns the
+ * payload or null.
+ */
+async function readHookPayload({ agentId, taskType, cwd }) {
+  const { doneSentinelPath, parseSentinelPayload, salvageSentinelPayload } = await import('../lib/agentSentinel.js');
+  const { tryReadFile } = await import('../lib/fileUtils.js');
+  // This run's own sentinel (see doneSentinelName) — in a shared workspace a
+  // sibling agent's file must not be consumed as this run's deliverable.
+  const contents = await tryReadFile(doneSentinelPath(cwd, agentId));
+  const strict = parseSentinelPayload(contents).payload;
+  if (strict != null) return strict;
+  // A less-capable (often local) reasoner can emit an almost-valid
+  // `{ summary, payload }` envelope — ```json-fenced, prose-trailed, or with
+  // raw newlines in the markdown body — that strict parse rejects, dropping a
+  // real proposal as "unparseable-response" and filing nothing. Before giving
+  // up, run the robust LLM-JSON extractor over the raw sentinel.
+  const salvaged = await salvageSentinelPayload(contents);
+  if (salvaged.payload != null) {
+    emitLog('info', `Recovered structured .agent-done payload for ${agentId} (${taskType}) via lenient JSON extraction`, { agentId });
+    return salvaged.payload;
+  }
+  if (contents != null) {
+    // Compatibility for programmatic-I/O prompts that predate the structured
+    // `{ summary, payload }` envelope and wrote the hook payload directly.
+    const bare = await recoverBareSentinelPayload(contents, taskType);
+    if (bare != null) {
+      emitLog('info', `Recovered legacy bare .agent-done payload for ${agentId} (${taskType})`, { agentId });
+    }
+    return bare;
+  }
+  // No sentinel at all: the model may have PRINTED its deliverable into the
+  // TUI instead of writing the file (#3640). Only when `contents == null` — a
+  // sentinel the agent DID write, whose content simply isn't a payload, keeps
+  // its own (correct) missing-output verdict.
+  const rescued = await rescueTranscriptPayload({ agentId, taskType });
+  if (rescued != null) {
+    emitLog('info', `Recovered printed payload for ${agentId} (${taskType}) from the transcript — no .agent-done was written`, { agentId });
+  }
+  return rescued;
+}
+
+/**
  * Read the finished agent's `.agent-done` payload and run the task type's
  * `processTaskOutput` hook, if it registers one. No-op for the vast majority of
  * task types (no hook). The hook receives `{ appId, success, payload, ... }` and
  * loads its own app/config — finalizeAgent stays domain-agnostic.
  */
-async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, assessedAt, readPayload = true, recovery = false }) {
+async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, assessedAt, recovery = false }) {
   // Shared resolver with evaluateSuccessCriteria's gate — "runs a hook" and "gets
   // the programmatic-I/O criterion" must stay the same question (#2727).
   const taskType = resolveTaskHookType(task);
@@ -1825,7 +1879,7 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   if (isAuditTaskType(taskType)) {
     const { recordAuditQuality } = await import('./appQuality.js');
     const recorded = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
-      workspacePath: readPayload ? (workspacePath || task?.metadata?.repoPath) : null })
+      workspacePath: hookPayloadDir({ task, workspacePath, recovery }) })
       .catch(err => emitLog('warn', `⚠️ Audit quality was not saved for ${agentId}: ${err.message}`, { agentId }));
     if (recorded === true) await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
@@ -1835,49 +1889,8 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   const hook = await getTaskOutputHook(taskType);
   if (!hook) return { ran: false };
 
-  const cwd = readPayload ? (workspacePath || task?.metadata?.repoPath || null) : null;
-  let payload = null;
-  if (cwd) {
-    const { doneSentinelPath, parseSentinelPayload, salvageSentinelPayload } = await import('../lib/agentSentinel.js');
-    const { tryReadFile } = await import('../lib/fileUtils.js');
-    // This run's own sentinel (see doneSentinelName) — in a shared workspace a
-    // sibling agent's file must not be consumed as this run's deliverable.
-    const contents = await tryReadFile(doneSentinelPath(cwd, agentId));
-    payload = parseSentinelPayload(contents).payload;
-    // A less-capable (often local) reasoner can emit an almost-valid
-    // `{ summary, payload }` envelope — ```json-fenced, prose-trailed, or with
-    // raw newlines in the markdown body — that strict parse rejects, dropping a
-    // real proposal as "unparseable-response" and filing nothing. Before giving
-    // up, run the robust LLM-JSON extractor over the raw sentinel.
-    if (payload == null) {
-      const salvaged = await salvageSentinelPayload(contents);
-      if (salvaged.payload != null) {
-        payload = salvaged.payload;
-        emitLog('info', `Recovered structured .agent-done payload for ${agentId} (${taskType}) via lenient JSON extraction`, { agentId });
-      }
-    }
-    // Compatibility for programmatic-I/O prompts that predate the structured
-    // `{ summary, payload }` envelope and wrote the hook payload directly.
-    if (payload == null && contents != null) {
-      const bare = await recoverBareSentinelPayload(contents, taskType);
-      if (bare != null) {
-        payload = bare;
-        emitLog('info', `Recovered legacy bare .agent-done payload for ${agentId} (${taskType})`, { agentId });
-      }
-    }
-    // No sentinel at all: the model may have PRINTED its deliverable into the
-    // TUI instead of writing the file (#3640). `contents == null` — not just a
-    // null payload — so a sentinel the agent DID write, whose content simply
-    // isn't a payload, keeps its own (correct) missing-output verdict instead of
-    // being overridden by something older in the transcript.
-    if (payload == null && contents == null) {
-      const rescued = await rescueTranscriptPayload({ agentId, taskType });
-      if (rescued != null) {
-        payload = rescued;
-        emitLog('info', `Recovered printed payload for ${agentId} (${taskType}) from the transcript — no .agent-done was written`, { agentId });
-      }
-    }
-  }
+  const cwd = hookPayloadDir({ task, workspacePath, recovery });
+  const payload = cwd ? await readHookPayload({ agentId, taskType, cwd }) : null;
   if (recovery && payload == null && !canRunTaskOutputHookWithoutPayload(taskType)) {
     return { ran: false, recoveryPayloadUnavailable: true };
   }
@@ -1900,8 +1913,8 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
  * Persist task/simplify summaries for agents that ran with /simplify.
  * Shared by handleAgentCompletion (runner mode) and spawnDirectly (direct mode).
  */
-export async function persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn) {
-  if (!isTruthyMetaFn(task.metadata?.simplify)) return;
+export async function persistSimplifySummaries(agentId, task, outputBuffer) {
+  if (!isTruthyMeta(task.metadata?.simplify)) return;
   const summaries = extractSimplifySummaries(outputBuffer);
   if (!summaries) return;
   // Persist whenever *either* summary is present — e.g. if the /simplify

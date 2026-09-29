@@ -1,3 +1,4 @@
+import { isTruthyMeta } from './metadataFlags.js';
 /**
  * Task target-branch metadata — one reader and one terminal-strip rule.
  *
@@ -8,7 +9,6 @@
  * the single canonical review-loop key.
  */
 
-const isTruthyMetadataFlag = (value) => value === true || value === 'true';
 
 /**
  * Resolve the branch a task must work on, or null when it should cut a fresh one.
@@ -17,7 +17,7 @@ const isTruthyMetadataFlag = (value) => value === true || value === 'true';
  */
 export function resolveTaskTargetBranch(metadata) {
   if (metadata?.existingBranch) return metadata.existingBranch;
-  if (isTruthyMetadataFlag(metadata?.reviewLoopFollowUp) && metadata?.reviewLoopPRBranch) {
+  if (isTruthyMeta(metadata?.reviewLoopFollowUp) && metadata?.reviewLoopPRBranch) {
     return metadata.reviewLoopPRBranch;
   }
   return null;

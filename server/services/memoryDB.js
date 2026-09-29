@@ -390,19 +390,25 @@ export async function updateMemoryEmbedding(id, embedding) {
 }
 
 /**
- * Delete a memory (soft delete by default)
+ * Archive a memory: mark it archived; the row and embedding stay, so it is restorable.
  */
-export async function deleteMemory(id, hard = false) {
-  if (hard) {
-    // Hard delete — cascades to memory_links via ON DELETE CASCADE
-    await query('DELETE FROM memories WHERE id = $1', [id]);
-  } else {
-    // Soft delete — mark as archived
-    await query("UPDATE memories SET status = 'archived' WHERE id = $1", [id]);
-  }
+export async function archiveMemory(id) {
+  await query("UPDATE memories SET status = 'archived' WHERE id = $1", [id]);
 
-  console.log(`🧠 Memory deleted: ${id} (hard: ${hard})`);
-  cosEvents.emit('memory:deleted', { id, hard });
+  console.log(`🧠 Memory archived: ${id}`);
+  cosEvents.emit('memory:deleted', { id, hard: false });
+
+  return { success: true, id };
+}
+
+/**
+ * Purge a memory: DELETE the row (cascades to memory_links) and its embedding. Not restorable.
+ */
+export async function purgeMemory(id) {
+  await query('DELETE FROM memories WHERE id = $1', [id]);
+
+  console.log(`🧠 Memory purged: ${id}`);
+  cosEvents.emit('memory:deleted', { id, hard: true });
 
   return { success: true, id };
 }

@@ -1,3 +1,4 @@
+import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 /**
  * Music Video — treatment compiler (#8980).
  *
@@ -98,6 +99,9 @@ function deriveMotifs(project, brief) {
   const fromBrief = (brief.mustHave || '').split(/[\n;,]+/).map((s) => s.trim()).filter(Boolean).slice(0, 3)
     .map((name) => ({ name: name.slice(0, 120), description: 'A must-have from the brief.', evolution, rationale: `A recurring image ${audience} can track across the song.` }));
   if (fromBrief.length > 0) return fromBrief;
+  const subjects = (project.concept?.subjects || []).slice(0, 3)
+    .map((subject) => ({ name: subject.name, description: subject.description || `The selected ${subject.kind}.`, evolution, rationale: `Preserves the production's cast and recurring subjects for ${audience}.` }));
+  if (subjects.length > 0) return subjects;
   const refs = (project.visualSpec?.references || [])
     .filter((r) => ['character', 'prop', 'set'].includes(r.role) && isNonBlankStr(r.label)).slice(0, 3)
     .map((r) => ({ name: r.label.trim().slice(0, 120), description: `The ${r.role} reference "${r.label.trim()}".`, evolution, rationale: `Anchors identity continuity for ${audience}.` }));
@@ -141,7 +145,8 @@ const FRAMINGS = ['wide establishing', 'medium', 'close-up'];
 
 function focalFor(mode, project, motifs) {
   const character = (project.visualSpec?.references || []).find((r) => r.role === 'character' && isNonBlankStr(r.label));
-  if (mode === 'performance') return character ? character.label.trim() : 'the performer';
+  const lead = (project.concept?.subjects || []).find((s) => s.kind === 'character' && ['protagonist', 'band'].includes(s.role));
+  if (mode === 'performance') return lead?.name || (character ? character.label.trim() : 'the performer');
   if (mode === 'graphic') return 'a bold graphic composition';
   return motifs[0]?.name || 'the recurring motif';
 }
@@ -359,6 +364,7 @@ export function buildTreatmentPrompt(project, draft) {
     brief.hookObjective && `Opening hook objective: ${quote(brief.hookObjective)}`,
     brief.mustHave && `Must have: ${quote(brief.mustHave, 400)}`,
     brief.avoid && `Avoid: ${quote(brief.avoid, 400)}`,
+    musicVideoCreativeContext(concept),
     concept.prompt && `Concept: ${quote(concept.prompt, 600)}`,
     concept.style && `Visual style: ${quote(concept.style)}`,
     spec.palette?.length && `Palette: ${spec.palette.join(' ')}`,

@@ -194,6 +194,13 @@ describe('History Routes', () => {
   });
 
   describe('DELETE /api/history', () => {
+    it.each(['abc', '-5', '0', '1e'])('rejects olderThanDays=%s with 400 and clears nothing', async (v) => {
+      const response = await request(app).delete(`/api/history?olderThanDays=${v}`);
+
+      expect(response.status).toBe(400);
+      expect(history.clearHistory).not.toHaveBeenCalled();
+    });
+
     it('should clear all history', async () => {
       history.clearHistory.mockResolvedValue({ success: true, deletedCount: 150 });
 

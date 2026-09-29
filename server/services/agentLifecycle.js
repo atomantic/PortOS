@@ -319,7 +319,6 @@ export async function spawnViaRunner(agentId, task, opts) {
       duration: 0,
       outputBuffer: '',
       errorAnalysis,
-      isTruthyMetaFn: isTruthyMeta,
       error: message,
       completionReason: 'spawn-rejected',
       workspacePath,
@@ -660,7 +659,6 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         duration,
         outputBuffer,
         errorAnalysis,
-        isTruthyMetaFn: isTruthyMeta,
         workspacePath: agent.workspacePath || null,
         prExpected: runnerPrClaimExpected,
         // The run window the commit criterion is evaluated against (#3637).
@@ -668,7 +666,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
       runnerPrClaimVerified = prClaimWasVerified(finalized?.prVerdict);
-      runnerNoChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
+      runnerNoChangesToShip = finalized?.prVerdict?.branchProvenEmpty === true;
     } catch (err) {
       finalizeError = err;
       emitLog('error', `finalizeAgent threw for ${agentId} (continuing cleanup): ${err.message}`, { agentId, error: err.message });
@@ -678,7 +676,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // pipeline progression, the Creative Director chain hook, and worktree
     // cleanup (+ cleanup-warning notification and merge-recovery task). Runs
     // inside this try so a throw still hits the finally below.
-    await runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess: cleanupSuccess, outputBuffer, prClaimVerified: runnerPrClaimVerified, noChangesToShip: runnerNoChangesToShip });
+    await runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess: cleanupSuccess, outputBuffer, prClaimVerified: runnerPrClaimVerified, branchProvenEmpty: runnerNoChangesToShip });
 
     // Surface a finalizeAgent throw to the caller after best-effort
     // cleanup completed — without this the runner harness would never see

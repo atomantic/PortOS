@@ -166,6 +166,15 @@ export const isAppFeatureEnabled = (app, featureId, globalEnabled) => {
   return legacy ?? (globalEnabled !== false);
 };
 
+/** Whether launch videos are disabled for an app (PortOS baseline app or Eidoverse Worlds app). */
+export const isLaunchVideoDisabled = (app) => {
+  if (!app) return false;
+  if (app.id === PORTOS_APP_ID) return true;
+  if (app.id === 'eidoverse-worlds' || app.id === 'eidoverse') return true;
+  if (Array.isArray(app.pm2ProcessNames) && app.pm2ProcessNames.includes('eidoverse-worlds')) return true;
+  return false;
+};
+
 // Overview first, then alphabetical. Every id is a real route segment
 // (`/apps/:appId/:tab`) so each tab is linkable, bookmarkable, and reachable
 // from ⌘K — see the routing rules in client/src/AGENTS.md. Icons live in
@@ -185,7 +194,7 @@ export const APP_DETAIL_TABS = [
   { id: 'issues', label: 'Issues' },
   { id: 'pull-requests', label: 'PRs / MRs' },
   { id: 'jira', label: 'JIRA', feature: 'jira' },
-  { id: 'launch-video', label: 'Launch Video' },
+  { id: 'launch-video', label: 'Launch Video', visibleWhen: (app) => !isLaunchVideoDisabled(app) },
   { id: 'processes', label: 'Processes' },
   { id: 'quality', label: 'Quality' },
   { id: 'references', label: 'References' },

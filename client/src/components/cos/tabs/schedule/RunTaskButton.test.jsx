@@ -109,4 +109,19 @@ describe('RunTaskButton', () => {
     // narrowed by max-w, so it ran past the right edge instead of moving.
     expect(left + width).toBeLessThanOrEqual(window.innerWidth - 8);
   });
+
+  it("moves focus into the app panel and Escape closes it, returning focus to the trigger", async () => {
+    const user = userEvent.setup();
+    render(<RunTaskButton taskType="review" apps={APPS} onTrigger={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: /Run on App/i });
+    expect(trigger.getAttribute("aria-haspopup")).toBe("true");
+    await user.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(screen.getByText("Example App").closest("button"));
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByText("Example App")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  });
 });

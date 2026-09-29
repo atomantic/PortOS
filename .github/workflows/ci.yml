@@ -30,6 +30,7 @@ jobs:
   impact:
     name: Plan test impact
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Still live despite the removed push trigger: a called workflow inherits
     # the caller's event, and release.yml calls this one from a push.
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')
@@ -136,6 +137,7 @@ jobs:
     needs: impact
     if: needs.impact.outputs.server_mode != 'skip'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         shard: ${{ fromJSON(needs.impact.outputs.server_shards) }}
@@ -335,6 +337,7 @@ jobs:
     needs: impact
     if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         shard: ${{ fromJSON(needs.impact.outputs.client_shards) }}
@@ -446,6 +449,7 @@ jobs:
     needs: impact
     if: needs.impact.outputs.lint_mode != 'skip'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       actions: write
@@ -511,6 +515,7 @@ jobs:
     needs: impact
     if: needs.impact.outputs.db == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       actions: write
@@ -674,6 +679,7 @@ jobs:
     needs: impact
     if: needs.impact.outputs.windows == 'true'
     runs-on: windows-latest
+    timeout-minutes: 40
     strategy:
       matrix:
         shard: ${{ fromJSON(needs.impact.outputs.windows_shards) }}
@@ -807,6 +813,7 @@ jobs:
   node-minimum:
     name: Node minimum compatibility
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -841,6 +848,7 @@ jobs:
     if: always()
     needs: [impact, server, client, lint, database, windows-server, node-minimum]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # READ, not write: the reporter only lists this run's jobs, to name the one
     # whose STEP failed when the fail-fast cancel beat GitHub to writing the job
     # conclusion. Cancelling the run stays a leaf-job privilege.
@@ -900,6 +908,7 @@ jobs:
     if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'full'
     needs: [impact, gate]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read

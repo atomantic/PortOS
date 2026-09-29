@@ -8,6 +8,7 @@
  *   POST /api/code-animation/generate       start a provider run → 202 job
  *   GET  /api/code-animation/jobs           list saved jobs for the gallery
  *   GET  /api/code-animation/generate/:id   poll a job (html once completed)
+ *   POST /api/code-animation/:id/export     queue a frame-exact MP4 render → 202 media job
  */
 
 import { Router } from 'express';
@@ -25,6 +26,7 @@ import {
   getCodeAnimationOptions,
   startCodeAnimationGeneration,
 } from '../services/codeAnimation/index.js';
+import { startCodeAnimationExport } from '../services/codeAnimation/export.js';
 import {
   CODE_ANIMATION_ASPECT_RATIOS,
   CODE_ANIMATION_LIMITS,
@@ -152,6 +154,16 @@ router.get('/generate/:id', asyncHandler(async (req, res) => {
   const job = await getCodeAnimationJob(req.params.id);
   if (!job) throw new ServerError('Generation job not found', { status: 404, code: 'NOT_FOUND' });
   res.json(job);
+}));
+
+const exportParamsSchema = z.object({ id: z.string().uuid() }).strict();
+
+// Frame-exact export: the stored HTML renders through the HTML-composition
+// pipeline (seek each frame, H.264 MP4, Media History) on the media queue.
+// Progress streams from /api/html-composition/:jobId/events.
+router.post('/:id/export', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.status(202).json(await startCodeAnimationExport(id));
 }));
 
 export default router;

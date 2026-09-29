@@ -53,10 +53,15 @@ the operator's live checkout.
 | `better-dependency-freedom` | Whether a dependency should exist at all | `dependencies`, `depfree` | file | yes |
 | `better-test-quality` | Existing tests that prove nothing | `tests`, `test-quality` | file | |
 | `better-dev-environment` | What the dev loop leaves on the host | `tests`, `dev-environment` | file | |
+| `infrastructure` | Deployment, container, IaC and CI configuration | `infrastructure` | file | |
+| `data-integrity` | Ingestion, idempotency, consistency, schema evolution | `data-safety`, `data-integrity` | file | |
+| `reliability` | Shutdown, health checks, backpressure, job leasing, mixed-version deploys | `resilience`, `reliability` | file | |
+| `privacy` | Exposure, minimization, retention and erasure of personal data | `privacy` | file | |
+| `cost-efficiency` | Metered spend: paid calls, unbounded scans, over-provisioning | `performance`, `cost` | file | |
 
 ## Why the boundaries are explicit
 
-Twenty-six lanes only pay off if they do not file each other's findings. Every
+Lanes only pay off if they do not file each other's findings. Every
 mission body names what it cedes and to whom, so two lanes cannot both claim one
 problem:
 

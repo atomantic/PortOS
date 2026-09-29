@@ -43,33 +43,57 @@ export async function readUserTypes() {
  * `deletedAt` in its data) stays a row so the deletion keeps federating.
  */
 export async function writeUserTypes(list) {
-  const types = Array.isArray(list) ? list.filter((t) => t && typeof t.id === 'string' && t.id) : [];
-  await withTransaction(async (client) => {
+  await withTransaction((client) => applyWrite(client.query.bind(client), list));
+}
+
+// Arbitrary constant key for the per-table advisory lock (`catalog_user_types`).
+const USER_TYPES_LOCK_KEY = 90011001;
+
+/**
+ * Read-modify-write the slice atomically: takes a transaction-scoped advisory
+ * lock, reads inside the transaction, hands the list to `mutator`, and writes
+ * its result — so a cross-process writer cannot interleave between the read and
+ * the whole-slice authoritative write. A `null`/`undefined` return skips the
+ * write. Returns the mutator's list (or the unchanged current list).
+ */
+export async function updateUserTypes(mutator) {
+  return withTransaction(async (client) => {
     const exec = client.query.bind(client);
-    const keepIds = [];
-    for (const t of types) {
-      keepIds.push(t.id);
-      // The typed mirror columns are bind-sanitized so a hand-edited/legacy
-      // record with a malformed timestamp can't make the INSERT throw and abort
-      // the whole slice write (which runs during boot warm). `data` is verbatim.
-      const updatedAt = mirrorTimestamp(t.updatedAt, null);
-      const deletedAt = mirrorTimestamp(t.deletedAt, null);
-      await exec(
-        `INSERT INTO catalog_user_types (id, data, updated_at, deleted_at)
-         VALUES ($1, $2::jsonb, COALESCE($3::timestamptz, NOW()), $4)
-         ON CONFLICT (id) DO UPDATE SET
-           data = EXCLUDED.data,
-           updated_at = EXCLUDED.updated_at,
-           deleted_at = EXCLUDED.deleted_at`,
-        [t.id, JSON.stringify(t), updatedAt, deletedAt],
-      );
-    }
-    // Prune rows that left the desired slice. With keepIds empty the whole
-    // table clears; otherwise delete everything NOT in the list.
-    if (keepIds.length === 0) {
-      await exec(`DELETE FROM catalog_user_types`);
-    } else {
-      await exec(`DELETE FROM catalog_user_types WHERE id <> ALL($1::text[])`, [keepIds]);
-    }
+    await exec(`SELECT pg_advisory_xact_lock($1)`, [USER_TYPES_LOCK_KEY]);
+    const { rows } = await exec(`SELECT data FROM catalog_user_types ORDER BY created_at ASC, id ASC`);
+    const current = rows.map(rowToType);
+    const next = await mutator(current);
+    if (next == null) return current;
+    await applyWrite(exec, next);
+    return next;
   });
+}
+
+async function applyWrite(exec, list) {
+  const types = Array.isArray(list) ? list.filter((t) => t && typeof t.id === 'string' && t.id) : [];
+  const keepIds = [];
+  for (const t of types) {
+    keepIds.push(t.id);
+    // The typed mirror columns are bind-sanitized so a hand-edited/legacy
+    // record with a malformed timestamp can't make the INSERT throw and abort
+    // the whole slice write (which runs during boot warm). `data` is verbatim.
+    const updatedAt = mirrorTimestamp(t.updatedAt, null);
+    const deletedAt = mirrorTimestamp(t.deletedAt, null);
+    await exec(
+      `INSERT INTO catalog_user_types (id, data, updated_at, deleted_at)
+       VALUES ($1, $2::jsonb, COALESCE($3::timestamptz, NOW()), $4)
+       ON CONFLICT (id) DO UPDATE SET
+         data = EXCLUDED.data,
+         updated_at = EXCLUDED.updated_at,
+         deleted_at = EXCLUDED.deleted_at`,
+      [t.id, JSON.stringify(t), updatedAt, deletedAt],
+    );
+  }
+  // Prune rows that left the desired slice. With keepIds empty the whole
+  // table clears; otherwise delete everything NOT in the list.
+  if (keepIds.length === 0) {
+    await exec(`DELETE FROM catalog_user_types`);
+  } else {
+    await exec(`DELETE FROM catalog_user_types WHERE id <> ALL($1::text[])`, [keepIds]);
+  }
 }

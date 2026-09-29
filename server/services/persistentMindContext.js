@@ -134,7 +134,7 @@ export function archivePersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
           preserved += 1;
           continue;
         }
-        await memoryBackend.deleteMemory(memory.id, false);
+        await memoryBackend.archiveMemory(memory.id);
         archived += 1;
         batchArchived += 1;
       }

@@ -82,6 +82,39 @@ job result keeps `generationId` as the job and names the first format in
 `id`/`filename`/`thumbnail`, and lists all of
 them in `videos: [{ format, id, filename, thumbnail, path }]`.
 
+## Motion blur
+
+Set `motionBlur` on `portosComposition` to blend sub-frames on fast moves.
+
+- **Integer `1`–`4`** (default `1`): captures that many sub-frames spread over
+  the whole frame interval and blends them with ffmpeg `tmix`. `1` is no blur.
+  Fast moves show separated copies rather than a streak.
+- **Object `{ shutter, samples, tolerance }`**: samples a centred fraction of
+  the frame time, at `t = (n + (k/count - ½) · shutter) / fps`, and averages
+  the sub-frames in linear light. `shutter` is 0.05–1 (default 0.5; 0.2 is a
+  short filmic streak, 1 smears the whole interval). `samples` is a fixed
+  count from 4–64 or `'auto'` (the default). `tolerance` is 1–8 levels out of
+  255 (default 2).
+
+`'auto'` starts at the frame's centre and refines 1 → 3 → 9 → 27 → 81 samples,
+reusing every earlier sample. It stops when the worst 8×8 block of the new
+average differs from the previous average by less than `tolerance`. A frame
+whose centre matches both neighbouring frames' centres is still and costs a
+single capture. The job result's `sampleHistogram` maps each sample count to
+the number of output frames that used it.
+
+Shutter blur relies on two scene rules:
+
+- Output must be a pure function of `t`. Sub-frames are rendered out of order,
+  may repeat, and the first frame's shutter clamps negative times to `0`.
+- Per-frame flicker (grain, jitter, a random seed per frame) must stay constant
+  across the shutter. Key it to `PortosMotion.frameIdx(t, fps)`, which rounds
+  to the nearest frame, not to `Math.floor(t * fps)`.
+
+```js
+motionBlur: { shutter: 0.5, samples: 'auto', tolerance: 2 }
+```
+
 ## Motion kit
 
 `server/services/htmlComposition/kit/portos-motion.js` is a deterministic
@@ -95,8 +128,15 @@ helper script for compositions. Copy it beside `index.html`, load it with
   one spring per change, so motion never restarts or pops.
 - `indicator(t, stops, width)`, `swapAlpha(t, tIn, tOut)`, `loopT(t, dur)` —
   stretching selection bars, content swaps inside a morphing container, loops.
+- `frameIdx(t, fps)` — the output frame `t` belongs to, constant across a
+  motion-blur shutter; key per-frame flicker to it.
 - `rng(seed)` — seeded noise (mulberry32); never use `Math.random`.
 - `beats(bpm)` — a beat grid (`at`, `bar`, `index`, `phase`, `list`).
+- `song(audioAnalysis)` — seekable song lookups from a music-video project's
+  analysis JSON: `env('rms'|'low'|'mid'|'high', t)` (interpolated 0..1),
+  `hit('kick'|'snare'|'hat', t, halfLife)` (decaying pulses from past onsets;
+  band heuristics, not stems), `beatAt`, `barAt`, `beatPhase`, `sectionAt`.
+  `ready` is false when the analysis has no feature track (re-analyze).
 - `renderCues({ sampleRate, durationSec, cues })`, `mixCues`, `toPcm` —
   synthesized `click`, `tick`, `pop`, `thump`, `whoosh` and `riser` cues
   that return the plain PCM array `renderAudio` needs.
@@ -119,7 +159,7 @@ launch-video artifacts are delivered. The completed job's result carries
 relative to the data directory (never an absolute host path) and `url` serves
 it under `/data/`; tile *n* shows `times[n]`.
 Launch runs write `proofs/contact-<jobId>.png` beside the run; other
-compositions write `data/composition-proofs/`. Both are excluded from backups.
+compositions write `data/composition-proofs/`. Both are excluded from backups. Code Animation exports stage `data/code-animation-exports/<job-id>/<export-id>/` (also excluded): the stored HTML with a shim that maps `ANIMATION_META`/`renderFrame(t)` onto `portosComposition`, stops the page's own `requestAnimationFrame` clock, and hides everything but the film canvas.
 
 The 202 response contains the media queue's `jobId`. Subscribe to
 `GET /api/html-composition/:jobId/events` for the usual queued, started, progress,

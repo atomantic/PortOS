@@ -235,16 +235,18 @@ export function usePostSession() {
     });
   }, [runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex, answers, drillResults, sessionScore, isTraining, conditions, legacyTags, sessionPlan, benchmark]);
 
-  const startSession = useCallback(async (drillConfigs, training = false, sessionConditions = {}, plan = null, benchmarkMetadata = null) => {
-    // drillConfigs: [{ type, config, timeLimitSec }]
+  const startSession = useCallback(async ({ drills: drillConfigs, training = false, conditions: sessionConditions = {}, plan = null, benchmark: benchmarkMetadata = null } = {}) => {
+    // drills: [{ type, config, timeLimitSec }]
     if (!drillConfigs?.length) {
       toast.error('No drills configured');
       return;
     }
     setState(STATES.LOADING);
+    // A training run never carries benchmark metadata.
+    const effectiveBenchmark = training ? null : benchmarkMetadata || null;
     setIsTraining(training);
     setSessionPlan(plan || null);
-    setBenchmark(training ? null : benchmarkMetadata || null);
+    setBenchmark(effectiveBenchmark);
     setDrills(drillConfigs);
     setCurrentDrillIndex(0);
     setDrillResults([]);

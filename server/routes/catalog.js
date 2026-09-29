@@ -42,7 +42,7 @@ import {
   REF_KINDS,
 } from '../lib/catalogValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
-import { readUserTypes as readUserTypeSlice, writeUserTypes } from '../services/catalogUserTypes/store.js';
+import { updateUserTypes } from '../services/catalogUserTypes/store.js';
 import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalogBulkParsers.js';
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
@@ -824,12 +824,6 @@ router.post('/migration/rerun', asyncHandler(async (req, res) => {
 // restart. The GET returns the FULL active registry (system + user) normalized
 // for the client merge, with each entry's `system` flag.
 
-// Read the persisted user-type slice as a plain array (tolerates absent/junk).
-const readUserTypes = async () => {
-  const list = await readUserTypeSlice();
-  return Array.isArray(list) ? list : [];
-};
-
 router.get('/types', asyncHandler(async (req, res) => {
   // Active registry (system first, then user). Each entry already carries
   // `system`, `label`, `primaryContentKey`, `snippetFallbackKeys`, and (for
@@ -848,23 +842,24 @@ const stampUserType = (body) => {
 
 router.post('/types', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogUserTypeSchema, req.body);
-  const current = await readUserTypes();
-  // A LIVE type with this id already exists → conflict. A tombstoned id (or a
-  // fresh id) is fine: POST revives the tombstone / creates anew, replacing the
-  // slot in place so the unique-id invariant holds.
-  const idx = current.findIndex((t) => t.id === body.id);
-  if (idx !== -1 && !current[idx].deletedAt) {
-    throw new ServerError(`Catalog type "${body.id}" already exists`, { status: 409 });
-  }
-  const stamped = stampUserType(body);
-  const next = idx === -1
-    ? [...current, stamped]
-    : current.map((t, i) => (i === idx ? stamped : t));
-  // Validate the whole slice (unique-id + system-collision refinements) before
-  // persisting — a system-id collision (e.g. "character") is rejected here.
-  validateRequest(catalogUserTypesSettingsSchema, next);
-  await writeUserTypes(next);
-  setUserCatalogTypes(next);
+  await updateUserTypes((slice) => {
+    const current = Array.isArray(slice) ? slice : [];
+    // A LIVE type with this id already exists → conflict. A tombstoned id (or a
+    // fresh id) is fine: POST revives the tombstone / creates anew, replacing the
+    // slot in place so the unique-id invariant holds.
+    const idx = current.findIndex((t) => t.id === body.id);
+    if (idx !== -1 && !current[idx].deletedAt) {
+      throw new ServerError(`Catalog type "${body.id}" already exists`, { status: 409 });
+    }
+    const stamped = stampUserType(body);
+    const next = idx === -1
+      ? [...current, stamped]
+      : current.map((t, i) => (i === idx ? stamped : t));
+    // Validate the whole slice (unique-id + system-collision refinements) before
+    // persisting — a system-id collision (e.g. "character") is rejected here.
+    validateRequest(catalogUserTypesSettingsSchema, next);
+    return next;
+  }, setUserCatalogTypes);
   console.log(`🧩 Catalog: added user type "${body.id}"`);
   res.status(201).json({ types: getActiveCatalogTypes() });
 }));
@@ -873,51 +868,53 @@ router.patch('/types/:id', asyncHandler(async (req, res) => {
   // Merge the path id onto the body so a partial PATCH still validates as a
   // full user-type (id is immutable — the path wins over any body id).
   const merged = validateRequest(catalogUserTypeSchema, { ...req.body, id: req.params.id });
-  const current = await readUserTypes();
-  // Editing a tombstoned (deleted) type is a 404 — it must be re-created via POST.
-  const idx = current.findIndex((t) => t.id === req.params.id && !t.deletedAt);
-  if (idx === -1) throw new ServerError(`Catalog type "${req.params.id}" not found`, { status: 404 });
-  const next = [...current];
-  next[idx] = stampUserType(merged);
-  validateRequest(catalogUserTypesSettingsSchema, next);
-  await writeUserTypes(next);
-  setUserCatalogTypes(next);
+  await updateUserTypes((slice) => {
+    const current = Array.isArray(slice) ? slice : [];
+    // Editing a tombstoned (deleted) type is a 404 — it must be re-created via POST.
+    const idx = current.findIndex((t) => t.id === req.params.id && !t.deletedAt);
+    if (idx === -1) throw new ServerError(`Catalog type "${req.params.id}" not found`, { status: 404 });
+    const next = [...current];
+    next[idx] = stampUserType(merged);
+    validateRequest(catalogUserTypesSettingsSchema, next);
+    return next;
+  }, setUserCatalogTypes);
   console.log(`🧩 Catalog: updated user type "${req.params.id}"`);
   res.json({ types: getActiveCatalogTypes() });
 }));
 
 router.delete('/types/:id', asyncHandler(async (req, res) => {
-  const current = await readUserTypes();
-  const idx = current.findIndex((t) => t.id === req.params.id && !t.deletedAt);
-  if (idx === -1) throw new ServerError(`Catalog type "${req.params.id}" not found`, { status: 404 });
-  // Refuse to delete a type that still has ingredients of that type unless the
-  // caller explicitly forces it (`?force=true`) — otherwise those rows become
-  // orphaned (their `type` no longer resolves in the active registry, so the
-  // detail page falls back to the generic 'idea' editor and the type filter
-  // drops them). force=true deletes the definition anyway; the rows survive
-  // and just render under the fallback editor.
   const force = req.query.force === 'true';
-  if (!force) {
-    const { items } = await catalogDB.listIngredients({ type: req.params.id, limit: 1 });
-    if (items.length > 0) {
-      throw new ServerError(
-        `Catalog type "${req.params.id}" has ingredients — pass ?force=true to delete it anyway`,
-        { status: 409, code: 'CATALOG_TYPE_IN_USE' },
-      );
+  await updateUserTypes(async (slice) => {
+    const current = Array.isArray(slice) ? slice : [];
+    const idx = current.findIndex((t) => t.id === req.params.id && !t.deletedAt);
+    if (idx === -1) throw new ServerError(`Catalog type "${req.params.id}" not found`, { status: 404 });
+    // Refuse to delete a type that still has ingredients of that type unless the
+    // caller explicitly forces it (`?force=true`) — otherwise those rows become
+    // orphaned (their `type` no longer resolves in the active registry, so the
+    // detail page falls back to the generic 'idea' editor and the type filter
+    // drops them). force=true deletes the definition anyway; the rows survive
+    // and just render under the fallback editor.
+    if (!force) {
+      const { items } = await catalogDB.listIngredients({ type: req.params.id, limit: 1 });
+      if (items.length > 0) {
+        throw new ServerError(
+          `Catalog type "${req.params.id}" has ingredients — pass ?force=true to delete it anyway`,
+          { status: 409, code: 'CATALOG_TYPE_IN_USE' },
+        );
+      }
     }
-  }
-  // Soft-delete: KEEP the entry with a `deletedAt` tombstone (and a fresh
-  // `updatedAt`) so the deletion federates to peers via the catalogTypes sync
-  // block. A physical removal would let a peer that still has the definition
-  // resurrect it on the next pull. setUserCatalogTypes filters tombstones out
-  // of the active registry, so the type disappears from the UI immediately.
-  const deletedAt = new Date().toISOString();
-  const next = current.map((t, i) => (
-    i === idx ? { ...t, deletedAt, updatedAt: deletedAt } : t
-  ));
-  validateRequest(catalogUserTypesSettingsSchema, next);
-  await writeUserTypes(next);
-  setUserCatalogTypes(next);
+    // Soft-delete: KEEP the entry with a `deletedAt` tombstone (and a fresh
+    // `updatedAt`) so the deletion federates to peers via the catalogTypes sync
+    // block. A physical removal would let a peer that still has the definition
+    // resurrect it on the next pull. setUserCatalogTypes filters tombstones out
+    // of the active registry, so the type disappears from the UI immediately.
+    const deletedAt = new Date().toISOString();
+    const next = current.map((t, i) => (
+      i === idx ? { ...t, deletedAt, updatedAt: deletedAt } : t
+    ));
+    validateRequest(catalogUserTypesSettingsSchema, next);
+    return next;
+  }, setUserCatalogTypes);
   console.log(`🧩 Catalog: deleted user type "${req.params.id}"${force ? ' (forced)' : ''}`);
   res.json({ types: getActiveCatalogTypes() });
 }));

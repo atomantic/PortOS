@@ -11,6 +11,8 @@ import { Info } from 'lucide-react';
  * Props:
  *   icon        — Lucide component for the centered glyph (default: Info)
  *   title       — optional bold heading (the "what's missing")
+ *   headingLevel — heading level for the title, 2–6 (default 2); pass 3 when
+ *                  the empty state sits under an existing h2 section
  *   message     — the teaching hint that names the next action
  *   actionTo    — internal route for the call-to-action Link
  *   actionLabel — text for the call-to-action
@@ -20,6 +22,7 @@ import { Info } from 'lucide-react';
 export default function EmptyState({
   icon: Icon = Info,
   title,
+  headingLevel = 2,
   message,
   actionTo,
   actionLabel,
@@ -29,10 +32,12 @@ export default function EmptyState({
   const actionClass =
     'mt-4 px-4 py-2 rounded-lg text-sm font-medium bg-port-accent/10 text-port-accent hover:bg-port-accent/20 transition-colors';
 
+  const Heading = `h${Math.min(6, Math.max(2, headingLevel))}`;
+
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       {Icon && <Icon size={32} className="text-gray-600 mb-3" />}
-      {title && <h3 className="text-white font-semibold mb-1">{title}</h3>}
+      {title && <Heading className="text-white font-semibold mb-1">{title}</Heading>}
       {message && <p className="text-gray-400 text-sm max-w-xs">{message}</p>}
       {actionLabel && (onAction ? (
         <button

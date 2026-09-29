@@ -148,9 +148,7 @@ function resolveCliErrorAnalysis({ finalSuccess, task, model, rawStreamBuffer, o
 
 /**
  * Spawn agent directly (fallback when runner not available).
- * `isTruthyMetaFn` is the lifecycle's shared metadata predicate, passed in by
- * the caller and threaded on to `finalizeAgent`. Completion cleanup is not
- * injected: `runSpawnerCompletionCleanup` is imported at top level, since
+ * Completion cleanup is not injected: `runSpawnerCompletionCleanup` is imported at top level, since
  * nothing in its static closure reaches this module or agentLifecycle.js.
  */
 export async function spawnDirectly({
@@ -165,7 +163,6 @@ export async function spawnDirectly({
   agentDir,
   executionId,
   laneName,
-  isTruthyMetaFn,
   prOpenedBy,
   safetyProfile = null,
 }) {
@@ -269,7 +266,6 @@ export async function spawnDirectly({
           duration: 0, outputBuffer: '', workspacePath, prExpected: false,
           error: message, completionReason: 'spawn-error',
           errorAnalysis: { category: 'actionable', error: message, suggestedFix: message },
-          isTruthyMetaFn,
         });
         cosEvents.emit('agent:error', { agentId, taskId: task.id, error: message });
         return null;
@@ -778,7 +774,6 @@ export async function spawnDirectly({
     // `agentOpensOwnPr` are two predicates (#3358).
     const prOwnership = resolvePrOwnership({
       task,
-      isTruthyMeta: isTruthyMetaFn,
       persistedPrOpenedBy: prOpenedBy,
       providerId: provider?.id,
       providerCommand: provider?.command,
@@ -790,7 +785,7 @@ export async function spawnDirectly({
     // that threw, and a throw from finalize skips the assignment entirely; in all
     // three cases nothing was verified, so cleanup must ask rather than stand down.
     let prClaimVerified = false;
-    let noChangesToShip = false;
+    let branchProvenEmpty = false;
 
     // try/finally so a throw from finalizeAgent still runs the local cleanup
     // (the shared completion dispatch, pid unregister, activeAgents delete).
@@ -809,7 +804,6 @@ export async function spawnDirectly({
         outputBuffer,
         errorAnalysis,
         terminatedByUser,
-        isTruthyMetaFn,
         error: finalError || undefined,
         completionReason: terminatedByUser ? 'user-terminated' : undefined,
         workspacePath: cwd,
@@ -819,7 +813,7 @@ export async function spawnDirectly({
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
       prClaimVerified = prClaimWasVerified(finalized?.prVerdict);
-      noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
+      branchProvenEmpty = finalized?.prVerdict?.branchProvenEmpty === true;
     } finally {
       // Pipeline progression → worktree cleanup with the PR disposition →
       // retry-hold release, in the one owner both in-process spawners share.
@@ -831,7 +825,7 @@ export async function spawnDirectly({
         success: cleanupSuccess,
         prOwnership,
         prClaimVerified,
-        noChangesToShip,
+        branchProvenEmpty,
         outputBuffer,
       }).catch(err => console.error(`❌ CLI completion cleanup failed for ${agentId}: ${err.message}`));
 

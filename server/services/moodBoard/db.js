@@ -37,6 +37,7 @@ import {
   clearPinterestLinkRecord,
   appendPinterestPins,
   appendImportedItems as appendImportedItemsRecord,
+  applyLocalizedImageUrls,
 } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
@@ -146,7 +147,7 @@ export async function updateBoard(id, patch) {
 }
 
 /**
- * Faithful conflict-restore (RESTORABLE_FIELDS.moodBoard = name/description/items)
+ * Faithful conflict-restore (RESTORABLE_FIELDS.moodBoard = name/description/items/style/posterImageRef)
  * wired into conflictJournalResolver. Goes through the row lock + tombstone guard
  * like every other mutator, but uses applyBoardRestore so a "restore my whole
  * version" also brings back items[] (applyBoardPatch only touches name/description).
@@ -299,6 +300,16 @@ export async function appendImportedItems(id, imported) {
     return { board: next, result: { added }, skipPersist: added === 0 };
   });
   return { board, ...result };
+}
+
+// Swap external image URLs for their re-hosted local copies in ONE locked write.
+// Skips the write when nothing still matches. Returns { board, changed }.
+export async function applyLocalizedItemImages(id, replacements) {
+  const { board, result } = await withLockedBoard(id, (b) => {
+    const { board: next, changed } = applyLocalizedImageUrls(b, replacements);
+    return { board: next, result: changed, skipPersist: changed === 0 };
+  });
+  return { board, changed: result };
 }
 
 export async function removeBoardItem(id, itemId) {

@@ -17,6 +17,7 @@ import {
   memoryListSchema,
   memoryTimelineSchema,
   memoryConsolidateSchema,
+  memoryDecaySchema,
   memoryLinkSchema,
   memorySyncSchema,
   memoryIdParamSchema
@@ -151,7 +152,7 @@ router.post('/link', asyncHandler(async (req, res) => {
 
 // POST /api/memory/decay - Apply importance decay
 router.post('/decay', asyncHandler(async (req, res) => {
-  const decayRate = parseFloat(req.body.decayRate) || 0.01;
+  const { decayRate } = validateRequest(memoryDecaySchema, req.body ?? {});
   const result = await memory.applyDecay(decayRate);
   res.json(result);
 }));
@@ -219,7 +220,7 @@ router.post('/:id/reject', asyncHandler(async (req, res) => {
 router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = validateRequest(memoryIdParamSchema, req.params);
   const hard = req.query.hard === 'true';
-  const result = await memory.deleteMemory(id, hard);
+  const result = await (hard ? memory.purgeMemory(id) : memory.archiveMemory(id));
   res.json(result);
 }));
 

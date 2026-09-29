@@ -691,7 +691,7 @@ export default function PromptManager() {
           {/* Stage List */}
           <div className="bg-port-card border border-port-border rounded-xl p-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-gray-400">Prompt Stages</h3>
+              <h2 className="text-sm font-medium text-gray-400">Prompt Stages</h2>
               <button
                 onClick={() => setCreatingStage(true)}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-accent hover:text-port-accent/80"

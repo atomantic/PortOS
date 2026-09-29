@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import {
   moodBoardCreateSchema,
   moodBoardUpdateSchema,
+  moodBoardStyleSchema,
   moodBoardItemCreateSchema,
   moodBoardItemUpdateSchema,
   moodBoardXPostImportSchema,
@@ -30,6 +31,24 @@ describe('moodBoardCreateSchema', () => {
 describe('moodBoardUpdateSchema', () => {
   it('accepts a partial patch', () => {
     expect(moodBoardUpdateSchema.parse({ description: '' }).description).toBe('');
+  });
+  it('accepts a composite style and a poster filename, and null clears both', () => {
+    const style = moodBoardStyleSchema.parse({
+      prompt: 'ink wash dusk',
+      negativePrompt: 'gloss',
+      analyzedItemCount: 2,
+      composedAt: '2026-08-14T00:00:00.000Z',
+    });
+    expect(style.prompt).toBe('ink wash dusk');
+    const patch = moodBoardUpdateSchema.parse({ style, posterImageRef: 'poster.png' });
+    expect(patch.posterImageRef).toBe('poster.png');
+    expect(moodBoardUpdateSchema.parse({ style: null, posterImageRef: null })).toEqual({ style: null, posterImageRef: null });
+  });
+  it('rejects a poster path and a style with no prompt', () => {
+    expect(moodBoardUpdateSchema.safeParse({ posterImageRef: '../x.png' }).success).toBe(false);
+    expect(moodBoardUpdateSchema.safeParse({ posterImageRef: 'notes.txt' }).success).toBe(false);
+    expect(moodBoardStyleSchema.safeParse({ prompt: '   ' }).success).toBe(false);
+    expect(moodBoardStyleSchema.safeParse({ prompt: 'ok', extra: true }).success).toBe(false);
   });
 });
 
@@ -93,6 +112,10 @@ describe('moodBoardItemCreateSchema', () => {
   it('rejects a video item whose ref is a bare id (no extension) — it would 404 as a filename', () => {
     expect(moodBoardItemCreateSchema.safeParse({ type: 'video', mediaKey: 'video:job-123' }).success).toBe(false);
   });
+  it('accepts an image item with prompt alongside imageUrl', () => {
+    const item = moodBoardItemCreateSchema.parse({ type: 'image', imageUrl: 'https://x/y.png', prompt: 'a prompt' });
+    expect(item.prompt).toBe('a prompt');
+  });
 });
 
 describe('isVideoItemMediaKey', () => {
@@ -114,6 +137,9 @@ describe('isVideoItemMediaKey', () => {
 describe('moodBoardItemUpdateSchema', () => {
   it('accepts a caption-only patch', () => {
     expect(moodBoardItemUpdateSchema.parse({ caption: 'c' }).caption).toBe('c');
+  });
+  it('accepts a prompt patch', () => {
+    expect(moodBoardItemUpdateSchema.parse({ prompt: 'new prompt' }).prompt).toBe('new prompt');
   });
   it('accepts a null caption (clear)', () => {
     expect(moodBoardItemUpdateSchema.parse({ caption: null }).caption).toBeNull();

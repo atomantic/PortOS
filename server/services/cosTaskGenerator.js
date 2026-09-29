@@ -108,6 +108,7 @@ import {
 } from './cosTaskPreStepBlocks.js';
 import { detectIdleLeftoverBranches, formatUserActionDetectorBlock } from './userActionDetectors.js';
 
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 // Back-compat shim — these five were public here before the pre-step layer moved
 // to its own module, so a deep import of this file keeps resolving them.
 export {
@@ -193,7 +194,7 @@ export function isCooldownExemptTask(task) {
   const meta = task?.metadata;
   if (!meta) return false;
   return meta.pipeline?.currentStage > 0
-    || meta.perpetual === true || meta.perpetual === 'true'
+    || isTruthyMeta(meta.perpetual)
     || hasQuotaBurnProvenance(meta);
 }
 
@@ -1612,7 +1613,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // returns null on plan-gate / precondition skip; we silently continue.
     // Regression-pinned in cos.test.js.
     const prepared = await prepareManagedAppImprovementTask(nextType, app, state, { ignoreTaskId });
-    if (!prepared?.task) continue;
+    if (!prepared.task) continue;
     const { task, pendingPerpetualDispatch } = prepared;
 
     // Queue-path invariants override the generator's direct-spawn defaults
@@ -1961,7 +1962,7 @@ export function applyAppWorktreeDefault(metadata, app) {
       metadata.useWorktree = true; // openPR implies useWorktree
     } else if (app.defaultOpenPR === false || taskTypeDisabledWorktree) {
       metadata.openPR = false;
-    } else if ((app.defaultUseWorktree === true || metadata.useWorktree === true || metadata.useWorktree === 'true') && app.defaultOpenPR !== false) {
+    } else if ((app.defaultUseWorktree === true || isTruthyMeta(metadata.useWorktree)) && app.defaultOpenPR !== false) {
       metadata.openPR = true;
       metadata.useWorktree = true;
     }
@@ -1970,7 +1971,7 @@ export function applyAppWorktreeDefault(metadata, app) {
   // Apply defaultUseWorktree (only if not already set by task-type or openPR above)
   if (metadata.useWorktree === undefined) {
     // openPR implies useWorktree — don't let app default override explicit openPR: true
-    const explicitOpenPR = metadata.openPR === true || metadata.openPR === 'true';
+    const explicitOpenPR = isTruthyMeta(metadata.openPR);
     if (explicitOpenPR) {
       metadata.useWorktree = true;
     } else if (app.defaultUseWorktree === true) {
@@ -1981,7 +1982,7 @@ export function applyAppWorktreeDefault(metadata, app) {
   }
 
   // Final invariant: openPR implies useWorktree (normalize in both directions)
-  const finalOpenPR = metadata.openPR === true || metadata.openPR === 'true';
+  const finalOpenPR = isTruthyMeta(metadata.openPR);
   const finalWorktreeOff = metadata.useWorktree === false || metadata.useWorktree === 'false';
   if (finalOpenPR && finalWorktreeOff) {
     // openPR wins — force useWorktree on
@@ -2082,8 +2083,7 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     // on-demand drain — this is the whole reason the card is opened early.
     preflightCardId: stolenCardId
   });
-  const task = prepared?.task ?? null;
-  const pendingPerpetualDispatch = prepared?.pendingPerpetualDispatch ?? null;
+  const { task, pendingPerpetualDispatch } = prepared;
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
   if (selectionReason === 'on-demand') applyOnDemandConsent(task);
@@ -2102,71 +2102,35 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
-// Last transient (non-parking) detector verdict, keyed the same way a park is
-// (`taskType` + appId), so emitOnDemandEmpty can read it right beside
-// getPerpetualParkInfo. A transient skip deliberately does NOT park — there is no
-// park record to hang the reason on — so this is that path's reason channel.
-//
-// Deliberately in-memory and short-lived: the only consumer is the emit that
-// follows the gate a few frames later in the SAME drain, so a persisted schedule
-// field would have nothing left to read it after a restart. The TTL keeps a
-// verdict from a *previous* drain out of an unrelated later toast, and the read
-// consumes it so it can never be reported twice.
-const TRANSIENT_VERDICT_TTL_MS = 60_000;
-const transientVerdicts = new Map();
-const transientVerdictKey = (taskType, appId) => `${taskType}:${appId || 'global'}`;
-
-// How many CONSECUTIVE transient skips (across evaluations, not within any
-// single 60s window) applyPerpetualWorkGate tolerates at `debug` before
-// escalating to `warn` — see recordPerpetualTransient's return value.
+// How many CONSECUTIVE transient skips (across evaluations) applyPerpetualWorkGate
+// tolerates at `debug` before escalating to `warn` — see noteTransientProbe's
+// return value.
 export const PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD = 3;
 
-// Consecutive-transient-skip counters, keyed the same as transientVerdicts but
-// deliberately tracked SEPARATELY from it: this streak must survive across
-// evaluations more than 60s apart (it counts how many evaluations IN A ROW came
-// back transient, not how many landed inside one verdict's TTL window), and it
-// is reset — not just expired — the moment a probe stops being transient.
+// Consecutive-transient-skip counters, keyed `taskType:appId`. This is the ONLY
+// state that has to outlive a single evaluation (it counts how many evaluations
+// IN A ROW came back transient); the skip's REASON travels back explicitly on
+// prepareManagedAppImprovementTask's `skip` result instead of through a side
+// channel.
 const transientStreaks = new Map();
+const transientStreakKey = (taskType, appId) => `${taskType}:${appId || 'global'}`;
 
 /**
- * Record why a perpetual work gate skipped WITHOUT parking. `cli` is the forge
- * CLI whose probe failed (`gh` / `glab`), or null when no forge was involved.
- * Passing a null verdict clears any stale entry (the actionable / park paths)
- * AND resets the consecutive-transient streak — a successful probe means
- * whatever was stuck has cleared.
+ * Count one more consecutive transient (non-parking) probe failure for
+ * `taskType` + `appId`.
  *
- * Also doubles as pr-reviewer's idle-skip reason channel: pr-reviewer is
- * on-demand, not perpetual, so its preflight skip (churn park, no external PRs,
- * a target PR that isn't reviewable, the security guard not being ready, …)
- * reaches emitOnDemandEmpty as a plain 'idle' outcome with no channel of its own
- * for WHY — the same gap this map already closes for 'transient'. The payload
- * shape here is a free-form object (`{ ...verdict }`), so a `{ reason }` payload
- * under the `taskType: 'pr-reviewer'` key needs no separate map or TTL logic.
- * pr-reviewer shares the streak counter too — harmless, since it is keyed
- * per-`taskType:appId` and nothing reads pr-reviewer's streak today.
- *
- * @returns {number} the new consecutive-transient count (0 once cleared).
+ * @returns {number} the new consecutive-transient count.
  */
-export function recordPerpetualTransient(taskType, appId, verdict) {
-  const key = transientVerdictKey(taskType, appId);
-  if (!verdict) {
-    transientVerdicts.delete(key);
-    transientStreaks.delete(key);
-    return 0;
-  }
-  transientVerdicts.set(key, { ...verdict, at: Date.now() });
+function noteTransientProbe(taskType, appId) {
+  const key = transientStreakKey(taskType, appId);
   const count = (transientStreaks.get(key) || 0) + 1;
   transientStreaks.set(key, count);
   return count;
 }
 
-/** Read-and-consume the recorded verdict; null when absent or past its TTL. */
-function takePerpetualTransient(taskType, appId) {
-  const key = transientVerdictKey(taskType, appId);
-  const verdict = transientVerdicts.get(key);
-  transientVerdicts.delete(key);
-  if (!verdict || (Date.now() - verdict.at) > TRANSIENT_VERDICT_TTL_MS) return null;
-  return verdict;
+/** Reset the consecutive-transient streak — the probe stopped being transient. */
+function clearTransientProbeStreak(taskType, appId) {
+  transientStreaks.delete(transientStreakKey(taskType, appId));
 }
 
 /**
@@ -2272,8 +2236,13 @@ export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, reque
  * passed in to avoid re-reading the schedule. The event fires ONLY on the
  * user-initiated on-demand path, so the client can toast it without
  * background-park noise.
+ *
+ * `skip` is the `skip` field of the prepareManagedAppImprovementTask result
+ * that produced no task (null when the caller had none, e.g. a global task): it
+ * carries pr-reviewer's preflight reason and the transient detector verdict
+ * (`cli` / `remedy`) that the outcome classification below explains.
  */
-export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig, preflightCardId = null }) {
+export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig, preflightCardId = null, skip = null }) {
   const appId = targetApp?.id || null;
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
   const isDetectorDriven = taskConfig?.perpetual === true;
@@ -2291,21 +2260,21 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     reason = app?.layeredIntelligence?.lastRunReason || null;
   }
   if (outcome === 'idle' && request.taskType === 'pr-reviewer') {
-    reason = takePerpetualTransient('pr-reviewer', appId)?.reason ?? null;
+    reason = skip?.gate === 'security-preflight' ? skip.reason : null;
   }
 
   // 'transient' says "the forge probe failed, try again shortly" — only true when
   // the forge is momentarily flaky. A gh that is missing, unauthenticated, or
   // blocked by an outbound firewall fails EVERY tick forever, so that advice sends
   // the user in circles. Ask the CLI the detector actually ran (recorded by the
-  // work gate moments ago — the task-type NAME can't answer this: `claim-work`
+  // work gate on `skip` — the task-type NAME can't answer this: `claim-work`
   // resolves its forge internally, and branch-reconcile goes transient over
   // git/provider faults with no forge involved) whether it is broken in a
   // way that won't self-clear, and pass the remedy through. No verdict, an
   // unprobeable CLI, or a healthy one all leave `forge` null and keep the
   // generic copy — the failure really was a blip, or at least not one we can name.
   let forge = null;
-  const verdict = outcome === 'transient' ? takePerpetualTransient(request.taskType, appId) : null;
+  const verdict = outcome === 'transient' && skip?.gate === 'perpetual-work' ? skip : null;
   if (verdict?.remedy) {
     // The detector already knew the fault AND the way out — a per-repo permission
     // the token lacks (e.g. the collaborators/members list behind the "Me +
@@ -2499,8 +2468,10 @@ async function resolveClaimWorkRouting(app, taskType, metadata, taskSchedule) {
  *   - unchanged actionable set → PARK after a successful no-progress run;
  *   - idle (definitive) → PARK on the recheck cadence, skip;
  *   - transient probe failure → skip WITHOUT parking so the next tick retries.
- * The detector keys on the RESOLVED promptTaskType. Returns `{ skip, spendDispatch,
- * signature }` and mutates `metadata.perpetual` on the actionable path.
+ * The detector keys on the RESOLVED promptTaskType. Returns `{ skip, verdict,
+ * spendDispatch, signature }` — `verdict` (`{ cli, reason, remedy, detail }`) is
+ * set only on the transient skip, so the caller can hand the reason to the
+ * user-facing "Run" toast — and mutates `metadata.perpetual` on the actionable path.
  *
  * `spendDispatch` is the caller's cue to call `recordPerpetualDispatch` (which
  * clears the park and spends one unit of the type's `drainDispatchCap` budget in a
@@ -2528,7 +2499,7 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
     // A probe that reports actionable work is, by definition, not stuck — clear
     // both the transient streak and any persisted stall diagnostic before
     // deciding whether THIS evaluation dispatches or parks on no-progress.
-    recordPerpetualTransient(taskType, app.id, null);
+    clearTransientProbeStreak(taskType, app.id);
     await taskSchedule.recordPerpetualStall(taskType, app.id, null);
     // A successful claim/plan agent can still return without changing forge or
     // PLAN state (for example, it decides not to pick the advertised item). The
@@ -2568,16 +2539,17 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
     // stalled verdict — otherwise a perpetual drain whose forge CLI is broken
     // produces zero console output, zero persisted state, and zero UI signal,
     // indefinitely (#7551).
-    const consecutive = recordPerpetualTransient(taskType, app.id, {
+    const verdict = {
       cli: detection.cli || null, reason: detection.reason, remedy: detection.remedy || null, detail: detection.detail || null
-    });
+    };
+    const consecutive = noteTransientProbe(taskType, app.id);
     const detailSuffix = detection.detail ? ` — ${detection.detail}` : '';
     const escalated = consecutive >= PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD;
     emitLog(escalated ? 'warn' : 'debug',
       `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason}${detailSuffix}, ${consecutive} consecutive)`,
       { appId: app.id, consecutive });
     // The skip is silent by design at low counts (the next tick retries), but an
-    // explicit user "Run" ends here too — record which CLI failed so
+    // explicit user "Run" ends here too — return which CLI failed (`verdict`) so
     // emitOnDemandEmpty can tell the difference between a blip and a forge that
     // is broken for good, plus any remedy the detector already named (a
     // permission the token lacks, which no amount of retrying fixes).
@@ -2586,9 +2558,9 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
         cli: detection.cli || null, reason: detection.reason, detail: detection.detail || null, consecutive
       });
     }
-    return { skip: true };
+    return { skip: true, verdict };
   }
-  recordPerpetualTransient(taskType, app.id, null);
+  clearTransientProbeStreak(taskType, app.id);
   await taskSchedule.recordPerpetualStall(taskType, app.id, null);
   // Carry the detector's open/in-flight/filtered breakdown into the park so an
   // explicit "Run" can explain WHY a non-empty queue yielded no work.
@@ -2737,6 +2709,12 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
   }
 }
 
+// The one "nothing to build" result of prepareManagedAppImprovementTask — every
+// skip exit returns this, so the one-shape rule is enforced in one place and the
+// reason for the skip travels with the answer instead of through a side channel.
+const skipped = (gate, { reason = null, cli = null, remedy = null, detail = null } = {}) =>
+  ({ task: null, pendingPerpetualDispatch: null, skip: { gate, reason, cli, remedy, detail } });
+
 /**
  * Decide whether a managed-app improvement task should be generated for
  * `taskType`, and build it if so. Never records a perpetual-drain dispatch —
@@ -2748,7 +2726,14 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
  * queue, on-demand, and idle-review paths call this function directly and
  * defer the record until their own spawn-engine admission succeeds (#6871).
  *
- * @returns {Promise<{ task: Object|null, pendingPerpetualDispatch: Object|null }>}
+ * Always resolves to ONE shape, `{ task, pendingPerpetualDispatch, skip }`:
+ * `skip` is `null` when a task was built, otherwise
+ * `{ gate, reason, cli, remedy, detail }` (built by `skipped`) naming the exit
+ * that declined — `reason`/`cli`/`remedy`/`detail` are the operator-facing
+ * detail where the gate has one (pr-reviewer's security preflight, the transient
+ * work-detector verdict, the plan gate), null otherwise.
+ *
+ * @returns {Promise<{ task: Object|null, pendingPerpetualDispatch: Object|null, skip: { gate: string, reason: string|null, cli: string|null, remedy: string|null, detail: string|null }|null }>}
  */
 export async function prepareManagedAppImprovementTask(taskType, app, state, {
   skipPreconditions = false,
@@ -2770,7 +2755,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   const { getTaskPrompt, getStagePrompt } = await import('./taskPromptService.js');
 
   // Also protect requests queued before the target-scope gate was installed.
-  if (requiresInstallWideTarget(taskType)) return null;
+  if (requiresInstallWideTarget(taskType)) return skipped('install-wide-target');
 
   // NOTE: `updateAppActivity` + the "Generating improvement task" log are
   // intentionally deferred until AFTER every gate returns non-null (see end
@@ -2784,7 +2769,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // also away from types that *could* run on a future tick) and (b) emit a
   // misleading "Generating improvement task" line for skipped types. The
   // single-call ordering at the bottom keeps both paths in sync — a returned
-  // task means rotation advanced; a `return null` short-circuit means it
+  // task means rotation advanced; a `skipped(...)` short-circuit means it
   // didn't.
 
   // Get interval settings to determine provider/model and pipeline config.
@@ -2826,7 +2811,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // `resolveQuotaBurnStep` before they queue. `runInapplicableAudit` is the
   // user's recorded override from the schedule form.
   if (!skipPreconditions && !onDemand && isAuditTaskType(taskType) && metadata.runInapplicableAudit !== true
-    && await skipInapplicableAudit(app, taskType, taskSchedule)) return null;
+    && await skipInapplicableAudit(app, taskType, taskSchedule)) return skipped('audit-inapplicable');
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);
@@ -2834,15 +2819,10 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule, {
     progress: preflightReporter(preflightCardId),
   });
-  // Record (or clear a stale) skip reason in the SAME call: clearing on a passed
-  // gate matters too, or an unrelated later idle outcome for this app (e.g. a
-  // downstream precondition skip below) could read back a reason that no longer
-  // applies.
-  if (taskType === 'pr-reviewer') {
-    recordPerpetualTransient('pr-reviewer', app.id, securityPreflight.skipped ? { reason: securityPreflight.reason || null } : null);
-  }
-  if (securityPreflight.skipped) return null;
-  if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
+  // The preflight's reason rides the skip result to emitOnDemandEmpty, so a user
+  // "Run" of pr-reviewer that hits the security guard toasts WHY.
+  if (securityPreflight.skipped) return skipped('security-preflight', { reason: securityPreflight.reason || null });
+  if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return skipped('precondition');
 
   // Programmatic-I/O input hook. A task type may register a buildTaskInput hook
   // (taskTypeHooks.js) that does deterministic pre-agent data collection and
@@ -2854,7 +2834,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // counts in-flight tasks against a budget must not count the run that just
   // finished and already recorded itself (#3179).
       const inputHook = await resolveTaskInputHook(app, taskType, taskSchedule, { ignoreTaskId });
-  if (inputHook.skip) return null;
+  if (inputHook.skip) return skipped('input-hook');
   const { hookPrompt, hookOverride, hookMetadata } = inputHook;
 
   // claim-work single-source router: `taskType` stays 'claim-work' for
@@ -2866,18 +2846,18 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // capped drain must not pay for a work-detector probe or a reconcile git/gh scan
   // it is only going to discard.
   const drainCap = await applyPerpetualDrainCap(app, taskType, interval, taskSchedule);
-  if (drainCap.skip) return null;
+  if (drainCap.skip) return skipped('drain-cap');
 
   // Perpetual (drain-until-done) gate — probes for actionable work before
   // building the prompt or burning an agent (branch-/issue-reconcile self-gate
   // in their own blocks, so this excludes them).
   const perpetualGate = await applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, interval, taskSchedule, { ignoreTaskId });
-  if (perpetualGate.skip) return null;
+  if (perpetualGate.skip) return skipped('perpetual-work', perpetualGate.verdict);
 
   // branch-reconcile: deterministic git/gh pre-step that carries the actionable
   // in-flight set into the prompt via {inFlightBranches}.
   const branchReconcile = await resolveBranchReconcileBlock(app, taskType, metadata, taskSchedule);
-  if (branchReconcile.skip) return null;
+  if (branchReconcile.skip) return skipped('branch-reconcile');
   const inFlightBranchesBlock = branchReconcile.block;
 
   // repo-sync: deterministic git pre-step that syncs this app's checkout with
@@ -2886,13 +2866,13 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // generateSelfImprovementTaskForType — which is what "Run Now" with no app
   // triggers; this branch covers a run scoped to one app.)
   const repoSync = await resolveRepoSyncBlock(app, taskType, metadata);
-  if (repoSync.skip) return null;
+  if (repoSync.skip) return skipped('repo-sync');
   const repoSyncReportBlock = repoSync.block;
 
   // issue-reconcile: deterministic forge pre-step that carries the zombie-issue
   // set into the prompt via {zombieIssues}.
   const issueReconcile = await resolveIssueReconcileBlock(app, taskType, metadata, taskSchedule);
-  if (issueReconcile.skip) return null;
+  if (issueReconcile.skip) return skipped('issue-reconcile');
   const zombieIssuesBlock = issueReconcile.block;
 
   // Honor a direct claim-work prompt customization if the user set one;
@@ -2917,7 +2897,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
   // describing each ref configured on the app + commits since lastReviewedSha.
   const referenceWatch = await resolveReferenceWatchBlock(app, taskType);
-  if (referenceWatch.skip) return null;
+  if (referenceWatch.skip) return skipped('reference-watch');
   const referenceDataBlock = referenceWatch.block;
 
   // Tracker-filing types (reference-watch, or an audit type with fileIssues):
@@ -2941,7 +2921,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // pr-watcher: poll the app's GitHub repo for PRs newly opened against the
   // default branch; injects {prData}/{repoFullName}/{defaultBranch}.
   const prWatch = await resolvePrWatcherBlock(app, taskType, metadata, taskSchedule);
-  if (prWatch.skip) return null;
+  if (prWatch.skip) return skipped('pr-watcher');
   const prDataBlock = prWatch.block;
   const prRepoFullName = prWatch.repoFullName;
   const prDefaultBranch = prWatch.defaultBranch;
@@ -2952,7 +2932,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   const planMeta = await applyPlanIdMetadata(promptTaskType, app.repoPath, metadata);
   if (planMeta.skipReason) {
     emitLog('info', `Skipping ${taskType} for ${app.name}: ${planMeta.skipReason}`, { appId: app.id });
-    return null;
+    return skipped('plan-gate', { reason: planMeta.skipReason });
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
 
@@ -3014,12 +2994,12 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
 
   // All gates passed — stamp the buildTaskInput hook's metadata bag, record the
   // rotation-pointer advance, and emit the generation log. Deferred from the top
-  // of the function (see note there); every `return null` above this point
+  // of the function (see note there); every `skipped(...)` exit above this point
   // intentionally leaves all three untouched.
   //
   // The hook bag lands HERE, below the last gate, precisely so a hook can defer a
   // side effect keyed on it until the task is certain to exist. Several gates
-  // below `resolveTaskInputHook` can still `return null` with no agent ever
+  // below `resolveTaskInputHook` can still `return skipped(...)` with no agent ever
   // spawned, so a hook that charged a spend ledger from `buildTaskInput` would
   // burn budget on a dispatch that never happened (#3179).
   //
@@ -3060,7 +3040,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
     ? { taskType, appId: app.id, signature: perpetualGate.signature ?? null }
     : null;
 
-  return { task, pendingPerpetualDispatch };
+  return { task, pendingPerpetualDispatch, skip: null };
 }
 
 /**
@@ -3082,10 +3062,10 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, opts = {}) {
   const taskSchedule = await import('./taskSchedule.js');
   const prepared = await prepareManagedAppImprovementTask(taskType, app, state, opts);
-  // Guard on `prepared?.task`, matching every other caller of prepare — task
+  // Guard on `prepared.task`, matching every other caller of prepare — task
   // and pendingPerpetualDispatch are always constructed together, but this
   // keeps the guard from silently drifting if that ever changes.
-  if (!prepared?.task) return null;
+  if (!prepared.task) return null;
   await recordDeferredPerpetualDispatch(prepared.pendingPerpetualDispatch, taskSchedule);
   return prepared.task;
 }

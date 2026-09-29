@@ -148,13 +148,33 @@ export function boardItemLocalImage(item) {
   return imageUrlToAppAsset(item.imageUrl);
 }
 
-// Apply a PATCH to board-level fields (name/description). Absent keys preserve
-// the original; a present empty string clears (description). `items` is managed
-// only through the dedicated item ops below, never a bulk board PATCH.
+// Stored shape of the board's composite style prompt. Absent optionals become
+// explicit nulls; `composedAt` is stamped when the writer didn't send one.
+// `null` clears the style (the poster render has nothing to pin to).
+function normalizeBoardStyle(style, now = nowIso()) {
+  if (!style) return null;
+  return {
+    prompt: style.prompt,
+    negativePrompt: style.negativePrompt ?? null,
+    rationale: style.rationale ?? null,
+    analyzedItemCount: Number.isInteger(style.analyzedItemCount) ? style.analyzedItemCount : 0,
+    providerId: style.providerId ?? null,
+    model: style.model ?? null,
+    composedAt: style.composedAt ?? now,
+  };
+}
+
+// Apply a PATCH to board-level fields (name/description/style/poster). Absent
+// keys preserve the original; a present empty string clears description, and
+// `null` clears style or the poster filename. `items` is managed only through
+// the dedicated item ops below, never a bulk board PATCH.
 export function applyBoardPatch(board, patch) {
   const next = { ...board };
   if (patch.name !== undefined) next.name = patch.name;
   if (patch.description !== undefined) next.description = patch.description;
+  if (patch.style !== undefined) next.style = normalizeBoardStyle(patch.style);
+  if (patch.posterImageRef !== undefined) next.posterImageRef = patch.posterImageRef ?? null;
+  if (patch.collageImageRef !== undefined) next.collageImageRef = patch.collageImageRef ?? null;
   next.updatedAt = nowIso();
   return next;
 }
@@ -174,6 +194,7 @@ function normalizeItem(input, { id, now = nowIso() } = {}) {
     mediaKey: hasMedia ? (input.mediaKey ?? null) : null,
     imageUrl: hasMedia ? (input.imageUrl ?? null) : null,
     text: input.type === 'text' ? input.text : null,
+    prompt: hasMedia ? (input.prompt ?? null) : null,
     caption: input.caption ?? null,
     source: input.source ?? null,
     createdAt: now,
@@ -226,7 +247,7 @@ export function updateItem(board, itemId, patch) {
   const updated = { ...current };
   const isMediaItem = current.type === 'image' || current.type === 'video';
   const editableKeys = isMediaItem
-    ? ['caption', 'source', 'imageUrl', 'mediaKey']
+    ? ['caption', 'source', 'imageUrl', 'mediaKey', 'prompt']
     : ['caption', 'source', 'text'];
   for (const key of editableKeys) {
     if (patch[key] !== undefined) updated[key] = patch[key];
@@ -270,10 +291,11 @@ export function removeItem(board, itemId) {
 }
 
 // Faithful conflict-restore of the restorable board fields (RESTORABLE_FIELDS.
-// moodBoard = name/description/items). Unlike applyBoardPatch — the route PATCH
-// path, which only touches name/description because items are managed through
-// the dedicated item ops — a "restore my whole version" must bring back the
-// board's items[]. The conflict resolver narrows `patch` to the allowed fields
+// moodBoard = name/description/items/style/posterImageRef). Unlike applyBoardPatch
+// — the route PATCH path, which does not touch items because they are managed
+// through the dedicated item ops — a "restore my whole version" must bring back
+// the board's items[], and the composite style + poster when the journaled
+// version had them. The conflict resolver narrows `patch` to the allowed fields
 // (via `pick`), so this just spreads the present ones and bumps updatedAt so the
 // restore wins LWW and re-propagates. Mirrors creativeDirector's
 // applyProjectPatch wholesale-spread restore path.
@@ -282,6 +304,9 @@ export function applyBoardRestore(board, patch) {
   if (patch.name !== undefined) next.name = patch.name;
   if (patch.description !== undefined) next.description = patch.description;
   if (Array.isArray(patch.items)) next.items = patch.items;
+  if (patch.style !== undefined) next.style = normalizeBoardStyle(patch.style);
+  if (patch.posterImageRef !== undefined) next.posterImageRef = patch.posterImageRef ?? null;
+  if (patch.collageImageRef !== undefined) next.collageImageRef = patch.collageImageRef ?? null;
   next.updatedAt = nowIso();
   return next;
 }
@@ -410,4 +435,56 @@ export function appendImportedItems(board, imported) {
   ));
   const next = { ...board, items: [...items, ...fresh], updatedAt: nowIso() };
   return { board: next, added: fresh.length };
+}
+
+// ─── Re-hosting external media ───────────────────────────────────────────────
+
+/** True for an http(s) URL — the only `imageUrl` shape that isn't a local asset. */
+export function isExternalImageUrl(url) {
+  return isStr(url) && /^https?:\/\//i.test(url.trim());
+}
+
+/** Media items whose displayed image still points at a remote host. */
+export function externalImageItems(board) {
+  const items = Array.isArray(board?.items) ? board.items : [];
+  return items.filter((it) => it && (it.type === 'image' || it.type === 'video') && isExternalImageUrl(it.imageUrl));
+}
+
+/**
+ * Swap re-hosted images in. Each replacement is `{ id, from, to }`; it only
+ * applies while the item still carries the `from` URL the download was started
+ * for (the fetch runs outside the row lock, so the user may have edited the item
+ * meanwhile). Returns `{ board, changed }`.
+ */
+export function applyLocalizedImageUrls(board, replacements) {
+  const items = Array.isArray(board.items) ? board.items : [];
+  const byId = new Map((replacements || []).map((r) => [r.id, r]));
+  let changed = 0;
+  const nextItems = items.map((it) => {
+    const r = it && byId.get(it.id);
+    if (!r || it.imageUrl !== r.from) return it;
+    changed += 1;
+    return { ...it, imageUrl: r.to };
+  });
+  if (!changed) return { board, changed: 0 };
+  return { board: { ...board, items: nextItems, updatedAt: nowIso() }, changed };
+}
+
+// ─── Collage geometry ────────────────────────────────────────────────────────
+
+/**
+ * Grid dimensions that keep the composite as square as possible: the smallest
+ * column count whose square covers `count`, then only as many rows as needed
+ * (e.g. 5 → 3×2, 10 → 4×3, 16 → 4×4). Cells are square, so the image aspect
+ * follows the grid aspect.
+ */
+export function squareGridDims(count) {
+  const n = Math.max(1, Math.floor(count) || 1);
+  const cols = Math.ceil(Math.sqrt(n));
+  return { cols, rows: Math.ceil(n / cols) };
+}
+
+/** Evenly spaced sample times — the midpoint of each of `count` equal segments. */
+export function frameSampleTimes(durationSec, count) {
+  return Array.from({ length: count }, (_, i) => ((i + 0.5) * durationSec) / count);
 }

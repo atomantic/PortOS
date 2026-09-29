@@ -7,6 +7,8 @@ describe('resolveModelRates', () => {
     expect(r).toMatchObject({ rateModel: 'claude-opus-4-8', inputPer1M: 5, outputPer1M: 25, matched: 'exact' });
     const r5 = resolveModelRates('claude-code', 'claude-opus-5');
     expect(r5).toMatchObject({ rateModel: 'claude-opus-5', inputPer1M: 5, outputPer1M: 25, matched: 'exact' });
+    const rs55 = resolveModelRates('claude-code', 'claude-sonnet-5-5');
+    expect(rs55).toMatchObject({ rateModel: 'claude-sonnet-5-5', inputPer1M: 2, outputPer1M: 10, matched: 'exact' });
   });
 
   it('resolves CLI shorthand model names via family rules', () => {

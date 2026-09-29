@@ -113,7 +113,6 @@ import { resolveCompletionMode } from '../lib/agentCompletionMode.js';
 import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection, getAppWorkspace, getAgentInstructionsContext, detectSkillTemplates, loadSkillTemplates, UI_AUDIT_RUNTIME_RULE, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
 
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
-import { isTruthyMeta } from './agentState.js';
 import { getMemorySection } from './memoryRetriever.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { getToolsSummaryForPrompt } from './tools.js';
@@ -249,7 +248,6 @@ describe('composable skill template routing', () => {
       task,
       '/workspace/example-app',
       null,
-      isTruthyMeta,
       { providerId: 'codex-tui', providerCommand: 'codex' },
     );
     const apiPrompt = await buildAgentPrompt(
@@ -257,7 +255,6 @@ describe('composable skill template routing', () => {
       {},
       '/workspace/example-app',
       null,
-      isTruthyMeta,
       { providerType: 'api' },
     );
 
@@ -347,7 +344,7 @@ describe('tool-free public-review stage completion', () => {
   });
 
   it('tells the model its reply is the deliverable and never mentions a sentinel or API action', () => {
-    const prompt = buildLightContextPrompt(gateTask(), '/repo', null, isTruthyMeta, {
+    const prompt = buildLightContextPrompt(gateTask(), '/repo', null, {
       providerId: 'claude-ollama', providerCommand: 'claude',
     });
     expect(prompt).toMatch(/## Completion \(Tool-Free Reasoning\)/);
@@ -365,7 +362,7 @@ describe('sandboxed public-review actions stage completion', () => {
     const task = makeTask({
       metadata: { noCodeOutput: true, discardWorktree: true, openPR: false, executionProfile: 'public-review-actions' },
     });
-    const prompt = buildLightContextPrompt(task, '/repo', null, isTruthyMeta, {
+    const prompt = buildLightContextPrompt(task, '/repo', null, {
       providerId: 'codex-tui', providerCommand: 'codex',
     });
     expect(prompt).toMatch(/exact payload format described in your task instructions/);
@@ -386,10 +383,10 @@ describe('sandboxed public-review actions stage completion', () => {
     });
     // Same provider record, spawned two ways — so the ONLY variable is the
     // spawn mode, which is exactly the thing that must not move the contract.
-    const headless = buildLightContextPrompt(task(), '/repo', null, isTruthyMeta, {
+    const headless = buildLightContextPrompt(task(), '/repo', null, {
       providerType: 'cli', providerId: 'claude-code', providerCommand: 'claude',
     });
-    const tui = buildLightContextPrompt(task(), '/repo', null, isTruthyMeta, {
+    const tui = buildLightContextPrompt(task(), '/repo', null, {
       providerType: 'tui', providerId: 'claude-code', providerCommand: 'claude',
     });
     expect(tui).toMatch(/exact payload format described in your task instructions/);
@@ -411,7 +408,7 @@ describe('no-code / API-action task completion (CD agents must NOT be told to /d
   });
 
   it('a no-code TUI task gets the No-Code completion section, not the /do:push Completion Workflow', () => {
-    const prompt = buildLightContextPrompt(cdTask(), '/repo', null, isTruthyMeta, {
+    const prompt = buildLightContextPrompt(cdTask(), '/repo', null, {
       providerId: 'claude-code-tui', providerCommand: 'claude',
     });
     expect(prompt).toMatch(/## Completion \(No Code Output\)/);
@@ -428,7 +425,7 @@ describe('no-code / API-action task completion (CD agents must NOT be told to /d
     const legacyCdTask = makeTask({
       metadata: { context: 'PATCH the plan', creativeDirector: { projectId: 'p', kind: 'plan' }, openPR: false },
     });
-    const prompt = buildLightContextPrompt(legacyCdTask, '/repo', null, isTruthyMeta, {
+    const prompt = buildLightContextPrompt(legacyCdTask, '/repo', null, {
       providerId: 'claude-code-tui', providerCommand: 'claude',
     });
     expect(prompt).toMatch(/## Completion \(No Code Output\)/);
@@ -437,7 +434,7 @@ describe('no-code / API-action task completion (CD agents must NOT be told to /d
 
   it('a normal code task on the same provider still gets the /do:push Completion Workflow', () => {
     const prompt = buildLightContextPrompt(
-      makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta,
+      makeTask({ metadata: { openPR: false } }), '/repo', null,
       { providerId: 'claude-code-tui', providerCommand: 'claude' },
     );
     expect(prompt).toMatch(/## Completion Workflow/);
@@ -450,8 +447,8 @@ describe('claim-flow completion handoff', () => {
   it.each([true, false])('honors leave-open on the %s light/full claim path', async (light) => {
     const task = makeTask({ metadata: { analysisType: 'claim-issue', claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'leave-open' } });
     const prompt = light
-      ? buildLightContextPrompt(task, '/repo', null, isTruthyMeta, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' })
-      : await buildAgentPrompt(task, {}, '/repo', null, isTruthyMeta, { providerType: 'api' });
+      ? buildLightContextPrompt(task, '/repo', null, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' })
+      : await buildAgentPrompt(task, {}, '/repo', null, { providerType: 'api' });
     expect(prompt).toContain('PR completion policy: LEAVE OPEN');
     expect(prompt).toContain('Complete implementation, configured reviews, publication, and CI checks as usual');
     expect(prompt).toContain('preserve the claim markers, issue state, branch, and worktree');
@@ -480,7 +477,6 @@ describe('claim-flow completion handoff', () => {
         existingBranch: true,
         claimResumeInPlace: true,
       },
-      isTruthyMeta,
       { isTui: true, providerId: 'grok-tui', providerCommand: 'grok' },
     );
 
@@ -497,7 +493,7 @@ describe('claim-flow completion handoff', () => {
   it('keeps self-managed claim work out of the generic false/false handoff', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, simplify: true } }),
-      '/repo', null, isTruthyMeta,
+      '/repo', null,
       { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
     );
 
@@ -513,7 +509,7 @@ describe('claim-flow completion handoff', () => {
   it('uses the claim handoff on the full API prompt path too', async () => {
     const prompt = await buildAgentPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, simplify: true } }),
-      {}, '/repo', null, isTruthyMeta, { providerType: 'api' },
+      {}, '/repo', null, { providerType: 'api' },
     );
 
     expect(prompt).toMatch(/## Claim Workflow Handoff/);
@@ -525,7 +521,7 @@ describe('claim-flow completion handoff', () => {
   it('renders merge-on-green PR completion policy for claim flow on light and full prompt paths', async () => {
     const lightPrompt = buildLightContextPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green' } }),
-      '/repo', null, isTruthyMeta,
+      '/repo', null,
       { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
     );
 
@@ -536,7 +532,7 @@ describe('claim-flow completion handoff', () => {
 
     const apiPrompt = await buildAgentPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green' } }),
-      {}, '/repo', null, isTruthyMeta, { providerType: 'api' },
+      {}, '/repo', null, { providerType: 'api' },
     );
 
     expect(apiPrompt).toMatch(/## Claim Workflow Handoff/);
@@ -556,7 +552,6 @@ describe('claim-flow completion handoff', () => {
       } }),
       {}, '/repo',
       { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'origin/main' },
-      isTruthyMeta,
       { providerType: 'api' },
     );
 
@@ -570,7 +565,7 @@ describe('claim-flow completion handoff', () => {
   it('recognizes a queued legacy claim task by analysisType', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ metadata: { analysisType: 'claim-issue', useWorktree: false, openPR: false } }),
-      '/repo', null, isTruthyMeta,
+      '/repo', null,
       { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
     );
 
@@ -587,7 +582,7 @@ describe('claim-flow completion handoff', () => {
     it('pins the reviewers the task persisted, exactly once', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: claimMeta({ reviewers: ['codex', 'claude'], usernames: ['alice'] }) }),
-        '/repo', null, isTruthyMeta,
+        '/repo', null,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
       );
 
@@ -610,7 +605,7 @@ describe('claim-flow completion handoff', () => {
             reviewerEfforts: { antigravity: 'medium' },
           }),
         }),
-        '/repo', null, isTruthyMeta,
+        '/repo', null,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
       );
 
@@ -620,7 +615,7 @@ describe('claim-flow completion handoff', () => {
     it('emits the pin on the full API prompt path too', async () => {
       const prompt = await buildAgentPrompt(
         makeTask({ metadata: claimMeta({ reviewers: ['grok'], usernames: [] }) }),
-        {}, '/repo', null, isTruthyMeta, { providerType: 'api' },
+        {}, '/repo', null, { providerType: 'api' },
       );
 
       expect(prompt).toContain('--review-with grok');
@@ -633,7 +628,7 @@ describe('claim-flow completion handoff', () => {
       // resolver is what keeps an in-flight legacy task off the #2507 stall.
       vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['copilot'] });
       const prompt = await buildAgentPrompt(
-        makeTask({ metadata: claimMeta() }), {}, '/repo', null, isTruthyMeta, { providerType: 'api' },
+        makeTask({ metadata: claimMeta() }), {}, '/repo', null, { providerType: 'api' },
       );
 
       expect(prompt).toContain('--review-with codex');
@@ -643,7 +638,7 @@ describe('claim-flow completion handoff', () => {
     it('does not emit the pin for a non-claim task', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: false, reviewers: ['codex'] } }),
-        '/repo', null, isTruthyMeta,
+        '/repo', null,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
       );
 
@@ -659,7 +654,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { analysisType } }),
         '/repo',
         null,
-        isTruthyMeta,
       );
 
       expect(prompt).toContain(UI_AUDIT_RUNTIME_RULE);
@@ -697,7 +691,6 @@ describe('buildLightContextPrompt', () => {
         {},
         '/repo',
         null,
-        isTruthyMeta,
         { providerType: 'api' },
       );
 
@@ -709,7 +702,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { selfImprovementType: 'mobile-responsive' } }),
         '/repo',
         null,
-        isTruthyMeta,
       );
 
       expect(prompt).toContain(UI_AUDIT_RUNTIME_RULE);
@@ -720,7 +712,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { analysisType: 'security' } }),
         '/repo',
         null,
-        isTruthyMeta,
       );
 
       expect(prompt).not.toContain('## UI Audit Runtime');
@@ -729,12 +720,12 @@ describe('buildLightContextPrompt', () => {
 
   describe('what it omits', () => {
     it('does NOT include the obsolete "# Chief of Staff Agent Briefing" header', () => {
-      const prompt = buildLightContextPrompt(makeTask(), '/repo', null, isTruthyMeta);
+      const prompt = buildLightContextPrompt(makeTask(), '/repo', null);
       expect(prompt).not.toMatch(/Chief of Staff Agent Briefing/);
     });
 
     it('does NOT inject the "You are an autonomous agent" role-play framing', () => {
-      const prompt = buildLightContextPrompt(makeTask(), '/repo', null, isTruthyMeta);
+      const prompt = buildLightContextPrompt(makeTask(), '/repo', null);
       expect(prompt).not.toMatch(/You are an autonomous agent/);
     });
 
@@ -743,7 +734,7 @@ describe('buildLightContextPrompt', () => {
       // checking the rendered output has no section headings for them.
       const prompt = buildLightContextPrompt(makeTask({
         metadata: { context: 'extra detail', app: 'comics' }
-      }), '/repo', null, isTruthyMeta);
+      }), '/repo', null);
       expect(prompt).not.toMatch(/## CLAUDE\.md Instructions/);
       expect(prompt).not.toMatch(/## Relevant Memory/);
       expect(prompt).not.toMatch(/## Digital Twin/);
@@ -759,7 +750,7 @@ describe('buildLightContextPrompt', () => {
 
   describe('what it includes', () => {
     it('includes the task description directly without a metadata header', () => {
-      const prompt = buildLightContextPrompt(makeTask(), '/workspaces/foo', null, isTruthyMeta);
+      const prompt = buildLightContextPrompt(makeTask(), '/workspaces/foo', null);
       expect(prompt).toMatch(/Add a button to the dashboard/);
       // The agent's cwd is set by the spawner; the prompt doesn't repeat metadata.
       expect(prompt).not.toMatch(/task-test-1/);
@@ -771,24 +762,24 @@ describe('buildLightContextPrompt', () => {
     it('shows Target App for a managed app', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { app: 'comics' } }),
-        '/r', null, isTruthyMeta);
+        '/r', null);
       expect(prompt).toMatch(/\*\*Target App\*\*: comics/);
     });
 
     it('omits Target App for the PortOS default app (cwd already scopes it)', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { app: 'portos-default' } }),
-        '/r', null, isTruthyMeta);
+        '/r', null);
       expect(prompt).not.toMatch(/\*\*Target App\*\*/);
     });
 
     it('renders attached context (multiline and single-line)', () => {
       const single = buildLightContextPrompt(
-        makeTask({ metadata: { context: 'one-liner' } }), '/r', null, isTruthyMeta);
+        makeTask({ metadata: { context: 'one-liner' } }), '/r', null);
       expect(single).toMatch(/### Context\none-liner/);
 
       const multi = buildLightContextPrompt(
-        makeTask({ metadata: { context: 'line one\nline two' } }), '/r', null, isTruthyMeta);
+        makeTask({ metadata: { context: 'line one\nline two' } }), '/r', null);
       expect(multi).toMatch(/### Context\n\nline one\nline two/);
     });
 
@@ -796,11 +787,11 @@ describe('buildLightContextPrompt', () => {
     // `metadata.context` payload must keep rendering identically.
     it('renders metadata.prompt, and the note after it', () => {
       const promptOnly = buildLightContextPrompt(
-        makeTask({ metadata: { prompt: 'line one\nline two' } }), '/r', null, isTruthyMeta);
+        makeTask({ metadata: { prompt: 'line one\nline two' } }), '/r', null);
       expect(promptOnly).toMatch(/### Context\n\nline one\nline two/);
 
       const both = buildLightContextPrompt(
-        makeTask({ metadata: { prompt: 'line one\nline two', context: 'a short note' } }), '/r', null, isTruthyMeta);
+        makeTask({ metadata: { prompt: 'line one\nline two', context: 'a short note' } }), '/r', null);
       expect(both).toMatch(/### Context\n\nline one\nline two\n\na short note/);
     });
 
@@ -811,7 +802,7 @@ describe('buildLightContextPrompt', () => {
       const body = '# ⚡ SWARM MODE — claim and ship up to 3 independent issues in parallel\n\n**This run operates in slashdo mode.** Do the work.';
       const prompt = buildLightContextPrompt(
         makeTask({ description: '# ⚡ SWARM MODE — claim and ship up to 3 independent issues in parallel', metadata: { context: body } }),
-        '/r', null, isTruthyMeta);
+        '/r', null);
       // Header appears exactly once, and the redundant `### Context` wrapper is gone.
       expect(prompt.match(/# ⚡ SWARM MODE/g)).toHaveLength(1);
       expect(prompt).not.toMatch(/### Context/);
@@ -821,7 +812,7 @@ describe('buildLightContextPrompt', () => {
       // Same task written by post-#4153 code: payload in `metadata.prompt`.
       const split = buildLightContextPrompt(
         makeTask({ description: '# ⚡ SWARM MODE — claim and ship up to 3 independent issues in parallel', metadata: { prompt: body } }),
-        '/r', null, isTruthyMeta);
+        '/r', null);
       expect(split.match(/# ⚡ SWARM MODE/g)).toHaveLength(1);
       expect(split).not.toMatch(/### Context/);
       expect(split).toMatch(/\*\*This run operates in slashdo mode\.\*\* Do the work\./);
@@ -830,7 +821,7 @@ describe('buildLightContextPrompt', () => {
     it('lists screenshot file paths so the agent can read them via its own tools', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { screenshots: ['/tmp/a.png', '/tmp/b.png'] } }),
-        '/r', null, isTruthyMeta);
+        '/r', null);
       expect(prompt).toMatch(/### Screenshots/);
       expect(prompt).toMatch(/`\/tmp\/a\.png`/);
       expect(prompt).toMatch(/`\/tmp\/b\.png`/);
@@ -842,7 +833,7 @@ describe('buildLightContextPrompt', () => {
           { filename: 'a-123.png', originalName: 'photo-one.png', path: '/tmp/attachments/a-123.png' },
           { filename: 'b-456.png', originalName: 'photo-two.png', path: '/tmp/attachments/b-456.png' },
         ] } }),
-        '/r', null, isTruthyMeta);
+        '/r', null);
       expect(prompt).toMatch(/### Attachments/);
       expect(prompt).toMatch(/`\/tmp\/attachments\/a-123\.png` \(photo-one\.png\)/);
       expect(prompt).toMatch(/`\/tmp\/attachments\/b-456\.png` \(photo-two\.png\)/);
@@ -854,7 +845,7 @@ describe('buildLightContextPrompt', () => {
       // must map that back to an on-disk path for the agent's filesystem tools.
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { screenshots: ['/api/screenshots/abcd1234-shot.png'] } }),
-        '/r', null, isTruthyMeta);
+        '/r', null);
       const abs = join(PATHS.screenshots, 'abcd1234-shot.png');
       expect(prompt).toContain(`\`${abs}\``);
       expect(prompt).not.toMatch(/`\/api\/screenshots\//);
@@ -865,7 +856,7 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { attachments: [
           { filename: 'a-123.png', originalName: 'photo-one.png', path: '/api/attachments/a-123.png' },
         ] } }),
-        '/r', null, isTruthyMeta);
+        '/r', null);
       const abs = join(PATHS.cosAttachments, 'a-123.png');
       expect(prompt).toContain(`\`${abs}\` (photo-one.png)`);
       expect(prompt).not.toMatch(/`\/api\/attachments\//);
@@ -877,7 +868,7 @@ describe('buildLightContextPrompt', () => {
         worktreePath: '/tmp/wt',
         baseBranch: 'origin/main',
       };
-      const prompt = buildLightContextPrompt(makeTask(), '/r', wt, isTruthyMeta);
+      const prompt = buildLightContextPrompt(makeTask(), '/r', wt);
       expect(prompt).toMatch(/## Git Worktree/);
       expect(prompt).toMatch(/`cos\/test-1`/);
       expect(prompt).toMatch(/`\/tmp\/wt`/);
@@ -891,7 +882,7 @@ describe('buildLightContextPrompt', () => {
           jiraTicketUrl: 'https://j/PROJ-123',
           jiraBranch: 'jira/proj-123',
         }
-      }), '/r', null, isTruthyMeta);
+      }), '/r', null);
       expect(prompt).toMatch(/## JIRA/);
       expect(prompt).toMatch(/PROJ-123/);
       expect(prompt).toMatch(/`jira\/proj-123`/);
@@ -902,7 +893,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { simplify: true, openPR: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true });
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).toMatch(/`\/simplify`/);
@@ -937,7 +927,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { simplify: true, openPR: true, analysisType: 'jira-sprint-manager' } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true });
       expect(prompt).toMatch(/Leave the PR open — do NOT merge it/);
       expect(prompt).toMatch(/tracked in JIRA/);
@@ -952,7 +941,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { simplify: true, openPR: true, prCompletion: 'leave-open', reviewLoop: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true });
       expect(prompt).toMatch(/Leave the PR open — do NOT merge it/);
       expect(prompt).toMatch(/`\/do:pr --review-with none --no-merge`/);
@@ -965,7 +953,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, jiraTicketId: 'PROJ-9' } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       // `--no-merge` is required: a saved slashdo `merge: true` default would
       // otherwise merge the PR before the "leave it open" step is ever reached.
@@ -979,7 +966,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, analysisType: 'jira-sprint-manager' } }),
         '/r',
         { branchName: 'claim/x', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
       // A JIRA-tracked PR is a human's to land, so there is no merge section for
       // the agent to drive — and an agent told to open a PR it will never land
@@ -1000,7 +986,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         null,
-        isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
       expect(prompt).not.toMatch(/gh pr create/);
       expect(prompt).not.toMatch(/git push -u origin/);
@@ -1023,7 +1008,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
       expect(prompt).not.toMatch(/gh pr create/);
       expect(prompt).not.toMatch(/## Review Loop/);
@@ -1043,8 +1027,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-6',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/glab mr note 5 --message/);
       expect(prompt).not.toMatch(/gh pr comment/);
     });
@@ -1061,8 +1044,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-5',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
       // The review still runs — only the merge is withheld.
       expect(prompt).toMatch(/codex/);
@@ -1076,7 +1058,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { simplify: true, openPR: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, providerId: 'codex-tui' });
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).not.toMatch(/`\/simplify`/);
@@ -1088,7 +1069,7 @@ describe('buildLightContextPrompt', () => {
       // merges nothing on exit — so /do:push is the right completion step.
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { simplify: true, openPR: false } }),
-        '/r', null, isTruthyMeta, { isTui: true });
+        '/r', null, { isTui: true });
       expect(prompt).toMatch(/`\/do:push`/);
       expect(prompt).not.toMatch(/`\/do:pr`/);
       // /do:push doesn't open a PR — no merge step should be emitted.
@@ -1105,7 +1086,7 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { simplify: true, openPR: false } }),
         '/r',
         { branchName: 'cos/task-1/agent-a', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta, { isTui: true });
+        { isTui: true });
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).toMatch(/^1\. `\/simplify`/m);
       expect(prompt).toMatch(/^2\. Stage only the files you changed \(never `git add -A` \/ `git add \.`\) and commit with a conventional message/m);
@@ -1126,7 +1107,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { simplify: true, openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot'] } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         {
           isTui: true,
           providerId: 'opencode-ollama-tui',
@@ -1191,7 +1171,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot'], reviewStopMode } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
 
       expect(prompt).toContain(`\`${reviewStopMode}\` skips the PR-side reviewers only when the local phase actually satisfied that stop condition`);
@@ -1208,7 +1187,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['copilot', 'codex'], reviewStopMode } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
 
       expect(prompt).toContain('Cross-phase stop-mode gate');
@@ -1223,7 +1201,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot', 'ollama'], reviewStopMode } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
 
       expect(prompt).toContain('`ollama`=0, `codex`=1, `copilot`=2');
@@ -1237,7 +1214,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot'], optionalReviewers: ['codex'] } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
 
       expect(prompt).toContain('All local reviewers are optional, so missing/inconclusive results');
@@ -1259,7 +1235,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         {
           isTui: true,
           providerId: 'opencode-ollama-tui',
@@ -1292,7 +1267,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['claude', 'antigravity', 'grok'], reviewerApplies: true } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         {
           isTui: true,
           providerId: 'opencode-ollama-tui',
@@ -1323,7 +1297,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         {
           isTui: true,
           providerId: 'opencode-ollama-tui',
@@ -1341,7 +1314,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'], reviewerApplies: true } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
       const localStart = prompt.indexOf('### Local Review Before Opening the PR/MR');
       const prPush = prompt.indexOf('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
@@ -1357,7 +1329,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'release; echo bad' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
 
       expect(prompt).toContain("git diff 'origin/release; echo bad'...HEAD");
@@ -1369,7 +1340,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['ollama'], usernames: ['alice'] } }),
         '/r',
         { branchName: 'claim/issue-4363', worktreePath: '/tmp/wt', baseBranch: 'main', forgeCli: 'glab' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
 
       expect(prompt).toMatch(/### Local Review Before Opening the PR\/MR/);
@@ -1395,7 +1365,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { simplify: true, openPR: true } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
       expect(prompt).toMatch(/gh pr create/);
       expect(prompt).toMatch(/## Merge Gate/);
@@ -1410,7 +1379,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: false } }),
         '/r',
         { branchName: 'claim/issue-2', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).not.toMatch(/`\/do:push`/);
@@ -1426,7 +1394,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: false } }),
         '/r',
         { branchName: 'weird;rm -rf', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
       expect(prompt).not.toMatch(/git push/);
       expect(prompt).not.toMatch(/git .*weird;rm -rf/);
@@ -1444,7 +1411,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['copilot'] } }),
         '/r',
         { branchName: 'claim/x', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex', defaultReviewers: ['copilot'] });
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).toMatch(/does NOT have slashdo/);
@@ -1464,7 +1430,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         { branchName: 'claim/x', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
 
       // A routine base conflict stays in this agent's lifecycle. Previously the
@@ -1486,7 +1451,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['copilot'] } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'antigravity-tui', providerCommand: 'agy' });
       expect(prompt).toMatch(/## Review Loop/);
       expect(prompt).not.toMatch(/## Review-Loop Follow-up/);
@@ -1505,7 +1469,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
       expect(prompt).toMatch(/write the completion sentinel — the run is not done until you have/);
       expect(prompt).not.toMatch(/The system will clean up your worktree on exit/);
@@ -1516,7 +1479,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: false, providerId: 'codex', providerCommand: 'codex' });
       expect(prompt).toMatch(/### Local Review Before Opening the PR\/MR/);
       expect(prompt).toMatch(/## Merge Gate/);
@@ -1537,7 +1499,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         {
           isTui: true, providerId: 'codex-tui', providerCommand: 'codex',
           localAgentLoopBody: 'RECIPE: codex --sandbox read-only review --base <base>',
@@ -1555,7 +1516,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         {
           isTui: true, providerId: 'codex-tui', providerCommand: 'codex',
           localAgentLoopBody: body,
@@ -1582,7 +1542,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true } }),
         '/r',
         { branchName: 'weird;rm -rf /', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
       expect(prompt).toMatch(/BRANCH='weird;rm -rf \/'/);
       expect(prompt).toContain('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
@@ -1596,7 +1555,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true } }),
         '/r',
         { branchName: 'cos/task-1/agent-2', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
       expect(readable).toMatch(/BRANCH=cos\/task-1\/agent-2/);
       expect(readable).toContain('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
@@ -1605,7 +1563,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
       expect(noBase).toMatch(/git remote set-head origin --auto/);
       expect(noBase).toMatch(/BASE_BRANCH=\$\(git symbolic-ref --short refs\/remotes\/origin\/HEAD/);
@@ -1620,7 +1577,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, simplify: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false, providerId: 'my-custom-agent', providerCommand: '/opt/homebrew/bin/claude' });
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).toMatch(/`\/simplify`/);
@@ -1633,7 +1589,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: false } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, providerId: 'antigravity-tui', providerCommand: 'agy' });
       expect(prompt).not.toMatch(/`\/do:push`/);
       expect(prompt).not.toMatch(/git push/);
@@ -1646,7 +1601,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' });
       expect(prompt).toMatch(/`\/do:pr --review-with none`/);
       expect(prompt).toMatch(/external review is disabled/i);
@@ -1658,7 +1612,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false, providerId: 'codex', providerCommand: 'codex' });
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).not.toMatch(/`\/do:pr`/);
@@ -1678,13 +1631,23 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, simplify: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false, providerId: 'antigravity-cli', providerCommand: 'agy' });
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).not.toMatch(/`\/simplify`/);
       expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
       expect(prompt).toMatch(/gh pr create/);
       expect(prompt).not.toMatch(/PortOS will push and open the PR/);
+    });
+
+    it('offers no-change guidance only where finalize will honour it (marker alone is not enough)', () => {
+      const build = (metadata) => buildLightContextPrompt(
+        makeTask({ metadata: { noChangeSuccess: true, useWorktree: true, openPR: true, ...metadata } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        { isTui: false, providerId: 'codex', providerCommand: 'codex' });
+      expect(build({})).not.toMatch(/no change is needed/i);
+      expect(build({ autonomousJob: true })).toMatch(/no change is needed/i);
+      expect(build({ isInvestigation: true })).toMatch(/no change is needed/i);
     });
 
     it('gives a marked catalog audit an explicit no-change exit while retaining the change workflow', () => {
@@ -1699,7 +1662,6 @@ describe('buildLightContextPrompt', () => {
         task,
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false, providerId: 'codex', providerCommand: 'codex' });
       expect(prompt).toMatch(/no change is needed/i);
       expect(prompt).toMatch(/leave the worktree clean/i);
@@ -1719,7 +1681,6 @@ describe('buildLightContextPrompt', () => {
       } }),
       '/r',
       { branchName: 'b', worktreePath: '/tmp/wt' },
-      isTruthyMeta,
       { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' },
     );
 
@@ -1737,7 +1698,6 @@ describe('buildLightContextPrompt', () => {
         } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true },
       );
 
@@ -1754,7 +1714,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, simplify: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false });
       expect(prompt).toMatch(/`\/simplify`/);
       expect(prompt).toMatch(/`\/do:pr/);
@@ -1765,7 +1724,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).toMatch(/`\/simplify`/);
@@ -1786,7 +1744,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, simplify: false } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/`\/do:pr --review-with none`/);
       expect(prompt).toMatch(/external review disabled/i);
@@ -1803,7 +1760,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: false } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/`\/simplify`/);
@@ -1817,7 +1773,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: false, simplify: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/^\s*\d+\.\s+Stage only the files you changed \(never `git add -A` \/ `git add \.`\) and commit with a conventional message/m);
       expect(prompt).toMatch(/Do NOT push and do NOT open a PR: PortOS merges this branch into `main` in the source checkout after you exit and deletes it/);
@@ -1829,7 +1784,7 @@ describe('buildLightContextPrompt', () => {
     it('suppresses the PR completion workflow but still writes a sentinel when readOnly + TUI', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { readOnly: true } }),
-        '/r', null, isTruthyMeta, { isTui: true });
+        '/r', null, { isTui: true });
       expect(prompt).toMatch(/Read-Only Task/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
       // A read-only TUI agent must still be told to write .agent-done — the
@@ -1851,7 +1806,7 @@ describe('buildLightContextPrompt', () => {
 
       const completionPrompt = (metadata = {}) => buildLightContextPrompt(
         makeTask({ metadata }),
-        '/shared-checkout', null, isTruthyMeta,
+        '/shared-checkout', null,
         { isTui: true, agentId: 'agent-07ddbb85', providerId: 'opencode-mtplx-tui', providerCommand: 'opencode' });
 
       it('gives a worktree-less TUI completion run one canonical sentinel path, no read-only banner, and permission to write it', () => {
@@ -1891,7 +1846,7 @@ describe('buildLightContextPrompt', () => {
     it('read-only on a non-TUI (CLI) provider gets the bare notice, no sentinel', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { readOnly: true } }),
-        '/r', null, isTruthyMeta, { isTui: false, providerId: 'claude-code' });
+        '/r', null, { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/Read-Only Task/);
       // CLI/API agents complete on process exit and never poll a sentinel.
       expect(prompt).not.toMatch(/\.agent-done/);
@@ -1911,7 +1866,7 @@ describe('buildLightContextPrompt', () => {
         }}),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta, { defaultReviewers: ['copilot'] });
+        { defaultReviewers: ['copilot'] });
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
       expect(prompt).toMatch(/task-src-1/);
       expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
@@ -1949,8 +1904,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-2',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/## Merge Follow-up/);
       expect(prompt).not.toMatch(/## Review-Loop Follow-up/);
       // CI is the gate, and the merge command matches the review-loop contract.
@@ -1979,8 +1933,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-3',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/## Merge Follow-up/);
       // Addressed by MR IID — `glab mr merge` does not accept a URL.
       expect(prompt).toMatch(/glab mr merge 5 --yes --remove-source-branch/);
@@ -2004,8 +1957,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-4',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/gh pr merge "https:\/\/github\.example\.com\/o\/r\/pull\/7" --merge --delete-branch/);
       expect(prompt).not.toMatch(/glab (?:issue|mr) /);
     });
@@ -2023,8 +1975,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-2',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/--review-with claude/);
       // The Copilot-specific pre-request wording must be replaced when no
       // Copilot reviewer leads the order (the agent invokes the reviewers itself).
@@ -2044,8 +1995,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-3',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/--review-with codex,antigravity,copilot/);
       expect(prompt).toMatch(/--review-stop-on-clean/);
       expect(prompt).not.toMatch(/--reviewer-applies/);
@@ -2074,7 +2024,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
       expect(prompt).toMatch(/--review-with ollama~opt,codex,@alice --review-stop-on-findings/);
       expect(prompt).not.toMatch(/--reviewer-applies/);
@@ -2099,7 +2048,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
       // The skip list is NOT relaxed — a surviving `inconclusive` still blocks.
       expect(prompt).toContain('skip the gate if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
@@ -2114,7 +2062,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true });
       expect(prompt).toContain('skip the gate if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
       expect(prompt).not.toContain('Every configured reviewer is optional (`~opt`)');
@@ -2131,7 +2078,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
       expect(prompt).toMatch(/--review-with ollama~opt~max=1,codex~max=2/);
     });
@@ -2141,7 +2087,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['ollama'], reviewerMaxRounds: { ollama: 0 } } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true, defaultReviewers: ['ollama'], codeReviewDefaults: { reviewers: ['ollama'], reviewerMaxRounds: { ollama: 3 } } });
       // `0` = loop until clean, and it must not be mistaken for "no cap".
       expect(prompt).toMatch(/--review-with ollama~max=0/);
@@ -2154,7 +2099,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true });
       expect(prompt).not.toMatch(/@alice/);
       expect(prompt).not.toMatch(/~opt/);
@@ -2174,8 +2118,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-u',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/--review-with copilot,@CodeReviewbot/);
       // The agent is told to request the username as a PR reviewer that gates merge.
       expect(prompt).toMatch(/--add-reviewer/);
@@ -2195,8 +2138,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-uonly',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/--review-with @CodeReviewbot/);
       // No copilot fallback re-introduced.
       expect(prompt).not.toMatch(/--review-with copilot/);
@@ -2214,8 +2156,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-map',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
       expect(prompt).toMatch(/claude --model qwen2\.5:7b/);
     });
@@ -2233,8 +2174,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-effort',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       // codex takes a config pair; claude and agy take --effort. The model pin
       // and the effort ride the SAME command line when both are set.
       expect(prompt).toMatch(/codex --model gpt-5\.6-sol -c model_reasoning_effort=high/);
@@ -2257,8 +2197,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-cursor-effort',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       // This is a literal command line the agent runs; `cursor-agent --effort max`
       // exits non-zero, so the level has to ride the model variant instead.
       expect(prompt).toMatch(/cursor-agent --model gpt-5\[effort=max\]/);
@@ -2277,8 +2216,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-local-effort',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toContain('"effort": "high"');
       // The effort has no slashdo suffix, so it must NOT leak into the flag string.
       expect(prompt).not.toMatch(/--review-with[^\n]*effort/);
@@ -2297,8 +2235,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-max',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       // This prompt drives the loop in prose, so the cap has to be stated —
       // the `equiv` flag string alone wouldn't bind the agent.
       expect(prompt).toMatch(/Round caps \(~max\)/);
@@ -2321,8 +2258,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-nomax',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).not.toMatch(/Round caps \(~max\)/);
       expect(prompt).toMatch(/--review-with ollama,codex/);
     });
@@ -2339,8 +2275,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-cl',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/claude --model qwen2\.5:7b/);
     });
 
@@ -2363,8 +2298,7 @@ describe('buildLightContextPrompt', () => {
             sourceTaskId: 'task-src-verbatim',
           }}),
           '/r',
-          { branchName: 'b', worktreePath: '/tmp/wt' },
-          isTruthyMeta);
+          { branchName: 'b', worktreePath: '/tmp/wt' });
         // Both ids appear exactly as configured — no Bedrock rewrite, no mangling.
         expect(prompt).toMatch(/claude --model us\.anthropic\.claude-opus-4-8/);
         expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
@@ -2387,8 +2321,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-cx',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
     });
 
@@ -2406,8 +2339,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-noncx',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).not.toMatch(/--model gpt-5\.6-sol/);
     });
 
@@ -2422,8 +2354,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-llm',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       // The agent gets a copy-pasteable stdin bridge pipeline — no HTTP route,
       // no instance-password gate — without it the lmstudio/ollama reviewer
       // kinds have no way to actually run a review.
@@ -2441,7 +2372,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true, reviewers: ['antigravity'] } }),
         '/r',
         { branchName: 'feat', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true });
       expect(prompt).toMatch(/`\/do:pr --review-with antigravity`/);
     });
@@ -2451,7 +2381,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean' } }),
         '/r',
         { branchName: 'feat', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true });
       expect(prompt).toMatch(/--review-stop-on-clean/);
       // `partial` is a successful stop-mode short-circuit → mergeable.
@@ -2463,7 +2392,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'antigravity'] } }),
         '/r',
         { branchName: 'feat', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: true });
       expect(prompt).toContain('reports `clean` (or `too-large`)');
       expect(prompt).not.toContain('reports `clean`, `partial`');
@@ -2479,8 +2407,7 @@ describe('buildLightContextPrompt', () => {
           sourceTaskId: 'task-src-4',
         }}),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        { branchName: 'b', worktreePath: '/tmp/wt' });
       // Must instruct requesting Copilot at its turn — not claim a pre-request happened.
       expect(prompt).toMatch(/request a Copilot review when you reach its turn/);
       expect(prompt).not.toMatch(/already requested the initial Copilot/);
@@ -2501,7 +2428,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, simplify: true, reviewLoopFollowUp: true } }),
         '/r',
         { branchName: 'feat-x', worktreePath: '/tmp/wt', existingBranch: true },
-        isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/## Git Worktree/);
       expect(prompt).toMatch(/\*\(pre-existing PR branch\)\*/);
@@ -2521,7 +2447,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, simplify: true, resumedFromAgentId: 'agent-dead' } }),
         '/r',
         { branchName: 'cos/task-1/agent-dead', worktreePath: '/tmp/wt', existingBranch: true },
-        isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/## Resuming Unfinished Work/);
       expect(prompt).toMatch(/agent-dead/);
@@ -2534,7 +2459,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: true, simplify: true } }),
         '/r',
         { branchName: 'cos/task-1/agent-new', worktreePath: '/tmp/wt', baseBranch: 'main' },
-        isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/## Git Worktree/);
       expect(prompt).not.toMatch(/## Resuming Unfinished Work/);
@@ -2547,7 +2471,6 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { openPR: false, simplify: true } }),
         '/r',
         { branchName: 'feat-x', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/## Git Worktree/);
       expect(prompt).toMatch(/Commit your changes here — do NOT push\. PortOS merges this branch back after you exit/);
@@ -2563,7 +2486,7 @@ describe('buildLightContextPrompt', () => {
           currentStage: 1,
           stages: [{ name: 'idea' }, { name: 'prose' }, { name: 'comic' }],
         }}
-      }), '/r', null, isTruthyMeta);
+      }), '/r', null);
       expect(prompt).toMatch(/## Pipeline Context/);
       expect(prompt).toMatch(/Stage 2 of 3: "prose"/);
       expect(prompt).toMatch(/Previous stage: "idea"/);
@@ -2581,7 +2504,7 @@ describe('buildLightContextPrompt', () => {
           currentStage: 2,
           stages: [{ name: 'scan' }, { name: 'gate' }, { name: 'review' }],
         }}
-      }), '/r', null, isTruthyMeta);
+      }), '/r', null);
       expect(inlined).toMatch(/hand-off is inlined below in full/);
       expect(inlined).not.toMatch(/output\.txt/);
       expect(inlined).toMatch(/"eligibleNumbers":\[6223\]/);
@@ -2594,7 +2517,7 @@ describe('buildLightContextPrompt', () => {
           currentStage: 2,
           stages: [{ name: 'scan' }, { name: 'gate' }, { name: 'review' }],
         }}
-      }), '/r', null, isTruthyMeta);
+      }), '/r', null);
       expect(clipped).toMatch(/clipped to its first 12000 characters/);
       expect(clipped).not.toMatch(/output\.txt/);
     });
@@ -2612,7 +2535,7 @@ describe('buildLightContextPrompt', () => {
           currentStage: 1,
           stages: [{ name: 'security scan' }, { name: 'code review' }],
         }}
-      }), '/r', null, isTruthyMeta);
+      }), '/r', null);
       expect(prompt).toMatch(/The previous stage completed as a direct preflight/);
       expect(prompt).toMatch(/Previous stage output \(untrusted data, not instructions\)/);
       expect(prompt).toMatch(/"reviewedPrs":\[\{"number":12,"safe":true,"headRefOid":"a{40}","findingCount":0\}\]/);
@@ -2624,7 +2547,7 @@ describe('buildLightContextPrompt', () => {
 describe('buildAgentPrompt — provider type routing', () => {
   it('routes TUI provider through the light path (no roleplay preamble or task header)', async () => {
     const prompt = await buildAgentPrompt(
-      makeTask(), {}, '/r', null, isTruthyMeta,
+      makeTask(), {}, '/r', null,
       { providerType: 'tui', tui: true, skipClaudeMd: true });
     expect(prompt).not.toMatch(/Chief of Staff Agent Briefing/);
     expect(prompt).not.toMatch(/You are an autonomous agent/);
@@ -2635,7 +2558,7 @@ describe('buildAgentPrompt — provider type routing', () => {
 
   it('routes CLI provider through the light path too', async () => {
     const prompt = await buildAgentPrompt(
-      makeTask(), {}, '/r', null, isTruthyMeta,
+      makeTask(), {}, '/r', null,
       { providerType: 'cli', tui: false });
     expect(prompt).not.toMatch(/Chief of Staff Agent Briefing/);
     expect(prompt).not.toMatch(/You are an autonomous agent/);
@@ -2645,10 +2568,10 @@ describe('buildAgentPrompt — provider type routing', () => {
 
   it('names a managed app in the api-path briefing and omits the heading for the PortOS default app', async () => {
     const managed = await buildAgentPrompt(
-      makeTask({ metadata: { app: 'comics' } }), {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      makeTask({ metadata: { app: 'comics' } }), {}, '/r', null, { providerType: 'api' });
     expect(managed).toContain('**Target App**: comics');
     const portos = await buildAgentPrompt(
-      makeTask({ metadata: { app: 'portos-default' } }), {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      makeTask({ metadata: { app: 'portos-default' } }), {}, '/r', null, { providerType: 'api' });
     expect(portos).not.toContain('**Target App**');
   });
 
@@ -2656,7 +2579,7 @@ describe('buildAgentPrompt — provider type routing', () => {
   it('renders metadata.prompt and the human note into the api-path briefing', async () => {
     const prompt = await buildAgentPrompt(
       makeTask({ metadata: { prompt: 'the agent body\nsecond line', context: 'a short note' } }),
-      {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      {}, '/r', null, { providerType: 'api' });
     expect(prompt).toContain('the agent body\nsecond line');
     expect(prompt).toContain('a short note');
   });
@@ -2664,7 +2587,7 @@ describe('buildAgentPrompt — provider type routing', () => {
   it('renders a legacy context-only task unchanged', async () => {
     const prompt = await buildAgentPrompt(
       makeTask({ metadata: { context: 'legacy body\nsecond line' } }),
-      {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      {}, '/r', null, { providerType: 'api' });
     expect(prompt).toContain('legacy body\nsecond line');
   });
 
@@ -2683,14 +2606,14 @@ describe('buildAgentPrompt — provider type routing', () => {
           securityScan: { reports: [{ number: 42, findings: flaggedPayload }] },
         },
       }),
-      {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      {}, '/r', null, { providerType: 'api' });
     expect(prompt).not.toContain(flaggedPayload);
   });
 
   // #8200 — there is no user-editable template on this path; the builder never
   // consults the prompt-stage system, so a stored stage cannot silently diverge.
   it('builds the api-path briefing without consulting a prompt stage', async () => {
-    const prompt = await buildAgentPrompt(makeTask(), {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+    const prompt = await buildAgentPrompt(makeTask(), {}, '/r', null, { providerType: 'api' });
     expect(prompt).toMatch(/^## Instructions$/m);
     expect(prompt).toMatch(/^## Git Hygiene/m);
   });
@@ -2701,7 +2624,7 @@ describe('buildAgentPrompt — provider type routing', () => {
 
     it('returns { userPrompt, systemPrompt } with the task in user and the contract in system', async () => {
       const parts = await buildAgentPrompt(
-        splitTask(), {}, '/r', wt, isTruthyMeta,
+        splitTask(), {}, '/r', wt,
         { providerType: 'tui', providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true, split: true });
       expect(parts.userPrompt).toMatch(/Add a button to the dashboard/);
       expect(parts.userPrompt).toMatch(/Some context/);
@@ -2714,8 +2637,8 @@ describe('buildAgentPrompt — provider type routing', () => {
 
     it('split parts carry exactly the combined prompt sections (no drift)', async () => {
       const opts = { providerType: 'tui', providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true };
-      const combined = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, opts);
-      const parts = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, { ...opts, split: true });
+      const combined = await buildAgentPrompt(splitTask(), {}, '/r', wt, opts);
+      const parts = await buildAgentPrompt(splitTask(), {}, '/r', wt, { ...opts, split: true });
       // Combined = task sections + contract sections + Begin line; the split
       // moves the contract out and keeps the Begin line with the user prompt.
       const reassembled = parts.userPrompt.replace(
@@ -2727,7 +2650,7 @@ describe('buildAgentPrompt — provider type routing', () => {
 
     it('leanMode routes a claude TUI to the slashdo-free completion workflow', async () => {
       const prompt = await buildAgentPrompt(
-        splitTask(), {}, '/r', wt, isTruthyMeta,
+        splitTask(), {}, '/r', wt,
         { providerType: 'tui', providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true });
       expect(prompt).not.toMatch(/`\/do:push`/);
       expect(prompt).not.toMatch(/`\/do:pr`/);
@@ -2741,7 +2664,7 @@ describe('buildAgentPrompt — provider type routing', () => {
       // session is told to run it.
       const task = splitTask();
       const prompt = await buildAgentPrompt(
-        { ...task, metadata: { ...task.metadata, simplify: true } }, {}, '/r', wt, isTruthyMeta,
+        { ...task, metadata: { ...task.metadata, simplify: true } }, {}, '/r', wt,
         { providerType: 'tui', providerId: 'claude-code-tui', providerCommand: 'claude' });
       expect(prompt).toMatch(/^1\. `\/simplify`/m);
       expect(prompt).not.toMatch(/does NOT have slashdo/);
@@ -2751,7 +2674,7 @@ describe('buildAgentPrompt — provider type routing', () => {
     it('splits a STANDARD (non-lean) claude TUI too, keeping slashdo in the system prompt', async () => {
       const task = splitTask();
       const parts = await buildAgentPrompt(
-        { ...task, metadata: { ...task.metadata, simplify: true } }, {}, '/r', wt, isTruthyMeta,
+        { ...task, metadata: { ...task.metadata, simplify: true } }, {}, '/r', wt,
         { providerType: 'tui', providerId: 'claude-code-tui', providerCommand: 'claude', split: true });
       // Task in the user prompt, contract (with slashdo — NOT slashdo-free) in system.
       expect(parts.userPrompt).toMatch(/Add a button to the dashboard/);
@@ -2763,8 +2686,8 @@ describe('buildAgentPrompt — provider type routing', () => {
 
     it('split parts carry exactly the combined prompt for a standard claude CLI (no drift)', async () => {
       const opts = { providerType: 'cli', providerId: 'claude-code', providerCommand: 'claude' };
-      const combined = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, opts);
-      const parts = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, { ...opts, split: true });
+      const combined = await buildAgentPrompt(splitTask(), {}, '/r', wt, opts);
+      const parts = await buildAgentPrompt(splitTask(), {}, '/r', wt, { ...opts, split: true });
       const reassembled = parts.userPrompt.replace(
         /\n\nBegin working on the task now\.\n$/,
         '\n\n' + parts.systemPrompt.replace(/\n$/, '') + '\n\nBegin working on the task now.\n'
@@ -2793,7 +2716,6 @@ describe('buildAgentPrompt — provider type routing', () => {
       {},
       '/r',
       { branchName: 'b', worktreePath: '/tmp/wt' },
-      isTruthyMeta,
       { providerType: 'api' });
     expect(prompt).toMatch(/## Review-Loop Follow-up/);
     // Merge command must be present, exactly with --merge --delete-branch.
@@ -2820,14 +2742,14 @@ describe('unattended-run rule reaches every prompt path', () => {
   const wt = { branchName: 'cos/t/a', worktreePath: '/tmp/wt', baseBranch: 'main' };
 
   it('rides in the light-context prompt', () => {
-    const prompt = buildLightContextPrompt(makeTask(), '/repo', null, isTruthyMeta);
+    const prompt = buildLightContextPrompt(makeTask(), '/repo', null);
     expect(prompt).toMatch(RULE_HEADING);
     expect(prompt).toMatch(/Never ask the user to choose or approve/);
   });
 
   it('rides in the SYSTEM half of a split prompt, not the user half', async () => {
     const parts = await buildAgentPrompt(
-      makeTask(), {}, '/r', wt, isTruthyMeta,
+      makeTask(), {}, '/r', wt,
       { providerType: 'tui', providerId: 'claude-code-tui', providerCommand: 'claude', split: true });
     expect(parts.systemPrompt).toMatch(RULE_HEADING);
     expect(parts.userPrompt).not.toMatch(RULE_HEADING);
@@ -2835,7 +2757,7 @@ describe('unattended-run rule reaches every prompt path', () => {
 
   it('rides in the full api-path prompt', async () => {
     const prompt = await buildAgentPrompt(
-      makeTask(), {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      makeTask(), {}, '/r', null, { providerType: 'api' });
     expect(prompt).toMatch(RULE_HEADING);
   });
 
@@ -2976,7 +2898,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
   };
 
   it('light TUI path emits the sentinel-only completion, not the /do:push workflow', () => {
-    const prompt = buildLightContextPrompt(liTask(), '/r', wt, isTruthyMeta, { isTui: true });
+    const prompt = buildLightContextPrompt(liTask(), '/r', wt, { isTui: true });
     assertReasoningOnly(prompt);
     // Worktree section carries the discard note, not commit/merge guidance.
     expect(prompt).toMatch(/discarded on exit/);
@@ -2984,7 +2906,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
   });
 
   it('light CLI (non-TUI) path emits the sentinel-only completion', () => {
-    const prompt = buildLightContextPrompt(liTask(), '/r', wt, isTruthyMeta, { isTui: false, providerId: 'codex' });
+    const prompt = buildLightContextPrompt(liTask(), '/r', wt, { isTui: false, providerId: 'codex' });
     assertReasoningOnly(prompt);
   });
 
@@ -3010,7 +2932,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
     };
 
     it('light TUI path', () => {
-      const prompt = buildLightContextPrompt(auditTask(), '/r', wt, isTruthyMeta, { isTui: true });
+      const prompt = buildLightContextPrompt(auditTask(), '/r', wt, { isTui: true });
       assertActionOutput(prompt);
       // The sentinel is still the done-signal for a TUI run — just not the
       // place the deliverable goes.
@@ -3018,12 +2940,12 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
     });
 
     it('light CLI (non-TUI) path', () => {
-      const prompt = buildLightContextPrompt(auditTask(), '/r', wt, isTruthyMeta, { isTui: false, providerId: 'codex' });
+      const prompt = buildLightContextPrompt(auditTask(), '/r', wt, { isTui: false, providerId: 'codex' });
       assertActionOutput(prompt);
     });
 
     it('full (api) path', async () => {
-      const prompt = await buildAgentPrompt(auditTask(), {}, '/r', wt, isTruthyMeta, { providerType: 'api' });
+      const prompt = await buildAgentPrompt(auditTask(), {}, '/r', wt, { providerType: 'api' });
       assertActionOutput(prompt);
     });
 
@@ -3034,7 +2956,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       // aim a push straight at that branch — and for a task that changes no code,
       // whatever it swept up would be the user's own uncommitted work.
       const task = makeTask({ metadata: { noCodeOutput: true, useWorktree: false, openPR: false } });
-      const prompt = await buildAgentPrompt(task, {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      const prompt = await buildAgentPrompt(task, {}, '/r', null, { providerType: 'api' });
       expect(prompt).toMatch(/## Completion \(No Code Output\)/);
       expect(prompt).toMatch(/Do NOT commit, push, or open a PR/);
       expect(prompt).not.toMatch(/Commit and push using/);
@@ -3044,7 +2966,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
   });
 
   it('full (api) path suppresses the commit/push instructions in Instructions + Git Hygiene', async () => {
-    const prompt = await buildAgentPrompt(liTask(), {}, '/r', wt, isTruthyMeta, { providerType: 'api' });
+    const prompt = await buildAgentPrompt(liTask(), {}, '/r', wt, { providerType: 'api' });
     assertReasoningOnly(prompt);
     // Fallback-template step 4 must not tell the agent to commit/push.
     expect(prompt).toMatch(/Write your result to the completion sentinel/);
@@ -3104,7 +3026,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       expect(claudeMdSection).toMatch(/gh pr merge/);
       expect(claudeMdSection).toMatch(/Commit and push your changes/);
 
-      const prompt = await buildAgentPrompt(liTask(), {}, '/r', wt, isTruthyMeta, { providerType: 'api' });
+      const prompt = await buildAgentPrompt(liTask(), {}, '/r', wt, { providerType: 'api' });
       // The verbatim splice is the production contract — the builder passes the
       // user's own instructions through untouched.
       expect(prompt).toContain(claudeMdSection);
@@ -3132,7 +3054,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       const cdTask = makeTask({
         metadata: { creativeDirector: { projectId: 'p', kind: 'evaluate' }, useWorktree: false, openPR: false },
       });
-      const prompt = await buildAgentPrompt(cdTask, {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      const prompt = await buildAgentPrompt(cdTask, {}, '/r', null, { providerType: 'api' });
       expect(prompt).not.toMatch(/## CLAUDE\.md Instructions/);
       expect(prompt).not.toMatch(/Example Global Instructions/);
     });
@@ -3147,7 +3069,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       const cdTask = makeTask({
         metadata: { creativeDirector: { projectId: 'p', kind: 'evaluate' }, useWorktree: false, openPR: false },
       });
-      const prompt = await buildAgentPrompt(cdTask, {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      const prompt = await buildAgentPrompt(cdTask, {}, '/r', null, { providerType: 'api' });
       expect(getMemorySection).not.toHaveBeenCalled();
       expect(getDigitalTwinForPrompt).not.toHaveBeenCalled();
       expect(getToolsSummaryForPrompt).not.toHaveBeenCalled();
@@ -3168,7 +3090,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
           memory: { maxContextTokens: 0 },
           digitalTwin: { maxContextTokens: 0 },
           soul: { maxContextTokens: 1200 },
-        }, '/r', null, isTruthyMeta, { providerType: 'api' });
+        }, '/r', null, { providerType: 'api' });
         expect(prompt).toContain('Example Global Instructions');
         expect(prompt).toMatch(/^## Instructions$/m);
         expect(getMemorySection).toHaveBeenLastCalledWith(expect.anything(), { maxTokens: 2000 });
@@ -3184,7 +3106,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       vi.mocked(getMemorySection).mockClear().mockResolvedValue('## Memory Context\nNONCD_MEMORY_SENTINEL');
       vi.mocked(getDigitalTwinForPrompt).mockClear().mockResolvedValue('## Digital Twin\nNONCD_TWIN_SENTINEL');
       vi.mocked(getToolsSummaryForPrompt).mockClear().mockResolvedValue('## Available Tools\nNONCD_TOOLS_SENTINEL');
-      const prompt = await buildAgentPrompt(makeTask(), {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      const prompt = await buildAgentPrompt(makeTask(), {}, '/r', null, { providerType: 'api' });
       expect(getMemorySection).toHaveBeenCalled();
       expect(getDigitalTwinForPrompt).toHaveBeenCalled();
       expect(getToolsSummaryForPrompt).toHaveBeenCalled();
@@ -3220,7 +3142,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       // --delete-branch`. (The `openPR: false` sibling above never reaches that
       // line at all, which is why its /gh pr merge/ check can't carry this.)
       const prTask = makeTask({ metadata: { discardWorktree: true, useWorktree: true, openPR: true, simplify: true } });
-      const prompt = buildLightContextPrompt(prTask, '/r', wt, isTruthyMeta, { isTui: true });
+      const prompt = buildLightContextPrompt(prTask, '/r', wt, { isTui: true });
       expect(prompt).not.toMatch(/gh pr merge/);
       expect(prompt).toMatch(/## Completion \(Reasoning-Only Task\)/);
       // The light path targets agentic CLIs that load CLAUDE.md natively, so the
@@ -3253,7 +3175,7 @@ describe('full (api) path: step 4 and Git Hygiene agree on the completion contra
     // that is the exact shape whose step 4 had no matching arm.
     const prompt = await buildAgentPrompt(
       makeTask({ metadata: { executionProfile: 'public-review-gate', useWorktree: false, openPR: false } }),
-      {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      {}, '/r', null, { providerType: 'api' });
 
     // The contract the other two sections already got right.
     expect(prompt).toMatch(/## Completion \(Tool-Free Reasoning\)/);
@@ -3267,7 +3189,7 @@ describe('full (api) path: step 4 and Git Hygiene agree on the completion contra
   it('a read-only task is never told to commit — in step 4 or in Git Hygiene', async () => {
     const prompt = await buildAgentPrompt(
       makeTask({ metadata: { readOnly: true, useWorktree: false, openPR: false } }),
-      {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      {}, '/r', null, { providerType: 'api' });
 
     // The Guidelines bullet already resolved this correctly.
     expect(prompt).toMatch(/\*\*This is a read-only task\.\*\*/);
@@ -3292,7 +3214,7 @@ describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (
 
   it('threads a configured default reviewer list into --review-with when the task pins none', async () => {
     vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['claude', 'codex'] });
-    const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
+    const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, claudeCliOpts);
     expect(prompt).toMatch(/`\/do:pr --review-with claude,codex`/);
     // The stalling copilot default must not leak in.
     expect(prompt).not.toMatch(/--review-with copilot/);
@@ -3300,7 +3222,7 @@ describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (
 
   it('keeps review opt-in when no default is configured', async () => {
     vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: [] });
-    const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
+    const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, claudeCliOpts);
     // An empty default is suppressed from --review-with, so /do:pr runs without
     // an explicit reviewer flag.
     expect(prompt).toMatch(/`\/do:pr`/);
@@ -3310,14 +3232,14 @@ describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (
   it('a task-pinned reviewer list still wins over the configured default', async () => {
     vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['claude', 'codex'] });
     const task = makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: false, reviewers: ['grok'] } });
-    const prompt = await buildAgentPrompt(task, {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
+    const prompt = await buildAgentPrompt(task, {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, claudeCliOpts);
     expect(prompt).toMatch(/`\/do:pr --review-with grok`/);
     expect(prompt).not.toMatch(/--review-with claude/);
   });
 
   it('keeps review opt-in when the settings read fails', async () => {
     vi.mocked(getCodeReviewDefaults).mockRejectedValueOnce(new Error('settings unavailable'));
-    const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
+    const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, claudeCliOpts);
     expect(prompt).toMatch(/`\/do:pr`/);
     expect(prompt).not.toMatch(/--review-with claude/);
   });
@@ -3488,7 +3410,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
 
   it('renders the Claude Code invocation for a claude-code provider', async () => {
     const prompt = await buildAgentPrompt(
-      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'claude-code' });
     expect(prompt).toContain('/do:plan-task');
     expect(prompt).toContain('Add rate limiting to the widget API');
@@ -3496,7 +3418,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
 
   it('renders the flat invocation for OpenCode', async () => {
     const prompt = await buildAgentPrompt(
-      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      slashdoTask(), {}, '/r', null,
       { providerType: 'tui', providerId: 'opencode-tui', providerCommand: 'opencode' });
     expect(prompt).toContain('/do-plan-task');
     expect(prompt).not.toContain('/do:plan-task');
@@ -3504,7 +3426,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
 
   it('names the skill instead of a slash command for a skill-style CLI', async () => {
     const prompt = await buildAgentPrompt(
-      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
     expect(prompt).toContain('do-plan-task');
     expect(prompt).not.toContain('/do:plan-task');
@@ -3517,7 +3439,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
   it.each(['claude-code', 'opencode', 'codex'])('inlines the command body for %s', async (providerId) => {
     vi.mocked(loadSlashdoFile).mockResolvedValue('# Plan Task\n\nInvestigate, then file the issue.');
     const prompt = await buildAgentPrompt(
-      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId });
     expect(prompt).toContain('Investigate, then file the issue.');
     // `skipIncludes: []` — nothing pruned, since this task pins no reviewers and
@@ -3528,7 +3450,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
   it('still emits the invocation when the body cannot be loaded', async () => {
     vi.mocked(loadSlashdoFile).mockResolvedValue(null);
     const prompt = await buildAgentPrompt(
-      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'claude-code' });
     expect(prompt).toContain('/do:plan-task');
   });
@@ -3538,7 +3460,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     vi.mocked(loadSlashdoFile).mockResolvedValueOnce('# Release\n\nCanonical release procedure.');
     const prompt = await buildAgentPrompt(
       makeTask({ description: 'Run the release check', metadata: { slashdoCommand: 'release' } }),
-      {}, '/r', null, isTruthyMeta,
+      {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
 
     expect(prompt).toContain('do-release');
@@ -3562,7 +3484,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
       slashdoCommand: 'release', slashdoArgs: '--review-with codex[gpt-6-astra]~opt~max=1~effort=low'
     });
     const prompt = await buildAgentPrompt(
-      makeTask({ metadata: scheduledMetadata }), {}, '/r', null, isTruthyMeta,
+      makeTask({ metadata: scheduledMetadata }), {}, '/r', null,
       { providerType, providerId, providerCommand, agentId: 'release-test' });
     expect(prompt).toContain('Canonical release procedure.');
     expect(prompt).toContain('--review-with codex[gpt-6-astra]~opt~max=1~effort=low');
@@ -3587,7 +3509,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
         makeTask({ metadata: sanitizeTaskMetadata({
           useWorktree: false, openPR: false, simplify: true,
           worktreeChangesExpected: true, slashdoCommand: command,
-        }) }), {}, '/r', null, isTruthyMeta,
+        }) }), {}, '/r', null,
         { providerType, providerId, providerCommand, agentId: 'better-test' });
       expect(prompt).toContain('Canonical audit procedure.');
       expect(prompt).toContain('Better Workflow Handoff');
@@ -3616,7 +3538,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
           ...sanitizeTaskMetadata({ useWorktree: false, openPR: false, worktreeChangesExpected: false, simplify: true }),
           ...identity.metadata,
         },
-      }), {}, '/r', null, isTruthyMeta,
+      }), {}, '/r', null,
       { providerType, providerId: 'codex', providerCommand: 'codex', agentId: 'reconcile-test' });
       expect(prompt).toContain('Reconcile only claim/issue-42');
       expect(prompt).toContain('## Branch Reconciliation Handoff');
@@ -3633,7 +3555,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
   it('keeps explicit read-only reconciliation restricted', async () => {
     const prompt = await buildAgentPrompt(makeTask({
       metadata: { analysisType: 'branch-reconcile', readOnly: true, openPR: false },
-    }), {}, '/r', null, isTruthyMeta, { providerType: 'cli', providerId: 'codex' });
+    }), {}, '/r', null, { providerType: 'cli', providerId: 'codex' });
     expect(prompt).toMatch(/read.only/i);
     expect(prompt).not.toContain('## Branch Reconciliation Handoff');
   });
@@ -3642,7 +3564,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     vi.mocked(loadSlashdoFile).mockResolvedValue('# Release\n\nCanonical release procedure.');
     const prompt = await buildAgentPrompt(
       makeTask({ metadata: { analysisType: 'do-release', openPR: false } }),
-      {}, '/r', null, isTruthyMeta, { providerType: 'tui', providerId: 'codex-tui', providerCommand: 'codex' });
+      {}, '/r', null, { providerType: 'tui', providerId: 'codex-tui', providerCommand: 'codex' });
     expect(prompt).toContain('Canonical release procedure.');
     expect(prompt).toContain('Release Workflow Handoff');
     expect(prompt).not.toContain('Do NOT push');
@@ -3650,7 +3572,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
 
   it('uses explicit slashdoArgs when present', async () => {
     const prompt = await buildAgentPrompt(
-      slashdoTask({ slashdoArgs: '--issues 42' }), {}, '/r', null, isTruthyMeta,
+      slashdoTask({ slashdoArgs: '--issues 42' }), {}, '/r', null,
       { providerType: 'cli', providerId: 'claude-code' });
     expect(prompt).toContain('/do:plan-task --issues 42');
   });
@@ -3666,7 +3588,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
         openPR: false,
         simplify: false,
         reviewLoop: false,
-      }), {}, '/r', null, isTruthyMeta,
+      }), {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
 
     expect(prompt).toContain('--yes');
@@ -3679,20 +3601,20 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
   });
 
   it('reaches the api-path briefing through task.description', async () => {
-    const prompt = await buildAgentPrompt(slashdoTask(), {}, '/r', null, isTruthyMeta, { providerType: 'api', providerId: 'claude-code' });
+    const prompt = await buildAgentPrompt(slashdoTask(), {}, '/r', null, { providerType: 'api', providerId: 'claude-code' });
     expect(prompt).toContain('/do:plan-task');
   });
 
   it('leaves a task with no slashdoCommand untouched', async () => {
     const prompt = await buildAgentPrompt(
-      makeTask(), {}, '/r', null, isTruthyMeta,
+      makeTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'claude-code' });
     expect(prompt).not.toContain('Slashdo Workflow');
   });
 
   it('ignores an invalid command rather than joining it into a path', async () => {
     const prompt = await buildAgentPrompt(
-      slashdoTask({ slashdoCommand: '../../etc/passwd' }), {}, '/r', null, isTruthyMeta,
+      slashdoTask({ slashdoCommand: '../../etc/passwd' }), {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
     expect(prompt).not.toContain('Slashdo Workflow');
     expect(vi.mocked(loadSlashdoFile)).not.toHaveBeenCalledWith('../../etc/passwd', expect.anything());
@@ -3729,7 +3651,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
 
   it('hands a file-tools host a pointer instead of the body when over budget', async () => {
     const prompt = await buildAgentPrompt(
-      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
     expect(prompt).toContain('/install/data/cos/slashdo-resolved/review.md');
     expect(prompt).not.toContain(OVER);
@@ -3742,7 +3664,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     const files = { 'audit.md': 'Audit procedure' };
     vi.mocked(loadSlashdoBundle).mockResolvedValueOnce({ body, files });
     const prompt = await buildAgentPrompt(
-      slashdoTask({ reviewers: ['codex'] }), {}, '/managed-app', null, isTruthyMeta,
+      slashdoTask({ reviewers: ['codex'] }), {}, '/managed-app', null,
       { providerType: 'cli', providerId: 'codex' });
     expect(writeResolvedSlashdoBody).toHaveBeenCalledWith('review', body, { files });
     expect(prompt).toContain('/install/data/cos/slashdo-resolved/review.md');
@@ -3758,7 +3680,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     vi.mocked(loadSlashdoFile).mockResolvedValueOnce('Complete inline audit procedure');
     vi.mocked(writeResolvedSlashdoBody).mockRejectedValueOnce(new Error('EACCES'));
     const prompt = await buildAgentPrompt(
-      slashdoTask(), {}, '/managed-app', null, isTruthyMeta,
+      slashdoTask(), {}, '/managed-app', null,
       { providerType: 'cli', providerId: 'codex' });
     expect(prompt).toContain('Complete inline audit procedure');
     expect(prompt).not.toContain('Read lib/audit.md');
@@ -3767,21 +3689,21 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
   it('rejects a missing required procedure instead of dispatching an invocation alone', async () => {
     vi.mocked(loadSlashdoBundle).mockRejectedValueOnce(new Error('Missing required slashdo library: audit.md'));
     await expect(buildAgentPrompt(
-      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' })).rejects.toThrow('Missing required slashdo library');
   });
 
   it('inlines the body when it is under budget, and stages no file', async () => {
     vi.mocked(loadSlashdoFile).mockResolvedValue(UNDER);
     const prompt = await buildAgentPrompt(
-      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
     expect(prompt).toContain('Step one.');
     expect(vi.mocked(writeResolvedSlashdoBody)).not.toHaveBeenCalled();
   });
 
   it('inlines for an api provider regardless of size — no file tools to read with', async () => {
-    const prompt = await buildAgentPrompt(slashdoTask(), {}, '/r', null, isTruthyMeta,
+    const prompt = await buildAgentPrompt(slashdoTask(), {}, '/r', null,
       { providerType: 'api', providerId: 'some-http-provider' });
     expect(prompt).toContain(OVER);
     expect(vi.mocked(writeResolvedSlashdoBody)).not.toHaveBeenCalled();
@@ -3789,7 +3711,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
 
   it('warns once, naming the command and size, when an api provider is handed an over-budget body', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await buildAgentPrompt(slashdoTask(), {}, '/r', null, isTruthyMeta,
+    await buildAgentPrompt(slashdoTask(), {}, '/r', null,
       { providerType: 'api', providerId: 'some-http-provider' });
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('review');
@@ -3801,7 +3723,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     vi.mocked(writeResolvedSlashdoBody).mockRejectedValue(new Error('EACCES'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const prompt = await buildAgentPrompt(
-      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
     // A failed write must not silently drop the procedure.
     expect(prompt).toContain(OVER);
@@ -3826,7 +3748,6 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
       makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
       {}, '/r',
       { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-      isTruthyMeta,
       { providerType: 'tui', providerId: 'opencode-tui', providerCommand: 'opencode' });
     const [, stagedBody] = vi.mocked(writeResolvedSlashdoBody).mock.calls.at(-1);
 
@@ -3851,7 +3772,6 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
       makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
       {}, '/r',
       { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
-      isTruthyMeta,
       { providerType: 'tui', providerId: 'opencode-tui', providerCommand: 'opencode' });
 
     expect(prompt).toContain('RECIPE FALLBACK HEADER');
@@ -3868,7 +3788,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
   it('carries a pinned reviewer effort on the --review-with token, not as prose', async () => {
     const prompt = await buildAgentPrompt(
       slashdoTask({ reviewers: ['codex'], reviewerEfforts: { codex: 'high' } }),
-      {}, '/r', null, isTruthyMeta,
+      {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
     expect(prompt).toContain('codex~effort=high');
     // Restating it would have the agent pass `-c model_reasoning_effort=high` a
@@ -3885,7 +3805,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
         usernames: ['octocat'],
         reviewerEfforts: { codex: 'high' },
       }),
-      {}, '/r', null, isTruthyMeta,
+      {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
     // (the note's own prose mentions the flag — assert on the pin line instead)
     expect(prompt).not.toContain('Run this workflow with');
@@ -3898,7 +3818,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     // flag to a CLI it never invokes.
     const prompt = await buildAgentPrompt(
       slashdoTask({ reviewers: ['codex'], reviewerEfforts: { codex: 'high', claude: 'xhigh' } }),
-      {}, '/r', null, isTruthyMeta,
+      {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
     expect(prompt).toContain('codex~effort=high');
     expect(prompt).not.toContain('claude~effort=xhigh');
@@ -3907,7 +3827,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
 
   it('adds no effort sentence when no reviewer pins one', async () => {
     const prompt = await buildAgentPrompt(
-      slashdoTask({ reviewers: ['codex'] }), {}, '/r', null, isTruthyMeta,
+      slashdoTask({ reviewers: ['codex'] }), {}, '/r', null,
       { providerType: 'cli', providerId: 'codex' });
     expect(prompt).not.toContain('pinned reasoning effort');
   });
@@ -3916,7 +3836,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
 
     it('prunes unreachable reviewer loops when the task pins its reviewers', async () => {
       await buildAgentPrompt(
-        slashdoTask({ reviewers: ['codex'] }), {}, '/r', null, isTruthyMeta,
+        slashdoTask({ reviewers: ['codex'] }), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       const skipped = skipArg();
       expect(skipped).toContain('copilot-review-loop');
@@ -3925,7 +3845,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
 
     it('pins --review-with alongside a pruned body so the run matches what it got', async () => {
       const prompt = await buildAgentPrompt(
-        slashdoTask({ reviewers: ['codex'] }), {}, '/r', null, isTruthyMeta,
+        slashdoTask({ reviewers: ['codex'] }), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(prompt).toContain('--review-with codex');
     });
@@ -3933,7 +3853,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     it('prunes from the install Code Review Defaults when the task pins nothing', async () => {
       vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['ollama'] });
       await buildAgentPrompt(
-        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        slashdoTask(), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(skipArg()).not.toContain('ollama-review-loop');
     });
@@ -3943,7 +3863,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
       // install that has not opted into code review.
       vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: [] });
       const prompt = await buildAgentPrompt(
-        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        slashdoTask(), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(skipArg()).toEqual([]);
       expect(prompt).not.toContain('--review-with');
@@ -3955,7 +3875,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     it('honors the legacy single `reviewer` string, not just the reviewers array', async () => {
       vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['ollama'] });
       const prompt = await buildAgentPrompt(
-        slashdoTask({ reviewer: 'codex' }), {}, '/r', null, isTruthyMeta,
+        slashdoTask({ reviewer: 'codex' }), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       // Legacy `reviewer` beats the defaults, so the CLI loop is kept and the
       // local-model loop (the default's) is what gets dropped.
@@ -3970,7 +3890,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
         reviewers: ['codex'], optionalReviewers: ['codex'],
       });
       const prompt = await buildAgentPrompt(
-        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        slashdoTask(), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       // Pinning a non-blocking reviewer as blocking changes the merge gate.
       expect(prompt).toContain('--review-with codex~opt');
@@ -3987,7 +3907,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
         reviewers: ['copilot'], optionalReviewers: ['copilot'],
       });
       const prompt = await buildAgentPrompt(
-        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        slashdoTask(), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(prompt).toContain('--review-with copilot~opt');
       expect(skipArg()).not.toContain('copilot-review-loop');
@@ -3996,14 +3916,14 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     it('prunes NOTHING when the defaults read fails', async () => {
       vi.mocked(getCodeReviewDefaults).mockRejectedValue(new Error('unreadable'));
       await buildAgentPrompt(
-        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        slashdoTask(), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(skipArg()).toEqual([]);
     });
 
     it('keeps the @login loop when a username reviewer gates the PR', async () => {
       await buildAgentPrompt(
-        slashdoTask({ reviewers: ['codex'], usernames: ['octocat'] }), {}, '/r', null, isTruthyMeta,
+        slashdoTask({ reviewers: ['codex'], usernames: ['octocat'] }), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       const skipped = skipArg();
       expect(skipped).not.toContain('github-reviewer-loop');
@@ -4023,7 +3943,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     it('prunes for the explicit flag, not for the task metadata behind it', async () => {
       const prompt = await buildAgentPrompt(
         slashdoTask({ slashdoArgs: '--review-with ollama', reviewers: ['codex'] }),
-        {}, '/r', null, isTruthyMeta,
+        {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       const skipped = skipArg();
       // The reviewer the run will actually invoke keeps its loop…
@@ -4038,7 +3958,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     it('preserves an explicit `none` opt-out inherited from Code Review Defaults', async () => {
       vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['codex'] });
       const prompt = await buildAgentPrompt(
-        slashdoTask({ slashdoArgs: '--review-with none' }), {}, '/r', null, isTruthyMeta,
+        slashdoTask({ slashdoArgs: '--review-with none' }), {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(prompt).toContain('--review-with none');
       // `none` sets REVIEW_AGENTS=[] with no fallback, so no loop is reachable.
@@ -4055,7 +3975,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
         // The metadata names a DIFFERENT loop variant, so a metadata-derived pin
         // would both prune away agy's loop and add a second set of suffixes.
         slashdoTask({ slashdoArgs: args, reviewers: ['ollama'], reviewerEfforts: { ollama: 'high' } }),
-        {}, '/r', null, isTruthyMeta,
+        {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(prompt).not.toContain('--review-with ollama');
       expect(skipArg()).not.toContain('local-agent-review-loop');
@@ -4067,7 +3987,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     it('reads the equals form the same as the spaced one', async () => {
       const prompt = await buildAgentPrompt(
         slashdoTask({ slashdoArgs: '--review-with=ollama', reviewers: ['codex'] }),
-        {}, '/r', null, isTruthyMeta,
+        {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(skipArg()).not.toContain('ollama-review-loop');
       expect(skipArg()).toContain('local-agent-review-loop');
@@ -4080,7 +4000,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
         // A slug outside the grammar PortOS mirrors: guessing which loop it needs
         // is how the run loses the one it reaches.
         slashdoTask({ slashdoArgs: '--review-with some-future-reviewer' }),
-        {}, '/r', null, isTruthyMeta,
+        {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(skipArg()).toEqual([]);
       expect(prompt).toContain('--review-with some-future-reviewer');
@@ -4090,7 +4010,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     it('leaves the metadata contract in charge when the args name no reviewer', async () => {
       const prompt = await buildAgentPrompt(
         slashdoTask({ slashdoArgs: '--issues 42', reviewers: ['codex'] }),
-        {}, '/r', null, isTruthyMeta,
+        {}, '/r', null,
         { providerType: 'cli', providerId: 'codex' });
       expect(prompt).toContain('--review-with codex');
       expect(skipArg()).toContain('copilot-review-loop');
@@ -4342,7 +4262,7 @@ describe('TUI reviewLoopFollowUp completion instructions', () => {
       }
     };
     const worktreeInfo = { worktreePath: '/tmp/wt-1', branchName: 'cos/task-orig/agent-1' };
-    const prompt = await buildLightContextPrompt(task, '/repo', worktreeInfo, (v) => v === true || v === 'true', {
+    const prompt = await buildLightContextPrompt(task, '/repo', worktreeInfo, {
       isTui: true,
       providerId: 'antigravity-tui',
       providerCommand: 'agy',
@@ -4364,7 +4284,7 @@ describe('TUI reviewLoopFollowUp completion instructions', () => {
       metadata: { useWorktree: false, openPR: false, discardWorktree: true, providerId: 'claude-code-tui', providerCommand: 'claude' }
     });
     const build = (taskId, agentId) => buildLightContextPrompt(
-      worktreelessTask(taskId), '/repo', null, (v) => v === true || v === 'true',
+      worktreelessTask(taskId), '/repo', null,
       { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude', agentId }
     );
 
@@ -4387,7 +4307,7 @@ describe('TUI reviewLoopFollowUp completion instructions', () => {
 describe('planner attribution', () => {
   it('gives a light-path run the exact planner label for the model it resolved to', () => {
     const prompt = buildLightContextPrompt(
-      makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta,
+      makeTask({ metadata: { openPR: false } }), '/repo', null,
       { providerId: 'claude-code-tui', providerCommand: 'claude', providerModel: 'claude-opus-5' },
     );
     expect(prompt).toMatch(/## Planner Attribution/);
@@ -4397,7 +4317,7 @@ describe('planner attribution', () => {
 
   it('falls back to the provider id when the run pinned no model', () => {
     const prompt = buildLightContextPrompt(
-      makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta,
+      makeTask({ metadata: { openPR: false } }), '/repo', null,
       { providerId: 'grok', providerCommand: 'grok' },
     );
     expect(prompt).toMatch(/--label planner:grok/);
@@ -4408,7 +4328,7 @@ describe('planner attribution', () => {
   // an install's stored prompt template predates it and would silently drop it.
   it('reaches an api provider through the full path too', async () => {
     const prompt = await buildAgentPrompt(
-      makeTask({ metadata: { openPR: false } }), {}, '/repo', null, isTruthyMeta,
+      makeTask({ metadata: { openPR: false } }), {}, '/repo', null,
       { providerType: 'api', providerId: 'lmstudio', providerModel: 'claude-opus-5' },
     );
     const text = typeof prompt === 'string' ? prompt : prompt.userPrompt;
@@ -4433,10 +4353,10 @@ describe('planner attribution', () => {
   };
 
   it.each([
-    ['light', (task) => buildLightContextPrompt(task, '/repo', null, isTruthyMeta,
+    ['light', (task) => buildLightContextPrompt(task, '/repo', null,
       { providerId: 'claude-code-tui', providerCommand: 'claude', providerModel: 'claude-opus-5' })],
     ['api', async (task) => {
-      const prompt = await buildAgentPrompt(task, {}, '/repo', null, isTruthyMeta,
+      const prompt = await buildAgentPrompt(task, {}, '/repo', null,
         { providerType: 'api', providerId: 'lmstudio', providerModel: 'claude-opus-5' });
       return typeof prompt === 'string' ? prompt : prompt.userPrompt;
     }],
@@ -4448,7 +4368,7 @@ describe('planner attribution', () => {
 
   it('recognizes the contract when a template re-indented it', () => {
     const indented = MANDATORY_DISPATCH_HINT_GUIDANCE.split('\n').join('\n     ');
-    const text = buildLightContextPrompt(embedsContract(indented), '/repo', null, isTruthyMeta,
+    const text = buildLightContextPrompt(embedsContract(indented), '/repo', null,
       { providerId: 'claude-code-tui', providerCommand: 'claude', providerModel: 'claude-opus-5' });
     expectDeduped(text);
   });
@@ -4456,7 +4376,7 @@ describe('planner attribution', () => {
   it('keeps the full contract for a task that paraphrased it', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ description: 'File issues with model: and effort: labels.', metadata: { openPR: false } }),
-      '/repo', null, isTruthyMeta, { providerId: 'claude-code-tui', providerCommand: 'claude' },
+      '/repo', null, { providerId: 'claude-code-tui', providerCommand: 'claude' },
     );
     expect(prompt).toContain('## Issue Filing Labels');
     expect(prompt.split(MANDATORY_DISPATCH_HINT_GUIDANCE).length - 1).toBe(1);
@@ -4464,7 +4384,7 @@ describe('planner attribution', () => {
 
   it('still enforces filing labels when PortOS cannot attribute the run', () => {
     const prompt = buildLightContextPrompt(
-      makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta, {},
+      makeTask({ metadata: { openPR: false } }), '/repo', null, {},
     );
     expect(prompt).not.toMatch(/## Planner Attribution/);
     expect(prompt).toContain('## Issue Filing Labels');
@@ -4485,7 +4405,7 @@ describe('auto-merge posture (worktree, no PR) is commit-only on every path', ()
       makeTask({ metadata: { openPR: false, simplify: true } }),
       {}, '/r',
       { branchName: 'cos/task-1/agent-a', worktreePath: '/tmp/wt', baseBranch: 'main' },
-      isTruthyMeta, { providerType: 'api' });
+      { providerType: 'api' });
     expect(prompt).toMatch(/Fix any issues found, then commit your changes \(do NOT push — PortOS merges this branch back into the source checkout after you exit/);
     expect(prompt).toMatch(/Commit your changes \(see Git Hygiene below\) — do NOT push, PortOS merges this branch back on exit/);
     expect(prompt).toMatch(/\*\*Commit only — do NOT push\.\*\* Stage specific files \(no `git add -A`\), use `feat:`\/`fix:`\/`breaking:` prefix in the commit message, no Co-Authored-By annotations\. PortOS merges this branch back into the source checkout after you exit and deletes it, so do NOT run `git push` or `\/do:push` yourself/);
@@ -4498,7 +4418,7 @@ describe('auto-merge posture (worktree, no PR) is commit-only on every path', ()
   it('api path: the same task WITHOUT a worktree keeps commit-and-push', async () => {
     const prompt = await buildAgentPrompt(
       makeTask({ metadata: { openPR: false, simplify: true } }),
-      {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      {}, '/r', null, { providerType: 'api' });
     expect(prompt).toMatch(/commit and push using `\/do:push`/);
     expect(prompt).toMatch(/Commit and push using `\/do:push`/);
     expect(prompt).not.toMatch(/PortOS merges this branch back/);

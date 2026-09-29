@@ -181,7 +181,7 @@ function ContactCard({ contact, active, onSelect, onLogTouch, cardRef }) {
           <div className="min-w-0">
             <div className="flex items-center gap-2 min-w-0">
               <UserRound size={16} className="shrink-0 text-gray-500" aria-hidden="true" />
-              <h3 className="font-semibold text-white truncate">{contact.name || 'Unnamed person'}</h3>
+              <h2 className="font-semibold text-white truncate">{contact.name || 'Unnamed person'}</h2>
             </div>
             <p className="mt-1 text-sm text-gray-400 truncate">{contact.relationship || 'Relationship'}</p>
           </div>
@@ -1299,7 +1299,7 @@ export default function Tribe() {
 
       <TabPills tabs={TABS} activeTab={activeTab} onChange={setActiveTab} ariaLabel="Tribe sections" />
 
-      <main className="flex-1 overflow-auto p-4">
+      <section className="flex-1 overflow-auto p-4">
         <div className="mx-auto grid max-w-7xl gap-4">
           {loading && (
             <div className="flex min-h-[220px] items-center justify-center">
@@ -1513,7 +1513,7 @@ export default function Tribe() {
             </>
           )}
         </div>
-      </main>
+      </section>
     </div>
   );
 }

@@ -525,6 +525,7 @@ export * from './modelPinMembership.js';
 export * from './modelPinReconcile.js';
 export * from './modelPricing.js';
 export * from './navManifest.js';
+export * from './noChangeCompletion.js';
 export * from './noReplaceMove.js';
 export * from './instanceFeatureRegistry.js';
 export * from './credentialRegistry.js';
@@ -761,3 +762,17 @@ export * from './databaseAuthority.js';
 export * from './databaseMaintenanceJournal.js';
 
 export * from './databaseWriterRegistry.js';
+
+export * from './musicVideoCreativeContext.js';
+export * from './moodBoardStyleContext.js';
+export * from './musicVideoAutomation.js';
+export * as albumLimits from './albumLimits.js';
+export * as artistLimits from './artistLimits.js';
+export * as authorLimits from './authorLimits.js';
+export * as trackLimits from './trackLimits.js';
+export * from './shellLimits.js';
+export * from './layeredIntelligenceRejectionLabels.js';
+export * from './muscriptorModels.js';
+export * from './metadataFlags.js';
+export * from './loopInterval.js';
+export * from './defaultRequestBody.js';

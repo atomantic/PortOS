@@ -151,3 +151,68 @@ describe('prompts routes — system stages', () => {
     expect(PROTECTED_STAGE_KEYS.length).toBeGreaterThan(SYSTEM_STAGE_KEYS.length * 5);
   });
 });
+
+describe('prompts routes — name validation (#9152)', () => {
+  const writers = () => ({
+    updateStageTemplate: vi.fn(async () => {}),
+    updateStageConfig: vi.fn(async () => {}),
+    createStage: vi.fn(async () => {}),
+    createVariable: vi.fn(async () => {}),
+    getVariable: (k) => (k === 'known' ? { content: 'x' } : null),
+    previewPrompt: vi.fn(async () => 'p'),
+  });
+
+  it.each(['..%2Fx', 'a%2Fb', 'Upper', 'has%20space'])('rejects stage param %s with 400 and touches nothing', async (bad) => {
+    const svc = writers();
+    const { app } = makeApp(svc);
+    for (const r of [
+      await request(app).put(`/api/prompts/${bad}`).send({ template: 'x' }),
+      await request(app).get(`/api/prompts/${bad}`),
+      await request(app).post(`/api/prompts/${bad}/preview`).send({}),
+      await request(app).get(`/api/prompts/${bad}/usage`),
+    ]) {
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('VALIDATION_ERROR');
+    }
+    expect(svc.updateStageTemplate).not.toHaveBeenCalled();
+    expect(svc.previewPrompt).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid stageName / variable key on create without writing', async () => {
+    const svc = writers();
+    const { app } = makeApp(svc);
+    const a = await request(app).post('/api/prompts').send({ stageName: '../evil', name: 'n' });
+    const b = await request(app).post('/api/prompts/variables').send({ key: 'a/b', content: 'c' });
+    const c = await request(app).put('/api/prompts/variables/..%2Fx').send({ content: 'c' });
+    expect([a.status, b.status, c.status]).toEqual([400, 400, 400]);
+    expect(svc.createStage).not.toHaveBeenCalled();
+    expect(svc.createVariable).not.toHaveBeenCalled();
+  });
+
+  it('PUT on an unknown stage is 404 and writes nothing', async () => {
+    const svc = writers();
+    const { app } = makeApp(svc);
+    const r = await request(app).put('/api/prompts/no-such-stage').send({ template: 'x' });
+    expect(r.status).toBe(404);
+    expect(svc.updateStageTemplate).not.toHaveBeenCalled();
+  });
+
+  it('creating an existing stage or variable is 409', async () => {
+    const svc = writers();
+    const { app } = makeApp(svc);
+    const a = await request(app).post('/api/prompts').send({ stageName: 'my-own-stage', name: 'n' });
+    const b = await request(app).post('/api/prompts/variables').send({ key: 'known', content: 'c' });
+    expect([a.status, b.status]).toEqual([409, 409]);
+    expect(svc.createStage).not.toHaveBeenCalled();
+  });
+
+  it('every shipped stage name and variable key passes the schemas', async () => {
+    const { readFileSync } = await import('fs');
+    const { promptStageNameSchema, promptVariableKeySchema } = await import('../lib/validation.js');
+    const dir = new URL('../../data.reference/prompts/', import.meta.url);
+    const stages = Object.keys(JSON.parse(readFileSync(new URL('stage-config.json', dir), 'utf-8')).stages);
+    const vars = Object.keys(JSON.parse(readFileSync(new URL('variables.json', dir), 'utf-8')).variables);
+    expect(stages.filter((k) => !promptStageNameSchema.safeParse(k).success)).toEqual([]);
+    expect(vars.filter((k) => !promptVariableKeySchema.safeParse(k).success)).toEqual([]);
+  });
+});

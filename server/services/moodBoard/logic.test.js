@@ -21,6 +21,8 @@ import {
   clearPinterestLinkRecord,
   appendPinterestPins,
   appendImportedItems,
+  externalImageItems,
+  applyLocalizedImageUrls,
 } from './logic.js';
 
 describe('buildBoardRecord', () => {
@@ -56,6 +58,36 @@ describe('applyBoardPatch', () => {
   it('preserves description when the key is absent', () => {
     expect(applyBoardPatch(base, { name: 'B' }).description).toBe('old');
   });
+  it('stores a composite style and poster, and null clears both', () => {
+    const style = { prompt: 'ink wash dusk', negativePrompt: 'gloss', analyzedItemCount: 2 };
+    const withStyle = applyBoardPatch(base, { style, posterImageRef: 'poster.png' });
+    expect(withStyle.style.prompt).toBe('ink wash dusk');
+    expect(withStyle.style.negativePrompt).toBe('gloss');
+    expect(withStyle.style.analyzedItemCount).toBe(2);
+    expect(withStyle.style.composedAt).toEqual(expect.any(String));
+    expect(withStyle.posterImageRef).toBe('poster.png');
+    const cleared = applyBoardPatch(withStyle, { style: null, posterImageRef: null });
+    expect(cleared.style).toBeNull();
+    expect(cleared.posterImageRef).toBeNull();
+  });
+  it('leaves style and poster in place when the patch omits them', () => {
+    const styled = {
+      ...base,
+      style: {
+        prompt: 'keep',
+        negativePrompt: null,
+        rationale: null,
+        analyzedItemCount: 0,
+        providerId: null,
+        model: null,
+        composedAt: 't1',
+      },
+      posterImageRef: 'poster.png',
+    };
+    const next = applyBoardPatch(styled, { name: 'B' });
+    expect(next.style.prompt).toBe('keep');
+    expect(next.posterImageRef).toBe('poster.png');
+  });
 });
 
 describe('addItem', () => {
@@ -89,6 +121,12 @@ describe('addItem', () => {
     expect(item.imageUrl).toBe('/data/video-thumbnails/upload-ab12cd34.jpg');
     expect(item.text).toBeNull();
   });
+  it('normalizes prompt on media items and nulls on text items', () => {
+    const { item: img } = addItem(base, { type: 'image', mediaKey: 'image:a.png', prompt: 'an image prompt' });
+    expect(img.prompt).toBe('an image prompt');
+    const { item: txt } = addItem(base, { type: 'text', text: 'note', prompt: 'ignored prompt' });
+    expect(txt.prompt).toBeNull();
+  });
   it('throws BOARD_FULL at the item cap', () => {
     const full = { ...base, items: Array.from({ length: MAX_ITEMS_PER_BOARD }, (_, i) => ({ id: `i${i}` })) };
     expect(() => addItem(full, { type: 'text', text: 'x' })).toThrow(/full/i);
@@ -106,6 +144,12 @@ describe('updateItem', () => {
     const { item } = updateItem(withItem, itemId, { caption: 'new' });
     expect(item.caption).toBe('new');
     expect(item.text).toBe('orig');
+  });
+  it('patches prompt on a media item', () => {
+    const fresh = buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+    const { board: withImg, item: img } = addItem(fresh, { type: 'image', mediaKey: 'image:p.png' });
+    const { item: patched } = updateItem(withImg, img.id, { prompt: 'updated prompt' });
+    expect(patched.prompt).toBe('updated prompt');
   });
   it('throws NOT_FOUND for an unknown item id', () => {
     expect(() => updateItem(withItem, 'nope', { caption: 'x' })).toThrow(/not found/i);
@@ -287,6 +331,16 @@ describe('applyBoardRestore', () => {
     const base = { ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }), items: [{ id: 'x' }] };
     expect(applyBoardRestore(base, { items: 'nope' }).items).toEqual([{ id: 'x' }]);
   });
+  it('restores the composite style and poster when the journaled version had them', () => {
+    const base = { ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }), style: null, posterImageRef: 'new.png' };
+    const next = applyBoardRestore(base, {
+      style: { prompt: 'restored ink', analyzedItemCount: 1, composedAt: '2026-08-14T00:00:00.000Z' },
+      posterImageRef: 'old.png',
+    });
+    expect(next.style.prompt).toBe('restored ink');
+    expect(next.style.composedAt).toBe('2026-08-14T00:00:00.000Z');
+    expect(next.posterImageRef).toBe('old.png');
+  });
 });
 
 describe('applyPinterestLink', () => {
@@ -451,5 +505,37 @@ describe('appendImportedItems', () => {
     const { added, board: next } = appendImportedItems(board(), []);
     expect(added).toBe(0);
     expect(next.items).toEqual([]);
+  });
+});
+
+describe('re-hosting external media', () => {
+  const mk = () => ({
+    ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }),
+    items: [
+      { id: 'a', type: 'image', imageUrl: 'https://example.com/a.jpg' },
+      { id: 'b', type: 'image', imageUrl: '/data/images/b.jpg' },
+      { id: 'c', type: 'video', mediaKey: 'video:c.mp4', imageUrl: 'http://example.com/c.jpg' },
+      { id: 'd', type: 'text', text: 'note' },
+    ],
+  });
+
+  it('finds only media items whose image is still remote', () => {
+    expect(externalImageItems(mk()).map((it) => it.id)).toEqual(['a', 'c']);
+  });
+
+  it('swaps a URL only while the item still carries the URL that was downloaded', () => {
+    const b = mk();
+    const { board: next, changed } = applyLocalizedImageUrls(b, [
+      { id: 'a', from: 'https://example.com/a.jpg', to: '/data/images/a.jpg' },
+      { id: 'c', from: 'http://example.com/stale.jpg', to: '/data/images/c.jpg' },
+    ]);
+    expect(changed).toBe(1);
+    expect(next.items.find((it) => it.id === 'a').imageUrl).toBe('/data/images/a.jpg');
+    expect(next.items.find((it) => it.id === 'c').imageUrl).toBe('http://example.com/c.jpg');
+  });
+
+  it('returns the same board when nothing matches', () => {
+    const b = mk();
+    expect(applyLocalizedImageUrls(b, [{ id: 'zzz', from: 'x', to: 'y' }])).toEqual({ board: b, changed: 0 });
   });
 });

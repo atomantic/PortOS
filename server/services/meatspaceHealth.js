@@ -8,6 +8,7 @@
 
 import { invalidateMeatspace } from './meatspaceEvents.js';
 import { join } from 'path';
+import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import { readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import {
@@ -134,7 +135,25 @@ export async function addEpigeneticTest(test) {
 export async function getEyeExams() {
   const ml = await mlArrayIfEnabled('eyeExams');
   if (ml) return { exams: [...ml].sort(byDate) };
-  return readJSONFile(EYES_FILE, { exams: [] });
+  const data = await readJSONFile(EYES_FILE, { exams: [] });
+  const exams = Array.isArray(data?.exams) ? data.exams : [];
+  // Legacy eyes.json rows have no id. Stamp and persist them once so the ids
+  // the client reads back are the ones later edits/deletes resolve.
+  if (exams.some(e => !e.id)) {
+    for (const e of exams) e.id ||= randomUUID();
+    exams.sort(byDate);
+    await writeLocal(EYES_FILE, { ...data, exams });
+  }
+  return { ...data, exams };
+}
+
+/** Resolve an eye exam id, or a legacy numeric index into the date-sorted list, to an id. */
+export async function resolveEyeExamId(ref) {
+  if (typeof ref === 'string' && /^\d+$/.test(ref)) {
+    const { exams } = await getEyeExams();
+    return exams[Number(ref)]?.id ?? null;
+  }
+  return ref;
 }
 
 export async function addEyeExam(exam) {
@@ -144,22 +163,23 @@ export async function addEyeExam(exam) {
     return stored;
   }
   const data = await getEyeExams();
-  data.exams.push(exam);
+  const stored = { ...exam, id: exam.id || randomUUID() };
+  data.exams.push(stored);
   data.exams.sort(byDate);
   await writeLocal(EYES_FILE, data);
-  console.log(`👁️ Eye exam added for ${exam.date}`);
-  return exam;
+  console.log(`👁️ Eye exam added for ${stored.date}`);
+  return stored;
 }
 
 const EYE_FIELDS = ['date', 'leftSphere', 'leftCylinder', 'leftAxis', 'rightSphere', 'rightCylinder', 'rightAxis'];
 
-export async function updateEyeExam(index, updates) {
+export async function updateEyeExam(id, updates) {
   const data = await getEyeExams();
-  if (index < 0 || index >= data.exams.length) return null;
-  const exam = data.exams[index];
+  const exam = data.exams.find(e => e.id === id);
+  if (!exam) return null;
   const patch = Object.fromEntries(EYE_FIELDS.filter(k => updates[k] !== undefined).map(k => [k, updates[k]]));
 
-  if (await isMortalLoomEnabled() && exam.id) {
+  if (await isMortalLoomEnabled()) {
     const updated = await mlPatchById('eyeExams', exam.id, patch);
     console.log(`👁️ Eye exam updated: ${updated?.date} (MortalLoom)`);
     return updated;
@@ -168,25 +188,25 @@ export async function updateEyeExam(index, updates) {
   Object.assign(exam, patch);
   data.exams.sort(byDate);
   await writeLocal(EYES_FILE, data);
-  console.log(`👁️ Eye exam updated at index ${index}: ${exam.date}`);
+  console.log(`👁️ Eye exam updated ${id}: ${exam.date}`);
   return exam;
 }
 
-export async function removeEyeExam(index) {
+export async function removeEyeExam(id) {
   const data = await getEyeExams();
-  if (index < 0 || index >= data.exams.length) return null;
-  const target = data.exams[index];
+  const target = data.exams.find(e => e.id === id);
+  if (!target) return null;
 
-  if (await isMortalLoomEnabled() && target.id) {
+  if (await isMortalLoomEnabled()) {
     const removed = await mlRemoveById('eyeExams', target.id);
     console.log(`👁️ Eye exam removed: ${removed?.date} (MortalLoom)`);
     return removed;
   }
 
-  const [removed] = data.exams.splice(index, 1);
+  data.exams = data.exams.filter(e => e.id !== id);
   await writeLocal(EYES_FILE, data);
-  console.log(`👁️ Eye exam removed: ${removed.date}`);
-  return removed;
+  console.log(`👁️ Eye exam removed: ${target.date}`);
+  return target;
 }
 
 // === Workouts ===

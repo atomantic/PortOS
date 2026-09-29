@@ -2184,3 +2184,30 @@ describe('CODEX_COMPOSER_READY_PATTERN', () => {
     expect(CODEX_COMPOSER_READY_PATTERN.test('Loading MCP servers…')).toBe(false);
   });
 });
+
+describe('createAgyResumeGate', () => {
+  const ID = '81c97d96-72b6-44d1-a6d1-18f3e283d642';
+
+  it('returns the conversation id once the shell has gone quiet, even split across chunks', async () => {
+    const { createAgyResumeGate } = await import('./tuiHandshake.js');
+    const gate = createAgyResumeGate({ settleMs: 1000 });
+    gate.observe('Resume with -c (or command below):\nagy--conversation=81c97d96-72b6-');
+    gate.observe('44d1-a6d1-18f3e283d642\n');
+    expect(gate.takeResume(1500, 1000)).toBeNull();
+    expect(gate.takeResume(2500, 1000)).toBe(ID);
+    expect(gate.takeResume(9000, 1000)).toBeNull();
+  });
+
+  it('stops relaunching after the attempt budget is spent', async () => {
+    const { createAgyResumeGate } = await import('./tuiHandshake.js');
+    const gate = createAgyResumeGate({ settleMs: 0, maxAttempts: 2 });
+    for (let i = 0; i < 2; i++) {
+      gate.observe(`--conversation=${ID}`);
+      expect(gate.takeResume(1, 0)).toBe(ID);
+      gate.recordRelaunch();
+    }
+    gate.observe(`--conversation=${ID}`);
+    expect(gate.takeResume(1, 0)).toBeNull();
+    expect(gate.attempts).toBe(2);
+  });
+});

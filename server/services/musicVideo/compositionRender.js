@@ -76,6 +76,54 @@ async function captureWindow(page, ffmpeg, { startSec, frames, fps, outputPath, 
  * `width`×`height`, `fps` frame. Resolves `[{ path, startSec, durationSec }]` in
  * time order. `onProgress(0..1)` reports captured frames; `signal` cancels.
  */
+function musicVideoSongDocument(project) {
+  const analysis = project?.audioAnalysis && typeof project.audioAnalysis === 'object' && !Array.isArray(project.audioAnalysis)
+    ? project.audioAnalysis : {};
+  let words = null;
+  if (Array.isArray(project?.lyricCues)) {
+    const collected = [];
+    for (const cue of project.lyricCues) {
+      if (!Array.isArray(cue?.words)) continue;
+      words = collected;
+      for (const word of cue.words) {
+        if (!word || typeof word !== 'object') continue;
+        collected.push({
+          w: typeof word.w === 'string' ? word.w : '',
+          startSec: Number.isFinite(word.startSec) ? word.startSec : null,
+          endSec: Number.isFinite(word.endSec) ? word.endSec : null,
+          conf: word.conf === 'matched' || word.conf === 'interpolated' ? word.conf : null,
+        });
+      }
+    }
+  }
+  const features = analysis.features;
+  return {
+    beats: Array.isArray(analysis.beats) ? analysis.beats : [],
+    downbeats: Array.isArray(analysis.downbeats) ? analysis.downbeats : [],
+    sections: Array.isArray(analysis.sections) ? analysis.sections : [],
+    features: features !== null && typeof features === 'object' && !Array.isArray(features) ? features : null,
+    words,
+  };
+}
+
+/**
+ * Render one code-composition music video (or an excerpt of it) through the
+ * HTML composition owner. `startSec` is the master's in-point (#8986); the
+ * page's own duration is the rendered length. Song data is staged as song.json
+ * before the composition snapshot freezes.
+ */
+export async function renderSongComposition({ project, directory, jobId, audioPath, startSec = 0 }) {
+  const { renderComposition } = await import('../htmlComposition/index.js');
+  return renderComposition({
+    jobId,
+    directory,
+    owner: 'music-video',
+    audio: { path: audioPath, startSec },
+    maxDurationSec: Number(project?.audioAnalysis?.durationSec),
+    song: musicVideoSongDocument(project),
+  });
+}
+
 export async function renderTypographyOverlays({ jobId, cues, style, width, height, fps, durationSec, signal, onProgress }) {
   // Snap each window outward to the output frame grid so every overlay frame
   // lands exactly on a footage frame, and never past the video's last frame.

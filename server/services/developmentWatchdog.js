@@ -33,12 +33,21 @@ function reviewFollowUpPrNumber(task, target) {
   return Number.isSafeInteger(urlNumber) && urlNumber > 0 ? urlNumber : null;
 }
 
-function authorized(state, appId, write = false) {
+function mayReadApp(state, appId) {
   const role = normalizePersistentMindMaintainer(state.config?.persistentMindMaintainer);
   const caps = normalizePersistentMindCapabilities(state.config?.persistentMindCapabilities);
-  return role.enabled && caps.readPortos && (!write || caps.createTasks)
+  return role.enabled && caps.readPortos
     && role.appIds.includes(appId) && (!caps.allowedAppIds || caps.allowedAppIds.includes(appId));
 }
+
+function mayCreateTasksForApp(state, appId) {
+  const caps = normalizePersistentMindCapabilities(state.config?.persistentMindCapabilities);
+  return mayReadApp(state, appId) && caps.createTasks;
+}
+
+/** True when the grant, pause flag or CoS execute mode no longer permits queuing work for the app. */
+const authorityLost = (state, appId) =>
+  !mayCreateTasksForApp(state, appId) || state.paused || getDomainMode(state.config, 'cos') !== 'execute';
 
 /** Latest bounded receipt; this read never refreshes, queues or invokes a model. */
 export async function readDevelopmentWatchdogSnapshot() {
@@ -178,7 +187,7 @@ async function retireTerminalReviewFollowUps(app, row) {
   const activeAgentStatuses = new Set(['running', 'queued', 'finalizing', 'paused']);
   for (const followUp of row.terminalReviewFollowUps) {
     const current = await loadState();
-    if (!authorized(current, app.id, true)) return;
+    if (!mayCreateTasksForApp(current, app.id)) return;
     const hasAgent = Object.values(current.agents || {}).some(agent => agent.taskId === followUp.taskId
       && activeAgentStatuses.has(agent.status));
     if (hasAgent) continue;
@@ -201,7 +210,7 @@ async function dispatch(app, decision) {
   // Refresh grant, pause and ownership through the durable queue immediately
   // before a write. The queue's shared work-key admission is authoritative.
   const current = await loadState();
-  if (!authorized(current, app.id, true) || current.paused || getDomainMode(current.config, 'cos') !== 'execute') return { reason: 'authority-changed' };
+  if (authorityLost(current, app.id)) return { reason: 'authority-changed' };
   const { resolveAutonomyBudget } = await import('./cosTaskGenerator.js');
   const budget = await resolveAutonomyBudget(current, Object.values(current.agents || {}).filter(a => a.status === 'running'));
   if (budget.cosAutonomyMode !== 'execute' || budget.autonomousActionsRemaining <= 0) return { reason: 'autonomy-budget' };
@@ -235,10 +244,9 @@ async function dispatch(app, decision) {
     if (owner) return { taskId: owner.id, duplicate: true };
     const { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } = await import('./cosTaskGenerator.js');
     const prepared = await prepareManagedAppImprovementTask('claim-issue', app, current);
-    if (!prepared?.task) return { reason: 'claim-schedule-no-work' };
+    if (!prepared.task) return { reason: 'claim-schedule-no-work' };
     const finalState = await loadState();
-    if (!authorized(finalState, app.id, true) || finalState.paused || !isImprovementEnabled(finalState)
-      || getDomainMode(finalState.config, 'cos') !== 'execute') return { reason: 'authority-changed' };
+    if (authorityLost(finalState, app.id) || !isImprovementEnabled(finalState)) return { reason: 'authority-changed' };
     const task = await addTask({ ...prepared.task, metadata: { ...prepared.task.metadata,
       developmentWatchdog: true, dispatchProvenance: 'development-watchdog' } }, 'internal', { raw: true, suppressDequeue: true });
     if (!task.duplicate) {
@@ -265,7 +273,7 @@ async function dispatch(app, decision) {
     if (dependency.state !== 'CLOSED') return { reason: 'open-dependency' };
   }
   const finalState = await loadState();
-  if (!authorized(finalState, app.id, true) || finalState.paused || getDomainMode(finalState.config, 'cos') !== 'execute') return { reason: 'authority-changed' };
+  if (authorityLost(finalState, app.id)) return { reason: 'authority-changed' };
   const { resolveReviewLoopOptions } = await import('./codeReview.js');
   const { normalizeReviewers, claimSafeReviewers } = await import('../lib/reviewerConfig.js');
   const { isTruthyMeta } = await import('./agentState.js');
@@ -288,7 +296,7 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
   const receipt = { schemaVersion: 1, id: randomUUID(), checkedAt: new Date().toISOString(), source, dryRun,
     complete: true, availableSlots: 0, blockers: [], apps: [], decisions: [], recovery: [] };
   if (!role.enabled) receipt.blockers.push('maintainer-disabled');
-  else if (!role.appIds.some(id => authorized(state, id))) {
+  else if (!role.appIds.some(id => mayReadApp(state, id))) {
     receipt.complete = false;
     receipt.blockers.push('no-readable-maintainer-scope');
     receipt.apps = role.appIds.map(appId => ({ appId, complete: false, blockers: ['app-unavailable-or-not-granted'], pullRequests: [], issues: [] }));
@@ -314,7 +322,7 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
     }
     const queued = tasks.filter(task => ['pending', 'in_progress'].includes(task.status));
     receipt.availableSlots = Math.max(0, (state.config.maxConcurrentAgents || 1) - activeAgents.length - queued.filter(t => t.status === 'pending').length);
-    receipt.recovery = tasks.filter(task => authorized(state, task.metadata?.app || task.metadata?.taskApp) && (task.metadata?.sourceAgentId || task.metadata?.isInvestigation || task.metadata?.diagnostics))
+    receipt.recovery = tasks.filter(task => mayReadApp(state, task.metadata?.app || task.metadata?.taskApp) && (task.metadata?.sourceAgentId || task.metadata?.isInvestigation || task.metadata?.diagnostics))
       .slice(-30).map(task => ({ taskId: task.id, status: task.status, sourceAgentId: task.metadata.sourceAgentId || null,
         sourceTaskId: task.metadata.sourceTaskId || null, kind: task.metadata.reviewLoopFollowUp ? 'review-follow-up' : task.metadata.isInvestigation ? 'investigation' : 'recovery',
         blockedReason: task.metadata.blockedCategory || null }));
@@ -322,11 +330,11 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
     const apps = await getActiveApps();
     for (const id of role.appIds) {
       const app = apps.find(item => item.id === id);
-      if (!app || !authorized(state, id)) { receipt.apps.push({ appId: id, complete: false, blockers: ['app-unavailable-or-not-granted'], pullRequests: [], issues: [] }); continue; }
+      if (!app || !mayReadApp(state, id)) { receipt.apps.push({ appId: id, complete: false, blockers: ['app-unavailable-or-not-granted'], pullRequests: [], issues: [] }); continue; }
       let row;
       try { row = await inspectApp(app, allTasks, localReviewTasks, activeAgentTaskIds); }
       catch { row = { appId: id, complete: false, blockers: ['source-unavailable'], pullRequests: [], issues: [] }; }
-      if (row.complete && !dryRun && !peers.blockers.length && authorized(state, id, true)) {
+      if (row.complete && !dryRun && !peers.blockers.length && mayCreateTasksForApp(state, id)) {
         await retireTerminalReviewFollowUps(app, row).catch(err => {
           console.error(`❌ Development watchdog could not retire a completed PR follow-up: ${err.message}`);
         });

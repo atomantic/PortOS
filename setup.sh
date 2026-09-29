@@ -128,14 +128,15 @@ ensure_ffmpeg
 # via npx. Auto-detects the installed AI environments and lays down the latest
 # command set under ~/.claude/commands (or per-environment equivalent). The
 # git submodule at lib/slashdo is the in-repo source for inline command loading
-# from CoS agents — `npx slash-do@latest` complements that by keeping the
+# from CoS agents — `npx slash-do@<pinned>` complements that by keeping the
 # user-global command pool current. Failures are non-fatal: PortOS still works
 # without the global slash commands.
-echo "Installing/updating slash-do commands (npx slash-do@latest)..."
+SLASHDO_VERSION="$(tr -d '[:space:]' < scripts/SLASHDO_VERSION)"
+echo "Installing/updating slash-do commands (npx slash-do@${SLASHDO_VERSION})..."
 # Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
 # all detected envs instead of hanging on readline when stdin is not a TTY.
-if ! echo a | npx --yes slash-do@latest; then
-    echo "⚠️  slash-do install failed — skipping (you can re-run later: npx slash-do@latest)"
+if ! echo a | npx --yes "slash-do@${SLASHDO_VERSION}"; then
+    echo "⚠️  slash-do install failed — skipping (you can re-run later: npx slash-do@${SLASHDO_VERSION})"
 fi
 echo ""
 

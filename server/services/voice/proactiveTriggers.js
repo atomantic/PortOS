@@ -40,6 +40,7 @@ import { speakProactive as defaultSpeak } from './proactiveSpeech.js';
 import { getVoiceConfig } from './config.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
 
+import { isTruthyMeta } from '../../lib/metadataFlags.js';
 // Per-source minimum interval between spoken lines (ms). Tuned for an opt-in
 // assistant: critical errors are rare so a wide spacing is fine; tasks and
 // notifications can cluster, so a one-minute floor keeps them from chattering.
@@ -177,7 +178,6 @@ export const formatEscalationOpeningLine = (notification) => {
 // Truthy check mirroring isTruthyMeta — task metadata round-trips through
 // TASKS.md, so `voiceDispatch: true` comes back as the STRING 'true'. Kept
 // inline so this module stays decoupled from the agent-state helpers.
-const isMetaTrue = (v) => v === true || v === 'true';
 
 // Completion of a voice-dispatched coding task, keyed off the task's TERMINAL
 // status (completed / blocked) rather than per-agent-attempt — so a task that
@@ -356,7 +356,7 @@ export const wireProactiveTriggers = ({
     const task = evt.task;
     const status = task?.status;
     if (status !== 'completed' && status !== 'blocked') return;
-    if (!isMetaTrue(task.metadata?.voiceDispatch)) return;
+    if (!isTruthyMeta(task.metadata?.voiceDispatch)) return;
     if (status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') return;
     // A TIMED cooldown is not a terminal outcome — the sweeper flips it back to
     // `pending` in minutes. Announcing it would be wrong AND would burn the

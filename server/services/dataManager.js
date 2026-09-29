@@ -81,6 +81,7 @@ export const CATEGORIES = {
   'composition-proofs': { label: 'Composition Proofs', description: 'Contact-sheet review stills from HTML-composition proof renders — re-rendered from source, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'music-video-compositions': { label: 'Music Video Overlay Scratch', description: 'Typography overlay frames for an in-flight composed music-video render — removed when the render ends and swept at boot', archivable: false, deletable: false },
   'code-animations': { label: 'Code Animations', description: 'Generated animation HTML retained with its job history — the only copy of provider-generated work', archivable: true, deletable: false },
+  'code-animation-exports': { label: 'Code Animation Export Staging', description: 'Animation HTML plus the frame-exact render shim, staged once per MP4 export — safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'commission-feedback': { label: 'Commission Feedback', description: 'Reactions on creative commissions (file mirror of the Postgres store)', archivable: true, deletable: false },
   'conflict-journal': { label: 'Conflict Journal', description: 'Peer-sync conflict history — diagnostics only, safe to purge', archivable: true, deletable: true, purgeScope: 'category' },
   'cos': { label: 'Chief of Staff', description: 'Agent data, reports, memories', archivable: true, deletable: false },
