@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { LayoutGrid, Download } from 'lucide-react';
 import toast from '../ui/Toast';
 import { composeMoodBoardCollage } from '../../services/api';
+import { moodBoardCollageSrc } from '../../lib/moodBoardItemSrc';
 
 /**
  * Board-level "Collage" control: compiles every image (plus sampled video
@@ -17,6 +18,7 @@ export default function MoodBoardCollagePanel({ board, onBoardChange }) {
   const [result, setResult] = useState(null);
 
   if (!hasVisual) return null;
+  const shownSrc = result?.url || moodBoardCollageSrc(board);
 
   const handleBuild = async () => {
     setBuilding(true);
@@ -28,7 +30,7 @@ export default function MoodBoardCollagePanel({ board, onBoardChange }) {
     setBuilding(false);
     if (!res) return;
     setResult(res);
-    if (res.board && addFramesToBoard) onBoardChange?.(res.board);
+    if (res.board) onBoardChange?.(res.board);
     toast.success(`Collage built: ${res.cols}×${res.rows} grid, ${res.cells} image${res.cells === 1 ? '' : 's'}`);
   };
 
@@ -73,12 +75,12 @@ export default function MoodBoardCollagePanel({ board, onBoardChange }) {
           {building ? 'Building…' : 'Build collage'}
         </button>
       </div>
-      {result ? (
+      {shownSrc ? (
         <div className="space-y-2">
-          <img src={result.url} alt="Board collage" className="w-full max-w-md rounded border border-port-border" />
+          <img src={shownSrc} alt="Board collage" className="w-full max-w-md rounded border border-port-border" />
           <div className="flex items-center gap-3 text-xs text-gray-400">
-            <span>{result.width}×{result.height}px · {result.cols}×{result.rows} grid{result.skipped ? ` · ${result.skipped} skipped` : ''}</span>
-            <a href={result.url} download={result.filename} className="flex items-center gap-1 text-port-accent hover:underline">
+            {result ? <span>{result.width}×{result.height}px · {result.cols}×{result.rows} grid{result.skipped ? ` · ${result.skipped} skipped` : ''}</span> : null}
+            <a href={shownSrc} download className="flex items-center gap-1 text-port-accent hover:underline">
               <Download className="w-3.5 h-3.5" aria-hidden="true" /> Download
             </a>
           </div>

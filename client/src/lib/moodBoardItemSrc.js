@@ -27,6 +27,13 @@ export function moodBoardPosterSrc(board) {
   return `/data/images/${encodeURIComponent(name)}`;
 }
 
+// The board's last compiled collage (persisted so it survives a reload).
+export function moodBoardCollageSrc(board) {
+  const name = typeof board?.collageImageRef === 'string' ? board.collageImageRef.trim() : '';
+  if (!name || name.includes('/') || name.includes('\\')) return null;
+  return `/data/images/${encodeURIComponent(name)}`;
+}
+
 export function moodBoardItemSrc(item) {
   if (item?.imageUrl) return item.imageUrl;
   if (typeof item?.mediaKey === 'string' && item.mediaKey.startsWith(IMAGE_PREFIX)) {

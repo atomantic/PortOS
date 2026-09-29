@@ -528,7 +528,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // the ahead-version push until it upgrades. Video bytes ride the existing
   // asset manifest (`video:<filename>` ref → PATHS.videos, receiver regenerates
   // the poster thumbnail on pull).
-  // A board's composite `style` prompt and `posterImageRef` are additive on
+  // A board's composite `style` prompt, `posterImageRef` and `collageImageRef` are additive on
   // that same v2 record: whole-record LWW plus every local mutator spreads the
   // board, so an older peer preserves both keys and does not execute against
   // them. The poster file rides the asset manifest as a gallery image. No bump.

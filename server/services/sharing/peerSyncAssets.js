@@ -662,6 +662,8 @@ export function referenceBoardAssetManifest(board) {
   // is dropped later by the hash step, same as any other image ref.
   const poster = imageAssetReference(board?.posterImageRef);
   if (poster) dedup.set(`${poster.kind}:${poster.filename}`, poster);
+  const collage = imageAssetReference(board?.collageImageRef);
+  if (collage) dedup.set(`${collage.kind}:${collage.filename}`, collage);
   for (const it of Array.isArray(board?.items) ? board.items : []) {
     // `video` items (#4188) carry a `video:<filename>` mediaKey (the ref IS
     // the on-disk filename, so collectionVideoRefToFilename passes it through

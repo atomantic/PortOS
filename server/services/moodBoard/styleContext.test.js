@@ -80,4 +80,15 @@ describe('collectBoardStyleContext', () => {
     const total = ctx.items.reduce((sum, it) => sum + it.note.length, 0);
     expect(total).toBeLessThanOrEqual(24000);
   });
+
+  it('samples across the whole board when over budget instead of keeping only the first items', () => {
+    const many = Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, type: 'text', text: `pin-${i}` }));
+    const ctx = collectBoardStyleContext(boardWith(many));
+    expect(ctx.items).toHaveLength(60);
+    const idx = ctx.items.map((it) => Number(it.note.slice(4)));
+    expect(idx).toEqual([...idx].sort((a, b) => a - b));
+    expect(idx[0]).toBeLessThan(10);
+    expect(idx[idx.length - 1]).toBeGreaterThan(190);
+    expect(ctx.droppedItems).toBe(140);
+  });
 });

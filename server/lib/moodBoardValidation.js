@@ -86,6 +86,7 @@ export const moodBoardUpdateSchema = z.object({
   description: z.string().max(5000).optional(),
   style: moodBoardStyleSchema.nullable().optional(),
   posterImageRef: posterFilenameSchema.nullable().optional(),
+  collageImageRef: posterFilenameSchema.nullable().optional(),
 }).strict();
 
 // Add-item. An `image` item requires at least one of mediaKey / imageUrl; a

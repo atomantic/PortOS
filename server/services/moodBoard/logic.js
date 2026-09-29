@@ -174,6 +174,7 @@ export function applyBoardPatch(board, patch) {
   if (patch.description !== undefined) next.description = patch.description;
   if (patch.style !== undefined) next.style = normalizeBoardStyle(patch.style);
   if (patch.posterImageRef !== undefined) next.posterImageRef = patch.posterImageRef ?? null;
+  if (patch.collageImageRef !== undefined) next.collageImageRef = patch.collageImageRef ?? null;
   next.updatedAt = nowIso();
   return next;
 }
@@ -305,6 +306,7 @@ export function applyBoardRestore(board, patch) {
   if (Array.isArray(patch.items)) next.items = patch.items;
   if (patch.style !== undefined) next.style = normalizeBoardStyle(patch.style);
   if (patch.posterImageRef !== undefined) next.posterImageRef = patch.posterImageRef ?? null;
+  if (patch.collageImageRef !== undefined) next.collageImageRef = patch.collageImageRef ?? null;
   next.updatedAt = nowIso();
   return next;
 }
