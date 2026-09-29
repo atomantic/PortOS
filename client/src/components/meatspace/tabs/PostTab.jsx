@@ -88,8 +88,8 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
     setStatsWeek(stWeek);
   }
 
-  async function handleStart(drillConfigs, conditions, training = false, sessionPlan = null, benchmark = null) {
-    const started = await session.startSession(drillConfigs, training, conditions || {}, sessionPlan, benchmark);
+  async function handleStart(options) {
+    const started = await session.startSession(options);
     if (started) navigate('/post/session/run');
   }
 

@@ -429,7 +429,7 @@ export default function PostSessionLauncher({
     // for better retention (issue #2100). Full coverage is preserved — every
     // enabled drill still runs, just reordered.
     const drillConfigs = interleaveByDomain([...mathConfigs, ...llmConfigs, ...cognitiveConfigs, ...memoryConfigs]);
-    onStart(drillConfigs, buildCleanConditions(conditions), mode === 'train');
+    onStart({ drills: drillConfigs, conditions: buildCleanConditions(conditions), training: mode === 'train' });
   }
 
   // Build domain → enabled drills map for quick session
@@ -513,13 +513,18 @@ export default function PostSessionLauncher({
       return drillConfig;
     });
     if (!drillConfigs.length) return;
-    onStart(drillConfigs, buildCleanConditions(conditions), mode === 'train', {
+    onStart({
+      drills: drillConfigs,
+      conditions: buildCleanConditions(conditions),
+      training: mode === 'train',
+      plan: {
       targetDurationSec: quickPlan.targetDurationSec,
       estimatedDurationSec: quickPlan.estimatedDurationSec,
       toleranceSec: quickPlan.toleranceSec,
       omittedDomains: quickPlan.omittedDomains,
       omittedReviews: quickPlan.omittedReviews,
       selectedTypes: quickPlan.selected.map(candidate => candidate.type),
+      },
     });
   }
 
@@ -536,11 +541,15 @@ export default function PostSessionLauncher({
           config: { ...task.config },
           timeLimitSec: task.timeLimitSec,
         }));
-        onStart(drillConfigs, buildCleanConditions(conditions), false, null, {
+        onStart({
+          drills: drillConfigs,
+          conditions: buildCleanConditions(conditions),
+          benchmark: {
           protocolId: protocol.protocolId,
           protocolVersion: protocol.protocolVersion,
           scorerVersion: protocol.scorerVersion,
           formId: form.formId,
+          },
         });
       })
       .catch(error => setBenchmarkError(error.message || 'Benchmark could not be loaded'))
@@ -592,7 +601,7 @@ export default function PostSessionLauncher({
   function handleFocusDomain(domainKey) {
     const drills = enabledDomains[domainKey];
     if (!drills || drills.length === 0) return;
-    onStart(drills.map(d => buildFocusDrillConfig(d, domainKey)), buildCleanConditions(conditions), mode === 'train');
+    onStart({ drills: drills.map(d => buildFocusDrillConfig(d, domainKey)), conditions: buildCleanConditions(conditions), training: mode === 'train' });
   }
 
   // Start a session with exactly ONE recommended drill (issue #2100): an Up next
@@ -601,7 +610,7 @@ export default function PostSessionLauncher({
   function startDrillByType(type) {
     const entry = allEnabledDrills.find(d => d.type === type);
     if (!entry) return;
-    onStart([buildFocusDrillConfig(entry)], buildCleanConditions(conditions), mode === 'train');
+    onStart({ drills: [buildFocusDrillConfig(entry)], conditions: buildCleanConditions(conditions), training: mode === 'train' });
   }
 
   // Launch a single due maintenance-review rep from an "Up next" skill-review
@@ -628,7 +637,7 @@ export default function PostSessionLauncher({
       reviewLabel: rep.label,
       ...(rep.providerId && { providerId: rep.providerId }),
     };
-    onStart([drillConfig], buildCleanConditions(conditions), mode === 'train');
+    onStart({ drills: [drillConfig], conditions: buildCleanConditions(conditions), training: mode === 'train' });
   }
 
   const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0 || enabledMemoryDrills.length > 0;
