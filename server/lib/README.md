@@ -792,3 +792,4 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `trackLimits.js` | Track record length/count caps shared by the tracks sanitizer and client editors. |
 | `shellLimits.js` | `MAX_TOTAL_SESSIONS` shell-session cap shared by the shell service and the Shell UI. |
 | `muscriptorModels.js` | `MUSCRIPTOR_MODELS` (`small`/`medium`/`large`) — MuScriptor size tiers shared by route schemas and `audioMidiTranscription.js`; pinned to the Python runner's argparse choices. |
+| `loopInterval.js` | Loop interval grammar (`MIN_INTERVAL_MS`, `parseInterval`, `isValidLoopInterval`) shared by `services/loops.js` and `createLoopSchema` so the route rejects what the service would. |

@@ -52,14 +52,14 @@ async function ensureProviderPage(accountType) {
  * Auto-launches the browser tab and waits for auth if needed.
  */
 export async function executeAction(accountId, messageId, action) {
-  if (!UUID_RE.test(accountId)) throw new Error('Invalid accountId');
-  if (!['archive', 'delete'].includes(action)) throw new Error(`Unsupported action: ${action}`);
+  if (!UUID_RE.test(accountId)) throw new ServerError('Invalid accountId', { status: 400, code: 'VALIDATION_ERROR' });
+  if (!['archive', 'delete'].includes(action)) throw new ServerError(`Unsupported action: ${action}`, { status: 400, code: 'VALIDATION_ERROR' });
 
   const account = await getAccount(accountId);
-  if (!account) throw new Error('Account not found');
+  if (!account) throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
 
   const message = await getMessage(accountId, messageId);
-  if (!message) throw new Error('Message not found');
+  if (!message) throw new ServerError('Message not found', { status: 404, code: 'NOT_FOUND' });
 
   // Gmail: use API directly instead of browser automation
   if (account.type === 'gmail' && message.apiId) {

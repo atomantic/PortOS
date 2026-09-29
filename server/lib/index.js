@@ -774,3 +774,4 @@ export * from './shellLimits.js';
 export * from './layeredIntelligenceRejectionLabels.js';
 export * from './muscriptorModels.js';
 export * from './metadataFlags.js';
+export * from './loopInterval.js';
