@@ -319,7 +319,13 @@ describe('owned maintenance worker entry', () => {
     writeFileSync(join(root, 'data', 'database-writers', writer.id, 'reservation.json'), 'private-example-marker');
     const operation = journal.begin({ source, target });
     const token = journal.acquireCoordinator(operation.id);
-    const outcome = await launch(operation.id, token);
+    // This contract is the worker entry refusal, before platform-specific
+    // transfer. Reserve the real one-use owner and invoke the fixed worker
+    // directly; detached supervisor launch is exercised by the tests above.
+    journal.reserveCoordinatorWorker(operation.id, token);
+    const workerUrl = new URL('../../scripts/database-maintenance-worker.mjs', import.meta.url).href;
+    const outcome = await run(`process.argv=[process.execPath,'worker',${JSON.stringify(operation.id)},${JSON.stringify(token)}];
+      await import(${JSON.stringify(workerUrl)});`);
     expect(outcome.status).toBe(1);
     expect(outcome.stdout).toBe('');
     expect(outcome.stderr).toContain('ownership, writer, or transfer evidence is incomplete');

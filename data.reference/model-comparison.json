@@ -2,6 +2,38 @@
   "schemaVersion": 1,
   "observations": [
     {
+      "id": "openai-gpt-6.1-sol-pricing-2026-09-29-standard",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-sol",
+      "effort": "unspecified",
+      "configuration": "OpenAI API standard tier; uncached input / output tokens, context at or below the standard-rate threshold",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-29)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+          "retrievedAt": "2026-09-29T17:24:10.680242Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+          "retrievedAt": "2026-09-29T17:24:10.680436Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Official GPT-6.1 Sol standard API rates: $2/M uncached input and $10/M output. Cached input is $0.10/M and cache writes are $2.50/M, separate classes not represented here. Above 272K input tokens, input/cache rates are 2x and output is 1.5x. Fast is 2x Standard; Batch/Flex are 50% lower. These API rates do not describe Codex subscription quota. Quality, latency, throughput, and task cost are not published on this source."
+    },
+    {
       "id": "lcb-generation-2023-05-08--2025-04-07-qwen3-235b-a22b-unspecified",
       "provider": "Qwen",
       "model": "qwen3-235b-a22b",

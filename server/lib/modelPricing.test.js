@@ -108,6 +108,14 @@ describe('resolveModelRates', () => {
     expect(resolveModelRates('antigravity-cli', 'antigravity-configured-default')).toMatchObject({ rateModel: 'gemini-3.1-pro-preview', matched: 'family' });
   });
 
+  it('prices GPT-6.1 Sol with its lower cached-input rate', () => {
+    expect(resolveModelRates('codex', 'gpt-6.1-sol')).toMatchObject({
+      rateModel: 'gpt-6.1-sol', matched: 'exact',
+      inputPer1M: 2, outputPer1M: 10, cacheReadPer1M: 0.1, cacheWritePer1M: 2.5,
+    });
+    expect(resolveModelRates('codex', 'gpt-6-sol').cacheReadPer1M).toBe(0.2);
+  });
+
   it('prices GPT-6 Astra at standard rates with derived cache tiers', () => {
     expect(resolveModelRates('codex', 'gpt-6-astra')).toMatchObject({
       rateModel: 'gpt-6-astra',

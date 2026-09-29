@@ -36,6 +36,7 @@ export const PRICING_AS_OF = '2026-09-01';
 const MODEL_RATE_AS_OF = Object.freeze({
   'claude-sonnet-5-5': '2026-09-28',
   'claude-opus-5-5': '2026-09-23',
+  'gpt-6.1-sol': '2026-09-29',
   'gpt-6-sol': '2026-09-22',
   'gpt-6-luna': '2026-09-22',
   'gpt-5.6-sol': '2026-09-22',
@@ -96,6 +97,8 @@ const EXACT_RATES = {
   // verified against the 2026-09-22 model launch:
   // https://openai.com/index/introducing-gpt-6-sol-and-luna/
   'gpt-6-astra': [10.0, 50.0],
+  // https://developers.openai.com/api/docs/models/gpt-6.1-sol
+  'gpt-6.1-sol': [2.0, 10.0],
   'gpt-6-sol': [2.0, 10.0],
   'gpt-6-luna': [0.1, 0.5],
   'gpt-5.6-sol': [4.0, 20.0],
@@ -218,6 +221,8 @@ const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
  */
 const DEFAULT_CACHE_MULTIPLIERS = { read: 0.1, write: 1.25 };
 const CACHE_MULTIPLIER_RULES = [
+  // GPT-6.1 Sol cached input is $0.10/MTok against a $2 input rate.
+  { test: /^gpt-6\.1-sol$/, read: 0.05, write: 1.25 },
   { test: /^grok-4\.7$/, read: 0.25, write: 1 },
   { test: /^grok/, read: 0.15, write: 1.25 },
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },

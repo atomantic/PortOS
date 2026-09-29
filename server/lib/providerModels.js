@@ -189,7 +189,7 @@ export const EFFORT_LEVELS = Object.freeze([...new Set([
   ...CURSOR_EFFORT_LEVELS,
 ])]);
 
-const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra']);
+const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6.1-sol']);
 
 // Models that REJECT `minimal`. The gpt-6 family dropped the rung: codex
 // against `gpt-6-astra` answers HTTP 400 `unsupported_value` — "'minimal' is

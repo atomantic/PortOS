@@ -682,13 +682,15 @@ describe('Provider Service', () => {
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([
         'gpt-6-astra',
+        'gpt-6.1-sol',
+        'gpt-6-sol',
+        'gpt-6-luna',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
         'gpt-5.4',
         'gpt-5.4-mini',
-        'gpt-5.3-codex-spark',
       ]);
       expect(codex.defaultModel).toBe('gpt-5.6-terra');
       expect(codex.lightModel).toBe('gpt-5.6-luna');
@@ -717,13 +719,15 @@ describe('Provider Service', () => {
       const codexTui = await providerService.getProviderById('codex-tui');
       expect(codexTui.models).toEqual([
         'gpt-6-astra',
+        'gpt-6.1-sol',
+        'gpt-6-sol',
+        'gpt-6-luna',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
         'gpt-5.4',
         'gpt-5.4-mini',
-        'gpt-5.3-codex-spark',
       ]);
       expect(codexTui.defaultModel).toBe('gpt-5.6-terra');
       expect(codexTui.lightModel).toBe('gpt-5.6-luna');
@@ -731,8 +735,10 @@ describe('Provider Service', () => {
       expect(codexTui.heavyModel).toBe('gpt-5.6-sol');
     });
 
-    it('widens a prior-seeded Codex catalog without changing selected pins', async () => {
-      const priorModels = ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'];
+    it.each([
+      ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
+      ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+    ].map(models => [models]))('widens a prior-seeded Codex catalog without changing selected pins (%j)', async (priorModels) => {
       await writeProvidersFile({
         activeProvider: 'codex',
         providers: {
@@ -753,13 +759,15 @@ describe('Provider Service', () => {
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([
         'gpt-6-astra',
+        'gpt-6.1-sol',
+        'gpt-6-sol',
+        'gpt-6-luna',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
         'gpt-5.4',
         'gpt-5.4-mini',
-        'gpt-5.3-codex-spark',
       ]);
       expect(codex.defaultModel).toBe('gpt-5.6-luna');
       expect(codex.lightModel).toBe('gpt-5.6-sol');
@@ -789,13 +797,15 @@ describe('Provider Service', () => {
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([
         'gpt-6-astra',
+        'gpt-6.1-sol',
+        'gpt-6-sol',
+        'gpt-6-luna',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
         'gpt-5.4',
         'gpt-5.4-mini',
-        'gpt-5.3-codex-spark',
       ]);
     });
 

@@ -11,13 +11,15 @@ const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 const CODEX_MODELS = [
   'gpt-6-astra',
+  'gpt-6.1-sol',
+  'gpt-6-sol',
+  'gpt-6-luna',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',
   'gpt-5.5',
   'gpt-5.4',
   'gpt-5.4-mini',
-  'gpt-5.3-codex-spark',
 ];
 const CODEX_MODEL_DEFAULTS = {
   defaultModel: 'gpt-5.6-terra',
@@ -26,6 +28,8 @@ const CODEX_MODEL_DEFAULTS = {
   heavyModel: 'gpt-5.6-sol',
 };
 const PRIOR_CODEX_MODEL_CATALOGS = [
+  ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+  ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
   ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
   ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.3-codex-spark'],
 ];
