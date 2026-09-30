@@ -285,7 +285,9 @@ describe('Codex terminal model-access rejection (#9319)', () => {
 
   it('settles a chunked structured rejection, finalizes once, and tears down without continuing', async () => {
     const { controller, paste, write, finalizeAgent, resolveErrorAnalysis, kill, closers } = await submitted();
-    for (const chunk of [rejection.slice(0, 90), rejection.slice(90), ended, composer]) {
+    // A first-request rejection has no work separator: Codex's terminal ■
+    // error cell itself is emitted only after on_error finalizes the turn.
+    for (const chunk of [rejection.slice(0, 90), rejection.slice(90), composer]) {
       await controller.handleData(chunk);
     }
     await vi.advanceTimersByTimeAsync(4000);
@@ -311,8 +313,9 @@ describe('Codex terminal model-access rejection (#9319)', () => {
   });
 
   it.each([
-    ['no fresh completed turn', rejection + composer],
+    ['no terminal error-turn gutter', rejection.replace('■ ', '') + composer],
     ['no fresh empty composer', rejection + ended],
+    ['stale composer from before the error', composer + rejection],
     ['transient HTTP failure', rejection.replace('400 Bad Request', '500 Internal Server Error') + ended + composer],
     ['quoted prose', '> ' + rejection.trimStart() + ended + composer],
     ['productive tool output after a fixture', rejection + ended + composer + '• Running tests (1s • esc to interrupt)\n'],

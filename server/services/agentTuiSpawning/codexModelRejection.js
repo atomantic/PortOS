@@ -4,7 +4,6 @@
 const BUFFER_CAP = 4096;
 const SETTLE_MS = 5000;
 const ERROR_PREFIX = /(?:^|[\r\n])[ \t]*■\s*Unexpected\s*status\s*400\s*Bad\s*Request\s*:\s*/i;
-const TURN_ENDED = /(?:^|[\r\n])[ \t]*[─━]+\s*Worked\s*for\s+[^\r\n]+[\r\n]/i;
 const IDLE_COMPOSER = /(?:^|[\r\n])[ \t]*›[ \t]*Ask\s*Codex[^\r\n]*[\r\n]/i;
 const WORKING = /esc\s*to\s*interrupt|(?:^|[\r\n])[ \t]*[•●]\s*(?:Working|Thinking|Running|Reconnecting)\b/i;
 
@@ -40,14 +39,16 @@ export function createCodexModelRejectionGate() {
         || !/model\s*is\s*not\s*supported\s*when\s*using\s*Codex\s*with\s*a\s*ChatGPT\s*account/i.test(response.error.message)) return;
 
       const afterError = afterPrefix.slice(envelope[0].length);
-      const ended = TURN_ENDED.exec(afterError);
-      if (!ended) return;
-      const afterTurn = afterError.slice(ended.index + ended[0].length);
-      const composer = IDLE_COMPOSER.exec(afterTurn);
-      // A fresh empty composer alone also renders DURING a live turn. Require
-      // the turn-end separator before it and invalidate on any later work.
+      const composer = IDLE_COMPOSER.exec(afterError);
+      // Codex on_error finalizes its turn BEFORE adding the ■ error cell. The
+      // Worked-for separator is conditional on work, so a rejected first request
+      // need not have it. The error cell is our turn-end evidence; demand a FRESH
+      // empty composer after it, and invalidate on any later work.
       if (!composer || WORKING.test(afterError)) return;
-      const afterComposer = afterTurn.slice(composer.index + composer[0].length);
+      const beforeComposer = afterError.slice(0, composer.index);
+      if (beforeComposer.split(/[\r\n]/).some(line => line.trim()
+        && !/^[ \t]*[─━]+\s*Worked\s*for\s+[^\r\n]+$/i.test(line))) return;
+      const afterComposer = afterError.slice(composer.index + composer[0].length);
       // Only footer chrome may follow: subsequent tool/assistant output makes
       // this a quoted fixture or a recovered session, never a terminal verdict.
       if (afterComposer.split(/[\r\n]/).some(line => line.trim()
