@@ -82,11 +82,13 @@ export function visualDirection(spec) {
 // `clause` is the scene's applied treatment direction (#8980) — the composition
 // constraints for a frame or a motion prompt. Same order as the client's
 // buildFramePrompt/buildShotPrompt.
-function composePrompt(primary, fallback, project, clause) {
+// A motion prompt (`motion: true`) omits the mood-board look: the i2v model
+// starts from the reference frame, which already carries it.
+function composePrompt(primary, fallback, project, clause, { motion = false } = {}) {
   return [
     primary?.trim() || fallback?.trim() || '',
     project.concept?.style?.trim() || '',
-    musicVideoCreativeContext(project.concept),
+    musicVideoCreativeContext(project.concept, { moodBoard: !motion }),
     visualDirection(project.visualSpec),
     clause?.trim() || '',
   ].filter(Boolean).join(', ');
@@ -96,7 +98,7 @@ function composePrompt(primary, fallback, project, clause) {
 export const sceneFramePrompt = (project, scene) => composePrompt(scene.framePrompt, scene.prompt, project, scene.direction?.frameClause);
 
 /** A scene's composed shot (motion) prompt. */
-export const sceneShotPrompt = (project, scene) => composePrompt(scene.prompt, scene.framePrompt, project, scene.direction?.motionClause);
+export const sceneShotPrompt = (project, scene) => composePrompt(scene.prompt, scene.framePrompt, project, scene.direction?.motionClause, { motion: true });
 
 /** Build the export manifest for a project. */
 export function buildHandoffManifest(project, { now = new Date().toISOString() } = {}) {

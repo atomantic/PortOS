@@ -21,7 +21,15 @@ function universeStyleSnapshot(universe) {
   ].filter(Boolean).join('\n').slice(0, STYLE_SNAPSHOT_MAX);
 }
 
+// Prefer the board's synthesized style (a look description with its own
+// avoid list) over its raw item captions, which name the pictured places and
+// subjects ("a woman sitting in a bathtub") rather than the look.
 function moodBoardStyleSnapshot(board) {
+  const synthesized = board?.style?.prompt?.trim();
+  if (synthesized) {
+    const avoid = board.style.negativePrompt?.trim();
+    return [synthesized, avoid ? `Avoid: ${avoid}` : ''].filter(Boolean).join('\n').slice(0, STYLE_SNAPSHOT_MAX);
+  }
   const context = board ? collectBoardStyleContext(board) : null;
   if (!context) return '';
   return [context.name, context.description, ...context.items.map((item) => Object.values(item).join('; '))]

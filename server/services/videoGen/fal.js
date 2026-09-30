@@ -204,6 +204,21 @@ async function pollFalStatus({ statusUrl, apiKey }) {
   return res.json();
 }
 
+/** A short, single-line reason from a fal error response body (`detail` string or validation list), or ''. */
+async function falErrorDetail(response) {
+  const text = typeof response.text === 'function' ? await response.text().catch(() => '') : '';
+  if (!text) return '';
+  let reason = text;
+  try {
+    const body = JSON.parse(text);
+    const detail = body?.detail ?? body?.error ?? body?.message;
+    reason = Array.isArray(detail)
+      ? detail.map((d) => [d?.loc?.slice?.(-1)?.[0], d?.msg || d?.type].filter(Boolean).join(': ')).join('; ')
+      : typeof detail === 'string' ? detail : JSON.stringify(detail ?? body);
+  } catch { /* not JSON: keep the text */ }
+  return reason.replace(/\s+/g, ' ').trim().slice(0, 300);
+}
+
 // Retry only reads of the already-paid render, including body consumption.
 // Schema/JSON errors and permanent HTTP failures must not enter this loop.
 async function readCompletedRender(url, { apiKey, signal, deadline, video = false }) {
@@ -218,8 +233,13 @@ async function readCompletedRender(url, { apiKey, signal, deadline, video = fals
         signal,
       }, Math.min(remaining, video ? FAL_DOWNLOAD_TIMEOUT_MS : FAL_POLL_TIMEOUT_MS));
       if (!response.ok) {
-        const error = new Error(`fal.ai ${video ? 'video download' : 'result retrieval'} failed: HTTP ${response.status}`);
-        error.transientRead = response.status === 408 || response.status === 429 || (response.status >= 500 && response.status <= 599);
+        const transientRead = response.status === 408 || response.status === 429 || (response.status >= 500 && response.status <= 599);
+        // A permanent failure on the result read is how fal reports a job that
+        // failed on its side (a 422 with a `detail` naming the input or policy
+        // violation). Keep that reason — without it the job just says "HTTP 422".
+        const detail = !transientRead && !video ? await falErrorDetail(response) : '';
+        const error = new Error(`fal.ai ${video ? 'video download' : 'result retrieval'} failed: HTTP ${response.status}${detail ? ` — ${detail}` : ''}`);
+        error.transientRead = transientRead;
         throw error;
       }
       const value = await (video ? response.arrayBuffer() : response.json());

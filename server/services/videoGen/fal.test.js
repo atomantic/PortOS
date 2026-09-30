@@ -654,6 +654,12 @@ describe('videoGen/fal — recover completed renders (#8564)', () => {
     expect(counts).toEqual({ submit: 1, result: 1, video: phase === 'video' ? 1 : 0 });
     await expect(readFile(join(FAKE_VIDEOS_DIR, job.filename))).rejects.toMatchObject({ code: 'ENOENT' });
   });
+  it('keeps fal\'s reason when the result read reports a failed job', async () => {
+    installReads({ result: () => new Response(JSON.stringify({ detail: [{ loc: ['body', 'image_url'], msg: 'Image flagged by the content checker', type: 'content_policy_violation' }] }), { status: 422 }) });
+    const job = await generate();
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed', error: expect.stringContaining('HTTP 422 — image_url: Image flagged by the content checker') });
+    expect(counts).toEqual({ submit: 1, result: 1, video: 0 });
+  });
   it('shares the ten-minute budget across result timeouts, backoff and a stalled video body', async () => {
     installReads({
       result: (attempt, signal) => attempt < 3 ? stalledResponse(signal) : jsonResponse({ video: { url: videoUrl } }),
