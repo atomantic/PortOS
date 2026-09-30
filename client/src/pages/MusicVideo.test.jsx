@@ -1798,7 +1798,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
         { id: 'mvr-cs-set-harbor', imageId: 'harbor.png', condition: true },
         { id: 'mvr-cs-set-roof', imageId: 'roof.png', condition: false },
       ] },
-    });
+    }, 'board');
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       referenceImageFiles: ['character.png', 'roof.png'],

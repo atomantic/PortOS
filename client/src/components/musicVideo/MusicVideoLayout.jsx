@@ -85,9 +85,10 @@ export default function MusicVideoLayout({
   }, []);
 
   // A new tab starts at its top, not wherever the last one was scrolled to.
-  const firstStage = useRef(true);
+  const shownStage = useRef(stage);
   useEffect(() => {
-    if (firstStage.current) { firstStage.current = false; return; }
+    if (shownStage.current === stage) return;
+    shownStage.current = stage;
     document.getElementById('main-content')?.scrollTo?.({ top: 0 });
   }, [stage]);
 
