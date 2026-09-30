@@ -270,12 +270,12 @@ function documentBoundaryTimes(data, window) {
 
 // Mux the silent picture with the master song (and the optional bed), both
 // cut to the window on SONG time.
-function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationSec, songDurationSec, soundBed = null, buildBed, audioNorm }) {
+function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationSec, songDurationSec, soundBed = null, buildBed, audioNorm, fade = '' }) {
   if (!soundBed?.path) {
     const args = ['-hide_banner', '-loglevel', 'error', '-i', videoPath];
     if (startSec > 0) args.push('-ss', String(startSec));
     args.push('-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-t', String(durationSec), '-c:v', 'copy',
-      '-af', `atrim=duration=${durationSec},apad=whole_dur=${durationSec},asetpts=PTS-STARTPTS`,
+      '-af', `atrim=duration=${durationSec},apad=whole_dur=${durationSec},asetpts=PTS-STARTPTS${fade}`,
       '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', outputPath);
     return args;
   }
@@ -284,7 +284,7 @@ function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationS
     firstInputIdx: 2, mainLabel: '[master]', outLabel: '[mixa]',
   });
   const filters = [`[1:a]${audioNorm}[master]`, ...bed.filters,
-    `[mixa]atrim=start=${startSec}:end=${startSec + durationSec},asetpts=PTS-STARTPTS,apad=whole_dur=${durationSec}[outa]`];
+    `[mixa]atrim=start=${startSec}:end=${startSec + durationSec},asetpts=PTS-STARTPTS,apad=whole_dur=${durationSec}${fade}[outa]`];
   return ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-i', audioPath, ...bed.inputs,
     '-filter_complex', filters.join(';'), '-map', '0:v:0', '-map', '[outa]', '-t', String(durationSec), '-c:v', 'copy',
     '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', outputPath];
@@ -295,9 +295,9 @@ function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationS
  * Resolves `{ width, height, fps, durationSec, startSec, boundaryTimes }`.
  */
 export async function encodeDocumentComposition({
-  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null,
+  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null, fade = false,
 }) {
-  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry, edgeFadeFilter } = await import('../../lib/ffmpeg.js');
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition } = await import('../htmlComposition/encode.js');
@@ -352,7 +352,7 @@ export async function encodeDocumentComposition({
       bin: ffmpeg, signal,
       args: documentMuxArgs(silent, audioPath, outputPath, {
         startSec: window.startSec, durationSec: window.durationSec, songDurationSec: plan.songDurationSec,
-        soundBed, buildBed: buildAudioBedMix, audioNorm: AUDIO_NORM,
+        soundBed, buildBed: buildAudioBedMix, audioNorm: AUDIO_NORM, fade: fade ? edgeFadeFilter(window.durationSec) : '',
       }),
     });
     if (!mux.ok) {

@@ -266,7 +266,24 @@ snapped to the frame grid). The picture is captured silent and the master song
 (plus the optional sound-design bed) is muxed under it. The project's aspect
 ratio picks the frame; a page authored at another aspect must list that size
 in `portosComposition.formats` (its `layout({ width, height })` hook
-reframes). A `seek(t)` that rejects — for example a `<video>` that failed to
+reframes).
+
+**Social cuts (#9280).** A draft excerpt can render at another frame than the
+project's: `POST /api/music-video/:id/excerpt` takes `aspect` (`16:9`, `9:16`,
+`1:1`) and `fade` (fade-in 0.08 s and fade-out 0.6 s on the excerpt's audio).
+The render re-frames the project for that one job, so `PORTOS_MV.render` and
+`PORTOS_MV.project.aspect` report the cut's frame, and the page must declare
+that size in `formats` (or read its size from `PORTOS_MV.render`). The stored
+project keeps its own aspect, and the excerpt records `aspect`, `fade`, `width`
+and `height`. Footage (ffmpeg) projects refuse a re-framed cut
+(`EXCERPT_ASPECT_UNSUPPORTED`), because cropping their 16:9 frame slices
+through the type layers. `GET /api/music-video/:id/social-cuts?count=&minSec=&maxSec=`
+suggests hook windows: sung lines, lip-sync coverage, chorus sections,
+loudness and the title lyric, returned as non-overlapping `{ startSec, endSec,
+score, label, reasons }`. The Review stage lists them with a one-click
+"Render 9:16".
+
+A `seek(t)` that rejects — for example a `<video>` that failed to
 seek — fails the render and names the frame. A page that draws `<video>`
 frames must await `seeked` before painting; the template seeks to the middle
 of the source frame so a frame boundary can never round to the previous one.

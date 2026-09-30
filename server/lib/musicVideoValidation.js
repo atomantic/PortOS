@@ -512,7 +512,17 @@ export const MUSIC_VIDEO_EXCERPT_NOTE_VERDICTS = ['flagged', 'approved'];
 export const musicVideoExcerptRequestSchema = z.object({
   startSec: z.number().min(0).max(36000),
   endSec: z.number().min(0).max(36000),
+  // #9280: a social cut renders at another frame and fades its audio edges.
+  aspect: z.enum(['16:9', '9:16', '1:1']).optional(),
+  fade: z.boolean().optional(),
 }).strict().refine((r) => r.endSec > r.startSec, { message: 'endSec must be greater than startSec' });
+
+// #9280: hook-window suggestions for social cuts.
+export const musicVideoSocialCutsQuerySchema = z.object({
+  count: z.coerce.number().int().min(1).max(10).optional(),
+  minSec: z.coerce.number().min(3).max(120).optional(),
+  maxSec: z.coerce.number().min(5).max(180).optional(),
+}).strict().refine((q) => q.minSec == null || q.maxSec == null || q.maxSec >= q.minSec, { message: 'maxSec must be at least minSec' });
 
 export const musicVideoExcerptNoteSchema = z.object({
   atSec: z.number().min(0).max(36000),

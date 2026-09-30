@@ -19,7 +19,7 @@ vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), mut
 vi.mock('./codeRender.js', async (importOriginal) => ({ ...(await importOriginal()), writeCodeProofSheet: vi.fn(async () => null) }));
 vi.mock('./documentRender.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  encodeDocumentComposition: vi.fn(async ({ plan }) => ({ width: 1920, height: 1080, fps: 24, durationSec: plan.durationSec, startSec: 0, boundaryTimes: [0] })),
+  encodeDocumentComposition: vi.fn(async ({ plan }) => ({ width: plan.width, height: plan.height, fps: 24, durationSec: plan.durationSec, startSec: 0, boundaryTimes: [0] })),
 }));
 
 const { PATHS } = await import('../../lib/paths.js');
@@ -64,6 +64,29 @@ describe('composition-document render plan', () => {
     });
     expect(call).not.toHaveProperty('windowStart');
     await vi.waitFor(async () => expect((await projects.getProject(id)).renderHistoryId).toBe(jobId));
+  });
+
+  it('renders a faded 9:16 social cut of a 16:9 document project without re-framing the project (#9280)', async () => {
+    const id = await documentProject();
+    await importDocumentTemplate(id);
+    encodeDocumentComposition.mockClear();
+    const { excerptId } = await startExcerptRender(id, { startSec: 1, endSec: 4, aspect: '9:16', fade: true });
+    await vi.waitFor(async () => expect((await projects.getProject(id)).excerpts.find((e) => e.id === excerptId).status).toBe('complete'));
+    const call = encodeDocumentComposition.mock.calls.at(-1)[0];
+    expect(call).toMatchObject({ fade: true, windowStart: 1, windowEnd: 4, plan: { width: 1080, height: 1920 } });
+    expect(call.project.treatment.brief.aspectRatio).toBe('9:16');
+    const stored = await projects.getProject(id);
+    expect(stored.treatment?.brief?.aspectRatio ?? '16:9').toBe('16:9');
+    expect(stored.excerpts.find((e) => e.id === excerptId)).toMatchObject({ aspect: '9:16', fade: true, width: 1080, height: 1920 });
+  });
+
+  it('refuses a social cut of a footage project, which has no frame of its own to re-lay-out (#9280)', async () => {
+    await mkdir(PATHS.music, { recursive: true });
+    await writeFile(join(PATHS.music, 'song.wav'), Buffer.alloc(64));
+    const { id } = await projects.createProject({ name: 'Footage', uploadedAudioFilename: 'song.wav' });
+    for (const body of [{ aspect: '9:16' }, { fade: true }]) {
+      await expect(startExcerptRender(id, { startSec: 1, endSec: 3, ...body })).rejects.toMatchObject({ status: 422, code: 'EXCERPT_ASPECT_UNSUPPORTED' });
+    }
   });
 
   it('refuses a full render and an excerpt over a stale performance take, like a footage render (#9266)', async () => {

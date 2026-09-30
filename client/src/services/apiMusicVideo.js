@@ -182,6 +182,16 @@ export const cancelMusicVideoRender = (jobId, options = {}) =>
 export const renderMusicVideoExcerpt = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/excerpt`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// #9280: the song windows most likely to work as a vertical social cut —
+// { suggestions: [{ startSec, endSec, score, label, reasons }] }.
+export const getMusicVideoSocialCuts = (id, { count, minSec, maxSec } = {}, options = {}) => {
+  const params = new URLSearchParams();
+  if (count != null) params.set('count', String(count));
+  if (minSec != null) params.set('minSec', String(minSec));
+  if (maxSec != null) params.set('maxSec', String(maxSec));
+  const qs = params.toString();
+  return request(`/music-video/${encodeURIComponent(id)}/social-cuts${qs ? `?${qs}` : ''}`, options);
+};
 export const musicVideoExcerptRenderEventsUrl = (jobId) =>
   `/api/music-video/excerpt/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoExcerptRender = (jobId, options = {}) =>

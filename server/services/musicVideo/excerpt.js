@@ -53,7 +53,7 @@ function findExcerpt(project, excerptId) {
  * project; the render job fills in `filename`/`contactSheetFilename` (or
  * `error`) once the encode finishes.
  */
-export function startExcerptOnProject(project, { startSec, endSec, sections = null, partialFilename = null, renderingOn = null }, now = new Date().toISOString()) {
+export function startExcerptOnProject(project, { startSec, endSec, sections = null, partialFilename = null, renderingOn = null, aspect = null, fade = false }, now = new Date().toISOString()) {
   if (!(startSec >= 0) || !(endSec > startSec) || endSec > MAX_EXCERPT_SEC) {
     throw excerptError(422, 'INVALID_EXCERPT_RANGE', 'endSec must be greater than startSec, and both within range');
   }
@@ -76,6 +76,10 @@ export function startExcerptOnProject(project, { startSec, endSec, sections = nu
     // #8987: the sections the draft cuts, in ABSOLUTE song time — what a
     // flagged note maps onto when the director asks for a selective revision.
     sections: Array.isArray(sections) ? sections : null,
+    // #9280: a social cut's frame (the project's own unless re-framed) and
+    // whether its audio edges fade; `width`/`height` land with the finished file.
+    aspect: aspect || null,
+    fade: fade === true,
     error: null,
     notes: [],
     createdAt: now,

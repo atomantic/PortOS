@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react';
-import { Film, Flag, CheckCircle2, Trash2, X, Clapperboard, RotateCcw } from 'lucide-react';
+import { Film, Flag, CheckCircle2, Trash2, X, Clapperboard, RotateCcw, Smartphone, Sparkles } from 'lucide-react';
+import { musicVideoAspect, MUSIC_VIDEO_ASPECTS } from '../../lib/musicVideoAspect.js';
+import { getMusicVideoSocialCuts } from '../../services/apiMusicVideo.js';
 import RevisionPanel, { currentRevision } from './RevisionPanel.jsx';
 import AutoReviewPanel from './AutoReviewPanel.jsx';
 
@@ -8,6 +10,14 @@ const VERDICT_STYLES = {
   approved: 'bg-port-success/20 text-port-success',
 };
 const STATUS_LABELS = { rendering: 'Rendering…', complete: 'Ready', error: 'Failed', canceled: 'Cancelled' };
+
+// The player frame for an excerpt's own aspect (#9280): a vertical social cut
+// plays tall and narrow instead of pillarboxed in a 16:9 box.
+const PLAYER_FRAME = {
+  '9:16': 'aspect-[9/16] max-h-[60vh] mx-auto',
+  '1:1': 'aspect-square max-h-[50vh] mx-auto',
+};
+const ASPECT_LABELS = { '16:9': '16:9 (YouTube)', '9:16': '9:16 (Shorts, TikTok, Reels)', '1:1': '1:1 (square)' };
 
 const fmt = (sec) => {
   const s = Math.max(0, Math.round(sec * 10) / 10);
@@ -77,7 +87,8 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
   return (
     <li className="rounded border border-port-border p-2 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-        <span className="font-medium">{fmt(excerpt.startSec)} – {fmt(excerpt.endSec)} <span className="text-port-text-muted">({STATUS_LABELS[excerpt.status] || excerpt.status})</span></span>
+        <span className="font-medium">{fmt(excerpt.startSec)} – {fmt(excerpt.endSec)} <span className="text-port-text-muted">({STATUS_LABELS[excerpt.status] || excerpt.status})</span>
+          {excerpt.aspect && excerpt.aspect !== '16:9' && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent text-[10px]">{excerpt.aspect}</span>}</span>
         <div className="flex items-center gap-2">
           {/* #8987: regenerate ONLY the sections holding a flagged note; the rest stay as approved. */}
           {excerpt.status === 'complete' && excerpt.sections?.length > 0 && excerpt.notes?.some((n) => n.verdict === 'flagged') && (
@@ -94,7 +105,7 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
       {excerpt.status === 'complete' && excerpt.filename && (
         <div className="space-y-2">
           <video ref={videoRef} src={`/data/videos/${excerpt.filename}`} controls playsInline preload="metadata"
-            className="w-full aspect-video max-h-[45vh] object-contain rounded bg-black border border-port-border"
+            className={`w-full ${PLAYER_FRAME[excerpt.aspect] || 'aspect-video max-h-[45vh]'} object-contain rounded bg-black border border-port-border`}
             aria-label={`Play excerpt ${fmt(excerpt.startSec)} to ${fmt(excerpt.endSec)}`} />
           {excerpt.contactSheetFilename && (
             <details className="text-xs">
@@ -141,8 +152,24 @@ export default function ExcerptPanel({ project, rendering, progress, excerpts, r
   const durationSec = project?.audioAnalysis?.durationSec ?? null;
   const [startSec, setStartSec] = useState(0);
   const [endSec, setEndSec] = useState(durationSec ? Math.min(15, durationSec) : 15);
+  const projectAspect = musicVideoAspect(project);
+  const [aspect, setAspect] = useState(projectAspect);
+  const [fade, setFade] = useState(false);
+  const [suggestions, setSuggestions] = useState(null);
+  const [suggesting, setSuggesting] = useState(false);
   const idFor = (s) => `mv-excerpt-${project?.id}-${s}`;
   const valid = Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec;
+  // A social cut (another frame, faded edges) needs a composition that lays
+  // itself out per frame; a footage render only cuts at its own aspect.
+  const canReframe = ['document', 'code'].includes(project?.composition?.mode);
+  const render = (s, e, opts) => actions.startExcerpt(s, e, opts);
+  const suggestHooks = () => {
+    setSuggesting(true);
+    getMusicVideoSocialCuts(project.id, { count: 3 }, { silent: true })
+      .then((res) => setSuggestions(res?.suggestions || []))
+      .catch(() => setSuggestions([]))
+      .finally(() => setSuggesting(false));
+  };
 
   return (
     <div className="space-y-2">
@@ -160,12 +187,54 @@ export default function ExcerptPanel({ project, rendering, progress, excerpts, r
             onChange={(e) => setEndSec(Number(e.target.value))}
             className="w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
         </div>
+        {canReframe && (
+          <div>
+            <label htmlFor={idFor('aspect')} className="block text-[10px] text-port-text-muted">Frame</label>
+            <select id={idFor('aspect')} value={aspect} onChange={(e) => setAspect(e.target.value)}
+              className="bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0">
+              {MUSIC_VIDEO_ASPECTS.map((a) => <option key={a} value={a}>{ASPECT_LABELS[a] || a}</option>)}
+            </select>
+          </div>
+        )}
+        {canReframe && (
+          <label htmlFor={idFor('fade')} className="flex items-center gap-1 text-xs text-port-text-muted min-h-[44px] sm:min-h-0">
+            <input id={idFor('fade')} type="checkbox" checked={fade} onChange={(e) => setFade(e.target.checked)} />
+            Fade audio edges
+          </label>
+        )}
         <button type="button" disabled={rendering || !valid}
-          onClick={() => actions.startExcerpt(startSec, endSec)}
+          onClick={() => render(startSec, endSec, canReframe ? { aspect: aspect === projectAspect ? null : aspect, fade } : undefined)}
           className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
           <Film size={13} /> Render excerpt
         </button>
       </div>
+      {canReframe && (
+        <div className="rounded border border-port-border p-2 space-y-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-port-text-muted flex items-center gap-1"><Smartphone size={12} /> Social cuts: vertical hooks for Shorts, TikTok and Reels</span>
+            <button type="button" onClick={suggestHooks} disabled={suggesting}
+              className="flex items-center gap-1 text-port-accent disabled:opacity-50 text-xs min-h-[44px] sm:min-h-0">
+              <Sparkles size={12} /> {suggesting ? 'Finding hooks…' : 'Suggest hooks'}
+            </button>
+          </div>
+          {suggestions && suggestions.length === 0 && <p className="text-xs text-port-text-muted">No hook windows found. Time the lyrics first.</p>}
+          {suggestions && suggestions.length > 0 && (
+            <ul className="space-y-1">
+              {suggestions.map((s) => (
+                <li key={`${s.startSec}-${s.endSec}`} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-mono shrink-0">{fmt(s.startSec)} – {fmt(s.endSec)}</span>
+                  <span className="min-w-0 flex-1 break-words">{s.label ? `“${s.label}”` : ''} <span className="text-port-text-muted">{s.reasons.join(' · ')}</span></span>
+                  <button type="button" onClick={() => { setStartSec(s.startSec); setEndSec(s.endSec); }}
+                    className="text-port-text-muted min-h-[44px] sm:min-h-0 px-1">Use range</button>
+                  <button type="button" disabled={rendering}
+                    onClick={() => { setStartSec(s.startSec); setEndSec(s.endSec); render(s.startSec, s.endSec, { aspect: projectAspect === '9:16' ? null : '9:16', fade: true }); }}
+                    className="text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0 px-1">Render 9:16</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {rendering && (
         <div>
           <div className="h-1.5 bg-port-bg rounded overflow-hidden">

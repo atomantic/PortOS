@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { findFfmpeg, probeVideoDuration, runFfmpegProcess, edgeFadeFilter } from '../../lib/ffmpeg.js';
 import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { prepareCodeRender, _muxExactArgs } from './codeRender.js';
 
@@ -59,6 +59,15 @@ describe.skipIf(!ffmpeg)('code render mux (#9076)', () => {
       const args = _muxExactArgs(silent, wav, out, plan.durationSec, 0).join(' ');
       expect(args).not.toContain('afade');
       expect(await readFile(out)).toBeInstanceOf(Buffer);
+      // A social cut (#9280) fades its edges without changing the length: ffmpeg
+      // accepts the fade chain and the file still covers the song.
+      const faded = join(dir, 'faded.mp4');
+      const fadedMux = await runFfmpegProcess({
+        bin: ffmpeg,
+        args: _muxExactArgs(silent, wav, faded, plan.durationSec, 0, edgeFadeFilter(plan.durationSec)),
+      });
+      expect(fadedMux.ok).toBe(true);
+      expect(Math.abs((await probeVideoDuration(faded)) - plan.durationSec)).toBeLessThan(1 / 24 + 0.02);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

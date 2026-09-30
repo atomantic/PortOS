@@ -28,6 +28,7 @@ vi.mock('../services/musicVideo/excerptRender.js', () => ({
 }));
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
+const { startExcerptRender } = await import('../services/musicVideo/excerptRender.js');
 const projects = await import('../services/musicVideo/projects.js');
 
 const app = express();
@@ -139,5 +140,29 @@ describe('excerpts survive a clone (#8986 acceptance)', () => {
     expect(second.status).toBe(200);
     expect(existsSync(videoPath)).toBe(false); // no project references it anymore
     expect(existsSync(sheetPath)).toBe(false);
+  });
+});
+
+describe('social cuts (#9280)', () => {
+  it('forwards a vertical, faded excerpt request and rejects an unknown aspect', async () => {
+    const project = await projects.createProject({ name: 'Example Video' });
+    startExcerptRender.mockResolvedValue({ jobId: 'mve-2', excerptId: 'mve-2' });
+    const ok = await request(app).post(`${base(project.id)}/excerpt`).send({ startSec: 10, endSec: 25, aspect: '9:16', fade: true });
+    expect(ok.status).toBe(200);
+    expect(startExcerptRender).toHaveBeenCalledWith(project.id, { startSec: 10, endSec: 25, aspect: '9:16', fade: true });
+    const bad = await request(app).post(`${base(project.id)}/excerpt`).send({ startSec: 10, endSec: 25, aspect: '4:3' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('suggests hook windows from the project\'s lyric timing', async () => {
+    const created = await projects.createProject({ name: 'Example Video' });
+    await projects.updateProject(created.id, {
+      audioAnalysis: { durationSec: 60 },
+      lyricCues: Array.from({ length: 10 }, (_, i) => ({ id: `lc-${i}`, text: `line ${i}`, startSec: i * 6, endSec: i * 6 + 5 })),
+    });
+    const r = await request(app).get(`${base(created.id)}/social-cuts?count=2&minSec=10&maxSec=20`);
+    expect(r.status).toBe(200);
+    expect(r.body.suggestions).toHaveLength(2);
+    expect(r.body.suggestions[0]).toMatchObject({ startSec: expect.any(Number), endSec: expect.any(Number), reasons: expect.any(Array) });
   });
 });
