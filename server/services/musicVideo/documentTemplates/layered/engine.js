@@ -16,6 +16,7 @@
 (() => {
   'use strict';
   const MV = window.PORTOS_MV;
+  const GENERATED = window.PORTOS_MV_GENERATED || null;
   if (!MV || !MV.render) throw new Error('PORTOS_MV is missing — PortOS writes portos-mv.js next to index.html when it renders');
 
   // ---------- frame ----------
@@ -383,12 +384,18 @@
   };
   const cardFor = (scene) => (scene?.visualLayer === 'card' ? CARDS.title : null);
 
+  function sectionFunction(t) {
+    const section = GENERATED?.song?.sections?.find((item) => t >= item.startSec && t < item.endSec);
+    return section ? { section, fn: GENERATED.sections?.[section.id] } : null;
+  }
+
   // ---------- frame ----------
   function render(t, scene, source) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
+    const authored = sectionFunction(t);
     if (scene) {
       const lt = t - scene.startSec; const d = scene.endSec - scene.startSec;
-      const card = cardFor(scene);
+      const card = authored?.fn ? null : cardFor(scene);
       if (card) card(t, lt, d, scene, source);
       else if (source) {
         const energetic = isHighEnergy(t) || scene.shotMode === 'performance';
@@ -396,6 +403,18 @@
         drawCover(source, seg(t, scene.startSec, scene.endSec), moveFor(scene), punch);
       }
       if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * 0.5);
+    }
+    if (authored?.fn) {
+      const inset = 0.1;
+      ctx.save();
+      try {
+        authored.fn(ctx, {
+          t, localT: t - authored.section.startSec, frame: frameOf(t), width: W, height: H,
+          song: GENERATED.song, palette: GENERATED.palette, section: authored.section,
+          safe: { x: W * inset, y: H * inset, w: W * (1 - 2 * inset), h: H * (1 - 2 * inset) },
+          karaoke: [], mediaKind: scene?.media?.kind || null, visualLayer: scene?.visualLayer || null,
+        });
+      } finally { ctx.restore(); }
     }
     vignette(0.5);
     grain(t, 0.09);

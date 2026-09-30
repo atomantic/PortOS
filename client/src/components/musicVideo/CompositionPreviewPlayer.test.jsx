@@ -46,4 +46,13 @@ describe('CompositionPreviewPlayer', () => {
     rerender(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" seekRequest={{ t: 99, n: 3 }} />);
     await waitFor(() => expect(screen.getByText(/^9\.9\ds \/ 10\.0s$/)).toBeTruthy());
   });
+
+  it('gives simultaneous active and candidate previews distinct scrubbers', async () => {
+    const both = { ...project, composition: { ...project.composition,
+      documentDraft: { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-candidate' } } };
+    render(<><CompositionPreviewPlayer project={both} audioUrl={null} /><CompositionPreviewPlayer project={both} audioUrl={null} draft /></>);
+    await screen.findByTitle('Composition candidate preview');
+    expect(screen.getByLabelText('Scrub the composition preview').id).toBe('mv-doc-scrub');
+    expect(screen.getByLabelText('Scrub the composition candidate').id).toBe('mv-doc-draft-scrub');
+  });
 });

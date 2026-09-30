@@ -86,6 +86,22 @@ describe('buildCodeTimeline (#9076)', () => {
     expect(timeline.sections[1].snapKind).toBe('downbeat');
   });
 
+  it('keeps a section when its last lyric snaps onto the following boundary', () => {
+    const lateLyric = {
+      ...project,
+      audioAnalysis: { durationSec: 30, beats: [0, 10, 20], downbeats: [0, 10, 20], sections: [
+        { id: 'intro', startSec: 0, endSec: 10 },
+        { id: 'verse', startSec: 10, endSec: 20 },
+        { id: 'hook', startSec: 20, endSec: 30 },
+      ] },
+      lyricCues: [{ id: 'last-line', text: 'on the cut', startSec: 19.8, endSec: 20.1,
+        words: [{ w: 'on', startSec: 20 }] }],
+    };
+    expect(buildCodeTimeline(lateLyric).sections.map((section) => [section.id, section.startSec])).toEqual([
+      ['intro', 0], ['verse', 10], ['hook', 20],
+    ]);
+  });
+
   it('prefers treatment windows over analyzed sections', () => {
     const directed = {
       ...project,

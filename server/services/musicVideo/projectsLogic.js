@@ -660,8 +660,14 @@ export function mergeProjectRecord(local, remoteRaw) {
   if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
   // The composition document's files live only on this install as well
   // (compositionDocument.js), so its pointer survives a newer remote body.
-  if (local.composition?.document && remote.composition && typeof remote.composition === 'object' && !Array.isArray(remote.composition)) {
-    remote.composition = { ...remote.composition, document: local.composition.document };
+  if (local.composition?.document || local.composition?.documentDraft) {
+    const sharedComposition = remote.composition && typeof remote.composition === 'object' && !Array.isArray(remote.composition)
+      ? remote.composition : {};
+    remote.composition = {
+      ...sharedComposition,
+      ...(local.composition.document ? { document: local.composition.document } : {}),
+      ...(local.composition.documentDraft ? { documentDraft: local.composition.documentDraft } : {}),
+    };
   }
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && Object.hasOwn(local.videoSettings, 'backend')) {

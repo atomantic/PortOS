@@ -376,7 +376,16 @@ export const startMusicVideoCompositionTemplate = (id, template = 'layered', opt
   request(`${compositionDocumentPath(id)}/template`, { method: 'POST', body: JSON.stringify({ template }), ...options });
 export const getMusicVideoCompositionExport = (id, options = {}) =>
   request(`${compositionDocumentPath(id)}/export`, { responseType: 'arraybuffer', ...options });
-export const getMusicVideoCompositionPreview = (id, options = {}) => request(`${compositionDocumentPath(id)}/preview`, options);
+export const getMusicVideoCompositionPreview = (id, { draft = false, ...options } = {}) => request(`${compositionDocumentPath(id)}/preview${draft ? '?draft=1' : ''}`, options);
+export const generateMusicVideoMixedMediaDocument = (id, body, options = {}) =>
+  request(`${compositionDocumentPath(id)}/generate`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const getMusicVideoMixedMediaCandidate = (id, options = {}) => request(`${compositionDocumentPath(id)}/candidate`, options);
+export const regenerateMusicVideoMixedMediaSection = (id, sectionId, body, options = {}) =>
+  request(`${compositionDocumentPath(id)}/sections/${encodeURIComponent(sectionId)}/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const acceptMusicVideoMixedMediaDocument = (id, directory, options = {}) =>
+  request(`${compositionDocumentPath(id)}/accept`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
+export const discardMusicVideoMixedMediaDocument = (id, directory, options = {}) =>
+  request(`${compositionDocumentPath(id)}/candidate`, { method: 'DELETE', body: JSON.stringify({ directory }), ...options });
 export const detachMusicVideoCompositionDocument = (id, options = {}) =>
   request(compositionDocumentPath(id), { method: 'DELETE', ...options });
 // One preview asset (a scene take under /data, or a document file) as a Blob the
