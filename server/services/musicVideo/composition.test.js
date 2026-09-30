@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTypographyDocument, cueStateAt, normalizeComposition, overlayWindows, renderableCues } from './composition.js';
+import { buildTypographyDocument, cueStateAt, normalizeComposition, overlayWindows, renderableCues, sectionCardCues } from './composition.js';
 
 const cue = (over = {}) => ({ id: 'c', text: 'Hello world', startSec: 10, endSec: 12, template: 'fade', placement: 'lower', emphasis: 'subtitle', ...over });
 
@@ -88,5 +88,15 @@ describe('buildTypographyDocument (#8984)', () => {
     expect(html.match(/<\/script>/g)).toHaveLength(1);
     expect(html).toContain('\\u003c/script>');
     expect(html).not.toContain('innerHTML');
+  });
+
+  it('uses the treatment graphic note for counter card motion and type', () => {
+    const cards = sectionCardCues(
+      [{ sceneId: 'graphic-card-0', layer: 'card', cardText: '198' }],
+      [{ sceneId: 'graphic-card-0', startSec: 2, endSec: 2.5 }], 10, 'HUD pictograms and counters');
+    expect(cards).toMatchObject([{ text: '198', template: 'pop' }]);
+    const html = buildTypographyDocument({ cues: cards, style: { font: 'serif', graphicLanguage: 'HUD counters' },
+      width: 1280, height: 720, durationSec: 10, fps: 24 });
+    expect(html).toContain('Menlo');
   });
 });

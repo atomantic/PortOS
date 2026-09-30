@@ -602,6 +602,9 @@ export async function planMusicVideoRender(project) {
       beats,
       bpm: project.audioAnalysis?.bpm,
       words: (project.lyricCues || []).flatMap((cue) => (Array.isArray(cue?.words) ? cue.words : [])),
+      lyricCues: project.lyricCues,
+      graphicCards: composed,
+      accentColor: project.composition?.style?.accentColor,
     })
     : snapped;
   const soundBed = await resolveSoundBedPath(project);
@@ -782,7 +785,7 @@ export async function renderMusicVideo(projectId, options = {}) {
     // #8984: a composed project lays its timed text cues over the cut, and a
     // title card's text (#8985) joins them over its own section. No renderable
     // cue (plain mode, or nothing timed) skips the overlay capture entirely.
-    const cues = [...renderableCues(project.composition, totalDuration), ...sectionCardCues(clips, sections, totalDuration)]
+    const cues = [...renderableCues(project.composition, totalDuration), ...sectionCardCues(clips, sections, totalDuration, project.treatment?.brief?.graphicLanguage)]
       .sort((a, b) => a.startSec - b.startSec);
     const composition = cues.length > 0 ? project.composition : null;
 
@@ -954,7 +957,7 @@ export async function renderMusicVideo(projectId, options = {}) {
     job.overlayAbort = new AbortController();
     const { signal } = job.overlayAbort;
     renderTypographyOverlays({
-      jobId, cues, style: composition.style, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
+      jobId, cues, style: { ...composition.style, graphicLanguage: project.treatment?.brief?.graphicLanguage }, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then((overlays) => {
       signal.throwIfAborted();

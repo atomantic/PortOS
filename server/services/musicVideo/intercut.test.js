@@ -78,4 +78,52 @@ describe('intercutClips (#9290)', () => {
     expect(intercutClips([card], { scenes, sections, beats, bpm })).toEqual([card]);
     expect(intercutClips(clips, { scenes, sections, beats: [], bpm: null })).toBe(clips);
   });
+
+  it('inserts one-beat hook and number cards in loud sections with bounded density and coverage', () => {
+    const source = [footage('quiet', 0, 10, 10), footage('perf', 0, 10, 10)];
+    const cues = [
+      { text: 'Rise rise 198', startSec: 10, endSec: 14, words: [
+        { w: 'Rise', startSec: 10.5 }, { w: 'rise', startSec: 11.5 }, { w: '198', startSec: 12.5 },
+      ] },
+      { text: 'Rise rise 198', startSec: 14, endSec: 18, words: [
+        { w: 'Rise', startSec: 14.5 }, { w: 'rise', startSec: 15.5 }, { w: '198', startSec: 16.5 },
+      ] },
+    ];
+    const rankedSections = [{ startSec: 0, endSec: 10, energy: 0 }, { startSec: 10, endSec: 20, energy: 1 }];
+    const out = intercutClips(source, { scenes, sections: rankedSections, beats, bpm, lyricCues: cues,
+      graphicCards: true, accentColor: '#123456' });
+    const cardTimes = [];
+    let t = 0;
+    for (const clip of out) {
+      if (clip.layer === 'card') {
+        cardTimes.push(t);
+        expect(clip.outSec - clip.inSec).toBeCloseTo(0.5, 3);
+        expect(clip.cardText).toMatch(/rise|198/i);
+      }
+      t += clip.outSec - clip.inSec;
+    }
+    expect(t).toBeCloseTo(20, 3);
+    expect(out.filter((clip) => clip.layer === 'card').map((clip) => clip.cardText)).toEqual(['Rise', '198', 'Rise', '198']);
+    expect(cardTimes).toEqual([10.5, 12.5, 14.5, 16.5]);
+    expect(cardTimes.every((at, i) => at >= 10 && (i === 0 || at - cardTimes[i - 1] >= 2 - 1e-3))).toBe(true);
+    expect(out.filter((clip) => clip.layer === 'card').map((clip) => clip.cardColor))
+      .toEqual(out.filter((clip) => clip.layer === 'card').map((_, i) => i % 2 ? '#000000' : '#123456'));
+    expect(out.every((clip, i) => i === 0 || clip.layer !== 'card' || out[i - 1].layer !== 'card')).toBe(true);
+    expect(intercutClips(source, { scenes, sections: rankedSections, beats, bpm, lyricCues: cues, graphicCards: false })
+      .some((clip) => clip.layer === 'card')).toBe(false);
+  });
+
+  it('does not place cards in an analysis gap or next to an authored card', () => {
+    const authored = { sceneId: 'title', layer: 'card', inSec: 0, outSec: 1, duration: 1,
+      cardText: 'TITLE', cardColor: '#000000' };
+    const source = [footage('quiet', 0, 10, 10), authored, footage('perf', 0, 9, 9)];
+    const cues = [{ text: '1 2 3', startSec: 11, endSec: 16, words: [
+      { w: '1', startSec: 11.5 }, { w: '2', startSec: 12.5 }, { w: '3', startSec: 14.5 },
+    ] }];
+    const out = intercutClips(source, { scenes, sections: [
+      { startSec: 0, endSec: 10, energy: 0 }, { startSec: 13, endSec: 20, energy: 1 },
+    ], beats, bpm, lyricCues: cues, graphicCards: true });
+    expect(spanOf(out)).toBeCloseTo(20, 3);
+    expect(out.filter((clip) => clip.layer === 'card').map((clip) => clip.cardText)).toEqual(['TITLE', '3']);
+  });
 });

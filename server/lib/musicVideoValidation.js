@@ -427,6 +427,7 @@ export const musicVideoTreatmentBriefSchema = z.object({
   emotion: z.string().max(500).optional(),
   premise: z.string().max(2000).optional(),
   hookObjective: z.string().max(1000).optional(),
+  graphicLanguage: z.string().max(1000).optional(),
   mustHave: z.string().max(2000).optional(),
   avoid: z.string().max(2000).optional(),
   referenceNotes: z.array(musicVideoTreatmentReferenceNoteSchema).max(20).optional(),
