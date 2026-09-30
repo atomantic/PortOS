@@ -287,7 +287,8 @@ describe('Codex terminal model-access rejection (#9319)', () => {
     const { controller, paste, write, finalizeAgent, resolveErrorAnalysis, kill, closers } = await submitted();
     // A first-request rejection has no work separator: Codex's terminal ■
     // error cell itself is emitted only after on_error finalizes the turn.
-    for (const chunk of [rejection.slice(0, 90), rejection.slice(90), composer]) {
+    const details = ', url: https://example.com/responses, cf-ray: example-ray, request id: example-request\n';
+    for (const chunk of [rejection.slice(0, 90), rejection.slice(90).trimEnd(), details, composer]) {
       await controller.handleData(chunk);
     }
     await vi.advanceTimersByTimeAsync(4000);

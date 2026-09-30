@@ -46,8 +46,12 @@ export function createCodexModelRejectionGate() {
       // empty composer after it, and invalidate on any later work.
       if (!composer || WORKING.test(afterError)) return;
       const beforeComposer = afterError.slice(0, composer.index);
-      if (beforeComposer.split(/[\r\n]/).some(line => line.trim()
-        && !/^[ \t]*[─━]+\s*Worked\s*for\s+[^\r\n]+$/i.test(line))) return;
+      const transportDetails = beforeComposer.split(/[\r\n]/)
+        .filter(line => !/^[ \t]*[─━]+\s*Worked\s*for\s+[^\r\n]+$/i.test(line))
+        .join('').trim();
+      // Unexpected-status errors may append wrapped transport diagnostics to
+      // the JSON body. Recognize their keys, never retain/publish their values.
+      if (transportDetails && !/^(?:,\s*(?:url|cf-ray|request\s*id|auth\s*error(?:\s*code)?):\s*[^,]+)+$/i.test(transportDetails)) return;
       const afterComposer = afterError.slice(composer.index + composer[0].length);
       // Only footer chrome may follow: subsequent tool/assistant output makes
       // this a quoted fixture or a recovered session, never a terminal verdict.
