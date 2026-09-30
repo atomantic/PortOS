@@ -97,6 +97,37 @@ describe('persistent database maintenance boundary', () => {
     expect(() => journal.assertAdmission()).toThrow();
   });
 
+  // Regression: ownership can change after recoverCoordinator reads the old
+  // owner but before it asserts that owner. Refusal is safe; retry adopts the
+  // persisted successor instead of publishing another one (#9236).
+  it('fences a contended recovery and lets an operator retry adopt the one successor', () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    const directory = journal.reserveCoordinatorWorker(operation.id, token);
+    writeFileSync(join(directory, 'exit'), '1\n');
+    let ownerReads = 0;
+    let successor;
+    const interleave = path => {
+      if (path.endsWith('cancel-' + operation.id + '.claim') && ++ownerReads === 3) {
+        successor = journal.prepareRecovery(operation.id);
+      } else {
+        fsHook.beforeRead = interleave;
+      }
+    };
+    fsHook.beforeRead = interleave;
+    try {
+      expect(() => journal.prepareRecovery(operation.id)).toThrow(expect.objectContaining({ code: 'DATABASE_MAINTENANCE' }));
+    } finally {
+      fsHook.beforeRead = null;
+    }
+    expect(successor).toBeTruthy();
+    expect(journal.prepareRecovery(operation.id)).toBe(successor);
+    journal.reserveCoordinatorWorker(operation.id, successor);
+    expect(journal.prepareRecovery(operation.id)).toBeNull();
+    expect(() => journal.reserveCoordinatorWorker(operation.id, successor)).toThrow();
+    expect(() => journal.assertAdmission()).toThrow();
+  });
+
   it('fences cancellation and competing coordinators through every durable stage', () => {
     const operation = journal.begin({ source, target });
     const token = journal.acquireCoordinator(operation.id);

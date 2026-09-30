@@ -217,16 +217,37 @@ describe.skipIf(process.platform === 'win32')('owned maintenance worker', () => 
       .toEqual(expect.arrayContaining(['owner.json', 'started.json', 'group.json', 'stdout.log', 'stderr.log', 'pid']));
   }, 90_000);
 
-  it('relaunches only the recorded operation once across repeated operator recovery', async () => {
+  it('relaunches the recorded operation once; a contended operator recovery reports running or fenced, retry', async () => {
     const operation = journal.begin({ source, target });
     const token = journal.acquireCoordinator(operation.id);
     stubs.setMode('dump', 'fail');
     expect((await launch(operation.id, token)).status).toBe(1);
     expect(status()).toMatchObject({ stage: 'exporting', coordinator: { state: 'exited', exitCode: 1 } });
-    stubs.setMode('dump', 'ok');
-    const outcomes = await Promise.all([recover(operation.id), recover(operation.id)]);
-    expect(outcomes.map(value => value.status), outcomes.map(value => value.stderr).join('\n')).toEqual([0, 0]);
-    expect(outcomes.map(value => JSON.parse(value.stdout).recovery).sort()).toEqual(['launched', 'running']);
+    // Hold the successor at export so a slow competing CLI cannot arrive
+    // after release. Ownership changes between checks deliberately fail
+    // closed: that contender must retry, not assume both calls exit zero.
+    stubs.setMode('dump', 'pause');
+    try {
+      const outcomes = await Promise.all([recover(operation.id), recover(operation.id)]);
+      const successful = outcomes.filter(value => value.status === 0);
+      expect(successful.filter(value => JSON.parse(value.stdout).recovery === 'launched'),
+        outcomes.map(value => value.stderr).join('\n')).toHaveLength(1);
+      for (const outcome of outcomes) {
+        if (outcome.status === 0) {
+          expect(JSON.parse(outcome.stdout)).toMatchObject({ id: operation.id, recovery: expect.stringMatching(/^(launched|running)$/) });
+        } else {
+          expect(outcome.status).toBe(1);
+          expect(outcome.stdout).toBe('');
+          expect(outcome.stderr.trim()).toBe('Database maintenance is fenced; journal recovery is required.');
+        }
+      }
+      await waitWithEvidence(() => expect(stubs.started('dump')).toBe(true), 30_000);
+      const retry = await recover(operation.id);
+      expect(retry.status, retry.stderr).toBe(0);
+      expect(JSON.parse(retry.stdout)).toMatchObject({ id: operation.id, recovery: 'running' });
+    } finally {
+      stubs.release('dump');
+    }
     await waitWithEvidence(() => expect(stubs.events()).toContain(`server booted ${target.port}`), 30_000);
     await waitWithEvidence(() => expect(journal.read()).toBeNull(), 10_000);
     // One recovered worker: one export retry, one import, one server restart.

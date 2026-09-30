@@ -156,6 +156,14 @@ After a committed import the same worker (`runDatabaseCutover` in `server/servic
 
 **Recovery commands.** Inspect with `node scripts/database-maintenance.mjs status`. If `coordinator.state` is `exited`, repair the reported cause (for example start the target backend, or fix `.env`) and run `node scripts/database-maintenance.mjs recover <operation-id>`; repeat as needed — each run resumes the recorded stage. `verifying` with a server that keeps exiting usually means the target is unreachable or `.env`/the launch environment points elsewhere; `pm2 logs portos-server` shows the bounded refusal. `verified` with no release (a crash between them) is completed by the same `recover`. Never delete the fence, the proofs, or the authority record to force startup.
 
+Concurrent operator recoveries still launch at most one worker for the recorded
+successor. A competing command can report `running`, or exit 1 with
+`Database maintenance is fenced; journal recovery is required.` if ownership
+changes between its checks. Inspect `status` and retry the same operation;
+while its worker is running, the retry reports `running`. Once release finishes,
+there is no active operation left to recover. A fenced refusal never authorizes
+removing the fence or launching another operation.
+
 ### Calendar daily-review recovery
 
 Daily reviews remain in the existing `data/calendar/daily-reviews/<date>.json`
