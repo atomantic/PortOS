@@ -8,6 +8,7 @@ import { ServerError } from '../../../lib/errorHandler.js';
 import { chaptersText } from '../publishKitText.js';
 
 const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80 };
+const DEFAULT_SUBREDDIT = 'aivideo';
 
 const missing = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
 const text = (v) => (typeof v === 'string' ? v.trim() : '');
@@ -88,15 +89,27 @@ const BUILDERS = {
     return { posts };
   },
   reddit: (project, kit, options = {}) => {
-    const subreddit = text(options.subreddit).replace(/^\/?r\//i, '');
+    // r/aivideo is the default (#9307): a native video post, title + flair, no
+    // body. Showcase posts to tool-support subs (r/ClaudeAI, r/SunoAI) landed poorly.
+    const subreddit = (text(options.subreddit) || DEFAULT_SUBREDDIT).replace(/^\/?r\//i, '');
     if (!/^[A-Za-z0-9_]{2,21}$/.test(subreddit)) throw missing('Name the subreddit to post in');
+    const kind = ['self', 'link', 'video'].includes(options.kind) ? options.kind : 'video';
     const title = requireTitle('reddit', text(kit.copy?.reddit?.title));
     // r/SunoAI removes song posts whose title doesn't open with the genre in brackets.
     if (subreddit.toLowerCase() === 'sunoai' && !/^\[[^\]]+\]/.test(title)) throw missing('r/SunoAI titles must start with the genre in brackets, e.g. [Electropop] Song Name');
-    const url = options.kind === 'link' ? (text(options.url) || fullVideoUrl(kit)) : '';
-    if (options.kind === 'link' && !url) throw missing('A Reddit link post needs the full video URL');
+    // r/aivideo removes posts whose title doesn't name the video.
+    if (subreddit.toLowerCase() === 'aivideo' && project?.name && !title.toLowerCase().includes(String(project.name).toLowerCase())) {
+      throw missing(`r/aivideo titles must include the video's name ("${project.name}")`);
+    }
+    let video = null;
+    if (kind === 'video') {
+      if (!kit.master?.filename) throw missing('Build the publishing kit first — a Reddit video post uploads the final render');
+      video = { dir: 'videos', name: kit.master.filename };
+    }
+    const url = kind === 'link' ? (text(options.url) || fullVideoUrl(kit)) : '';
+    if (kind === 'link' && !url) throw missing('A Reddit link post needs the full video URL');
     return {
-      subreddit, kind: options.kind === 'link' ? 'link' : 'self', title, body: text(kit.copy?.reddit?.body), url,
+      subreddit, kind, title, body: kind === 'video' ? '' : text(kit.copy?.reddit?.body), url, video,
       flairId: text(options.flairId) || null, flairText: text(options.flairText) || null, firstComment: text(options.firstComment) || null,
     };
   },

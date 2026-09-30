@@ -10,7 +10,7 @@ export const PUBLISH_TARGETS = [
   { target: 'shorts', label: 'YouTube Shorts', note: 'The newest 9:16 social cut' },
   { target: 'tiktok', label: 'TikTok', note: 'The newest 9:16 social cut, labelled AI-generated' },
   { target: 'instagram', label: 'Instagram Reels', note: 'The newest 9:16 social cut, with the AI label' },
-  { target: 'reddit', label: 'Reddit', note: 'A text or link post to one subreddit' },
+  { target: 'reddit', label: 'Reddit', note: 'A native video post to r/aivideo (title and flair, no body)' },
   { target: 'stackerNews', label: 'Stacker News', note: 'A link post to the full video' },
 ];
 
@@ -35,9 +35,10 @@ function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
   if (target === 'reddit') {
     return (
       <div className="grid sm:grid-cols-2 gap-2">
-        {text('subreddit', 'Subreddit', 'SunoAI')}
+        {text('subreddit', 'Subreddit', 'aivideo')}
         {field('kind', 'Post type',
-          <select id={idFor('kind')} aria-label="Post type" value={options.kind || 'self'} onChange={(e) => setOption('kind', e.target.value)} className={inputCls}>
+          <select id={idFor('kind')} aria-label="Post type" value={options.kind || 'video'} onChange={(e) => setOption('kind', e.target.value)} className={inputCls}>
+            <option value="video">Video upload</option>
             <option value="self">Text post</option>
             <option value="link">Link to the full video</option>
           </select>)}
