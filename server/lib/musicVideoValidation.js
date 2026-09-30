@@ -286,7 +286,8 @@ export const isDeterministicCodeSource = (source) => typeof source === 'string'
   && source.length > 0
   && source.length <= MUSIC_VIDEO_CODE_SOURCE_MAX
   && !MUSIC_VIDEO_CODE_NONDETERMINISTIC.test(source);
-export const MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES = ['fade', 'rise', 'typewriter', 'pop'];
+// 'build' (#9291) lays a line down word by word on its sung onsets, the newest word in the accent color.
+export const MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES = ['fade', 'rise', 'typewriter', 'pop', 'build'];
 export const MUSIC_VIDEO_TYPOGRAPHY_PLACEMENTS = ['upper', 'center', 'lower'];
 export const MUSIC_VIDEO_TYPOGRAPHY_EMPHASES = ['subtitle', 'hero'];
 export const MUSIC_VIDEO_TYPOGRAPHY_FONTS = ['sans', 'serif', 'mono'];
@@ -299,6 +300,8 @@ export const musicVideoTextCueSchema = z.object({
   template: z.enum(MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES).optional(),
   placement: z.enum(MUSIC_VIDEO_TYPOGRAPHY_PLACEMENTS).optional(),
   emphasis: z.enum(MUSIC_VIDEO_TYPOGRAPHY_EMPHASES).optional(),
+  // Sung word onsets for the 'build' template (#9291).
+  words: z.array(z.object({ w: z.string().min(1).max(60), atSec: z.number().min(0).max(36000) }).strict()).max(80).optional(),
 }).strict();
 
 const codeSectionSource = z.string().min(1).max(MUSIC_VIDEO_CODE_SOURCE_MAX)
@@ -357,6 +360,7 @@ export const musicVideoCompositionSchema = z.object({
   style: z.object({
     color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').optional(),
     font: z.enum(MUSIC_VIDEO_TYPOGRAPHY_FONTS).optional(),
+    accentColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'accentColor is #rrggbb').optional(),
   }).strict().optional(),
   posterSec: timedSec,
   codeVideo: musicVideoCodeVideoSchema.nullable().optional(),
