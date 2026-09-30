@@ -7,6 +7,8 @@ import { generateVideo } from '../services/apiImageVideo.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, sceneVisualLayer } from '../lib/musicVideoLayers.js';
+import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
+import { MOTION_CONTINUITY_CLAUSE } from '../lib/musicVideoMotion.js';
 import {
   approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
 } from '../lib/musicVideoShotTiming.js';
@@ -123,7 +125,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // fallback) suffixed the same way. The reference frame already fixes the
   // look; this prompt guides the motion.
   const buildShotPrompt = (scene) =>
-    [(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim()].filter(Boolean).join(', ');
+    [(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim(), MOTION_CONTINUITY_CLAUSE].filter(Boolean).join(', ');
 
   /**
    * Render a still reference frame for one scene from its frame prompt. The
@@ -153,6 +155,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     frameLane.startScene(scene.sceneId);
     return generateImage({
       prompt,
+      ...musicVideoFrameGenSize(project),
       ...(conditioning.length ? { referenceImageFiles: conditioning.map((ref) => ref.imageId) } : {}),
       musicVideo: { projectId, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) },
     }, { silent: true })

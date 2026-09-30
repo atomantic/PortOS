@@ -1,4 +1,5 @@
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
+import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
 /**
  * Music Video external-asset handoff (#8965) — provider-neutral export/import
  * for tools PortOS does not drive, such as Midjourney.
@@ -82,8 +83,9 @@ export function visualDirection(spec) {
 // `clause` is the scene's applied treatment direction (#8980) — the composition
 // constraints for a frame or a motion prompt. Same order as the client's
 // buildFramePrompt/buildShotPrompt.
-// A motion prompt (`motion: true`) omits the mood-board look: the i2v model
-// starts from the reference frame, which already carries it.
+// A motion prompt (`motion: true`) omits the mood-board look (the i2v model
+// starts from the reference frame, which already carries it) and pins the
+// frame's lighting for the length of the take.
 function composePrompt(primary, fallback, project, clause, { motion = false } = {}) {
   return [
     primary?.trim() || fallback?.trim() || '',
@@ -91,6 +93,7 @@ function composePrompt(primary, fallback, project, clause, { motion = false } = 
     musicVideoCreativeContext(project.concept, { moodBoard: !motion }),
     visualDirection(project.visualSpec),
     clause?.trim() || '',
+    motion ? MOTION_CONTINUITY_CLAUSE : '',
   ].filter(Boolean).join(', ');
 }
 

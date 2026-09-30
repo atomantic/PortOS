@@ -525,7 +525,7 @@ const directionKey = (d) => fingerprint(DIRECTION_FIELDS.map((f) => d?.[f] ?? nu
 
 function sceneDirection(treatment, direction) {
   const clauses = composeDirectionClauses(direction, {
-    aspectRatio: treatment.brief.aspectRatio,
+    aspectRatio: treatment.brief.aspectRatio || '16:9',
     lipSyncUnavailable: treatment.capabilityGaps.some((g) => g.id === 'lip-sync'),
   });
   return {

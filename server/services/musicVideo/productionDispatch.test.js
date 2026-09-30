@@ -37,6 +37,8 @@ describe('production scene dispatch (#9066)', () => {
     expect(kind).toBe('image');
     expect(owner).toBe('music-video-production:mvpr-example');
     expect(params).toMatchObject({ mode: 'codex', musicVideo: tag, referenceImageStrengths: [1] });
+    // Frames are requested at the project's aspect (16:9 by default), never left to the backend.
+    expect(params).toMatchObject({ width: 1536, height: 864 });
     expect(params.prompt).toMatch(/^a lighthouse, noir/);
     expect(params.referenceImagePaths).toHaveLength(1);
     expect(params.referenceImagePaths[0]).toMatch(/ref-example\.png$/);

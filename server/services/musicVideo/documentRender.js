@@ -32,6 +32,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
@@ -50,11 +51,8 @@ const finite = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : null);
 const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 const safeSegment = (id) => String(id || 'scene').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 80) || 'scene';
 
-/** The project's aspect ratio (brief), defaulting to 16:9. */
-export function documentAspect(project) {
-  const aspect = project?.treatment?.brief?.aspectRatio;
-  return DOCUMENT_FRAME_SIZES[aspect] ? aspect : '16:9';
-}
+/** The project's aspect ratio (brief), defaulting to 16:9 (lib/musicVideoAspect.js). */
+export const documentAspect = musicVideoAspect;
 
 const aspectOf = (width, height) => {
   const r = width / height;

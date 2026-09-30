@@ -69,6 +69,8 @@ export * from './issueRefs.js';
 export * from './musicDuration.js';
 export * from './muscriptorModels.js';
 export * from './musicVideoLayers.js';
+export * from './musicVideoAspect.js';
+export * from './musicVideoMotion.js';
 export * from './musicVideoTakes.js';
 export * from './musicVideoShotTiming.js';
 export * from './musicVideoStages.js';
