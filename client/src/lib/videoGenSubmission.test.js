@@ -55,3 +55,22 @@ describe('buildVideoGenSubmission — block streaming request (#6499)', () => {
     expect(payload.streamingMode).toBeUndefined();
   });
 });
+
+describe('buildVideoGenSubmission — fal options (#9232)', () => {
+  it('carries selected resolution and provider audio only to the fal backend', () => {
+    const options = { falResolution: '4k', falGenerateAudio: true };
+    expect(buildVideoGenSubmission(baseArgs({ isFal: true, ...options })))
+      .toMatchObject({ backend: 'fal', falResolution: '4k', falGenerateAudio: true });
+    const local = buildVideoGenSubmission(baseArgs(options));
+    expect(local).not.toHaveProperty('falResolution');
+    expect(local).not.toHaveProperty('falGenerateAudio');
+  });
+
+  it('omits unset options so the server keeps its resolution and silent defaults', () => {
+    const payload = buildVideoGenSubmission(baseArgs({
+      isFal: true, falResolution: '', falGenerateAudio: false,
+    }));
+    expect(payload).not.toHaveProperty('falResolution');
+    expect(payload).not.toHaveProperty('falGenerateAudio');
+  });
+});

@@ -25,6 +25,8 @@ export function useVideoGenFieldState({
   const [grokDuration, setGrokDuration] = useState(GROK_VIDEO_DEFAULT_DURATION);
   const [falDuration, setFalDuration] = useState('');
   const [falModelId, setFalModelId] = useState('');
+  const [falResolution, setFalResolution] = useState('');
+  const [falGenerateAudio, setFalGenerateAudio] = useState(false);
   const [reactorClipId, setReactorClipId] = useState('');
   const [reactorSeconds, setReactorSeconds] = useState(REACTOR_DEFAULT_CLIP_LENGTH);
   const [reactorSeed, setReactorSeed] = useState('');
@@ -96,6 +98,8 @@ export function useVideoGenFieldState({
     grokDuration, setGrokDuration,
     falDuration, setFalDuration,
     falModelId, setFalModelId,
+    falResolution, setFalResolution,
+    falGenerateAudio, setFalGenerateAudio,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,
