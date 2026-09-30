@@ -11,7 +11,7 @@ import {
   DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft,
 } from '../../lib/musicVideoAutomation.js';
 import { RESUMABLE_RUN_STATUSES, currentProductionRun } from '../../lib/musicVideoStages.js';
-import { formatUsd } from '../../utils/formatters.js';
+import { formatCount, formatUsd } from '../../utils/formatters.js';
 
 const POOL_TOOLS = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group === 'image' || t.group === 'video');
 const POOL_TOOL_IDS = new Set(POOL_TOOLS.map((t) => t.id));
@@ -297,7 +297,7 @@ function ProductionSection({ project, production }) {
   const active = run && RESUMABLE_RUN_STATUSES.has(run.status);
   const codeFirst = project.productionPolicy?.strategy === 'code-first';
   const assets = codeFirst ? codeFirstProductionAssets(project) : null;
-  const count = (action) => assets.steps.filter((step) => step.action === action).length;
+  const count = (action) => formatCount(assets.steps.filter((step) => step.action === action).length);
   return (
     <div className="rounded border border-port-border p-2 space-y-2 text-xs" aria-label="Production run">
       <span className="font-medium flex items-center gap-1"><Clapperboard size={12} /> Autonomous production (opt-in)</span>
