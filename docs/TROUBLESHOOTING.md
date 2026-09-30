@@ -10,6 +10,10 @@ This is a model-access rejection, not evidence that login failed. Run
 `codex login status` in the same environment as PortOS to confirm the active
 authentication method. PortOS lets Codex own its credentials and token refresh.
 
+To pin which login method PortOS uses, set **Codex authentication** on the Codex provider
+(AI Providers → edit): *ChatGPT subscription* or *API key*. It passes
+`-c forced_login_method=...` to Codex; leave it on the default to let Codex decide.
+
 Choose a supported model in the task or provider settings, or clear the task's
 model override to use its configured default (check that default too). PortOS's
 shipped model catalog can include models unavailable to your account; refreshing

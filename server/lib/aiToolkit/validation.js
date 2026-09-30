@@ -224,6 +224,10 @@ export const providerSchema = z.object({
   // one an existing install already relies on, and an override that silently
   // turned itself on would be its own surprise.
   ignoreUserConfig: z.boolean().optional(),
+  // Codex authentication method pin (`forced_login_method`): 'chatgpt' = the
+  // ChatGPT subscription, 'api' = API-key billing. Absent/null = Codex decides
+  // from its own login state. Some models are available to only one method.
+  codexAuthMode: z.enum(['chatgpt', 'api']).nullable().optional(),
   // A CLI/TUI provider whose harness auth is provisioned by an external CLI at
   // spawn time (e.g. a short-lived token for a proxy) rather than a static
   // `apiKey` PortOS stores. PortOS spawns `command`(+`args`) in front of the

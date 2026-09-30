@@ -74,6 +74,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     apiKey: '',
     allowCustomEndpoint: provider?.allowCustomEndpoint === true,
     ignoreUserConfig: provider?.ignoreUserConfig === true,
+    codexAuthMode: provider?.codexAuthMode || '',
     lowPriorityOnUsageLimit: provider?.lowPriorityOnUsageLimit === true,
     // The FULL advertised catalog, never the model-access-scoped `models` the
     // payload carries. This textarea is saved verbatim, so seeding it from the
@@ -480,7 +481,12 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     }
     // `--ignore-user-config` is a Codex flag. Never stamp it onto a record
     // running another vendor's binary, where it would be a stored lie.
-    if (!isCodexProvider({ ...provider, ...data, id: provider?.id })) delete data.ignoreUserConfig;
+    if (!isCodexProvider({ ...provider, ...data, id: provider?.id })) {
+      delete data.ignoreUserConfig;
+      delete data.codexAuthMode;
+    } else {
+      data.codexAuthMode = data.codexAuthMode || null;
+    }
     // `/low-priority` is a Claude TUI-only command. Do not persist a dormant
     // toggle on a CLI/headless or another vendor's provider record.
     if (formData.type !== 'tui' || !isClaudeCommandProvider({ ...provider, ...data, id: provider?.id })) {
@@ -973,6 +979,25 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       the account this card reports on.
                     </span>
                   </label>
+                </FormField>
+              )}
+
+              {isCodexProvider({ ...provider, ...formData, id: provider?.id }) && isProcessProvider(formData) && (
+                <FormField label="Codex authentication">
+                  <select
+                    id="codexAuthMode"
+                    value={formData.codexAuthMode}
+                    onChange={(e) => setFormData(prev => ({ ...prev, codexAuthMode: e.target.value }))}
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
+                  >
+                    <option value="">Codex default (its own login state)</option>
+                    <option value="chatgpt">ChatGPT subscription</option>
+                    <option value="api">API key (API billing)</option>
+                  </select>
+                  <span className="text-xs text-gray-500 mt-1 block">
+                    Pins Codex to one login method (<code>forced_login_method</code>). Some models are only
+                    available to one method; ChatGPT subscription and API-key access are billed separately.
+                  </span>
                 </FormField>
               )}
 

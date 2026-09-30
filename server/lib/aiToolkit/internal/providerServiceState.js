@@ -329,6 +329,7 @@ export function createProviderServiceState(config = {}) {
       ...(modelAccess ? { modelAccess } : {}),
       ...(providerData.allowCustomEndpoint === true ? { allowCustomEndpoint: true } : {}),
       ...(providerData.ignoreUserConfig === true ? { ignoreUserConfig: true } : {}),
+      ...(providerData.codexAuthMode === 'chatgpt' || providerData.codexAuthMode === 'api' ? { codexAuthMode: providerData.codexAuthMode } : {}),
       ...(providerData.credentialBootstrap?.command ? { credentialBootstrap: providerData.credentialBootstrap } : {}),
       envVars: providerData.envVars || {},
       secretEnvVars: providerData.secretEnvVars || [],
