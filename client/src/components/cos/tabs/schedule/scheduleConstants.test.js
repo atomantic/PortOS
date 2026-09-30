@@ -1,5 +1,6 @@
+import { TASK_READINESS_REASONS } from '../../../../../../server/lib/taskReadinessReasons.js';
 import { describe, it, expect } from 'vitest';
-import { isManualOnlyCadence, getTaskStatusGroup, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, stagePublicReviewPosture, togglePrReviewerActions, suggestedOrderSteps, compareBySuggestedOrder } from './scheduleConstants';
+import { isManualOnlyCadence, getTaskStatusGroup, TASK_READINESS_REASON_RENDERING, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, stagePublicReviewPosture, togglePrReviewerActions, suggestedOrderSteps, compareBySuggestedOrder } from './scheduleConstants';
 
 describe('pr-reviewer pipeline helpers', () => {
   it('recognizes semantic roles and legacy prompt-key stages', () => {
@@ -124,6 +125,15 @@ describe('toggleMetadataField', () => {
   it('refuses to drop the worktree out from under an open PR', () => {
     expect(toggleMetadataField({ useWorktree: true, openPR: true }, 'useWorktree'))
       .toEqual({ useWorktree: true, openPR: true });
+  });
+});
+
+describe('readiness reason rendering', () => {
+  it('classifies every current wire reason and exposes an unknown peer reason', () => {
+    expect(new Set(Object.keys(TASK_READINESS_REASON_RENDERING))).toEqual(new Set(TASK_READINESS_REASONS));
+    const config = { enabled: true, type: 'cron', status: { reason: 'future-unknown-reason' } };
+    expect(getTaskStatusGroup(config)).toBe('unknown');
+    expect(describeNextRun(config)).toMatchObject({ text: 'Unknown schedule state', warn: true });
   });
 });
 

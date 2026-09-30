@@ -9,6 +9,7 @@ import InfoTooltip from '../../../ui/InfoTooltip';
 import { FormField } from '../../../ui/FormField';
 import { formatDateTime } from '../../../../utils/formatters';
 import { formatSkipCauses } from '../../../../lib/perpetualSkipCauses';
+import { TASK_READINESS_REASON } from '../../../../../../server/lib/taskReadinessReasons.js';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
 import useReviewerModelOptions from '../../../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../../../lib/reviewerModels';
@@ -423,7 +424,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               );
             }
             // Global (non-app) perpetual task: the global status.reason is accurate.
-            if (status.reason === 'perpetual-parked') {
+            if (status.reason === TASK_READINESS_REASON.PERPETUAL_PARKED) {
               const skipSummary = formatSkipCauses(status.parkSkipCauses);
               return (
                 <>
@@ -434,7 +435,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
                 </>
               );
             }
-            if (status.reason === 'perpetual-drain' || status.reason === 'perpetual-recheck') {
+            if (status.reason === TASK_READINESS_REASON.PERPETUAL_DRAIN || status.reason === TASK_READINESS_REASON.PERPETUAL_RECHECK) {
               return (
                 <>
                   {stallNote}

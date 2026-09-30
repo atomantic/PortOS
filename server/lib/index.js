@@ -464,6 +464,8 @@ export * from './taskTargetBranch.js';
 export * from './claimContinuation.js';
 export * from './scheduledTaskTypes.js';
 export * from './scheduleRunOrder.js';
+export * from './taskReadinessReasons.js';
+export * from './taskReadinessSchema.js';
 export * from './taskTargetScope.js';
 export * from './taxonomyTally.js';
 export * from './worktreeOwnership.js';

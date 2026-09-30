@@ -22,6 +22,7 @@
  */
 
 import { getScheduleStatus } from './taskSchedule.js';
+import { TASK_READINESS_REASON } from '../lib/taskReadinessReasons.js';
 import { DEFAULT_PERPETUAL_RECHECK_MS } from './taskScheduleConstants.js';
 import { AUDIT_TASK_TYPES } from '../lib/auditCatalog.js';
 import { dedupeByKey } from '../lib/arrayUtils.js';
@@ -181,7 +182,7 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
       // — that field drives warning styling in the UI. Other shouldRun=false states (cooldown,
       // weekday-only, disabled-for-app, etc.) are exposed via `statusReason` so the UI can
       // render them as neutral "waiting" rather than a warning.
-      blocked: info.status?.reason === 'waiting-on-dependencies' ? info.status.reason : null,
+      blocked: info.status?.reason === TASK_READINESS_REASON.WAITING_ON_DEPENDENCIES ? info.status.reason : null,
       statusReason: info.status?.shouldRun === false ? info.status.reason : null,
       shouldRun: info.status?.shouldRun === true,
       // Why the task is due right now (e.g. 'weekly-due', 'cron-catch-up',
@@ -500,7 +501,7 @@ function appendCronOccurrences({ node, expression, startMs, endMs, timezone, tar
 function projectPerpetual(node, startMs, endMs, timezone, occurrences, windows) {
   const perpetual = node.perpetualStatus;
   const allTrackedAppsParked = perpetual?.trackedAppCount > 0 && perpetual.parkedAppCount === perpetual.trackedAppCount;
-  const draining = node.shouldRun && !perpetual?.globalParked && !allTrackedAppsParked && node.statusReason !== 'perpetual-parked';
+  const draining = node.shouldRun && !perpetual?.globalParked && !allTrackedAppsParked && node.statusReason !== TASK_READINESS_REASON.PERPETUAL_PARKED;
 
   // A cron+perpetual task rechecks on its own expression (computePerpetualRecheckAt
   // derives the park from it); an on-demand one uses `recheckCron`.
