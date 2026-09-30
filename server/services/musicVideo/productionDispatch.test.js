@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { basename } from 'node:path';
 
 const enqueueJob = vi.fn(async () => ({ jobId: 'job-image' }));
 const submitVideoGenJob = vi.fn(async () => ({ jobId: 'job-video' }));
@@ -55,7 +56,7 @@ describe('production scene dispatch (#9066)', () => {
       await dispatchProductionStep({ stepKind: 'frame', project: checkedIn, scene: { ...scene, sectionIndex },
         route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
       const params = enqueueJob.mock.calls.at(-1)[0].params;
-      expect(params.referenceImagePaths.map((path) => path.split('/').at(-1))).toEqual(['character.png', `${plate}.png`]);
+      expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['character.png', `${plate}.png`]);
       expect(params.referenceImageStrengths).toEqual([1, 1]);
     }
   });
