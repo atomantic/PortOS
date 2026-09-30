@@ -337,9 +337,12 @@ function codexPublicReviewActionsSpawnArgs(provider, { effectiveModel, effort, m
 
 // Code-review reader: Codex's OS-level read-only sandbox may inspect files but
 // never write or run a mutating command. It still exposes read tools, so it is
-// the read-only code-review tier, not the no-tool posture.
+// the read-only code-review tier, not the no-tool posture. `toolFree` reviews
+// run from an isolated non-Git scratch cwd, where codex refuses to start
+// without `--skip-git-repo-check`; that flag only waives the trusted-directory
+// check, so the read-only sandbox and credential isolation are unchanged.
 function codexReadOnlyReviewSpawnArgs(provider, ctx) {
-  return codexPublicReviewArgs(provider, ctx, ['--sandbox', 'read-only']);
+  return codexPublicReviewArgs(provider, ctx, ['--sandbox', 'read-only', '--skip-git-repo-check']);
 }
 
 function codexPublicReviewArgs(provider, { effectiveModel, effort, maxConcurrentThreads }, postureArgs) {

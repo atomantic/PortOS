@@ -222,6 +222,7 @@ describe('public-review provider postures', () => {
     expect(config.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(config.args).not.toContain('--mcp-config');
     expect(config.args).not.toContain('unsafe.json');
+    expect(config.args).not.toContain('--skip-git-repo-check');
   });
 
   it('rejects read-only Codex because filesystem restrictions do not remove tools', () => {
@@ -267,6 +268,8 @@ describe('public-review provider postures', () => {
       safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
     });
     expect(codexReview.args).toEqual(expect.arrayContaining(['exec', '--sandbox', 'read-only']));
+    // Isolated scratch cwd is not a Git repo; codex exits without this flag.
+    expect(codexReview.args).toContain('--skip-git-repo-check');
     expect(codexReview.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     // No enforced mode: the caller falls back to the vendor's ordinary argv.
     expect(buildCodeReviewSpawnConfig(antigravity, { safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE })).toBeNull();
