@@ -142,7 +142,7 @@ export async function getVideoExecutionPreview(projectId) {
     limits: creativeDirectorVideoLimitsSchema.parse(project.videoExecution?.limits || {}),
     execution,
     costNotice: choices?.costEstimateUsd != null
-      ? 'Estimated from the fal.ai price catalog; balances are unknown. A dollar cap refuses any clip that would exceed it. Clip and agent-call limits are also enforced.'
+      ? 'Estimated from the fal.ai price catalog; balances are unknown. A dollar cap bounds clip spend only (a clip that would exceed it is refused); agent calls are bounded by the agent-call limit, not counted in dollars.'
       : 'Provider prices and balances are unknown. Clip and agent-call limits are enforced; a dollar cap blocks calls whose price cannot be bounded.' };
 }
 
