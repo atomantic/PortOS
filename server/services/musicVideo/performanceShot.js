@@ -226,6 +226,7 @@ export async function assertCurrentPerformanceTakes(project, masterPath) {
  *
  * Returns `null` for a cutaway scene (nothing to add), or
  * `{ audioFilePath, shotInstruction, modelId, resolution, enableTranscription }`
+ * (`enableTranscription` is off when the project sets `videoSettings.falLipSyncTranscription: false`)
  * for a performance scene on a capable backend. `resolution` is the take's
  * output resolution: the request's own when the lip-sync route offers it, else
  * the project's `videoSettings.falLipSyncResolution`, else the capability
@@ -292,6 +293,10 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     );
   }
 
+  // Transcript guidance is on by default where the route offers it; a project
+  // can turn it off (videoSettings.falLipSyncTranscription === false) when the
+  // provider's transcript mishears sung words and shapes the mouth for them.
+  const transcription = capability.transcription === true && project.videoSettings?.falLipSyncTranscription !== false;
   const shotInstruction = {
     version: SHOT_INSTRUCTION_VERSION,
     shotMode: 'performance',
@@ -321,6 +326,8 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
       transcription: capability.transcription,
       resolution: takeResolution,
     },
+    // Whether this take asked the provider to transcribe the audio first.
+    transcription,
     // The provider's output length follows the submitted audio.
     generatedCoverageSec: plan.windowSec,
   };
@@ -329,6 +336,6 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     shotInstruction,
     modelId: capability.modelId,
     resolution: takeResolution,
-    enableTranscription: capability.transcription === true,
+    enableTranscription: transcription,
   };
 }

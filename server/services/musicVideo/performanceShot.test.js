@@ -280,6 +280,18 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect((await preparePerformanceShot({ ...args, resolution: '720p' })).resolution).toBe('768P');
   });
 
+  it('asks for transcript guidance by default and skips it when the project turns it off', async () => {
+    const args = { musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: '/x/frame.png', mode: 'image' };
+    getProject.mockResolvedValue(project());
+    const guided = await preparePerformanceShot(args);
+    expect(guided.enableTranscription).toBe(true);
+    expect(guided.shotInstruction.transcription).toBe(true);
+    getProject.mockResolvedValue({ ...project(), videoSettings: { backend: 'fal', falLipSyncTranscription: false } });
+    const acoustic = await preparePerformanceShot(args);
+    expect(acoustic.enableTranscription).toBe(false);
+    expect(acoustic.shotInstruction.transcription).toBe(false);
+  });
+
   it('refuses a shot longer than the provider synchronizes instead of letting it truncate', async () => {
     getProject.mockResolvedValue(project({ startSec: 0, endSec: 30 }));
     await expect(preparePerformanceShot({

@@ -74,6 +74,9 @@ export const musicVideoVideoSettingsSchema = z.object({
   // Output resolution of a performance (lip-sync) take — fal's own alphabet
   // for the lip-sync route. null/omitted = MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION.
   falLipSyncResolution: z.enum(SOURCE_AUDIO_LIPSYNC.fal.resolutions).nullable().optional(),
+  // false = lip-sync to the audio alone, without the provider transcribing it
+  // first (sung words it mishears turn into the wrong mouth shapes).
+  falLipSyncTranscription: z.boolean().nullable().optional(),
   generationMode: z.enum(['image', 'audioReactive']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
