@@ -121,7 +121,20 @@ export const musicVideoPacingSchema = z.object({
   hookSec: z.number().min(0.5).max(60).optional(),
 }).strict();
 
+// Lyric-sheet structure: a section header (`[Chorus]`) or a stage direction
+// (`[Spoken, close]`) anchored to the index of the lyric line it precedes.
+// `kind` is the normalized section part or delivery (see
+// services/musicVideo/lyricMarkers.js); a free string so a newer peer's
+// vocabulary still validates here.
+export const musicVideoLyricMarkerSchema = z.object({
+  type: z.enum(['section', 'direction']),
+  label: z.string().trim().min(1).max(120),
+  kind: z.string().max(32).optional(),
+  line: z.number().int().min(0).max(2000),
+}).strict();
+
 const lyricCueList = z.array(musicVideoLyricCueSchema).max(2000);
+const lyricMarkerList = z.array(musicVideoLyricMarkerSchema).max(500);
 const phraseList = z.array(musicVideoPhraseSchema).max(500);
 
 // ---- Visual specification + scene takes (#8965) ----------------------------
@@ -227,6 +240,13 @@ export const musicVideoLyricsImportSchema = z.object({
   format: z.enum(['auto', 'lrc', 'srt', 'text']).optional(),
   text: z.string().max(200000),
   mode: z.enum(['replace', 'append']).optional(),
+}).strict();
+
+// Import the linked track's lyric sheet. `replace` swaps the project's lines
+// for the sheet; `if-empty` (the autopilot kickoff) imports only when the
+// project has no lines yet, so a re-run never overwrites the director's edits.
+export const musicVideoLyricsImportTrackSchema = z.object({
+  mode: z.enum(['replace', 'if-empty']).optional(),
 }).strict();
 
 // Word alignment (#9074) runs only when the director clicks. `cueId` re-aligns
@@ -545,6 +565,7 @@ export const musicVideoProjectCreateSchema = z.object({
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
   lyricCues: lyricCueList.optional(),
+  lyricMarkers: lyricMarkerList.optional(),
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
@@ -563,6 +584,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   automation: musicVideoAutomationSchema.nullable().optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
   lyricCues: lyricCueList.optional(),
+  lyricMarkers: lyricMarkerList.optional(),
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
@@ -726,6 +748,11 @@ export const musicVideoAudioAnalysisSchema = z.object({
     // Normalized 0..1 section loudness used by the energy-weighted auto-arranger
     // (#1915). Additive + optional so older cached analyses still validate.
     energy: z.number().min(0).optional(),
+    // Set when the label came from the aligned lyric sheet ("Chorus") rather
+    // than the detector ("Section 3"); `analysisLabel` keeps the detector's
+    // label so a later pass can restore it. Additive, so older analyses validate.
+    labelSource: z.enum(['analysis', 'lyrics']).optional(),
+    analysisLabel: z.string().max(120).optional(),
   })),
   durationSec: z.number(),
   // Explain whether the beat grid came from the full track, consensus among

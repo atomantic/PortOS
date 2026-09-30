@@ -18,7 +18,7 @@ import { trackSourceLabel } from '../../lib/trackProvenance.js';
  */
 export default function TrackPanel({
   project, tracks, trackName, audioFilename, youtube,
-  renderBound, midiBound, onChangeTrack, onProjectUpdated,
+  renderBound, midiBound, onChangeTrack, onProjectUpdated, separation = null,
 }) {
   const blockedMessage = renderBound
     ? 'Wait for the current render to finish before changing the track'
@@ -63,6 +63,7 @@ export default function TrackPanel({
         project={project}
         hasAudio={Boolean(project.trackId || project.uploadedAudioFilename)}
         onUpdated={onProjectUpdated}
+        separation={separation}
       />
       {/* #8988: an optional, explicitly chosen bed mixed under the song. */}
       <SoundBedControl key={project.id} project={project} tracks={tracks} disabled={renderBound} onUpdated={onProjectUpdated} />

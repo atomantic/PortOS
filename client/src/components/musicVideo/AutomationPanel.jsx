@@ -10,10 +10,12 @@ const actionClass = 'text-sm text-port-accent min-h-[44px] sm:min-h-0 px-1';
 
 /**
  * The project's automation brief — tools, guidance, budget — shown first on
- * the board, with a one-click kickoff (analyze the song, then plan every shot
- * against the brief). Edits PATCH through `onSave`, which owns the error toast.
+ * the board, with a one-click kickoff (analyze the song, import the track's
+ * lyrics, separate vocals, align words, then plan every shot against the
+ * brief). `kickoffStep` names the step running now. Edits PATCH through
+ * `onSave`, which owns the error toast.
  */
-export default function AutomationPanel({ project, onSave, onKickoff, kickoffBusy, kickoffBlockedReason }) {
+export default function AutomationPanel({ project, onSave, onKickoff, kickoffBusy, kickoffStep = null, kickoffBlockedReason }) {
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const automation = project.automation || null;
@@ -55,7 +57,7 @@ export default function AutomationPanel({ project, onSave, onKickoff, kickoffBus
             type="button"
             onClick={onKickoff}
             disabled={kickoffBusy || !!kickoffBlockedReason}
-            title={kickoffBlockedReason || 'Analyze the song, then plan every shot against the brief'}
+            title={kickoffBlockedReason || 'Analyze the song, import its lyrics, separate and align the vocal, then plan every shot against the brief'}
             className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
           >
             <Play size={14} /> {kickoffBusy ? 'Working…' : 'Analyze & plan'}
@@ -73,6 +75,7 @@ export default function AutomationPanel({ project, onSave, onKickoff, kickoffBus
         <p className="text-xs text-port-text-muted break-words line-clamp-3">
           {automation.guidance || 'No guidance yet — the agent plans from the song, universe and board alone.'}
         </p>
+        {kickoffStep && <p className="text-xs text-port-accent" role="status">{kickoffStep}</p>}
         {kickoffBlockedReason && <p className="text-xs text-port-warning">{kickoffBlockedReason}</p>}
       </>
     );

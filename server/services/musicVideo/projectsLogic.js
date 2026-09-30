@@ -31,6 +31,7 @@ import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isStr } from '../../lib/textUtils.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
+import { normalizeLyricMarkers } from './lyricMarkers.js';
 import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
@@ -140,6 +141,12 @@ export function buildProjectRecord(input, { id, now }) {
     // #8964 — editable timed lyric cues + phrase annotations (timed against
     // the current audio source) and the shot planner's pacing range.
     lyricCues: Array.isArray(input.lyricCues) ? normalizeLyricCues(input.lyricCues) : [],
+    // Section headers + stage directions read off the lyric sheet, anchored to
+    // cue indices (lyricMarkers.js). Present only when the sheet had any, so a
+    // record without them keeps its shape.
+    ...(Array.isArray(input.lyricMarkers) && input.lyricMarkers.length
+      ? { lyricMarkers: normalizeLyricMarkers(input.lyricMarkers) }
+      : {}),
     phrases: Array.isArray(input.phrases) ? normalizePhrases(input.phrases) : [],
     pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
@@ -259,6 +266,7 @@ export function applyProjectPatch(project, patch) {
       automation: patch.automation ? normalizeMusicVideoAutomation(patch.automation, project.automation) : null,
     } : {}),
     ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues) } : {}),
+    ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
     // #8984 — the composition manifest is replaced whole; null clears it.
     ...('composition' in patch ? { composition: normalizeComposition(patch.composition) } : {}),

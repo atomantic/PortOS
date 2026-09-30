@@ -23,6 +23,7 @@ import {
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
   musicVideoLyricsImportSchema,
+  musicVideoLyricsImportTrackSchema,
   musicVideoLyricsAlignSchema,
   musicVideoTakeInputSchema,
   musicVideoTakeReviewSchema,
@@ -95,6 +96,8 @@ import {
 import { planProject } from '../services/musicVideo/planner.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
+import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
+import { offsetLyricMarkers, relabelAnalysisSections } from '../services/musicVideo/lyricMarkers.js';
 import {
   updateTreatment,
   compileTreatment,
@@ -178,6 +181,28 @@ router.delete('/:id/vocal-stem', asyncHandler(async (req, res) => {
   res.json(await detachVocalStem(req.params.id));
 }));
 
+// Separate the vocal from the song with demucs and attach it as the stem.
+// Kickoff returns 202 + a jobId (a running separation for the project is
+// re-attached, not doubled); progress streams over SSE. The first run
+// installs demucs into its own venv — only ever from this explicit request.
+// Lazy import: the demucs runner pulls the spawn/venv helpers only this needs.
+router.post('/:id/vocal-stem/separate', asyncHandler(async (req, res) => {
+  const { startVocalSeparation } = await import('../services/musicVideo/vocalSeparation.js');
+  res.status(202).json(await startVocalSeparation(req.params.id));
+}));
+
+router.get('/vocal-stem/separate/:jobId/events', asyncHandler(async (req, res) => {
+  const { attachVocalSeparationSseClient } = await import('../services/musicVideo/vocalSeparation.js');
+  if (!attachVocalSeparationSseClient(req.params.jobId, res)) {
+    throw new ServerError('Vocal separation job not found or expired', { status: 404, code: 'NOT_FOUND' });
+  }
+}));
+
+router.post('/vocal-stem/separate/:jobId/cancel', asyncHandler(async (req, res) => {
+  const { cancelVocalSeparation } = await import('../services/musicVideo/vocalSeparation.js');
+  res.json({ ok: cancelVocalSeparation(req.params.jobId) });
+}));
+
 // Resolve a project's source audio to an absolute path under data/music/. The
 // filename comes from the linked track or the uploaded-audio field; both are
 // validated as safe basenames so a tampered record can't escape the directory.
@@ -209,7 +234,9 @@ router.post('/:id/analyze', asyncHandler(async (req, res) => {
   if (!analysis) {
     throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
   }
-  const updated = await setProjectAnalysis(project.id, analysis);
+  // Timed lyrics with sheet headers name the fresh sections too (a no-op
+  // until the lines are aligned).
+  const updated = await setProjectAnalysis(project.id, relabelAnalysisSections(analysis, project.lyricCues, project.lyricMarkers));
   res.json(updated);
 }));
 
@@ -286,26 +313,40 @@ router.post('/:id/treatment/proofs/:proofId/review', asyncHandler(async (req, re
 // (plain lines arrive untimed, ready to be timed by hand). `replace` swaps the
 // project's cue list; `append` adds after it. The cues persist through the
 // ordinary project PATCH path, so ids/normalization match hand edits.
-const MAX_LYRIC_CUES = 2000;
+// Plain lines keep their section headers and stage directions as lyric
+// markers anchored to the imported lines (lyricMarkers.js).
 router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
   const { format = 'auto', text, mode = 'replace' } = validateRequest(musicVideoLyricsImportSchema, req.body);
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const { format: detected, cues } = parseLyricCues(text, format);
+  const { format: detected, cues, markers } = parseLyricCues(text, format);
   if (cues.length === 0) {
     throw new ServerError(`No lyric lines found in the ${detected} text`, { status: 422, code: 'NO_LYRICS' });
   }
-  const lyricCues = mode === 'append' ? [...(project.lyricCues || []), ...cues] : cues;
+  const existing = project.lyricCues || [];
+  const append = mode === 'append';
+  const lyricCues = append ? [...existing, ...cues] : cues;
   if (lyricCues.length > MAX_LYRIC_CUES) {
     throw new ServerError(`A project holds at most ${MAX_LYRIC_CUES} lyric cues`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const updated = await updateProject(project.id, { lyricCues });
+  const lyricMarkers = append
+    ? [...(project.lyricMarkers || []), ...offsetLyricMarkers(markers, existing.length)]
+    : markers;
+  const updated = await updateProject(project.id, { lyricCues, lyricMarkers });
   res.json({ project: updated, imported: cues.length, format: detected });
 }));
 
+// Import the linked track's lyric sheet ("Use track lyrics", and the
+// autopilot kickoff with `mode: 'if-empty'`, which never replaces lines).
+router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
+  const { mode = 'replace' } = validateRequest(musicVideoLyricsImportTrackSchema, req.body || {});
+  res.json(await importTrackLyrics(req.params.id, { mode }));
+}));
+
 // Word-level alignment (#9074). Nothing here runs until the director clicks
-// Align words or a line's Re-align. An unreachable whisper server is an error,
-// not an empty timing list.
+// Align words or a line's Re-align (or starts an autopilot run). The first
+// alignment downloads the music-grade whisper model; no whisper.cpp at all is
+// a 503 with install steps, not an empty timing list.
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
   res.json(await alignProjectLyrics(req.params.id, { cueId }));

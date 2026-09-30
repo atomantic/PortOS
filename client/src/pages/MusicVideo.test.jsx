@@ -53,7 +53,11 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   reorderMusicVideoScenes: vi.fn(),
   splitMusicVideoScene: vi.fn(),
   importMusicVideoLyrics: vi.fn(),
+  importMusicVideoTrackLyrics: vi.fn(),
   alignMusicVideoLyrics: vi.fn(),
+  separateMusicVideoVocals: vi.fn(async () => ({ jobId: 'sep-job-1' })),
+  musicVideoVocalSeparationEventsUrl: (jobId) => `/api/music-video/vocal-stem/separate/${jobId}/events`,
+  cancelMusicVideoVocalSeparation: vi.fn(async () => ({ ok: true })),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),
@@ -163,7 +167,7 @@ import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject,
-  importMusicVideoLyrics, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
+  importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
@@ -1486,14 +1490,20 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     ));
   });
 
-  it('autopilot kickoff analyzes the song, then plans the shots against the brief', async () => {
-    const project = { ...PROJECT_NO_CLIP, scenes: [], automation: { tools: ['image:local'], guidance: 'noir', budgetUsd: null } };
-    analyzeMusicVideoProject.mockResolvedValue({ ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, status: 'analyzed' });
-    planMusicVideoProject.mockResolvedValue({ project: { ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis }, scenesAdded: 3, promptsSeeded: true });
+  it('autopilot kickoff analyzes the song, tries the track lyrics, then plans the shots against the brief', async () => {
+    const project = { ...PROJECT_NO_CLIP, trackId: 'track-1', lyricCues: [], scenes: [], automation: { tools: ['image:local'], guidance: 'noir', budgetUsd: null } };
+    const analyzed = { ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, status: 'analyzed' };
+    analyzeMusicVideoProject.mockResolvedValue(analyzed);
+    // An instrumental track: nothing to import, so nothing to separate or align.
+    importMusicVideoTrackLyrics.mockResolvedValue({ project: analyzed, imported: 0, markers: 0, skipped: 'no-track-lyrics' });
+    planMusicVideoProject.mockResolvedValue({ project: analyzed, scenesAdded: 3, promptsSeeded: true });
     await openProject(project);
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
     expect(analyzeMusicVideoProject).toHaveBeenCalledWith(project.id, { silent: true });
+    expect(importMusicVideoTrackLyrics).toHaveBeenCalledWith(project.id, { mode: 'if-empty' }, { silent: true });
+    expect(separateMusicVideoVocals).not.toHaveBeenCalled();
+    expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
   });
 
   it('blocks relinking the track while a render is in progress for the selected project', async () => {
