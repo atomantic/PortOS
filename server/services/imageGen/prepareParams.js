@@ -28,6 +28,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -131,7 +132,9 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   const initUpload = files?.initImage;
   const referenceImagePaths = [];
   const referenceImageStrengths = [];
-  const namedReferenceFiles = Array.isArray(data.referenceImageFiles) ? data.referenceImageFiles : [];
+  const namedReferenceFiles = Array.isArray(data.referenceImageFiles) ? [...data.referenceImageFiles] : [];
+  let musicVideoProject = null;
+  let musicVideoProjectLoaded = false;
 
   // Pair strengths by PACK position (post-filter), not slot position — the
   // client renumbers populated slots into `referenceImage1..N` and sends a
@@ -195,6 +198,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   const source = data.mode ? null : RECORD_PIN_SOURCES.find((s) => data[s.tag]?.[s.idKey]);
   if (source) {
     const record = await source.load(data[source.tag][source.idKey]).catch(() => null);
+    if (source.tag === 'musicVideo') { musicVideoProject = record; musicVideoProjectLoaded = true; }
     const pin = recordRenderPin(record || {});
     const resolved = resolveRenderTargetConfig(settings, source.target, {
       model: data.cloudModel || null,
@@ -219,10 +223,19 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   // request or named by an earlier one) plus every reference slot. Every gate
   // below keys off these two, rather than respelling "carries input images"
   // per gate and having to keep the spellings in sync.
+  const localModel = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
+  if (data.musicVideo?.sceneId) {
+    if (!musicVideoProjectLoaded) musicVideoProject = await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
+    const reservedSlots = referenceUploads.length + (initUpload || data.initImageFile ? 1 : 0);
+    const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel) - reservedSlots);
+    const styles = musicVideoStyleImages(musicVideoProject, namedReferenceFiles, capacity);
+    // Named inputs precede uploads. Keep the latter's packed strength positions intact.
+    if (!referenceUploads.length) namedReferenceFiles.push(...styles);
+    const look = musicVideoStylePrompt(musicVideoProject, referenceUploads.length ? 0 : styles.length);
+    if (look) data.prompt = [data.prompt, look].filter(Boolean).join('. ');
+  }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = (initUpload || data.initImageFile ? 1 : 0) + referenceImageCount;
-
-  const localModel = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
   // Freeze the selected preference before capability checks. Explicit ids stay
   // untouched so the existing unknown/hardware rejection still applies.
   if (!data.modelId && localModel?.id) data.modelId = localModel.id;

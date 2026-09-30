@@ -742,3 +742,12 @@ describe('composition document (render style `document`)', () => {
     expect(next.composition.document).toEqual(pointer);
   });
 });
+
+it('preserves optional project moodboard uploads through create, patch and clone', () => {
+  const styleReferences = [{ imageId: 'style.png', caption: 'silver grain' }];
+  const project = buildProjectRecord({ name: 'Example', styleReferences }, { id: 'mv-example', now: '2026-01-01' });
+  expect(project.styleReferences).toEqual(styleReferences);
+  expect(applyProjectPatch(project, { name: 'Updated' }).styleReferences).toEqual(styleReferences);
+  expect(cloneProjectRecord(project, { id: 'mv-clone', now: '2026-01-02' }).styleReferences).toEqual(styleReferences);
+  expect(applyProjectPatch(project, { styleReferences: [] }).styleReferences).toEqual([]);
+});

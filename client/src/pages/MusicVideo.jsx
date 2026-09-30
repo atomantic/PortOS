@@ -119,6 +119,8 @@ export default function MusicVideo() {
   const [analyzing, setAnalyzing] = useState(false);
   const [arranging, setArranging] = useState(false);
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
+  const [styleReferencesPending, setStyleReferencesPending] = useState(false);
+  useEffect(() => { setStyleReferencesPending(false); }, [selectedId]);
   const [planning, setPlanning] = useState(false);
   const [cloning, setCloning] = useState(false);
   const [importingLyrics, setImportingLyrics] = useState(false);
@@ -362,7 +364,7 @@ export default function MusicVideo() {
   // separate the vocal, align the words, then plan every shot against the
   // brief (the planner reads automation.guidance). Each step only runs when
   // its result is missing; lyric/vocal/alignment failures still plan.
-  const autopilotBlockedReason = creativeSetupPending
+  const autopilotBlockedReason = (creativeSetupPending || styleReferencesPending)
     ? 'Save or cancel the creative setup before starting autopilot.'
     : autopilotBlocker(selected);
   const kickoff = useMusicVideoKickoff({
@@ -760,7 +762,7 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
-    locked: creativeSetupPending,
+    locked: creativeSetupPending || styleReferencesPending,
     busy: { analyzing, planning, arranging, cloning },
     tracks,
     trackName,
@@ -802,6 +804,10 @@ export default function MusicVideo() {
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec });
     }),
     setCreativeSetupPending,
+    setStyleReferencesPending,
+    saveStyleReferences: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
+      patchProject(project.id, { styleReferences: project.styleReferences });
+    }),
     setPickerTarget,
     onAddReference: () => setPickerTarget({ type: 'reference' }),
     onAnalyze: () => handleAnalyze(),

@@ -176,6 +176,11 @@ export const musicVideoVisualReferenceSchema = z.object({
   use: z.enum(MUSIC_VIDEO_REFERENCE_USES).optional(),
 }).strict();
 
+export const musicVideoStyleReferencesSchema = z.array(z.object({
+  imageId: galleryImageName,
+  caption: z.string().trim().max(500).optional(),
+}).strict()).max(8);
+
 // The project's reusable visual specification. A patch merges per sub-field
 // (like `concept`), and `references` / `palette` replace their list whole.
 export const musicVideoVisualSpecSchema = z.object({
@@ -755,6 +760,7 @@ export const musicVideoProjectCreateSchema = z.object({
   uploadedAudioFilename: z.string().max(256).nullable().optional(),
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
+  styleReferences: musicVideoStyleReferencesSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
   lyricCues: lyricCueList.optional(),
@@ -773,6 +779,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   uploadedAudioFilename: z.string().max(256).nullable().optional(),
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
+  styleReferences: musicVideoStyleReferencesSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),

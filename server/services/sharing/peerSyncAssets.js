@@ -581,6 +581,7 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
     ...scenes.map((s) => (isStr(s?.referenceImageId) ? s.referenceImageId : null)).filter(Boolean),
     ...takeIds('image'),
     ...specRefs.map((r) => (isStr(r?.imageId) ? r.imageId : null)).filter(Boolean),
+    ...(Array.isArray(project?.styleReferences) ? project.styleReferences : []).map((r) => (isStr(r?.imageId) ? r.imageId : null)).filter(Boolean),
   ])];
   if (imageNames.length) {
     const entries = imageNames.map(imageAssetReference);

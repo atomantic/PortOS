@@ -325,3 +325,13 @@ describe('Cast & Sets check-in', () => {
     expect(skipped.body.stage.status).toBe('skipped');
   });
 });
+
+it('uses project moodboard style images for Cast & Sets without a linked board', async () => {
+  const project = await seed({ visualSpec: null, styleReferences: [{ imageId: 'style.png', caption: 'silver grain' }] });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  expect(jobs[0].params.referenceImagePaths.some((p) => p.endsWith('style.png'))).toBe(true);
+  expect(jobs[0].params.prompt).toContain('silver grain');
+  const dependent = jobs.find((j) => j.params.referenceImagePaths?.length > 1);
+  expect(dependent.params.referenceImagePaths.at(-1)).toMatch(/style.png$/);
+});

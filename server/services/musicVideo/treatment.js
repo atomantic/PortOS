@@ -262,6 +262,7 @@ function normalizeTreatment(input, now = new Date().toISOString()) {
     revision: Number.isInteger(input.revision) && input.revision > 0 ? input.revision : 1,
     brief: normalizeBrief(input.brief, null, now),
     arc: normalizeArc(input.arc),
+    ...(typeof input.styleLook === 'string' ? { styleLook: input.styleLook.slice(0, 1000), styleReferencesBasis: input.styleReferencesBasis } : {}),
     shotDirections: normalizeShotDirections(input.shotDirections),
     proofs: normalizeProofs(input.proofs),
     capabilityGaps: normalizeGaps(input.capabilityGaps),
@@ -321,7 +322,7 @@ export function treatmentBasis(project) {
     visualSpec: fingerprint([project?.concept || null, spec ? [
       (spec.references || []).map((r) => [r.imageId, r.role || 'mood', r.use || 'reference', r.label || '', r.note || '']),
       spec.palette || [], spec.typography || '', spec.cameraRules || '',
-    ] : null]),
+    ] : null, ...(project?.styleReferences?.length ? [project.styleReferences] : [])]),
     lyrics: fingerprint((project?.lyricCues || []).map((c) => [c.text, c.startSec ?? null, c.endSec ?? null])),
     scenes: fingerprint((project?.scenes || []).map((s) => [s.sceneId, s.startSec ?? null, s.endSec ?? null])),
   };
@@ -403,6 +404,7 @@ export function writeCompiledTreatment(project, { baseRevision, draft, basis, co
     ...(existing || blankTreatment(now)),
     brief: normalizeBrief({ graphicLanguage: draft.graphicLanguage || existing?.brief?.graphicLanguage }, existing?.brief, now),
     arc: normalizeArc(draft.arc),
+    ...(project.styleReferences?.length ? { styleLook: draft.styleLook ?? '', styleReferencesBasis: draft.styleReferencesBasis ?? null } : {}),
     shotDirections: normalizeShotDirections(draft.shotDirections),
     // A new compile proposes a fresh checklist: earlier verdicts reviewed
     // different shots/direction.
