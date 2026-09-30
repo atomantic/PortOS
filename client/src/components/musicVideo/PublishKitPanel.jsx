@@ -128,7 +128,7 @@ export default function PublishKitPanel({ project, publishKit }) {
                   <button type="button" onClick={() => copyToClipboard(chaptersText(kit.chapters), 'Chapters copied')} aria-label="Copy chapters"
                     className="text-port-text-muted min-h-[44px] sm:min-h-0 px-1"><Copy size={12} /></button>
                 </div>
-                <pre className="bg-port-bg border border-port-border rounded p-2 whitespace-pre-wrap font-mono text-[11px]">{chaptersText(kit.chapters)}</pre>
+                <pre className="bg-port-bg border border-port-border rounded p-2 whitespace-pre-wrap break-words font-mono text-[11px]">{chaptersText(kit.chapters)}</pre>
               </div>
             )}
             {kit.thumbnails?.length > 0 && (
