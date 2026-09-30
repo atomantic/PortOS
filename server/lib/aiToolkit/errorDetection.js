@@ -144,6 +144,16 @@ const ERROR_PATTERNS = [
     extractWaitTime: true
   },
   {
+    // Codex authenticated successfully, but the selected model is outside this
+    // ChatGPT account's access. This is request-specific, not a broken login
+    // or an exhausted subscription; other models may still run.
+    pattern: /model is not supported when using Codex with a ChatGPT account/i,
+    category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
+    requiresFallback: true,
+    actionable: true,
+    suggestedFix: 'Choose a model supported by the signed-in Codex account, or clear the model override to use the CLI default. Changing to API-key authentication uses separate API billing.'
+  },
+  {
     pattern: /unauthorized|invalid.?api.?key|authentication|forbidden|401|403/i,
     category: ERROR_CATEGORIES.AUTH_ERROR,
     requiresFallback: true,
