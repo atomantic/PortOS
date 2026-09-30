@@ -10,6 +10,13 @@
  *
  * Stored shape: `{ version, rateHz, startFrame, db }` where `db` is base64 of an
  * Int8Array — at most 3,000 bytes for a 30 s window.
+ *
+ * What it answers is "did the timing of this window's sound change?" — which
+ * is what mouth motion follows (syllable onsets, holds, breaths). A change that
+ * keeps the 10 ms loudness contour intact to r ≥ 0.98 and ≤ 1.5 dB (pitch
+ * correction, an EQ tweak, a re-encode) is deliberately NOT a change. It is not
+ * a content hash: a different vocal performed with an identical 10 ms
+ * dynamic contour would pass, which no real re-master produces.
  */
 
 import { spawn } from './childProcess.js';
