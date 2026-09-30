@@ -36,6 +36,11 @@ const COMPARE_FLOOR_DB = -60;
 const MIN_SHAPE_STD_DB = 1;
 export const FINGERPRINT_MIN_CORRELATION = 0.98;
 export const FINGERPRINT_MAX_MEAN_DELTA_DB = 1.5;
+// A window-wide mean dilutes a short local change (a silenced second of a
+// 30 s steady window moves the mean ~1.3 dB), so a quarter second of frames
+// that each moved by 10 dB or more is a change on its own.
+const LOCAL_CHANGE_DB = 10;
+const LOCAL_CHANGE_FRAMES = 25;
 
 /**
  * Decode `path` to 8 kHz mono and return its whole 100 Hz RMS envelope as an
@@ -111,7 +116,8 @@ const decodeFingerprint = (fingerprint) => {
  * Does `envelope` (a whole song) still carry the audio a stored fingerprint
  * recorded? Returns `{ same, correlation, meanDeltaDb }`; `same` is false when
  * the fingerprint is unreadable or the song no longer reaches the window.
- * Pearson correlation below 0.98 or a mean |ΔdB| above 1.5 dB is a change.
+ * Pearson correlation below 0.98, a mean |ΔdB| above 1.5 dB, or a quarter
+ * second moved by 10 dB or more is a change.
  */
 export function compareWindowFingerprint(fingerprint, envelope) {
   const stored = decodeFingerprint(fingerprint);
@@ -122,12 +128,17 @@ export function compareWindowFingerprint(fingerprint, envelope) {
   let sumA = 0;
   let sumB = 0;
   let sumDelta = 0;
+  let run = 0;
+  let localChange = false;
   for (let i = 0; i < n; i++) {
     a[i] = Math.max(COMPARE_FLOOR_DB, stored[i]);
     b[i] = Math.max(COMPARE_FLOOR_DB, envelope[fingerprint.startFrame + i]);
     sumA += a[i];
     sumB += b[i];
-    sumDelta += Math.abs(a[i] - b[i]);
+    const delta = Math.abs(a[i] - b[i]);
+    sumDelta += delta;
+    run = delta >= LOCAL_CHANGE_DB ? run + 1 : 0;
+    if (run >= LOCAL_CHANGE_FRAMES) localChange = true;
   }
   const meanA = sumA / n;
   const meanB = sumB / n;
@@ -142,6 +153,6 @@ export function compareWindowFingerprint(fingerprint, envelope) {
   const shaped = Math.sqrt(varA / n) >= MIN_SHAPE_STD_DB && Math.sqrt(varB / n) >= MIN_SHAPE_STD_DB;
   const correlation = shaped ? cov / Math.sqrt(varA * varB) : null;
   const meanDeltaDb = sumDelta / n;
-  const same = meanDeltaDb <= FINGERPRINT_MAX_MEAN_DELTA_DB && (correlation == null || correlation >= FINGERPRINT_MIN_CORRELATION);
+  const same = !localChange && meanDeltaDb <= FINGERPRINT_MAX_MEAN_DELTA_DB && (correlation == null || correlation >= FINGERPRINT_MIN_CORRELATION);
   return { same, correlation, meanDeltaDb };
 }

@@ -19,7 +19,7 @@ afterAll(() => rm(dir, { recursive: true, force: true }));
 // A "sung" line: a 220 Hz tone whose loudness steps every 250 ms through a
 // fixed pattern, so the window has a real envelope shape to correlate.
 // `silence` blanks [startSec, endSec) — the changed bar of a new mix.
-function songWav({ silence = null } = {}) {
+function songWav({ silence = null, steady = false } = {}) {
   const samples = SONG_SEC * RATE;
   const buf = Buffer.alloc(44 + samples * 2);
   buf.write('RIFF', 0); buf.writeUInt32LE(36 + samples * 2, 4); buf.write('WAVE', 8);
@@ -30,7 +30,7 @@ function songWav({ silence = null } = {}) {
   for (let i = 0; i < samples; i++) {
     const t = i / RATE;
     const muted = silence && t >= silence.startSec && t < silence.endSec;
-    const amp = muted ? 0 : levels[Math.floor(t * 4) % levels.length];
+    const amp = muted ? 0 : steady ? 0.3 : levels[Math.floor(t * 4) % levels.length];
     buf.writeInt16LE(Math.round(amp * 30000 * Math.sin(2 * Math.PI * 220 * t)), 44 + i * 2);
   }
   return buf;
@@ -62,6 +62,21 @@ describe.skipIf(!ffmpeg)('audio window fingerprints', () => {
     const inside = join(dir, 'inside.wav');
     await writeFile(inside, songWav({ silence: { startSec: 4, endSec: 5 } }));
     expect(compareWindowFingerprint(fp, await computeRmsEnvelope(inside)).same).toBe(false);
+  }, 30_000);
+
+  it('catches a short local change in a window with no loudness shape to correlate', async () => {
+    const master = join(dir, 'steady.wav');
+    await writeFile(master, songWav({ steady: true }));
+    const fp = windowFingerprint(await computeRmsEnvelope(master), { startSec: 0, endSec: SONG_SEC });
+    const reencoded = join(dir, 'steady.m4a');
+    execFileSync(ffmpeg, ['-v', 'error', '-i', master, '-c:a', 'aac', '-b:a', '128k', '-y', reencoded]);
+    expect(compareWindowFingerprint(fp, await computeRmsEnvelope(reencoded)).same).toBe(true);
+    // A quarter second blanked moves the window mean under 1.5 dB, but not unnoticed.
+    const dropped = join(dir, 'steady-dropped.wav');
+    await writeFile(dropped, songWav({ steady: true, silence: { startSec: 4, endSec: 4.27 } }));
+    const verdict = compareWindowFingerprint(fp, await computeRmsEnvelope(dropped));
+    expect(verdict.meanDeltaDb).toBeLessThan(1.5);
+    expect(verdict.same).toBe(false);
   }, 30_000);
 
   it('treats a song that no longer reaches the window, or an unreadable fingerprint, as changed', async () => {
