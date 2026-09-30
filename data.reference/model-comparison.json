@@ -34,6 +34,165 @@
       "notes": "Official GPT-6.1 Sol standard API rates: $2/M uncached input and $10/M output. Cached input is $0.10/M and cache writes are $2.50/M, separate classes not represented here. Above 272K input tokens, input/cache rates are 2x and output is 1.5x. Fast is 2x Standard; Batch/Flex are 50% lower. These API rates do not describe Codex subscription quota. Quality, latency, throughput, and task cost are not published on this source."
     },
     {
+      "id": "aa-v4.3.2-openai-gpt-6.1-sol-max",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-sol",
+      "effort": "max",
+      "configuration": "Published API model; max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 52,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score."
+        }
+      },
+      "costPerTask": {
+        "value": 0.72,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 67.8,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (GPT-6.1 Sol (max)). Time-to-first-token is not recorded: the page reported an implausible launch-day value."
+    },
+    {
+      "id": "aa-v4.3.2-openai-gpt-6.1-sol-high",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "configuration": "Published API model; high",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 50,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score."
+        }
+      },
+      "costPerTask": {
+        "value": 0.32,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 65.4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (GPT-6.1 Sol (high)). Time-to-first-token is not recorded: the page reported an implausible launch-day value."
+    },
+    {
+      "id": "aa-v4.3.2-openai-gpt-6.1-sol-medium",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "configuration": "Published API model; medium",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 48,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score."
+        }
+      },
+      "costPerTask": {
+        "value": 0.21,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 60.7,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
+          "retrievedAt": "2026-09-30T00:00:00.000Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (GPT-6.1 Sol (medium)). Time-to-first-token is not recorded: the page reported an implausible launch-day value."
+    },
+    {
       "id": "lcb-generation-2023-05-08--2025-04-07-qwen3-235b-a22b-unspecified",
       "provider": "Qwen",
       "model": "qwen3-235b-a22b",
