@@ -227,6 +227,16 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
               <option key={res} value={res}>{`Lip-sync ${res} · ${describeFalVideoRate(lipSync.modelId, res)}`}</option>
             ))}
           </select>
+          <label className="flex items-center gap-1.5 text-xs text-port-text-muted min-h-[44px] sm:min-h-0"
+            title="Let the provider transcribe the sung audio to guide mouth shapes. Turn off if it mishears lyrics and shapes the wrong words (e.g. 'swarm' mouthed as 'sworn'); the take then follows the audio alone.">
+            <input
+              type="checkbox"
+              checked={settings.falLipSyncTranscription !== false}
+              onChange={(e) => change({ falLipSyncTranscription: e.target.checked ? null : false })}
+              disabled={locked}
+            />
+            Transcript-guided lip-sync
+          </label>
         </>
       )}
     </>
