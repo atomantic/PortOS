@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { Download, FileArchive, FolderInput, LayoutTemplate, Pause, Play, Unlink } from 'lucide-react';
 import toast from '../ui/Toast';
 import { downloadBlob } from '../../lib/downloadBlob';
@@ -98,7 +99,7 @@ function DocumentFiles({ projectId, directory }) {
   return (
     <details key={directory} className="rounded border border-port-border p-2 text-xs" onToggle={(e) => load(e.currentTarget.open)}>
       <summary className="cursor-pointer select-none text-port-text-muted">Files</summary>
-      {error && <p className="mt-1 text-port-error">{error}</p>}
+      {error && <p role="status" className="mt-1 text-port-error">{error}</p>}
       {manifest && !manifest.available && <p className="mt-1 text-port-warning">The document folder is missing on this machine — import it again.</p>}
       {manifest?.available && (
         <ul className="mt-1 max-h-48 overflow-y-auto font-mono">
@@ -129,7 +130,6 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   const [playing, setPlaying] = useState(false);
   const iframeRef = useRef(null);
   const audioRef = useRef(null);
-  const fileRef = useRef(null);
   const blobCache = useRef(new Map());
   const seekState = useRef({ inFlight: false, pending: null, ready: false });
 
@@ -263,12 +263,11 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
           title="Copy PortOS's layered template (scene media, camera moves, grain, HUD, kinetic lyrics) into this project">
           <LayoutTemplate size={14} /> {busy === 'template' ? 'Copying…' : confirming === 'template' ? 'Click again to replace' : doc ? 'Replace with template' : 'Start from template'}
         </button>
-        <button type="button" className={buttonCls} disabled={!!busy} onClick={() => fileRef.current?.click()}
+        <FilePickerButton accept=".zip,application/zip" onChange={(e) => importZip(e.target.files?.[0])} disabled={!!busy}
+          ariaLabel="Import zip composition document" className={`${buttonCls} cursor-pointer`}
           title="A .zip whose root (or single top folder) holds index.html">
-          <FileArchive size={14} /> {busy === 'zip' ? 'Importing…' : 'Import zip'}
-        </button>
-        <input ref={fileRef} type="file" accept=".zip,application/zip" className="hidden" aria-label="Composition document zip"
-          onChange={(e) => { importZip(e.target.files?.[0]); e.target.value = ''; }} />
+          <FileArchive size={14} aria-hidden="true" /> {busy === 'zip' ? 'Importing…' : 'Import zip'}
+        </FilePickerButton>
         <div className="flex items-end gap-1">
           <div>
             <label htmlFor="mv-doc-folder" className="block text-xs text-port-text-muted mb-0.5">Folder inside data/</label>
