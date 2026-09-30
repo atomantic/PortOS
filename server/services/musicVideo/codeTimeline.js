@@ -182,7 +182,13 @@ export function buildCodeTimeline(project, { fps = CODE_FPS } = {}) {
     if (lyric) {
       const anchor = anchorOf(lyric);
       const beat = beatAtOrBefore(beats, anchor);
-      return { ...window, snap: beat ?? anchor, snapKind: beat == null ? 'lyric' : 'beat', lyricId: lyric.id || null };
+      // A late word can quantize onto the next section's boundary. Keep this
+      // window instead of collapsing it into the following one.
+      const snapped = beat ?? anchor;
+      if (snapped >= window.endSec - 1 / fps) {
+        return { ...window, snap: window.startSec, snapKind: 'nominal', lyricId: lyric.id || null };
+      }
+      return { ...window, snap: snapped, snapKind: beat == null ? 'lyric' : 'beat', lyricId: lyric.id || null };
     }
     const down = nearest(downbeats, window.startSec);
     if (down != null) return { ...window, snap: down, snapKind: 'downbeat', lyricId: null };

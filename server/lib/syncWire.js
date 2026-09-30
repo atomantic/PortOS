@@ -61,8 +61,8 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
   // (services/musicVideo/compositionDocument.js); the render mode and HUD
   // settings still sync, and a peer without the files refuses to render.
   if (shared.composition && typeof shared.composition === 'object' && !Array.isArray(shared.composition)
-    && Object.hasOwn(shared.composition, 'document')) {
-    const { document: _document, ...composition } = shared.composition;
+    && (Object.hasOwn(shared.composition, 'document') || Object.hasOwn(shared.composition, 'documentDraft'))) {
+    const { document: _document, documentDraft: _documentDraft, ...composition } = shared.composition;
     shared.composition = composition;
   }
   if (stripVideoBackend && shared.videoSettings

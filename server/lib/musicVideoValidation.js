@@ -281,7 +281,7 @@ export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'doc
 export const MUSIC_VIDEO_CUTTING_MODES = ['scene', 'intercut'];
 // Shipped starting points a project can copy into its document folder.
 export const MUSIC_VIDEO_DOCUMENT_TEMPLATES = ['layered'];
-export const MUSIC_VIDEO_DOCUMENT_SOURCES = ['zip', 'directory', 'template'];
+export const MUSIC_VIDEO_DOCUMENT_SOURCES = ['zip', 'directory', 'template', 'generated'];
 // One immutable document version: data/music-video/<projectId>/composition/<versionId>.
 export const MUSIC_VIDEO_DOCUMENT_DIRECTORY = /^music-video\/[A-Za-z0-9_-]{1,100}\/composition\/[A-Za-z0-9_-]{1,100}$/;
 // One section function. Reject the calls that would make a frame depend on
@@ -371,6 +371,7 @@ export const musicVideoCompositionSchema = z.object({
   posterSec: timedSec,
   codeVideo: musicVideoCodeVideoSchema.nullable().optional(),
   document: musicVideoCompositionDocumentSchema.nullable().optional(),
+  documentDraft: musicVideoCompositionDocumentSchema.nullable().optional(),
   overlay: musicVideoCompositionOverlaySchema.nullable().optional(),
 }).strict();
 
@@ -382,6 +383,15 @@ export const musicVideoDocumentDirectoryImportSchema = z.object({
 
 export const musicVideoDocumentFileQuerySchema = z.object({
   path: z.string().min(1).max(512),
+  draft: z.literal('1').optional(),
+}).strict();
+
+export const musicVideoDocumentDraftQuerySchema = z.object({ draft: z.literal('1').optional() }).strict();
+export const musicVideoDocumentCandidateSchema = z.object({
+  directory: z.string().regex(MUSIC_VIDEO_DOCUMENT_DIRECTORY),
+}).strict();
+export const musicVideoMixedMediaRegenerateSchema = musicVideoCodeGenerateSchema.extend({
+  expectedDraft: z.string().regex(MUSIC_VIDEO_DOCUMENT_DIRECTORY),
 }).strict();
 
 export const musicVideoDocumentTemplateSchema = z.object({

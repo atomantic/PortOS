@@ -1,18 +1,23 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
-import { Download, FileArchive, FolderInput, LayoutTemplate, Unlink } from 'lucide-react';
+import { Download, FileArchive, FolderInput, LayoutTemplate, Unlink, Film, RotateCcw } from 'lucide-react';
 import toast from '../ui/Toast';
+import useProviderModels from '../../hooks/useProviderModels.js';
+import ProviderModelSelector from '../ProviderModelSelector.jsx';
+import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { formatBytes, timeAgo } from '../../utils/formatters.js';
 import { compositionDraft } from './compositionDraft.js';
 import {
   detachMusicVideoCompositionDocument, getMusicVideoCompositionDocument, getMusicVideoCompositionExport,
   importMusicVideoCompositionDirectory, importMusicVideoCompositionZip, startMusicVideoCompositionTemplate,
+  generateMusicVideoMixedMediaDocument, regenerateMusicVideoMixedMediaSection,
+  getMusicVideoMixedMediaCandidate, acceptMusicVideoMixedMediaDocument, discardMusicVideoMixedMediaDocument,
 } from '../../services/apiMusicVideo.js';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
-const SOURCE_LABELS = { template: 'template', zip: 'zip', directory: 'folder' };
+const SOURCE_LABELS = { template: 'template', zip: 'zip', directory: 'folder', generated: 'generated' };
 
 const linesOf = (value) => String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);
 // "12.5 = 80" per line → [[12.5, 80], …]; unparseable lines are dropped.
@@ -116,13 +121,30 @@ function DocumentFiles({ projectId, directory }) {
  * beside the stage tabs so it stays visible while scenes and typography are
  * edited.
  */
-export default function DocumentCompositionPanel({ project, onProject, onSave }) {
+export default function DocumentCompositionPanel({ project, audioUrl, onProject, onSave }) {
   const doc = project.composition?.document || null;
   const [busy, setBusy] = useState(null);
   // Replacing or detaching drops the current version folder once nothing
   // points at it, so both ask for a second click (no window.confirm).
   const [confirming, setConfirming] = useState(null);
   const [folder, setFolder] = useState('');
+  const [candidate, setCandidate] = useState(null);
+  const [selectedSection, setSelectedSection] = useState('');
+  const {
+    providers, selectedProviderId, selectedModel, availableModels, selectedProvider,
+    setSelectedProviderId, setSelectedModel,
+  } = useProviderModels({ preselectDefaults: true, silent: true });
+
+  useEffect(() => {
+    let active = true;
+    if (!project.composition?.documentDraft && project.composition?.document?.source?.kind !== 'generated') {
+      setCandidate(null); return () => { active = false; };
+    }
+    getMusicVideoMixedMediaCandidate(project.id, { silent: true })
+      .then((next) => { if (active) setCandidate(next); })
+      .catch((err) => { if (active) toast.error(err?.message || 'Could not load the candidate'); });
+    return () => { active = false; };
+  }, [project.id, project.updatedAt, project.composition?.documentDraft?.directory, project.composition?.document?.directory, project.composition?.document?.source?.kind]);
 
   const run = async (label, task, success) => {
     setBusy(label);
@@ -146,6 +168,14 @@ export default function DocumentCompositionPanel({ project, onProject, onSave })
     return {};
   });
   const detach = confirmFirst('detach', () => run('detach', () => detachMusicVideoCompositionDocument(project.id, { silent: true }), 'Composition document detached'));
+  const effectiveModel = selectedModel || selectedProvider?.defaultModel || '';
+  const provider = { providerId: selectedProviderId, model: effectiveModel };
+  const selectedSectionValid = candidate?.sections?.some((section) => section.id === selectedSection) || false;
+  const generate = () => run('generate', () => generateMusicVideoMixedMediaDocument(project.id, provider, { silent: true }), 'Candidate ready to review');
+  const regenerate = () => selectedSectionValid && run('regenerate', () => regenerateMusicVideoMixedMediaSection(project.id, selectedSection,
+    { ...provider, expectedDraft: candidate?.source?.directory }, { silent: true }), 'New candidate ready to review');
+  const accept = () => run('accept', () => acceptMusicVideoMixedMediaDocument(project.id, candidate?.candidate?.directory, { silent: true }), 'Candidate selected for rendering');
+  const discard = () => run('discard', () => discardMusicVideoMixedMediaDocument(project.id, candidate?.candidate?.directory, { silent: true }), 'Candidate discarded');
 
   return (
     <section className="mt-3 space-y-2 rounded-lg border border-port-border bg-port-bg p-2" aria-label="Composition document">
@@ -185,6 +215,42 @@ export default function DocumentCompositionPanel({ project, onProject, onSave })
         <button type="button" className={buttonCls} disabled={!!busy || !doc} onClick={detach} title="Stop using this document (the render refuses until another is attached)">
           <Unlink size={14} /> {confirming === 'detach' ? 'Click again to detach' : 'Detach'}
         </button>
+      </div>
+      <div className="space-y-2 rounded border border-port-border p-2">
+        <p className="text-xs text-port-text-muted">Generate from the approved treatment, song timing and selected project assets. Missing media is reported before any provider call.</p>
+        {providers.length > 0 && <ProviderModelSelector
+          providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel}
+          availableModels={availableModels} onProviderChange={setSelectedProviderId} onModelChange={setSelectedModel}
+          label="Mixed-media code provider" disabled={!!busy} modelDisabled={availableModels.length === 0}
+          compact alwaysShowModel
+        />}
+        <p className="text-xs text-port-text-muted">Code authoring uses {selectedProvider?.name || selectedProviderId || 'no provider selected'} / {effectiveModel || 'no model selected'}. Nothing is sent until you click.</p>
+        <div className="flex flex-wrap items-end gap-2">
+          <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || !selectedProviderId || !effectiveModel} onClick={generate}>
+            <Film size={14} /> {busy === 'generate' ? 'Generating…' : 'Generate mixed-media composition'}
+          </button>
+          {candidate?.source && <>
+            <div>
+              <label htmlFor="mv-doc-section" className="block text-xs text-port-text-muted mb-0.5">Section to revise</label>
+              <select id="mv-doc-section" className={inputCls} value={selectedSectionValid ? selectedSection : ''} onChange={(e) => setSelectedSection(e.target.value)}>
+                <option value="">Choose section</option>
+                {candidate.sections.map((section) => <option key={section.id} value={section.id}>{section.label || section.id} · {section.startSec}s</option>)}
+              </select>
+            </div>
+            <button type="button" className={buttonCls} disabled={!!busy || !selectedSectionValid || candidate.stale || !selectedProviderId || !effectiveModel} onClick={regenerate}>
+              <RotateCcw size={14} /> {busy === 'regenerate' ? 'Regenerating…' : 'Regenerate section'}
+            </button>
+          </>}
+          {candidate?.candidate && <>
+            <button type="button" className={buttonCls} disabled={!!busy || candidate.stale} onClick={accept}>Accept reviewed version</button>
+            <button type="button" className={buttonCls} disabled={!!busy} onClick={discard}>Discard candidate</button>
+          </>}
+        </div>
+        {candidate?.stale && <p className="text-xs text-port-warning" role="status">The treatment, song or selected assets changed. Generate a fresh candidate.</p>}
+        {candidate?.candidate && <div className="rounded border border-port-border p-2">
+          <p className="mb-2 text-xs text-port-text-muted">Candidate preview · {candidate.providerId || 'provider'} / {candidate.model || 'default model'} · active document stays selected until accepted</p>
+          <CompositionPreviewPlayer project={project} audioUrl={audioUrl} draft />
+        </div>}
       </div>
       <OverlayEditor key={`${project.id}-${project.composition?.overlay ? 'hud' : 'none'}`} project={project} onSave={onSave} />
       {doc && <DocumentFiles key={doc.directory} projectId={project.id} directory={doc.directory} />}

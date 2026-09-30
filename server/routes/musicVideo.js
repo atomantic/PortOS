@@ -62,6 +62,9 @@ import {
   musicVideoDocumentDirectoryImportSchema,
   musicVideoDocumentFileQuerySchema,
   musicVideoDocumentTemplateSchema,
+  musicVideoDocumentDraftQuerySchema,
+  musicVideoDocumentCandidateSchema,
+  musicVideoMixedMediaRegenerateSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -121,6 +124,7 @@ import { planProject } from '../services/musicVideo/planner.js';
 import {
   DOCUMENT_ZIP_MAX_BYTES,
   detachDocument,
+  discardGeneratedDocument,
   documentMimeType,
   exportDocumentZip,
   importDocumentDirectory,
@@ -130,6 +134,7 @@ import {
   resolveDocumentFile,
 } from '../services/musicVideo/compositionDocument.js';
 import { buildDocumentPreview } from '../services/musicVideo/documentPreview.js';
+import { acceptMixedMediaDocument, generateMixedMediaDocument, readMixedMediaCandidate, regenerateMixedMediaSection } from '../services/musicVideo/documentGeneration.js';
 import { isZipUpload } from '../lib/zipStream.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
@@ -546,6 +551,30 @@ router.post('/:id/composition/document/template', asyncHandler(async (req, res) 
   res.status(201).json(await importDocumentTemplate(req.params.id, template));
 }));
 
+router.post('/:id/composition/document/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
+  res.status(201).json(await generateMixedMediaDocument(req.params.id, body));
+}));
+
+router.get('/:id/composition/document/candidate', asyncHandler(async (req, res) => {
+  res.json(await readMixedMediaCandidate(req.params.id));
+}));
+
+router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoMixedMediaRegenerateSchema, req.body || {});
+  res.status(201).json(await regenerateMixedMediaSection(req.params.id, req.params.sectionId, body));
+}));
+
+router.post('/:id/composition/document/accept', asyncHandler(async (req, res) => {
+  const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
+  res.json(await acceptMixedMediaDocument(req.params.id, directory));
+}));
+
+router.delete('/:id/composition/document/candidate', asyncHandler(async (req, res) => {
+  const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
+  res.json(await discardGeneratedDocument(req.params.id, directory));
+}));
+
 router.get('/:id/composition/document/export', asyncHandler(async (req, res) => {
   const { zip, filename } = await exportDocumentZip(await requireProject(req.params.id));
   res.set('Content-Type', 'application/zip');
@@ -554,15 +583,22 @@ router.get('/:id/composition/document/export', asyncHandler(async (req, res) => 
 }));
 
 router.get('/:id/composition/document/preview', asyncHandler(async (req, res) => {
-  res.json(await buildDocumentPreview(await requireProject(req.params.id)));
+  const { draft } = validateRequest(musicVideoDocumentDraftQuerySchema, req.query || {});
+  const project = await requireProject(req.params.id);
+  const pointer = draft ? project.composition?.documentDraft : project.composition?.document;
+  if (draft && !pointer) throw new ServerError('No composition candidate to preview', { status: 404, code: 'NOT_FOUND' });
+  res.json(await buildDocumentPreview(draft ? { ...project, composition: { ...project.composition, document: pointer } } : project, { draft: Boolean(draft) }));
 }));
 
 // One document file, for the preview's asset bridge (fetched by the PortOS
 // page, never loaded by the sandboxed preview itself). Served inert: a
 // sandbox CSP, no sniffing, same-origin only.
 router.get('/:id/composition/document/file', asyncHandler(async (req, res) => {
-  const { path } = validateRequest(musicVideoDocumentFileQuerySchema, req.query || {});
-  const abs = await resolveDocumentFile(await requireProject(req.params.id), path);
+  const { path, draft } = validateRequest(musicVideoDocumentFileQuerySchema, req.query || {});
+  const project = await requireProject(req.params.id);
+  const pointer = draft ? project.composition?.documentDraft : project.composition?.document;
+  if (draft && !pointer) throw new ServerError('No composition candidate to preview', { status: 404, code: 'NOT_FOUND' });
+  const abs = await resolveDocumentFile(draft ? { ...project, composition: { ...project.composition, document: pointer } } : project, path);
   res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');

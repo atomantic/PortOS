@@ -7,11 +7,23 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+
+const author = vi.hoisted(() => ({ calls: 0, response: null }));
+vi.mock('../promptRunner.js', () => ({
+  assertProvider: () => {},
+  resolveProviderAndModel: async () => ({ provider: { id: 'stub-provider' }, selectedModel: 'fixture-model' }),
+  runPromptThroughProvider: async () => {
+    author.calls += 1;
+    return { text: author.response || JSON.stringify({ sections: ['intro', 'still', 'clip'].map((id) => ({
+      id, source: "function render(ctx, env) { if (env.visualLayer === 'card') { ctx.fillStyle = '#123456'; ctx.fillRect(0, 0, env.width, env.height); } }",
+    })) }) };
+  },
+}));
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: (path) => fetch(`${endpoint}${path}`) }));
@@ -23,6 +35,8 @@ const { PATHS } = await import('../../lib/paths.js');
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
 const { encodeDocumentComposition, prepareDocumentRender } = await import('./documentRender.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
+const { generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js');
+const { buildDocumentPreview } = await import('./documentPreview.js');
 const projects = await import('./projects.js');
 const { _cleanupTestBrowser } = await import('../htmlComposition/testBrowserCleanup.js');
 
@@ -103,4 +117,109 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     await rm(first.outputPath, { force: true });
     await rm(second.outputPath, { force: true });
   }, 120000);
+
+  it('renders a generated 30-second card/still/clip document with the selected performance in-point', async () => {
+    await mkdir(PATHS.videos, { recursive: true });
+    await mkdir(PATHS.images, { recursive: true });
+    await mkdir(PATHS.music, { recursive: true });
+    const clip = join(PATHS.videos, 'generated-rgb.webm');
+    execFileSync(ffmpeg, ['-v', 'error', '-y',
+      '-f', 'lavfi', '-i', 'color=c=red:s=640x360:r=24:d=1', '-f', 'lavfi', '-i', 'color=c=lime:s=640x360:r=24:d=1', '-f', 'lavfi', '-i', 'color=c=blue:s=640x360:r=24:d=1',
+      '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0', '-c:v', 'libvpx', '-b:v', '1M', '-g', '24', clip]);
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=yellow:s=640x360:d=1', '-frames:v', '1', join(PATHS.images, 'generated-still.png')]);
+    const master = join(PATHS.music, 'generated-master.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=30', master]);
+    const created = await projects.createProject({ name: 'Generated Example' });
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: {
+      ...current,
+      audioAnalysis: { durationSec: 30, beats: [0, 10, 20], downbeats: [0, 10, 20], sections: [
+        { id: 'intro', startSec: 0, endSec: 10 }, { id: 'still', startSec: 10, endSec: 20 }, { id: 'clip', startSec: 20, endSec: 30 },
+      ] },
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      treatment: { shotDirections: [
+        { sceneId: 'card', medium: 'procedural', mediumRationale: 'Graphic opening' },
+        { sceneId: 'image', medium: 'still', mediumRationale: 'Use selected image' },
+        { sceneId: 'video', medium: 'existing-footage', mediumRationale: 'Use selected clip' },
+      ] },
+      scenes: [
+        { sceneId: 'card', order: 0, startSec: 0, endSec: 10 },
+        { sceneId: 'image', order: 1, startSec: 10, endSec: 20, referenceImageId: 'generated-still.png' },
+        { sceneId: 'video', order: 2, startSec: 20, endSec: 30, shotMode: 'performance', videoHistoryId: 'vh-generated', takes: [
+          { kind: 'video', assetId: 'vh-generated', shotInstruction: { shotMode: 'performance', edit: { inSec: 1, outSec: 3 } } },
+        ] },
+      ],
+    } }));
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-generated', filename: 'generated-rgb.webm', numFrames: 72, fps: 24, width: 640, height: 360 }]));
+    author.calls = 0;
+    const staged = await generateMixedMediaDocument(created.id);
+    expect(author.calls).toBe(1);
+    expect((await projects.getProject(created.id)).composition.document).toBeUndefined();
+    await acceptMixedMediaDocument(created.id, staged.document.directory);
+    const project = await projects.getProject(created.id);
+    const preview = await buildDocumentPreview(project);
+    expect(preview.html).toContain('PORTOS_MV_GENERATED');
+    expect(preview.html).toContain('"inSec":1');
+    const previewFrames = async (current, times) => {
+      const page = await browser.newPage();
+      const prepared = await buildDocumentPreview(current);
+      await page.setContent(prepared.html);
+      const files = Object.fromEntries(await Promise.all(prepared.assets.map(async (asset) => [asset.key,
+        (await readFile(asset.key.endsWith('.webm') ? clip : join(PATHS.images, 'generated-still.png'))).toString('base64')])));
+      await page.evaluate(async (encoded) => {
+        const blobs = Object.fromEntries(Object.entries(encoded).map(([key, value]) => [key,
+          new Blob([Uint8Array.from(atob(value), (c) => c.charCodeAt(0))], { type: key.endsWith('.webm') ? 'video/webm' : 'image/png' })]));
+        window.postMessage({ type: 'portos-mv:assets', files: blobs }, '*');
+        await window.PORTOS_MV_ASSETS;
+      }, files);
+      const pixels = [];
+      for (const time of times) pixels.push(await page.evaluate(async (t) => {
+        await window.portosComposition.seek(t);
+        const canvas = document.getElementById('stage');
+        return [...canvas.getContext('2d').getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data].slice(0, 3);
+      }, time));
+      await page.close();
+      return pixels;
+    };
+    const beforeProof = await previewFrames(project, [0, 10, 20]);
+    const plan = { ...(await prepareDocumentRender(project)), frame: { width: 1280, height: 720 } };
+    const renderAt = async (time, name) => {
+      const outputPath = join(PATHS.videos, name);
+      await encodeDocumentComposition({ project, plan, jobId: name.replace(/\W/g, ''), audioPath: master, outputPath, windowStart: time, windowEnd: time + 1 / 24 });
+      const frame = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+      await rm(outputPath, { force: true });
+      return [...frame.subarray((18 * 64 + 32) * 3, (18 * 64 + 32) * 3 + 3)];
+    };
+    const card = await renderAt(0, 'generated-card.mp4');
+    const still = await renderAt(10, 'generated-still.mp4');
+    const firstClip = await renderAt(20, 'generated-clip.mp4');
+    const repeated = await renderAt(20, 'generated-clip-again.mp4');
+    const fullPath = join(PATHS.videos, 'generated-full.mp4');
+    await encodeDocumentComposition({ project, plan, jobId: 'generated-full', audioPath: master, outputPath: fullPath });
+    const fullPixel = (time) => {
+      const frame = execFileSync(ffmpeg, ['-v', 'error', '-ss', String(time), '-i', fullPath, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+      return [...frame.subarray((18 * 64 + 32) * 3, (18 * 64 + 32) * 3 + 3)];
+    };
+    for (const [index, time] of [0, 10, 20].entries()) {
+      const excerpt = [card, still, firstClip][index];
+      const final = fullPixel(time);
+      for (let channel = 0; channel < 3; channel++) {
+        expect(Math.abs(beforeProof[index][channel] - excerpt[channel]), `preview/excerpt ${time}s channel ${channel}`).toBeLessThan(35);
+        expect(Math.abs(final[channel] - excerpt[channel]), `final/excerpt ${time}s channel ${channel}`).toBeLessThan(25);
+      }
+    }
+    await rm(fullPath, { force: true });
+    expect(card[2]).toBeGreaterThan(50);
+    expect(still[0]).toBeGreaterThan(140);
+    expect(still[1]).toBeGreaterThan(140);
+    expect(firstClip[1]).toBeGreaterThan(firstClip[0] + 60); // clip time 1s is green, not red
+    expect(firstClip).toEqual(repeated);
+    author.response = JSON.stringify({ sections: [{ id: 'still', source: "function render(ctx, env) { ctx.fillStyle = '#ff00ff'; ctx.fillRect(0, 0, env.width, env.height); }" }] });
+    const revision = await regenerateMixedMediaSection(created.id, 'still', { expectedDraft: project.composition.document.directory });
+    await acceptMixedMediaDocument(created.id, revision.document.directory);
+    const afterProof = await previewFrames(await projects.getProject(created.id), [0, 10, 20]);
+    expect(afterProof[0]).toEqual(beforeProof[0]);
+    expect(afterProof[1]).not.toEqual(beforeProof[1]);
+    expect(afterProof[2]).toEqual(beforeProof[2]);
+    author.response = null;
+  }, 180000);
 });

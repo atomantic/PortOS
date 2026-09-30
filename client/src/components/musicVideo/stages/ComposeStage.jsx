@@ -26,6 +26,7 @@ export default function ComposeStage({ board }) {
           <DocumentCompositionPanel
             key={`document-${project.id}`}
             project={project}
+            audioUrl={audioUrl}
             onProject={board.replaceProject}
             onSave={board.saveProjectFields}
           />

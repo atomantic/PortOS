@@ -31,7 +31,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
@@ -99,15 +99,17 @@ export function documentRenderClock(songDurationSec, fps = DOCUMENT_RENDER_FPS) 
  * `history` is the video history list; `probe(path)` measures a clip the
  * history did not (hosted renders record no geometry).
  */
-export async function resolveSceneMedia(project, { history = [], probe = async () => null } = {}) {
+export async function resolveSceneMedia(project, { history = [], probe = async () => null, strictLayers = false } = {}) {
   const byId = new Map((Array.isArray(history) ? history : []).map((entry) => [entry.id, entry]));
   const out = new Map();
   const { safeUnder } = await import('../../lib/ffmpeg.js');
   for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
     if (!scene?.sceneId) continue;
+    const layer = documentSceneVisualLayer(project, scene, { generated: strictLayers });
+    if (strictLayers && layer === 'card') continue;
     const entry = scene.videoHistoryId ? byId.get(scene.videoHistoryId) : null;
     const videoPath = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
-    if (videoPath && existsSync(videoPath)) {
+    if ((!strictLayers || layer === 'footage') && videoPath && existsSync(videoPath)) {
       const measured = entry.numFrames && entry.fps && entry.width && entry.height ? entry : { ...entry, ...((await probe(videoPath)) || {}) };
       const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
       const edit = selectedPerformanceInstruction(scene)?.edit ?? null;
@@ -124,7 +126,7 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       });
       continue;
     }
-    const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
+    const imagePath = (!strictLayers || layer === 'still') && scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
     if (imagePath && existsSync(imagePath)) {
       const ext = (/\.([a-z0-9]{2,5})$/i.exec(scene.referenceImageId)?.[1] || 'png').toLowerCase();
       out.set(scene.sceneId, { kind: 'image', path: imagePath, ext: ext === 'jpeg' ? 'jpg' : ext, inSec: null, outSec: null, fps: null, width: null, height: null });
@@ -146,7 +148,7 @@ function sceneDirection(project, sceneId) {
  * The `window.PORTOS_MV` payload (pure). `media` is resolveSceneMedia's map;
  * `frame` is `{ width, height }`; `clock` is documentRenderClock's result.
  */
-export function buildDocumentData(project, { media = new Map(), frame, clock, songDurationSec }) {
+export function buildDocumentData(project, { media = new Map(), frame, clock, songDurationSec, generated = false }) {
   const song = musicVideoSongDocument(project);
   const analysis = project?.audioAnalysis || {};
   const scenes = (Array.isArray(project?.scenes) ? project.scenes : [])
@@ -164,7 +166,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         startSec: start,
         endSec: start != null && end != null && end > start ? end : null,
         shotMode: scene.shotMode === 'performance' ? 'performance' : 'cutaway',
-        visualLayer: sceneVisualLayer(scene, { layered: true }),
+        visualLayer: documentSceneVisualLayer(project, scene, { generated }),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         cardText: typeof scene.cardText === 'string' ? scene.cardText : null,
         cardColor: typeof scene.cardColor === 'string' ? scene.cardColor : null,
@@ -306,8 +308,9 @@ export async function encodeDocumentComposition({
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
   const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
-  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry });
-  const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec });
+  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, strictLayers: project.composition?.document?.source?.kind === 'generated' });
+  const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec,
+    generated: project.composition?.document?.source?.kind === 'generated' });
   const silent = `${outputPath}.silent.mp4`;
   let staged;
   let page;

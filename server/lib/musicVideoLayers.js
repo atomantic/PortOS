@@ -29,6 +29,17 @@ export function sceneVisualLayer(scene, { layered = false } = {}) {
   return layered && (layer === 'still' || layer === 'card') ? layer : 'footage';
 }
 
+/** A generated document executes the explicit code-first medium plan. */
+export function documentSceneVisualLayer(project, scene, { generated = false } = {}) {
+  if (!generated || project?.productionPolicy?.strategy !== 'code-first') return sceneVisualLayer(scene, { layered: true });
+  const direction = (project?.treatment?.shotDirections || []).find((entry) => entry.sceneId === scene.sceneId)
+    || scene?.direction;
+  if (direction?.medium === 'procedural') return 'card';
+  if (direction?.medium === 'still') return 'still';
+  if (direction?.medium === 'existing-footage' || direction?.medium === 'generated-footage') return 'footage';
+  return sceneVisualLayer(scene, { layered: true });
+}
+
 /** A still/card section has no clip to measure, so it needs an authored span. */
 export function sceneHasAuthoredSpan(scene) {
   return typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec;

@@ -134,12 +134,12 @@ function serializeProject(projectId, task) {
  * and point the project at it. The folder is assembled under a hidden name and
  * renamed into place, so a failed import never leaves a half-written version.
  */
-function storeVersion(projectId, files, source) {
+function storeVersion(projectId, files, source, options = {}) {
   assertProjectId(projectId);
-  return serializeProject(projectId, () => storeVersionNow(projectId, files, source));
+  return serializeProject(projectId, () => storeVersionNow(projectId, files, source, options));
 }
 
-async function storeVersionNow(projectId, files, source) {
+async function storeVersionNow(projectId, files, source, { draft = false, verifyCurrent = () => {} } = {}) {
   assertDocumentShape(files.map((file) => file.rel));
   if (!(await getProject(projectId))) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const versionId = `doc-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
@@ -172,8 +172,9 @@ async function storeVersionNow(projectId, files, source) {
   let outcome;
   try {
     outcome = await mutateProjectRecord(projectId, (current) => {
-      const composition = normalizeComposition({ ...(current.composition || {}), mode: 'document' });
-      const project = { ...current, composition: { ...composition, document }, updatedAt: document.updatedAt };
+      verifyCurrent(current);
+      const composition = normalizeComposition({ ...(current.composition || {}), ...(!draft ? { mode: 'document' } : {}) });
+      const project = { ...current, composition: { ...composition, [draft ? 'documentDraft' : 'document']: document }, updatedAt: document.updatedAt };
       return { project };
     });
   } catch (error) {
@@ -197,7 +198,7 @@ async function pruneDocumentVersions(projectId) {
   const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   if (!entries.length) return 0;
   const referenced = new Set((await listProjects({ includeDeleted: true }))
-    .map((project) => project?.composition?.document?.directory).filter(Boolean));
+    .flatMap((project) => [project?.composition?.document?.directory, project?.composition?.documentDraft?.directory]).filter(Boolean));
   let removed = 0;
   const staleBefore = Date.now() - 60 * 60 * 1000;
   for (const entry of entries) {
@@ -278,6 +279,50 @@ export async function importDocumentTemplate(projectId, templateId = 'layered') 
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
   const { files } = await collectTree(join(TEMPLATE_ROOT, templateId));
   return storeVersion(projectId, files, { kind: 'template', name: templateId });
+}
+
+/** Stage a host-assembled generated document for review before selection. */
+export async function stageGeneratedDocument(projectId, generatedFiles, { verifyCurrent } = {}) {
+  const { files } = await collectTree(join(TEMPLATE_ROOT, 'layered'));
+  const index = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
+  const marker = '<script src="engine.js"></script>';
+  if (!index.includes(marker)) throw new Error('Layered template has no engine script');
+  const staged = files.filter((file) => file.rel !== 'index.html');
+  staged.push({ rel: 'index.html', data: Buffer.from(index.replace(marker, '<script src="generated.js"></script>\n' + marker)) });
+  staged.push(...generatedFiles);
+  return storeVersion(projectId, staged, { kind: 'generated', name: 'Mixed-media composition' }, { draft: true, verifyCurrent });
+}
+
+/** Select exactly the candidate the director reviewed. */
+export function acceptGeneratedDocument(projectId, directory, { verifyCurrent = () => {} } = {}) {
+  return serializeProject(projectId, async () => {
+    const outcome = await mutateProjectRecord(projectId, (current) => {
+      const draft = current.composition?.documentDraft;
+      if (!draft || draft.directory !== directory || draft.source?.kind !== 'generated') {
+        throw refuse('The composition candidate changed — review the latest version', 'COMPOSITION_DRAFT_STALE', 409);
+      }
+      verifyCurrent(current);
+      const { documentDraft: _ignored, ...composition } = current.composition;
+      return { project: { ...current, composition: { ...composition, mode: 'document', document: draft }, updatedAt: new Date().toISOString() } };
+    });
+    await pruneDocumentVersions(projectId);
+    return { project: outcome.project, document: outcome.project.composition.document };
+  });
+}
+
+/** Discard a candidate without replacing the active document. */
+export function discardGeneratedDocument(projectId, directory) {
+  return serializeProject(projectId, async () => {
+    const outcome = await mutateProjectRecord(projectId, (current) => {
+      if (current.composition?.documentDraft?.directory !== directory) {
+        throw refuse('The composition candidate changed', 'COMPOSITION_DRAFT_STALE', 409);
+      }
+      const { documentDraft: _ignored, ...composition } = current.composition;
+      return { project: { ...current, composition, updatedAt: new Date().toISOString() } };
+    });
+    await pruneDocumentVersions(projectId);
+    return { project: outcome.project };
+  });
 }
 
 async function requireDocument(project) {

@@ -318,6 +318,7 @@ function promptSong(song) {
     lyrics: (song.lyrics || []).slice(0, 400),
     beats: (song.beats || []).slice(0, 400),
     downbeats: (song.downbeats || []).slice(0, 200),
+    featureNames: song.featureNames || [],
   };
 }
 
@@ -360,4 +361,20 @@ export function extractCodeSections(text) {
     } catch { /* the next fence may be the document */ }
   }
   return [];
+}
+
+/** Author only bounded drawing functions; the host owns the page and media. */
+export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment, visualSpec, scenes, styleLines = [], onlySectionId = null, sharedStyle = null }) {
+  const sections = (song.sections || []).filter((section) => !onlySectionId || section.id === onlySectionId);
+  return [
+    `Write original Canvas 2D section functions for a mixed-media music-video document titled ${JSON.stringify(trimTo(title, 200))}. The host owns the document, song clock, selected local media and lyric pass. Return code functions only; do not request or generate image/video assets.`,
+    CODE_VIDEO_RULES.replace('- Canvas 2D only. No external assets, fonts, or network.', '- Canvas 2D only. No network, remote URLs, filesystem paths or font loading. The host binds only the listed selected project assets; draw over footage/stills without obscuring them, and draw the entire frame for card scenes.'),
+    'env additionally has mediaKind (video, image or null) and visualLayer (footage, still or card). The host has already drawn the selected media at its in/out time. Do not read DOM or load assets in a section function. Use seeded arithmetic from env.frame for visual motion. Keep repeated hooks related but deliberately vary their action.',
+    `SHARED STYLE CONTRACT:\n${JSON.stringify(sharedStyle || { palette, treatment: { brief: treatment?.brief || null, motifs: treatment?.arc?.motifs || [], styleLook: treatment?.styleLook || null }, visualSpec, styleLines })}`,
+    `SONG AND LYRIC TIMING:\n${JSON.stringify(promptSong(song))}`,
+    `APPROVED SCENE ASSIGNMENTS AND LOCAL ASSET IDS:\n${JSON.stringify(scenes)}`,
+    `SECTIONS TO AUTHOR:\n${JSON.stringify(sections)}`,
+    onlySectionId ? `Revise only section ${JSON.stringify(onlySectionId)}. Preserve the shared style contract and other sections.` : 'Return one function for each listed section id. Describe a specific visual action for each scene and a distinct entry/exit transition in its function.',
+    'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML, no assets, no explanation.',
+  ].filter(Boolean).join('\n\n');
 }

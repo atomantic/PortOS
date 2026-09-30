@@ -741,6 +741,16 @@ describe('composition document (render style `document`)', () => {
     expect(next.name).toBe('remote edit');
     expect(next.composition.document).toEqual(pointer);
   });
+
+  it('keeps local document pointers when a newer peer has no composition', () => {
+    const draft = { ...pointer, directory: 'music-video/mv-1/composition/doc-draft', source: { kind: 'generated', name: 'Mixed-media composition' } };
+    const local = { ...withDocument(), composition: { ...withDocument().composition, documentDraft: draft } };
+    const remote = { ...local, updatedAt: '2026-01-05T00:00:00Z', composition: null };
+    const { next } = mergeProjectRecord(local, remote);
+    expect(next.composition.document).toEqual(pointer);
+    expect(next.composition.documentDraft).toEqual(draft);
+    expect(next.composition.mode).toBeUndefined();
+  });
 });
 
 it('preserves optional project moodboard uploads through create, patch and clone', () => {

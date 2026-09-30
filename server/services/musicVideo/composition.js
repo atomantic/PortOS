@@ -143,6 +143,7 @@ export function normalizeComposition(input) {
   const style = input.style && typeof input.style === 'object' ? input.style : {};
   const codeVideo = normalizeCodeVideo(input.codeVideo);
   const documentRef = normalizeCompositionDocument(input.document);
+  const documentDraft = normalizeCompositionDocument(input.documentDraft);
   const overlay = normalizeCompositionOverlay(input.overlay);
   return {
     version: COMPOSITION_VERSION,
@@ -161,6 +162,7 @@ export function normalizeComposition(input) {
     ...(codeVideo ? { codeVideo } : {}),
     // Same posture: present only once a document was imported / a HUD set.
     ...(documentRef ? { document: documentRef } : {}),
+    ...(documentDraft ? { documentDraft } : {}),
     ...(overlay ? { overlay } : {}),
   };
 }
@@ -180,8 +182,12 @@ export function withAutopilotCutting(project) {
  */
 export function withStoredCompositionDocument(next, stored) {
   if (!next) return next;
-  const { document: _ignored, ...rest } = next;
-  return stored?.document ? { ...rest, document: stored.document } : rest;
+  const { document: _ignored, documentDraft: _ignoredDraft, ...rest } = next;
+  return {
+    ...rest,
+    ...(stored?.document ? { document: stored.document } : {}),
+    ...(stored?.documentDraft ? { documentDraft: stored.documentDraft } : {}),
+  };
 }
 
 /** Clear the audio-derived timings (cue times, poster) when the song changes, keeping the text. */
