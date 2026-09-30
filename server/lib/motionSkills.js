@@ -45,3 +45,12 @@ export function detectMotionSkills({ home = homedir(), exists = existsSync } = {
     return { id: pack.id, label: pack.label, description: pack.description, skills: [...pack.skills], found, installed: found.length === pack.skills.length };
   });
 }
+
+// Agents the skills CLI links each installed skill into (Claude Code + Codex
+// cover the CoS providers that read skill folders).
+const SKILL_AGENTS = ['claude-code', 'codex'];
+
+/** The `skills` CLI invocation that installs one pack user-wide, non-interactively. */
+export function skillInstallCommand(pack) {
+  return ['npx', ['-y', 'skills@latest', 'add', pack.source, '--global', '--yes', '--agent', ...SKILL_AGENTS, '--skill', ...pack.skills]];
+}
