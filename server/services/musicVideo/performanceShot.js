@@ -152,7 +152,7 @@ function legacyMasterLookup(project, masterPath) {
  * The master is hashed only when there is a performance take to check, and
  * decoded only when its hash changed.
  */
-export async function reviewPerformanceTakes(project, masterPath) {
+async function reviewPerformanceTakes(project, masterPath) {
   const results = [];
   const selected = [];
   for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
