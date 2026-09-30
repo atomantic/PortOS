@@ -30,6 +30,7 @@ import useMusicVideoVocalSeparation from '../hooks/useMusicVideoVocalSeparation.
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
 import useMusicVideoPublishKit from '../hooks/useMusicVideoPublishKit.js';
+import useMusicVideoPublishing from '../hooks/useMusicVideoPublishing.js';
 import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
 import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
 import useMusicVideoProduction from '../hooks/useMusicVideoProduction.js';
@@ -183,6 +184,8 @@ export default function MusicVideo() {
   const excerpts = useMusicVideoExcerpts({ project: selected, replaceProject });
   // Publishing kit (#9281): release encodes, thumbnails, captions, chapters and copy.
   const publishKit = useMusicVideoPublishKit({ project: selected, replaceProject });
+  // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.
+  const publishing = useMusicVideoPublishing({ project: selected, replaceProject });
   const videoSettings = useMusicVideoModelSettings({ project: selected, onProjectPatch: patchProject });
   const tempo = useMusicVideoManualTempo({ project: selected, onUpdated: replaceProject });
   const sceneMedia = useMusicVideoSceneMedia({
@@ -779,6 +782,7 @@ export default function MusicVideo() {
     treatment,
     excerpts,
     publishKit,
+    publishing,
     revisions,
     autoReview,
     finalVideo,

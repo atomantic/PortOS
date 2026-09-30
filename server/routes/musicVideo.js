@@ -39,6 +39,8 @@ import {
   musicVideoPublishCopyPatchSchema,
   musicVideoPublishCopyDraftSchema,
   musicVideoPublishThumbnailSchema,
+  musicVideoPublishTargetSchema,
+  musicVideoPublishPrepareSchema,
   musicVideoCodeGenerateSchema,
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
@@ -102,6 +104,7 @@ import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender }
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
+import { preparePublishDraft, submitPublishDraft, discardPublishDraft } from '../services/musicVideo/publish/index.js';
 import {
   startRevision, resumeRevision, cancelRevision, releaseRevisionSection,
 } from '../services/musicVideo/revisionService.js';
@@ -613,6 +616,23 @@ router.put('/:id/publish-kit/thumbnail', asyncHandler(async (req, res) => {
   const { filename } = validateRequest(musicVideoPublishThumbnailSchema, req.body || {});
   const { project } = await selectPublishKitThumbnail(req.params.id, filename);
   res.json({ project });
+}));
+
+// --- Posting (#9282) ---
+// Fill a platform's post in the PortOS Browser and return a screenshot; post
+// only on a second, explicit request naming that live draft.
+router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {
+  const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
+  const options = validateRequest(musicVideoPublishPrepareSchema, req.body || {});
+  res.json(await preparePublishDraft(req.params.id, target, options));
+}));
+
+router.post('/:id/publish/drafts/:draftId/submit', asyncHandler(async (req, res) => {
+  res.json(await submitPublishDraft(req.params.id, req.params.draftId));
+}));
+
+router.delete('/:id/publish/drafts/:draftId', asyncHandler(async (req, res) => {
+  res.json({ ok: await discardPublishDraft(req.params.id, req.params.draftId) });
 }));
 
 // #9280: the song windows most likely to work as a vertical social cut.

@@ -65,6 +65,7 @@ export { default as useMusicVideoCastAndSets } from './useMusicVideoCastAndSets.
 export { default as useMusicVideoDevArtifacts } from './useMusicVideoDevArtifacts.js';
 export { default as useMusicVideoExcerpts } from './useMusicVideoExcerpts.js';
 export { default as useMusicVideoPublishKit } from './useMusicVideoPublishKit.js';
+export { default as useMusicVideoPublishing } from './useMusicVideoPublishing.js';
 export { default as useMusicVideoKickoff } from './useMusicVideoKickoff.js';
 export { default as useMusicVideoManualTempo } from './useMusicVideoManualTempo.js';
 export { default as useMusicVideoMidiJob } from './useMusicVideoMidiJob.js';
