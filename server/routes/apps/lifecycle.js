@@ -15,6 +15,7 @@
  */
 
 import { Router } from 'express';
+import { pm2ProcessNameSchema } from '../../lib/validation.js';
 import { join, extname } from 'path';
 import { tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import * as appsService from '../../services/apps.js';
@@ -287,10 +288,14 @@ router.get('/:id/status', loadApp, asyncHandler(async (req, res) => {
 router.get('/:id/logs', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
   const lines = parseInt(req.query.lines, 10) || 100;
-  const processName = req.query.process || app.pm2ProcessNames?.[0];
+  const processName = req.query.process ?? app.pm2ProcessNames?.[0];
 
-  if (!processName) {
+  if (processName === undefined) {
     throw new ServerError('No process name specified', { status: 400, code: 'MISSING_PROCESS' });
+  }
+
+  if (!pm2ProcessNameSchema.safeParse(processName).success || !app.pm2ProcessNames?.includes(processName)) {
+    throw new ServerError('Invalid process name for this app', { status: 400, code: 'INVALID_PROCESS_NAME' });
   }
 
   const logs = await pm2Service.getLogs(processName, lines, app.pm2Home)
