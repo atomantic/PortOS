@@ -13,7 +13,7 @@
  *
  * What it answers is "did the timing of this window's sound change?" — which
  * is what mouth motion follows (syllable onsets, holds, breaths). A change that
- * keeps the 10 ms loudness contour intact to r ≥ 0.98 and ≤ 1.5 dB (pitch
+ * keeps the 10 ms loudness contour intact to r ≥ 0.95 and ≤ 1.5 dB (pitch
  * correction, an EQ tweak, a re-encode) is deliberately NOT a change. It is not
  * a content hash: a different vocal performed with an identical 10 ms
  * dynamic contour would pass, which no real re-master produces.
@@ -34,7 +34,12 @@ const COMPARE_FLOOR_DB = -60;
 // A window whose envelope barely moves (sustained tone, silence) has no shape
 // to correlate; the mean level difference alone judges it.
 const MIN_SHAPE_STD_DB = 1;
-export const FINGERPRINT_MIN_CORRELATION = 0.98;
+// A dense, compressed chorus has little loudness shape (σ of a few dB), so a
+// plain re-encode's ±1 dB frame jitter alone pulls r to 0.976–0.978 while the
+// mean moves only 0.2–0.3 dB (measured on a real re-mastered song whose
+// windows were otherwise identical). 0.95 keeps those; a real edit is caught
+// by the mean-delta and local-change rules, which a re-encode never trips.
+export const FINGERPRINT_MIN_CORRELATION = 0.95;
 export const FINGERPRINT_MAX_MEAN_DELTA_DB = 1.5;
 // A window-wide mean dilutes a short local change (a silenced second of a
 // 30 s steady window moves the mean ~1.3 dB), so a quarter second of frames
@@ -116,7 +121,7 @@ const decodeFingerprint = (fingerprint) => {
  * Does `envelope` (a whole song) still carry the audio a stored fingerprint
  * recorded? Returns `{ same, correlation, meanDeltaDb }`; `same` is false when
  * the fingerprint is unreadable or the song no longer reaches the window.
- * Pearson correlation below 0.98, a mean |ΔdB| above 1.5 dB, or a quarter
+ * Pearson correlation below 0.95, a mean |ΔdB| above 1.5 dB, or a quarter
  * second moved by 10 dB or more is a change.
  */
 export function compareWindowFingerprint(fingerprint, envelope) {
