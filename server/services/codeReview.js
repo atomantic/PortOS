@@ -668,11 +668,10 @@ async function resolveServedModel(backend, baseUrl) {
  *                   no-tool environment allowlist (no forge or cloud
  *                   credentials), so nothing it writes reaches a checkout.
  *
- * `allowUnconfined` admits that last tier. A code review sets it: the diff is
- * the operator's own branch, or a claim branch the operator's own agent just
- * wrote with full permissions from the same issue text, so a confined reviewer
- * widens nothing. Claim-comment screening leaves it off — raw public comments
- * reach no agent that could act on them.
+ * `allowUnconfined` admits that last tier for ordinary code reviews. Claim
+ * reviews and public-comment screening leave it off: their supplied diff or
+ * comments may contain untrusted contributor instructions, so the reviewer
+ * must have a vendor-enforced no-tool or read-only mode.
  */
 export async function resolveProviderReviewTransport(provider, { allowUnconfined = false } = {}) {
   if (!provider || provider.enabled === false) {
@@ -687,7 +686,7 @@ export async function resolveProviderReviewTransport(provider, { allowUnconfined
   return {
     transport: null,
     code: 'REVIEWER_UNSUPPORTED',
-    error: 'This provider has no enforced no-tool or read-only mode, so it cannot screen public comments. Use its API mode or a local model for that gate.',
+    error: 'This provider has no enforced no-tool or read-only mode for this review. Use its API mode or a local model.',
   }
 }
 
@@ -883,10 +882,12 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, ef
  *   reviewer's working directory when its vendor enforces a no-tool or
  *   read-only review mode (#6338), neither of which can write to it. A CLI with
  *   no such mode never receives it: it runs in a scratch directory instead.
- * @param {boolean} [opts.toolFree] - Claim review: every CLI reviewer runs in a
- *   scratch cwd instead of `opts.cwd`, whatever its mode.
+ * @param {boolean} [opts.toolFree] - Run a CLI reviewer in a scratch cwd instead
+ *   of `opts.cwd`, whatever its mode.
+ * @param {string} [opts.kind] - `claim-review` additionally requires a
+ *   vendor-enforced no-tool or read-only transport before launching any CLI.
  */
-export async function runLocalCodeReview({ backend, model, diff, effort = null, timeoutMs = undefined, baseUrl = null, cwd = null, toolFree = false } = {}) {
+export async function runLocalCodeReview({ backend, model, diff, effort = null, timeoutMs = undefined, baseUrl = null, cwd = null, toolFree = false, kind = null } = {}) {
   if (!isToolFreeReviewer(backend)) {
     return { ok: false, error: `Unsupported reviewer backend: ${backend}` }
   }
@@ -916,8 +917,8 @@ export async function runLocalCodeReview({ backend, model, diff, effort = null, 
     diffSizeBytes,
     baseUrl,
     cwd,
-    toolFree,
-    allowUnconfined: true,
+    toolFree: kind === 'claim-review' || toolFree,
+    allowUnconfined: kind !== 'claim-review',
     messages: [
       { role: 'system', content: CODE_REVIEW_SYSTEM_PROMPT },
       { role: 'user', content: `Review this PR diff:\n\n${fence}diff\n${trimmedDiff}\n${fence}` },

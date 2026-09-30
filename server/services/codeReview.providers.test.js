@@ -174,22 +174,21 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
-  // Antigravity (like any harness with no enforced reviewer mode) reviews code,
-  // ordinary or claim, but never from the caller's checkout: its ordinary argv
-  // may carry a blanket-permission flag, so it runs in a scratch directory with
-  // the diff inlined and the no-tool environment allowlist.
-  it('runs a harness with no enforced reviewer mode confined to a scratch directory', async () => {
+  // Ordinary code review preserves the scratch-only fallback for a harness
+  // without an enforced mode. Claim review must refuse it before process launch.
+  it('runs an ordinary review in scratch but refuses an unconfined claim review', async () => {
     for (const command of ['agy', 'custom-agent']) {
       getProviderById.mockResolvedValue({ ...provider, type: 'cli', command });
       runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
       const claimRequest = localReviewBridgeRequest({ kind: 'claim-review', backend, diff: 'example diff' }, process.cwd());
-      for (const request of [{ backend, model: 'pinned-coder', diff: 'example diff', cwd: process.cwd() }, claimRequest]) {
-        expect(await runLocalCodeReview(request)).toMatchObject({ ok: true });
-        const args = runCliProviderPrompt.mock.lastCall[0];
-        expect(args).toMatchObject({ safetyProfile: 'public-review-gate', codeReview: true });
-        expect(args.cwd).not.toBe(process.cwd());
-        await expect(access(args.cwd)).rejects.toThrow();
-      }
+      expect(await runLocalCodeReview({ backend, model: 'pinned-coder', diff: 'example diff', cwd: process.cwd() })).toMatchObject({ ok: true });
+      const args = runCliProviderPrompt.mock.lastCall[0];
+      expect(args).toMatchObject({ safetyProfile: 'public-review-gate', codeReview: true });
+      expect(args.cwd).not.toBe(process.cwd());
+      await expect(access(args.cwd)).rejects.toThrow();
+      runCliProviderPrompt.mockClear();
+      expect(await runLocalCodeReview(claimRequest)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
+      expect(runCliProviderPrompt).not.toHaveBeenCalled();
     }
   });
 
