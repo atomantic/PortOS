@@ -24,7 +24,7 @@ function NoteRow({ excerptId, note, busy, onEdit, onDelete, onSeek }) {
       <li className="flex flex-wrap items-center gap-1.5 text-xs">
         <input value={draft} maxLength={2000} onChange={(e) => setDraft(e.target.value)}
           aria-label="Edit review note"
-          className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-1.5 py-1" />
+          className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-1.5 py-1 min-h-[44px] sm:min-h-0" />
         <button type="button" disabled={busy || !draft.trim()}
           onClick={() => { onEdit(excerptId, note.id, { note: draft.trim() }); setEditing(false); }}
           className="text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0 px-1">Save</button>
@@ -115,7 +115,7 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
             <div className="flex items-center gap-1.5">
               <input value={draft} maxLength={2000} onChange={(e) => setDraft(e.target.value)}
                 placeholder="Note at the current playhead…" aria-label="New review note"
-                className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs" />
+                className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
               <button type="button" onClick={addNoteHere} disabled={noteBusy === excerpt.id || !draft.trim()}
                 className="text-port-accent disabled:opacity-50 text-xs min-h-[44px] sm:min-h-0 px-2">Add</button>
             </div>
@@ -152,13 +152,13 @@ export default function ExcerptPanel({ project, rendering, progress, excerpts, r
           <label htmlFor={idFor('start')} className="block text-[10px] text-port-text-muted">Start (sec)</label>
           <input id={idFor('start')} type="number" min={0} step={0.5} value={startSec}
             onChange={(e) => setStartSec(Number(e.target.value))}
-            className="w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs" />
+            className="w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
         </div>
         <div>
           <label htmlFor={idFor('end')} className="block text-[10px] text-port-text-muted">End (sec)</label>
           <input id={idFor('end')} type="number" min={0} step={0.5} value={endSec}
             onChange={(e) => setEndSec(Number(e.target.value))}
-            className="w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs" />
+            className="w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
         </div>
         <button type="button" disabled={rendering || !valid}
           onClick={() => actions.startExcerpt(startSec, endSec)}

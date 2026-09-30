@@ -20,7 +20,7 @@ const STATUS_TONES = {
 };
 const STEP_TONES = { completed: 'text-port-success', failed: 'text-port-error', canceled: 'text-port-text-muted', refused: 'text-port-text-muted' };
 const RESUMABLE = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
-const inputCls = 'w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs';
+const inputCls = 'w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 const SHOWN_STEPS = 8;
 
 const toolLabel = new Map(POOL_TOOLS.map((t) => [t.id, t.label]));

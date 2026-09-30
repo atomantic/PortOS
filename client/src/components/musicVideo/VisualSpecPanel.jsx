@@ -115,7 +115,7 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
                     <label htmlFor={idFor(`role-${ref.id}`)} className="sr-only">Reference role</label>
                     <select id={idFor(`role-${ref.id}`)} value={ref.role || 'mood'}
                       onChange={(e) => updateRef(ref.id, { role: e.target.value })}
-                      className="bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px]">
+                      className="bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px] min-h-[44px] sm:min-h-0">
                       {ROLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                     </select>
                     <button type="button" onClick={() => saveReferences(references.filter((r) => r.id !== ref.id))}
@@ -127,15 +127,15 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
                   <label htmlFor={idFor(`use-${ref.id}`)} className="sr-only">Reference use</label>
                   <select id={idFor(`use-${ref.id}`)} value={ref.use || 'reference'}
                     onChange={(e) => updateRef(ref.id, { use: e.target.value })}
-                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px]">
+                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px] min-h-[44px] sm:min-h-0">
                     {USES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
                   <label htmlFor={idFor(`label-${ref.id}`)} className="sr-only">Reference label</label>
                   <input id={idFor(`label-${ref.id}`)} defaultValue={ref.label || ''} maxLength={120}
                     placeholder="Label (e.g. lead singer)"
                     onBlur={(e) => { if (e.target.value !== (ref.label || '')) updateRef(ref.id, { label: e.target.value }); }}
-                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px]" />
-                  <label className="flex items-center gap-1 text-[11px]">
+                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px] min-h-[44px] sm:min-h-0" />
+                  <label className="flex items-center gap-1 text-[11px] min-h-[44px] sm:min-h-0">
                     <input type="checkbox" checked={!!ref.condition}
                       disabled={!ref.condition && flagged >= MAX_CONDITIONING_REFERENCES}
                       onChange={(e) => updateRef(ref.id, { condition: e.target.checked })} />
@@ -162,7 +162,7 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
             ))}
             <label htmlFor={idFor('color')} className="sr-only">Palette color</label>
             <input id={idFor('color')} type="color" value={color} onChange={(e) => setColor(e.target.value)}
-              className="w-9 h-9 bg-transparent border border-port-border rounded" />
+              className="w-9 h-9 bg-transparent border border-port-border rounded min-h-[44px] sm:min-h-0 min-w-[44px] sm:min-w-0" />
             <button type="button" disabled={palette.length >= MAX_PALETTE || palette.includes(color.toLowerCase())}
               onClick={() => onSave({ palette: [...palette, color.toLowerCase()] })}
               className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">

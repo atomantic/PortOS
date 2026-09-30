@@ -42,7 +42,7 @@ export default function TrackPanel({
           onChange={(e) => e.target.value && onChangeTrack(e.target.value)}
           disabled={youtube.editJob.active || renderBound || midiBound}
           title={blockedMessage || undefined}
-          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50">
+          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 min-h-[44px] sm:min-h-0">
           <option value="">Change track…</option>
           {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
         </select>

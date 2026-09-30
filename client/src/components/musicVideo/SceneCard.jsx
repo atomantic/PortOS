@@ -159,18 +159,18 @@ export default function SceneCard({
           const toValue = (v) => (v === '' ? null : Number(v));
           return (
             <label key={key} className="flex items-center gap-1">{labelText}
-              <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-16 bg-port-bg border border-port-border rounded px-1 py-1"
+              <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-16 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
                 onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
                 onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
             </label>
           );
         })}
-        <label className="flex items-center gap-1">
+        <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
           <input type="checkbox" checked={!!scene.beatAligned}
             onChange={(e) => { onEditLocal(scene.sceneId, { beatAligned: e.target.checked }); onSave(scene.sceneId, { beatAligned: e.target.checked }); }} />
           Beat-aligned
         </label>
-        <label className="flex items-center gap-1" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
+        <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
           <input type="checkbox" checked={loops} disabled={performance} onChange={(e) => applyPatch({ loop: e.target.checked })} />
           Loop clip
         </label>
@@ -191,14 +191,14 @@ export default function SceneCard({
       <div className="flex flex-wrap gap-2 items-center text-xs">
         <label htmlFor={fieldId('layer')}>Layer</label>
         <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
-          className="bg-port-bg border border-port-border rounded px-1 py-1">
+          className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
           {MUSIC_VIDEO_VISUAL_LAYERS.map((value) => <option key={value} value={value}>{LAYER_LABELS[value]}</option>)}
         </select>
         {layer === 'still' && (
           <>
             <label htmlFor={fieldId('move')}>Move</label>
             <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
-              className="bg-port-bg border border-port-border rounded px-1 py-1">
+              className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
               {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
             </select>
           </>
@@ -210,12 +210,12 @@ export default function SceneCard({
               placeholder="Title shown on the card"
               onChange={(e) => onEditLocal(scene.sceneId, { cardText: e.target.value })}
               onBlur={(e) => onSave(scene.sceneId, { cardText: e.target.value.trim() || null })}
-              className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1" />
+              className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0" />
             <label htmlFor={fieldId('card-color')}>Background</label>
             <input id={fieldId('card-color')} type="color" value={scene.cardColor || '#000000'}
               onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
               onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
-              className="h-8 w-10 bg-port-bg border border-port-border rounded" />
+              className="h-8 w-10 min-h-[44px] sm:min-h-0 bg-port-bg border border-port-border rounded" />
           </>
         )}
       </div>
