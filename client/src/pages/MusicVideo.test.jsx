@@ -89,7 +89,35 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoCodeDocument: vi.fn(async () => ({ html: '<!doctype html><html><body></body></html>', durationSec: 2, fps: 24, width: 1280, height: 720, song: { sections: [] }, timeline: { sections: [] } })),
   generateMusicVideoCode: vi.fn(),
   regenerateMusicVideoCodeSection: vi.fn(),
+  startMusicVideoCastAndSets: vi.fn(),
+  regenerateMusicVideoCastAndSets: vi.fn(),
+  resumeMusicVideoCastAndSets: vi.fn(),
+  approveMusicVideoCastAndSets: vi.fn(),
+  skipMusicVideoCastAndSets: vi.fn(),
+  musicVideoDevArtifactFileUrl: (id, artifactId, version) => `/api/music-video/${id}/dev-artifacts/${artifactId}/file${version ? `?version=${version}` : ''}`,
+  uploadMusicVideoDevArtifact: vi.fn(),
+  addMusicVideoDevArtifactNote: vi.fn(),
+  resolveMusicVideoDevArtifactNote: vi.fn(),
+  reviewMusicVideoDevArtifact: vi.fn(),
+  deleteMusicVideoDevArtifact: vi.fn(),
 }));
+// Server pushes (production runs, the Cast & Sets check-in) arrive over the
+// socket; tests deliver them through this registry.
+const socketHandlers = vi.hoisted(() => new Map());
+vi.mock('../services/socket', () => ({
+  default: {
+    on: (event, fn) => {
+      if (!socketHandlers.has(event)) socketHandlers.set(event, new Set());
+      socketHandlers.get(event).add(fn);
+    },
+    off: (event, fn) => { socketHandlers.get(event)?.delete(fn); },
+    emit: () => {},
+    connected: true,
+  },
+}));
+const pushSocket = (event, payload) => act(async () => {
+  for (const fn of socketHandlers.get(event) || []) fn(payload);
+});
 vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn(), listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn(), uploadGalleryImage: vi.fn() }));
@@ -173,6 +201,7 @@ import {
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
+  startMusicVideoCastAndSets, approveMusicVideoCastAndSets,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
@@ -1429,6 +1458,8 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       tools: ['image:external', 'image:local', 'video:local', 'video:fal', 'code:render'],
       guidance: 'one long take',
       budgetUsd: 40,
+      // A new brief stops for the Cast & Sets check-in unless told otherwise.
+      checkins: { castAndSets: 'review' },
     });
   });
 
@@ -1491,7 +1522,8 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   });
 
   it('autopilot kickoff analyzes the song, tries the track lyrics, then plans the shots against the brief', async () => {
-    const project = { ...PROJECT_NO_CLIP, trackId: 'track-1', lyricCues: [], scenes: [], automation: { tools: ['image:local'], guidance: 'noir', budgetUsd: null } };
+    // A check-in the director already skipped does not stop the run.
+    const project = { ...PROJECT_NO_CLIP, trackId: 'track-1', lyricCues: [], scenes: [], castAndSets: { status: 'skipped' }, automation: { tools: ['image:local'], guidance: 'noir', budgetUsd: null } };
     const analyzed = { ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, status: 'analyzed' };
     analyzeMusicVideoProject.mockResolvedValue(analyzed);
     // An instrumental track: nothing to import, so nothing to separate or align.
@@ -1504,6 +1536,71 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     expect(importMusicVideoTrackLyrics).toHaveBeenCalledWith(project.id, { mode: 'if-empty' }, { silent: true });
     expect(separateMusicVideoVocals).not.toHaveBeenCalled();
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
+  });
+
+  it('autopilot stops at the Cast & Sets check-in in review mode, and Approve & continue plans', async () => {
+    const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [], automation: { tools: ['image:codex'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
+    const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
+    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
+    const sheet = { id: 'mvd-1', kind: 'cast-sets', title: 'Cast & Sets — Nova', status: 'pending', version: 1, mimeType: 'text/html', versions: [{ version: 1, mimeType: 'text/html', createdAt: '2026-01-01T00:00:00Z' }], notes: [] };
+    const reviewing = { ...project, devArtifacts: [sheet], castAndSets: { status: 'review', revision: 1, artifactId: 'mvd-1', plan: {}, images: {} } };
+    const approved = { ...reviewing, castAndSets: { ...reviewing.castAndSets, status: 'approved' }, devArtifacts: [{ ...sheet, status: 'approved' }] };
+    approveMusicVideoCastAndSets.mockResolvedValue({ project: approved, stage: approved.castAndSets });
+    planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 2, promptsSeeded: true });
+    await openProject(project);
+
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
+    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: reviewing, stage: reviewing.castAndSets });
+    expect(await screen.findByText('Waiting for your check-in.')).toBeTruthy();
+    await settle();
+    expect(planMusicVideoProject).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Approve & continue/ }));
+    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
+    expect(approveMusicVideoCastAndSets).toHaveBeenCalledTimes(1);
+  });
+
+  it('autopilot continues straight to the plan when the check-in auto-approves', async () => {
+    const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [], automation: { tools: ['image:codex'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'auto' } } };
+    const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
+    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
+    const approved = { ...project, castAndSets: { status: 'approved', revision: 1, plan: {}, images: {} } };
+    planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 2, promptsSeeded: true });
+    await openProject(project);
+
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
+    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalled());
+    // Progress pushes don't release the gate; only a checkpoint does.
+    await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: { ...directing, castAndSets: { ...directing.castAndSets, status: 'imaging' } } });
+    expect(planMusicVideoProject).not.toHaveBeenCalled();
+    await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: approved, stage: approved.castAndSets });
+    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
+    expect(approveMusicVideoCastAndSets).not.toHaveBeenCalled();
+  });
+
+  it('opens a development file from its deep link in a sandboxed viewer', async () => {
+    const sheet = {
+      id: 'mvd-1', kind: 'cast-sets', title: 'Cast & Sets — Nova', status: 'approved', version: 2, mimeType: 'text/html', updatedAt: '2026-01-02T00:00:00Z',
+      versions: [{ version: 1, mimeType: 'text/html', source: 'upload', createdAt: '2026-01-01T00:00:00Z' }, { version: 2, mimeType: 'text/html', source: 'upload', createdAt: '2026-01-02T00:00:00Z' }],
+      notes: [{ id: 'n1', text: 'Shorter braid', target: null, version: 1, createdAt: '2026-01-01T00:00:00Z', resolvedAt: null }],
+    };
+    const project = { ...PROJECT_NO_CLIP, devArtifacts: [sheet] };
+    listMusicVideoProjects.mockResolvedValue([project]);
+    render(
+      <MemoryRouter initialEntries={[`/music-video/${project.id}/dev/mvd-1?v=1`]}>
+        <Routes>
+          <Route path="/music-video/:projectId" element={<MusicVideo />} />
+          <Route path="/music-video/:projectId/dev/:artifactId" element={<MusicVideo />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const frame = await screen.findByTitle('Cast & Sets — Nova v1');
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(frame.getAttribute('src')).toBe(`/api/music-video/${project.id}/dev-artifacts/mvd-1/file?version=1`);
+    expect(screen.getByText('Shorter braid')).toBeTruthy();
+    // The Development section lists it with its review status.
+    expect(screen.getAllByText('Approved').length).toBeGreaterThan(0);
   });
 
   it('blocks relinking the track while a render is in progress for the selected project', async () => {

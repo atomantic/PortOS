@@ -57,7 +57,21 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
           className={inputClass}
         />
       </div>
-      <div className="max-w-[12rem]">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),18rem))] gap-3">
+      <div>
+        <label htmlFor={`${idPrefix}-checkin`} className="block text-xs text-port-text-muted mb-1">Cast &amp; Sets check-in</label>
+        <select
+          id={`${idPrefix}-checkin`}
+          value={draft.castAndSetsCheckin || 'review'}
+          onChange={(e) => onChange({ castAndSetsCheckin: e.target.value })}
+          className={inputClass}
+        >
+          <option value="review">Stop for my review</option>
+          <option value="auto">Auto-approve</option>
+        </select>
+        <p className="text-[11px] text-port-text-muted mt-1">Before planning, autopilot builds a cast &amp; sets sheet for your feedback.</p>
+      </div>
+      <div>
         <label htmlFor={`${idPrefix}-budget`} className="block text-xs text-port-text-muted mb-1">Budget cap (USD)</label>
         <input
           id={`${idPrefix}-budget`}
@@ -70,6 +84,7 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
           placeholder="No cap"
           className={inputClass}
         />
+      </div>
       </div>
     </div>
   );

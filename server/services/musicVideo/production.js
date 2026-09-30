@@ -44,6 +44,7 @@ import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
+import { castAndSetsSettled } from './castAndSets.js';
 
 const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
   maxGenerations: Object.freeze({ min: 1, max: 500 }),
@@ -248,6 +249,8 @@ const slotSteps = (run, sceneId, stepKind, revisionId = null) => run.steps
 
 /**
  * Pure: what the run should do next, from the record and the queue alone:
+ *   `cast-and-sets` — the board is empty and no Cast & Sets check-in exists:
+ *                start one (it runs before the plan; see castAndSetsService.js);
  *   `plan`     — the board is empty: seed it (one planner call, first time only);
  *   `dispatch` — generate `kind` (frame|clip) for `sceneId`;
  *   `review`   — every scene holds its media: hand the continuous excerpt
@@ -275,6 +278,8 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   if (!scenes.length) {
     if (run.planned) return { type: 'halt', status: 'blocked', reason: 'Planning produced no scenes — check the song analysis' };
+    const gate = castAndSetsGate(project, run);
+    if (gate) return gate;
     return { type: 'plan' };
   }
   const targets = productionTargets(project);
@@ -303,6 +308,25 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
     startSec: Math.min(...spans.map((s) => s.startSec)),
     endSec: Math.max(...spans.map((s) => s.endSec)),
   };
+}
+
+/**
+ * The Cast & Sets check-in runs before the plan. Returns the step it needs,
+ * or null once it is approved or skipped.
+ */
+function castAndSetsGate(project, run) {
+  const stage = project?.castAndSets || null;
+  if (castAndSetsSettled(stage)) return null;
+  if (!stage) {
+    return run.castAndSetsStarted
+      ? { type: 'halt', status: 'blocked', reason: 'The Cast & Sets check-in did not start — start it from the Autopilot panel, or skip it' }
+      : { type: 'cast-and-sets' };
+  }
+  if (stage.status === 'review') return { type: 'wait', on: 'checkin' };
+  if (stage.status === 'failed') {
+    return { type: 'halt', status: 'blocked', reason: `The Cast & Sets check-in failed: ${stage.stopReason || 'unknown error'} — resume or skip it, then resume the run` };
+  }
+  return { type: 'wait', on: 'cast-and-sets' };
 }
 
 // ---- dispatch accounting ------------------------------------------------------
@@ -436,6 +460,30 @@ export function reconcileProductionSteps(project, runId, jobs = [], nowMs = Date
 }
 
 // ---- lifecycle ---------------------------------------------------------------
+
+/** Mark the Cast & Sets check-in as started by this run (so a failed start halts instead of looping). */
+export const markProductionCastAndSets = (project, runId, now = new Date().toISOString()) =>
+  mutateRun(project, runId, () => ({ castAndSetsStarted: true }), now);
+
+/**
+ * An approved (or skipped) Cast & Sets check-in writes the visual spec and
+ * concept subjects a run's creative-setup checksum covers. A running run that
+ * has not planned yet was waiting on exactly that change, so its basis is
+ * re-captured in the same write instead of halting it `needs-replan`.
+ * Returns `{ project }`.
+ */
+export function rebaseProductionAfterCheckin(project, now = new Date().toISOString()) {
+  const runs = projectProductionRuns(project);
+  if (!runs.some((r) => r.status === 'running' && !r.planned)) return { project };
+  const revision = productionBasisRevision(project);
+  return {
+    project: {
+      ...project,
+      productionRuns: runs.map((r) => (r.status === 'running' && !r.planned
+        ? { ...r, basis: { revision, capturedAt: now }, updatedAt: now } : r)),
+    },
+  };
+}
 
 /** Mark the board as planned by this run (so an empty plan halts instead of looping). */
 export const markProductionPlanned = (project, runId, now = new Date().toISOString()) =>

@@ -45,12 +45,16 @@ export const MUSIC_VIDEO_AUTOMATION_TOOLS = Object.freeze([
 export const MUSIC_VIDEO_AUTOMATION_TOOL_IDS = Object.freeze(MUSIC_VIDEO_AUTOMATION_TOOLS.map((t) => t.id));
 
 export const MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX = 8000;
+// Check-in gates the autopilot stops at. `review` (the default) waits for the
+// director; `auto` approves the step and continues.
+export const MUSIC_VIDEO_CHECKIN_MODES = Object.freeze(['review', 'auto']);
 export const MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD = 100000;
 
 /**
  * Merge a validated automation patch onto the stored brief. Sub-fields merge
  * (a guidance edit cannot drop the tool list); `tools` replaces its list whole,
  * de-duplicated in catalog order. `budgetUsd: null` means "no cap".
+ * `checkins` merges per gate; an unknown or absent gate is `review`.
  */
 export function normalizeMusicVideoAutomation(patch, current = null) {
   const merged = { ...(current || {}), ...(patch || {}) };
@@ -61,5 +65,8 @@ export function normalizeMusicVideoAutomation(patch, current = null) {
     guidance: typeof merged.guidance === 'string' ? merged.guidance.slice(0, MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX) : '',
     budgetUsd: merged.budgetUsd != null && Number.isFinite(budget) && budget >= 0
       ? Math.min(budget, MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD) : null,
+    checkins: {
+      castAndSets: ({ ...(current?.checkins || {}), ...(patch?.checkins || {}) }).castAndSets === 'auto' ? 'auto' : 'review',
+    },
   };
 }

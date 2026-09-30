@@ -236,6 +236,12 @@ export function cloneProjectRecord(source, {
     ...(Array.isArray(source.autoReviews) ? { autoReviews: [] } : {}),
     // #9066: a production run executes against the SOURCE's scenes and jobs.
     ...(Array.isArray(source.productionRuns) ? { productionRuns: [] } : {}),
+    // Development artifacts ride along as-is: every version is an immutable
+    // file, so the clone points at the same bytes (devArtifacts.js). The Cast
+    // & Sets check-in keeps its direction and images, but its dispatch pin and
+    // production link belong to the source — a working stage reads as
+    // interrupted on the clone and can be resumed there.
+    ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
     renderHistoryId: null,
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
@@ -637,6 +643,10 @@ export function mergeProjectRecord(local, remoteRaw) {
   if (Object.hasOwn(local, 'imageModelId')) remote.imageModelId = local.imageModelId;
   // #9066: this install's production-run checkpoint survives a newer remote.
   if (Object.hasOwn(local, 'productionRuns')) remote.productionRuns = local.productionRuns;
+  // Development artifacts and the Cast & Sets checkpoint are wire-local too:
+  // their files and jobs exist only on this install.
+  if (Object.hasOwn(local, 'devArtifacts')) remote.devArtifacts = local.devArtifacts;
+  if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && Object.hasOwn(local.videoSettings, 'backend')) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'
