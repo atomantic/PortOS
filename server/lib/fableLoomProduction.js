@@ -47,6 +47,22 @@ const trimModelId = (value) => (typeof value === 'string' && value.trim()
   ? value.trim().slice(0, 64)
   : null);
 
+const recordedFileChecksumIssue = ({ label, filename, sha256 }, installedByFilename) => {
+  if (!isNonBlankStr(filename)) return `Recorded character ${label} has no filename.`;
+  if (!isNonBlankStr(sha256)) {
+    return `Recorded character ${label} "${filename}" has no checksum to verify exact inputs.`;
+  }
+  const installedFile = installedByFilename.find((file) => file?.filename === filename);
+  if (!installedFile) return `Recorded character ${label} "${filename}" is not installed locally.`;
+  if (!isNonBlankStr(installedFile.sha256)) {
+    return `Installed character ${label} "${filename}" has no checksum to verify exact inputs.`;
+  }
+  if (installedFile.sha256 !== sha256) {
+    return `Recorded character ${label} "${filename}" checksum mismatch (expected ${sha256}, found ${installedFile.sha256}).`;
+  }
+  return null;
+};
+
 /**
  * Normalize the optional provider/model preferences on a loom render pin.
  * Image and video model ids are local-model selections; cloud backends use
@@ -432,22 +448,8 @@ export function verifyExactInputProvenance(recordedProvenance, {
       errors.push('Recorded visual conditioning has no adapter manifest.');
     } else {
       for (const adapter of recordedProvenance.adapters) {
-        if (!isNonBlankStr(adapter?.filename)) {
-          errors.push('Recorded visual conditioning contains an adapter with no filename.');
-          continue;
-        }
-        if (!isNonBlankStr(adapter.sha256)) {
-          errors.push(`Recorded character adapter "${adapter.filename}" has no checksum to verify exact inputs.`);
-          continue;
-        }
-        const matchedLora = installedLoras.find((lora) => lora?.filename === adapter.filename);
-        if (!matchedLora) {
-          errors.push(`Recorded character adapter "${adapter.filename}" is not installed locally.`);
-        } else if (!isNonBlankStr(matchedLora.sha256)) {
-          errors.push(`Installed character adapter "${adapter.filename}" has no checksum to verify exact inputs.`);
-        } else if (matchedLora.sha256 !== adapter.sha256) {
-          errors.push(`Recorded character adapter "${adapter.filename}" checksum mismatch (expected ${adapter.sha256}, found ${matchedLora.sha256}).`);
-        }
+        const issue = recordedFileChecksumIssue({ ...adapter, label: 'adapter' }, installedLoras);
+        if (issue) errors.push(issue);
       }
     }
     if (!Array.isArray(recordedProvenance.omitted)) {
@@ -476,22 +478,8 @@ export function verifyExactInputProvenance(recordedProvenance, {
 
     // Check LoRA matching
     if (char.lora) {
-      const recordedFilename = char.lora.filename;
-      if (!isNonBlankStr(recordedFilename)) {
-        errors.push(`Recorded character LoRA binding for "${charId}" has no filename.`);
-      } else {
-        const recordedSha = char.lora.sha256;
-        const matchedLora = installedLoras.find((l) => l.filename === recordedFilename);
-        if (!matchedLora) {
-          errors.push(`Recorded character LoRA "${recordedFilename}" is not installed locally.`);
-        } else if (!isNonBlankStr(recordedSha)) {
-          errors.push(`Recorded character LoRA "${recordedFilename}" has no checksum to verify.`);
-        } else if (!isNonBlankStr(matchedLora.sha256)) {
-          errors.push(`Installed character LoRA "${recordedFilename}" has no checksum to verify exact inputs.`);
-        } else if (matchedLora.sha256 !== recordedSha) {
-          errors.push(`Recorded character LoRA "${recordedFilename}" checksum mismatch (expected ${recordedSha}, found ${matchedLora.sha256}).`);
-        }
-      }
+      const issue = recordedFileChecksumIssue({ ...char.lora, label: 'LoRA' }, installedLoras);
+      if (issue) errors.push(issue);
     }
 
     // Check Voice Profile matching
