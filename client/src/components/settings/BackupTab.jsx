@@ -1,3 +1,4 @@
+import { MIN_RETENTION_COUNT, MAX_RETENTION_COUNT, DEFAULT_RETENTION_COUNT } from '../../../../server/lib/backupConfig.js';
 import { useState, useEffect, useId, useRef } from 'react';
 import { AlertTriangle, Archive, CalendarClock, CheckCircle2, Database, Play, Plus, Save, ShieldOff, Trash2, X, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -14,13 +15,6 @@ import { formatBytes } from '../../utils/formatters';
 import { describeCron } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
 import { anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../../lib/backupExcludes';
-
-// Mirrors MIN_RETENTION_COUNT/MAX_RETENTION_COUNT in server/lib/backupConfig.js —
-// the server is the source of truth and re-validates on save; these only bound
-// the input control.
-const MIN_RETENTION_COUNT = 1;
-const MAX_RETENTION_COUNT = 365;
-const DEFAULT_RETENTION_COUNT = 30;
 
 // Set equality — rsync --exclude flags are order-independent, so reordering
 // is NOT a dirty state; only membership changes (added/removed entries) are.

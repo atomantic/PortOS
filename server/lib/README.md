@@ -804,3 +804,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `musicVideoMotion.js` | `MOTION_CONTINUITY_CLAUSE`: the clause every Music Video motion (i2v) prompt ends with, pinning the reference frame's lighting, time of day and palette. Shared by `handoff.js` and the client board. |
 | `musicVideoConditioning.js` | `musicVideoStyleImages`, `musicVideoStylePrompt`, `musicVideoStyleBasis`, and `musicVideoStyleReferenceCapacity` supply bounded moodboard conditioning and text fallback; `musicVideoConditioningReferences(project, scene)` selects the approved character sheet and scene's mapped set plate, with capped project-wide fallback; shared by board and production. |
 | `musicVideoMediumPlan.js` | `normalizeMusicVideoProductionPolicy`, `planMusicVideoMedia`, `summarizeMusicVideoMediumPlan`, and `codeFirstProductionAssets`: pinned shot media, union-of-intervals video allowance, and selected-asset preflight shared by planning and Board review. |
+
+| `imageLimits.js` | MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS — browser-safe image generation caps shared with validation. |
