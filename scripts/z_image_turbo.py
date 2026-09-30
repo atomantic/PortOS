@@ -33,6 +33,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import (  # noqa: E402
     apply_memory_optimizations,
+    decode_with_finite_retry,
     emit_image_execution_marker,
     heartbeat,
     install_hf_error_handler,
@@ -190,6 +191,44 @@ def to_i2i_pipeline(pipe):
     return AutoPipelineForImage2Image.from_pipe(pipe)
 
 
+def decode_qwen21_latents(pipe, latents, height: int, width: int):
+    vae = pipe.vae
+    unpacked = pipe._unpack_latents(latents, height, width, pipe.vae_scale_factor)
+
+    def decode(dtype):
+        vae.to(dtype=dtype)
+        aligned = unpacked.to(dtype=dtype)
+        mean = (
+            torch.tensor(vae.config.latents_mean)
+            .view(1, vae.config.z_dim, 1, 1, 1)
+            .to(device=aligned.device, dtype=dtype)
+        )
+        std = (
+            torch.tensor(vae.config.latents_std)
+            .view(1, vae.config.z_dim, 1, 1, 1)
+            .to(device=aligned.device, dtype=dtype)
+        )
+        return vae.decode(aligned * std + mean, return_dict=False)[0]
+
+    try:
+        decoded, retried = decode_with_finite_retry(
+            lambda: decode(vae.dtype),
+            lambda: decode(torch.float32),
+            torch.isfinite,
+        )
+    except FloatingPointError as err:
+        message = (
+            "Qwen Image 2.1 MPS VAE decode produced NaNs after a float32 retry — "
+            "try float32 or a different model"
+        )
+        print("USER_ERROR:qwen_mps_nan", file=sys.stderr, flush=True)
+        print(f"❌ {message}", file=sys.stderr, flush=True)
+        raise RuntimeError(message) from err
+    if retried:
+        print("⚠️ qwen-image-2.1 VAE decode recovered after a float32 retry", file=sys.stderr)
+    return pipe.image_processor.postprocess(decoded[:, :, 0], output_type="pil")
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS Z-Image-Turbo runner")
     p.add_argument("--model", required=True, help="model id (e.g. z-image-turbo-bf16)")
@@ -277,6 +316,10 @@ def main() -> None:
 
     apply_memory_optimizations(pipe, width=args.width, height=args.height)
     apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])
+
+    qwen21_mps = args.pipeline_class == "QwenImage21Pipeline" and device == "mps"
+    if qwen21_mps:
+        pipe.vae.to(dtype=torch.float32)
 
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
     generator = make_generator(device, seed)
@@ -376,17 +419,29 @@ def main() -> None:
     # unaffected).
     if args.use_pe and "use_pe" in accepted:
         pipe_kwargs["use_pe"] = True
+    if qwen21_mps:
+        if "output_type" not in accepted:
+            message = "Qwen Image 2.1 runtime cannot return latents; reinstall the local image runtime"
+            print("USER_ERROR:torch_runtime_broken", file=sys.stderr, flush=True)
+            print(f"❌ {message}", file=sys.stderr, flush=True)
+            raise RuntimeError(message)
+        pipe_kwargs["output_type"] = "latent"
 
     print("STAGE:inference", file=sys.stderr, flush=True)
     print(
-        f"🎨 z-image generate seed={seed} {args.width}x{args.height} steps={args.steps} "
-        f"guidance={args.guidance} device={device}",
+        f"🎨 {args.model} generate seed={seed} {args.width}x{args.height} steps={args.steps} "
+        f"guidance={args.guidance} device={device} references={len(args.reference_images)}",
         file=sys.stderr,
     )
 
     with torch.inference_mode():
         result = pipe(**pipe_kwargs)
-    image = result.images[0]
+        images = (
+            decode_qwen21_latents(pipe, result.images, int(args.height), int(args.width))
+            if qwen21_mps
+            else result.images
+        )
+    image = images[0]
     image.save(args.output)
 
     if callback is not None and hasattr(callback, "_stats"):
@@ -419,7 +474,7 @@ def main() -> None:
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-    print(f"✅ z-image saved {args.output} (seed={seed})", file=sys.stderr)
+    print(f"✅ {args.model} saved {args.output} (seed={seed})", file=sys.stderr)
 
 
 if __name__ == "__main__":

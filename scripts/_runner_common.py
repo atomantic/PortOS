@@ -61,6 +61,17 @@ def register_source_namespace(package_name: str, package_dir: "str | Path"):
     return package
 
 
+def decode_with_finite_retry(decode, retry_decode, isfinite):
+    """Decode once, retry once after non-finite output, then fail closed."""
+    decoded = decode()
+    if bool(isfinite(decoded).all().item()):
+        return decoded, False
+    decoded = retry_decode()
+    if bool(isfinite(decoded).all().item()):
+        return decoded, True
+    raise FloatingPointError("decode produced non-finite values after retry")
+
+
 @contextmanager
 def heartbeat(stage: "str | Callable[[], str]", interval: float = 20.0):
     """Emit a periodic STAGE:<stage>:heartbeat:Ns marker so the JS idle
