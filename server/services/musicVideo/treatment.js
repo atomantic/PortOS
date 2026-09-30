@@ -56,6 +56,7 @@ import {
 } from '../../lib/musicVideoValidation.js';
 import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { normalizeComposition } from './composition.js';
+import { hookKey, hookLines, cueWordOnsets } from './hookTypography.js';
 
 const TREATMENT_VERSION = 1;
 
@@ -591,6 +592,7 @@ const withPlannedScenes = (project, planned) => {
 function textCueCandidates(project, treatment) {
   const scenes = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const cues = (project.lyricCues || []).filter((c) => isNonBlankStr(c?.text) && isTime(c.startSec));
+  const hooks = hookLines(cues);
   const existing = new Set((project.composition?.textCues || []).map((c) => `${c.text}@${c.startSec}`));
   const out = [];
   for (const direction of treatment.shotDirections) {
@@ -607,7 +609,11 @@ function textCueCandidates(project, treatment) {
       // Clamped to the directing shot: a line that runs on must not keep its
       // text over a later shot that reserved no (or another) region for it.
       const endSec = isTime(cue.endSec) && cue.endSec > cue.startSec ? Math.min(cue.endSec, scene.endSec) : scene.endSec;
-      out.push({
+      const words = hooks.has(hookKey(cueText)) ? cueWordOnsets(cue, endSec) : [];
+      out.push(words.length ? {
+        // A hook builds word by word, big and centered (#9291).
+        text: cueText, startSec: cue.startSec, endSec, placement: 'center', emphasis: 'hero', template: 'build', words,
+      } : {
         text: cueText,
         startSec: cue.startSec,
         endSec,

@@ -107,6 +107,17 @@ function normalizeCompositionOverlay(input) {
  * keeps its text but loses its end (it does not render until re-timed). Returns
  * null for a non-object so a cleared manifest stays cleared.
  */
+/** A cue's sung word onsets (#9291), in time order; null when there are none. */
+function cueWords(words) {
+  if (!Array.isArray(words)) return null;
+  const out = words
+    .filter((w) => w && typeof w.w === 'string' && w.w.trim() && toTime(w.atSec) != null)
+    .slice(0, 80)
+    .map((w) => ({ w: w.w.trim().slice(0, 60), atSec: toTime(w.atSec) }))
+    .sort((a, b) => a.atSec - b.atSec);
+  return out.length ? out : null;
+}
+
 export function normalizeComposition(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const seen = new Set();
@@ -126,6 +137,7 @@ export function normalizeComposition(input) {
       template: pick(cue.template, TYPOGRAPHY_TEMPLATES, 'fade'),
       placement: pick(cue.placement, TYPOGRAPHY_PLACEMENTS, 'lower'),
       emphasis: pick(cue.emphasis, TYPOGRAPHY_EMPHASES, 'subtitle'),
+      ...(cueWords(cue.words) ? { words: cueWords(cue.words) } : {}),
     });
   }
   const style = input.style && typeof input.style === 'object' ? input.style : {};
@@ -139,6 +151,7 @@ export function normalizeComposition(input) {
     style: {
       color: typeof style.color === 'string' && /^#[0-9a-f]{6}$/i.test(style.color) ? style.color.toLowerCase() : '#ffffff',
       font: pick(style.font, TYPOGRAPHY_FONTS, 'sans'),
+      ...(typeof style.accentColor === 'string' && /^#[0-9a-f]{6}$/i.test(style.accentColor) ? { accentColor: style.accentColor.toLowerCase() } : {}),
     },
     posterSec: toTime(input.posterSec),
     // Absent until chosen (#9290): the autopilot plan picks 'intercut' for an undecided project.
@@ -235,6 +248,20 @@ export function cueStateAt(cue, t) {
   } else if (cue.template === 'pop') {
     // Grows into place and never past full size, so it cannot leave the safe area.
     scale = 0.85 + 0.15 * easeOut(inP);
+  } else if (cue.template === 'build') {
+    // #9291: each word lands on its sung onset (evenly over the first 60% of
+    // the cue when no onsets are known); the line holds, then fades out.
+    const words = Array.isArray(cue.words) && cue.words.length ? cue.words.map((w) => w.atSec) : null;
+    // Tokens counted inline: this function is serialized into the overlay
+    // page (cueStateAt.toString()), so it cannot import lib/textUtils.
+    let count = 0;
+    if (words) count = words.length;
+    else for (const token of String(cue.text).split(/\s+/)) if (token) count += 1;
+    let shown = 0;
+    if (words) for (const at of words) { if (at <= t + 1e-6) shown += 1; }
+    else shown = count ? Math.min(count, 1 + Math.floor(clamp((t - start) / (span * 0.6)) * count)) : 0;
+    opacity = easeOut(outP);
+    return { opacity: Math.round(opacity * 10000) / 10000, offsetY: 0, scale: 1, visibleChars: length, visibleWords: Math.max(1, shown) };
   } else if (cue.template === 'typewriter') {
     const typeSec = Math.min(span * 0.6, length * 0.05);
     visibleChars = typeSec > 0 ? Math.min(length, Math.ceil(length * clamp((t - start) / typeSec))) : length;
@@ -277,9 +304,10 @@ const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
  * box never changes between frames and cannot leave the safe area.
  */
 export function buildTypographyDocument({ cues, style = {}, width, height, durationSec, fps }) {
-  const payload = cues.map(({ id, text, startSec, endSec, template, placement, emphasis }) => ({ id, text, startSec, endSec, template, placement, emphasis }));
+  const payload = cues.map(({ id, text, startSec, endSec, template, placement, emphasis, words }) => ({ id, text, startSec, endSec, template, placement, emphasis, ...(words ? { words } : {}) }));
   const color = /^#[0-9a-f]{6}$/i.test(style.color || '') ? style.color : '#ffffff';
   const fontStack = FONT_STACKS[style.font] || FONT_STACKS.sans;
+  const accent = /^#[0-9a-f]{6}$/i.test(style.accentColor || '') ? style.accentColor : '#ff5a1f';
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
 #safe { position: absolute; }
@@ -288,20 +316,35 @@ html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
   /* The padding keeps this legibility shadow inside the cue box, and so inside the safe area. */
   text-shadow: 0 0 0.12em rgba(0,0,0,0.85), 0 0.04em 0.18em rgba(0,0,0,0.7); }
 .cue .rest { visibility: hidden; }
+/* #9291 word build: heavy condensed caps, words hold their place as they land. */
+.cue.build { text-align: left; font-family: Impact, "Arial Narrow Bold", "Arial Narrow", ${fontStack}; font-weight: 900; text-transform: uppercase; letter-spacing: 0.01em; line-height: 0.98; }
+.cue.build .word { visibility: hidden; }
 </style></head><body><div id="safe"></div><script>
 const CUES = ${scriptJson(payload)};
 const SAFE_INSET = ${SAFE_INSET};
+const ACCENT = ${scriptJson(accent)};
 const cueStateAt = ${cueStateAt.toString()};
 const safe = document.getElementById('safe');
 const nodes = CUES.map((cue) => {
   const el = document.createElement('div');
-  el.className = 'cue';
+  el.className = cue.template === 'build' ? 'cue build' : 'cue';
   const shown = document.createElement('span');
   const rest = document.createElement('span');
   rest.className = 'rest';
-  el.append(shown, rest);
+  const words = [];
+  if (cue.template === 'build') {
+    const tokens = cue.words && cue.words.length ? cue.words.map((w) => w.w) : cue.text.split(/\s+/).filter(Boolean);
+    tokens.forEach((token, i) => {
+      const span = document.createElement('span');
+      span.className = 'word';
+      span.textContent = token;
+      if (i) el.append(' ');
+      el.append(span);
+      words.push(span);
+    });
+  } else el.append(shown, rest);
   safe.append(el);
-  return { cue, el, shown, rest, chars: Array.from(cue.text) };
+  return { cue, el, shown, rest, words, chars: Array.from(cue.text) };
 });
 let frame = { width: ${Number(width)}, height: ${Number(height)} };
 function layout({ width, height }) {
@@ -314,10 +357,10 @@ function layout({ width, height }) {
   const base = Math.min(width, height);
   for (const node of nodes) {
     const hero = node.cue.emphasis === 'hero';
-    const maxH = safeH * (hero ? 0.6 : 0.3);
-    node.shown.textContent = node.cue.text;
-    node.rest.textContent = '';
-    let size = Math.round(base * (hero ? 0.09 : 0.05));
+    const build = node.words.length > 0;
+    const maxH = safeH * (hero || build ? 0.6 : 0.3);
+    if (!build) { node.shown.textContent = node.cue.text; node.rest.textContent = ''; }
+    let size = Math.round(base * (build ? 0.13 : hero ? 0.09 : 0.05));
     const floor = Math.max(8, Math.round(base * 0.02));
     node.el.style.fontSize = size + 'px';
     while (size > floor && (node.el.scrollHeight > maxH || node.el.scrollWidth > safeW)) {
@@ -338,7 +381,19 @@ function layout({ width, height }) {
 function draw(t) {
   for (const node of nodes) {
     const state = cueStateAt(node.cue, t);
-    if (!state) { node.el.style.visibility = 'hidden'; continue; }
+    // A word span set visible would show through its hidden cue, so hide both.
+    if (!state) { node.el.style.visibility = 'hidden'; node.words.forEach((span) => { span.style.visibility = 'hidden'; }); continue; }
+    if (node.words.length) {
+      const n = state.visibleWords || 0;
+      node.words.forEach((span, i) => {
+        span.style.visibility = i < n ? 'visible' : 'hidden';
+        span.style.color = i === n - 1 ? ACCENT : '';
+      });
+      node.el.style.visibility = 'visible';
+      node.el.style.opacity = String(state.opacity);
+      node.el.style.transform = 'none';
+      continue;
+    }
     node.shown.textContent = node.chars.slice(0, state.visibleChars).join('');
     node.rest.textContent = node.chars.slice(state.visibleChars).join('');
     node.el.style.visibility = 'visible';
