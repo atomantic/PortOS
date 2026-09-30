@@ -188,7 +188,7 @@ const hoistPriorityEntries = (entries, priority) => {
 // Caps each section at CANON_PROMPT_ENTRIES_PER_KIND_MAX entries; an
 // "(… + N more)" footer signals truncation so the LLM doesn't assume the
 // canon is complete.
-export function renderCanonForPrompt(world, { priorityCharacterIds = null, respectRevealGates = false } = {}) {
+export function renderCanonForPrompt(world, { priorityCharacterIds = null, respectRevealGates = true } = {}) {
   if (!world || typeof world !== 'object') return '';
   const priority = asIdSet(priorityCharacterIds);
   const sections = [];
@@ -409,7 +409,9 @@ function rankCharactersForNarrativeContext(characters, {
  * `spoiler` flag or a `revealIssue` has authored history the audience has NOT
  * earned yet, so the gated entry renders as a named placeholder rather than
  * handing a generation prompt the concealed origin. Author-side planning
- * surfaces that already reason over the full bible leave it off. It is the SAME
+ * surfaces must explicitly turn it off: the arc planner (`pipeline/arcPlanner/context.js`)
+ * and FableLoom editorial (`fableLoom/editorial.js`) need the unrevealed canon.
+ * The gate defaults ON in all three renderers. It is the SAME
  * predicate and allowlist the descriptive block uses (`concealCanonEntry`) —
  * see the gate comment above; do not add a second rule here.
  *
@@ -420,7 +422,7 @@ function rankCharactersForNarrativeContext(characters, {
 export function renderCharacterNarrativeContext(characters, {
   max = CHARACTER_NARRATIVE_ARC_MAX,
   priorityIds = null,
-  respectRevealGates = false,
+  respectRevealGates = true,
   reportOmitted = false,
 } = {}) {
   const { shown, omitted } = rankCharactersForNarrativeContext(characters, { max, priorityIds });
