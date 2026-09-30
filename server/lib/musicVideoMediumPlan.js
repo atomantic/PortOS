@@ -49,6 +49,9 @@ export function summarizeMusicVideoMediumPlan(project, directions = project?.tre
       if (codeFirst) unresolved.push({ sceneId: scene.sceneId, blocking: true, message: 'Compile a medium plan for this shot.' });
       continue;
     }
+    if (codeFirst && (typeof d.mediumRationale !== 'string' || !d.mediumRationale.trim())) {
+      unresolved.push({ sceneId: scene.sceneId, blocking: true, message: 'Explain why this medium serves the shot before applying the plan.' });
+    }
     const { startSec, endSec } = scene;
     const valid = validDuration && Number.isFinite(startSec) && Number.isFinite(endSec)
       && startSec >= 0 && endSec > startSec && endSec <= durationSec + 0.000001;

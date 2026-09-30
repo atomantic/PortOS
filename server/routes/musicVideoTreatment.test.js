@@ -544,12 +544,17 @@ describe('code-first medium planning (#9299)', () => {
 
   it('persists a zero-video plan, shows unmet performance, and applies without changing manual prompts, takes or renderer', async () => {
     const project = await hundredSecondPlan();
-    const treatment = project.treatment;
+    let treatment = project.treatment;
     expect(treatment.shotDirections.map((d) => d.medium)).not.toContain('generated-footage');
     expect(treatment.shotDirections.every((d) => d.mediumRationale)).toBe(true);
     const sceneId = project.scenes[0].sceneId;
     seedImage('medium-still.png');
     await projects.appendSceneTakes(project.id, sceneId, [{ kind: 'image', assetId: 'medium-still.png', source: 'imported' }]);
+    const stale = await request(app).get(`${base(project.id)}/treatment/apply-preview`);
+    expect(stale.body).toMatchObject({ blocked: true, stale: expect.arrayContaining([expect.objectContaining({ input: 'media', blocking: true })]) });
+    const refreshed = await compile(project.id, { baseRevision: treatment.revision, useAi: false });
+    expect(refreshed.status).toBe(200);
+    treatment = refreshed.body.treatment;
     const before = await reload(project.id);
     const preview = await request(app).get(`${base(project.id)}/treatment/apply-preview`);
     expect(preview.body.mediumPlan).toMatchObject({ generatedSec: 0, allowedGeneratedSec: 0, blocked: false });
@@ -563,7 +568,7 @@ describe('code-first medium planning (#9299)', () => {
     expect(stored.scenes[0]).toMatchObject({
       prompt: 'Director motion', framePrompt: 'Director frame', takes: before.scenes[0].takes,
       referenceImageId: before.scenes[0].referenceImageId, shotMode: 'cutaway', visualLayer: 'footage',
-      direction: { medium: 'procedural' },
+      direction: { medium: 'still' },
     });
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
   });
@@ -592,6 +597,14 @@ describe('code-first medium planning (#9299)', () => {
     await projects.updateScene(project.id, overlap.sceneId, { endSec: 20 });
     const applied = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: edited.body.treatment.revision });
     expect(applied.status).toBe(200);
+    const cleared = await patchTreatment(project.id, {
+      baseRevision: edited.body.treatment.revision,
+      shotDirections: [{ sceneId: first.sceneId, mediumRationale: '' }],
+    });
+    expect(cleared.status).toBe(200);
+    const incomplete = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: cleared.body.treatment.revision });
+    expect(incomplete.status).toBe(422);
+    expect(incomplete.body.error).toContain('Explain why this medium');
   });
 
   it('retains manual still/procedural pins across AI re-planning, clone and wire round trips', async () => {
@@ -644,7 +657,7 @@ describe('code-first medium planning (#9299)', () => {
     )).toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', receiverV: 11 }] });
   });
 
-  it('defaults legacy projects and blocks a compile raced by a production-policy edit', async () => {
+  it('defaults legacy projects and blocks compiles raced by policy or selected-media edits', async () => {
     const project = await plannedProject();
     expect(project.productionPolicy.strategy).toBe('legacy');
     runPromptThroughProvider.mockImplementationOnce(async () => {
@@ -656,6 +669,14 @@ describe('code-first medium planning (#9299)', () => {
     expect(raced.status).toBe(409);
     expect(raced.body.code).toBe('TREATMENT_INPUTS_CHANGED');
     expect((await reload(project.id)).productionPolicy).toEqual({ strategy: 'code-first', maxGeneratedVideoPercent: 0 });
+    runPromptThroughProvider.mockImplementationOnce(async () => {
+      await projects.updateScene(project.id, project.scenes[0].sceneId, { visualLayer: 'still' });
+      return { text: JSON.stringify({ beats: [{ sectionIndex: 0, objective: 'A changed opening' }] }) };
+    });
+    const mediaRace = await compile(project.id, { baseRevision: 0 });
+    expect(mediaRace.status).toBe(409);
+    expect(mediaRace.body.code).toBe('TREATMENT_INPUTS_CHANGED');
+    expect(mediaRace.body.error).toContain('media');
     const invalid = await request(app).patch(base(project.id)).send({ productionPolicy: { maxGeneratedVideoPercent: 101 } });
     expect(invalid.status).toBe(400);
   });

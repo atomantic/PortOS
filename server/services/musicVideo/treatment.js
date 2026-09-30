@@ -302,8 +302,9 @@ function assertRevision(project, baseRevision) {
 
 // ---- basis / staleness ------------------------------------------------------
 
-const BASIS_KEYS = ['audio', 'analysis', 'visualSpec', 'lyrics', 'scenes', 'productionPolicy'];
+const BASIS_KEYS = ['audio', 'analysis', 'visualSpec', 'lyrics', 'scenes', 'productionPolicy', 'media'];
 const STALE_MESSAGES = {
+  media: 'Selected media or visual layers changed since this treatment was compiled.',
   productionPolicy: 'The production policy changed since this treatment was compiled.',
   audio: 'The song changed since this treatment was compiled — recompile it.',
   analysis: 'The song was re-analyzed since this treatment was compiled.',
@@ -313,7 +314,7 @@ const STALE_MESSAGES = {
 };
 // A stale basis on these inputs blocks Apply (old direction must not overwrite
 // newer edits); scene-set changes only leave some scenes unmapped.
-const BLOCKING_STALE = new Set(['audio', 'analysis', 'visualSpec', 'lyrics', 'productionPolicy']);
+const BLOCKING_STALE = new Set(['audio', 'analysis', 'visualSpec', 'lyrics', 'productionPolicy', 'media']);
 
 /** Fingerprints of every input a compile reads. */
 export function treatmentBasis(project) {
@@ -321,6 +322,9 @@ export function treatmentBasis(project) {
   const spec = project?.visualSpec;
   return {
     productionPolicy: fingerprint(normalizeMusicVideoProductionPolicy(project?.productionPolicy)),
+    // Scene identity/timing has its own fingerprint. Omit ids here so a
+    // media-preserving clone retains its valid plan after ids are remapped.
+    media: fingerprint((project?.scenes || []).map((s) => [s.visualLayer || 'footage', s.referenceImageId || null, s.videoHistoryId || null])),
     audio: fingerprint([project?.trackId ?? null, project?.uploadedAudioFilename ?? null]),
     analysis: fingerprint(analysis
       ? [analysis.durationSec ?? null, (analysis.sections || []).map((s) => [s?.startSec ?? null, s?.endSec ?? null, s?.energy ?? null])]
@@ -340,6 +344,9 @@ function treatmentStaleness(project, treatment = normalizeTreatment(project?.tre
   const current = treatmentBasis(project);
   return BASIS_KEYS
     .filter((key) => {
+      // Legacy Apply does not depend on a medium plan; its own render-layer
+      // edits and later take selections must not make old treatments stale.
+      if (key === 'media' && normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'legacy') return false;
       // Old treatments predate policy; absent remains the original legacy behavior.
       if (key === 'productionPolicy' && !treatment.basis[key]
         && normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'legacy') return false;
