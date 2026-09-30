@@ -79,6 +79,22 @@ describe.skipIf(!ffmpeg)('audio window fingerprints', () => {
     expect(verdict.same).toBe(false);
   }, 30_000);
 
+  it('keeps a dense, low-shape window whose re-encode only jitters each frame by about 1 dB', () => {
+    // A compressed chorus: ±3 dB of loudness shape around -18 dBFS for 5 s.
+    const frames = 505;
+    const base = new Int8Array(frames);
+    for (let i = 0; i < frames; i++) base[i] = Math.round(-18 + 3 * Math.sin(i / 7) + 1.5 * Math.sin(i / 2.3));
+    const fp = windowFingerprint(base, { startSec: 0, endSec: frames / 100 });
+    // A re-encode: every frame off by -1, 0 or +1 dB in a fixed pseudo-random pattern.
+    const jittered = Int8Array.from(base, (v, i) => v + [-1, 0, 1, 1, 0, -1, 0][(i * 5) % 7]);
+    const verdict = compareWindowFingerprint(fp, jittered);
+    expect(verdict.correlation).toBeLessThan(0.98);
+    expect(verdict.same).toBe(true);
+    // The same window with a bar dropped 12 dB is still a change.
+    const edited = Int8Array.from(base, (v, i) => (i >= 200 && i < 260 ? v - 12 : v));
+    expect(compareWindowFingerprint(fp, edited).same).toBe(false);
+  });
+
   it('treats a song that no longer reaches the window, or an unreadable fingerprint, as changed', async () => {
     const master = join(dir, 'short-master.wav');
     await writeFile(master, songWav());
