@@ -45,7 +45,7 @@ export function envelopVideoPrompt(text, {
 }
 
 export function buildVideoGenSubmission({
-  isGrok, grokDuration, isFal, falDuration, falModelId,
+  isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
   isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
   displaySleepEnabled,
   prompt, negativePrompt, stylePreset, selectedUniverse,
@@ -92,6 +92,8 @@ export function buildVideoGenSubmission({
       // only stamped a promise on the history record that nothing honored.
       falDuration,
       falModelId: falModelId || undefined,
+      ...(falResolution ? { falResolution } : {}),
+      ...(falGenerateAudio ? { falGenerateAudio: true } : {}),
       width: clampImageEdge(width, VIDEO_EDGE_BOUNDS),
       height: clampImageEdge(height, VIDEO_EDGE_BOUNDS),
       mode: mode === 'image' ? 'image' : 'text',

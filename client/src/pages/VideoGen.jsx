@@ -98,7 +98,7 @@ import LoraPicker from '../components/imageGen/LoraPicker';
 import { VIDEO_RESOLUTIONS, resolutionOptionsForModel } from '../lib/videoGenResolutions';
 import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
 import {
-  FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, FAL_VIDEO_MODELS, estimateFalVideoCostUsd,
+  FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, FAL_VIDEO_MODELS, getFalVideoModel, falVideoResolutions, estimateFalVideoCostUsd,
 } from '../lib/falVideoModels.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
@@ -229,6 +229,7 @@ export default function VideoGen() {
   const {
     backend, isGrok, isFal, isReactor, handleBackendChange, grokDuration, setGrokDuration,
     falDuration, setFalDuration, falModelId, setFalModelId,
+    falResolution, setFalResolution, falGenerateAudio, setFalGenerateAudio,
     reactorClipId, setReactorClipId, reactorSeconds, setReactorSeconds, reactorSeed, setReactorSeed,
     reactorAspect, setReactorAspect,
     mode, handleModeChange,
@@ -992,6 +993,9 @@ export default function VideoGen() {
   // python probe, so on a cold load the list itself is normally what lands.
   const modelsLoading = models.length === 0;
   const modelFieldVisible = !modelsLoading || modelContextLoading;
+  const falModel = getFalVideoModel(falModelId);
+  const falResolutions = falVideoResolutions(falModel);
+
   const notConnected = !!status && status.connected === false && !needsByovProbe;
 
   // reactor.inc rejects a prompt over 800 characters outright, and the limit
@@ -1638,17 +1642,43 @@ export default function VideoGen() {
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
                 />
               </FormField>
+              {falModel?.resolution && (
+                <FormField label="Resolution" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                  <select
+                    value={falResolution}
+                    onChange={(e) => setFalResolution(e.target.value)}
+                    className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                  >
+                    <option value="">Model default</option>
+                    {falResolutions.map((resolution) => (
+                      <option key={resolution} value={resolution}>{resolution}</option>
+                    ))}
+                  </select>
+                </FormField>
+              )}
+              {falModel?.audio && (
+                <label htmlFor="fal-provider-audio" className="flex items-center gap-2 text-sm text-gray-400">
+                  <input
+                    id="fal-provider-audio"
+                    type="checkbox"
+                    checked={falGenerateAudio}
+                    onChange={(e) => setFalGenerateAudio(e.target.checked)}
+                    className="accent-port-accent"
+                  />
+                  Provider audio
+                </label>
+              )}
               <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
                 Renders on fal.ai's queue API — leave the model blank to use PortOS's default (text-to-video, or image-to-video in Image mode). Counts against your fal.ai balance
                 {(() => {
                   const estimate = estimateFalVideoCostUsd({
                     modelId: falModelId?.trim() || (mode === 'image' ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL),
                     seconds: falDuration === '' ? null : Number(falDuration),
-                    width, height,
+                    width, height, resolution: falResolution, generateAudio: falGenerateAudio,
                   });
                   return estimate == null
                     ? ' — cost unknown for this model.'
-                    : ` — about ${formatUsd(estimate)} at list price, at the model's default resolution with provider audio off.`;
+                    : ` — about ${formatUsd(estimate)} at list price, at ${falResolution || "the model's default resolution"} with provider audio ${falGenerateAudio ? 'on' : 'off'}.`;
                 })()}
               </p>
             </div>

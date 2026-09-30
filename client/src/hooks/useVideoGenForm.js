@@ -103,6 +103,8 @@ export function useVideoGenForm({
     grokDuration, setGrokDuration,
     falDuration, setFalDuration,
     falModelId, setFalModelId,
+    falResolution, setFalResolution,
+    falGenerateAudio, setFalGenerateAudio,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,
@@ -151,6 +153,12 @@ export function useVideoGenForm({
     incomingPrompt,
     incomingSourceImage,
   });
+
+  // Each fal model has its own resolution and audio capabilities.
+  useEffect(() => {
+    setFalResolution('');
+    setFalGenerateAudio(false);
+  }, [falModelId]);
 
   // Music renders live in the shared library rather than in the browser's
   // local file picker. Turn a render's deep-link filename into the same File
@@ -1299,7 +1307,7 @@ export function useVideoGenForm({
   // Snapshot the current validated state into a wire payload. The submit flow
   // stays pure so all three backend contracts can be tested independently.
   const submissionState = {
-    isGrok, grokDuration, isFal, falDuration, falModelId,
+    isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
     isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
     displaySleepEnabled,
     prompt, negativePrompt, stylePreset, selectedUniverse,
@@ -1321,6 +1329,8 @@ export function useVideoGenForm({
     grokDuration, setGrokDuration,
     falDuration, setFalDuration,
     falModelId, setFalModelId,
+    falResolution, setFalResolution,
+    falGenerateAudio, setFalGenerateAudio,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,
