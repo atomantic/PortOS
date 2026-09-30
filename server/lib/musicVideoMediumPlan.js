@@ -84,6 +84,42 @@ export function summarizeMusicVideoMediumPlan(project, directions = project?.tre
   };
 }
 
+/**
+ * Execution preflight for an approved code-first plan. This describes work,
+ * never dispatches it: an existing selected asset wins over generation, and
+ * procedural scenes need neither a reference frame nor a video provider.
+ * Imported-footage gaps are conflicts, not permission to generate a take.
+ */
+export function codeFirstProductionAssets(project) {
+  const plan = summarizeMusicVideoMediumPlan(project);
+  if (plan.strategy !== 'code-first') return null;
+  const directions = new Map((project?.treatment?.shotDirections || []).map((d) => [d.sceneId, d]));
+  const steps = [];
+  const conflicts = plan.unresolved.filter((item) => item.blocking).map((item) => item.message);
+  for (const scene of project?.scenes || []) {
+    const medium = directions.get(scene.sceneId)?.medium;
+    if (!MUSIC_VIDEO_MEDIA.includes(medium)) continue;
+    if (medium === 'procedural') {
+      steps.push({ sceneId: scene.sceneId, medium, action: 'code' });
+    } else if (medium === 'still') {
+      steps.push({ sceneId: scene.sceneId, medium, action: scene.referenceImageId ? 'reuse-image' : 'generate-image' });
+    } else if (medium === 'existing-footage') {
+      if (scene.videoHistoryId) steps.push({ sceneId: scene.sceneId, medium, action: 'reuse-video' });
+      else conflicts.push(`Select an existing take for ${scene.label || scene.sceneId} before production.`);
+    } else if (scene.videoHistoryId) {
+      steps.push({ sceneId: scene.sceneId, medium, action: 'reuse-video' });
+    } else {
+      if (!scene.referenceImageId) steps.push({ sceneId: scene.sceneId, medium, action: 'generate-image' });
+      steps.push({ sceneId: scene.sceneId, medium, action: 'generate-video' });
+    }
+  }
+  return { steps, conflicts,
+    requiredRoutes: {
+      image: steps.some((step) => step.action === 'generate-image'),
+      video: steps.some((step) => step.action === 'generate-video'),
+    } };
+}
+
 /** Retain director pins; allocate optional generated shots only within the union budget. */
 export function planMusicVideoMedia(project, directions) {
   const policy = normalizeMusicVideoProductionPolicy(project.productionPolicy);

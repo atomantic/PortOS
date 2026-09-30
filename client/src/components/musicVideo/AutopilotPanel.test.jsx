@@ -160,7 +160,38 @@ describe('AutopilotPanel production run', () => {
       audioAnalysis: { durationSec: 30 }, scenes: [], treatment: { shotDirections: [] },
     }} />);
     expect(screen.getByText(/generated video 0 \/ 0 seconds/)).toBeTruthy();
+    expect(screen.getByLabelText('Code-first asset preflight')).toHaveTextContent('Routes needed for selected assets: no image · no video');
     expect(screen.queryByRole('button', { name: /Start production/ })).toBeNull();
+  });
+
+  it('preflights selected assets without treating procedural or imported shots as generation jobs', () => {
+    const directions = [
+      { sceneId: 'code', medium: 'procedural', mediumRationale: 'Type motion' },
+      { sceneId: 'still', medium: 'still', mediumRationale: 'Poster image' },
+      { sceneId: 'imported', medium: 'existing-footage', mediumRationale: 'Existing performance' },
+      { sceneId: 'exception', medium: 'generated-footage', mediumRationale: 'One motion exception' },
+    ];
+    const scenes = [
+      { sceneId: 'code', startSec: 0, endSec: 5 },
+      { sceneId: 'still', startSec: 5, endSec: 10, referenceImageId: 'selected-image' },
+      { sceneId: 'imported', startSec: 10, endSec: 15 },
+      { sceneId: 'exception', startSec: 15, endSec: 20 },
+    ];
+    const project = { id: 'p1', productionRuns: [], productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 25 },
+      audioAnalysis: { durationSec: 20 }, scenes, treatment: { shotDirections: directions } };
+    const { rerender } = render(<ProductionHarness initial={project} />);
+    const preflight = screen.getByLabelText('Code-first asset preflight');
+    expect(preflight).toHaveTextContent('Procedural: 1 · Reused stills: 1 · Reused takes: 0 · Still jobs: 1 · Video jobs: 1');
+    expect(preflight).toHaveTextContent('Routes needed for selected assets: image · video');
+    expect(preflight).toHaveTextContent('Select an existing take for imported before production.');
+    expect(api.startMusicVideoProduction).not.toHaveBeenCalled();
+    // A selected imported take is reused; the generated exception still needs
+    // its own frame and video submission.
+    rerender(<AutopilotPanel project={{ ...project, scenes: scenes.map((scene) => scene.sceneId === 'imported'
+      ? { ...scene, videoHistoryId: 'selected-video' } : scene) }} production={IDLE_PRODUCTION}
+      onSave={vi.fn()} onKickoff={vi.fn()} kickoffBusy={false} />);
+    expect(screen.getByLabelText('Code-first asset preflight')).toHaveTextContent('Reused takes: 1 · Still jobs: 1 · Video jobs: 1');
+    expect(screen.getByLabelText('Code-first asset preflight')).not.toHaveTextContent('Select an existing take');
   });
 
   it('starts only when the director presses Start, with the allowed pool and limits', async () => {

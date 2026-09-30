@@ -6,6 +6,7 @@ import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import MediumPlanSummary from './MediumPlanSummary.jsx';
+import { codeFirstProductionAssets } from '../../../../server/lib/musicVideoMediumPlan.js';
 import {
   DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft,
 } from '../../lib/musicVideoAutomation.js';
@@ -295,12 +296,25 @@ function ProductionSection({ project, production }) {
   const run = currentProductionRun(project);
   const active = run && RESUMABLE_RUN_STATUSES.has(run.status);
   const codeFirst = project.productionPolicy?.strategy === 'code-first';
+  const assets = codeFirst ? codeFirstProductionAssets(project) : null;
+  const count = (action) => assets.steps.filter((step) => step.action === action).length;
   return (
     <div className="rounded border border-port-border p-2 space-y-2 text-xs" aria-label="Production run">
       <span className="font-medium flex items-center gap-1"><Clapperboard size={12} /> Autonomous production (opt-in)</span>
       {run && <RunView run={run} production={production} codeFirst={codeFirst} />}
       {codeFirst && <>
         <MediumPlanSummary project={project} />
+        <div className="rounded border border-port-border p-2 space-y-1" aria-label="Code-first asset preflight">
+          <p className="font-medium">Selected asset preparation</p>
+          <p className="text-port-text-muted">
+            Procedural: {count('code')} · Reused stills: {count('reuse-image')} · Reused takes: {count('reuse-video')} · Still jobs: {count('generate-image')} · Video jobs: {count('generate-video')}
+          </p>
+          <p className="text-port-text-muted">Routes needed for selected assets: {assets.requiredRoutes.image ? 'image' : 'no image'} · {assets.requiredRoutes.video ? 'video' : 'no video'}</p>
+          {assets.conflicts.length > 0 && <ul className="list-disc pl-4 text-port-warning">
+            {assets.conflicts.map((conflict, index) => <li key={`${index}-${conflict}`}>{conflict}</li>)}
+          </ul>}
+          <p className="text-port-text-muted">Code authoring, still jobs, and video jobs use separate providers and costs when autonomous dispatch is available. This preflight does not submit jobs.</p>
+        </div>
         <p className="text-port-warning">Autonomous code-first production is waiting for document authoring and review checkpoints. Use the mixed-media document controls for the approved plan.</p>
       </>}
       {!active && !codeFirst && <StartForm key={run?.id || 'new'} project={project} production={production} />}
