@@ -297,6 +297,9 @@ const renderMVWithNav = (to) => render(
 );
 
 beforeEach(() => {
+  // The dev-artifact drawer renders a real <iframe src="/api/...">; keep happy-dom
+  // from fetching it (the src attribute is still asserted, just never loaded).
+  window.happyDOM.settings.disableIframePageLoading = true;
   vi.clearAllMocks();
   sseState.latest = null;
   sseState.closed = false;
