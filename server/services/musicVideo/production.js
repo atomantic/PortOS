@@ -112,6 +112,7 @@ function productionBasisRevision(project) {
   return canonicalSnapshotChecksum({
     concept: pick(project?.concept),
     visualSpec: pick(project?.visualSpec),
+    ...(project?.styleReferences?.length ? { styleReferences: project.styleReferences } : {}),
     brief: pick(project?.treatment?.brief),
     automation: pick(project?.automation),
     audio: {

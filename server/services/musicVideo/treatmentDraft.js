@@ -1,3 +1,4 @@
+import { musicVideoStyleBasis, musicVideoStylePrompt } from '../../lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 /**
  * Music Video — treatment compiler (#8980).
@@ -372,6 +373,8 @@ export function buildTreatmentPrompt(project, draft) {
     spec.palette?.length && `Palette: ${spec.palette.join(' ')}`,
     spec.cameraRules && `Camera rules: ${quote(spec.cameraRules)}`,
   ].filter(Boolean);
+  const styleLook = musicVideoStylePrompt(project);
+  if (styleLook) briefLines.push(styleLook);
   const refs = (spec.references || []).map((r) => `- ${r.role || 'mood'} reference${r.label ? ` "${quote(r.label, 80)}"` : ''} (use: ${r.use || 'reference'})${r.note ? ` — ${quote(r.note, 120)}` : ''}`);
   const notes = brief.referenceNotes.map((n) => `- ${n.note ? quote(n.note, 300) : '(no note)'}${n.url ? ` [source: ${quote(n.url, 200)}]` : ''}`);
   const beatLines = draft.arc.beats.map((b) => `sectionIndex ${b.sectionIndexes[0]}: "${b.label}" ${b.startSec.toFixed(1)}–${b.endSec.toFixed(1)}s, energy ${b.energy}, role ${b.role.toUpperCase()}`);
@@ -394,7 +397,7 @@ The planned shots (index; arc role / section; duration; the lyric lines sung dur
 ${shotLines.join('\n')}
 
 Write the treatment:
-- For each section, an "objective" (what the picture must achieve there) and a "rationale" tied to the audience, the lyrics or the emotion. Keep the roles as given.
+${project.styleReferences?.length ? '- "styleLook": one short sentence summarizing palette, lighting, lens language and grain from the moodboard captions; do not invent subjects or places.\n' : ''}- For each section, an "objective" (what the picture must achieve there) and a "rationale" tied to the audience, the lyrics or the emotion. Keep the roles as given.
 - Two or three recurring "motifs" (an image, object, color or gesture) with how each changes across the arc.
 - The balance of "performance", "cutaway" and "graphic" shots as percentages, with a rationale.
 - "graphicLanguage": a concise visual note for the graphic cards and typography (HUD, pictograms, counters), honoring any graphic direction in the brief.
@@ -493,5 +496,7 @@ export function mergeAiTreatment(project, draft, parsed) {
   }
   const scenes = directions.map((d) => scenesById.get(d.sceneId)).filter(Boolean);
   const graphicLanguage = brief.graphicLanguage || strField(parsed.graphicLanguage, 1000) || draft.graphicLanguage;
-  return { ...finalize(project, brief, arc, directions, scenes), graphicLanguage };
+  return { ...finalize(project, brief, arc, directions, scenes), graphicLanguage,
+    ...(project.styleReferences?.length ? { styleLook: strField(parsed.styleLook, 1000) ?? '', styleReferencesBasis: musicVideoStyleBasis(project) } : {}),
+  };
 }

@@ -168,8 +168,8 @@ describe('music-video render-target resolution (#3231 Phase 4)', () => {
     const { data, mode } = await run({ prompt: 'p', mode: 'local', musicVideo: { projectId: 'mv-1', sceneId: 's1' } });
     expect(mode).toBe('local');
     expect(data.cloudModel).toBeUndefined();
-    // Explicit mode wins outright, so the project store isn't even consulted.
-    expect(getProject).not.toHaveBeenCalled();
+    // The project is read for style references, but its renderer pin cannot override the explicit mode.
+    expect(getProject).toHaveBeenCalledOnce();
   });
 
   it('falls through to the install default with no pins, and a missing project is harmless', async () => {
@@ -273,4 +273,13 @@ describe('universe render-target resolution', () => {
     expect(data.cloudModel).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
     expect(data.cloudModelIsShippedDefault).toBe(false);
   });
+});
+
+it('uses moodboard caption text on a backend without image-reference support', async () => {
+  getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+  getProject.mockResolvedValue({ styleReferences: [{ imageId: 'style.png', caption: 'fine silver grain' }] });
+  const { data, mode } = await run({ prompt: 'a lighthouse', musicVideo: { projectId: 'mv-1', sceneId: 's1' } });
+  expect(mode).toBe('external');
+  expect(data.prompt).toContain('fine silver grain');
+  expect(data.referenceImagePaths).toBeUndefined();
 });

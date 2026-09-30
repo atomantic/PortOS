@@ -504,3 +504,19 @@ describe('treatment proofs, clone and motion references', () => {
     expect(body.treatment.capabilityGaps.map((g) => g.id)).toContain('rotoscope');
   });
 });
+
+it('persists a treatment look once and invalidates its application when the moodboard changes', async () => {
+  const project = await plannedProject();
+  await projects.updateProject(project.id, { styleReferences: [{ imageId: 'look.png', caption: 'teal night, fine grain' }] });
+  runPromptThroughProvider.mockResolvedValueOnce({ text: JSON.stringify({
+    beats: [{ sectionIndex: 0, objective: 'Reveal the harbor' }], styleLook: 'Teal night with fine grain.',
+  }) });
+  const result = await compile(project.id, { baseRevision: 0 });
+  expect(result.status).toBe(200);
+  expect(result.body.treatment.styleLook).toBe('Teal night with fine grain.');
+  expect((await reload(project.id)).treatment.styleLook).toBe('Teal night with fine grain.');
+  expect(runPromptThroughProvider.mock.calls.at(-1)[0].prompt).toContain('teal night, fine grain');
+  await projects.updateProject(project.id, { styleReferences: [{ imageId: 'new.png', caption: 'warm daylight' }] });
+  const preview = await request(app).get(`${base(project.id)}/treatment/apply-preview`);
+  expect(preview.body.stale.some((entry) => entry.input === 'visualSpec')).toBe(true);
+});

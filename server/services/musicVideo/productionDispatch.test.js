@@ -63,6 +63,16 @@ describe('production scene dispatch (#9066)', () => {
     }
   });
 
+  it('appends capped style images after identities and carries a text look', async () => {
+    await dispatchProductionStep({ stepKind: 'frame', project: { ...project,
+      styleReferences: Array.from({ length: 8 }, (_, i) => ({ imageId: `style-${i}.png`, caption: 'teal shadows, fine grain' })),
+    }, scene, route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
+    const params = enqueueJob.mock.calls[0][0].params;
+    expect(params.referenceImagePaths.map((p) => basename(p))).toEqual(['ref-example.png', 'style-0.png', 'style-1.png', 'style-2.png']);
+    expect(params.prompt).toContain('teal shadows, fine grain');
+    expect(params.referenceImageStrengths).toEqual([1, 1, 1, 1]);
+  });
+
   it('refuses a disabled backend instead of rendering on another one', async () => {
     await expect(dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'grok', model: null }, tag, settings }))
       .rejects.toThrow(/disabled/);

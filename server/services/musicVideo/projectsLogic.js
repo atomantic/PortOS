@@ -117,6 +117,7 @@ export function buildProjectRecord(input, { id, now }) {
     // #8965 — the reusable visual specification (moodboard/reference assets,
     // palette, typography, camera rules). Null until the director sets one.
     visualSpec: input.visualSpec ? normalizeVisualSpec(input.visualSpec) : null,
+    ...(input.styleReferences ? { styleReferences: input.styleReferences } : {}),
     videoSettings: {
       backend: videoSettings.backend ?? 'local',
       modelId: videoSettings.modelId ?? null,

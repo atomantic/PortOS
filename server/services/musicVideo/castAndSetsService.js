@@ -1,3 +1,4 @@
+import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
  *
@@ -262,7 +263,9 @@ async function enqueueImage(project, stage, key) {
       } : {}),
     },
   };
-  const params = await deps.imageParams(await deps.getSettings(), stage.route, common);
+  const settings = await deps.getSettings();
+  const baseParams = await deps.imageParams(settings, stage.route, common);
+  const params = await withMusicVideoStyle(project, baseParams, stage.route.mode, stage.route.model, settings);
   return deps.enqueue({ kind: 'image', params, owner: `music-video-cast-sets:${project.id}` });
 }
 
