@@ -6,7 +6,7 @@ import { Activity, Download } from 'lucide-react';
 export default function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = false, disabled = false }) {
   const size = compact ? 12 : 13;
   const py = compact ? 'py-1' : 'py-1.5';
-  const btnExtra = compact ? '' : 'text-xs whitespace-nowrap min-h-[44px] sm:min-h-0';
+  const btnExtra = compact ? 'min-h-[44px] sm:min-h-0' : 'text-xs whitespace-nowrap min-h-[44px] sm:min-h-0';
   return (
     <>
       <input

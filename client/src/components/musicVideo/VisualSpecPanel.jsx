@@ -72,7 +72,7 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
 
   return (
     <details className="mt-2 rounded border border-port-border bg-port-bg/40 p-2 group">
-      <summary className="cursor-pointer text-xs text-port-text-muted select-none min-h-[32px] flex items-center gap-2">
+      <summary className="cursor-pointer text-xs text-port-text-muted select-none min-h-[44px] sm:min-h-[32px] flex items-center gap-2">
         <Palette size={13} />
         <span>Visual spec</span>
         <span>· {references.length} reference{references.length === 1 ? '' : 's'}</span>

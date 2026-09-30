@@ -75,7 +75,7 @@ export default function TrackPanel({
             <audio src={audioUrl} controls preload="metadata" className="h-8 max-w-full" aria-label="Preview track audio" />
             <a href={audioUrl} download={audioFilename}
               title="Download the audio track"
-              className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs hover:bg-port-border/40">
+              className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0 hover:bg-port-border/40">
               <Download size={13} /> Download audio
             </a>
           </div>

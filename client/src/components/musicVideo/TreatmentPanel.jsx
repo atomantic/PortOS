@@ -86,7 +86,7 @@ export default function TreatmentPanel({ project, treatment: api }) {
 
   return (
     <details className="mt-2 rounded border border-port-border bg-port-bg/40 p-2">
-      <summary className="cursor-pointer text-xs text-port-text-muted select-none min-h-[32px] flex flex-wrap items-center gap-2">
+      <summary className="cursor-pointer text-xs text-port-text-muted select-none min-h-[44px] sm:min-h-[32px] flex flex-wrap items-center gap-2">
         <ScrollText size={13} />
         <span>Treatment</span>
         {t ? <span>· rev {t.revision}</span> : <span>· not started</span>}

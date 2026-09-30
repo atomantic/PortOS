@@ -47,7 +47,7 @@ function Viewer({ projectId, artifact, version }) {
  * history, notes and review actions. For the sheet the Cast & Sets check-in is
  * waiting on, the review actions are the stage's own: "Regenerate with notes"
  * and "Approve & continue". Open state and the viewed version live in the URL
- * (`/music-video/:projectId/dev/:artifactId?v=N`).
+ * (`/music-video/:projectId/:stage/dev/:artifactId?v=N`; the older `/music-video/:projectId/dev/:artifactId` still opens it).
  */
 export default function DevArtifactDrawer({
   open, onClose, project, artifact, version, onVersionChange, ops, busy, castAndSets,

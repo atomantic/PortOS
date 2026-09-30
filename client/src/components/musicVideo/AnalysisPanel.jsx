@@ -42,7 +42,7 @@ export default function AnalysisPanel({ audioAnalysis, scenes, tempo, onReanalyz
               {onReanalyze && (
                 <button type="button" onClick={onReanalyze} disabled={analyzing}
                   title="Re-runs the offline analysis, including tempo detection (replaces a manually set tempo)"
-                  className="bg-port-card border border-port-border rounded px-2 py-1 min-h-[32px] hover:bg-port-border/40 disabled:opacity-50">
+                  className="bg-port-card border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-[32px] hover:bg-port-border/40 disabled:opacity-50">
                   {analyzing ? 'Analyzing…' : 'Re-analyze'}
                 </button>
               )}

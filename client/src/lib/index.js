@@ -71,6 +71,7 @@ export * from './muscriptorModels.js';
 export * from './musicVideoLayers.js';
 export * from './musicVideoTakes.js';
 export * from './musicVideoShotTiming.js';
+export * from './musicVideoStages.js';
 export * from './musicVideoUniverseRefs.js';
 export * from './musicVideoAutomation.js';
 export * from './pipelineImageDefaults.js';

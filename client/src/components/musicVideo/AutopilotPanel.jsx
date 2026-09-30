@@ -1,9 +1,14 @@
 import { useState } from 'react';
-import { Clapperboard, Play, Pause, X } from 'lucide-react';
+import { Bot, Clapperboard, Pause, Play, X } from 'lucide-react';
+import AutomationBriefFields from './AutomationBriefFields.jsx';
+import Pill from '../ui/Pill.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
-import { DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
+import {
+  DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft,
+} from '../../lib/musicVideoAutomation.js';
+import { RESUMABLE_RUN_STATUSES, currentProductionRun } from '../../lib/musicVideoStages.js';
 import { formatUsd } from '../../utils/formatters.js';
 
 const POOL_TOOLS = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group === 'image' || t.group === 'video');
@@ -19,18 +24,13 @@ const STATUS_TONES = {
   failed: 'text-port-error', canceled: 'text-port-text-muted',
 };
 const STEP_TONES = { completed: 'text-port-success', failed: 'text-port-error', canceled: 'text-port-text-muted', refused: 'text-port-text-muted' };
-const RESUMABLE = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
 const inputCls = 'w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 const SHOWN_STEPS = 8;
 
 const toolLabel = new Map(POOL_TOOLS.map((t) => [t.id, t.label]));
+const briefToolLabel = new Map(MUSIC_VIDEO_AUTOMATION_TOOLS.map((t) => [t.id, t.label]));
+const actionClass = 'text-sm text-port-accent min-h-[44px] sm:min-h-0 px-1';
 const routeLabel = (route) => `${toolLabel.get(`${route.kind}:${route.mode}`) || `${route.kind} ${route.mode}`}${route.model ? ` · ${route.model}` : ''}`;
-
-/** The run worth showing: the live one, else the most recent. */
-export const currentProductionRun = (project) => {
-  const runs = Array.isArray(project?.productionRuns) ? project.productionRuns : [];
-  return runs.find((r) => RESUMABLE.has(r.status)) || runs[runs.length - 1] || null;
-};
 
 const initialPool = (project) => {
   const fromBrief = (project?.automation?.tools || []).filter((id) => POOL_TOOL_IDS.has(id));
@@ -50,7 +50,7 @@ function StepRow({ step }) {
 }
 
 function RunView({ run, production }) {
-  const live = RESUMABLE.has(run.status);
+  const live = RESUMABLE_RUN_STATUSES.has(run.status);
   const steps = run.steps || [];
   const failures = steps.filter((s) => s.error);
   const cap = run.limits.spendCapUsd;
@@ -190,11 +190,97 @@ function StartForm({ project, production }) {
             compact
           />
         )}
-        <button type="button" disabled={production.busy || !valid} onClick={start}
+        <button type="button" id="mv-production-start" disabled={production.busy || !valid} onClick={start}
           className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
           <Play size={12} /> {production.busy ? 'Starting…' : 'Start production'}
         </button>
       </div>
+    </div>
+  );
+}
+
+/** The brief: tools, guidance and budget, with the one-click kickoff. */
+function BriefSection({ project, onSave, onKickoff, kickoffBusy, kickoffStep, kickoffBlockedReason }) {
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const automation = project.automation || null;
+
+  const save = () => {
+    setSaving(true);
+    onSave(automationFromDraft(draft))
+      .then(() => setDraft(null))
+      // A failed save keeps the brief open for another try.
+      .catch(() => {})
+      .finally(() => setSaving(false));
+  };
+
+  let header = null;
+  let body;
+  if (draft) {
+    body = (
+      <fieldset disabled={saving} className="space-y-3 min-w-0">
+        <AutomationBriefFields idPrefix={`mv-auto-${project.id}`} draft={draft} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} />
+        <div className="flex flex-wrap gap-3">
+          <button type="button" onClick={save} className="bg-port-accent text-white rounded px-3 py-2 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
+            {saving ? 'Saving…' : 'Save brief'}
+          </button>
+          <button type="button" onClick={() => setDraft(null)} className="text-sm min-h-[44px] sm:min-h-0">Cancel</button>
+        </div>
+      </fieldset>
+    );
+  } else if (automation) {
+    header = (
+      <>
+        <span className="text-xs text-port-text-muted">
+          {automation.tools.length} tool{automation.tools.length === 1 ? '' : 's'}
+          {' · '}
+          {automation.budgetUsd != null ? `${formatUsd(automation.budgetUsd)} cap` : 'no budget cap'}
+          {' · '}
+          {automation.checkins?.castAndSets === 'auto' ? 'check-ins auto-approved' : 'stops for check-ins'}
+        </span>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => setDraft(automationDraftFrom(automation))} className={actionClass}>Edit brief</button>
+          <button
+            type="button"
+            onClick={onKickoff}
+            disabled={kickoffBusy || !!kickoffBlockedReason}
+            title={kickoffBlockedReason || 'Analyze the song, import its lyrics, separate and align the vocal, build the Cast & Sets check-in, then plan every shot against the brief'}
+            className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
+          >
+            <Play size={14} /> {kickoffBusy ? 'Working…' : 'Analyze & plan'}
+          </button>
+        </div>
+      </>
+    );
+    body = (
+      <>
+        {automation.tools.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {automation.tools.map((id) => <Pill key={id} size="xs" bordered={false}>{briefToolLabel.get(id) || id}</Pill>)}
+          </div>
+        )}
+        <p className="text-xs text-port-text-muted break-words line-clamp-3">
+          {automation.guidance || 'No guidance yet — the agent plans from the song, universe and board alone.'}
+        </p>
+        {kickoffStep && <p className="text-xs text-port-accent" role="status">{kickoffStep}</p>}
+        {kickoffBlockedReason && <p className="text-xs text-port-warning">{kickoffBlockedReason}</p>}
+      </>
+    );
+  } else {
+    header = (
+      <button type="button" onClick={() => setDraft(automationDraftFrom(null))} className={`ml-auto ${actionClass}`}>Set up autopilot</button>
+    );
+    body = <p className="text-xs text-port-text-muted">Hand this video to the agent: pick the tools it may use, give it guidance and a budget.</p>;
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Bot size={16} className="text-port-accent shrink-0" aria-hidden="true" />
+        <h3 className="text-sm font-medium">Autopilot</h3>
+        {header}
+      </div>
+      {body}
     </div>
   );
 }
@@ -204,14 +290,39 @@ function StartForm({ project, production }) {
  * it with an allowed provider/model pool and explicit limits. Progress arrives
  * over the `music-video:production` socket event via `useMusicVideoProduction`.
  */
-export default function ProductionPanel({ project, production }) {
+function ProductionSection({ project, production }) {
   const run = currentProductionRun(project);
-  const active = run && RESUMABLE.has(run.status);
+  const active = run && RESUMABLE_RUN_STATUSES.has(run.status);
   return (
     <div className="rounded border border-port-border p-2 space-y-2 text-xs" aria-label="Production run">
       <span className="font-medium flex items-center gap-1"><Clapperboard size={12} /> Autonomous production (opt-in)</span>
       {run && <RunView run={run} production={production} />}
       {!active && <StartForm key={run?.id || 'new'} project={project} production={production} />}
     </div>
+  );
+}
+
+/**
+ * Autopilot: one card holding the project's automation brief (tools, guidance,
+ * budget, kickoff) and its server-side production run (allowed routes,
+ * generation and spend caps, the run log). Edits PATCH through `onSave`, which
+ * owns the error toast; `production` is the `useMusicVideoProduction` slot.
+ * `kickoffStep` names the kickoff step running now.
+ */
+export default function AutopilotPanel({
+  project, production, onSave, onKickoff, kickoffBusy, kickoffStep = null, kickoffBlockedReason,
+}) {
+  return (
+    <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0" aria-label="Autopilot">
+      <BriefSection
+        project={project}
+        onSave={onSave}
+        onKickoff={onKickoff}
+        kickoffBusy={kickoffBusy}
+        kickoffStep={kickoffStep}
+        kickoffBlockedReason={kickoffBlockedReason}
+      />
+      <ProductionSection project={project} production={production} />
+    </section>
   );
 }
