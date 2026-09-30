@@ -778,3 +778,5 @@ export * from './muscriptorModels.js';
 export * from './metadataFlags.js';
 export * from './loopInterval.js';
 export * from './defaultRequestBody.js';
+
+export * from './musicVideoConditioning.js';

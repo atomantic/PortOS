@@ -1,3 +1,4 @@
+import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
 import toast from '../components/ui/Toast';
 import { addMusicVideoSceneTake } from '../services/apiMusicVideo.js';
@@ -17,7 +18,7 @@ const AUDIO_REACTIVE_PERFORMANCE_GUARD = 'The music drives only environmental mo
 // The image backends accept at most four reference images for most models
 // (server imageGen/prepareParams.js), mirrored by the server's
 // MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES.
-export const MAX_CONDITIONING_REFERENCES = 4;
+export const MAX_CONDITIONING_REFERENCES = MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES;
 
 // Refusals the image route returns when the resolved backend can't consume
 // reference images — surfaced as explicit capability feedback, never retried
@@ -51,10 +52,8 @@ export function visualDirection(spec) {
   ].filter(Boolean).join('; ');
 }
 
-/** The spec references flagged to condition reference frames, capped to the backend limit. */
-export function conditioningReferences(spec) {
-  return (spec?.references || []).filter((ref) => ref.condition).slice(0, MAX_CONDITIONING_REFERENCES);
-}
+/** Shared scene-aware frame conditioning, with the legacy capped fallback. */
+export const conditioningReferences = musicVideoConditioningReferences;
 
 // A scene's authored span on the song, or null while it is untimed.
 const sceneSpanSec = (scene) => (typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
@@ -108,7 +107,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
 
   const style = project?.concept?.style?.trim();
   const direction = [musicVideoCreativeContext(project?.concept), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
-  const conditioning = conditioningReferences(project?.visualSpec);
+  const conditioning = conditioningReferences(project);
   // The image prompt for a scene's reference frame: its frame prompt (or the
   // shot prompt as a fallback) suffixed with the project's global concept style
   // and the visual spec's palette/camera direction (typography excluded, #8992).
@@ -145,6 +144,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * confirmed submissions rather than every call it fired.
    */
   const generateFrame = (scene, { revisionId } = {}) => {
+    const conditioning = conditioningReferences(project, scene);
     const prompt = buildFramePrompt(scene);
     if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;

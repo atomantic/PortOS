@@ -42,7 +42,7 @@ async function guardRevision(tag, kind) {
 async function dispatchFrame({ project, scene, route, tag, settings }) {
   const prompt = sceneFramePrompt(project, scene);
   if (!prompt) throw unprompted(scene, 'frame');
-  const referenceImagePaths = conditioningReferences(project)
+  const referenceImagePaths = conditioningReferences(project, scene)
     .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),

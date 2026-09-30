@@ -41,6 +41,25 @@ describe('production scene dispatch (#9066)', () => {
     expect(params.referenceImagePaths[0]).toMatch(/ref-example\.png$/);
   });
 
+  it('conditions an approved check-in frame on its character and mapped plate, even beyond the global cap', async () => {
+    const checkedIn = { ...project,
+      castAndSets: { status: 'approved', direction: { songMap: [{ section: 0, setId: 'harbor' }, { section: 1, setId: 'roof' }] } },
+      visualSpec: { references: [
+        { id: 'authored', imageId: 'authored.png', condition: true },
+        { id: 'mvr-cs-character', imageId: 'character.png', condition: true },
+        { id: 'mvr-cs-set-harbor', imageId: 'harbor.png', condition: true },
+        { id: 'mvr-cs-set-roof', imageId: 'roof.png', condition: false },
+      ] },
+    };
+    for (const [sectionIndex, plate] of [[0, 'harbor'], [1, 'roof']]) {
+      await dispatchProductionStep({ stepKind: 'frame', project: checkedIn, scene: { ...scene, sectionIndex },
+        route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
+      const params = enqueueJob.mock.calls.at(-1)[0].params;
+      expect(params.referenceImagePaths.map((path) => path.split('/').at(-1))).toEqual(['character.png', `${plate}.png`]);
+      expect(params.referenceImageStrengths).toEqual([1, 1]);
+    }
+  });
+
   it('refuses a disabled backend instead of rendering on another one', async () => {
     await expect(dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'grok', model: null }, tag, settings }))
       .rejects.toThrow(/disabled/);
