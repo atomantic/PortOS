@@ -63,6 +63,26 @@ const recordedFileChecksumIssue = ({ label, filename, sha256 }, installedByFilen
   return null;
 };
 
+const exactVoiceProfileIssues = ({ characterId, universeId, recordedVersion, recordedEngine, recordedModelRev, profile }) => {
+  const issues = [];
+  if (profile.binding?.characterId && profile.binding.characterId !== characterId) {
+    issues.push(`Recorded voice profile "${profile.id}" is bound to a different character.`);
+  }
+  if (universeId && profile.binding?.universeId && profile.binding.universeId !== universeId) {
+    issues.push(`Recorded voice profile "${profile.id}" belongs to a different Universe.`);
+  }
+  if (!Number.isFinite(recordedVersion) || profile.version !== recordedVersion) {
+    issues.push(`Recorded voice profile "${profile.id}" version mismatch (recorded v${recordedVersion ?? 'unknown'}, current local v${profile.version ?? 'unknown'}).`);
+  }
+  if (!isNonBlankStr(recordedEngine) || !isNonBlankStr(profile.engine) || profile.engine !== recordedEngine) {
+    issues.push(`Recorded voice profile "${profile.id}" engine mismatch (recorded ${recordedEngine || 'unknown'}, current local ${profile.engine || 'unknown'}).`);
+  }
+  if (!isNonBlankStr(recordedModelRev) || !isNonBlankStr(profile.modelRevision) || profile.modelRevision !== recordedModelRev) {
+    issues.push(`Recorded voice profile "${profile.id}" model revision mismatch (recorded ${recordedModelRev || 'unknown'}, current local ${profile.modelRevision || 'unknown'}).`);
+  }
+  return issues;
+};
+
 /**
  * Normalize the optional provider/model preferences on a loom render pin.
  * Image and video model ids are local-model selections; cloud backends use
@@ -498,23 +518,14 @@ export function verifyExactInputProvenance(recordedProvenance, {
         errors.push(`Recorded voice profile "${recordedProfileId}" is not installed locally.`);
         continue;
       }
-      if (matchedProfile.binding?.characterId && matchedProfile.binding.characterId !== charId) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" is bound to a different character.`);
-      }
-      if (recordedProvenance.universeId
-        && matchedProfile.binding?.universeId
-        && matchedProfile.binding.universeId !== recordedProvenance.universeId) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" belongs to a different Universe.`);
-      }
-      if (!Number.isFinite(recordedVersion) || matchedProfile.version !== recordedVersion) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" version mismatch (recorded v${recordedVersion ?? 'unknown'}, current local v${matchedProfile.version ?? 'unknown'}).`);
-      }
-      if (!isNonBlankStr(recordedEngine) || !isNonBlankStr(matchedProfile.engine) || matchedProfile.engine !== recordedEngine) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" engine mismatch (recorded ${recordedEngine || 'unknown'}, current local ${matchedProfile.engine || 'unknown'}).`);
-      }
-      if (!isNonBlankStr(recordedModelRev) || !isNonBlankStr(matchedProfile.modelRevision) || matchedProfile.modelRevision !== recordedModelRev) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" model revision mismatch (recorded ${recordedModelRev || 'unknown'}, current local ${matchedProfile.modelRevision || 'unknown'}).`);
-      }
+      errors.push(...exactVoiceProfileIssues({
+        characterId: charId,
+        universeId: recordedProvenance.universeId,
+        recordedVersion,
+        recordedEngine,
+        recordedModelRev,
+        profile: matchedProfile,
+      }));
     }
   }
 
