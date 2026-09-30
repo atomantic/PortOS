@@ -710,7 +710,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     }
     if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
-    console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps}`);
+    console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps} references=${validReferenceImagePaths.length}`);
     imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
     activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
