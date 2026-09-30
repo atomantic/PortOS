@@ -529,6 +529,24 @@ describe('Apps Lifecycle Routes', () => {
       expect(response.body.logs).toBe('Log line 1\nLog line 2');
     });
 
+    it('returns the error envelope when the app process log read fails', async () => {
+      appsService.getAppById.mockResolvedValue({
+        id: 'app-001',
+        pm2ProcessNames: ['test-app'],
+      });
+      pm2Service.getLogs.mockRejectedValueOnce(new Error('PM2 log read failed'));
+
+      const response = await request(app).get('/api/apps/app-001/logs');
+
+      expect(response.status).toBe(500);
+      expect(response.body).toMatchObject({
+        error: 'PM2 log read failed',
+        code: 'INTERNAL_ERROR',
+        timestamp: expect.any(Number),
+      });
+      expect(response.body).not.toHaveProperty('logs');
+    });
+
     it('should return 404 if app not found', async () => {
       appsService.getAppById.mockResolvedValue(null);
 

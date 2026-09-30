@@ -33,8 +33,7 @@ router.get('/:processName', asyncHandler(async (req, res) => {
 
   if (!followBool) {
     // Static log fetch
-    const logs = await pm2Service.getLogs(safeProcessName, lines, pm2Home)
-      .catch(err => `Error: ${err.message}`);
+    const logs = await pm2Service.getLogs(safeProcessName, lines, pm2Home);
     return res.json({ processName: safeProcessName, lines, logs });
   }
 
@@ -99,8 +98,7 @@ router.get('/app/:appId', asyncHandler(async (req, res) => {
   const results = {};
 
   for (const processName of app.pm2ProcessNames || []) {
-    results[processName] = await pm2Service.getLogs(processName, lines, app.pm2Home)
-      .catch(err => `Error: ${err.message}`);
+    results[processName] = await pm2Service.getLogs(processName, lines, app.pm2Home);
   }
 
   res.json({ app: app.name, processes: results });

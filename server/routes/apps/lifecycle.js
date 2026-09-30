@@ -298,8 +298,7 @@ router.get('/:id/logs', loadApp, asyncHandler(async (req, res) => {
     throw new ServerError('Invalid process name for this app', { status: 400, code: 'INVALID_PROCESS_NAME' });
   }
 
-  const logs = await pm2Service.getLogs(processName, lines, app.pm2Home)
-    .catch(err => `Error retrieving logs: ${err.message}`);
+  const logs = await pm2Service.getLogs(processName, lines, app.pm2Home);
 
   res.json({ processName, lines, logs });
 }));
