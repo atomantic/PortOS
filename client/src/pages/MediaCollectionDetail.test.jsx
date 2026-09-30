@@ -12,6 +12,7 @@ const mockListMediaCollections = vi.fn();
 const mockGetMediaCollection = vi.fn();
 const mockAddMediaCollectionItem = vi.fn();
 const mockRemoveMediaCollectionItem = vi.fn();
+const mockLocalizeMediaCollection = vi.fn();
 
 vi.mock('../services/api', () => ({
   listImageGallery: (...args) => mockListImageGallery(...args),
@@ -24,7 +25,10 @@ vi.mock('../services/api', () => ({
   deleteImage: vi.fn(),
   deleteVideoHistoryItem: vi.fn(),
   pullMissingMetadata: (...args) => mockPullMissingMetadata(...args),
+  localizeMediaCollection: (...args) => mockLocalizeMediaCollection(...args),
 }));
+
+vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 
 vi.mock('../services/apiImageVideo', () => ({
   listMediaGalleryPage: async ({ collectionId, limit, offset }) => {
@@ -456,5 +460,24 @@ describe('MediaCollectionDetail — bulkMoveOrCopy move/remove failures', () => 
     // and only the item whose removal failed stays selected.
     await waitFor(() => expect(screen.getByText(/of 2 selected/)).toBeInTheDocument());
     expect(screen.queryByText(IMAGE_B.filename)).toBeNull();
+  });
+  it('renders a peer-hosted image the gallery index cannot see, badges it, and copies it locally', async () => {
+    mockListImageGallery.mockResolvedValue([IMAGE_A]);
+    mockListVideoHistory.mockResolvedValue([]);
+    mockGetMediaCollection.mockResolvedValue({
+      ...REAL_COLLECTION,
+      items: [
+        { kind: 'image', ref: IMAGE_A.filename, location: 'local' },
+        { kind: 'image', ref: 'hosted-on-peer.png', location: 'remote', hostPeerId: 'peer-1', hostPeerName: 'Studio Mac' },
+      ],
+    });
+    mockLocalizeMediaCollection.mockResolvedValue({ requested: 1, started: 1 });
+    const user = userEvent.setup();
+    renderReal();
+    // The stub row exists only because the collection annotates it as remote.
+    expect(await screen.findByText('hosted-on-peer.png')).toBeInTheDocument();
+    expect(screen.getByTitle(/Hosted by Studio Mac/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /copy 1 to this machine/i }));
+    await waitFor(() => expect(mockLocalizeMediaCollection).toHaveBeenCalledWith(REAL_COLLECTION.id, ['image:hosted-on-peer.png'], { silent: true }));
   });
 });

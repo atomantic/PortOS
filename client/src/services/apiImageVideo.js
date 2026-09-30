@@ -369,6 +369,13 @@ export const renderTimelineProject = (id, options = {}) => request(`/video-timel
 // "video:<uuid>"); cover keys use the same format.
 export const listMediaCollections = ({ silent = false } = {}) => request('/media/collections', { silent });
 export const getMediaCollection = (id, options = {}) => request(`/media/collections/${encodeURIComponent(id)}`, options);
+// Copy a collection's peer-hosted items onto this machine (all, or just `keys`).
+// The pulls run server-side; each landed file arrives as `peerSync:asset-arrived`.
+export const localizeMediaCollection = (id, keys, options = {}) => request(`/media/collections/${encodeURIComponent(id)}/localize`, {
+  method: 'POST',
+  body: JSON.stringify(keys ? { keys } : {}),
+  ...options,
+});
 export const createMediaCollection = ({ name, description = '' }, options = {}) => request('/media/collections', {
   method: 'POST',
   body: JSON.stringify({ name, description }),

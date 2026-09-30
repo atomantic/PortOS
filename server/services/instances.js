@@ -281,6 +281,14 @@ const DEFAULT_SYNC_CATEGORIES = {
 
 export { DEFAULT_SYNC_CATEGORIES };
 
+// How this install obtains the image/video BYTES behind a synced Media
+// Collection from a peer: `copy` downloads them into local `data/` (default —
+// the historical behavior), `host` keeps only the references and streams each
+// file from the peer on demand (see services/peerHostedMedia.js).
+export const MEDIA_SYNC_MODES = Object.freeze(['copy', 'host']);
+export const DEFAULT_MEDIA_SYNC_MODE = 'copy';
+export const peerMediaSyncMode = (peer) => (MEDIA_SYNC_MODES.includes(peer?.mediaSyncMode) ? peer.mediaSyncMode : DEFAULT_MEDIA_SYNC_MODE);
+
 // Categories that stay on for a peer even when the user's master `syncEnabled`
 // switch is off — that switch predates them and means "don't replicate my
 // content to this peer", so it must not silently retract a default-ON one.
@@ -348,11 +356,17 @@ export function resolveEffectiveCategories(peer, { masterSwitch = true } = {}) {
   if (!peerUserEstablished(peer)) {
     for (const key of DEFAULT_ON_SYNC_CATEGORIES) defaults[key] = false;
   }
-  const stored = peer?.syncCategories
+  const storedRaw = peer?.syncCategories
     ? { ...defaults, ...peer.syncCategories }
     // Legacy fallback: a peer with no stored map but sync on gets brain+memory,
     // the pre-per-category behavior.
     : { ...defaults, ...(peer?.syncEnabled !== false ? { brain: true, memory: true } : {}) };
+  // Video-history rows are the metadata half of Media Collections: a synced
+  // collection's `{ kind:'video' }` items only render once the matching row
+  // exists. There is no separate user-facing toggle, so `mediaCollections`
+  // implies `videoHistory`; a legacy peer that only had `videoHistory` on keeps
+  // it (OR, never AND), so upgrading stops nothing that was flowing.
+  const stored = storedRaw.mediaCollections ? { ...storedRaw, videoHistory: true } : storedRaw;
   if (!masterSwitch || peer?.syncEnabled !== false) return stored;
   return Object.fromEntries(DEFAULT_ON_SYNC_CATEGORIES.map((key) => [key, stored[key] === true]));
 }
@@ -540,6 +554,9 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
       }
     }
     if (updates.name !== undefined) peer.name = validName(updates.name, peer.name);
+    if (updates.mediaSyncMode !== undefined && MEDIA_SYNC_MODES.includes(updates.mediaSyncMode)) {
+      peer.mediaSyncMode = updates.mediaSyncMode;
+    }
     if (updates.enabled !== undefined) peer.enabled = updates.enabled;
     if (updates.syncEnabled !== undefined) peer.syncEnabled = updates.syncEnabled;
     // Full-sync ("mirror everything") toggle. A false→true flip implies every

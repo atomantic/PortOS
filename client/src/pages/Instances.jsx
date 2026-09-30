@@ -564,8 +564,7 @@ const SYNC_CATEGORY_META = [
   { key: 'meatspace', label: 'Meatspace', icon: HeartPulse, description: 'Daily logs, blood tests, body metrics, eyes' },
   { key: 'universe', label: 'Universe', icon: Sparkles, description: 'Universe Builder canon: characters, places, objects' },
   { key: 'pipeline', label: 'Pipeline', icon: Film, description: 'Series + issues record state (no image/video blobs)' },
-  { key: 'mediaCollections', label: 'Media Collections', icon: Images, description: 'Per-universe/series image + video buckets' },
-  { key: 'videoHistory', label: 'Video History', icon: Film, description: 'Generated-video metadata rows (so synced collection videos render)' },
+  { key: 'mediaCollections', label: 'Media Collections', icon: Images, description: 'Per-universe/series image + video buckets, including the video metadata they need to render' },
   { key: 'storyBuilder', label: 'Story Builder', icon: BookOpen, description: 'Resumable Story Builder sessions you marked for cross-machine sync' },
   { key: 'usage', label: 'AI Usage Metrics', icon: Gauge, description: 'On by default. Aggregate AI usage counters — providers, models, token counts, estimated spend — so the Usage page totals your whole federation. No prompts, transcripts, or record contents. Turning it off stops PULLING this peer\u2019s usage; disable the peer to stop every direction.' },
   { key: 'fableLoom', label: 'FableLoom', icon: Waypoints, description: 'Branching stories, series plans, episode graphs, and rendered scene references' },
@@ -590,6 +589,22 @@ const SYNC_CATEGORY_META = [
 // record kinds handled by the per-record peer-push pipeline.
 const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'fableLoom', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions', 'decks']);
 const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
+
+// Video-history rows have no toggle of their own: they are the metadata half of
+// Media Collections, so that one switch drives both keys (server-side
+// `mediaCollections` already implies `videoHistory`; a legacy peer with only
+// `videoHistory` on reads as on here, and turning the row off clears both).
+const MEDIA_COLLECTION_KEYS = ['mediaCollections', 'videoHistory'];
+const isCategoryOn = (categories, key) => (key === 'mediaCollections'
+  ? MEDIA_COLLECTION_KEYS.some(k => categories[k])
+  : Boolean(categories[key]));
+
+// How bytes for a synced Media Collection reach this machine. Mirrors the
+// server's MEDIA_SYNC_MODES (services/instances.js).
+const MEDIA_SYNC_MODE_OPTIONS = [
+  { value: 'copy', label: 'Copy', description: 'Download every image/video onto this machine (uses local disk, works offline)' },
+  { value: 'host', label: 'Host on peer', description: 'Keep references only and stream files from the peer on demand (no local copy)' },
+];
 
 // Indicator backed by REAL coverage diffing (record IDs vs confirmed pushes),
 // not the BIGSERIAL cursors — so "fully mirrored" never lies. Refetches on mount
@@ -642,7 +657,8 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
   const categories = peer.syncCategories || {};
   const fullSync = peer.fullSync === true;
   // A full-sync peer mirrors every category — present them as locked-on.
-  const enabledCount = fullSync ? SYNC_CATEGORY_META.length : Object.values(categories).filter(Boolean).length;
+  const enabledCount = fullSync ? SYNC_CATEGORY_META.length : SYNC_CATEGORY_META.filter(({ key }) => isCategoryOn(categories, key)).length;
+  const mediaSyncMode = peer.mediaSyncMode === 'host' ? 'host' : 'copy';
 
   const toggleFullSync = async () => {
     await updatePeer(peer.id, { fullSync: !fullSync }).catch(() => null);
@@ -654,7 +670,15 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
   // as "something is enabled" and widen the peer's outbound push consent.
   const toggleCategory = async (key) => {
     if (fullSync) return; // categories are locked-on under full mirror
-    await updatePeer(peer.id, { syncCategories: { [key]: !categories[key] } }).catch(() => null);
+    const next = !isCategoryOn(categories, key);
+    const keys = key === 'mediaCollections' ? MEDIA_COLLECTION_KEYS : [key];
+    await updatePeer(peer.id, { syncCategories: Object.fromEntries(keys.map(k => [k, next])) }).catch(() => null);
+    onRefresh();
+  };
+
+  const changeMediaSyncMode = async (mode) => {
+    if (mode === mediaSyncMode) return;
+    await updatePeer(peer.id, { mediaSyncMode: mode }).catch(() => null);
     onRefresh();
   };
 
@@ -663,6 +687,7 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
     for (const { key } of SYNC_CATEGORY_META) {
       updated[key] = enable;
     }
+    updated.videoHistory = enable;
     await updatePeer(peer.id, { syncCategories: updated }).catch(() => null);
     onRefresh();
   };
@@ -765,10 +790,10 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
           </div>
           {SYNC_CATEGORY_META.map(({ key, label, icon: Icon, description }) => {
             // Under full mirror every category reads as on and is non-interactive.
-            const on = fullSync || categories[key];
+            const on = fullSync || isCategoryOn(categories, key);
             return (
+            <div key={key}>
             <button
-              key={key}
               onClick={() => toggleCategory(key)}
               disabled={fullSync}
               title={fullSync ? 'Locked on by full mirror' : undefined}
@@ -787,6 +812,34 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
                 <p className="text-[10px] text-gray-600 truncate">{description}</p>
               </div>
             </button>
+            {key === 'mediaCollections' && on && (
+              <fieldset className="ml-7 mt-1 mb-1.5" aria-label="Media Collections sync method">
+                <legend className="sr-only">Media Collections sync method</legend>
+                <div className="flex flex-wrap gap-1.5">
+                  {MEDIA_SYNC_MODE_OPTIONS.map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => changeMediaSyncMode(option.value)}
+                      aria-pressed={mediaSyncMode === option.value}
+                      title={option.description}
+                      className={`px-2 py-1 min-h-[28px] rounded text-[10px] border transition-colors ${
+                        mediaSyncMode === option.value
+                          ? 'border-port-accent bg-port-accent/20 text-port-accent'
+                          : 'border-port-border text-gray-400 hover:bg-port-bg/50'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-600 mt-1">
+                  {MEDIA_SYNC_MODE_OPTIONS.find(o => o.value === mediaSyncMode).description}
+                  {fullSync ? '. Full mirror still copies the whole media library.' : '.'}
+                </p>
+              </fieldset>
+            )}
+            </div>
             );
           })}
         </div>
