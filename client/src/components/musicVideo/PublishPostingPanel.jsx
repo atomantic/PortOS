@@ -37,12 +37,12 @@ function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
       <div className="grid sm:grid-cols-2 gap-2">
         {text('subreddit', 'Subreddit', 'SunoAI')}
         {field('kind', 'Post type',
-          <select id={idFor('kind')} value={options.kind || 'self'} onChange={(e) => setOption('kind', e.target.value)} className={inputCls}>
+          <select id={idFor('kind')} aria-label="Post type" value={options.kind || 'self'} onChange={(e) => setOption('kind', e.target.value)} className={inputCls}>
             <option value="self">Text post</option>
             <option value="link">Link to the full video</option>
           </select>)}
         {flairs?.length > 0 && field('flairId', 'Flair',
-          <select id={idFor('flairId')} value={options.flairId || ''} onChange={(e) => setOption('flairId', e.target.value)} className={inputCls}>
+          <select id={idFor('flairId')} aria-label="Flair" value={options.flairId || ''} onChange={(e) => setOption('flairId', e.target.value)} className={inputCls}>
             <option value="">No flair</option>
             {flairs.map((f) => <option key={f.id} value={f.id}>{f.text}</option>)}
           </select>)}
@@ -68,7 +68,7 @@ function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
       <div className="space-y-2">
         {area('prompt', 'Prompt reply (optional, e.g. the prompt that started it)')}
         {kit.thumbnails?.length > 0 && field('storyImage', 'Image on the story reply (optional)',
-          <select id={idFor('storyImage')} value={options.storyImage || ''} onChange={(e) => setOption('storyImage', e.target.value)} className={inputCls}>
+          <select id={idFor('storyImage')} aria-label="Image on the story reply" value={options.storyImage || ''} onChange={(e) => setOption('storyImage', e.target.value)} className={inputCls}>
             <option value="">None</option>
             {kit.thumbnails.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>)}
