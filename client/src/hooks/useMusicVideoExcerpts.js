@@ -44,7 +44,7 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
   };
 
   const job = useSseJobSlot({
-    startRequest: ({ startSec, endSec }) => renderMusicVideoExcerpt(projectId, { startSec, endSec }, { silent: true }),
+    startRequest: (body) => renderMusicVideoExcerpt(projectId, body, { silent: true }),
     eventsUrl: musicVideoExcerptRenderEventsUrl,
     cancelRequest: cancelMusicVideoExcerptRender,
     readPercent,
@@ -61,7 +61,10 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
     startErrorFallback: 'Failed to start the excerpt render',
   });
 
-  const startExcerpt = (startSec, endSec) => job.start({ startSec, endSec }, projectId);
+  // #9280: a social cut passes its own frame (`aspect`) and faded audio edges.
+  const startExcerpt = (startSec, endSec, { aspect = null, fade = false } = {}) => job.start({
+    startSec, endSec, ...(aspect ? { aspect } : {}), ...(fade ? { fade: true } : {}),
+  }, projectId);
   // #8987: a selective revision's resume starts its draft re-render server-side;
   // adopt that job so it shows the same progress and reloads on its finish.
   const attachRender = (jobId, id = projectId) => job.attach(jobId, id);

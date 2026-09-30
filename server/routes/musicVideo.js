@@ -35,6 +35,7 @@ import {
   musicVideoTreatmentApplySchema,
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
+  musicVideoSocialCutsQuerySchema,
   musicVideoCodeGenerateSchema,
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
@@ -96,6 +97,7 @@ import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
+import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import {
   startRevision, resumeRevision, cancelRevision, releaseRevisionSection,
 } from '../services/musicVideo/revisionService.js';
@@ -571,8 +573,14 @@ router.delete('/:id/composition/document', asyncHandler(async (req, res) => {
 // full render above) on its OWN job map, so an excerpt draft and a full render
 // can run at once without contending for the same mutex.
 router.post('/:id/excerpt', asyncHandler(async (req, res) => {
-  const { startSec, endSec } = validateRequest(musicVideoExcerptRequestSchema, req.body);
-  res.json(await startExcerptRender(req.params.id, { startSec, endSec }));
+  const { startSec, endSec, aspect, fade } = validateRequest(musicVideoExcerptRequestSchema, req.body);
+  res.json(await startExcerptRender(req.params.id, { startSec, endSec, aspect, fade }));
+}));
+
+// #9280: the song windows most likely to work as a vertical social cut.
+router.get('/:id/social-cuts', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoSocialCutsQuerySchema, req.query);
+  res.json({ suggestions: suggestSocialCuts(await requireProject(req.params.id), options) });
 }));
 
 router.get('/excerpt/:jobId/events', (req, res) => {

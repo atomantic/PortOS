@@ -38,6 +38,7 @@ import { renderTypographyOverlays, removeCompositionScratch } from './compositio
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
 import { markRevisionRendering, settleRevisionRender } from './revision.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
+import { musicVideoAspect, musicVideoAtAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoEvents } from './events.js';
 
 const jobs = new Map();
@@ -87,10 +88,10 @@ const SEEKED_EXCERPTS = Object.freeze({
       const full = prepareCodeRender(project);
       return { full, totalSec: full.durationSec, songSections: full.song.sections.map((s) => ({ sceneId: s.sceneId || s.id, startSec: s.startSec, endSec: s.endSec })) };
     },
-    encode: async ({ project, projectId, jobId, audioPath, outputPath, signal, onProgress, startSec, endSec }) => {
+    encode: async ({ project, projectId, jobId, audioPath, outputPath, signal, onProgress, startSec, endSec, fade }) => {
       const plan = prepareCodeRender(project, { windowStart: startSec, windowEnd: endSec });
       await encodeCodeComposition({
-        ...plan, audioPath, audioStartSec: startSec, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress,
+        ...plan, audioPath, audioStartSec: startSec, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress, fade,
       });
       return { width: plan.width, height: plan.height, fps: plan.fps, boundaryTimes: plan.sectionTimes };
     },
@@ -106,13 +107,16 @@ const SEEKED_EXCERPTS = Object.freeze({
         .map((s) => ({ sceneId: s.sceneId, startSec: s.startSec, endSec: s.endSec }));
       return { plan, totalSec: plan.durationSec, songSections };
     },
-    encode: ({ prepared, project, jobId, audioPath, soundBed, outputPath, signal, onProgress, startSec, endSec }) => encodeDocumentComposition({
-      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec,
+    encode: ({ prepared, project, jobId, audioPath, soundBed, outputPath, signal, onProgress, startSec, endSec, fade }) => encodeDocumentComposition({
+      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec, fade,
     }),
   },
 });
 
-async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revisionId, handOff, renderer }) {
+async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSec, revisionId, handOff, renderer, aspect = null, fade = false }) {
+  // A social cut renders the same composition at another frame (#9280): the
+  // re-framed view drives planning, staging and capture; the record keeps its own aspect.
+  const project = musicVideoAtAspect(stored, aspect);
   const prepared = await renderer.prepare(project);
   // Same order as a full render: a missing master throws before the
   // excerpt is marked rendering.
@@ -139,7 +143,7 @@ async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revis
     }));
   const renderingOn = await ensureInstanceId();
   const { excerpt } = await mutateProjectRecord(projectId, (current) => {
-    const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, partialFilename: filename, renderingOn });
+    const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, partialFilename: filename, renderingOn, aspect: musicVideoAspect(project), fade });
     return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
   });
   const excerptId = excerpt.id;
@@ -165,7 +169,7 @@ async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revis
     return persisted;
   };
   Promise.resolve().then(() => renderer.encode({
-    prepared, project, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped,
+    prepared, project, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade,
     onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
   })).then(async (encoded) => {
     job.overlayAbort = null;
@@ -180,7 +184,7 @@ async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revis
       console.warn(`⚠️ Music-video ${renderer.label} excerpt contact sheet failed [${jobId.slice(4, 12)}]: ${err.message}`);
       contactSheetFilename = null;
     }
-    const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null });
+    const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null, width: encoded.width ?? null, height: encoded.height ?? null });
     if (!persisted) {
       await unlink(outputPath).catch(() => {});
       broadcastSse(job, { type: 'error', error: 'The excerpt rendered, but saving the result failed — reload the project and try again' });
@@ -202,7 +206,7 @@ async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revis
   return { jobId, excerptId };
 }
 
-export async function startExcerptRender(projectId, { startSec, endSec }, { revisionId = null } = {}) {
+export async function startExcerptRender(projectId, { startSec, endSec, aspect = null, fade = false }, { revisionId = null } = {}) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -219,7 +223,14 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     const seeked = SEEKED_EXCERPTS[project.composition?.mode];
     if (seeked) {
       return await launchSeekedExcerpt({
-        projectId, project, startSec, endSec, revisionId, handOff: () => { handedOff = true; }, renderer: seeked,
+        projectId, project, startSec, endSec, revisionId, handOff: () => { handedOff = true; }, renderer: seeked, aspect, fade,
+      });
+    }
+    // A footage (ffmpeg) render has no frame of its own to re-lay-out: cropping
+    // the 16:9 cut would slice through its type and cards (#9280).
+    if ((aspect && aspect !== musicVideoAspect(project)) || fade) {
+      throw new ServerError('Social cuts (another aspect, faded edges) need a composition-document or code-rendered project', {
+        status: 422, code: 'EXCERPT_ASPECT_UNSUPPORTED',
       });
     }
     const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
