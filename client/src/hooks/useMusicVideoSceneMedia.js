@@ -107,6 +107,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
 
   const style = project?.concept?.style?.trim();
   const direction = [musicVideoCreativeContext(project?.concept), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
+  // The i2v prompt leaves the mood-board look out (handoff.js composePrompt): the frame already carries it.
+  const motionDirection = [musicVideoCreativeContext(project?.concept, { moodBoard: false }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
   const conditioning = conditioningReferences(project);
   // The image prompt for a scene's reference frame: its frame prompt (or the
   // shot prompt as a fallback) suffixed with the project's global concept style
@@ -121,7 +123,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // fallback) suffixed the same way. The reference frame already fixes the
   // look; this prompt guides the motion.
   const buildShotPrompt = (scene) =>
-    [(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, direction, scene.direction?.motionClause?.trim()].filter(Boolean).join(', ');
+    [(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim()].filter(Boolean).join(', ');
 
   /**
    * Render a still reference frame for one scene from its frame prompt. The

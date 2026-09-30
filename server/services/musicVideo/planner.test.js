@@ -245,7 +245,7 @@ describe('buildScenePlanPrompt', () => {
       subjects: [{ id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' }],
     } }), shots);
     expect(prompt).toContain('Universe style: Ink silhouettes');
-    expect(prompt).toContain('Mood board style: Watercolor');
+    expect(prompt).toContain('Mood board look (palette, lighting and texture only; never its locations, objects or poses): Watercolor');
     expect(prompt).toContain('character (protagonist): Example singer — Silver coat');
     expect(prompt).toContain('Neon Nights');
     expect(prompt).toContain('cyberpunk chase');

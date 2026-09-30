@@ -3,12 +3,22 @@ import { trimTo } from './textUtils.js';
 const CONTEXT_MAX = 6000;
 const BIBLE_HEADER = 'Production bible (use the subjects relevant to this shot; preserve their identity; descriptions may be abbreviated):';
 
-/** Shared, bounded creative bible for planning, media generation and handoff. */
-export function musicVideoCreativeContext(concept) {
+// The mood board describes a LOOK. Its snapshot can still carry the board's own
+// subjects and places (image captions, or a synthesized style that pictures a
+// street or a bathroom), so it is labelled look-only wherever it is included.
+export const MOOD_BOARD_LOOK_LABEL = 'Mood board look (palette, lighting and texture only; never its locations, objects or poses)';
+
+/**
+ * Shared, bounded creative bible for planning, media generation and handoff.
+ * `moodBoard: false` leaves the mood-board look out — a motion prompt is
+ * conditioned on a reference frame that already carries the look, and the
+ * board's pictured places and subjects only fight the shot there.
+ */
+export function musicVideoCreativeContext(concept, { moodBoard = true } = {}) {
   if (!concept) return '';
   const styles = [
     concept.universeStyle && `Universe style: ${trimTo(concept.universeStyle, 800)}`,
-    concept.moodBoardStyle && `Mood board style: ${trimTo(concept.moodBoardStyle, 800)}`,
+    moodBoard && concept.moodBoardStyle && `${MOOD_BOARD_LOOK_LABEL}: ${trimTo(concept.moodBoardStyle, 800)}`,
   ].filter(Boolean);
   const subjects = (concept.subjects || []).slice(0, 24);
   const identities = subjects.map((s) =>

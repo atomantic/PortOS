@@ -1767,7 +1767,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       prompt: expect.stringContaining('character (protagonist): Example singer — Silver coat'),
     }), { silent: true }));
-    expect(generateImage.mock.calls[0][0].prompt).toContain('Mood board style: Watercolor');
+    expect(generateImage.mock.calls[0][0].prompt).toContain('Mood board look (palette, lighting and texture only; never its locations, objects or poses): Watercolor');
     expect(generateImage.mock.calls[0][0].prompt).toContain('Universe style: Ink silhouettes');
   });
 

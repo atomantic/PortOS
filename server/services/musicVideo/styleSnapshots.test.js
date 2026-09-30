@@ -23,6 +23,13 @@ describe('withStyleSnapshots (#9105)', () => {
     expect(out.visualSpec).toEqual({ moodBoardId: 'b1' });
   });
 
+  it('snapshots a board\'s synthesized style and avoid list instead of its item captions', async () => {
+    getBoard.mockResolvedValue({ ...BOARD, style: { prompt: 'Teal and red neon, 35mm grain', negativePrompt: 'daylight, cartoon' } });
+    const out = await withStyleSnapshots({ name: 'MV', visualSpec: { moodBoardId: 'b1' }, concept: {} });
+    expect(out.concept.moodBoardStyle).toBe('Teal and red neon, 35mm grain\nAvoid: daylight, cartoon');
+    expect(out.concept.moodBoardStyle).not.toContain('Loose brush strokes');
+  });
+
   it('keeps an explicit snapshot and does not refetch an unchanged, already-snapshotted source', async () => {
     const existing = { concept: { universeId: 'u1', universeStyle: 'kept', moodBoardStyle: 'kept' }, visualSpec: { moodBoardId: 'b1' } };
     const patch = { concept: { universeId: 'u1', subjects: [] }, visualSpec: { moodBoardId: 'b1' } };
