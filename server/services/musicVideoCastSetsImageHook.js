@@ -29,13 +29,13 @@ const hook = createMediaJobImageHook({
   serializeKey: ({ projectId }) => projectId,
   describe: ({ projectId, key }) => `${projectId}/${key}`,
   attach: ({ projectId, key, filename, job }) => settle({
-    projectId, key, filename, jobId: typeof job.id === 'string' ? job.id : null,
+    projectId, key, filename, productionRunId: job.params?.musicVideo?.productionRunId, productionStepKey: job.params?.musicVideo?.productionStepKey, jobId: typeof job.id === 'string' ? job.id : null,
   }).then((changed) => (changed ? { filename } : null)),
   onAttached: ({ projectId, key, filename }) => {
     console.log(`🎭 music-video cast & sets ${projectId.slice(0, 11)}/${key} ← ${filename}`);
   },
   onTerminal: ({ projectId, key, job }, status) => settle({
-    projectId, key, jobId: typeof job?.id === 'string' ? job.id : null, error: job?.error || `The render was ${status}`,
+    projectId, key, status, productionRunId: job?.params?.musicVideo?.productionRunId, productionStepKey: job?.params?.musicVideo?.productionStepKey, jobId: typeof job?.id === 'string' ? job.id : null, error: job?.error || `The render was ${status}`,
   }),
 });
 
