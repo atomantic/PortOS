@@ -10,7 +10,9 @@
  * platform returns PUBLISH_LOGIN_REQUIRED; login, CAPTCHAs and 2FA are the
  * director's to do in the PortOS Browser.
  *
- * Posting results persist to `project.publishKit.posts[target] = { url, postedAt }`.
+ * Posting results persist to `project.publishKit.posts[target] = { url, postedAt }`;
+ * the director can add reception and notes, or record a post made by hand (#9287).
+ * Only platforms the director turned on can be prepared.
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
@@ -21,6 +23,7 @@ import { safeUnder } from '../../../lib/ffmpeg.js';
 import { getProject, mutateProjectRecord } from '../projects.js';
 import { buildPublishPayload } from './payloads.js';
 import { connectPortosBrowser } from './browser.js';
+import { assertAccount, assertPlatformEnabled, getPublishPlatforms, normalizePost } from './platforms.js';
 import { youtubeAdapter, shortsAdapter } from './youtube.js';
 import { tiktokAdapter } from './tiktok.js';
 import { instagramAdapter } from './instagram.js';
@@ -91,6 +94,8 @@ async function withCovers(target, payload, deps) {
 export async function preparePublishDraft(projectId, target, options = {}, deps = {}) {
   const adapter = (deps.adapters || PUBLISH_ADAPTERS)[target];
   if (!adapter) throw new ServerError(`Unknown publish target: ${target}`, { status: 400, code: 'VALIDATION_ERROR' });
+  const platforms = deps.platforms || await getPublishPlatforms();
+  assertPlatformEnabled(platforms, target);
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   let payload = resolveFiles(buildPublishPayload(target, project, options));
@@ -102,6 +107,8 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
     try {
       await page.bringToFront();
       const summary = await adapter.prepare(page, payload);
+      // A dedicated account for this content must be the one signed in (where the adapter can tell).
+      assertAccount(platforms, target, summary?.account);
       const shot = await page.screenshot({ type: 'jpeg', quality: 70 }).catch(() => null);
       const id = `mvpub-${randomUUID()}`;
       const draft = { id, projectId, target, payload, page, browser, summary, createdAt: Date.now() };
@@ -144,4 +151,15 @@ export async function discardPublishDraft(projectId, draftId) {
   if (!draft || draft.projectId !== projectId) return false;
   await closeDraft(draft);
   return true;
+}
+
+/** Record or update one platform's post by hand: its link, reception (good/mixed/poor) and notes. */
+export async function recordPublishPost(projectId, target, input = {}) {
+  const { project } = await mutateProjectRecord(projectId, (current) => {
+    const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
+    const posts = { ...(kit.posts || {}) };
+    posts[target] = normalizePost(posts[target], input);
+    return { project: { ...current, publishKit: { ...kit, posts } } };
+  });
+  return { project, post: project.publishKit.posts[target] };
 }

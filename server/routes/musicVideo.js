@@ -41,6 +41,8 @@ import {
   musicVideoPublishThumbnailSchema,
   musicVideoPublishTargetSchema,
   musicVideoPublishPrepareSchema,
+  musicVideoPublishPlatformsPatchSchema,
+  musicVideoPublishPostSchema,
   musicVideoCodeGenerateSchema,
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
@@ -104,7 +106,8 @@ import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender }
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
-import { preparePublishDraft, submitPublishDraft, discardPublishDraft } from '../services/musicVideo/publish/index.js';
+import { preparePublishDraft, submitPublishDraft, discardPublishDraft, recordPublishPost } from '../services/musicVideo/publish/index.js';
+import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import {
   startRevision, resumeRevision, cancelRevision, releaseRevisionSection,
 } from '../services/musicVideo/revisionService.js';
@@ -621,6 +624,25 @@ router.put('/:id/publish-kit/thumbnail', asyncHandler(async (req, res) => {
 // --- Posting (#9282) ---
 // Fill a platform's post in the PortOS Browser and return a screenshot; post
 // only on a second, explicit request naming that live draft.
+// #9287: where the director posts (opt-in, optional account per platform),
+// with every platform's post history and ratings across projects.
+router.get('/publish/platforms', asyncHandler(async (req, res) => {
+  const [platforms, history] = await Promise.all([getPublishPlatforms(), publishHistory()]);
+  res.json({ platforms, history });
+}));
+
+router.put('/publish/platforms', asyncHandler(async (req, res) => {
+  const patch = validateRequest(musicVideoPublishPlatformsPatchSchema, req.body || {});
+  res.json({ platforms: await updatePublishPlatforms(patch) });
+}));
+
+// Record a post made by hand, or rate one: its link, reception and notes.
+router.put('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
+  const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
+  const input = validateRequest(musicVideoPublishPostSchema, req.body || {});
+  res.json(await recordPublishPost(req.params.id, target, input));
+}));
+
 router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {
   const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
   const options = validateRequest(musicVideoPublishPrepareSchema, req.body || {});

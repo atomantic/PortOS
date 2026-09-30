@@ -17,6 +17,7 @@ export const xAdapter = {
     await step(label, 'open the composer', () => page.goto(COMPOSE_URL, { waitUntil: 'domcontentloaded', timeout: T }));
     await page.waitForTimeout(4000);
     if (/\/login|\/i\/flow/.test(page.url())) throw loginRequired(label, COMPOSE_URL);
+    const account = await page.evaluate(() => (document.querySelector('[data-testid=AppTabBar_Profile_Link]')?.getAttribute('href') || '').replace(/^\//, '') || null).catch(() => null);
     for (const [i, post] of payload.posts.entries()) {
       const editor = `[data-testid=tweetTextarea_${i}]`;
       if (i > 0) await step(label, `add post ${i + 1}`, () => page.locator('[data-testid=addButton]').click({ timeout: T }));
@@ -37,7 +38,7 @@ export const xAdapter = {
       return button && button.getAttribute('aria-disabled') !== 'true' && !uploading;
     }, null, { timeout: 600_000 }));
     const lengths = await page.evaluate((n) => Array.from({ length: n }, (_, i) => document.querySelector(`[data-testid=tweetTextarea_${i}]`)?.innerText.length ?? 0), payload.posts.length);
-    return { posts: payload.posts.length, lengths };
+    return { account, posts: payload.posts.length, lengths };
   },
   async submit(page, payload) {
     await step(label, 'post the thread', () => page.locator('[data-testid=tweetButton]').click({ timeout: T }));

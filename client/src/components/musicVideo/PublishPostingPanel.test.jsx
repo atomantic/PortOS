@@ -4,10 +4,11 @@
  * explicit Post press, and keeps a sign-in refusal beside its platform.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import PublishPostingPanel, { PUBLISH_TARGETS } from './PublishPostingPanel.jsx';
 
-const hook = (over = {}) => ({ drafts: {}, busy: {}, errors: {}, prepare: vi.fn(), submit: vi.fn(), discard: vi.fn(), ...over });
+const ALL = ['youtube', 'suno', 'x', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews'];
+const hook = (over = {}) => ({ drafts: {}, busy: {}, errors: {}, prepare: vi.fn(), submit: vi.fn(), discard: vi.fn(), enabledTargets: ALL, platforms: {}, recordPost: vi.fn(async () => null), ...over });
 const project = (kit = {}) => ({ id: 'mv-1', publishKit: { builtAt: '2026-01-01T00:00:00.000Z', thumbnails: ['t1.jpg'], ...kit } });
 const row = (label) => screen.getByText(label, { selector: 'div' }).closest('li');
 
@@ -53,5 +54,39 @@ describe('PublishPostingPanel (#9282)', () => {
     const alert = within(row('TikTok')).getByRole('alert');
     expect(alert).toHaveTextContent('Sign in to TikTok');
     expect(alert).toHaveTextContent('https://www.tiktok.com/login');
+  });
+
+  it('offers only the platforms turned on, with the account posted as', () => {
+    render(<PublishPostingPanel project={project()} publishing={hook({ enabledTargets: ['x', 'youtube'], platforms: { x: { enabled: true, account: 'antic' } } })} />);
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.queryByText('Reddit', { selector: 'div' })).toBeNull();
+    expect(screen.getByText('as @antic')).toBeInTheDocument();
+  });
+
+  it('asks for platforms when none are on', () => {
+    render(<PublishPostingPanel project={project()} publishing={hook({ enabledTargets: [] })} />);
+    expect(screen.getByText(/Turn on the platforms you use/)).toBeInTheDocument();
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+  });
+
+  it('rates a posted post and records a post made by hand', async () => {
+    const publishing = hook({ enabledTargets: ['youtube', 'x'], recordPost: vi.fn(async () => ({ url: 'saved' })) });
+    render(<PublishPostingPanel project={project({ posts: { youtube: { url: 'https://youtu.be/abc', reception: 'good' } } })} publishing={publishing} />);
+    const yt = row('YouTube');
+    expect(within(yt).getByRole('button', { name: 'Good' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(within(yt).getByRole('button', { name: 'Poor' }));
+    expect(publishing.recordPost).toHaveBeenCalledWith('youtube', { reception: 'poor' });
+    const notes = within(yt).getByLabelText('Notes on the YouTube post');
+    fireEvent.change(notes, { target: { value: 'slow start' } });
+    fireEvent.blur(notes);
+    expect(publishing.recordPost).toHaveBeenCalledWith('youtube', { notes: 'slow start' });
+
+    const x = row('X thread');
+    const record = within(x).getByRole('button', { name: /Record/ });
+    expect(record).toBeDisabled();
+    fireEvent.change(within(x).getByLabelText('Link to a X thread post made by hand'), { target: { value: 'https://x.com/antic/status/1' } });
+    await act(async () => { fireEvent.click(record); });
+    expect(publishing.recordPost).toHaveBeenCalledWith('x', { url: 'https://x.com/antic/status/1' });
+    expect(within(x).getByLabelText('Link to a X thread post made by hand')).toHaveValue('');
   });
 });

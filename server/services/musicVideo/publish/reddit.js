@@ -28,7 +28,7 @@ export const redditAdapter = {
       };
     }, payload.subreddit));
     if (!info.user) throw loginRequired(label, `${BASE}/login`);
-    return { subreddit: payload.subreddit, kind: payload.kind, title: payload.title, flairText: payload.flairText, rules: info.rules, flairs: info.flairs };
+    return { account: info.user, subreddit: payload.subreddit, kind: payload.kind, title: payload.title, flairText: payload.flairText, rules: info.rules, flairs: info.flairs };
   },
   async submit(page, payload) {
     const result = await step(label, 'post', () => page.evaluate(async (p) => {
