@@ -252,13 +252,13 @@ export async function encodeReferenceContactSheet(videoPath, outputPath, { every
 // selection — rather than a `between(t,…)` time window: at 30/60fps a time
 // window can match several consecutive frames, overfilling the tile before
 // later boundary times are ever reached.
-export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times, { width, height, fps } = {}) {
+export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times, { width, height, fps, columns: requestedColumns } = {}) {
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   if (!Array.isArray(times) || times.length === 0) throw new Error('encodeFileContactSheetAtTimes: no sample times');
   if (!(fps > 0)) throw new Error('encodeFileContactSheetAtTimes: fps is required');
   const tileWidth = width && height && width < height ? 240 : 360;
-  const columns = Math.min(PROOF_COLUMNS, times.length);
+  const columns = Math.min(requestedColumns || PROOF_COLUMNS, times.length);
   const rows = Math.ceil(times.length / columns);
   // Two very close boundary times can round to the same frame index — the
   // dedup means the tile gets one fewer real frame than requested (a padded
