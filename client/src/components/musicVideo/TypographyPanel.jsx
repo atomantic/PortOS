@@ -82,6 +82,7 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
 
       {composed && cues.length === 0 && <p className="mt-2 text-port-text-muted">No text cues yet — a composed render with none renders as plain cuts.</p>}
       {codeMode && <p className="mt-2 text-port-text-muted">Code-rendered draws the song in code. Text cues stay stored and come back if you switch to Composed.</p>}
+      {composition.mode === 'document' && <p className="mt-2 text-port-text-muted">The composition document reads these cues from <code>PORTOS_MV.textCues</code>: the layered template draws Hero cues as kinetic words on their sung times and uses Subtitle cues (or, with none, the timed lyrics) as subtitles.</p>}
       <div className="mt-2 max-h-72 overflow-y-auto space-y-1 pr-1">
         {cues.map((cue, i) => (
           <div key={cue.id} className="flex flex-wrap items-center gap-1">

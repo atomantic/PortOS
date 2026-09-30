@@ -33,7 +33,7 @@ import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/mus
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { normalizeLyricMarkers } from './lyricMarkers.js';
 import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
-import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
+import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
@@ -150,7 +150,8 @@ export function buildProjectRecord(input, { id, now }) {
     phrases: Array.isArray(input.phrases) ? normalizePhrases(input.phrases) : [],
     pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
-    composition: input.composition ? normalizeComposition(input.composition) : null,
+    // The document pointer is set only by the import routes, never on create.
+    composition: input.composition ? withStoredCompositionDocument(normalizeComposition(input.composition), null) : null,
     // #8988 — optional sound-design bed mixed under the song.
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
@@ -275,7 +276,9 @@ export function applyProjectPatch(project, patch) {
     ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
     // #8984 — the composition manifest is replaced whole; null clears it.
-    ...('composition' in patch ? { composition: normalizeComposition(patch.composition) } : {}),
+    // The composition document pointer is owned by the import routes: a PATCH
+    // that echoes (or omits, or forges) it keeps the stored one.
+    ...('composition' in patch ? { composition: withStoredCompositionDocument(normalizeComposition(patch.composition), project.composition) } : {}),
     // #8988 — an explicitly chosen sound-design bed; null clears it.
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
   };
@@ -647,6 +650,11 @@ export function mergeProjectRecord(local, remoteRaw) {
   // their files and jobs exist only on this install.
   if (Object.hasOwn(local, 'devArtifacts')) remote.devArtifacts = local.devArtifacts;
   if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
+  // The composition document's files live only on this install as well
+  // (compositionDocument.js), so its pointer survives a newer remote body.
+  if (local.composition?.document && remote.composition && typeof remote.composition === 'object' && !Array.isArray(remote.composition)) {
+    remote.composition = { ...remote.composition, document: local.composition.document };
+  }
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && Object.hasOwn(local.videoSettings, 'backend')) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'

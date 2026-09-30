@@ -99,6 +99,21 @@ describe('music-video composition owner', () => {
     expect(encodeComposition).not.toHaveBeenCalled();
   });
 
+  it('renders the extra frames the page declares in formats, and refuses one it does not', async () => {
+    encodeComposition.mockClear();
+    const master = join(PATHS.data, 'master-formats.wav');
+    await writeFile(master, Buffer.alloc(8));
+    const owner = { owner: 'music-video', audio: { path: master, startSec: 0 }, maxDurationSec: 30, song: {} };
+    seen.contract = { fps: 12, width: 1920, height: 1080, durationSec: 10, formats: ['1080x1920'], layout: true };
+    await expect(renderComposition({ jobId: randomUUID(), directory: await sourceDir(), formats: ['landscape', 'vertical'], ...owner }))
+      .rejects.toThrow('thumbnail skipped');
+    expect(encodeComposition.mock.calls.map(([, contract]) => `${contract.width}x${contract.height}`)).toEqual(['1920x1080', '1080x1920']);
+    encodeComposition.mockClear();
+    await expect(renderComposition({ jobId: randomUUID(), directory: await sourceDir(), formats: ['square'], ...owner }))
+      .rejects.toThrow('portosComposition.formats must include 1080x1080');
+    expect(encodeComposition).not.toHaveBeenCalled();
+  });
+
   it('does not let the owner option carry launch-video delivery', async () => {
     const directory = await sourceDir();
     const master = join(PATHS.data, 'master-launch.wav');

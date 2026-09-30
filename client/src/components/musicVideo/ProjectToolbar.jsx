@@ -46,6 +46,12 @@ export default function ProjectToolbar({
     ...(project.lyricCues || []).map((cue) => cue.endSec || cue.startSec || 0),
   );
   const codeReady = codeMode && !noAudio && codeDuration > 0;
+  // A composition document seeks the song: it needs the analysis's duration
+  // and an attached document; scene media is optional (the document decides).
+  const documentMode = mode === 'document';
+  const documentBlocked = !documentMode ? '' : noAudio ? 'Link a track first'
+    : !(project.audioAnalysis?.durationSec > 0) ? 'Analyze the track first — the document is timed against the song'
+      : !project.composition?.document ? 'Start from the template or import a composition document first' : '';
   const footageBlocked = codeMode ? 'Code-rendered style draws the picture in code and does not generate footage' : '';
   const nextVersion = (project.version || 1) + 1;
   return (
@@ -156,10 +162,12 @@ export default function ProjectToolbar({
             <Activity size={15} className="animate-spin" /> {renderJob.pending ? 'Preparing render…' : `${renderJob.progress}% · Cancel`}
           </button>
         ) : (
-          <button onClick={() => renderJob.start(project.id)} disabled={renderJob.active || (codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount))}
+          <button onClick={() => renderJob.start(project.id)} disabled={renderJob.active || (documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount))}
             title={renderJob.active
               ? 'Wait for the other project render to finish, or return to it to cancel'
-              : codeMode
+              : documentMode
+                ? (documentBlocked || 'Render the composition document over the song')
+                : codeMode
                 ? (codeReady ? 'Render the code-rendered video over the song. This does not generate footage.' : 'Analyze the song or time a scene before rendering code')
                 : sceneCount === 0
                   ? 'Add scenes first'

@@ -263,7 +263,15 @@ export const musicVideoLyricsAlignSchema = z.object({
 // whole song as a seekable composition instead of generated footage. Cue text
 // is the director's own, rendered as an independent typography layer — never
 // baked into generated pixels. See services/musicVideo/composition.js.
-export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code'];
+// `document` renders a project-owned HTML composition document (its own
+// folder under data/music-video/<projectId>/composition/) seeked over the
+// song; see services/musicVideo/compositionDocument.js and documentRender.js.
+export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document'];
+// Shipped starting points a project can copy into its document folder.
+export const MUSIC_VIDEO_DOCUMENT_TEMPLATES = ['layered'];
+export const MUSIC_VIDEO_DOCUMENT_SOURCES = ['zip', 'directory', 'template'];
+// One immutable document version: data/music-video/<projectId>/composition/<versionId>.
+export const MUSIC_VIDEO_DOCUMENT_DIRECTORY = /^music-video\/[A-Za-z0-9_-]{1,100}\/composition\/[A-Za-z0-9_-]{1,100}$/;
 // One section function. Reject the calls that would make a frame depend on
 // the clock, entropy, or the network — the preview and the render both seek.
 export const MUSIC_VIDEO_CODE_SOURCE_MAX = 20000;
@@ -305,6 +313,35 @@ export const musicVideoCodeGenerateSchema = z.object({
   model: z.string().max(200).optional(),
 }).strict();
 
+// Where the project's composition document lives. Set only by the import
+// routes; a PATCH that carries it back is ignored (the stored pointer wins).
+export const musicVideoCompositionDocumentSchema = z.object({
+  directory: z.string().max(300).regex(MUSIC_VIDEO_DOCUMENT_DIRECTORY, 'directory is a composition document version folder'),
+  entry: z.literal('index.html').optional(),
+  updatedAt: z.string().max(40).nullable().optional(),
+  source: z.object({
+    kind: z.enum(MUSIC_VIDEO_DOCUMENT_SOURCES),
+    name: z.string().max(200).nullable().optional(),
+  }).strict().nullable().optional(),
+  files: z.number().int().min(0).max(4096).optional(),
+  bytes: z.number().int().min(0).optional(),
+}).strict();
+
+// The optional HUD block a composition document may draw (the shipped
+// layered template reads it from PORTOS_MV.composition.overlay).
+export const musicVideoCompositionOverlaySchema = z.object({
+  enabled: z.boolean().optional(),
+  titleLines: z.array(z.string().max(120)).max(4).optional(),
+  meter: z.object({
+    label: z.string().max(40).optional(),
+    // [songSec, percent] pairs, eased between.
+    keyframes: z.array(z.tuple([z.number().min(0).max(36000), z.number().min(0).max(100)])).max(200).optional(),
+  }).strict().nullable().optional(),
+  ticker: z.array(z.string().max(200)).max(40).optional(),
+  timecode: z.boolean().optional(),
+  timecodeStartSec: z.number().min(0).max(86400).optional(),
+}).strict();
+
 // Replaced whole by a project PATCH (the editor sends the full manifest).
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
@@ -316,6 +353,22 @@ export const musicVideoCompositionSchema = z.object({
   }).strict().optional(),
   posterSec: timedSec,
   codeVideo: musicVideoCodeVideoSchema.nullable().optional(),
+  document: musicVideoCompositionDocumentSchema.nullable().optional(),
+  overlay: musicVideoCompositionOverlaySchema.nullable().optional(),
+}).strict();
+
+// A relative folder inside data/ to copy a composition document from.
+export const musicVideoDocumentDirectoryImportSchema = z.object({
+  directory: z.string().min(1).max(1024).refine((value) => !value.startsWith('/') && !value.includes('\\') && !value.includes(':')
+    && !value.includes('\0') && !value.split('/').some((part) => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
+}).strict();
+
+export const musicVideoDocumentFileQuerySchema = z.object({
+  path: z.string().min(1).max(512),
+}).strict();
+
+export const musicVideoDocumentTemplateSchema = z.object({
+  template: z.enum(MUSIC_VIDEO_DOCUMENT_TEMPLATES).optional(),
 }).strict();
 
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;

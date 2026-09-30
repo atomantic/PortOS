@@ -638,7 +638,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // live under this install's data/music-video/ and are not in the project's
   // asset manifest, so they are never sent. What an approved check-in writes
   // into ordinary fields (visual-spec references, concept subjects) syncs.
-  musicVideoProjects: 9,
+  // v10 = composition mode `document` (a project-owned HTML composition
+  // document) and `composition.overlay` (its HUD settings). A v9 peer's
+  // normalizeComposition collapses the unknown mode to `concat` and drops the
+  // overlay, and its next composition edit would last-writer-wins both losses
+  // back, so the gate rejects the ahead transfer. The document pointer itself
+  // (`composition.document`) is wire-local like `devArtifacts`: its files live
+  // under this install's data/music-video/<projectId>/composition/ and are not
+  // in the asset manifest, so a peer keeps its own pointer (or none, and then
+  // refuses to render with COMPOSITION_DOCUMENT_MISSING).
+  musicVideoProjects: 10,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

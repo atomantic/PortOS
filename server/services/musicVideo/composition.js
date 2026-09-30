@@ -20,6 +20,8 @@ import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
 import {
   MUSIC_VIDEO_COMPOSITION_MODES as COMPOSITION_MODES,
+  MUSIC_VIDEO_DOCUMENT_DIRECTORY,
+  MUSIC_VIDEO_DOCUMENT_SOURCES,
   MUSIC_VIDEO_TYPOGRAPHY_EMPHASES as TYPOGRAPHY_EMPHASES,
   MUSIC_VIDEO_TYPOGRAPHY_FONTS as TYPOGRAPHY_FONTS,
   MUSIC_VIDEO_TYPOGRAPHY_PLACEMENTS as TYPOGRAPHY_PLACEMENTS,
@@ -56,6 +58,49 @@ function normalizeCodeVideo(input) {
 }
 
 /**
+ * The stored pointer to the project's composition document, or null when the
+ * value is not a document version folder. Only the import routes set it.
+ */
+function normalizeCompositionDocument(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  if (typeof input.directory !== 'string' || !MUSIC_VIDEO_DOCUMENT_DIRECTORY.test(input.directory)) return null;
+  const source = input.source && typeof input.source === 'object' && MUSIC_VIDEO_DOCUMENT_SOURCES.includes(input.source.kind)
+    ? { kind: input.source.kind, name: typeof input.source.name === 'string' && input.source.name ? input.source.name.slice(0, 200) : null }
+    : null;
+  const count = (value, max) => (Number.isInteger(value) && value >= 0 && value <= max ? value : null);
+  return {
+    directory: input.directory,
+    entry: 'index.html',
+    updatedAt: typeof input.updatedAt === 'string' && input.updatedAt ? input.updatedAt.slice(0, 40) : null,
+    source,
+    ...(count(input.files, 4096) != null ? { files: input.files } : {}),
+    ...(count(input.bytes, Number.MAX_SAFE_INTEGER) != null ? { bytes: input.bytes } : {}),
+  };
+}
+
+/** The HUD block a composition document may draw; null when absent. */
+function normalizeCompositionOverlay(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const lines = (list, maxItems, maxLen) => (Array.isArray(list) ? list : [])
+    .map((line) => trimTo(line, maxLen)).filter(Boolean).slice(0, maxItems);
+  const meterIn = input.meter && typeof input.meter === 'object' && !Array.isArray(input.meter) ? input.meter : null;
+  const keyframes = (Array.isArray(meterIn?.keyframes) ? meterIn.keyframes : [])
+    .filter((pair) => Array.isArray(pair) && toTime(pair[0]) != null && typeof pair[1] === 'number' && pair[1] >= 0 && pair[1] <= 100)
+    .map(([t, v]) => [toTime(t), Math.round(v * 100) / 100])
+    .sort((a, b) => a[0] - b[0])
+    .slice(0, 200);
+  const start = input.timecodeStartSec;
+  return {
+    enabled: input.enabled !== false,
+    titleLines: lines(input.titleLines, 4, 120),
+    meter: meterIn ? { label: trimTo(meterIn.label, 40), keyframes } : null,
+    ticker: lines(input.ticker, 40, 200),
+    timecode: input.timecode !== false,
+    timecodeStartSec: typeof start === 'number' && Number.isFinite(start) && start >= 0 && start <= 86400 ? start : 0,
+  };
+}
+
+/**
  * Normalize a validated (or legacy/peer-supplied) manifest. Every cue persists
  * a stable id and explicit defaults; a cue whose end is not after its start
  * keeps its text but loses its end (it does not render until re-timed). Returns
@@ -84,6 +129,8 @@ export function normalizeComposition(input) {
   }
   const style = input.style && typeof input.style === 'object' ? input.style : {};
   const codeVideo = normalizeCodeVideo(input.codeVideo);
+  const documentRef = normalizeCompositionDocument(input.document);
+  const overlay = normalizeCompositionOverlay(input.overlay);
   return {
     version: COMPOSITION_VERSION,
     mode: pick(input.mode, COMPOSITION_MODES, 'concat'),
@@ -96,7 +143,20 @@ export function normalizeComposition(input) {
     // Absent unless a code video was actually stored, so a composed manifest
     // stays the shape peers and clones already compare.
     ...(codeVideo ? { codeVideo } : {}),
+    // Same posture: present only once a document was imported / a HUD set.
+    ...(documentRef ? { document: documentRef } : {}),
+    ...(overlay ? { overlay } : {}),
   };
+}
+
+/**
+ * `next` (a normalized manifest, or null) carrying `stored`'s document pointer
+ * instead of whatever `next` holds: only the import routes set the pointer.
+ */
+export function withStoredCompositionDocument(next, stored) {
+  if (!next) return next;
+  const { document: _ignored, ...rest } = next;
+  return stored?.document ? { ...rest, document: stored.document } : rest;
 }
 
 /** Clear the audio-derived timings (cue times, poster) when the song changes, keeping the text. */

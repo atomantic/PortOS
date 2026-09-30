@@ -51,6 +51,9 @@ import {
   musicVideoDevArtifactFileQuerySchema,
   musicVideoCastAndSetsStartSchema,
   musicVideoCastAndSetsRegenerateSchema,
+  musicVideoDocumentDirectoryImportSchema,
+  musicVideoDocumentFileQuerySchema,
+  musicVideoDocumentTemplateSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -103,6 +106,19 @@ import {
   startProduction, resumeProduction, stopProduction, cancelProduction, getProduction,
 } from '../services/musicVideo/productionService.js';
 import { planProject } from '../services/musicVideo/planner.js';
+import {
+  DOCUMENT_ZIP_MAX_BYTES,
+  detachDocument,
+  documentMimeType,
+  exportDocumentZip,
+  importDocumentDirectory,
+  importDocumentTemplate,
+  importDocumentZip,
+  readDocumentManifest,
+  resolveDocumentFile,
+} from '../services/musicVideo/compositionDocument.js';
+import { buildDocumentPreview } from '../services/musicVideo/documentPreview.js';
+import { isZipUpload } from '../lib/zipStream.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
@@ -474,6 +490,78 @@ router.post('/:id/code/generate', asyncHandler(async (req, res) => {
 router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
   res.json(await regenerateMusicVideoCodeSection(req.params.id, req.params.sectionId, body));
+}));
+
+// --- Composition document (render style `document`) ---
+// A project-owned HTML composition document (services/musicVideo/
+// compositionDocument.js): import a zip, a folder inside data/, or the shipped
+// template; export it; read its manifest; preview it. Files stay on this
+// install; the record keeps a pointer to the current immutable version.
+const requireProject = async (id) => {
+  const project = await getProject(id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  return project;
+};
+
+const documentZipUpload = uploadSingle('file', {
+  limits: { fileSize: DOCUMENT_ZIP_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (isZipUpload(file)) cb(null, true);
+    else cb(new ServerError('Upload a .zip of the composition document', { status: 400, code: 'VALIDATION_ERROR' }));
+  },
+});
+
+router.get('/:id/composition/document', asyncHandler(async (req, res) => {
+  res.json(await readDocumentManifest(await requireProject(req.params.id)));
+}));
+
+router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No file uploaded (multipart field "file")', { status: 400, code: 'VALIDATION_ERROR' });
+  try {
+    res.status(201).json(await importDocumentZip(req.params.id, req.file.path, req.file.originalname));
+  } finally {
+    await unlink(req.file.path).catch(() => {});
+  }
+}));
+
+router.post('/:id/composition/document/directory', asyncHandler(async (req, res) => {
+  const { directory } = validateRequest(musicVideoDocumentDirectoryImportSchema, req.body || {});
+  res.status(201).json(await importDocumentDirectory(req.params.id, directory));
+}));
+
+router.post('/:id/composition/document/template', asyncHandler(async (req, res) => {
+  const { template } = validateRequest(musicVideoDocumentTemplateSchema, req.body || {});
+  res.status(201).json(await importDocumentTemplate(req.params.id, template));
+}));
+
+router.get('/:id/composition/document/export', asyncHandler(async (req, res) => {
+  const { zip, filename } = await exportDocumentZip(await requireProject(req.params.id));
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(zip);
+}));
+
+router.get('/:id/composition/document/preview', asyncHandler(async (req, res) => {
+  res.json(await buildDocumentPreview(await requireProject(req.params.id)));
+}));
+
+// One document file, for the preview's asset bridge (fetched by the PortOS
+// page, never loaded by the sandboxed preview itself). Served inert: a
+// sandbox CSP, no sniffing, same-origin only.
+router.get('/:id/composition/document/file', asyncHandler(async (req, res) => {
+  const { path } = validateRequest(musicVideoDocumentFileQuerySchema, req.query || {});
+  const abs = await resolveDocumentFile(await requireProject(req.params.id), path);
+  res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Cache-Control', 'private, no-cache');
+  res.type(documentMimeType(path));
+  res.sendFile(abs, { dotfiles: 'allow' });
+}));
+
+router.delete('/:id/composition/document', asyncHandler(async (req, res) => {
+  await requireProject(req.params.id);
+  res.json(await detachDocument(req.params.id));
 }));
 
 // --- Draft excerpt render (#8986) ---

@@ -39,6 +39,7 @@ import { applyProjectPatch } from './projectsLogic.js';
 import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { renderableCues, sectionCardCues } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
+import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch, renderSongComposition } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { findStalePerformanceTakes } from './performanceShot.js';
@@ -165,7 +166,7 @@ export async function resolveMasterAudioPath(project) {
 // #8988: resolve the project's explicitly chosen sound-design bed (a
 // music-library track) to a verified path under data/music/, or null when the
 // song is the sole audio master (the default).
-async function resolveSoundBed(project) {
+export async function resolveSoundBedPath(project) {
   const bed = projectSoundBed(project);
   // A (synced) record naming the song itself as its bed mixes nothing.
   if (!bed || bed.trackId === project.trackId) return null;
@@ -593,7 +594,7 @@ export async function planMusicVideoRender(project) {
       { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
     );
   }
-  const soundBed = await resolveSoundBed(project);
+  const soundBed = await resolveSoundBedPath(project);
   return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed };
 }
 
@@ -619,14 +620,42 @@ async function renderMusicVideoCode(projectId, { codeDirectory, startSec = 0 }) 
   }
 }
 
-// Code-rendered mode (#9076) seeks a composition instead of concatenating
-// footage. It shares this module's job map so the existing SSE and cancel
-// routes apply, and it never asks a footage model for pixels.
-async function renderCodeMode(projectId, project, handOff) {
-  const plan = prepareCodeRender(project);
+// Code-rendered mode (#9076) and the composition-document mode seek a
+// composition instead of concatenating footage. They share this module's job
+// map so the existing SSE and cancel routes apply. Code mode never asks a
+// footage model for pixels; a document draws the scenes' selected takes.
+const SEEKED_RENDERERS = Object.freeze({
+  code: {
+    label: 'code',
+    modelId: 'music-video-code',
+    prepare: async (project) => prepareCodeRender(project),
+    encode: async ({ plan, projectId, jobId, audioPath, outputPath, signal, onProgress }) => {
+      await encodeCodeComposition({
+        ...plan, audioPath, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress,
+      });
+      return { width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec, boundaryTimes: plan.sectionTimes };
+    },
+  },
+  document: {
+    label: 'composition document',
+    modelId: 'music-video-document',
+    soundBed: true,
+    prepare: (project) => prepareDocumentRender(project),
+    encode: ({ plan, project, jobId, audioPath, soundBed, outputPath, signal, onProgress }) => encodeDocumentComposition({
+      project, plan, jobId, audioPath, soundBed, outputPath, signal, onProgress,
+    }),
+  },
+});
+
+/** The seeked renderer for a project's render mode, or null for footage modes. */
+export const seekedRendererFor = (project) => SEEKED_RENDERERS[project?.composition?.mode] || null;
+
+async function renderSeekedMode(projectId, project, handOff, renderer) {
+  const plan = await renderer.prepare(project);
   // Resolve the master before any rendering mark. A missing track throws here
   // and the caller releases the pending slot without leaving a job running.
   const audioPath = await resolveMasterAudioPath(project);
+  const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
   const renderingOn = await ensureInstanceId();
@@ -643,62 +672,58 @@ async function renderCodeMode(projectId, project, handOff) {
   handOff();
   const priorStatus = project.status && project.status !== 'rendering' ? project.status : 'ready';
   await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename }).catch((err) => {
-    console.error(`❌ Music-video code render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
+    console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
   });
-  console.log(`🎬 Rendering code music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} frames=${Math.round(plan.durationSec * plan.fps)} footage=off`);
+  console.log(`🎬 Rendering ${renderer.label} music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} frames=${Math.round(plan.durationSec * plan.fps)} footage=off`);
   const { signal } = job.overlayAbort;
   const finish = async (patch) => {
     projectRenders.delete(projectId);
     await updateProject(projectId, settledRender(patch.status, patch.extra || {})).catch((err) => {
-      console.error(`❌ Music-video code render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
+      console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
     });
     closeJobAfterDelay(jobs, jobId);
   };
-  encodeCodeComposition({
-    ...plan,
-    audioPath,
-    outputPath,
-    directory: `compositions/music-video/${projectId}/${jobId}`,
-    signal,
+  Promise.resolve().then(() => renderer.encode({
+    plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
     onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
-  }).then(async () => {
+  })).then(async (encoded) => {
     job.overlayAbort = null;
     job.status = 'complete';
     let proof = null;
     try {
-      await writeCodeProofSheet(outputPath, join(PATHS.videoThumbnails, sheetName), plan.sectionTimes, {
-        width: plan.width, height: plan.height, fps: plan.fps,
+      await writeCodeProofSheet(outputPath, join(PATHS.videoThumbnails, sheetName), encoded.boundaryTimes, {
+        width: encoded.width, height: encoded.height, fps: encoded.fps,
       });
       proof = sheetName;
     } catch (err) {
-      console.warn(`⚠️ Music-video code proof sheet failed [${jobId.slice(0, 8)}]: ${err.message}`);
+      console.warn(`⚠️ Music-video ${renderer.label} proof sheet failed [${jobId.slice(0, 8)}]: ${err.message}`);
     }
-    const atSec = typeof project.composition?.posterSec === 'number' ? project.composition.posterSec : (plan.sectionTimes[0] || 0);
+    const atSec = typeof project.composition?.posterSec === 'number' ? project.composition.posterSec : (encoded.boundaryTimes[0] || 0);
     const thumb = await generateThumbnail(outputPath, jobId, { atSec });
     await appendToVideoHistory({
       id: jobId,
       prompt: `Music Video: ${project.name}`,
-      modelId: 'music-video-code',
+      modelId: renderer.modelId,
       seed: 0,
-      width: plan.width,
-      height: plan.height,
-      numFrames: Math.round(plan.durationSec * plan.fps),
-      fps: plan.fps,
+      width: encoded.width,
+      height: encoded.height,
+      numFrames: Math.round(encoded.durationSec * encoded.fps),
+      fps: encoded.fps,
       filename,
       thumbnail: thumb,
       createdAt: new Date().toISOString(),
       musicVideoProjectId: projectId,
     });
     await finish({ status: 'complete', extra: { renderHistoryId: jobId } });
-    console.log(`✅ Code music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
+    console.log(`✅ ${renderer.label[0].toUpperCase()}${renderer.label.slice(1)} music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}`, proof: proof ? `/data/video-thumbnails/${proof}` : null } });
   }).catch(async (err) => {
     const canceled = signal.aborted || err?.code === 'CANCELED';
     job.status = canceled ? 'canceled' : 'error';
-    const reason = canceled ? 'Render cancelled' : `Code render failed: ${err.message}`;
+    const reason = canceled ? 'Render cancelled' : `${renderer.label[0].toUpperCase()}${renderer.label.slice(1)} render failed: ${err.message}`;
     job.lastError = reason;
     const log = canceled ? console.log : console.error;
-    log(`${canceled ? '🛑' : '❌'} Music-video code render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+    log(`${canceled ? '🛑' : '❌'} Music-video ${renderer.label} render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
     await unlink(outputPath).catch(() => {});
     broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
     await finish({ status: canceled ? priorStatus : 'failed' });
@@ -726,8 +751,9 @@ export async function renderMusicVideo(projectId, options = {}) {
 
   let handedOff = false;
   try {
-    if (project.composition?.mode === 'code') {
-      return await renderCodeMode(projectId, project, () => { handedOff = true; });
+    const seeked = seekedRendererFor(project);
+    if (seeked) {
+      return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked);
     }
     const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);
@@ -958,6 +984,10 @@ export async function recoverStuckMusicVideoRenders() {
   // No overlay capture survives a restart either; drop any scratch it left.
   await sweepCompositionScratch().catch((err) => {
     console.warn(`⚠️ Music Video recovery: could not remove stale overlay scratch: ${err.message}`);
+  });
+  // Nor a composition-document render's staged copy (document + scene media).
+  await sweepDocumentScratch().catch((err) => {
+    console.warn(`⚠️ Music Video recovery: could not remove stale composition-document scratch: ${err.message}`);
   });
   const instanceId = await ensureInstanceId();
   const stuck = (await listProjects()).filter((p) => p?.status === 'rendering'
