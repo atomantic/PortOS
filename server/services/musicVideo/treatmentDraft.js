@@ -304,7 +304,8 @@ function deriveCapabilityGaps(project, brief, directions) {
 function finalize(project, brief, arc, directions, scenes) {
   const gaps = deriveCapabilityGaps(project, brief, directions);
   const beatsById = new Map(arc.beats.map((b) => [b.id, b]));
-  return { arc, shotDirections: directions, proofs: draftProofs(directions, scenes, beatsById, gaps), capabilityGaps: gaps };
+  return { graphicLanguage: brief.graphicLanguage || 'Bold lyric keywords, pictograms and counters on one-beat graphic cards.',
+    arc, shotDirections: directions, proofs: draftProofs(directions, scenes, beatsById, gaps), capabilityGaps: gaps };
 }
 
 /**
@@ -362,6 +363,7 @@ export function buildTreatmentPrompt(project, draft) {
     brief.emotion && `Desired emotion: ${quote(brief.emotion)}`,
     brief.premise && `Narrative premise: ${quote(brief.premise, 600)}`,
     brief.hookObjective && `Opening hook objective: ${quote(brief.hookObjective)}`,
+    brief.graphicLanguage && `Graphic language: ${quote(brief.graphicLanguage)}`,
     brief.mustHave && `Must have: ${quote(brief.mustHave, 400)}`,
     brief.avoid && `Avoid: ${quote(brief.avoid, 400)}`,
     musicVideoCreativeContext(concept),
@@ -395,12 +397,13 @@ Write the treatment:
 - For each section, an "objective" (what the picture must achieve there) and a "rationale" tied to the audience, the lyrics or the emotion. Keep the roles as given.
 - Two or three recurring "motifs" (an image, object, color or gesture) with how each changes across the arc.
 - The balance of "performance", "cutaway" and "graphic" shots as percentages, with a rationale.
+- "graphicLanguage": a concise visual note for the graphic cards and typography (HUD, pictograms, counters), honoring any graphic direction in the brief.
 ${hasLyrics ? '- "lyricInterpretation": what the lyrics mean and how the picture interprets them (not word-for-word illustration).\n' : '- The song is instrumental: set "lyricInterpretation" to null and invent no lyrics.\n'}- For EACH shot: "mode" (performance|cutaway|graphic), "route" (generated|supplied-asset|code-2d — code-2d becomes a code-rendered title card for a sung line or a moved still; prefer it where a video model cannot hold the requirement), "focalSubject", "framing", "negativeSpace" (none|upper|center|lower — the region kept clean for the separately composited text), "typographyRole" (none|subtitle|hero; must be none on instrumental shots), "emphasis", "transitionIn", "transitionOut", "rationale", and a "framePrompt" (the opening still) and "prompt" (the motion) for the image/video model.
 - Never ask the image or video model to render the lyrics or any text: typography is composited separately into the reserved region.
 ${lipSync ? `- Performance shots are lip-synced to the song on ${lipSync.label} (each shot a ${lipSync.minAudioSec}–${lipSync.maxAudioSec}s song window); use them for sung lines where a visible singer matters.` : '- This project\'s video backend cannot lip-sync: no shot can rely on a singer synced to the song.'}
 
 Respond with ONLY a JSON object (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
-{ "rationale": "<why this arc serves the brief>", "lyricInterpretation": ${hasLyrics ? '"<interpretation>"' : 'null'},
+{ "rationale": "<why this arc serves the brief>", "graphicLanguage": "<graphic direction>", "lyricInterpretation": ${hasLyrics ? '"<interpretation>"' : 'null'},
   "beats": [{ "sectionIndex": 0, "objective": "<objective>", "rationale": "<rationale>" }],
   "motifs": [{ "name": "<motif>", "description": "<what it is>", "evolution": "<how it changes>", "rationale": "<why>" }],
   "balance": { "performance": 40, "cutaway": 45, "graphic": 15, "rationale": "<why>" },
@@ -489,5 +492,6 @@ export function mergeAiTreatment(project, draft, parsed) {
     if (d.typographyRole !== 'none' && d.negativeSpace === 'none') d.negativeSpace = d.typographyRole === 'hero' ? 'upper' : 'lower';
   }
   const scenes = directions.map((d) => scenesById.get(d.sceneId)).filter(Boolean);
-  return finalize(project, brief, arc, directions, scenes);
+  const graphicLanguage = brief.graphicLanguage || strField(parsed.graphicLanguage, 1000) || draft.graphicLanguage;
+  return { ...finalize(project, brief, arc, directions, scenes), graphicLanguage };
 }

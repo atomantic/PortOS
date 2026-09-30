@@ -20,11 +20,13 @@
  *     from the same section (else the nearest one), played from the part of
  *     its take the edit never showed (its tail after its own out-point);
  *   - performance clips are never partners: a sung take only matches the song
- *     at its own time. Stills and cards pass through untouched.
+ *     at its own time. Stills and authored cards pass through untouched.
  *
  * Pure and deterministic. Every piece reads inside its source (a looping
  * source may wrap); the output tiles exactly the same timeline as the input.
  */
+
+import { cueWordOnsets, hookKey, hookLines } from './hookTypography.js';
 
 const EPS = 1e-6;
 const MIN_PIECE_SEC = 0.4;
@@ -108,6 +110,86 @@ function nearest(sorted, t) {
   return Math.abs(a - t) <= Math.abs(b - t) ? a : b;
 }
 
+const STOP_WORDS = new Set(['a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'from', 'i', 'in', 'is', 'it', 'me', 'my', 'of', 'on', 'or', 'our', 'so', 'the', 'to', 'we', 'you', 'your']);
+const wordKey = (word) => hookKey(word).replace(/\s+/g, '');
+const isNumber = (word) => /^\p{N}+(?:[.,]\p{N}+)*$/u.test(String(word).replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''));
+
+/** The most frequent content word of each repeated hook line, plus numbers. */
+function graphicWords(cues) {
+  const hooks = hookLines(cues);
+  const candidates = [];
+  for (const cue of Array.isArray(cues) ? cues : []) {
+    const aligned = cueWordOnsets(cue, cue.endSec);
+    const counts = new Map();
+    if (hooks.has(hookKey(cue.text))) {
+      for (const { w } of aligned) {
+        const key = wordKey(w);
+        if (key && !STOP_WORDS.has(key) && !/^\p{N}+$/u.test(key)) counts.set(key, (counts.get(key) || 0) + 1);
+      }
+    }
+    const keyword = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+    for (const { w, atSec } of aligned) if (isNumber(w) || (keyword && wordKey(w) === keyword)) candidates.push({ atSec, text: w });
+  }
+  return candidates.sort((a, b) => a.atSec - b.atSec);
+}
+
+/** Replace one beat within a single source piece; keep footage read heads intact. */
+function insertGraphicCards(clips, ranked, period, lyricCues, accentColor) {
+  const candidates = graphicWords(lyricCues);
+  if (!candidates.length) return clips;
+  const accent = /^#[0-9a-f]{6}$/i.test(accentColor || '') ? accentColor : '#ff5a1f';
+  const out = [];
+  let cursor = 0;
+  let previousCardAt = -Infinity;
+  let count = 0;
+  let timeline = 0;
+  const authoredCards = clips.flatMap((clip) => {
+    const start = timeline;
+    timeline += clip.outSec - clip.inSec;
+    return clip.layer === 'card' ? [{ start, end: timeline }] : [];
+  });
+  for (const clip of clips) {
+    const span = clip.outSec - clip.inSec;
+    const start = cursor;
+    const end = start + span;
+    cursor = end;
+    if (clip.layer === 'card') {
+      previousCardAt = start;
+      out.push(clip);
+      continue;
+    }
+    const eligible = candidates.filter(({ atSec }) => {
+      const section = sectionAt(ranked, atSec);
+      return section && tierBeats(section.rank) <= 3 && atSec >= section.startSec - EPS && atSec >= start - EPS
+        && atSec + period <= Math.min(end, section.endSec) + EPS
+        && atSec - previousCardAt >= 4 * period - EPS
+        && authoredCards.every((card) => Math.abs(atSec - card.start) >= 4 * period - EPS
+          && (atSec + period < card.start - EPS || atSec > card.end + EPS));
+    });
+    let from = start;
+    for (const { atSec, text } of eligible) {
+      if (atSec < from - EPS || atSec - previousCardAt < 4 * period - EPS) continue;
+      if (atSec > from + EPS) out.push(sliceClip(clip, from - start, atSec - from));
+      const duration = round3(period);
+      out.push({ sceneId: `graphic-card-${count}`, layer: 'card', inSec: 0, outSec: duration, duration,
+        cardText: text, cardColor: count % 2 === 0 ? accent : '#000000' });
+      count += 1;
+      previousCardAt = atSec;
+      from = atSec + period;
+    }
+    if (end > from + EPS) out.push(from === start ? clip : sliceClip(clip, from - start, end - from));
+  }
+  return out;
+}
+
+function sliceClip(clip, offset, length) {
+  const duration = round3(length);
+  if (clip.layer === 'still') return { ...clip, inSec: 0, outSec: duration, duration, sourceSec: duration };
+  const inSec = round3(clip.inSec + offset);
+  return { ...clip, inSec, outSec: round3(inSec + duration), duration,
+    ...(clip.loop === false ? { sourceSec: round3(clip.inSec + (clip.sourceSec ?? clip.duration) - inSec) } : {}) };
+}
+
 /**
  * Re-cut `clips` (the snapped, coverage-checked render list, in timeline
  * order). `scenes` supply each clip's shot mode; `sections` (with `energy`),
@@ -115,7 +197,7 @@ function nearest(sorted, t) {
  * Returns a new clip list; the input is returned as-is when there is no beat
  * grid to cut on.
  */
-export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, words = [] } = {}) {
+export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, words = [], lyricCues = [], graphicCards = false, accentColor = null } = {}) {
   const list = Array.isArray(clips) ? clips : [];
   const grid = (Array.isArray(beats) ? beats : []).filter(finite).sort((a, b) => a - b);
   const period = beatPeriod(bpm, grid);
@@ -178,5 +260,5 @@ export function intercutClips(clips, { scenes = [], sections = [], beats = [], b
       out.push({ ...clip, inSec, outSec: round3(inSec + len), duration: len, ...(clip.loop === false ? { sourceSec: round3(clip.inSec + (clip.sourceSec ?? clip.duration) - inSec) } : {}) });
     }
   }
-  return out;
+  return graphicCards ? insertGraphicCards(out, ranked, period, lyricCues, accentColor) : out;
 }

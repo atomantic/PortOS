@@ -209,14 +209,14 @@ export function renderableCues(composition, durationSec) {
  * section on the output timebase (`sections` from buildMusicVideoFfmpegArgs),
  * clipped to the rendered video.
  */
-export function sectionCardCues(clips, sections, durationSec) {
+export function sectionCardCues(clips, sections, durationSec, graphicLanguage = '') {
   const textBySceneId = new Map(clips.filter((c) => c.layer === 'card' && c.cardText).map((c) => [c.sceneId, c.cardText]));
   return sections
     .filter((section) => textBySceneId.has(section.sceneId) && section.startSec < durationSec)
     .map((section) => ({
       id: `card-${section.sceneId}`, text: textBySceneId.get(section.sceneId),
       startSec: section.startSec, endSec: Math.min(section.endSec, durationSec),
-      template: 'fade', placement: 'center', emphasis: 'hero',
+      template: /\b(pictograms?|counters?|hud)\b/i.test(graphicLanguage) ? 'pop' : 'fade', placement: 'center', emphasis: 'hero',
     }));
 }
 
@@ -306,7 +306,7 @@ const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 export function buildTypographyDocument({ cues, style = {}, width, height, durationSec, fps }) {
   const payload = cues.map(({ id, text, startSec, endSec, template, placement, emphasis, words }) => ({ id, text, startSec, endSec, template, placement, emphasis, ...(words ? { words } : {}) }));
   const color = /^#[0-9a-f]{6}$/i.test(style.color || '') ? style.color : '#ffffff';
-  const fontStack = FONT_STACKS[style.font] || FONT_STACKS.sans;
+  const fontStack = /\b(hud|counters?)\b/i.test(style.graphicLanguage || '') ? FONT_STACKS.mono : (FONT_STACKS[style.font] || FONT_STACKS.sans);
   const accent = /^#[0-9a-f]{6}$/i.test(style.accentColor || '') ? style.accentColor : '#ff5a1f';
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }

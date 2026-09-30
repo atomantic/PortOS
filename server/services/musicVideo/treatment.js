@@ -108,6 +108,7 @@ export function normalizeBrief(patch, base = null, now = new Date().toISOString(
     emotion: text(merged.emotion, 500),
     premise: text(merged.premise, 2000),
     hookObjective: text(merged.hookObjective, 1000),
+    graphicLanguage: text(merged.graphicLanguage, 1000),
     mustHave: text(merged.mustHave, 2000),
     avoid: text(merged.avoid, 2000),
     referenceNotes: normalizeReferenceNotes(merged.referenceNotes, base?.referenceNotes, now),
@@ -400,6 +401,7 @@ export function writeCompiledTreatment(project, { baseRevision, draft, basis, co
   const existing = normalizeTreatment(project.treatment, now);
   const next = {
     ...(existing || blankTreatment(now)),
+    brief: normalizeBrief({ graphicLanguage: draft.graphicLanguage || existing?.brief?.graphicLanguage }, existing?.brief, now),
     arc: normalizeArc(draft.arc),
     shotDirections: normalizeShotDirections(draft.shotDirections),
     // A new compile proposes a fresh checklist: earlier verdicts reviewed
