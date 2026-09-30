@@ -32,12 +32,13 @@
  */
 
 import { createHash, randomUUID } from 'crypto';
-import { createReadStream } from 'fs';
+import { createReadStream, existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
-import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { findFfmpeg, probeVideoDuration, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
+import { compareWindowFingerprint, computeRmsEnvelope, windowFingerprint } from '../../lib/audioFingerprint.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import {
   clipRelativeCues,
@@ -89,34 +90,135 @@ const refuse = (message, code, status = 400) => new ServerError(message, { statu
 // Recorded vs current scene times agree within a millisecond.
 const SAME_TIME_SEC = 0.001;
 
+const STALE_REASON_LABELS = Object.freeze({
+  'not-lip-synced': 'not lip-synced',
+  retimed: 're-timed',
+  'audio-changed': 'sung window changed in the song',
+});
+
+// A take made before #9266 carries no window fingerprint. Its old master can
+// still be found among the linked track's earlier renders (the library keeps
+// every take's bytes under data/music/), matched by the content hash the take
+// recorded. Hashes and envelopes are computed at most once per file per check.
+function legacyMasterLookup(project, masterPath) {
+  let candidates = null;
+  const envelopes = new Map();
+  const listCandidates = async () => {
+    if (candidates) return candidates;
+    candidates = [];
+    if (!project?.trackId) return candidates;
+    const { getTrack } = await import('../tracks/index.js');
+    const track = await getTrack(project.trackId).catch(() => null);
+    const seen = new Set([masterPath]);
+    for (const render of Array.isArray(track?.renders) ? track.renders : []) {
+      const path = render?.audioFilename ? safeUnder(PATHS.music, render.audioFilename) : null;
+      if (!path || seen.has(path) || !existsSync(path)) continue;
+      seen.add(path);
+      candidates.push({ path, sha256: null });
+    }
+    return candidates;
+  };
+  return async function envelopeForSha(sha256) {
+    if (typeof sha256 !== 'string' || !sha256) return null;
+    if (envelopes.has(sha256)) return envelopes.get(sha256);
+    let envelope = null;
+    for (const candidate of await listCandidates()) {
+      candidate.sha256 ??= await hashFile(candidate.path).catch(() => '');
+      if (candidate.sha256 !== sha256) continue;
+      envelope = await computeRmsEnvelope(candidate.path);
+      break;
+    }
+    envelopes.set(sha256, envelope);
+    return envelope;
+  };
+}
+
 /**
- * Performance scenes whose SELECTED clip cannot be rendered as a lip-synced
- * shot: a take with no performance instruction (a cutaway render or an import
- * made before the scene became a performance), or one generated against a
- * different song interval (the scene was re-timed) or a different recording
- * (the song was replaced). Returns
- * `[{ sceneId, reason: 'not-lip-synced' | 'retimed' | 'audio-changed' }]`;
- * the master is hashed only when there is a performance take to check.
+ * Review every performance scene's SELECTED clip against the current master.
+ * Returns `[{ sceneId, reason, stale }]`:
+ *
+ *   - `not-lip-synced` (stale) — no performance instruction: a cutaway render
+ *     or an import made before the scene became a performance;
+ *   - `audio-changed` (stale) — the master was replaced AND the take's own
+ *     audio window sounds different in it;
+ *   - `retimed` (stale) — the scene's song interval moved since the take;
+ *   - `audio-rehashed` (NOT stale, informational) — the master's bytes
+ *     changed (a re-master or re-encode) but the take's window did not.
+ *
+ * Staleness is judged on the take's window, not the whole file (#9266): the
+ * take's stored loudness fingerprint (or, for an older take, the same window
+ * of its old master when that file is still in the track's render history)
+ * is compared with the new master. With neither, a changed master is stale.
+ * The master is hashed only when there is a performance take to check, and
+ * decoded only when its hash changed.
  */
-export async function findStalePerformanceTakes(project, masterPath) {
-  const stale = [];
+export async function reviewPerformanceTakes(project, masterPath) {
+  const results = [];
   const selected = [];
   for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
     if (!isPerformanceScene(scene) || !scene.videoHistoryId) continue;
     const instruction = selectedPerformanceInstruction(scene);
     if (instruction) selected.push({ scene, instruction });
-    else stale.push({ sceneId: scene.sceneId, reason: 'not-lip-synced' });
+    else results.push({ sceneId: scene.sceneId, reason: 'not-lip-synced', stale: true });
   }
-  if (selected.length === 0) return stale;
+  if (selected.length === 0) return results;
   const sha256 = await hashFile(masterPath);
+  let currentEnvelope = null;
+  const oldEnvelope = legacyMasterLookup(project, masterPath);
+  const windowUnchanged = async (instruction) => {
+    let fingerprint = instruction.audio?.windowFingerprint;
+    if (!fingerprint) {
+      const envelope = await oldEnvelope(instruction.audio?.sha256);
+      fingerprint = envelope && instruction.audioWindow ? windowFingerprint(envelope, instruction.audioWindow) : null;
+      if (!fingerprint) return false;
+    }
+    currentEnvelope ??= await computeRmsEnvelope(masterPath);
+    return compareWindowFingerprint(fingerprint, currentEnvelope).same;
+  };
   for (const { scene, instruction } of selected) {
     const interval = instruction.songInterval || {};
-    if (instruction.audio?.sha256 !== sha256) stale.push({ sceneId: scene.sceneId, reason: 'audio-changed' });
+    const rehashed = instruction.audio?.sha256 !== sha256;
+    // A window that cannot be compared (decode failure) stays stale — the
+    // pre-#9266 answer — rather than rendering a take out of sync.
+    const unchanged = !rehashed || await windowUnchanged(instruction).catch((err) => {
+      console.warn(`⚠️ Music Video: could not compare scene ${scene.sceneId}'s sung window with the new master: ${err.message}`);
+      return false;
+    });
+    if (!unchanged) results.push({ sceneId: scene.sceneId, reason: 'audio-changed', stale: true });
     else if (!(Math.abs(interval.startSec - scene.startSec) <= SAME_TIME_SEC && Math.abs(interval.endSec - scene.endSec) <= SAME_TIME_SEC)) {
-      stale.push({ sceneId: scene.sceneId, reason: 'retimed' });
-    }
+      results.push({ sceneId: scene.sceneId, reason: 'retimed', stale: true });
+    } else if (rehashed) results.push({ sceneId: scene.sceneId, reason: 'audio-rehashed', stale: false });
   }
-  return stale;
+  return results;
+}
+
+/** The stale entries of `reviewPerformanceTakes`: `[{ sceneId, reason }]`. */
+export async function findStalePerformanceTakes(project, masterPath) {
+  return (await reviewPerformanceTakes(project, masterPath))
+    .filter((r) => r.stale)
+    .map(({ sceneId, reason }) => ({ sceneId, reason }));
+}
+
+/**
+ * The one staleness gate every renderer that draws performance takes runs
+ * (concat, composed, document, and their excerpts): a performance take sings
+ * one stretch of one recording, so a re-timed scene or a changed sung window
+ * would put mouth motion over the wrong audio. Throws 422
+ * STALE_PERFORMANCE_TAKES naming each scene's reason.
+ */
+export async function assertCurrentPerformanceTakes(project, masterPath) {
+  const reviewed = await reviewPerformanceTakes(project, masterPath);
+  const rehashed = reviewed.filter((r) => r.reason === 'audio-rehashed').length;
+  if (rehashed > 0) console.log(`🎵 Music Video: ${rehashed} lip-sync take${rehashed === 1 ? '' : 's'} still match${rehashed === 1 ? 'es' : ''} the re-mastered song in ${rehashed === 1 ? 'its' : 'their'} sung window`);
+  const stale = reviewed.filter((r) => r.stale).map(({ sceneId, reason }) => ({ sceneId, reason }));
+  if (stale.length === 0) return;
+  const counts = new Map();
+  for (const { reason } of stale) counts.set(reason, (counts.get(reason) || 0) + 1);
+  const why = [...counts].map(([reason, n]) => `${n} ${STALE_REASON_LABELS[reason] || reason}`).join(', ');
+  throw new ServerError(
+    `${stale.length} performance shot${stale.length === 1 ? ' has' : 's have'} no lip-synced take of the current song interval and recording (${why}) — regenerate ${stale.length === 1 ? 'it' : 'them'}, or switch to Cutaway, before rendering`,
+    { status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale } },
+  );
 }
 
 /**
@@ -165,6 +267,15 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   if (stemPath) assertVocalStemTimebase(await probeVideoDuration(stemPath), songDurationSec);
 
   const audioSha256 = await hashFile(masterPath);
+  // #9266: the MASTER's loudness over this window, so a later re-master that
+  // leaves these bars alone keeps the take. Best-effort — a take without one
+  // falls back to the old-master lookup, and then to whole-file staleness.
+  const windowFingerprintRecord = await computeRmsEnvelope(masterPath)
+    .then((envelope) => windowFingerprint(envelope, { startSec: plan.windowStartSec, endSec: plan.windowEndSec }))
+    .catch((err) => {
+      console.warn(`⚠️ Music Video: could not fingerprint the performance window for scene ${scene.sceneId}: ${err.message}`);
+      return null;
+    });
   const conditioningSha256 = stemPath ? await hashFile(stemPath) : audioSha256;
   await ensureDir(PATHS.uploads);
   const audioFilePath = join(PATHS.uploads, `mv-performance-${randomUUID()}.wav`);
@@ -189,9 +300,11 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
       source: project.trackId ? 'track' : 'upload',
       sha256: audioSha256,
       songDurationSec,
+      windowFingerprint: windowFingerprintRecord,
       // What the provider heard: the master itself, or a vocal stem on the
       // master's timebase. `sha256` above stays the master's, so a take
-      // is stale only when the song changes, not when a stem is swapped.
+      // is stale only when the song changes, not when a stem is swapped —
+      // and then only when `windowFingerprint` says this window changed.
       conditioning: { source: stemPath ? 'vocal-stem' : 'master', sha256: conditioningSha256 },
     },
     songInterval: { startSec: scene.startSec, endSec: scene.endSec },

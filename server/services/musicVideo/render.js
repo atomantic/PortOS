@@ -42,7 +42,7 @@ import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from '.
 import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch, renderSongComposition } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { findStalePerformanceTakes } from './performanceShot.js';
+import { assertCurrentPerformanceTakes } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { projectSoundBed } from './soundBed.js';
@@ -567,16 +567,9 @@ export async function planMusicVideoRender(project) {
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
   const audioPath = await resolveMasterAudioPath(project);
-  // #8977: a performance take sings one stretch of one recording. If the
-  // scene was re-timed or the song replaced since, its mouth motion no longer
-  // matches the audio under it — refuse rather than render it out of sync.
-  const stale = await findStalePerformanceTakes(project, audioPath);
-  if (stale.length > 0) {
-    throw new ServerError(
-      `${stale.length} performance shot${stale.length === 1 ? ' has' : 's have'} no lip-synced take of the current song interval and recording — regenerate ${stale.length === 1 ? 'it' : 'them'}, or switch to Cutaway, before rendering`,
-      { status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale } },
-    );
-  }
+  // #8977/#9266: refuse a performance take whose scene was re-timed or whose
+  // sung window changed in the current master.
+  await assertCurrentPerformanceTakes(project, audioPath);
   // #8985: a composed render cuts still and card sections into the same
   // timebase as the footage; plain concat renders footage only, as before.
   const composed = project.composition?.mode === 'composed';
@@ -640,6 +633,9 @@ const SEEKED_RENDERERS = Object.freeze({
     label: 'composition document',
     modelId: 'music-video-document',
     soundBed: true,
+    // A document draws the scenes' selected takes, so it runs the same
+    // performance-take gate as a footage render (#9266).
+    performanceTakes: true,
     prepare: (project) => prepareDocumentRender(project),
     encode: ({ plan, project, jobId, audioPath, soundBed, outputPath, signal, onProgress }) => encodeDocumentComposition({
       project, plan, jobId, audioPath, soundBed, outputPath, signal, onProgress,
@@ -655,6 +651,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer) {
   // Resolve the master before any rendering mark. A missing track throws here
   // and the caller releases the pending slot without leaving a job running.
   const audioPath = await resolveMasterAudioPath(project);
+  if (renderer.performanceTakes) await assertCurrentPerformanceTakes(project, audioPath);
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);

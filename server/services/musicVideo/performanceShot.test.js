@@ -19,6 +19,9 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await
 const getProject = vi.fn();
 vi.mock('./projects.js', () => ({ getProject: (...a) => getProject(...a), listProjects: vi.fn(async () => []), updateProject: vi.fn() }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+// A pre-#9266 take's old master is found through the linked track's renders.
+const getTrack = vi.fn(async () => null);
+vi.mock('../tracks/index.js', () => ({ getTrack: (...a) => getTrack(...a) }));
 // render.js reads clip history through local.js; point it at the real history
 // store the fal lane writes, without loading the local runtime.
 vi.mock('../videoGen/local.js', async () => {
@@ -91,6 +94,7 @@ beforeEach(async () => {
   vi.unstubAllGlobals();
   videoGenEvents.removeAllListeners();
   getProject.mockReset();
+  getTrack.mockReset();
   // Queue-owned slices are deleted by the media-job queue, which these tests bypass.
   await rm(PATHS.uploads, { recursive: true, force: true });
   await mkdir(PATHS.music, { recursive: true });
@@ -192,10 +196,37 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(await findStalePerformanceTakes({ scenes: [withTake] }, songPath)).toEqual([]);
     expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, endSec: 22 }] }, songPath))
       .toEqual([{ sceneId: 'mvs-1', reason: 'retimed' }]);
-    const replaced = songWav();
-    replaced.writeInt16LE(1000, 44 + 2);
-    await writeFile(songPath, replaced);
+    // #9266: a re-master that changes the song OUTSIDE the take's window
+    // (18.225–23.275) keeps the take; one that changes its sung window does not.
+    const original = await readFile(songPath);
+    const remastered = songWav();
+    for (let i = 0; i < RATE; i++) remastered.writeInt16LE(Math.round(20000 * Math.sin(i / 8)), 44 + (5 * RATE + i) * 2);
+    await writeFile(songPath, remastered);
+    expect(await findStalePerformanceTakes({ scenes: [withTake] }, songPath)).toEqual([]);
+    const resung = songWav();
+    for (let i = 0; i < RATE; i++) resung.writeInt16LE(Math.round(20000 * Math.sin(i / 8)), 44 + (21 * RATE + i) * 2);
+    await writeFile(songPath, resung);
     expect(await findStalePerformanceTakes({ scenes: [withTake] }, songPath))
+      .toEqual([{ sceneId: 'mvs-1', reason: 'audio-changed' }]);
+
+    // A take made before window fingerprints existed is compared against its
+    // old master when the track's render history still holds it, and is stale
+    // when that file is gone.
+    const legacyInstruction = { ...si, audio: { ...si.audio, windowFingerprint: undefined } };
+    const { scene: legacyScene } = appendSceneTakes(project({ referenceImageId: 'frame.png' }), 'mvs-1', [{
+      kind: 'video', assetId: job.jobId, source: 'generated', shotInstruction: legacyInstruction,
+    }]);
+    const legacyProject = { trackId: 'trk-1', scenes: [legacyScene] };
+    await writeFile(join(PATHS.music, 'song-v1.wav'), original);
+    await writeFile(songPath, remastered);
+    getTrack.mockResolvedValue({ id: 'trk-1', audioFilename: 'song.wav', renders: [{ audioFilename: 'song.wav' }, { audioFilename: 'song-v1.wav' }] });
+    expect(await findStalePerformanceTakes(legacyProject, songPath)).toEqual([]);
+    await writeFile(songPath, resung);
+    expect(await findStalePerformanceTakes(legacyProject, songPath))
+      .toEqual([{ sceneId: 'mvs-1', reason: 'audio-changed' }]);
+    await writeFile(songPath, remastered);
+    getTrack.mockResolvedValue({ id: 'trk-1', audioFilename: 'song.wav', renders: [{ audioFilename: 'song.wav' }] });
+    expect(await findStalePerformanceTakes(legacyProject, songPath))
       .toEqual([{ sceneId: 'mvs-1', reason: 'audio-changed' }]);
     // A performance scene whose selected clip is not a lip-sync take is refused too.
     expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, takes: [] }] }, songPath))

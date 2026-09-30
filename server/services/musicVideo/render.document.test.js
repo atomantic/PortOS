@@ -65,4 +65,21 @@ describe('composition-document render plan', () => {
     expect(call).not.toHaveProperty('windowStart');
     await vi.waitFor(async () => expect((await projects.getProject(id)).renderHistoryId).toBe(jobId));
   });
+
+  it('refuses a full render and an excerpt over a stale performance take, like a footage render (#9266)', async () => {
+    const id = await documentProject();
+    await importDocumentTemplate(id);
+    await projects.mutateProjectRecord(id, (current) => ({ project: {
+      ...current,
+      scenes: [{ sceneId: 'mvs-1', order: 0, shotMode: 'performance', startSec: 1, endSec: 3, videoHistoryId: 'clip-1', takes: [] }],
+    } }));
+    encodeDocumentComposition.mockClear();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(renderMusicVideo(id)).rejects.toMatchObject({
+        status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale: [{ sceneId: 'mvs-1', reason: 'not-lip-synced' }] },
+      });
+      await expect(startExcerptRender(id, { startSec: 1, endSec: 3 })).rejects.toMatchObject({ status: 422, code: 'STALE_PERFORMANCE_TAKES' });
+    }
+    expect(encodeDocumentComposition).not.toHaveBeenCalled();
+  });
 });
