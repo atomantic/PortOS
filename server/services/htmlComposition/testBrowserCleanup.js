@@ -1,5 +1,54 @@
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 
+// Chrome writes its CDP address to stderr. Keep only a bounded tail and report
+// known failure categories: raw stderr can contain the user's profile path.
+export function _waitForTestChrome(proc, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    let stderr = '';
+    let timer;
+    const diagnostic = () => {
+      const categories = [
+        ['sandbox', /sandbox/i],
+        ['profile in use', /profile.*(?:in use|lock)|ProcessSingleton/i],
+        ['permission denied', /permission denied|EACCES/i],
+        ['missing file or library', /not found|ENOENT|shared librar/i],
+        ['disk full', /no space left|ENOSPC/i],
+        ['crashpad', /crashpad/i],
+      ].filter(([, pattern]) => pattern.test(stderr)).map(([name]) => name);
+      return categories.length ? `; stderr: ${categories.join(', ')}` : stderr ? '; Chrome emitted stderr' : '; no stderr';
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      proc.removeListener('error', onError);
+      proc.removeListener('exit', onExit);
+      proc.stderr.removeListener('data', onData);
+    };
+    const finish = (value, error) => {
+      cleanup();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const onData = bytes => {
+      stderr = (stderr + bytes.toString()).slice(-8192);
+      // Wait for the terminating newline: a stream chunk can end mid-URL.
+      const match = stderr.match(/(?:^|\n)DevTools listening on (ws:\/\/[^\r\n]+)\r?\n/);
+      if (match) finish(match[1]);
+    };
+    const onError = error => {
+      const code = /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : 'spawn error';
+      finish(null, new Error(`Test Chrome failed to spawn (${code}${diagnostic()})`));
+    };
+    const onExit = (code, signal) => finish(null, new Error(
+      `Test Chrome exited before startup (code ${Number.isInteger(code) ? code : 'none'}, signal ${/^[A-Z0-9]{1,32}$/.test(signal) ? signal : 'none'}${diagnostic()})`,
+    ));
+    proc.once('error', onError);
+    proc.once('exit', onExit);
+    proc.stderr.on('data', onData);
+    timer = setTimeout(() => finish(null, new Error(`Test Chrome did not start within ${timeoutMs}ms${diagnostic()}`)), timeoutMs);
+    if (proc.exitCode !== null || proc.signalCode !== null) onExit(proc.exitCode, proc.signalCode);
+  });
+}
+
 async function withinDeadline(action, timeoutMs, stage) {
   let timer;
   try {
