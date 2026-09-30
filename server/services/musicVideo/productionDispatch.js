@@ -26,6 +26,7 @@ import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage } from '../../lib/musicVideoShotTiming.js';
 import { sceneFramePrompt, sceneShotPrompt } from './handoff.js';
 import { conditioningReferences, falRouteVideoSettings } from './productionPool.js';
+import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
   `"${scene.label || scene.sceneId}" has no ${what} prompt to generate from`,
@@ -57,6 +58,9 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, route.mode);
   const common = {
     prompt,
+    // The project's aspect, never the backend's per-prompt choice (a portrait
+    // close-up pillarboxes in a 16:9 render).
+    ...musicVideoFrameGenSize(project),
     cleanC2PA,
     denoise,
     ...(referenceImagePaths.length ? { referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : {}),

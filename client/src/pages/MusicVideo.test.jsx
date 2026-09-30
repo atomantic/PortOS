@@ -1780,6 +1780,9 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith({
       prompt: 'harbor at dawn, grainy 16mm, color palette #112233; camera: locked-off wides',
+      // Frames are requested at the project's aspect (16:9 by default).
+      width: 1536,
+      height: 864,
       referenceImageFiles: ['mood.png'],
       musicVideo: { projectId: 'mv-spec', sceneId: 's1' },
     }, { silent: true }));

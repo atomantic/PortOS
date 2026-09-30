@@ -798,4 +798,6 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `muscriptorModels.js` | `MUSCRIPTOR_MODELS` (`small`/`medium`/`large`) — MuScriptor size tiers shared by route schemas and `audioMidiTranscription.js`; pinned to the Python runner's argparse choices. |
 | `loopInterval.js` | Loop interval grammar (`MIN_INTERVAL_MS`, `parseInterval`, `isValidLoopInterval`) shared by `services/loops.js` and `createLoopSchema` so the route rejects what the service would. |
 
+| `musicVideoAspect.js` | `musicVideoAspect(project)` (treatment brief aspect, default 16:9), `MUSIC_VIDEO_FRAME_GEN_SIZES` and `musicVideoFrameGenSize(project)`: the size every Music Video reference frame is requested at, so a backend never picks portrait for a 16:9 video. Shared by `productionDispatch.js`, `documentRender.js` and the client board. |
+| `musicVideoMotion.js` | `MOTION_CONTINUITY_CLAUSE`: the clause every Music Video motion (i2v) prompt ends with, pinning the reference frame's lighting, time of day and palette. Shared by `handoff.js` and the client board. |
 | `musicVideoConditioning.js` | `musicVideoConditioningReferences(project, scene)` selects the approved character sheet and scene's mapped set plate, with capped project-wide fallback; shared by board and production. |
