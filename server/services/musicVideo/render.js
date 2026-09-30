@@ -46,6 +46,7 @@ import { assertCurrentPerformanceTakes } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { projectSoundBed } from './soundBed.js';
+import { intercutClips } from './intercut.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -363,7 +364,12 @@ const evenPx = (n) => Math.max(2, Math.round(n / 2) * 2);
 // card is a solid colour the typography layer writes its text over. On the
 // frame grid every section is cut to an exact frame count.
 function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
-  const trim = frameGrid ? `trim=end_frame=${frames}` : `trim=start=${c.inSec}:end=${c.outSec}`;
+  // On the frame grid a footage in-point (a performance edit, an intercut
+  // piece #9290) is a start frame; stills and cards always start at 0.
+  const startFrame = !c.layer && c.inSec > 0 ? Math.round(c.inSec * fps) : 0;
+  const trim = frameGrid
+    ? (startFrame > 0 ? `trim=start_frame=${startFrame}:end_frame=${startFrame + frames}` : `trim=end_frame=${frames}`)
+    : `trim=start=${c.inSec}:end=${c.outSec}`;
   if (c.layer === 'card') {
     return `color=c=0x${c.cardColor.slice(1)}:s=${canonW}x${canonH}:r=${fps},setsar=1,format=yuv420p,${trim},setpts=PTS-STARTPTS`;
   }
@@ -576,17 +582,28 @@ export async function planMusicVideoRender(project) {
   const rawClips = await resolveSceneClips(project, { layered: composed });
   const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
   const beats = project.audioAnalysis?.beats;
-  const clips = beatSnapClips(rawClips, beats, { scenes: project.scenes });
+  const snapped = beatSnapClips(rawClips, beats, { scenes: project.scenes });
   // #8964: a new (non-looping) shot must never silently repeat footage to
   // fill its span. Refuse the render and name the shots that need a trim,
   // a continuation, a replacement clip, or an explicit loop.
-  const shortfalls = findCoverageShortfalls(clips);
+  const shortfalls = findCoverageShortfalls(snapped);
   if (shortfalls.length > 0) {
     throw new ServerError(
       `${shortfalls.length} shot${shortfalls.length === 1 ? ' is' : 's are'} longer than ${shortfalls.length === 1 ? 'its' : 'their'} source clip — trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
       { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
     );
   }
+  // #9290: an intercut project re-cuts the covered shots on the song's energy
+  // and sung words, reusing cutaway footage — no extra generation.
+  const clips = project.composition?.cutting === 'intercut'
+    ? intercutClips(snapped, {
+      scenes: project.scenes,
+      sections: project.audioAnalysis?.sections,
+      beats,
+      bpm: project.audioAnalysis?.bpm,
+      words: (project.lyricCues || []).flatMap((cue) => (Array.isArray(cue?.words) ? cue.words : [])),
+    })
+    : snapped;
   const soundBed = await resolveSoundBedPath(project);
   return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed };
 }

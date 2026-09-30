@@ -202,6 +202,17 @@ describe('music video production run (#9066)', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
+  it('has the autopilot cut on the song unless the director chose how it cuts (#9290)', async () => {
+    seedProject({ scenes: [], castAndSets: { status: 'skipped' } });
+    planProject.mockResolvedValue({ scenesAdded: 0 });
+    await start();
+    expect(store.get('mv-example').composition.cutting).toBe('intercut');
+
+    seedProject({ scenes: [], castAndSets: { status: 'skipped' }, composition: { mode: 'composed', cutting: 'scene', textCues: [] } });
+    await start();
+    expect(store.get('mv-example').composition.cutting).toBe('scene');
+  });
+
   it('runs the Cast & Sets check-in before the plan and waits for the director in review mode', async () => {
     seedProject({ scenes: [], visualSpec: { references: [] } });
     startCastAndSets.mockImplementation(async (projectId, { productionRunId }) => {
