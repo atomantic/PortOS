@@ -317,3 +317,31 @@ export const approveMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...options });
 export const skipMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/skip`, { method: 'POST', ...options });
+
+// ---- Composition document (render style `document`) ----
+// A project-owned HTML composition document rendered over the song. Imports
+// resolve to `{ project, document }`; the manifest to `{ document, available,
+// files, totalBytes }`; the preview to `{ html, assets, width, height, fps, durationSec }`.
+const compositionDocumentPath = (id) => `/music-video/${encodeURIComponent(id)}/composition/document`;
+export const getMusicVideoCompositionDocument = (id, options = {}) => request(compositionDocumentPath(id), options);
+export const importMusicVideoCompositionZip = (id, file, options = {}) => {
+  const body = new FormData();
+  body.append('file', file, file.name || 'composition.zip');
+  return request(`${compositionDocumentPath(id)}/zip`, { method: 'POST', body, ...options });
+};
+export const importMusicVideoCompositionDirectory = (id, directory, options = {}) =>
+  request(`${compositionDocumentPath(id)}/directory`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
+export const startMusicVideoCompositionTemplate = (id, template = 'layered', options = {}) =>
+  request(`${compositionDocumentPath(id)}/template`, { method: 'POST', body: JSON.stringify({ template }), ...options });
+export const getMusicVideoCompositionExport = (id, options = {}) =>
+  request(`${compositionDocumentPath(id)}/export`, { responseType: 'arraybuffer', ...options });
+export const getMusicVideoCompositionPreview = (id, options = {}) => request(`${compositionDocumentPath(id)}/preview`, options);
+export const detachMusicVideoCompositionDocument = (id, options = {}) =>
+  request(compositionDocumentPath(id), { method: 'DELETE', ...options });
+// One preview asset (a scene take under /data, or a document file) as a Blob the
+// page posts into the sandboxed preview, which cannot fetch anything itself.
+export async function fetchMusicVideoPreviewAsset(url) {
+  const response = await fetch(url, { credentials: 'same-origin' });
+  if (!response.ok) throw new Error(`Could not load preview media (${response.status})`);
+  return response.blob();
+}

@@ -697,3 +697,48 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(r.changed).toBe(false);
   });
 });
+
+describe('composition document (render style `document`)', () => {
+  const pointer = { directory: 'music-video/mv-1/composition/doc-a1', entry: 'index.html', updatedAt: '2026-01-02T00:00:00.000Z', source: { kind: 'template', name: 'layered' }, files: 3, bytes: 42 };
+  const overlay = { enabled: true, titleLines: ['EXAMPLE'], meter: { label: 'LEVEL', keyframes: [[10, 40], [0, 100]] }, ticker: ['alpha'], timecode: false, timecodeStartSec: 0 };
+  const withDocument = () => ({ ...baseProject(), composition: { version: 1, mode: 'document', textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null, document: pointer, overlay } });
+
+  it('never takes the pointer from a create body, and keeps the HUD settings normalized', () => {
+    const created = buildProjectRecord({ name: 'Doc', composition: { mode: 'document', document: pointer, overlay } }, { id: 'mv-9', now: '2026-01-01T00:00:00.000Z' });
+    expect(created.composition.mode).toBe('document');
+    expect(created.composition).not.toHaveProperty('document');
+    expect(created.composition.overlay.meter.keyframes).toEqual([[0, 100], [10, 40]]);
+  });
+
+  it('keeps the stored pointer across a PATCH that echoes, forges or omits it', () => {
+    const project = withDocument();
+    const forged = { ...project.composition, document: { ...pointer, directory: 'music-video/mv-other/composition/doc-z9' } };
+    expect(applyProjectPatch(project, { composition: forged }).composition.document).toEqual(pointer);
+    const { document: _omit, ...omitted } = project.composition;
+    const next = applyProjectPatch(project, { composition: { ...omitted, overlay: { ...overlay, timecode: true } } });
+    expect(next.composition.document).toEqual(pointer);
+    expect(next.composition.overlay.timecode).toBe(true);
+    expect(applyProjectPatch(project, { composition: null }).composition).toBeNull();
+  });
+
+  it('carries the pointer to a clone (versions are immutable folders)', () => {
+    const clone = cloneProjectRecord(withDocument(), { id: 'mv-2', now: '2026-01-03T00:00:00.000Z' });
+    expect(clone.composition.document).toEqual(pointer);
+  });
+
+  it('keeps the pointer install-local: stripped from the wire, never taken from a peer, kept over a newer remote', async () => {
+    const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
+    const local = { ...withDocument(), updatedAt: '2026-01-01T00:00:00Z' };
+    const wire = sanitizeRecordForWire('musicVideoProject', local);
+    expect(wire.composition.mode).toBe('document');
+    expect(wire.composition.overlay).toEqual(overlay);
+    expect(wire.composition).not.toHaveProperty('document');
+
+    const foreign = { ...pointer, directory: 'music-video/mv-1/composition/doc-peer' };
+    const inserted = mergeProjectRecord(null, { ...local, id: 'mv-3', updatedAt: '2026-01-02T00:00:00Z', composition: { ...local.composition, document: foreign } }).next;
+    expect(inserted.composition).not.toHaveProperty('document');
+    const { next } = mergeProjectRecord(local, { ...local, updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit', composition: { ...local.composition, mode: 'document', document: foreign } });
+    expect(next.name).toBe('remote edit');
+    expect(next.composition.document).toEqual(pointer);
+  });
+});

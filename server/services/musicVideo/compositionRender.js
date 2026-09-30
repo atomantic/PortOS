@@ -53,7 +53,7 @@ async function captureWindow(page, ffmpeg, { startSec, frames, fps, outputPath, 
       page.check();
       await page.evaluate(`globalThis.portosComposition.seek(${startSec + n / fps})`);
       page.check();
-      const { data } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
+      const { data } = await page.send('Page.captureScreenshot', { format: 'png', optimizeForSpeed: true, fromSurface: true, captureBeyondViewport: false });
       signal?.throwIfAborted();
       await Promise.race([
         new Promise((resolve, reject) => proc.stdin.write(Buffer.from(data, 'base64'), (error) => (error ? reject(error) : resolve()))),
@@ -76,7 +76,7 @@ async function captureWindow(page, ffmpeg, { startSec, frames, fps, outputPath, 
  * `width`×`height`, `fps` frame. Resolves `[{ path, startSec, durationSec }]` in
  * time order. `onProgress(0..1)` reports captured frames; `signal` cancels.
  */
-function musicVideoSongDocument(project) {
+export function musicVideoSongDocument(project) {
   const analysis = project?.audioAnalysis && typeof project.audioAnalysis === 'object' && !Array.isArray(project.audioAnalysis)
     ? project.audioAnalysis : {};
   let words = null;

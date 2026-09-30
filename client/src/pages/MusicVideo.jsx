@@ -61,6 +61,7 @@ import SceneCard from '../components/musicVideo/SceneCard.jsx';
 import LyricsPanel from '../components/musicVideo/LyricsPanel.jsx';
 import TypographyPanel from '../components/musicVideo/TypographyPanel.jsx';
 import CodeVideoPanel from '../components/musicVideo/CodeVideoPanel.jsx';
+import DocumentCompositionPanel from '../components/musicVideo/DocumentCompositionPanel.jsx';
 import { compositionDraft } from '../components/musicVideo/compositionDraft.js';
 import VisualSpecPanel from '../components/musicVideo/VisualSpecPanel.jsx';
 import TreatmentPanel from '../components/musicVideo/TreatmentPanel.jsx';
@@ -938,6 +939,15 @@ export default function MusicVideo() {
                   project={selected}
                   audioUrl={projectAudioFilename(selected) ? trackAudioUrl(projectAudioFilename(selected)) : null}
                   onProject={replaceProject}
+                />
+              )}
+              {selected.composition?.mode === 'document' && (
+                <DocumentCompositionPanel
+                  key={`document-${selected.id}`}
+                  project={selected}
+                  audioUrl={projectAudioFilename(selected) ? trackAudioUrl(projectAudioFilename(selected)) : null}
+                  onProject={replaceProject}
+                  onSave={saveProjectFields}
                 />
               )}
               <RenderStatusPanel

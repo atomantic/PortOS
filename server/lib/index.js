@@ -329,6 +329,7 @@ export * from './safetensors.js';
 export * from './loraEffect.js';
 export * from './assetHash.js';
 export * from './pdfImageEmbed.js';
+export * from './zipArchive.js';
 export * from './zipStream.js';
 export * from './zipWriter.js';
 

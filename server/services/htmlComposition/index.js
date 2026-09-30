@@ -59,22 +59,27 @@ async function resolveMusicVideoOwner({ owner, audio, maxDurationSec }) {
   };
 }
 
+export const MUSIC_VIDEO_SCRATCH_DIR = 'music-video-song-renders';
+
 // Copy the composition into this job's scratch directory and write song.json
 // before openComposition freezes the snapshot. The page fetches it by relative
-// URL, so the network-refusing sandbox stays unchanged.
-async function stageMusicVideoComposition(sourceDirectory, jobId, song) {
+// URL, so the network-refusing sandbox stays unchanged. `prepare(dir)` lets a
+// caller add job files (a music-video document's portos-mv.js and scene media)
+// to the private copy before the snapshot; the caller removes `scratchRoot`.
+export async function stageMusicVideoComposition(sourceDirectory, jobId, song, { prepare } = {}) {
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid composition job id');
   const root = await realpath(PATHS.data);
   const source = await realpath(resolve(root, sourceDirectory));
   if (!insideData(root, source)) throw new Error('directory must be inside data');
-  const scratchRoot = join(root, 'music-video-song-renders', jobId);
+  const scratchRoot = join(root, MUSIC_VIDEO_SCRATCH_DIR, jobId);
   try {
     await rm(scratchRoot, { recursive: true, force: true });
     const compositionDir = join(scratchRoot, 'composition');
     await ensureDir(scratchRoot);
     await cp(source, compositionDir, { recursive: true, verbatimSymlinks: true });
     await writeFile(join(compositionDir, 'song.json'), `${JSON.stringify(normalizeSongDocument(song))}\n`);
-    return { directory: `music-video-song-renders/${jobId}/composition`, scratchRoot };
+    if (prepare) await prepare(compositionDir);
+    return { directory: `${MUSIC_VIDEO_SCRATCH_DIR}/${jobId}/composition`, scratchRoot };
   } catch (error) {
     await rm(scratchRoot, { recursive: true, force: true });
     throw error;
@@ -150,7 +155,9 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
     let { directory } = parsedInput;
     const sourceDirectory = directory;
     const { musicTrack, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice } = parsedInput;
-    if (musicVideo && (launchVideo || synthesizeMusic || musicTrack || proof || formats)) {
+    // A music-video render may still ask for the extra frames its contract
+    // declares in portosComposition.formats (renderTargets enforces that).
+    if (musicVideo && (launchVideo || synthesizeMusic || musicTrack || proof)) {
       throw new Error('A music-video composition render cannot use launch-video, proof, or library-music options');
     }
     let musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
