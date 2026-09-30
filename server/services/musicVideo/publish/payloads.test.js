@@ -74,11 +74,15 @@ describe('buildPublishPayload (#9282)', () => {
     expect(p).toMatchObject({ url: 'https://www.youtube.com/watch?v=posted', territory: 'art', title: 'Song' });
   });
 
-  it('validates Reddit subreddits and r/SunoAI\'s genre-bracket title rule', () => {
+  it('posts a native video to r/aivideo by default, and validates other subreddits\' rules', () => {
+    const named = (over = {}) => ({ ...project({ copy: { reddit: { title: 'Song Name — a music video', body: 'Body' } }, ...over }), name: 'Song Name' });
+    expect(buildPublishPayload('reddit', named(), {})).toMatchObject({ subreddit: 'aivideo', kind: 'video', video: { dir: 'videos', name: 'master.mp4' }, body: '' });
+    expect(() => buildPublishPayload('reddit', { ...named(), name: 'Other Title' }, {})).toThrow(/include the video's name/);
+    expect(() => buildPublishPayload('reddit', named({ master: null }), {})).toThrow(/final render/);
     expect(buildPublishPayload('reddit', project(), { subreddit: 'r/SunoAI', kind: 'link' })).toMatchObject({ subreddit: 'SunoAI', kind: 'link', url: 'https://youtu.be/abc' });
-    expect(buildPublishPayload('reddit', project(), { subreddit: 'aivideo' })).toMatchObject({ kind: 'self', url: '' });
-    expect(() => buildPublishPayload('reddit', project(), {})).toThrow(/subreddit/);
-    expect(() => buildPublishPayload('reddit', project({ copy: { reddit: { title: 'Song' } } }), { subreddit: 'SunoAI' })).toThrow(/brackets/);
+    expect(buildPublishPayload('reddit', project(), { subreddit: 'aimusic', kind: 'self' })).toMatchObject({ kind: 'self', url: '', video: null, body: 'Body' });
+    expect(() => buildPublishPayload('reddit', project(), { subreddit: 'x' })).toThrow(/subreddit/);
+    expect(() => buildPublishPayload('reddit', project({ copy: { reddit: { title: 'Song' } } }), { subreddit: 'SunoAI', kind: 'self' })).toThrow(/brackets/);
   });
 
   it('needs a suno.com song URL and captions it with the full video', () => {

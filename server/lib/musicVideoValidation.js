@@ -592,7 +592,7 @@ export const musicVideoPublishPostSchema = z.object({
 }).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, reception or notes is required' });
 export const musicVideoPublishPrepareSchema = z.object({
   subreddit: z.string().max(40),
-  kind: z.enum(['self', 'link']),
+  kind: z.enum(['self', 'link', 'video']),
   url: publishUrl,
   flairId: z.string().max(100),
   flairText: z.string().max(64),
