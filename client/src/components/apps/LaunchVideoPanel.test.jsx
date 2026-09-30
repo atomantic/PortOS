@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import LaunchVideoPanel from './LaunchVideoPanel';
-import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, publishAppLaunchVideo } from '../../services/apiApps';
+import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, installMotionSkills, publishAppLaunchVideo } from '../../services/apiApps';
 vi.mock('../../services/apiApps', () => ({ getAppLaunchVideos: vi.fn(async () => ({ videos: [] })), createAppLaunchVideo: vi.fn(), publishAppLaunchVideo: vi.fn(),
-  getMotionToolkit: vi.fn(async () => ({ ffmpeg: true, skillPacks: [] })) }));
+  getMotionToolkit: vi.fn(async () => ({ ffmpeg: true, skillPacks: [] })), installMotionSkills: vi.fn() }));
 vi.mock('../../services/apiPipeline', () => ({ listPipelineMusicLibrary: async () => ({ tracks: [{ filename: 'track-1a2b.wav', label: 'Example track', sizeBytes: 2048, updatedAt: '2026-01-01T00:00:00.000Z' }] }) }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
@@ -48,6 +48,15 @@ describe('launch video drawer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Close/ }));
     expect(screen.queryByText('Launch video queued. Closing this drawer leaves the run active.')).toBeNull();
     expect(createAppLaunchVideo).toHaveBeenCalledTimes(1);
+  });
+
+  it('installs and enables motion skills from the form', async () => {
+    installMotionSkills.mockResolvedValue({ skillPacks: [{ id: 'hyperframes', label: 'HyperFrames', found: ['motion-graphics'], installed: true }] });
+    getMotionToolkit.mockResolvedValueOnce({ ffmpeg: true, skillPacks: [{ id: 'hyperframes', label: 'HyperFrames', found: [], installed: false }] });
+    renderPanel('/?launchVideo=true');
+    fireEvent.click(await screen.findByRole('button', { name: 'Install and enable motion skills' }));
+    await waitFor(() => expect(screen.getByLabelText('Consult motion skills').checked).toBe(true));
+    expect(installMotionSkills).toHaveBeenCalledWith({ silent: true });
   });
 
   it.each(['agent', 'service'])('queues %s music without requiring a library track or installed engine', async musicMethod => {

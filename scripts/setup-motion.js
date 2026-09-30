@@ -26,14 +26,11 @@
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { platform as osPlatform } from 'node:os';
-import { MOTION_SKILL_PACKS, detectMotionSkills } from '../server/lib/motionSkills.js';
+import { MOTION_SKILL_PACKS, detectMotionSkills, skillInstallCommand } from '../server/lib/motionSkills.js';
 import { whichFirstSync } from '../server/lib/processEnv.js';
 import { findFfmpeg } from '../server/lib/ffmpeg.js';
+export { skillInstallCommand };
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-
-// Agents the skills CLI links each installed skill into (Claude Code + Codex
-// cover the CoS providers that read skill folders).
-const SKILL_AGENTS = ['claude-code', 'codex'];
 
 export function parseMotionSetupArgs(argv) {
   const options = { yes: false, status: false, json: false, skills: [] };
@@ -59,11 +56,6 @@ export function ffmpegInstallCommand(platform, has) {
   if (platform === 'linux' && has('apt-get')) return ['sudo', ['apt-get', 'install', '-y', 'ffmpeg']];
   if (platform === 'linux' && has('dnf')) return ['sudo', ['dnf', 'install', '-y', 'ffmpeg']];
   return null;
-}
-
-/** The `skills` CLI invocation that installs one pack user-wide, non-interactively. */
-export function skillInstallCommand(pack) {
-  return ['npx', ['-y', 'skills@latest', 'add', pack.source, '--global', '--yes', '--agent', ...SKILL_AGENTS, '--skill', ...pack.skills]];
 }
 
 const hasCommand = (command) => Boolean(whichFirstSync(command));

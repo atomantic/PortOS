@@ -11,7 +11,7 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useUrlParams from '../../hooks/useUrlParams';
 import { copyToClipboard } from '../../lib/clipboard';
 import socket from '../../services/socket';
-import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, publishAppLaunchVideo } from '../../services/apiApps';
+import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, installMotionSkills, publishAppLaunchVideo } from '../../services/apiApps';
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
 import { uploadFile } from '../../services/apiMedia';
 import { trackAudioUrl } from '../../services/apiTracks';
@@ -53,6 +53,7 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [critiqueRounds, setCritiqueRounds] = useState(2);
   const [motionBlur, setMotionBlur] = useState('');
   const [motionSkills, setMotionSkills] = useState(false);
+  const [installingSkills, setInstallingSkills] = useState(false);
   const [skillPacks, setSkillPacks] = useState(null);
   const [music, setMusic] = useState(false);
   const [generateMusic, setGenerateMusic] = useState(false);
@@ -83,6 +84,16 @@ function LaunchVideoForm({ appId, onQueued }) {
   }, []);
   const installedSkills = (skillPacks ?? []).filter(pack => pack.found.length);
   const consultSkills = motionSkills && installedSkills.length > 0;
+
+  const handleInstallSkills = async () => {
+    setInstallingSkills(true);
+    const result = await installMotionSkills({ silent: true }).catch(err => { toast.error(err.message); return null; });
+    setInstallingSkills(false);
+    if (!result) return;
+    setSkillPacks(result.skillPacks);
+    setMotionSkills(true);
+    toast.success('Motion skills installed');
+  };
 
   const handleReferenceUpload = async event => {
     const file = event.target.files?.[0];
@@ -189,7 +200,12 @@ function LaunchVideoForm({ appId, onQueued }) {
       <label htmlFor="launch-motion-skills"><input id="launch-motion-skills" type="checkbox" disabled={!installedSkills.length} checked={consultSkills} onChange={event => setMotionSkills(event.target.checked)} /> Consult motion skills</label>
       <p className="text-sm text-port-text-muted">{skillPacks === null ? 'Checking installed skills…' : installedSkills.length
         ? `Technique guides from ${installedSkills.map(pack => pack.label).join(', ')}.`
-        : 'Install HyperFrames, Remotion and Claude Animation skills with npm run setup:motion -- --skills.'}</p>
+        : 'HyperFrames, Remotion and Claude Animation skills are not installed.'}</p>
+      {skillPacks !== null && skillPacks.some(pack => !pack.installed) && (
+        <button type="button" className="btn btn-secondary" disabled={installingSkills} onClick={handleInstallSkills}>
+          {installingSkills ? 'Installing motion skills…' : installedSkills.length ? 'Install missing motion skills' : 'Install and enable motion skills'}
+        </button>
+      )}
     </div>
     <div><label htmlFor="launch-music"><input id="launch-music" type="checkbox" checked={music} onChange={event => setMusic(event.target.checked)} /> Include music</label></div>
     {music && <div><label htmlFor="launch-generate-music"><input id="launch-generate-music" type="checkbox" checked={generateMusic} onChange={event => setGenerateMusic(event.target.checked)} /> Generate original music</label><p className="text-sm text-port-text-muted">Choose how the original soundtrack is made.</p></div>}
