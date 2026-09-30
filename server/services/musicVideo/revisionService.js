@@ -57,12 +57,12 @@ export async function startRevision(projectId, excerptId, input = {}) {
 export async function assertRevisionOpen(projectId, revisionId, { sceneId = null, kind = null } = {}) {
   if (!revisionId) return;
   const project = await getProject(projectId);
-  assertRevisionOpenForGeneration(project, revisionId);
+  assertRevisionOpenForGeneration(project, revisionId, { sceneId, kind });
   if (!project || !runOwningRevision(project, revisionId)) return;
   const { listJobs } = await import('../mediaJobQueue/index.js');
   const jobs = [...listJobs({ kind: 'video' }), ...listJobs({ kind: 'image' })];
   await mutateProjectRecord(projectId, (current) => {
-    const revision = assertRevisionOpenForGeneration(current, revisionId);
+    const revision = assertRevisionOpenForGeneration(current, revisionId, { sceneId, kind });
     const inFlight = sceneId && revisionGenerationJobs(current, revision, jobs)
       .some((job) => job.params?.musicVideo?.sceneId === sceneId && (!kind || job.kind === kind));
     if (inFlight) {

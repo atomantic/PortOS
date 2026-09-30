@@ -5,6 +5,7 @@ import Pill from '../ui/Pill.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
+import MediumPlanSummary from './MediumPlanSummary.jsx';
 import {
   DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft,
 } from '../../lib/musicVideoAutomation.js';
@@ -49,7 +50,7 @@ function StepRow({ step }) {
   );
 }
 
-function RunView({ run, production }) {
+function RunView({ run, production, codeFirst }) {
   const live = RESUMABLE_RUN_STATUSES.has(run.status);
   const steps = run.steps || [];
   const failures = steps.filter((s) => s.error);
@@ -83,7 +84,7 @@ function RunView({ run, production }) {
             <Pause size={12} /> Stop
           </button>
         )}
-        {live && (run.status !== 'running' || run.interrupted) && (
+        {live && !codeFirst && (run.status !== 'running' || run.interrupted) && (
           <button type="button" disabled={production.busy}
             onClick={() => production.resume(run.id, needsReplan ? { acceptBasis: true } : {})}
             className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
@@ -293,11 +294,16 @@ function BriefSection({ project, onSave, onKickoff, kickoffBusy, kickoffStep, ki
 function ProductionSection({ project, production }) {
   const run = currentProductionRun(project);
   const active = run && RESUMABLE_RUN_STATUSES.has(run.status);
+  const codeFirst = project.productionPolicy?.strategy === 'code-first';
   return (
     <div className="rounded border border-port-border p-2 space-y-2 text-xs" aria-label="Production run">
       <span className="font-medium flex items-center gap-1"><Clapperboard size={12} /> Autonomous production (opt-in)</span>
-      {run && <RunView run={run} production={production} />}
-      {!active && <StartForm key={run?.id || 'new'} project={project} production={production} />}
+      {run && <RunView run={run} production={production} codeFirst={codeFirst} />}
+      {codeFirst && <>
+        <MediumPlanSummary project={project} />
+        <p className="text-port-warning">Autonomous code-first production is waiting for document authoring and review checkpoints. Use the mixed-media document controls for the approved plan.</p>
+      </>}
+      {!active && !codeFirst && <StartForm key={run?.id || 'new'} project={project} production={production} />}
     </div>
   );
 }

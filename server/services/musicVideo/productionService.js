@@ -29,6 +29,7 @@ import { musicVideoEvents } from './events.js';
 import { withAutopilotCutting } from './composition.js';
 import {
   attachProductionReview,
+  assertProductionStepOpen,
   cancelProductionOnProject,
   findProductionRun,
   haltProduction,
@@ -88,6 +89,12 @@ async function requireProject(projectId) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   return project;
+}
+
+/** Read the newest record at the queue boundary, after provider preparation. */
+export async function assertProductionSubmission(projectId, runId, stepKey, input) {
+  const project = await requireProject(projectId);
+  assertProductionStepOpen(project, runId, stepKey, { ...input, processId: PROCESS_ID });
 }
 
 async function liveJobs() {

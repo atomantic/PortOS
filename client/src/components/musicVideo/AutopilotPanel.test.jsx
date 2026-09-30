@@ -154,6 +154,15 @@ function ProductionHarness({ initial }) {
 describe('AutopilotPanel production run', () => {
   beforeEach(() => { vi.clearAllMocks(); listeners.clear(); });
 
+  it('shows a zero-allowance code-first plan without offering the legacy autonomous Start', () => {
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [],
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      audioAnalysis: { durationSec: 30 }, scenes: [], treatment: { shotDirections: [] },
+    }} />);
+    expect(screen.getByText(/generated video 0 \/ 0 seconds/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Start production/ })).toBeNull();
+  });
+
   it('starts only when the director presses Start, with the allowed pool and limits', async () => {
     api.startMusicVideoProduction.mockResolvedValue({ project: { id: 'p1', productionRuns: [run()] }, run: run() });
     render(<ProductionHarness initial={{ id: 'p1', productionRuns: [] }} />);

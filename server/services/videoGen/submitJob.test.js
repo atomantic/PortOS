@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   prepareVideoGenParams: vi.fn(),
   preparePerformanceShot: vi.fn(async () => null),
   assertRevisionOpen: vi.fn(async () => {}),
+  assertProductionSubmission: vi.fn(async () => {}),
 }));
 
 vi.mock('../../lib/federatedMediaRequest.js', () => ({
@@ -31,6 +32,7 @@ vi.mock('../fableLoom/visualConditioning.js', () => ({
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: mocks.enqueueJob }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: mocks.preparePerformanceShot }));
 vi.mock('../musicVideo/revisionService.js', () => ({ assertRevisionOpen: mocks.assertRevisionOpen }));
+vi.mock('../musicVideo/productionService.js', () => ({ assertProductionSubmission: mocks.assertProductionSubmission }));
 vi.mock('./prepareParams.js', async (importOriginal) => ({
   ...await importOriginal(),
   cleanupMultipartTemp: mocks.cleanupMultipartTemp,
@@ -257,6 +259,21 @@ describe('submitVideoGenJob', () => {
       mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
       await submitVideoGenJob({ prompt: 'singer', backend: 'fal', musicVideo }, {});
       expect(mocks.assertRevisionOpen).not.toHaveBeenCalled();
+    });
+
+    it('checks the current production policy after video preparation, before queueing', async () => {
+      const changed = Object.assign(new Error('The approved plan changed'), { status: 409, code: 'PRODUCTION_BASIS_CHANGED' });
+      const prepared = falPrepared();
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+      mocks.assertProductionSubmission.mockRejectedValueOnce(changed);
+      const tagged = { ...musicVideo, productionRunId: 'mvpr-1', productionStepKey: 'clip:scene:base:1' };
+
+      await expect(submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', musicVideo: tagged }, {})).rejects.toBe(changed);
+      expect(mocks.prepareVideoGenParams).toHaveBeenCalledTimes(1);
+      expect(mocks.assertProductionSubmission).toHaveBeenCalledWith('mv-1', 'mvpr-1', tagged.productionStepKey,
+        { sceneId: musicVideo.sceneId, kind: 'video' });
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
   });
 });

@@ -14,9 +14,11 @@ const enqueueJob = vi.fn(async () => ({ jobId: 'job-image' }));
 const submitVideoGenJob = vi.fn(async () => ({ jobId: 'job-video' }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: (...a) => enqueueJob(...a) }));
 vi.mock('../videoGen/submitJob.js', () => ({ submitVideoGenJob: (...a) => submitVideoGenJob(...a) }));
+vi.mock('./productionService.js', () => ({ assertProductionSubmission: vi.fn(async () => {}) }));
 vi.mock('../imageGen/index.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
 
 const { dispatchProductionStep } = await import('./productionDispatch.js');
+const { assertProductionSubmission } = await import('./productionService.js');
 
 const project = {
   id: 'mv-example',
@@ -83,6 +85,15 @@ describe('production scene dispatch (#9066)', () => {
     await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: 'flux2-dev' }, tag, settings });
     expect(enqueueJob.mock.calls[0][0].params).toMatchObject({ modelId: 'flux2-dev', pythonPath: '/opt/example/python' });
     expect(enqueueJob.mock.calls[0][0].params).not.toHaveProperty('mode');
+  });
+
+  it('refuses an image after provider preparation when the production plan changed before enqueue', async () => {
+    assertProductionSubmission.mockRejectedValueOnce(Object.assign(new Error('Plan changed'), { code: 'PRODUCTION_BASIS_CHANGED' }));
+    await expect(dispatchProductionStep({ stepKind: 'frame', project, scene,
+      route: { kind: 'image', mode: 'codex', model: null }, tag, settings })).rejects.toMatchObject({ code: 'PRODUCTION_BASIS_CHANGED' });
+    expect(assertProductionSubmission).toHaveBeenCalledWith(tag.projectId, tag.productionRunId, tag.productionStepKey,
+      { sceneId: tag.sceneId, kind: 'image' });
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it('submits a clip with an explicit backend so the install pin ladder cannot substitute one', async () => {
