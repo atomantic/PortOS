@@ -783,3 +783,5 @@ export * from './defaultRequestBody.js';
 export * from './musicVideoConditioning.js';
 export * from './musicVideoAspect.js';
 export * from './musicVideoMotion.js';
+
+export * from './musicVideoMediumPlan.js';

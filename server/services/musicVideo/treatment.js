@@ -35,13 +35,12 @@
  * edited by hand unless they explicitly list that scene with the fingerprint
  * of the prompts they reviewed. Takes and slot selections are never touched.
  *
- * Peer sync: the treatment and `scene.direction` are additive fields on the
- * whole-record LWW project body. An older peer stores them verbatim, carries
- * them through its own edits (every mutator spreads the record), and never
- * executes them, so no `musicVideoProjects` schema bump is needed.
+ * Peer sync: musicVideoProjects v12 gates medium plans and production policy
+ * against older writers that would discard them during treatment edits.
  */
 
 import { createHash, randomUUID } from 'crypto';
+import { MUSIC_VIDEO_MEDIA, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 import {
@@ -182,6 +181,11 @@ function normalizeArc(arc) {
 function normalizeShotDirection(d) {
   return {
     sceneId: String(d.sceneId),
+    ...(MUSIC_VIDEO_MEDIA.includes(d.medium) ? {
+      medium: d.medium,
+      mediumRationale: text(d.mediumRationale, 1000),
+      mediumPinned: d.mediumPinned === true,
+    } : {}),
     beatId: typeof d.beatId === 'string' && d.beatId ? d.beatId : null,
     mode: pick(d.mode, SHOT_MODES, 'cutaway'),
     route: pick(d.route, SHOT_ROUTES, 'generated'),
@@ -298,8 +302,9 @@ function assertRevision(project, baseRevision) {
 
 // ---- basis / staleness ------------------------------------------------------
 
-const BASIS_KEYS = ['audio', 'analysis', 'visualSpec', 'lyrics', 'scenes'];
+const BASIS_KEYS = ['audio', 'analysis', 'visualSpec', 'lyrics', 'scenes', 'productionPolicy'];
 const STALE_MESSAGES = {
+  productionPolicy: 'The production policy changed since this treatment was compiled.',
   audio: 'The song changed since this treatment was compiled — recompile it.',
   analysis: 'The song was re-analyzed since this treatment was compiled.',
   visualSpec: 'The visual spec changed since this treatment was compiled.',
@@ -308,13 +313,14 @@ const STALE_MESSAGES = {
 };
 // A stale basis on these inputs blocks Apply (old direction must not overwrite
 // newer edits); scene-set changes only leave some scenes unmapped.
-const BLOCKING_STALE = new Set(['audio', 'analysis', 'visualSpec', 'lyrics']);
+const BLOCKING_STALE = new Set(['audio', 'analysis', 'visualSpec', 'lyrics', 'productionPolicy']);
 
 /** Fingerprints of every input a compile reads. */
 export function treatmentBasis(project) {
   const analysis = project?.audioAnalysis;
   const spec = project?.visualSpec;
   return {
+    productionPolicy: fingerprint(normalizeMusicVideoProductionPolicy(project?.productionPolicy)),
     audio: fingerprint([project?.trackId ?? null, project?.uploadedAudioFilename ?? null]),
     analysis: fingerprint(analysis
       ? [analysis.durationSec ?? null, (analysis.sections || []).map((s) => [s?.startSec ?? null, s?.endSec ?? null, s?.energy ?? null])]
@@ -333,12 +339,26 @@ function treatmentStaleness(project, treatment = normalizeTreatment(project?.tre
   if (!treatment?.basis) return [];
   const current = treatmentBasis(project);
   return BASIS_KEYS
-    .filter((key) => treatment.basis[key] !== current[key])
+    .filter((key) => {
+      // Old treatments predate policy; absent remains the original legacy behavior.
+      if (key === 'productionPolicy' && !treatment.basis[key]
+        && normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'legacy') return false;
+      return treatment.basis[key] !== current[key];
+    })
     .map((key) => ({ input: key, blocking: BLOCKING_STALE.has(key), message: STALE_MESSAGES[key] }));
 }
 
 function stamp(project, treatment, now) {
   return { ...project, treatment: { ...treatment, revision: treatment.revision + 1, updatedAt: now }, updatedAt: now };
+}
+
+function assertMediumAllowance(project, directions) {
+  const summary = summarizeMusicVideoMediumPlan(project, directions);
+  if (summary.strategy === 'code-first' && summary.generatedSec > summary.allowedGeneratedSec + 0.000001) {
+    throw treatmentError(422, 'GENERATED_VIDEO_ALLOWANCE_EXCEEDED',
+      'Generated footage exceeds the final-edit allowance. Adjust the medium plan or explicitly increase the allowance.',
+      { generatedSec: summary.generatedSec, allowedGeneratedSec: summary.allowedGeneratedSec });
+  }
 }
 
 // ---- edits ------------------------------------------------------------------
@@ -372,9 +392,13 @@ export function applyTreatmentPatch(project, patch, now = new Date().toISOString
     for (const edit of patch.shotDirections) {
       const idx = byScene.get(edit.sceneId);
       if (idx === undefined) throw treatmentError(404, 'NOT_FOUND', `The treatment has no direction for scene ${edit.sceneId}`);
-      next.shotDirections[idx] = normalizeShotDirection({ ...next.shotDirections[idx], ...edit });
+      next.shotDirections[idx] = normalizeShotDirection({
+        ...next.shotDirections[idx], ...edit,
+        ...((edit.medium !== undefined || edit.mediumRationale !== undefined) && edit.mediumPinned === undefined ? { mediumPinned: true } : {}),
+      });
     }
   }
+  if (patch.shotDirections) assertMediumAllowance(project, next.shotDirections);
   if (patch.rebase && next.basis) {
     const stale = treatmentStaleness(project, next);
     if (stale.some((s) => s.input === 'audio')) {
@@ -414,6 +438,7 @@ export function writeCompiledTreatment(project, { baseRevision, draft, basis, co
     compiledAt: now,
     compiledWith,
   };
+  assertMediumAllowance(project, next.shotDirections);
   return stamp(project, next, now);
 }
 
@@ -525,7 +550,7 @@ function composeDirectionClauses(direction, { aspectRatio = null, lipSyncUnavail
   };
 }
 
-const DIRECTION_FIELDS = ['beatId', 'mode', 'route', 'focalSubject', 'framing', 'negativeSpace', 'typographyRole', 'emphasis', 'transitionIn', 'transitionOut'];
+const DIRECTION_FIELDS = ['medium', 'mediumRationale', 'mediumPinned', 'beatId', 'mode', 'route', 'focalSubject', 'framing', 'negativeSpace', 'typographyRole', 'emphasis', 'transitionIn', 'transitionOut'];
 const directionKey = (d) => fingerprint(DIRECTION_FIELDS.map((f) => d?.[f] ?? null));
 
 function sceneDirection(treatment, direction) {
@@ -642,6 +667,7 @@ export function buildApplyPreview(project) {
     throw treatmentError(409, 'TREATMENT_NOT_COMPILED', 'Compile the treatment before applying it');
   }
   const stale = treatmentStaleness(project, treatment);
+  const mediumPlan = summarizeMusicVideoMediumPlan(project, treatment.shotDirections);
   const scenesById = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const lipSyncAvailable = !!performanceCapability(project.videoSettings?.backend || null);
   const planned = [];
@@ -654,7 +680,9 @@ export function buildApplyPreview(project) {
     directed.add(scene.sceneId);
     const next = sceneDirection(treatment, direction);
     const fields = promptFieldPlans(scene, direction);
-    const renderFields = renderFieldPatch(scene, direction, { lipSyncAvailable });
+    // This slice only plans code-first execution: never reinterpret procedural
+    // direction as legacy footage/card selection or switch a render mode.
+    const renderFields = mediumPlan.strategy === 'code-first' ? {} : renderFieldPatch(scene, direction, { lipSyncAvailable });
     planned.push({ ...scene, ...renderFields });
     scenes.push({
       sceneId: scene.sceneId,
@@ -673,7 +701,8 @@ export function buildApplyPreview(project) {
   return {
     revision: treatment.revision,
     stale,
-    blocked: stale.some((s) => s.blocking),
+    mediumPlan,
+    blocked: stale.some((s) => s.blocking) || mediumPlan.blocked,
     scenes,
     missingSceneIds,
     unmappedSceneIds: (project.scenes || []).map((s) => s.sceneId).filter((id) => !directed.has(id)),
@@ -695,6 +724,10 @@ export function applyTreatmentToProject(project, { revision, overwrite = [], add
       { currentRevision: treatment.revision });
   }
   const preview = buildApplyPreview(project);
+  if (preview.mediumPlan.blocked) {
+    throw treatmentError(422, 'MEDIUM_PLAN_UNRESOLVED',
+      preview.mediumPlan.unresolved.filter((item) => item.blocking).map((item) => item.message).join(' '));
+  }
   if (preview.blocked) {
     throw treatmentError(409, 'TREATMENT_STALE',
       `${preview.stale.filter((s) => s.blocking).map((s) => s.message).join(' ')} Recompile, or keep it for the current inputs, before applying.`,

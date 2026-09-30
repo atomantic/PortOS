@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
@@ -448,8 +449,16 @@ export const musicVideoTreatmentMotifSchema = z.object({
   rationale: treatmentText(1000),
 }).strict();
 
+export const musicVideoProductionPolicySchema = z.object({
+  strategy: z.enum(['legacy', 'code-first']).optional(),
+  maxGeneratedVideoPercent: z.number().min(0).max(100).optional(),
+}).strict();
+
 export const musicVideoShotDirectionPatchSchema = z.object({
   sceneId: z.string().min(1).max(64),
+  medium: z.enum(MUSIC_VIDEO_MEDIA).optional(),
+  mediumRationale: treatmentText(1000),
+  mediumPinned: z.boolean().optional(),
   mode: z.enum(MUSIC_VIDEO_TREATMENT_SHOT_MODES).optional(),
   route: z.enum(MUSIC_VIDEO_SHOT_ROUTES).optional(),
   focalSubject: treatmentText(500),
@@ -751,6 +760,7 @@ export const musicVideoCastAndSetsRegenerateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
+  productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
   // The source audio: either a music-library track or an uploaded file basename
@@ -772,6 +782,7 @@ export const musicVideoProjectCreateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
+  productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200).optional(),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
   status: z.enum(MUSIC_VIDEO_STATUSES).optional(),

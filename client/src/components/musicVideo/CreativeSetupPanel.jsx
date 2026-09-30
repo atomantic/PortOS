@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musicVideoMediumPlan.js';
+import { formatCount } from '../../utils/formatters.js';
 import { Link } from 'react-router';
 import { listUniverseNames, getUniverse } from '../../services/apiUniverseBuilder.js';
 import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
@@ -54,7 +56,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   }, [editing, universeId]);
 
   const begin = () => {
-    setDraft({ universeId: project.concept?.universeId || '', subjects: project.concept?.subjects || [], moodBoardId: project.visualSpec?.moodBoardId || '' });
+    setDraft({ universeId: project.concept?.universeId || '', subjects: project.concept?.subjects || [], moodBoardId: project.visualSpec?.moodBoardId || '', productionPolicy: normalizeMusicVideoProductionPolicy(project.productionPolicy) });
     setSelectedCanon([]);
     setNewName('');
     setNewDescription('');
@@ -69,6 +71,11 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   };
   const save = async () => {
     if (!universeReady) { setError('Wait for the selected universe to load before saving.'); return; }
+    const percent = draft.productionPolicy.maxGeneratedVideoPercent;
+    if (percent === '' || !Number.isFinite(Number(percent)) || Number(percent) < 0 || Number(percent) > 100) {
+      setError('Choose a generated-video allowance from 0 to 100%.');
+      return;
+    }
     setSaving(true);
     setError('');
     const concept = { subjects: draft.subjects, universeId: draft.universeId || null };
@@ -79,7 +86,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     }
     const pulled = pullUniverseCanonReferences(canon, project.visualSpec?.references || []);
     if (pulled.added) visualSpec.references = pulled.next;
-    return onSave({ concept, visualSpec }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
+    return onSave({ concept, visualSpec, productionPolicy: { ...draft.productionPolicy, maxGeneratedVideoPercent: Number(percent) } }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
   };
 
   return <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0 break-words" aria-label="Creative setup">
@@ -110,6 +117,22 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
           <p className="text-xs text-port-text-muted">Copies captions, notes and analyzed styles. Add images in Visual spec to condition frames.</p>
         </div>
       </div>
+      <div className="space-y-2">
+        <label htmlFor={idFor('strategy')} className="block text-xs">Production strategy</label>
+        <select id={idFor('strategy')} className={inputClass} value={draft.productionPolicy.strategy} onChange={(e) => setDraft((d) => ({ ...d, productionPolicy: normalizeMusicVideoProductionPolicy({ strategy: e.target.value }, d.productionPolicy) }))}>
+          <option value="legacy">Legacy / manual workflow</option>
+          <option value="code-first">Code-first medium planning</option>
+        </select>
+        {draft.productionPolicy.strategy === 'code-first' && <>
+          <label htmlFor={idFor('selective-video')} className="flex items-center gap-2 text-xs min-h-[44px]">
+            <input id={idFor('selective-video')} type="checkbox" checked={Number(draft.productionPolicy.maxGeneratedVideoPercent) > 0} onChange={(e) => setDraft((d) => ({ ...d, productionPolicy: { ...d.productionPolicy, maxGeneratedVideoPercent: e.target.checked ? 20 : 0 } }))} />
+            Allow selective generated footage
+          </label>
+          <label htmlFor={idFor('video-allowance')} className="block text-xs">Maximum generated video (% of final song time)</label>
+          <input id={idFor('video-allowance')} type="number" min="0" max="100" step="any" className={inputClass} value={draft.productionPolicy.maxGeneratedVideoPercent} onChange={(e) => setDraft((d) => ({ ...d, productionPolicy: { ...d.productionPolicy, maxGeneratedVideoPercent: e.target.value } }))} />
+          <p className="text-xs text-port-text-muted">Start with code and images. This policy plans final-edit seconds; it does not change the renderer or enforce generation budgets in manual controls.</p>
+        </>}
+      </div>
       {loading && <p className="text-xs">Loading canon…</p>}
       {universeReady && universe && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">{kinds.map(([kind, label]) => <div key={kind}>
         <label htmlFor={idFor(`pick-${kind}`)} className="text-xs">Select {label.toLowerCase()}</label>
@@ -136,6 +159,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
       {(newName.trim() || newDescription.trim()) && <p className="text-xs text-port-text-muted">Add the new subject to the production before saving.</p>}
       <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!newName.trim() || !!newDescription.trim()} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
     </fieldset>}
+    {!editing && project.productionPolicy?.strategy === 'code-first' && <p className="text-xs text-port-text-muted">Code-first plan · generated video allowance {formatCount(project.productionPolicy.maxGeneratedVideoPercent, { maximumFractionDigits: 3 })}% of final song time</p>}
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
   </section>;
 }

@@ -650,7 +650,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v11 = phrase-alignment confidence (`lyricCues[].matched`). Older peers
   // drop it on edits or retain stale confidence after audio changes. Existing
   // records need no rewrite: absent means alignment has not measured it.
-  musicVideoProjects: 11,
+  // v12 = code-first production policy and pinned per-shot medium plans.
+  // Older treatment writers drop these fields and can reinterpret them as
+  // footage. Absent policy remains legacy; no existing record needs rewriting.
+  musicVideoProjects: 12,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

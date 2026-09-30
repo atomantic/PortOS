@@ -1,3 +1,4 @@
+import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
@@ -169,7 +170,7 @@ export default function SceneCard({
             {/* Applied treatment direction (#8980) — appended to both generated prompts. */}
             {scene.direction && (
               <p className="break-words" title={scene.direction.frameClause}>
-                Direction: {scene.direction.mode}{scene.direction.focalSubject ? ` · ${scene.direction.focalSubject}` : ''}
+                Direction: {scene.direction.mode}{scene.direction.medium ? ` · planned ${MUSIC_VIDEO_MEDIUM_LABELS[scene.direction.medium] || scene.direction.medium}${scene.direction.mediumPinned ? ' (pinned)' : ''}` : ''}{scene.direction.focalSubject ? ` · ${scene.direction.focalSubject}` : ''}
                 {scene.direction.typographyRole !== 'none' ? ` · ${scene.direction.typographyRole} text, ${scene.direction.negativeSpace} region kept clear` : ' · no text'}
               </p>
             )}
