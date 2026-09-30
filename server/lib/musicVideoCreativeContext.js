@@ -24,3 +24,17 @@ export function musicVideoCreativeContext(concept) {
   });
   return [...styles, ...(lines.length ? [BIBLE_HEADER, ...lines] : [])].join('\n').slice(0, CONTEXT_MAX);
 }
+
+/** Bounded Cast & Sets bible; mood-board subjects are never location authority. */
+export function musicVideoDirectionContext(direction) {
+  if (!direction) return '';
+  const p = direction.protagonist || {};
+  return [
+    'Cast & Sets direction (authoritative locations and wardrobe):',
+    'The mood board is LOOK-ONLY: borrow palette, lighting and texture, never its literal locations, objects or narrative. Use the assigned set for each shot.',
+    `Story: ${trimTo(direction.logline, 400)} ${trimTo(direction.interpretation, 600)}`,
+    `Protagonist: ${[p.name, p.description, p.face, p.hair, p.signature, p.gesture, ...(p.rules || [])].filter(Boolean).map((s) => trimTo(s, 300)).join('; ')}`,
+    ...((direction.looks || []).slice(0, 8).map((l) => `Look ${trimTo(l.name, 80)}: ${trimTo(l.description, 300)}; chapters: ${trimTo(l.chapters, 120)}`)),
+    ...((direction.sets || []).slice(0, 8).map((s) => `Set ${trimTo(s.name, 80)}: ${trimTo(s.description, 300)}; lighting: ${trimTo(s.lighting, 120)}`)),
+  ].join('\n').slice(0, 6000);
+}
