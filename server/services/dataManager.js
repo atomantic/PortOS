@@ -79,6 +79,11 @@ export const CATEGORIES = {
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
   'launch-videos': { label: 'Launch Videos', description: 'App launch-video compositions, plans, captions and rendered deliverables', archivable: true, deletable: false },
   'composition-proofs': { label: 'Composition Proofs', description: 'Contact-sheet review stills from HTML-composition proof renders — re-rendered from source, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  // Development artifacts ("ingredients") of Music Video projects — every
+  // version of a Cast & Sets sheet, animatic, treatment or storyboard, one
+  // immutable file each, referenced by the project record. Not deletable from
+  // here: a purge would strand those references (delete the artifact instead).
+  'music-video': { label: 'Music Video Development Files', description: 'Versioned development artifacts (check-in sheets, animatics, treatments) referenced by Music Video projects', archivable: true, deletable: false },
   'music-video-compositions': { label: 'Music Video Overlay Scratch', description: 'Typography overlay frames for an in-flight composed music-video render — removed when the render ends and swept at boot', archivable: false, deletable: false },
   'code-animations': { label: 'Code Animations', description: 'Generated animation HTML retained with its job history — the only copy of provider-generated work', archivable: true, deletable: false },
   'code-animation-exports': { label: 'Code Animation Export Staging', description: 'Animation HTML plus the frame-exact render shim, staged once per MP4 export — safe to purge', archivable: false, deletable: true, purgeScope: 'category' },

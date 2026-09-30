@@ -128,6 +128,18 @@ describe('cloneProjectRecord', () => {
     expect(without).not.toHaveProperty('autoReviews');
   });
 
+  it('carries development artifacts and the Cast & Sets result to a clone, but not its dispatch pin or production link', () => {
+    const artifact = { id: 'mvd-1', kind: 'cast-sets', title: 'Sheet', status: 'approved', version: 2, file: 'music-video/mv-1/dev/mvd-1/v2.html', versions: [], notes: [] };
+    const clone = cloneProjectRecord({
+      ...baseProject(),
+      devArtifacts: [artifact],
+      castAndSets: { status: 'imaging', revision: 2, processId: 'proc-a', productionRunId: 'mvpr-1', artifactId: 'mvd-1', images: { character: { status: 'done', imageId: 'c.png' } } },
+    }, { id: 'mv-2', now: '2026-01-02T00:00:00.000Z' });
+    expect(clone.devArtifacts).toEqual([artifact]);
+    expect(clone.castAndSets).toMatchObject({ status: 'imaging', revision: 2, processId: null, productionRunId: null, artifactId: 'mvd-1' });
+    expect(cloneProjectRecord(baseProject(), { id: 'mv-3', now: '2026-01-02T00:00:00.000Z' })).not.toHaveProperty('castAndSets');
+  });
+
   it('can fork the board without carrying generated media', () => {
     const source = {
       ...baseProject(),
@@ -305,9 +317,13 @@ describe('applyProjectPatch', () => {
       automation: { tools: ['video:fal', 'image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25 },
     }, { id: 'mv-a', now: 'n' });
     // De-duplicated, in catalog order (image before video).
-    expect(created.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25 });
-    const edited = applyProjectPatch(created, { automation: { guidance: 'darker' } });
-    expect(edited.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'darker', budgetUsd: 25 });
+    // The Cast & Sets check-in gate defaults to review.
+    expect(created.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25, checkins: { castAndSets: 'review' } });
+    const auto = applyProjectPatch(created, { automation: { checkins: { castAndSets: 'auto' } } });
+    expect(auto.automation.checkins).toEqual({ castAndSets: 'auto' });
+    const edited = applyProjectPatch(auto, { automation: { guidance: 'darker' } });
+    // A guidance edit keeps the gate the director chose.
+    expect(edited.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'darker', budgetUsd: 25, checkins: { castAndSets: 'auto' } });
     expect(applyProjectPatch(edited, { automation: { budgetUsd: null } }).automation.budgetUsd).toBeNull();
     expect(applyProjectPatch(edited, { automation: null }).automation).toBeNull();
   });
@@ -577,6 +593,25 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     const { next } = mergeProjectRecord(local, { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit', productionRuns: foreign });
     expect(next.name).toBe('remote edit');
     expect(next.productionRuns).toEqual(runs);
+  });
+
+  it('keeps development artifacts and the Cast & Sets checkpoint install-local (their files and jobs live here)', async () => {
+    const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
+    const devArtifacts = [{ id: 'mvd-1', kind: 'cast-sets', file: 'music-video/mv-1/dev/mvd-1/v1.html' }];
+    const castAndSets = { status: 'review', processId: 'proc-local' };
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'local', devArtifacts, castAndSets };
+    const wire = sanitizeRecordForWire('musicVideoProject', local);
+    expect(wire).not.toHaveProperty('devArtifacts');
+    expect(wire).not.toHaveProperty('castAndSets');
+
+    const foreign = { devArtifacts: [{ id: 'mvd-foreign' }], castAndSets: { status: 'imaging' } };
+    const inserted = mergeProjectRecord(null, { id: 'mv-2', updatedAt: '2026-01-02T00:00:00Z', ...foreign }).next;
+    expect(inserted).not.toHaveProperty('devArtifacts');
+    expect(inserted).not.toHaveProperty('castAndSets');
+    const { next } = mergeProjectRecord(local, { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit', ...foreign });
+    expect(next.name).toBe('remote edit');
+    expect(next.devArtifacts).toEqual(devArtifacts);
+    expect(next.castAndSets).toEqual(castAndSets);
   });
 
   it('remote with a newer updatedAt wins', () => {

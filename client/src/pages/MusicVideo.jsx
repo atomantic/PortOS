@@ -26,6 +26,8 @@ import useFieldDraft from '../hooks/useFieldDraft.js';
 import useMusicVideoYoutubeImport from '../hooks/useMusicVideoYoutubeImport.js';
 import useMusicVideoMidiJob from '../hooks/useMusicVideoMidiJob.js';
 import useMusicVideoKickoff from '../hooks/useMusicVideoKickoff.js';
+import useMusicVideoCastAndSets from '../hooks/useMusicVideoCastAndSets.js';
+import useMusicVideoDevArtifacts from '../hooks/useMusicVideoDevArtifacts.js';
 import useMusicVideoVocalSeparation from '../hooks/useMusicVideoVocalSeparation.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
@@ -64,6 +66,9 @@ import VisualSpecPanel from '../components/musicVideo/VisualSpecPanel.jsx';
 import TreatmentPanel from '../components/musicVideo/TreatmentPanel.jsx';
 import HandoffControls from '../components/musicVideo/HandoffControls.jsx';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
+import DevArtifactsPanel from '../components/musicVideo/DevArtifactsPanel.jsx';
+import DevArtifactDrawer from '../components/musicVideo/DevArtifactDrawer.jsx';
+import CastAndSetsCheckin from '../components/musicVideo/CastAndSetsCheckin.jsx';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker.jsx';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
@@ -99,7 +104,9 @@ export default function MusicVideo() {
   // scene board is directly shareable/bookmarkable and reachable from the
   // media job-completion hooks. selectProject() navigates; the browser URL is
   // the single source of truth for "which project is open".
-  const { projectId: routeProjectId } = useParams();
+  // A development artifact opens from its own deep link
+  // (/music-video/:projectId/dev/:artifactId), the version from `?v=`.
+  const { projectId: routeProjectId, artifactId: routeArtifactId } = useParams();
   const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [tracks, setTracks] = useState([]);
@@ -175,6 +182,9 @@ export default function MusicVideo() {
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });
   const autoReview = useMusicVideoAutoReview({ project: selected, replaceProject, submitSections: revisions.submitSections });
   const production = useMusicVideoProduction({ project: selected, replaceProject });
+  // Cast & Sets check-in (before the plan) and the development files it saves.
+  const castSets = useMusicVideoCastAndSets({ project: selected, replaceProject });
+  const devArtifacts = useMusicVideoDevArtifacts({ project: selected, replaceProject });
   // Pre-production treatment (#8980): brief, compiled arc, shot direction,
   // proof checklist and the non-destructive Apply review.
   const treatment = useMusicVideoTreatment({ project: selected, onProjectPatch: patchProject, replaceProject });
@@ -355,7 +365,29 @@ export default function MusicVideo() {
         return next;
       })
       .catch((err) => { toast.error(err?.message || 'Could not align the words — planning without word timings'); return null; }),
+    castAndSets: (project) => castSets.runToCheckpoint(project),
     plan: (project) => handlePlan(project),
+  });
+  // Approve & continue: the kickoff resumes past the check-in and plans —
+  // unless a server production run owns this board (it continues on its own).
+  const continueAfterCheckin = (res) => {
+    const next = res?.project;
+    if (!next || (next.scenes || []).length) return;
+    if ((next.productionRuns || []).some((r) => r.status === 'running')) return;
+    kickoff.run(next);
+  };
+  const approveCastAndSets = () => castSets.approve().then(continueAfterCheckin);
+  const skipCastAndSets = () => castSets.skip().then(continueAfterCheckin);
+  const openArtifact = (artifactId) => navigate(`/music-video/${encodeURIComponent(selected.id)}/dev/${encodeURIComponent(artifactId)}`);
+  const closeArtifact = () => navigate(`/music-video/${encodeURIComponent(selected?.id || routeProjectId)}`);
+  const openArtifactRecord = routeArtifactId
+    ? (selected?.devArtifacts || []).find((a) => a.id === routeArtifactId && !a.deleted) || null
+    : null;
+  const artifactVersion = Number(searchParams.get('v')) || openArtifactRecord?.version || null;
+  const setArtifactVersion = (version) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (version && version !== openArtifactRecord?.version) next.set('v', String(version)); else next.delete('v');
+    return next;
   });
   const handleKickoff = () => {
     if (!selected || analyzing || planning || kickoff.running || autopilotBlockedReason) return;
@@ -672,6 +704,20 @@ export default function MusicVideo() {
         />
       )}
       {selected && (
+        <DevArtifactDrawer
+          key={routeArtifactId || 'none'}
+          open={!!routeArtifactId}
+          onClose={closeArtifact}
+          project={selected}
+          artifact={openArtifactRecord}
+          version={artifactVersion}
+          onVersionChange={setArtifactVersion}
+          ops={devArtifacts}
+          busy={devArtifacts.busy || castSets.busy}
+          castAndSets={{ regenerate: () => castSets.regenerate(), approveAndContinue: approveCastAndSets }}
+        />
+      )}
+      {selected && (
         <ContactSheetDrawer
           open={contactSheetOpen}
           onClose={() => setContactSheetOpen(false)}
@@ -765,11 +811,30 @@ export default function MusicVideo() {
               kickoffBusy={analyzing || planning || kickoff.running}
               kickoffStep={kickoff.stepLabel}
               kickoffBlockedReason={autopilotBlockedReason}
+              checkin={(
+                <CastAndSetsCheckin
+                  project={selected}
+                  busy={castSets.busy || kickoff.running}
+                  onOpenSheet={openArtifact}
+                  onApprove={approveCastAndSets}
+                  onRegenerate={() => castSets.regenerate()}
+                  onResume={() => castSets.resume()}
+                  onSkip={skipCastAndSets}
+                />
+              )}
             />
             <CreativeSetupPanel key={`creative-${selected.id}`} project={selected} onPendingChange={setCreativeSetupPending}
               onSave={(patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
                 patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec });
               })} />
+            <DevArtifactsPanel
+              project={selected}
+              busy={devArtifacts.busy}
+              onOpen={openArtifact}
+              onUpload={(file, fields) => devArtifacts.upload(file, fields).then((res) => {
+                if (res?.artifact) openArtifact(res.artifact.id);
+              })}
+            />
             <fieldset disabled={creativeSetupPending} className="space-y-3 min-w-0">
             <div className="bg-port-card border border-port-border rounded-lg p-3">
               <ProjectToolbar

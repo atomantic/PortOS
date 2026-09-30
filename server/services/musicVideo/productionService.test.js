@@ -44,6 +44,7 @@ const queue = {
 };
 const dispatch = vi.fn();
 const planProject = vi.fn();
+const startCastAndSets = vi.fn();
 const startAutoReview = vi.fn();
 const autoReview = { startAutoReview, resumeAutoReview: vi.fn(), stopAutoReview: vi.fn(async () => {}), cancelAutoReview: vi.fn(async () => {}) };
 
@@ -131,6 +132,7 @@ beforeEach(() => {
     dispatch,
     queue: async () => queue,
     planProject,
+    startCastAndSets,
     autoReview: async () => autoReview,
     releaseRevisionSection: vi.fn(async () => {}),
   });
@@ -172,7 +174,7 @@ describe('music video production run (#9066)', () => {
   });
 
   it('plans an empty board once, with the directive, before generating', async () => {
-    seedProject({ scenes: [] });
+    seedProject({ scenes: [], castAndSets: { status: 'skipped' } });
     planProject.mockImplementation(async () => {
       store.get('mv-example').scenes = [{ sceneId: 'mvs-p', framePrompt: 'x', prompt: 'y', startSec: 0, endSec: 4, takes: [] }];
       return { scenesAdded: 1 };
@@ -180,6 +182,50 @@ describe('music video production run (#9066)', () => {
     await start();
     expect(planProject).toHaveBeenCalledWith('mv-example', { seedPrompts: true, directive: 'moody, slow' });
     expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the Cast & Sets check-in before the plan and waits for the director in review mode', async () => {
+    seedProject({ scenes: [], visualSpec: { references: [] } });
+    startCastAndSets.mockImplementation(async (projectId, { productionRunId }) => {
+      store.get(projectId).castAndSets = { status: 'directing', productionRunId };
+      return {};
+    });
+    planProject.mockImplementation(async () => {
+      store.get('mv-example').scenes = [{ sceneId: 'mvs-p', framePrompt: 'x', prompt: 'y', startSec: 0, endSec: 4, takes: [] }];
+      return { scenesAdded: 1 };
+    });
+    await start();
+    expect(startCastAndSets).toHaveBeenCalledTimes(1);
+    expect(startCastAndSets.mock.calls[0][1]).toMatchObject({ productionRunId: theRun().id });
+    expect(planProject).not.toHaveBeenCalled();
+
+    // The sheet is waiting for its check-in: the run waits, it neither plans nor halts.
+    store.get('mv-example').castAndSets.status = 'review';
+    musicVideoEvents.emit('cast-and-sets', { projectId: 'mv-example', stage: { status: 'review' } });
+    await settle();
+    expect(planProject).not.toHaveBeenCalled();
+    expect(theRun()).toMatchObject({ status: 'running', planned: false, castAndSetsStarted: true });
+
+    // Approval writes new references (a creative-setup change) and re-bases the run in the same write.
+    const { rebaseProductionAfterCheckin } = await import('./production.js');
+    const project = store.get('mv-example');
+    project.castAndSets.status = 'approved';
+    project.visualSpec = { references: [{ id: 'mvr-cs-character', imageId: 'sheet.png', role: 'character', condition: true }] };
+    store.set('mv-example', rebaseProductionAfterCheckin(project).project);
+    musicVideoEvents.emit('cast-and-sets', { projectId: 'mv-example', stage: { status: 'approved' } });
+    await settle();
+    expect(planProject).toHaveBeenCalledTimes(1);
+    expect(theRun().status).toBe('running');
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('halts blocked when the Cast & Sets check-in fails, and never plans past it', async () => {
+    seedProject({ scenes: [], castAndSets: { status: 'failed', stopReason: 'no image backend' } });
+    await start();
+    expect(startCastAndSets).not.toHaveBeenCalled();
+    expect(planProject).not.toHaveBeenCalled();
+    expect(theRun()).toMatchObject({ status: 'blocked' });
+    expect(theRun().stopReason).toMatch(/no image backend/);
   });
 
   it('refuses a route outside the allowed pool before anything is enqueued', async () => {

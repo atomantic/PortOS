@@ -61,6 +61,8 @@ export { default as useMediaJobProgress } from './useMediaJobProgress.js';
 export * from './useMediaJobSse.js';
 export { default as useSceneRenderLifecycle } from './useSceneRenderLifecycle.js';
 export { default as useMusicVideoAutoReview } from './useMusicVideoAutoReview.js';
+export { default as useMusicVideoCastAndSets } from './useMusicVideoCastAndSets.js';
+export { default as useMusicVideoDevArtifacts } from './useMusicVideoDevArtifacts.js';
 export { default as useMusicVideoExcerpts } from './useMusicVideoExcerpts.js';
 export { default as useMusicVideoKickoff } from './useMusicVideoKickoff.js';
 export { default as useMusicVideoManualTempo } from './useMusicVideoManualTempo.js';

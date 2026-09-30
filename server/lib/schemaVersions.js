@@ -626,7 +626,19 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // import replaces the lines without replacing the markers, leaving them
   // anchored to the wrong lines, and that edit wins LWW onto the upgraded
   // peer. Records without either field need no rewrite.
-  musicVideoProjects: 8,
+  // v9 = autopilot check-in gates (`automation.checkins.castAndSets`:
+  // `review` | `auto`). A v8 peer's automation normalizer rebuilds the brief
+  // from tools/guidance/budget only, so its next brief edit would drop the
+  // gate and win LWW back onto the upgraded peer, silently turning an
+  // auto-approve setting back into a stop. Gating makes a v8 receiver reject
+  // the ahead-version transfer until it upgrades; a record without the gate
+  // needs no rewrite (absent = `review`). The Cast & Sets checkpoint
+  // (`castAndSets`) and the development artifacts (`devArtifacts`) that ship
+  // with it are wire-local like `productionRuns` (lib/syncWire.js): their files
+  // live under this install's data/music-video/ and are not in the project's
+  // asset manifest, so they are never sent. What an approved check-in writes
+  // into ordinary fields (visual-spec references, concept subjects) syncs.
+  musicVideoProjects: 9,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

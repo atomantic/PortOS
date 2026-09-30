@@ -149,6 +149,7 @@ import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';
 import { initFableLoomSceneVideoHook } from './fableLoomSceneVideoHook.js';
 import { initMusicVideoSceneImageHook } from './musicVideoSceneImageHook.js';
 import { initMusicVideoSceneVideoHook } from './musicVideoSceneVideoHook.js';
+import { initMusicVideoCastSetsImageHook } from './musicVideoCastSetsImageHook.js';
 import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook.js';
 import { initMusicStudioHook } from './musicStudioHook.js';
 import { initImageGenQuotaHook } from './imageGenQuota.js';
@@ -670,6 +671,10 @@ const initMediaJobDependentHooks = () => {
   // Music Video scene-video hook — durably files a queued i2v scene clip onto
   // its project scene's `videoHistoryId` on completion (#1760 Phase 1).
   initMusicVideoSceneVideoHook();
+  // Music Video Cast & Sets hook — files a queued check-in reference image
+  // (character sheet, looks, set plates, in-set tests) onto its stage key.
+  // It only listens: nothing is generated at boot.
+  initMusicVideoCastSetsImageHook();
   // Creative Director music-bed hook — durably files a queued first-pass
   // audio render onto its project's `musicBed` field on completion, even if
   // the requesting client unmounted mid-render (#1928).

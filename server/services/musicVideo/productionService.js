@@ -31,6 +31,7 @@ import {
   cancelProductionOnProject,
   findProductionRun,
   haltProduction,
+  markProductionCastAndSets,
   markProductionPlanned,
   normalizeProductionPool,
   nextProductionStep,
@@ -74,6 +75,7 @@ const defaults = {
   dispatch: async (args) => (await import('./productionDispatch.js')).dispatchProductionStep(args),
   queue: async () => import('../mediaJobQueue/index.js'),
   planProject: async (...args) => (await import('./planner.js')).planProject(...args),
+  startCastAndSets: async (...args) => (await import('./castAndSetsService.js')).startCastAndSets(...args),
   autoReview: async () => import('./autoReviewService.js'),
   releaseRevisionSection: async (...args) => (await import('./revisionService.js')).releaseRevisionSection(...args),
 };
@@ -169,6 +171,22 @@ async function takeSteps(projectId, runId) {
     if (step.type === 'halt') {
       const out = await halt(projectId, runId, { status: step.status, reason: step.reason });
       return { ...out, action: { type: 'idle' } };
+    }
+
+    if (step.type === 'cast-and-sets') {
+      // Marked first, like the plan: a failed start halts instead of looping.
+      await mutateProjectRecord(projectId, (current) => markProductionCastAndSets(current, runId));
+      const started = await deps.startCastAndSets(projectId, {
+        productionRunId: runId,
+        ...(run.reviewer?.providerId ? { providerId: run.reviewer.providerId } : {}),
+        ...(run.reviewer?.model ? { model: run.reviewer.model } : {}),
+      }).catch((err) => ({ error: err }));
+      if (started.error) {
+        const out = await halt(projectId, runId, { status: 'blocked', reason: `The Cast & Sets check-in could not start: ${started.error.message}` });
+        return { ...out, action: { type: 'idle' } };
+      }
+      console.log(`🎭 Music Video production ${short(runId)} started the Cast & Sets check-in`);
+      continue;
     }
 
     if (step.type === 'plan') {
@@ -419,6 +437,15 @@ const guarded = (label, fn) => (payload) => {
 musicVideoEvents.on('scene-image', guarded('a frame landed', onSceneTake));
 musicVideoEvents.on('scene-video', guarded('a clip landed', onSceneTake));
 musicVideoEvents.on('auto-review', guarded('its review advanced', onOwnedReviewAdvanced));
+
+/** The Cast & Sets check-in settled (approved, skipped) or failed: a run waiting on it continues or halts. */
+async function onCastAndSetsAdvanced({ projectId, stage } = {}) {
+  if (!projectId || !['approved', 'skipped', 'failed'].includes(stage?.status)) return;
+  const project = await getProject(projectId);
+  const run = project ? projectProductionRuns(project).find(runningHere) : null;
+  if (run && !run.planned) await advanceProduction(projectId, run.id);
+}
+musicVideoEvents.on('cast-and-sets', guarded('its Cast & Sets check-in advanced', onCastAndSetsAdvanced));
 
 // The queue listener is armed on a run's first Start/Resume (never at boot);
 // the queue module is deferred because only this path needs it.

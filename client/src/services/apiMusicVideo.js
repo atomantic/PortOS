@@ -276,3 +276,44 @@ export const reviewMusicVideoTreatmentProof = (id, proofId, body, options = {}) 
   request(`/music-video/${encodeURIComponent(id)}/treatment/proofs/${encodeURIComponent(proofId)}/review`, {
     method: 'POST', body: JSON.stringify(body), ...options,
   });
+
+// ---- Development artifacts ("ingredients") ----
+// Reviewable development files attached to a project: a Cast & Sets sheet, an
+// animatic, a treatment, a storyboard. Every write resolves to `{ project, artifact }`.
+const devArtifactsPath = (id) => `/music-video/${encodeURIComponent(id)}/dev-artifacts`;
+// The served file (sandboxed HTML, Markdown as text, media). `version` null = current.
+export const musicVideoDevArtifactFileUrl = (id, artifactId, version = null) =>
+  `/api/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}/file${version ? `?version=${encodeURIComponent(version)}` : ''}`;
+// `fields`: { kind, title } for a new artifact, or { artifactId } for a new version.
+export const uploadMusicVideoDevArtifact = (id, file, fields = {}, options = {}) => {
+  const body = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    if (value != null && value !== '') body.append(key, value);
+  }
+  body.append('file', file, file.name || 'artifact');
+  return request(devArtifactsPath(id), { method: 'POST', body, ...options });
+};
+export const addMusicVideoDevArtifactNote = (id, artifactId, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}/notes`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const resolveMusicVideoDevArtifactNote = (id, artifactId, noteId, resolved, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}/notes/${encodeURIComponent(noteId)}`, { method: 'PATCH', body: JSON.stringify({ resolved }), ...options });
+// Body: { status: 'approved' | 'changes-requested' | 'pending', note? }.
+export const reviewMusicVideoDevArtifact = (id, artifactId, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}/review`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const deleteMusicVideoDevArtifact = (id, artifactId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}`, { method: 'DELETE', ...options });
+
+// ---- Cast & Sets check-in (before the shot plan) ----
+// Start / regenerate / resume return at once (`{ project, stage }`); the stage
+// advances server-side and reports over the `music-video:cast-and-sets` socket event.
+export const startMusicVideoCastAndSets = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Body: { notes?: [{ text, target? }] } — omitted notes = the sheet's open notes.
+export const regenerateMusicVideoCastAndSets = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const resumeMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/resume`, { method: 'POST', body: '{}', ...options });
+export const approveMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...options });
+export const skipMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/skip`, { method: 'POST', ...options });

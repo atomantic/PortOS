@@ -50,7 +50,13 @@ export function sanitizeSoftDeleteFields(raw) {
  */
 export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = true } = {}) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
-  const { imageMode: _imageMode, imageModelId: _imageModelId, productionRuns: _productionRuns, ...shared } = record;
+  const {
+    imageMode: _imageMode, imageModelId: _imageModelId, productionRuns: _productionRuns,
+    // Development artifacts and the Cast & Sets checkpoint name files and jobs
+    // on this install only (services/musicVideo/devArtifacts.js, castAndSets.js).
+    devArtifacts: _devArtifacts, castAndSets: _castAndSets,
+    ...shared
+  } = record;
   if (stripVideoBackend && shared.videoSettings
     && typeof shared.videoSettings === 'object' && !Array.isArray(shared.videoSettings)) {
     const { backend: _backend, ...sharedVideoSettings } = shared.videoSettings;
