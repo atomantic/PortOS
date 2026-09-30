@@ -86,6 +86,7 @@ import {
   CODEX_COMMAND,
   CODEX_CLI_ID,
   buildCodexOssArgs,
+  buildCodexAuthModeArgs,
 } from './codex.js';
 import {
   ANTIGRAVITY_COMMAND,
@@ -287,6 +288,7 @@ function codexCliArgs(baseArgs, { model, effort, provider }) {
   const hasExec = baseArgs.includes('exec');
   const args = hasExec ? [...baseArgs] : [...baseArgs, 'exec'];
   args.push(...codexIgnoreUserConfigArgs(provider, args));
+  args.push(...buildCodexAuthModeArgs(provider, baseArgs));
   args.push(...buildCodexStartupArgs(baseArgs));
   // The local-model backing, when the record carries a runtime marker codex can
   // serve. Emitted from the marker rather than from provider args so a wrapper
@@ -308,6 +310,7 @@ function codexSpawnArgs(provider, { effectiveModel, effort, maxConcurrentThreads
     'exec',
     '--dangerously-bypass-approvals-and-sandbox',
     ...codexIgnoreUserConfigArgs(provider),
+    ...buildCodexAuthModeArgs(provider),
     ...buildCodexStartupArgs(),
     ...buildCodexOssArgs(provider),
     ...buildCodexAgentThreadArgs(maxConcurrentThreads),
