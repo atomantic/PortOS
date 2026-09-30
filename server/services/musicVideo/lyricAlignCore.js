@@ -703,25 +703,37 @@ function dpAlignWords(lyricWords, recognised) {
 
 /** Snap generated line starts and all words by one delta; authored sides stay fixed. */
 export function snapLineStarts(lines, onsets, originals = []) {
-  return lines.map((line, index) => {
+  const snapped = [];
+  for (const [index, line] of lines.entries()) {
+    snapped.push(line);
     const original = originals[index] || {};
-    if (line.matched < 0.5 || !line.words?.length) return line;
+    if (line.matched < 0.5 || !line.words?.length) continue;
     const first = line.words[0].startSec;
     const onset = onsets.filter((t) => t >= first - 0.35 && t <= first + 0.25)
       .sort((a, b) => Math.abs(a - first) - Math.abs(b - first))[0];
-    if (onset == null) return line;
+    if (onset == null) continue;
     const delta = onset - first;
-    // A snap is optional evidence, never permission to move karaoke words
-    // outside the line window the director explicitly set.
-    if (original.startSec != null && first + delta < original.startSec) return line;
-    if (original.endSec != null && line.words.at(-1).endSec + delta > original.endSec) return line;
-    return {
+    const wordEnd = line.words.at(-1).endSec + delta;
+    // A snap is optional evidence, never permission to cross an authored
+    // boundary or overlap the adjacent lyric. Use the already-snapped previous
+    // line so two individually permissible shifts cannot collide.
+    if (original.startSec != null && onset < original.startSec) continue;
+    if (original.endSec != null && wordEnd > original.endSec) continue;
+    const previous = snapped[index - 1];
+    const following = lines[index + 1];
+    const previousEnd = Math.max(previous?.words?.at(-1)?.endSec ?? -Infinity, previous?.endSec ?? -Infinity);
+    const followingStart = Math.min(following?.words?.[0]?.startSec ?? Infinity, following?.startSec ?? Infinity);
+    const endSec = original.endSec ?? (line.endSec == null ? null : round3(line.endSec + delta));
+    if (Math.min(original.startSec ?? onset, onset) < previousEnd) continue;
+    if (Math.max(endSec ?? wordEnd, wordEnd) > followingStart) continue;
+    snapped[index] = {
       ...line,
       startSec: original.startSec ?? round3(onset),
-      endSec: original.endSec ?? (line.endSec == null ? null : round3(line.endSec + delta)),
+      endSec,
       words: line.words.map((word) => ({ ...word, startSec: round3(word.startSec + delta), endSec: round3(word.endSec + delta) })),
     };
-  });
+  }
+  return snapped;
 }
 
 /** Read the ffmpeg-decoded WAV without assuming a fixed-size RIFF header. */

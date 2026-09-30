@@ -72,6 +72,16 @@ describe('phrase lyric matching', () => {
     expect(fallback.matched).toBeUndefined();
   });
 
+  it('prevents positive and negative snaps from overlapping neighboring lines', () => {
+    const cues = [{ text: 'hello morning' }, { text: 'quiet evening' }];
+    const adjacent = alignDirectorWords(cues, [...words('hello morning', 1), ...words('quiet evening', 1.65)], { phraseAnchored: true });
+    expect(snapLineStarts(adjacent, [1.2, 1.5], cues)).toEqual(adjacent);
+    const separated = alignDirectorWords(cues, [...words('hello morning', 1), ...words('quiet evening', 1.9)], { phraseAnchored: true });
+    const snapped = snapLineStarts(separated, [1.2, 1.7], cues);
+    expect(snapped[0]).toMatchObject({ startSec: 1.2, endSec: 1.8 });
+    expect(snapped[1]).toEqual(separated[1]);
+  });
+
   it('preserves low-confidence prior times and words, while snapping confident words together and honoring authored sides', () => {
     const cues = [
       { text: 'hello morning', startSec: null, endSec: null },
