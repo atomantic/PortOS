@@ -100,6 +100,13 @@ export async function takeHostedAssets(peerInstanceId, missingAssets, collection
   return remaining;
 }
 
+function forgetHosted(kind, filename) {
+  return queueWrite(async () => {
+    const entries = await readEntries();
+    if (delete entries[hostedKey(kind, filename)]) await writeEntries(entries);
+  }).catch(() => {});
+}
+
 /** Drop a hosted entry once its bytes are local; a still-absent file keeps its entry. */
 export function unmarkHosted(kind, filename) {
   return queueWrite(async () => {
@@ -136,6 +143,12 @@ export async function resolveMediaLocations(items) {
 // importing it (that module would drag the whole peer-sync graph in here).
 const videoRefToFilename = (ref) => (isStr(ref) ? (/\.[a-z0-9]+$/i.test(ref) ? ref : `${ref}.mp4`) : null);
 
+/** The registered, ENABLED peer behind a hosted entry (a disabled peer stops every direction). */
+export async function findHostPeer(instanceId) {
+  const peers = await getPeers().catch(() => []);
+  return peers.find((p) => p.instanceId === instanceId && p.enabled !== false) || null;
+}
+
 async function lookupHosted(kind, filename) {
   const entries = await readEntriesOrEmpty();
   return entries[hostedKey(kind, filename)] || null;
@@ -151,11 +164,11 @@ async function resolveHostedRequest(mount, filename) {
   if (!safe) return null;
   if (mount === '/data/images') {
     const hosted = await lookupHosted('image', safe);
-    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.image}/${encodeURIComponent(safe)}` };
+    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.image}/${encodeURIComponent(safe)}`, drop: { kind: 'image', filename: safe } };
   }
   if (mount === '/data/videos') {
     const hosted = await lookupHosted('video', safe);
-    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.video}/${encodeURIComponent(safe)}` };
+    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.video}/${encodeURIComponent(safe)}`, drop: { kind: 'video', filename: safe } };
   }
   if (mount === '/data/image-thumbnails') {
     // `<stem>.webp` is derived from `<stem>.png`; the peer serves its own
@@ -187,10 +200,9 @@ export function hostedAssetFallback(mount) {
     if (!filename || filename.includes('/')) return next();
     const target = await resolveHostedRequest(mount, filename).catch(() => null);
     if (!target) return next();
-    const peers = await getPeers().catch(() => []);
-    const peer = peers.find((p) => p.instanceId === target.peerId);
+    const peer = await findHostPeer(target.peerId);
     if (!peer) return next();
-    await streamFromPeer(peer, target.url, req, res).catch((err) => {
+    await streamFromPeer(peer, target.url, req, res, target.drop).catch((err) => {
       console.warn(`⚠️ peerHostedMedia: stream ${mount} from ${peer.name || 'peer'} failed: ${err.message}`);
       if (!res.headersSent) res.status(502).end();
       else res.destroy();
@@ -198,13 +210,16 @@ export function hostedAssetFallback(mount) {
   };
 }
 
-async function streamFromPeer(peer, path, req, res) {
+async function streamFromPeer(peer, path, req, res, drop) {
   const headers = {};
   if (isStr(req.headers.range)) headers.Range = req.headers.range;
   const upstream = await withAbortTimeout(STREAM_TIMEOUT_MS, (signal) =>
     peerStreamRequest(`${peerBaseUrl(peer)}${path}`, { signal, headers }, peer));
   if (upstream.status !== 200 && upstream.status !== 206) {
     upstream.stream.resume();
+    // The peer no longer has it (deleted, or a snapshot referenced bytes it never
+    // held): forget the entry so the collection stops advertising it as hosted.
+    if (upstream.status === 404 && drop) await forgetHosted(drop.kind, drop.filename);
     res.status(upstream.status === 404 ? 404 : 502).end();
     return;
   }
@@ -222,5 +237,7 @@ async function streamFromPeer(peer, path, req, res) {
     upstream.stream.destroy();
     return res.end();
   }
+  // The header-wait timer is spent by now; bound a stalled body too.
+  upstream.stream.setTimeout?.(STREAM_TIMEOUT_MS, () => upstream.stream.destroy(new Error('peer media stream idle timeout')));
   await pipeline(upstream.stream, res);
 }

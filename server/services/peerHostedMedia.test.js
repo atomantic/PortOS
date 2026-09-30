@@ -18,7 +18,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => (
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
 const PEER = { id: 'p1', instanceId: 'peer-instance-1', name: 'Studio Mac', host: 'peer.example.com', port: 5555 };
-vi.mock('./instances.js', () => ({ getPeers: vi.fn(async () => [PEER]) }));
+const getPeers = vi.fn(async () => [PEER]);
+vi.mock('./instances.js', () => ({ getPeers: (...args) => getPeers(...args) }));
 
 const streamRequest = vi.fn();
 vi.mock('../lib/peerHttpClient.js', () => ({ peerStreamRequest: (...args) => streamRequest(...args) }));
@@ -37,6 +38,7 @@ beforeAll(() => {
 
 beforeEach(async () => {
   streamRequest.mockReset();
+  getPeers.mockImplementation(async () => [PEER]);
   rmSync(join(tempRoot, 'peer-hosted-media.json'), { force: true });
 });
 
@@ -136,5 +138,20 @@ describe('static-mount fallback', () => {
     streamRequest.mockRejectedValue(new Error('ECONNREFUSED'));
     const res = await request(app).get('/data/images/offline.png');
     expect(res.status).toBe(502);
+  });
+
+  it('never streams from a disabled peer', async () => {
+    await markHosted(PEER.instanceId, [{ kind: 'image', filename: 'paused.png' }]);
+    getPeers.mockImplementation(async () => [{ ...PEER, enabled: false }]);
+    const res = await request(app).get('/data/images/paused.png');
+    expect(res.status).toBe(404);
+    expect(streamRequest).not.toHaveBeenCalled();
+  });
+
+  it('forgets a hosted entry once the peer answers 404, so it stops reading as remote', async () => {
+    await markHosted(PEER.instanceId, [{ kind: 'image', filename: 'gone.png' }]);
+    streamRequest.mockResolvedValue(upstream('nope', 404));
+    expect((await request(app).get('/data/images/gone.png')).status).toBe(404);
+    expect((await resolveMediaLocations([{ kind: 'image', ref: 'gone.png' }]))[0].location).toBe('missing');
   });
 });

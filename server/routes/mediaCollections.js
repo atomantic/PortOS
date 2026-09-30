@@ -20,7 +20,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest, mediaCollectionBulkItemsSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import * as svc from '../services/mediaCollections.js';
-import { resolveMediaLocations, unmarkHosted } from '../services/peerHostedMedia.js';
+import { resolveMediaLocations, unmarkHosted, findHostPeer } from '../services/peerHostedMedia.js';
 import { pullMissingAssetsFromPeer, collectionVideoRefToFilename } from '../services/sharing/peerSyncAssets.js';
 
 const router = Router();
@@ -104,6 +104,7 @@ router.post('/:id/localize', asyncHandler(async (req, res) => {
   });
   const started = [...byPeer.values()].reduce((n, list) => n + list.length, 0);
   Promise.all([...byPeer.entries()].map(async ([peerId, list]) => {
+    if (!await findHostPeer(peerId)) return; // disabled or removed peer: nothing to pull from
     await pullMissingAssetsFromPeer(peerId, list, { includeMismatched: false });
     await Promise.all(list.map((entry) => unmarkHosted(entry.kind, entry.filename)));
   })).catch((err) => console.error(`❌ localize collection media failed: ${err.message}`));

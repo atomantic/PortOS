@@ -95,13 +95,13 @@ export default function MediaCollectionDetail() {
   // (its /data/images URL falls through to the peer server-side). Videos need
   // no stub: their rows arrive with the synced video history.
   const galleryRows = useMemo(() => {
-    if (isUnsorted || page.hasMore) return page.items;
+    if (isUnsorted) return page.items;
     const present = new Set(page.items.filter(row => row.kind === 'image').map(row => row.data.filename));
     const remoteStubs = (collection?.items || [])
       .filter(item => item.kind === 'image' && item.location === 'remote' && !present.has(item.ref))
       .map(item => ({ kind: 'image', data: { filename: item.ref, prompt: '', createdAt: item.addedAt } }));
     return remoteStubs.length ? [...page.items, ...remoteStubs] : page.items;
-  }, [page.items, page.hasMore, collection, isUnsorted]);
+  }, [page.items, collection, isUnsorted]);
   const items = useMemo(() => galleryRows.filter(row => isUnsorted || collection?.items?.some(ref => ref.kind === row.kind && ref.ref === (row.kind === 'image' ? row.data.filename : row.data.id)))
     .map(normalizeMediaRow), [galleryRows, collection, isUnsorted]);
   const remoteKeys = useMemo(() => (collection?.items || []).filter(item => item.location === 'remote').map(item => `${item.kind}:${item.ref}`), [collection]);
