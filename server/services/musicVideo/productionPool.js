@@ -26,16 +26,13 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from '../../lib/generationModes.js';
+import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
 import { falSceneTake, isPerformanceScene, performanceBlockedReason } from '../../lib/musicVideoShotTiming.js';
 import { maxInputImages, supportsCloudModelOverride } from '../../lib/imageGenCapabilities.js';
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { RUNNER_FAMILIES } from '../../lib/runners.js';
 import { poolHasRoute, routeKey } from './production.js';
-
-// The image backends accept at most four reference images for most models;
-// mirrors the board's MAX_CONDITIONING_REFERENCES (useMusicVideoSceneMedia.js).
-const MAX_CONDITIONING_REFERENCES = 4;
 
 const describe = (route) => `${route.kind} ${route.mode}${route.model ? ` (${route.model})` : ''}`;
 const isMetered = (route) => MUSIC_VIDEO_AUTOMATION_TOOLS.some((t) => t.id === `${route.kind}:${route.mode}` && t.metered);
@@ -82,14 +79,13 @@ export function stepPriceUsd({ route, project, scene, stepKind }) {
 /** routeKey → price map for a pool (fal routes priced for `project`). */
 export const poolPricing = (pool, project = null) => Object.fromEntries(pool.map((r) => [routeKey(r), routePriceUsd(r, project)]));
 
-/** The visual-spec references a frame is conditioned on (capped to the backend limit). */
-export const conditioningReferences = (project) => (project?.visualSpec?.references || [])
-  .filter((ref) => ref?.condition && ref.imageId).slice(0, MAX_CONDITIONING_REFERENCES);
+/** Shared scene-aware frame conditioning, with the legacy capped fallback. */
+export const conditioningReferences = musicVideoConditioningReferences;
 
 /** What a scene's `kind` generation needs from a route. */
 export function sceneRequirement(project, scene, stepKind) {
   return stepKind === 'frame'
-    ? { kind: 'image', conditioning: conditioningReferences(project).length }
+    ? { kind: 'image', conditioning: conditioningReferences(project, scene).length }
     : { kind: 'video', performance: isPerformanceScene(scene) };
 }
 

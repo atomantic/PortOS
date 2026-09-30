@@ -1743,6 +1743,24 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     ));
   });
 
+  it('conditions the board frame on its approved character and section plate, including an unflagged plate', async () => {
+    await openProject({ ...SPEC_PROJECT,
+      scenes: [{ ...SPEC_PROJECT.scenes[0], sectionIndex: 1 }],
+      castAndSets: { status: 'approved', direction: { songMap: [{ section: 0, setId: 'harbor' }, { section: 1, setId: 'roof' }] } },
+      visualSpec: { ...SPEC_PROJECT.visualSpec, references: [
+        { id: 'authored', imageId: 'authored.png', condition: true },
+        { id: 'mvr-cs-character', imageId: 'character.png', condition: true },
+        { id: 'mvr-cs-set-harbor', imageId: 'harbor.png', condition: true },
+        { id: 'mvr-cs-set-roof', imageId: 'roof.png', condition: false },
+      ] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      referenceImageFiles: ['character.png', 'roof.png'],
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1' },
+    }), { silent: true }));
+  });
+
   it('keeps a new render as a candidate and lets the director explicitly pick and reject takes', async () => {
     const scene = {
       sceneId: 's1', order: 0, prompt: 'waves', referenceImageId: 'take-a.png', videoHistoryId: null,
