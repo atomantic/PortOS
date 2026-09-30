@@ -80,6 +80,18 @@ describe('Error Detection', () => {
         .toBe(ERROR_CATEGORIES.UNKNOWN);
     });
 
+    it('classifies Codex ChatGPT model access rejection as a model fault, not a login failure', () => {
+      const message = "The 'example-model' model is not supported when using Codex with a ChatGPT account.";
+      const result = analyzeError(JSON.stringify({
+        type: 'error', status: 400, error: { type: 'invalid_request_error', message }
+      }), 1);
+      expect(result).toMatchObject({
+        hasError: true, category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
+        requiresFallback: true, actionable: true, message
+      });
+      expect(result.suggestedFix).toContain('signed-in Codex account');
+    });
+
     it('should detect rate limit errors', () => {
       const result = analyzeError('API Error: 429 Too Many Requests');
       expect(result.hasError).toBe(true);
