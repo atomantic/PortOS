@@ -1,4 +1,5 @@
 // Federation HTTP/Socket.IO client — TLS validation off (Tailnet is the trust boundary).
+import http from 'node:http';
 import https from 'node:https';
 import { createHmac } from 'node:crypto';
 import { insecureFetch, RESPONSE_TOO_LARGE } from './httpClient.js';
@@ -104,14 +105,14 @@ export function __resetSelfInstanceIdForTests() {
  * `options.headers` still win over the injected headers. The `peer` arg is optional so existing two-arg callers
  * keep working.
  */
-export async function peerFetch(url, options = {}, peer = null) {
+async function peerRequestOptions(url, options, peer) {
   const callerHeaders = normalizeHeaders(options.headers);
   const selfId = await selfInstanceId();
   // Scope the pair credential to the record-push endpoint; never disclose it
   // to general peer queries, redirects, assets, or announcement responses.
   const syncHeaders = peer?.syncSecret && new URL(url).pathname === '/api/peer-sync/push'
     ? { 'X-PortOS-Peer-Sync-Token': peer.syncSecret } : {};
-  const finalOptions = {
+  return {
     ...options,
     // Peer credentials and sender identity must stay at the configured destination.
     redirect: 'error',
@@ -124,7 +125,38 @@ export async function peerFetch(url, options = {}, peer = null) {
       ...callerHeaders,
     },
   };
+}
+
+export async function peerFetch(url, options = {}, peer = null) {
+  const finalOptions = await peerRequestOptions(url, options, peer);
   return url.startsWith('https://') ? httpsFetch(url, finalOptions) : fetch(url, finalOptions);
+}
+
+/**
+ * GET a peer URL WITHOUT buffering the body: resolves once response headers
+ * arrive with `{ status, headers, stream }` (`headers` is Node's lowercase
+ * object, `stream` the raw IncomingMessage). `peerFetch` is unsuitable for
+ * large media — its HTTPS shim collects the entire body before resolving —
+ * so a peer-hosted video would otherwise sit whole in memory per viewer.
+ * Same credential/identity headers and no-redirect posture as `peerFetch`.
+ */
+export async function peerStreamRequest(url, options = {}, peer = null) {
+  const { headers, signal } = await peerRequestOptions(url, options, peer);
+  const u = new URL(url);
+  const secure = u.protocol === 'https:';
+  return new Promise((resolve, reject) => {
+    const req = (secure ? https : http).request({
+      hostname: u.hostname,
+      port: u.port || (secure ? 443 : 80),
+      path: u.pathname + u.search,
+      method: 'GET',
+      headers,
+      signal,
+      ...(secure ? { agent: peerHttpsAgent } : {}),
+    }, (res) => resolve({ status: res.statusCode, headers: res.headers, stream: res }));
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 export const PEER_BODY_IDLE_TIMEOUT = 'PEER_BODY_IDLE_TIMEOUT';

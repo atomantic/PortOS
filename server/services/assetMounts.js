@@ -22,6 +22,7 @@ import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePr
 import { wrWorksDir, WORK_ID_RE } from './writersRoom/_shared.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 import { ensureImageThumbnail } from '../lib/imageThumbnail.js';
+import { hostedAssetFallback } from './peerHostedMedia.js';
 
 // `acceptRanges: true` is the serve-static default already, but we set it
 // explicitly because the federated peer-sync receiver
@@ -115,10 +116,14 @@ const imageThumbnailGate = async (req, res, next) => {
   if (!/^\/[A-Za-z0-9][A-Za-z0-9._-]*\.webp$/i.test(req.path)) return res.status(404).end();
   const filename = req.path.slice(1);
   const ready = await ensureImageThumbnail(filename);
-  if (!ready) return res.status(404).end();
+  // No local source PNG: a peer hosting the collection image serves its own thumbnail.
+  if (!ready) return hostedAssetFallback('/data/image-thumbnails')(req, res, () => res.status(404).end());
   res.setHeader('Cache-Control', 'public, max-age=86400');
   next();
 };
+
+// Mounts whose files a peer may host instead of copying (peerHostedMedia.js).
+const HOSTED_FALLBACK_ROUTES = new Set(['/data/images', '/data/videos', '/data/video-thumbnails']);
 
 const ASSET_GATES = {
   '/data/image-thumbnails': imageThumbnailGate,
@@ -178,6 +183,8 @@ export function mountAssetRoutes(app, ownedPrefixes = SERVER_OWNED_PREFIXES) {
   ASSET_MOUNTS.forEach(({ route, dir, gate }) => {
     const options = route === '/data/image-thumbnails' ? IMAGE_THUMBNAIL_STATIC_OPTS : ASSET_STATIC_OPTS;
     app.use(route, ...(gate ? [gate] : []), express.static(dir(), options));
+    // Media a `host`-mode peer keeps: local file absent → stream from the peer.
+    if (HOSTED_FALLBACK_ROUTES.has(route)) app.use(route, hostedAssetFallback(route));
   });
   ownedPrefixes.forEach(({ prefix, spaPaths }) => {
     const spaMatchers = spaPaths.map(toRouteMatcher);

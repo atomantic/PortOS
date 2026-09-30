@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
-import { ArrowLeft, CheckSquare, Copy, DatabaseZap, FolderInput, Inbox, Lock, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Cloud, CloudOff, CheckSquare, Copy, DatabaseZap, FolderInput, HardDriveDownload, Inbox, Lock, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
 import ShareToButton from '../components/sharing/ShareToButton';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
@@ -17,11 +17,39 @@ import {
   listMediaCollections,
   addMediaCollectionItem, removeMediaCollectionItem,
   deleteImage, deleteVideoHistoryItem,
-  pullMissingMetadata,
+  pullMissingMetadata, localizeMediaCollection,
 } from '../services/api';
+import socket from '../services/socket';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
+
+// Local-vs-remote state of one collection item. Local files (the normal case)
+// carry no badge; the header summarizes the peer-hosted count.
+function LocationBadge({ entry }) {
+  if (entry?.location === 'remote') {
+    const host = entry.hostPeerName || 'peer';
+    return (
+      <span
+        className="absolute top-1.5 left-1.5 z-10 px-1.5 py-0.5 rounded bg-black/70 text-port-accent text-[10px] flex items-center gap-1 pointer-events-none"
+        title={`Hosted by ${host} — streamed on demand, not stored on this machine`}
+      >
+        <Cloud className="w-3 h-3" /> {host}
+      </span>
+    );
+  }
+  if (entry?.location === 'missing') {
+    return (
+      <span
+        className="absolute top-1.5 left-1.5 z-10 px-1.5 py-0.5 rounded bg-black/70 text-port-warning text-[10px] flex items-center gap-1 pointer-events-none"
+        title="The file is not on this machine and no peer is known to host it"
+      >
+        <CloudOff className="w-3 h-3" /> Not here
+      </span>
+    );
+  }
+  return null;
+}
 
 export default function MediaCollectionDetail() {
   const { id } = useParams();
@@ -58,8 +86,45 @@ export default function MediaCollectionDetail() {
     setCollection(c); setAllCollections(cols); setNameDraft(c?.name || ''); setLoading(false);
   }, [id, isUnsorted, page.refresh]);
   useEffect(() => { refresh(); }, [refresh]);
-  const items = useMemo(() => page.items.filter(row => isUnsorted || collection?.items?.some(ref => ref.kind === row.kind && ref.ref === (row.kind === 'image' ? row.data.filename : row.data.id)))
-    .map(normalizeMediaRow), [page.items, collection, isUnsorted]);
+  // Where each item's bytes live (server-annotated): 'local' | 'remote' (hosted
+  // by a peer and streamed on demand) | 'missing'. Items without an annotation
+  // (older server, unsorted view) read as local.
+  const locationByKey = useMemo(() => new Map((collection?.items || []).map(item => [`${item.kind}:${item.ref}`, item])), [collection]);
+  // The gallery index is built from local disk, so a peer-hosted image never
+  // appears in `page.items`. Append a stub row for each so it still renders
+  // (its /data/images URL falls through to the peer server-side). Videos need
+  // no stub: their rows arrive with the synced video history.
+  const galleryRows = useMemo(() => {
+    if (isUnsorted || page.hasMore) return page.items;
+    const present = new Set(page.items.filter(row => row.kind === 'image').map(row => row.data.filename));
+    const remoteStubs = (collection?.items || [])
+      .filter(item => item.kind === 'image' && item.location === 'remote' && !present.has(item.ref))
+      .map(item => ({ kind: 'image', data: { filename: item.ref, prompt: '', createdAt: item.addedAt } }));
+    return remoteStubs.length ? [...page.items, ...remoteStubs] : page.items;
+  }, [page.items, page.hasMore, collection, isUnsorted]);
+  const items = useMemo(() => galleryRows.filter(row => isUnsorted || collection?.items?.some(ref => ref.kind === row.kind && ref.ref === (row.kind === 'image' ? row.data.filename : row.data.id)))
+    .map(normalizeMediaRow), [galleryRows, collection, isUnsorted]);
+  const remoteKeys = useMemo(() => (collection?.items || []).filter(item => item.location === 'remote').map(item => `${item.kind}:${item.ref}`), [collection]);
+  const [runLocalize, localizing] = useAsyncAction(async () => {
+    const result = await localizeMediaCollection(id, remoteKeys, { silent: true });
+    toast.success(`Copying ${result?.started ?? remoteKeys.length} hosted item(s) to this machine…`);
+  });
+  // A copied file lands as `peerSync:asset-arrived`; re-read the annotations
+  // (and gallery rows) instead of polling. Debounced — a batch fires many.
+  useEffect(() => {
+    if (isUnsorted) return undefined;
+    let active = true;
+    let timer = null;
+    const onArrived = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        getMediaCollection(id, { silent: true }).then((c) => { if (active) setCollection(c); }).catch(() => {});
+        page.refresh();
+      }, 500);
+    };
+    socket.on('peerSync:asset-arrived', onArrived);
+    return () => { active = false; clearTimeout(timer); socket.off('peerSync:asset-arrived', onArrived); };
+  }, [id, isUnsorted, page.refresh]);
   const resolvePreview = useGalleryPreviewResolver({ collectionId: id });
   const [preview, setPreview] = usePreviewRoute(items, { resolveItem: resolvePreview });
 
@@ -349,6 +414,11 @@ export default function MediaCollectionDetail() {
         </Link>
         {renderTitle()}
         <span className="text-xs text-gray-500">{page.total} item{page.total === 1 ? '' : 's'}</span>
+        {remoteKeys.length > 0 && (
+          <span className="text-xs text-port-accent flex items-center gap-1" title="Hosted by a peer and streamed on demand — not stored on this machine">
+            <Cloud className="w-3.5 h-3.5" /> {remoteKeys.length} on peer
+          </span>
+        )}
         {!selectMode && (
           <div className="ml-auto flex items-center gap-2">
             {isUnsorted && (
@@ -363,6 +433,18 @@ export default function MediaCollectionDetail() {
               >
                 <DatabaseZap className="w-3.5 h-3.5" />
                 {pullingPrompts ? 'Pulling…' : 'Pull missing prompts'}
+              </button>
+            )}
+            {remoteKeys.length > 0 && (
+              <button
+                type="button"
+                onClick={runLocalize}
+                disabled={localizing}
+                className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded flex items-center gap-1.5 disabled:opacity-40"
+                title="Download the peer-hosted items so they are stored on this machine"
+              >
+                <HardDriveDownload className="w-3.5 h-3.5" />
+                {localizing ? 'Copying…' : `Copy ${remoteKeys.length} to this machine`}
               </button>
             )}
             {items.length > 0 && (
@@ -511,6 +593,7 @@ export default function MediaCollectionDetail() {
                   onToggleStar={!selectMode ? toggleStar : undefined}
                   onAnnotate={!selectMode && item.kind === 'image' ? handleAnnotate : undefined}
                 />
+                <LocationBadge entry={locationByKey.get(key)} />
                 {!selectMode && !isUnsorted && (
                   <button
                     type="button"

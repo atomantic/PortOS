@@ -425,6 +425,21 @@ describe('instances.js', () => {
     });
   });
 
+  // Video-history rows are the metadata half of Media Collections — one toggle.
+  describe('resolveEffectiveCategories — videoHistory folded into mediaCollections', () => {
+    it('implies videoHistory whenever mediaCollections is on', () => {
+      const peer = { id: 'p1', syncCategories: { mediaCollections: true, videoHistory: false } };
+      expect(resolveEffectiveCategories(peer)).toMatchObject({ mediaCollections: true, videoHistory: true });
+    });
+
+    it('keeps a legacy videoHistory-only peer syncing, and adds nothing when both are off', () => {
+      expect(resolveEffectiveCategories({ id: 'p1', syncCategories: { videoHistory: true } }))
+        .toMatchObject({ mediaCollections: false, videoHistory: true });
+      expect(resolveEffectiveCategories({ id: 'p2', syncCategories: {} }))
+        .toMatchObject({ mediaCollections: false, videoHistory: false });
+    });
+  });
+
   describe('sanitizePeerForClient', () => {
     it('never exposes a legacy tailcat capability on either wire surface', () => {
       const peer = { id: 'peer-example', tcAddress: 'tcEXAMPLE' + 'A'.repeat(40) };
@@ -486,6 +501,13 @@ describe('instances.js', () => {
       const result = await updatePeer('peer-1', { name: 'new-name' });
 
       expect(result.name).toBe('new-name');
+    });
+
+    it('stores the media sync mode and ignores an unknown one', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'peer-1', name: 'host', enabled: true }] });
+      expect((await updatePeer('peer-1', { mediaSyncMode: 'host' })).mediaSyncMode).toBe('host');
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'peer-1', name: 'host', enabled: true, mediaSyncMode: 'host' }] });
+      expect((await updatePeer('peer-1', { mediaSyncMode: 'stream-everything' })).mediaSyncMode).toBe('host');
     });
 
     it('should update peer enabled state', async () => {

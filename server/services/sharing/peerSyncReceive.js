@@ -29,11 +29,13 @@ import {
 } from './peerTombstoneCursors.js';
 import {
   diffAssetManifestAgainstLocal,
+  referenceCollectionAssetManifest,
   pullMissingAssetsFromPeer,
   pullMissingWorkBodies,
   pullMissingWorkBibles,
 } from './peerSyncAssets.js';
 import { RECORD_KINDS } from './recordKinds.js';
+import { takeHostedAssets } from '../peerHostedMedia.js';
 import { findPeerSubscription, subscribePeer } from './peerSubscriptions.js';
 import {
   makeErr,
@@ -393,7 +395,26 @@ export async function applyIncomingPush(payload, authorization) {
   if (ownAssets.length < incomingAssets.length) {
     console.warn(`⚠️ peerSync: ignored ${incomingAssets.length - ownAssets.length} unreferenced push assets`);
   }
-  const missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: mergeResult?.applied === true });
+  let missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: mergeResult?.applied === true });
+
+  // Media Collections `host` mode: this peer keeps the collection's image/video
+  // bytes, so record them as peer-hosted (rendered on demand via the static-mount
+  // fallback) instead of copying. Only collection-owned assets qualify — a
+  // universe/series' own art still copies.
+  if (missingAssets.length > 0 && !localEphemeral && record.deleted !== true) {
+    const senderPeer = await findPeerById(sourceInstanceId);
+    if (senderPeer?.mediaSyncMode === 'host') {
+      const collection = kind === 'mediaCollection' ? record : linkedCollection;
+      const assetKey = (entry) => `${entry.kind}:${entry.filename}`;
+      const collectionKeys = new Set(isPlainObject(collection) ? referenceCollectionAssetManifest(collection).map(assetKey) : []);
+      if (kind !== 'mediaCollection' && desc.referencedAssets) {
+        // Assets the record itself references stay copies even when the linked
+        // collection also holds them.
+        for (const entry of await desc.referencedAssets(record, { issues, linkedTrack })) collectionKeys.delete(assetKey(entry));
+      }
+      if (collectionKeys.size > 0) missingAssets = await takeHostedAssets(sourceInstanceId, missingAssets, collectionKeys);
+    }
+  }
 
   // Compute the deletedAt water-mark we can ack. Use the maximum across the
   // record + its issues + a bundled linkedTrack tombstone (#1858 bundles the
