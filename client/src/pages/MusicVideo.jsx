@@ -81,6 +81,11 @@ function autopilotBlocker(project) {
   return null;
 }
 
+// The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
+const STAGE_VIEWS = {
+  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage,
+};
+
 const STATUS_COLORS = {
   draft: 'bg-port-border text-port-text',
   analyzed: 'bg-port-accent/30 text-port-accent',
@@ -820,10 +825,7 @@ export default function MusicVideo() {
     openContactSheet: () => setContactSheetOpen(true),
     seekToScene,
   } : null;
-  const STAGES = {
-    setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage,
-  };
-  const StageView = STAGES[activeStage];
+  const StageView = STAGE_VIEWS[activeStage];
 
   return (
     <div className="space-y-4">
