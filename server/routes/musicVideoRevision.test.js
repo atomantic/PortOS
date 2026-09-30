@@ -342,6 +342,37 @@ describe('selective section revision (#8987)', () => {
     await expect(assertRevisionOpen(project.id, revision.id)).rejects.toMatchObject({ status: 409, code: 'REVISION_CLOSED' });
   });
 
+  it('enforces code-first video share and a concurrent policy edit at the revision submission boundary', async () => {
+    const created = await projects.createProject({ name: 'Example Video' });
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: {
+      ...current,
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      audioAnalysis: { durationSec: 100 },
+      scenes: [{ sceneId: 'selected', startSec: 0, endSec: 20 }],
+      treatment: { shotDirections: [{ sceneId: 'selected', medium: 'generated-footage', mediumRationale: 'Selected payoff.' }] },
+      excerpts: [{ id: 'mve-code', status: 'complete', startSec: 0, endSec: 20,
+        sections: [{ sceneId: 'selected', startSec: 0, endSec: 20 }] }],
+    } }));
+    const path = `${base(created.id)}/excerpt/mve-code/revisions`;
+    const forbidden = await request(app).post(path).send({ sceneIds: ['selected'] });
+    expect(forbidden.status).toBe(409);
+    expect(forbidden.body.code).toBe('REVISION_MEDIUM_PLAN_CONFLICT');
+    expect(h.enqueueJob).not.toHaveBeenCalled();
+
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: {
+      ...current, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 20 },
+    } }));
+    const allowed = await request(app).post(path).send({ sceneIds: ['selected'] });
+    expect(allowed.status).toBe(201);
+    const revisionId = allowed.body.revision.id;
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: {
+      ...current, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+    } }));
+    await expect(assertRevisionOpen(created.id, revisionId, { sceneId: 'selected', kind: 'video' }))
+      .rejects.toMatchObject({ code: 'REVISION_MEDIUM_PLAN_CHANGED' });
+    expect(h.enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('refuses a second open revision, a section outside the draft, and a draft without a section map', async () => {
     const project = await reviewedProject();
     const first = await request(app).post(`${base(project.id)}/excerpt/mve-draft/revisions`).send({ sceneIds: ['s1'] });

@@ -30,6 +30,8 @@
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
+import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
+import { normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { ensureSceneTakes, reviewSceneTake, TAKE_SLOT } from './takes.js';
 import { projectExcerpts } from './excerpt.js';
 
@@ -48,6 +50,21 @@ const TAKE_ATTACH_GRACE_MS = 120_000;
 
 const revisionError = (status, code, message, context) =>
   new ServerError(message, { status, code, ...(context ? { context } : {}) });
+
+const codeFirst = (project) => normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first';
+const mediumFor = (project, sceneId) => project?.treatment?.shotDirections?.find((direction) => direction.sceneId === sceneId)?.medium;
+const mediumBasis = (project) => canonicalSnapshotChecksum({
+  productionPolicy: project?.productionPolicy || null,
+  directions: project?.treatment?.shotDirections || null,
+  scenes: (project?.scenes || []).map(({ sceneId, startSec, endSec }) => ({ sceneId, startSec, endSec })),
+  durationSec: project?.audioAnalysis?.durationSec ?? null,
+});
+
+function assertCodeFirstPlan(project) {
+  const plan = summarizeMusicVideoMediumPlan(project);
+  if (plan.blocked) throw revisionError(409, 'REVISION_MEDIUM_PLAN_CONFLICT',
+    plan.unresolved.filter((item) => item.blocking).map((item) => item.message).join(' '));
+}
 
 /** The revision array on a project, tolerating a legacy record with none. */
 export const projectRevisions = (project) => (Array.isArray(project?.revisions) ? project.revisions : []);
@@ -117,6 +134,14 @@ export function startRevisionOnProject(project, excerptId, { sceneIds } = {}, no
     rejectIds = new Set(noteIdsByScene.keys());
   }
 
+  if (codeFirst(project)) {
+    assertCodeFirstPlan(project);
+    const conflicts = [...rejectIds].filter((sceneId) => !['still', 'generated-footage'].includes(mediumFor(project, sceneId)));
+    if (conflicts.length) throw revisionError(409, 'REVISION_MEDIUM_PLAN_CONFLICT',
+      'The review flagged a procedural or existing-footage section. Revise its code or selected asset, or explicitly change the medium plan before retrying.',
+      { sceneIds: conflicts });
+  }
+
   const scenesById = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const skippedSceneIds = [];
   let next = project;
@@ -128,11 +153,12 @@ export function startRevisionOnProject(project, excerptId, { sceneIds } = {}, no
     const scene = scenesById.get(section.sceneId);
     if (!scene) continue; // deleted since the draft — nothing left to keep or revise
     const rejected = rejectIds.has(section.sceneId);
-    if (section.layer === 'card') {
+    if (!codeFirst(project) && section.layer === 'card') {
       if (rejected) skippedSceneIds.push(section.sceneId);
       continue;
     }
-    const kind = section.layer === 'still' ? 'image' : 'video';
+    const kind = codeFirst(project) ? (mediumFor(project, section.sceneId) === 'still' ? 'image' : 'video')
+      : section.layer === 'still' ? 'image' : 'video';
     const assetId = isNonBlankStr(scene[TAKE_SLOT[kind]]) ? scene[TAKE_SLOT[kind]] : null;
     if (rejected && assetId) {
       // Materialize a legacy selection as a take first, so the take id the
@@ -168,6 +194,7 @@ export function startRevisionOnProject(project, excerptId, { sceneIds } = {}, no
     startSec: excerpt.startSec,
     endSec: excerpt.endSec,
     status: 'open',
+    ...(codeFirst(project) ? { mediumBasis: mediumBasis(project) } : {}),
     sections: revisionSections,
     renderExcerptId: null,
     renderAttempts: 0,
@@ -334,9 +361,22 @@ export function cancelRevisionOnProject(project, revisionId, now = new Date().to
  * there is nothing left to hand this generation's output to. No-op when the
  * project itself is gone (the route's own lookup reports that separately).
  */
-export function assertRevisionOpenForGeneration(project, revisionId) {
+export function assertRevisionOpenForGeneration(project, revisionId, { sceneId = null, kind = null } = {}) {
   if (!project) return null;
-  return resumableRevision(project, revisionId);
+  const revision = resumableRevision(project, revisionId);
+  if (revision.mediumBasis || codeFirst(project)) {
+    if (!revision.mediumBasis || revision.mediumBasis !== mediumBasis(project)) {
+      throw revisionError(409, 'REVISION_MEDIUM_PLAN_CHANGED', 'The medium plan or allowance changed since this revision opened');
+    }
+    assertCodeFirstPlan(project);
+    const section = revision.sections.find((entry) => entry.sceneId === sceneId && entry.verdict === 'rejected');
+    const medium = mediumFor(project, sceneId);
+    if (!section || section.kind !== kind || (kind === 'video' && medium !== 'generated-footage')
+      || (kind === 'image' && medium !== 'still')) {
+      throw revisionError(409, 'REVISION_MEDIUM_PLAN_CONFLICT', 'This generation request does not match the approved medium for the rejected section');
+    }
+  }
+  return revision;
 }
 
 /**

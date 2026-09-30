@@ -210,6 +210,11 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         const { assertRevisionOpen } = await import('../musicVideo/revisionService.js');
         await assertRevisionOpen(body.musicVideo.projectId, body.musicVideo.revisionId, { sceneId: body.musicVideo.sceneId, kind: 'video' });
       }
+      if (body.musicVideo?.productionRunId) {
+        const { assertProductionSubmission } = await import('../musicVideo/productionService.js');
+        await assertProductionSubmission(body.musicVideo.projectId, body.musicVideo.productionRunId,
+          body.musicVideo.productionStepKey, { sceneId: body.musicVideo.sceneId, kind: 'video' });
+      }
       return enqueueJob({ kind: 'video', params });
     },
   );

@@ -29,6 +29,7 @@ vi.mock('./projects.js', () => ({
 
 const { musicVideoEvents } = await import('./events.js');
 const service = await import('./productionService.js');
+const { productionBasisRevision } = await import('./production.js');
 
 // ---- queue, lanes and review doubles ------------------------------------------
 let jobs;
@@ -476,5 +477,46 @@ describe('music video production run (#9066)', () => {
     await settle();
     const last = dispatch.mock.calls.at(-1)[0];
     expect(last).toMatchObject({ stepKind: 'clip', tag: { revisionId: 'mvrv-example', sceneId: 'mvs-a' } });
+  });
+
+  it('does not start a code-first document run through legacy frame and clip lanes', async () => {
+    seedProject({ composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
+    await expect(service.startProduction('mv-example', { pool: POOL, limits: LIMITS }))
+      .rejects.toMatchObject({ code: 'PRODUCTION_CODE_FIRST_NOT_READY' });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a generation if the director changes to zero code-first allowance during provider preparation', async () => {
+    seedProject();
+    let release;
+    const prepared = new Promise((resolve) => { release = resolve; });
+    dispatch.mockImplementationOnce(async (args) => {
+      await prepared;
+      await service.assertProductionSubmission('mv-example', args.tag.productionRunId, args.tag.productionStepKey,
+        { sceneId: args.tag.sceneId, kind: 'image' });
+      return enqueueing(args);
+    });
+    await service.startProduction('mv-example', { pool: POOL, limits: LIMITS });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(theRun().steps[0].status).toBe('reserved');
+    store.get('mv-example').productionPolicy = { strategy: 'code-first', maxGeneratedVideoPercent: 0 };
+    release();
+    await settle();
+    expect(jobs).toHaveLength(0);
+    expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 0 } });
+    expect(theRun().steps[0]).toMatchObject({ status: 'refused', error: expect.stringMatching(/policy|plan/i) });
+    await expect(service.resumeProduction('mv-example', theRun().id, { acceptBasis: true }))
+      .rejects.toMatchObject({ code: 'PRODUCTION_CODE_FIRST_NOT_READY' });
+  });
+
+  it('keeps pre-upgrade legacy run checksums valid after adding the policy-aware basis', async () => {
+    seedProject();
+    await start();
+    const stored = store.get('mv-example');
+    stored.productionRuns[0].basis = { revision: productionBasisRevision(stored), capturedAt: stored.productionRuns[0].createdAt };
+    completeJob('job-1');
+    await settle();
+    expect(theRun().status).toBe('running');
+    expect(theRun().basis).not.toHaveProperty('version');
   });
 });

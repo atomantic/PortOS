@@ -42,6 +42,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
 import { castAndSetsSettled } from './castAndSets.js';
@@ -107,7 +108,7 @@ function pruneRuns(runs) {
  * part of it: the run itself seeds and fills them, and a director editing one
  * scene's prompt mid-run changes only what that scene generates next.
  */
-function productionBasisRevision(project) {
+export function productionBasisRevision(project, version = 1) {
   const pick = (value) => value ?? null;
   return canonicalSnapshotChecksum({
     concept: pick(project?.concept),
@@ -123,6 +124,11 @@ function productionBasisRevision(project) {
     },
     pacing: pick(project?.pacing),
     composition: pick(project?.composition?.mode),
+    ...(version >= 2 ? {
+      productionPolicy: normalizeMusicVideoProductionPolicy(project?.productionPolicy),
+      ...(normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first'
+        ? { shotDirections: pick(project?.treatment?.shotDirections) } : {}),
+    } : {}),
   });
 }
 
@@ -183,6 +189,9 @@ export function startProductionOnProject(project, {
   if (liveReview) throw productionError(409, 'AUTO_REVIEW_IN_PROGRESS', 'Finish or cancel the auto-review run before starting production', { runId: liveReview.id });
   const openRevision = projectRevisions(project).find((r) => r.status === 'open' || r.status === 'rendering');
   if (openRevision) throw productionError(409, 'REVISION_IN_PROGRESS', 'Finish or cancel the open revision before starting production', { revisionId: openRevision.id });
+  if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first') {
+    throw productionError(409, 'PRODUCTION_CODE_FIRST_NOT_READY', 'Autonomous code-first production needs document authoring and review checkpoints; use the mixed-media document controls until those steps are available');
+  }
   if (project?.composition?.mode === 'code') {
     throw productionError(409, 'PRODUCTION_UNSUPPORTED', 'A code-rendered project generates no footage — render it directly');
   }
@@ -209,7 +218,7 @@ export function startProductionOnProject(project, {
       providerId: isNonBlankStr(reviewer.providerId) ? reviewer.providerId : null,
       model: isNonBlankStr(reviewer.model) ? reviewer.model : null,
     },
-    basis: { revision: productionBasisRevision(project), capturedAt: now },
+    basis: { version: 2, revision: productionBasisRevision(project, 2), capturedAt: now },
     usage: { generations: 0, spentUsd: 0 },
     planned: false,
     reviewRunId: null,
@@ -222,6 +231,29 @@ export function startProductionOnProject(project, {
     updatedAt: now,
   };
   return { project: { ...project, productionRuns: pruneRuns([...projectProductionRuns(project), run]), updatedAt: now }, run };
+}
+
+/** Final submission guard, called after provider preparation and before queueing. */
+export function assertProductionStepOpen(project, runId, stepKey, { sceneId, kind, processId }) {
+  const run = findProductionRun(project, runId);
+  const step = run.steps.find((entry) => entry.key === stepKey);
+  if (run.status !== 'running' || run.processId !== processId || !step || step.status !== 'reserved' || step.sceneId !== sceneId
+    || JOB_KIND[step.kind] !== kind) {
+    throw productionError(409, 'PRODUCTION_STEP_CLOSED', 'The production step was stopped or changed before submission');
+  }
+  if (productionBasisRevision(project, run.basis.version || 1) !== run.basis.revision) {
+    throw productionError(409, 'PRODUCTION_BASIS_CHANGED', 'The production policy or approved plan changed before submission');
+  }
+  if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first') {
+    const plan = summarizeMusicVideoMediumPlan(project);
+    const medium = project.treatment?.shotDirections?.find((direction) => direction.sceneId === sceneId)?.medium;
+    if (plan.blocked || (kind === 'video' && medium !== 'generated-footage')
+      || (kind === 'image' && !['still', 'generated-footage'].includes(medium))) {
+      throw productionError(409, 'PRODUCTION_MEDIUM_CONFLICT', 'The approved medium plan or generated-video allowance no longer permits this submission');
+    }
+    throw productionError(409, 'PRODUCTION_CODE_FIRST_NOT_READY', 'Autonomous code-first production cannot submit media until document authoring and review checkpoints are available');
+  }
+  return step;
 }
 
 // ---- deriving the next step -------------------------------------------------
@@ -263,8 +295,11 @@ const slotSteps = (run, sceneId, stepKind, revisionId = null) => run.steps
 export function nextProductionStep(project, run, { jobs = [], processId = null } = {}) {
   if (run.status !== 'running') return { type: 'idle' };
   if (!processId || run.processId !== processId) return { type: 'idle', interrupted: true };
-  if (productionBasisRevision(project) !== run.basis.revision) {
+  if (productionBasisRevision(project, run.basis.version || 1) !== run.basis.revision) {
     return { type: 'halt', status: 'needs-replan', reason: 'The creative setup changed since Start — review it, then resume against the new setup' };
+  }
+  if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first') {
+    return { type: 'halt', status: 'needs-replan', reason: 'Autonomous code-first production needs document authoring and review checkpoints before it can dispatch' };
   }
   if (run.reviewRunId) {
     const review = projectAutoReviews(project).find((r) => r.id === run.reviewRunId);
@@ -476,12 +511,11 @@ export const markProductionCastAndSets = (project, runId, now = new Date().toISO
 export function rebaseProductionAfterCheckin(project, now = new Date().toISOString()) {
   const runs = projectProductionRuns(project);
   if (!runs.some((r) => r.status === 'running' && !r.planned)) return { project };
-  const revision = productionBasisRevision(project);
   return {
     project: {
       ...project,
       productionRuns: runs.map((r) => (r.status === 'running' && !r.planned
-        ? { ...r, basis: { revision, capturedAt: now }, updatedAt: now } : r)),
+        ? { ...r, basis: { ...r.basis, revision: productionBasisRevision(project, r.basis.version || 1), capturedAt: now }, updatedAt: now } : r)),
     },
   };
 }
@@ -518,7 +552,10 @@ export function stopProductionOnProject(project, runId, now = new Date().toISOSt
 export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId } = {}, now = new Date().toISOString()) {
   return mutateRun(project, runId, (run) => {
     if (!RESUMABLE.has(run.status)) throw productionError(409, 'PRODUCTION_CLOSED', `This production run is ${run.status} — start a new run instead`);
-    const basisChanged = productionBasisRevision(project) !== run.basis.revision;
+    if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first') {
+      throw productionError(409, 'PRODUCTION_CODE_FIRST_NOT_READY', 'Autonomous code-first production needs document authoring and review checkpoints; use the mixed-media document controls');
+    }
+    const basisChanged = productionBasisRevision(project, run.basis.version || 1) !== run.basis.revision;
     if (basisChanged && !acceptBasis) {
       throw productionError(409, 'PRODUCTION_BASIS_CHANGED', 'The creative setup changed since Start — resume with the new setup accepted, or cancel');
     }
@@ -537,7 +574,7 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       resumedAt: now,
       stopReason: null,
       error: null,
-      ...(basisChanged ? { basis: { revision: productionBasisRevision(project), capturedAt: now } } : {}),
+      ...(basisChanged ? { basis: { ...run.basis, revision: productionBasisRevision(project, run.basis.version || 1), capturedAt: now } } : {}),
     };
   }, now);
 }

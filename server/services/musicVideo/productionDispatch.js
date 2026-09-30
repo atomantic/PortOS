@@ -72,6 +72,8 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: route.model, ...common };
   const params = await withMusicVideoStyle(project, baseParams, route.mode, route.model, settings);
   await guardRevision(tag, 'image');
+  const { assertProductionSubmission } = await import('./productionService.js');
+  await assertProductionSubmission(tag.projectId, tag.productionRunId, tag.productionStepKey, { sceneId: tag.sceneId, kind: 'image' });
   const { jobId } = await enqueueJob({ kind: 'image', params, owner: `music-video-production:${tag.productionRunId}` });
   return { jobId };
 }
