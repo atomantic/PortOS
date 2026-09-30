@@ -78,6 +78,12 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   reviewMusicVideoTreatmentProof: vi.fn(),
   renderMusicVideoExcerpt: vi.fn(async () => ({ jobId: 'mve-job-1', excerptId: 'mve-job-1' })),
   musicVideoExcerptRenderEventsUrl: (jobId) => `/api/music-video/excerpt/${jobId}/events`,
+  buildMusicVideoPublishKit: vi.fn(async () => ({ jobId: 'mvpk-job-1' })),
+  musicVideoPublishKitEventsUrl: (jobId) => `/api/music-video/publish-kit/${jobId}/events`,
+  cancelMusicVideoPublishKit: vi.fn(async () => ({ ok: true })),
+  draftMusicVideoPublishCopy: vi.fn(),
+  updateMusicVideoPublishCopy: vi.fn(),
+  selectMusicVideoPublishThumbnail: vi.fn(),
   cancelMusicVideoExcerptRender: vi.fn(async () => ({ ok: true })),
   deleteMusicVideoExcerpt: vi.fn(),
   addMusicVideoExcerptNote: vi.fn(),
@@ -2094,11 +2100,12 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await waitFor(() => expect(stopMusicVideoProduction).toHaveBeenCalledWith('mv-3', 'run-1', { silent: true }));
     });
 
-    it('takes a finished project to its final video', async () => {
+    it('takes a finished project on to its release (#9281)', async () => {
       await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'board');
-      fireEvent.click(screen.getByRole('button', { name: 'Watch final video' }));
-      await waitFor(() => expect(selectedTab()).toHaveTextContent(/^Review/));
-      expect(document.getElementById('mv-final-video')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Build the publishing kit' }));
+      await waitFor(() => expect(selectedTab()).toHaveTextContent(/^Publish/));
+      expect(screen.getByRole('region', { name: 'Release assets' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Build publishing kit/ })).not.toBeDisabled();
     });
   });
 

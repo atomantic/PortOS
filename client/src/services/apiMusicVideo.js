@@ -192,6 +192,21 @@ export const getMusicVideoSocialCuts = (id, { count, minSec, maxSec } = {}, opti
   const qs = params.toString();
   return request(`/music-video/${encodeURIComponent(id)}/social-cuts${qs ? `?${qs}` : ''}`, options);
 };
+// ---- Publishing kit (#9281) ----
+// Build: platform encodes, thumbnails, captions and chapters from the final
+// render → { jobId } (progress over its own SSE URL). Copy: one provider draft,
+// then per-field edits; both resolve to { project }.
+export const buildMusicVideoPublishKit = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/build`, { method: 'POST', ...options });
+export const musicVideoPublishKitEventsUrl = (jobId) => `/api/music-video/publish-kit/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoPublishKit = (jobId, options = {}) =>
+  request(`/music-video/publish-kit/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+export const draftMusicVideoPublishCopy = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const updateMusicVideoPublishCopy = (id, patch, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'PATCH', body: JSON.stringify(patch || {}), ...options });
+export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/thumbnail`, { method: 'PUT', body: JSON.stringify({ filename }), ...options });
 export const musicVideoExcerptRenderEventsUrl = (jobId) =>
   `/api/music-video/excerpt/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoExcerptRender = (jobId, options = {}) =>

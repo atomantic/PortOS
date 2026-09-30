@@ -29,6 +29,7 @@ import useMusicVideoDevArtifacts from '../hooks/useMusicVideoDevArtifacts.js';
 import useMusicVideoVocalSeparation from '../hooks/useMusicVideoVocalSeparation.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
+import useMusicVideoPublishKit from '../hooks/useMusicVideoPublishKit.js';
 import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
 import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
 import useMusicVideoProduction from '../hooks/useMusicVideoProduction.js';
@@ -55,6 +56,7 @@ import BoardStage from '../components/musicVideo/stages/BoardStage.jsx';
 import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
 import ComposeStage from '../components/musicVideo/stages/ComposeStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
+import PublishStage from '../components/musicVideo/stages/PublishStage.jsx';
 import { compositionDraft } from '../components/musicVideo/compositionDraft.js';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
 import DevArtifactDrawer from '../components/musicVideo/DevArtifactDrawer.jsx';
@@ -83,7 +85,7 @@ function autopilotBlocker(project) {
 
 // The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
 const STAGE_VIEWS = {
-  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage,
+  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage, publish: PublishStage,
 };
 
 const STATUS_COLORS = {
@@ -179,6 +181,8 @@ export default function MusicVideo() {
   // separate from the full-render job/mutex above so a director can preview a
   // change without waiting on (or blocking) a full render.
   const excerpts = useMusicVideoExcerpts({ project: selected, replaceProject });
+  // Publishing kit (#9281): release encodes, thumbnails, captions, chapters and copy.
+  const publishKit = useMusicVideoPublishKit({ project: selected, replaceProject });
   const videoSettings = useMusicVideoModelSettings({ project: selected, onProjectPatch: patchProject });
   const tempo = useMusicVideoManualTempo({ project: selected, onUpdated: replaceProject });
   const sceneMedia = useMusicVideoSceneMedia({
@@ -774,6 +778,7 @@ export default function MusicVideo() {
     takes,
     treatment,
     excerpts,
+    publishKit,
     revisions,
     autoReview,
     finalVideo,

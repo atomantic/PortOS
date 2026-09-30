@@ -1,0 +1,60 @@
+/**
+ * Publish stage panel (#9281): the kit builds only from a final render, the
+ * copy draft carries the director's notes and valid links, an edited field
+ * saves on blur (tags as a list), and the thumbnail choice goes to the server.
+ */
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+
+vi.mock('../../hooks/useProviderModels.js', () => ({
+  default: () => ({ providers: [], selectedProviderId: '', selectedModel: '', availableModels: [], setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn() }),
+}));
+vi.mock('../../lib/clipboard.js', () => ({ copyToClipboard: vi.fn() }));
+
+import PublishKitPanel from './PublishKitPanel.jsx';
+
+const hook = (over = {}) => ({
+  building: false, progress: 0, build: vi.fn(), drafting: false, saving: false,
+  draftCopy: vi.fn(async () => null), saveCopy: vi.fn(async () => null), selectThumbnail: vi.fn(async () => null), ...over,
+});
+const built = {
+  builtAt: '2026-01-01T00:00:00.000Z', master: { filename: 'master.mp4' },
+  exports: [{ kind: 'x-1080p', label: 'X / social 1080p (12 Mbps)', filename: 'x.mp4' }],
+  thumbnails: ['t1.jpg', 't2.jpg'], thumbnail: 't1.jpg', captionsFilename: 'c.srt',
+  chapters: [{ startSec: 0, label: 'Opening line' }, { startSec: 30, label: 'Chorus' }, { startSec: 72, label: 'Outro' }],
+  copy: { youtube: { title: 'A title', description: '', tags: ['music'] } }, copyDraftedAt: '2026-01-01T00:00:00.000Z',
+};
+
+describe('PublishKitPanel (#9281)', () => {
+  it('builds only once there is a final render', () => {
+    const k = hook();
+    const { rerender } = render(<PublishKitPanel project={{ id: 'mv-1' }} publishKit={k} />);
+    expect(screen.getByRole('button', { name: /Build publishing kit/ })).toBeDisabled();
+    rerender(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1' }} publishKit={k} />);
+    fireEvent.click(screen.getByRole('button', { name: /Build publishing kit/ }));
+    expect(k.build).toHaveBeenCalled();
+  });
+
+  it('drafts copy from the notes and only well-formed links', () => {
+    const k = hook();
+    render(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1' }} publishKit={k} />);
+    fireEvent.change(screen.getByLabelText(/Making-of notes/), { target: { value: 'hummed it in the car' } });
+    fireEvent.change(screen.getByLabelText(/Full video URL/), { target: { value: 'https://example.com/v' } });
+    fireEvent.change(screen.getByLabelText(/Song URL/), { target: { value: 'not a url' } });
+    fireEvent.click(screen.getByRole('button', { name: /Draft copy/ }));
+    expect(k.draftCopy).toHaveBeenCalledWith({ notes: 'hummed it in the car', links: { youtube: 'https://example.com/v' } });
+  });
+
+  it('shows the built kit, saves an edited field on blur and picks a thumbnail', () => {
+    const k = hook();
+    render(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1', publishKit: built }} publishKit={k} />);
+    expect(screen.getByText('X / social 1080p (12 Mbps)')).toBeTruthy();
+    expect(screen.getByText(/0:00 Opening line/)).toBeTruthy();
+    const tags = screen.getByLabelText('Tags (comma-separated)');
+    fireEvent.change(tags, { target: { value: 'music, ai video ,claude' } });
+    fireEvent.blur(tags);
+    expect(k.saveCopy).toHaveBeenCalledWith({ youtube: { tags: ['music', 'ai video', 'claude'] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use thumbnail t2.jpg' }));
+    expect(k.selectThumbnail).toHaveBeenCalledWith('t2.jpg');
+  });
+});

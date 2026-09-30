@@ -36,6 +36,9 @@ import {
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
   musicVideoSocialCutsQuerySchema,
+  musicVideoPublishCopyPatchSchema,
+  musicVideoPublishCopyDraftSchema,
+  musicVideoPublishThumbnailSchema,
   musicVideoCodeGenerateSchema,
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
@@ -98,6 +101,7 @@ import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../serv
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
+import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
 import {
   startRevision, resumeRevision, cancelRevision, releaseRevisionSection,
 } from '../services/musicVideo/revisionService.js';
@@ -575,6 +579,40 @@ router.delete('/:id/composition/document', asyncHandler(async (req, res) => {
 router.post('/:id/excerpt', asyncHandler(async (req, res) => {
   const { startSec, endSec, aspect, fade } = validateRequest(musicVideoExcerptRequestSchema, req.body);
   res.json(await startExcerptRender(req.params.id, { startSec, endSec, aspect, fade }));
+}));
+
+// --- Publishing kit (#9281) ---
+// Platform encodes, thumbnails, captions and chapters from the final render
+// (an SSE job), plus per-platform copy: one user-triggered draft, then edits.
+router.post('/:id/publish-kit/build', asyncHandler(async (req, res) => {
+  res.json(await startPublishKitBuild(req.params.id));
+}));
+
+router.get('/publish-kit/:jobId/events', (req, res) => {
+  const ok = attachPublishKitSseClient(req.params.jobId, res);
+  if (!ok) throw new ServerError('Publishing kit job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+
+router.post('/publish-kit/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelPublishKitBuild(req.params.jobId) });
+});
+
+router.post('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoPublishCopyDraftSchema, req.body || {});
+  const { project } = await draftPublishKitCopy(req.params.id, input);
+  res.json({ project });
+}));
+
+router.patch('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
+  const patch = validateRequest(musicVideoPublishCopyPatchSchema, req.body || {});
+  const { project } = await updatePublishKitCopy(req.params.id, patch);
+  res.json({ project });
+}));
+
+router.put('/:id/publish-kit/thumbnail', asyncHandler(async (req, res) => {
+  const { filename } = validateRequest(musicVideoPublishThumbnailSchema, req.body || {});
+  const { project } = await selectPublishKitThumbnail(req.params.id, filename);
+  res.json({ project });
 }));
 
 // #9280: the song windows most likely to work as a vertical social cut.

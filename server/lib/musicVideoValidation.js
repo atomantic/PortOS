@@ -524,6 +524,26 @@ export const musicVideoSocialCutsQuerySchema = z.object({
   maxSec: z.coerce.number().min(5).max(180).optional(),
 }).strict().refine((q) => q.minSec == null || q.maxSec == null || q.maxSec >= q.minSec, { message: 'maxSec must be at least minSec' });
 
+// #9281: publishing kit — per-platform copy edits, the copy draft request, the chosen thumbnail.
+const kitText = (max) => z.string().max(max);
+export const musicVideoPublishCopyPatchSchema = z.object({
+  youtube: z.object({ title: kitText(100), description: kitText(5000), tags: z.array(kitText(60)).max(30) }).partial().strict().optional(),
+  shorts: z.object({ title: kitText(100), description: kitText(5000) }).partial().strict().optional(),
+  x: z.object({ hook: kitText(280), story: kitText(25000) }).partial().strict().optional(),
+  tiktok: z.object({ caption: kitText(2200) }).partial().strict().optional(),
+  instagram: z.object({ caption: kitText(2200) }).partial().strict().optional(),
+  reddit: z.object({ title: kitText(300), body: kitText(40000) }).partial().strict().optional(),
+  stackerNews: z.object({ title: kitText(80), body: kitText(40000) }).partial().strict().optional(),
+  notes: kitText(8000).optional(),
+}).strict();
+export const musicVideoPublishCopyDraftSchema = z.object({
+  providerId: z.string().max(200).nullable().optional(),
+  model: z.string().max(200).nullable().optional(),
+  notes: kitText(8000).optional(),
+  links: z.object({ youtube: z.string().url().max(500), song: z.string().url().max(500) }).partial().strict().optional(),
+}).strict();
+export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
+
 export const musicVideoExcerptNoteSchema = z.object({
   atSec: z.number().min(0).max(36000),
   note: z.string().min(1).max(2000),

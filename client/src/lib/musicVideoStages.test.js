@@ -70,8 +70,11 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction(composed)).toMatchObject({ id: 'goto-compose', stage: 'compose' });
 
     const finished = { ...ready, renderHistoryId: 'rh-1' };
-    expect(stateOf(finished)).toMatchObject({ setup: 'done', board: 'done', produce: 'done', compose: 'done', review: 'done' });
-    expect(deriveNextAction(finished)).toMatchObject({ id: 'goto-final', kind: 'goto', stage: 'review' });
+    expect(stateOf(finished)).toMatchObject({ setup: 'done', board: 'done', produce: 'done', compose: 'done', review: 'done', publish: 'active' });
+    // #9281: a rendered project moves on to the release.
+    expect(deriveNextAction(finished)).toMatchObject({ id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit' });
+    expect(deriveNextAction({ ...finished, publishKit: { builtAt: '2026-01-01T00:00:00.000Z' } })).toMatchObject({ label: 'Publish the release' });
+    expect(stateOf({ ...finished, publishKit: { posts: { youtube: { url: 'https://example.com/v' } } } }).publish).toBe('done');
   });
 
   it('does not require scene footage for code-rendered or document projects', () => {
