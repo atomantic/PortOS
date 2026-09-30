@@ -508,20 +508,21 @@ function applyWordTimes(cue, words) {
  * window keeps a fully unmatched run inside that window.
  * A cue's startSec/endSec is filled from its words only when that side is null.
  */
-function alignDirectorWords(cues, recognizedWords) {
+function alignDirectorWords(cues, recognizedWords, { phraseAnchored = false } = {}) {
   const list = Array.isArray(cues) ? cues : [];
   const director = [];
   list.forEach((cue, cueIndex) => {
     for (const token of lyricTokens(cue?.text)) director.push({ ...token, cueIndex });
   });
   const recognized = recognizedTokens(recognizedWords);
-  const matchOf = alignTokenIndexes(director, recognized);
+  const matches = phraseAnchored ? dpAlignWords(director, recognizedWords) : null;
+  const matchOf = matches ? null : alignTokenIndexes(director, recognized);
   const byCue = list.map(() => []);
   director.forEach((token, index) => {
-    const recIndex = matchOf[index];
+    const recIndex = matchOf?.[index] ?? -1;
     byCue[token.cueIndex].push({
       w: token.w,
-      match: recIndex >= 0 ? recognized[recIndex] : null,
+      match: matches ? matches[index] : recIndex >= 0 ? recognized[recIndex] : null,
     });
   });
   const placed = placeAll(list, byCue, recognized);
@@ -532,8 +533,196 @@ function alignDirectorWords(cues, recognizedWords) {
       delete cleared.words;
       return cleared;
     }
-    return applyWordTimes(cue, words);
+    if (!phraseAnchored) return applyWordTimes(cue, words);
+    const matched = words.filter((word) => word.conf === 'matched').length / words.length;
+    // A weak recognition must not overwrite even an untimed line with invented
+    // timing. Keep its previous word boundaries too, if any.
+    if (matched < 0.5) return { ...cue, matched };
+    return { ...applyWordTimes(cue, words), matched };
   });
+}
+
+/** RMS phrases from normalized mono PCM (10 ms hop, centered 30 ms smoothing). */
+export function detectVocalPhrases(pcm, sampleRate = LYRIC_ALIGN_SAMPLE_RATE) {
+  const hop = Math.max(1, Math.round(sampleRate * 0.01));
+  const power = [];
+  for (let i = 0; i < pcm.length; i += hop) {
+    let sum = 0;
+    const end = Math.min(pcm.length, i + hop);
+    for (let j = i; j < end; j++) sum += pcm[j] * pcm[j];
+    power.push(sum / (end - i));
+  }
+  const rms = power.map((v, i) => Math.sqrt(((power[i - 1] ?? v) + v + (power[i + 1] ?? v)) / 3));
+  const threshold = 10 ** (-40 / 20);
+  const onsetThreshold = 10 ** (-46 / 20);
+  const phrases = [];
+  const emit = (start, end) => {
+    if (end - start < 15) return;
+    // Bound each split away from the edges so even a flat sustained vocal
+    // makes progress; equal-depth dips prefer the middle.
+    while (end - start > 700) {
+      const limit = Math.min(start + 700, end - 15);
+      let dip = start + Math.floor((limit - start) / 2);
+      for (let i = start + 15; i <= limit; i++) if (rms[i] < rms[dip]) dip = i;
+      phrases.push({ startSec: round3(start * hop / sampleRate), endSec: round3(dip * hop / sampleRate) });
+      start = dip;
+    }
+    phrases.push({ startSec: round3(start * hop / sampleRate), endSec: round3(Math.min(pcm.length, end * hop) / sampleRate) });
+  };
+  let start = null;
+  let silent = 0;
+  for (let i = 0; i < rms.length; i++) {
+    if (rms[i] >= threshold) {
+      if (start == null) {
+        start = i;
+        while (start > 0 && rms[start - 1] >= onsetThreshold) start--;
+      }
+      silent = 0;
+    } else if (start != null && ++silent >= 10) {
+      emit(start, i - silent + 1);
+      start = null;
+      silent = 0;
+    }
+  }
+  if (start != null) emit(start, rms.length - silent);
+  return phrases;
+}
+
+/** Windows on the song clock. Long gaps start a new anchor, even below 11 s. */
+export function phraseWindows(phrases, durationSec = phrases.at(-1)?.endSec ?? 0) {
+  const windows = [];
+  for (const phrase of phrases) {
+    const startSec = Math.max(0, phrase.startSec - 0.08);
+    const endSec = Math.min(durationSec, phrase.endSec + 0.08);
+    const last = windows.at(-1);
+    // Do not put a post-silence phrase inside an earlier window: whisper
+    // would again attach its first word to that silence.
+    if (last && startSec - last.endSec <= 0.1 && endSec - last.startSec <= 11) last.endSec = endSec;
+    else if (endSec > startSec) windows.push({ startSec: round3(startSec), endSec: round3(endSec) });
+  }
+  const gaps = [];
+  let cursor = 0;
+  for (const window of [...windows, { startSec: durationSec, endSec: durationSec }]) {
+    if (window.startSec - cursor > 3) {
+      for (let start = cursor; start < window.startSec; start += 11) {
+        gaps.push({ startSec: round3(start), endSec: round3(Math.min(start + 11, window.startSec)) });
+      }
+    }
+    cursor = Math.max(cursor, window.endSec);
+  }
+  return [...windows, ...gaps].sort((a, b) => a.startSec - b.startSec);
+}
+
+// SequenceMatcher-style ratio: recursively count longest common contiguous
+// blocks, rather than making one edit the only tolerated recognition error.
+function wordRatio(a, b) {
+  const pending = [[0, a.length, 0, b.length]];
+  let matched = 0;
+  while (pending.length) {
+    const [alo, ahi, blo, bhi] = pending.pop();
+    let best = 0, ai = alo, bi = blo;
+    let previous = new Uint16Array(bhi - blo + 1);
+    for (let i = alo; i < ahi; i++) {
+      const row = new Uint16Array(bhi - blo + 1);
+      for (let j = blo; j < bhi; j++) {
+        if (a[i] !== b[j]) continue;
+        const size = previous[j - blo] + 1;
+        row[j - blo + 1] = size;
+        if (size > best) { best = size; ai = i - size + 1; bi = j - size + 1; }
+      }
+      previous = row;
+    }
+    if (!best) continue;
+    matched += best;
+    if (alo < ai && blo < bi) pending.push([alo, ai, blo, bi]);
+    if (ai + best < ahi && bi + best < bhi) pending.push([ai + best, ahi, bi + best, bhi]);
+  }
+  return 2 * matched / (a.length + b.length || 1);
+}
+
+const WORD_ALIASES = new Set(['a:of', 'of:a', 'swarm:sword', 'sword:swarm']);
+
+/** Global Needleman–Wunsch alignment; result has one match (or null) per lyric word. */
+function dpAlignWords(lyricWords, recognised) {
+  const director = lyricWords.map((word) => typeof word === 'string' ? lyricKey(word) : word.key);
+  const vocab = new Set(director);
+  const tokens = recognizedTokens(recognised);
+  const words = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const word = tokens[i];
+    const next = tokens[i + 1];
+    // Only glue fragments into a word the director actually supplied; never
+    // collapse two independently valid lyric words.
+    if (next && next.startSec - word.endSec <= 0.15 && !vocab.has(word.key) && vocab.has(word.key + next.key)) {
+      words.push({ ...word, key: word.key + next.key, endSec: next.endSec });
+      i++;
+    } else words.push(word);
+  }
+  const n = director.length, m = words.length, width = m + 1;
+  if ((n + 1) * width > MAX_ALIGN_DP_CELLS) {
+    throw new ServerError('Too many words to align at once. Re-align individual lines.', { status: 422, code: 'LYRIC_ALIGN_TOO_LARGE' });
+  }
+  const score = new Float64Array((n + 1) * width);
+  const step = new Uint8Array(score.length);
+  const cache = new Map();
+  const similarity = (a, b) => {
+    if (a === b || WORD_ALIASES.has(`${a}:${b}`)) return 1;
+    const key = `${a}:${b}`;
+    if (cache.size >= 50_000) cache.clear();
+    if (!cache.has(key)) cache.set(key, wordRatio(a, b));
+    return cache.get(key);
+  };
+  for (let i = 1; i <= n; i++) score[i * width] = -0.4 * i;
+  for (let j = 1; j <= m; j++) score[j] = -0.2 * j;
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const cell = i * width + j;
+      const up = score[cell - width] - 0.4;
+      const left = score[cell - 1] - 0.2;
+      score[cell] = Math.max(up, left);
+      step[cell] = up >= left ? 1 : 2;
+      const ratio = similarity(director[i - 1], words[j - 1].key);
+      const diag = score[cell - width - 1] + ratio;
+      if (ratio >= 0.6 && diag >= score[cell]) { score[cell] = diag; step[cell] = 3; }
+    }
+  }
+  const matches = new Array(n).fill(null);
+  let i = n, j = m;
+  while (i > 0 && j > 0) {
+    const direction = step[i * width + j];
+    if (direction === 3) { matches[--i] = words[--j]; }
+    else if (direction === 1) i--;
+    else j--;
+  }
+  return matches;
+}
+
+/** Snap generated line starts and all words by one delta; authored sides stay fixed. */
+export function snapLineStarts(lines, onsets, originals = []) {
+  return lines.map((line, index) => {
+    const original = originals[index] || {};
+    if (line.matched < 0.5 || !line.words?.length) return line;
+    const first = line.words[0].startSec;
+    const onset = onsets.filter((t) => t >= first - 0.35 && t <= first + 0.25)
+      .sort((a, b) => Math.abs(a - first) - Math.abs(b - first))[0];
+    if (onset == null) return line;
+    const delta = onset - first;
+    return {
+      ...line,
+      startSec: original.startSec ?? round3(onset),
+      endSec: original.endSec ?? (line.endSec == null ? null : round3(line.endSec + delta)),
+      words: line.words.map((word) => ({ ...word, startSec: round3(word.startSec + delta), endSec: round3(word.endSec + delta) })),
+    };
+  });
+}
+
+/** Read the ffmpeg-decoded WAV without assuming a fixed-size RIFF header. */
+export function vocalPcm(wav) {
+  const info = wavInfo(wav);
+  if (!info || info.blockAlign !== 2 || info.sampleRate !== LYRIC_ALIGN_SAMPLE_RATE) {
+    throw new ServerError('Decoded audio was not 16 kHz mono PCM.', { status: 422, code: 'LYRIC_ALIGN_DECODE_FAILED' });
+  }
+  return Float32Array.from({ length: info.sampleCount }, (_, i) => wav.readInt16LE(info.dataOffset + i * 2) / 32768);
 }
 
 function encodePcm16Wav(sampleCount, sampleRate = LYRIC_ALIGN_SAMPLE_RATE) {
@@ -610,8 +799,7 @@ export async function pickAlignmentPath(project, io = {}) {
     return resolveMasterAudioPath(record);
   });
   const stem = resolveStem(project);
-  // With a stem, the mix is transcribed too: the two transcripts are merged so
-  // a recognizer that loops on the isolated vocal is outvoted (mergeTranscripts).
+  // The stem supplies phrase onsets; the mix supplies recognized words.
   if (stem) return { path: stem, source: 'vocal-stem', mixPath: await resolveMaster(project) };
   return { path: await resolveMaster(project), source: 'master', mixPath: null };
 }

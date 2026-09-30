@@ -5,9 +5,9 @@
  * model is `base.en`, which is too weak for a sung vocal. Alignment therefore
  * brings its own runner and never asks the director to enable voice:
  *
- *   1. `whisper-cli` on PATH → one-shot run over the whole decoded song with a
+ *   1. `whisper-cli` on PATH → one-shot run over each requested audio window with a
  *      music-grade model (large-v3-turbo), word timestamps from its `-ojf`
- *      JSON. A 3–4 minute song takes seconds on Apple Silicon.
+ *      JSON. Phrase-window orchestration lives in lyricAlign.js.
  *   2. The configured voice STT endpoint, when something answers there.
  *   3. `whisper-server` on PATH → a temporary loopback server on a free port
  *      with the music-grade model, stopped when the alignment finishes.

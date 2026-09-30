@@ -6,9 +6,9 @@
  * 16 kHz mono PCM; a whisper runner (lyricTranscriber.js — whisper-cli with a
  * music-grade model, the voice STT endpoint, or a temporary whisper-server)
  * returns word timings, and those timings are aligned to the director's
- * spelling. With a vocal stem attached, both the stem and the mix are
- * transcribed and merged, so a recognizer that loops on the isolated vocal is
- * outvoted by the mix. A line the singer skipped stays inside its own window
+ * spelling. With a vocal stem attached, its phrases anchor short mix windows
+ * so post-silence words cannot drift back into the instrumental gap. A line
+ * the singer skipped stays inside its own window
  * and does not move the lines around it. Times the director already set are
  * kept. A whole-song alignment also names the analysis sections after the
  * lyric sheet's `[Verse]`/`[Chorus]` headers (lyricMarkers.js).
@@ -24,7 +24,13 @@ import { getProject, updateProject } from './projects.js';
 import {
   alignDirectorWords,
   lyricAlignFfmpegArgs,
+  dropNonLyricWords,
   mergeTranscripts,
+  detectVocalPhrases,
+  phraseWindows,
+  snapLineStarts,
+  vocalPcm,
+  wavDurationSec,
   pickAlignmentPath,
 } from './lyricAlignCore.js';
 import { relabelAnalysisSections } from './lyricMarkers.js';
@@ -107,18 +113,38 @@ export async function alignProjectLyrics(projectId, options = {}) {
   const region = windowed || { startSec: 0, endSec: null };
   const promptCues = windowed ? [cue] : cues;
   const prompt = alignmentPrompt(promptCues);
-  const lyricText = promptCues.map((entry) => entry.text).join('\n');
+  const phrases = mixWav ? detectVocalPhrases(vocalPcm(wav)) : [];
+  const windows = mixWav ? phraseWindows(phrases, wavDurationSec(mixWav)) : [];
 
   const transcriber = await deps.resolveTranscriber();
   let recognized;
   try {
-    const primary = await transcriber.transcribe(wav, { ...region, prompt });
-    const mix = mixWav ? await transcriber.transcribe(mixWav, { ...region, prompt }) : [];
-    recognized = mergeTranscripts(primary, mix, lyricText);
+    if (mixWav) {
+      recognized = [];
+      // The runner already slices and offsets each result onto the song clock.
+      // Sequential calls bound memory/GPU use and release one runner per song.
+      for (const [index, window] of windows.entries()) {
+        if (windowed && (window.endSec <= windowed.startSec || window.startSec >= windowed.endSec)) continue;
+        const startSec = Math.max(window.startSec, windowed?.startSec ?? 0);
+        const endSec = Math.min(window.endSec, windowed?.endSec ?? Infinity);
+        const words = await transcriber.transcribe(mixWav, { startSec, endSec, prompt });
+        const previous = windows[index - 1];
+        const following = windows[index + 1];
+        const ownStart = Math.max(startSec, previous ? (previous.endSec + window.startSec) / 2 : startSec);
+        const ownEnd = Math.min(endSec, following ? (window.endSec + following.startSec) / 2 : endSec);
+        recognized.push(...words.filter((word) => {
+          const midpoint = (word.startSec + word.endSec) / 2;
+          return midpoint >= ownStart && midpoint < ownEnd;
+        }));
+      }
+      recognized = dropNonLyricWords(recognized);
+    } else {
+      recognized = mergeTranscripts(await transcriber.transcribe(wav, { ...region, prompt }), [], promptCues.map((entry) => entry.text).join('\n'));
+    }
   } finally {
     await Promise.resolve(transcriber.release?.()).catch((err) => console.error(`❌ Could not stop the alignment runner: ${err.message}`));
   }
-  if (!windowed && recognized.length === 0) {
+  if (!mixWav && !windowed && recognized.length === 0) {
     throw new ServerError(
       'Speech-to-text heard no words in this audio. Check the song has vocals, then try Align words again.',
       { status: 422, code: 'LYRIC_ALIGN_EMPTY' },
@@ -134,12 +160,16 @@ export async function alignProjectLyrics(projectId, options = {}) {
     throw new ServerError('The lyric lines changed while they were aligning. Run Align words again.', { status: 409, code: 'LYRIC_ALIGN_TEXT_CHANGED' });
   }
 
+  const align = (entries) => {
+    const aligned = alignDirectorWords(entries, recognized, { phraseAnchored: Boolean(mixWav) });
+    return mixWav ? snapLineStarts(aligned, phrases.map((phrase) => phrase.startSec), entries) : aligned;
+  };
   let nextCues;
   if (windowed) {
-    const [aligned] = alignDirectorWords([cue], recognized);
+    const [aligned] = align([freshCues.find((entry) => entry.id === cue.id)]);
     nextCues = freshCues.map((entry) => (entry.id === cue.id ? { ...entry, ...aligned, id: entry.id } : entry));
   } else {
-    const aligned = alignDirectorWords(freshCues, recognized);
+    const aligned = align(freshCues);
     nextCues = cueId ? freshCues.map((entry, index) => (entry.id === cueId ? aligned[index] : entry)) : aligned;
   }
   const matched = nextCues.reduce((sum, entry) => sum + (entry.words || []).filter((word) => word.conf === 'matched').length, 0);

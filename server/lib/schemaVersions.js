@@ -647,7 +647,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // under this install's data/music-video/<projectId>/composition/ and are not
   // in the asset manifest, so a peer keeps its own pointer (or none, and then
   // refuses to render with COMPOSITION_DOCUMENT_MISSING).
-  musicVideoProjects: 10,
+  // v11 = phrase-alignment confidence (`lyricCues[].matched`). Older peers
+  // drop it on edits or retain stale confidence after audio changes. Existing
+  // records need no rewrite: absent means alignment has not measured it.
+  musicVideoProjects: 11,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

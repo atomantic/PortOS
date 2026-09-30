@@ -272,7 +272,11 @@ export function applyProjectPatch(project, patch) {
     ...('automation' in patch ? {
       automation: patch.automation ? normalizeMusicVideoAutomation(patch.automation, project.automation) : null,
     } : {}),
-    ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues) } : {}),
+    ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues).map((cue) => {
+      const previous = project.lyricCues?.find((entry) => entry.id === cue.id);
+      if (previous && previous.text !== cue.text) delete cue.matched;
+      return cue;
+    }) } : {}),
     ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
     // #8984 — the composition manifest is replaced whole; null clears it.

@@ -95,7 +95,9 @@ export const normalizeLyricCues = (cues) => normalizeList(cues, 'lc', (cue) => {
   const text = trimTo(cue.text, MAX_CUE_TEXT);
   if (!text) return null;
   const words = normalizeWords(text, cue.words);
-  return words ? { text, words } : { text };
+  const matched = Number.isFinite(cue.matched) && cue.matched >= 0 && cue.matched <= 1
+    ? { matched: cue.matched } : {};
+  return { text, ...(words ? { words } : {}), ...matched };
 });
 
 /** Normalize an edited phrase list: keep ids, trim label/intent. */
@@ -112,6 +114,7 @@ export function invalidateTimedText(project) {
   const clearCues = (list) => (Array.isArray(list) ? list.map((e) => {
     const next = { ...e, startSec: null, endSec: null };
     delete next.words;
+    delete next.matched;
     return next;
   }) : list);
   return {
