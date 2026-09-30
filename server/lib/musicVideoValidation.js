@@ -101,6 +101,7 @@ export const musicVideoLyricCueSchema = z.object({
   startSec: timedSec,
   endSec: timedSec,
   words: z.array(lyricWordSchema).max(400).optional(),
+  matched: z.number().min(0).max(1).optional(),
 }).strict();
 
 // A musical-phrase annotation: a span of the song with an optional visual

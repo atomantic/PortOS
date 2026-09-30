@@ -177,25 +177,28 @@ describe('projectsFile federation (#1770)', () => {
       { w: 'home', startSec: 1.55, endSec: 2, conf: 'matched' },
     ];
     await file.updateProject(p.id, {
-      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged }],
+      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4 }],
     });
     const saved = await file.getProject(p.id);
     expect(saved.lyricCues[0].words).toEqual(nudged);
     expect(saved.lyricCues[0].text).toBe('walking home');
+    expect(saved.lyricCues[0].matched).toBe(0.4);
     expect((await file.cloneProject(p.id)).lyricCues[0].words).toEqual(nudged);
 
     const retitled = await file.updateProject(p.id, {
-      lyricCues: [{ id: 'lc-1', text: 'walking house', startSec: 1, endSec: 2, words: nudged }],
+      lyricCues: [{ id: 'lc-1', text: 'walking house', startSec: 1, endSec: 2, words: nudged, matched: 0.4 }],
     });
     expect(retitled.lyricCues[0]).toMatchObject({ text: 'walking house', startSec: 1, endSec: 2 });
     expect(retitled.lyricCues[0].words).toBeUndefined();
+    expect(retitled.lyricCues[0].matched).toBeUndefined();
 
     await file.updateProject(p.id, {
-      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged }],
+      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4 }],
     });
     const swapped = await file.updateProject(p.id, { trackId: 't2' });
     expect(swapped.lyricCues[0].text).toBe('walking home');
     expect(swapped.lyricCues[0].words).toBeUndefined();
+    expect(swapped.lyricCues[0].matched).toBeUndefined();
     expect(swapped.lyricCues[0].startSec).toBeNull();
     expect(swapped.lyricCues[0].endSec).toBeNull();
   });

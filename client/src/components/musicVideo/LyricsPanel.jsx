@@ -129,6 +129,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
     lyricCues: cues.map((c) => {
       if (c.id !== id) return c;
       const next = { ...c, ...patch };
+      if (Object.hasOwn(patch, 'text') && patch.text !== c.text) delete next.matched;
       if (Object.hasOwn(patch, 'words') && patch.words == null) delete next.words;
       return next;
     }),
@@ -279,6 +280,11 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                   <button type="button" onClick={() => replaceCues(cues.filter((c) => c.id !== cue.id))}
                     aria-label={`Delete line ${i + 1}`} className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
                 </div>
+                {typeof cue.matched === 'number' && cue.matched < 0.5 && (
+                  <span className="inline-block rounded bg-port-warning/10 px-1.5 py-0.5 text-port-warning">
+                    Low confidence — check by ear
+                  </span>
+                )}
                 <WordTimingRow cue={cue}
                   onPreview={(words) => editWords(cue.id, words, false)}
                   onCommit={(words) => editWords(cue.id, words, true)} />

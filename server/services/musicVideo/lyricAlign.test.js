@@ -300,23 +300,56 @@ describe('alignProjectLyrics', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('transcribes the stem and the mix, and aligns to their merge', async () => {
-    const transcribe = vi.fn()
-      .mockResolvedValueOnce([
-        { text: 'walking', startSec: 0.5, endSec: 1 },
-        { text: 'no', startSec: 1.2, endSec: 1.3 }, { text: 'no', startSec: 1.3, endSec: 1.4 },
-        { text: 'no', startSec: 1.4, endSec: 1.5 }, { text: 'no', startSec: 1.5, endSec: 1.6 },
-      ])
-      .mockResolvedValueOnce([
-        { text: 'walking', startSec: 0.5, endSec: 1 },
-        { text: 'home', startSec: 1.1, endSec: 1.6 },
-      ]);
-    const { run, decodeAudio } = harness(transcribe, project, {
+  it('anchors a post-silence line to the stem while transcribing only sequential mix windows', async () => {
+    const record = { ...project, lyricCues: [
+      { id: 'a', text: 'hello morning', startSec: null, endSec: null },
+      { id: 'b', text: 'gently awaken', startSec: null, endSec: null },
+      { id: 'c', text: 'absent lyric', startSec: 8, endSec: 9 },
+    ] };
+    const stem = encodePcm16Wav(16000 * 10);
+    for (const [start, end] of [[1, 2], [4, 5]]) {
+      for (let i = start * 16000; i < end * 16000; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    }
+    const mix = encodePcm16Wav(16000 * 10);
+    let active = false;
+    const transcribe = vi.fn(async (wav, region) => {
+      expect(wav).toBe(mix);
+      expect(active).toBe(false);
+      active = true;
+      await Promise.resolve();
+      active = false;
+      // Mimic whisper's bias: first word starts at the slice's beginning.
+      const text = region.startSec < 2 ? ['hello', 'morning'] : region.startSec < 5 ? ['gently', 'awaken'] : [];
+      return text.map((word, i) => ({ text: word, startSec: region.startSec + i * 0.4, endSec: region.startSec + (i + 1) * 0.4 }));
+    });
+    const h = harness(transcribe, record, {
       resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem', mixPath: 'song.wav' }),
     });
-    const saved = await run();
-    expect(decodeAudio.mock.calls.map(([path]) => path)).toEqual(['stem.wav', 'song.wav']);
-    expect(saved.lyricCues[0].words[1]).toMatchObject({ w: 'home', startSec: 1.1, conf: 'matched' });
+    h.decodeAudio.mockImplementation(async (path) => path === 'stem.wav' ? stem : mix);
+    const saved = await h.run();
+    expect(h.decodeAudio.mock.calls.map(([path]) => path)).toEqual(['stem.wav', 'song.wav']);
+    expect(Math.abs(saved.lyricCues[1].startSec - 4)).toBeLessThanOrEqual(0.06);
+    expect(saved.lyricCues[1].matched).toBe(1);
+    expect(saved.lyricCues[1].words[0].startSec).toBe(saved.lyricCues[1].startSec);
+    expect(saved.lyricCues[2]).toEqual({ ...record.lyricCues[2], matched: 0 });
+    expect(transcribe.mock.calls.every(([, window]) => window.endSec - window.startSec <= 11)).toBe(true);
+    expect(h.release).toHaveBeenCalledOnce();
+  });
+
+  it('keeps current director times on a stem re-alignment, including edits made during transcription', async () => {
+    const record = { ...project, lyricCues: [{ id: 'a', text: 'walking home', startSec: 1, endSec: 2 }] };
+    const transcribe = vi.fn(async () => {
+      record.lyricCues = [{ ...record.lyricCues[0], startSec: 1.2, endSec: 2.5 }];
+      return [{ text: 'walking', startSec: 1, endSec: 1.5 }, { text: 'home', startSec: 1.5, endSec: 2 }];
+    });
+    const h = harness(transcribe, record, {
+      resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem', mixPath: 'song.wav' }),
+    });
+    const stem = encodePcm16Wav(16000 * 3);
+    for (let i = 16000; i < 32000; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    h.decodeAudio.mockResolvedValue(stem);
+    const saved = await h.run({ cueId: 'a' });
+    expect(saved.lyricCues[0]).toMatchObject({ startSec: 1.2, endSec: 2.5, matched: 1 });
   });
 
   it('names the analysis sections after the lyric sheet once the lines are timed', async () => {
