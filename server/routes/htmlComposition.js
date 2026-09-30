@@ -20,8 +20,7 @@ let skillInstall = null;
 router.post('/toolkit/skills/install', asyncHandler(async (req, res) => {
   if (skillInstall) throw new ServerError('A motion skills install is already running', { status: 409, code: 'INSTALL_IN_PROGRESS' });
   const { detectMotionSkills, skillInstallCommand } = await import('../lib/motionSkills.js');
-  const { execFile } = await import('node:child_process');
-  const { safeChildProcessOptions } = await import('../lib/processEnv.js');
+  const { execFile } = await import('../lib/childProcess.js');
   const packs = detectMotionSkills().filter(pack => !pack.installed);
   const sources = new Map(MOTION_SKILL_PACKS.map(pack => [pack.id, pack]));
   const failed = [];
@@ -29,7 +28,7 @@ router.post('/toolkit/skills/install', asyncHandler(async (req, res) => {
     for (const { id, label } of packs) {
       const [command, args] = skillInstallCommand(sources.get(id));
       console.log(`🎬 Installing ${label} motion skills`);
-      const ok = await new Promise(resolve => execFile(command, args, safeChildProcessOptions({ timeout: 5 * 60 * 1000, shell: process.platform === 'win32' }), error => {
+      const ok = await new Promise(resolve => execFile(command, args, { timeout: 5 * 60 * 1000, shell: process.platform === 'win32' }, error => {
         if (error) console.error(`❌ ${label} skill install failed: ${error.message.split('\n')[0]}`);
         resolve(!error);
       }));

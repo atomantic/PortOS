@@ -13,7 +13,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 }));
 vi.mock('../services/pipeline/audioMux.js', () => ({ resolveMusicTrackPath: vi.fn(async () => null) }));
 const skillState = vi.hoisted(() => ({ installed: false }));
-vi.mock('node:child_process', async importOriginal => ({
+vi.mock('../lib/childProcess.js', async importOriginal => ({
   ...(await importOriginal()),
   execFile: vi.fn((command, args, options, callback) => { skillState.installed = true; callback(null); }),
 }));
@@ -90,7 +90,7 @@ describe('GET /api/html-composition/beats (#8958)', () => {
 
 describe('motion skills install', () => {
   it('installs each missing skill pack through the skills CLI and returns the refreshed status', async () => {
-    const { execFile } = await import('node:child_process');
+    const { execFile } = await import('../lib/childProcess.js');
     const response = await request(app).post('/api/html-composition/toolkit/skills/install');
     expect(response.status).toBe(200);
     expect(execFile).toHaveBeenCalledTimes(3);
