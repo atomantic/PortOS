@@ -1,0 +1,193 @@
+import { useState } from 'react';
+import FilePickerButton from '../ui/FilePickerButton.jsx';
+import { Download, FileArchive, FolderInput, LayoutTemplate, Unlink } from 'lucide-react';
+import toast from '../ui/Toast';
+import { downloadBlob } from '../../lib/downloadBlob';
+import { formatBytes, timeAgo } from '../../utils/formatters.js';
+import { compositionDraft } from './compositionDraft.js';
+import {
+  detachMusicVideoCompositionDocument, getMusicVideoCompositionDocument, getMusicVideoCompositionExport,
+  importMusicVideoCompositionDirectory, importMusicVideoCompositionZip, startMusicVideoCompositionTemplate,
+} from '../../services/apiMusicVideo.js';
+
+const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
+const SOURCE_LABELS = { template: 'template', zip: 'zip', directory: 'folder' };
+
+const linesOf = (value) => String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);
+// "12.5 = 80" per line → [[12.5, 80], …]; unparseable lines are dropped.
+const keyframesOf = (value) => linesOf(value)
+  .map((line) => line.split(/[=:,\s]+/).map(Number))
+  .filter(([t, v]) => Number.isFinite(t) && t >= 0 && Number.isFinite(v) && v >= 0 && v <= 100)
+  .map(([t, v]) => [t, v]);
+
+/**
+ * HUD block the layered template draws (`composition.overlay`). Text fields
+ * edit locally and persist on blur, replacing the whole manifest.
+ */
+function OverlayEditor({ project, onSave }) {
+  const composition = compositionDraft(project);
+  const overlay = composition.overlay || null;
+  const [draft, setDraft] = useState(() => ({
+    titleLines: (overlay?.titleLines || []).join('\n'),
+    ticker: (overlay?.ticker || []).join('\n'),
+    meterLabel: overlay?.meter?.label || '',
+    keyframes: (overlay?.meter?.keyframes || []).map(([t, v]) => `${t} = ${v}`).join('\n'),
+  }));
+  const save = (patch = {}) => {
+    const next = {
+      enabled: overlay?.enabled ?? true,
+      timecode: overlay?.timecode ?? true,
+      timecodeStartSec: overlay?.timecodeStartSec ?? 0,
+      titleLines: linesOf(draft.titleLines).slice(0, 4),
+      ticker: linesOf(draft.ticker).slice(0, 40),
+      meter: draft.meterLabel || draft.keyframes ? { label: draft.meterLabel.trim().slice(0, 40), keyframes: keyframesOf(draft.keyframes) } : null,
+      ...patch,
+    };
+    onSave({ composition: { ...composition, overlay: next } });
+  };
+  const field = (key) => ({ value: draft[key], onChange: (e) => setDraft((d) => ({ ...d, [key]: e.target.value })), onBlur: () => save() });
+  return (
+    <details className="rounded border border-port-border p-2 text-xs">
+      <summary className="cursor-pointer select-none text-port-text-muted min-h-[44px] sm:min-h-0 flex items-center">HUD overlay — {overlay?.enabled === false || !overlay ? 'off' : 'on'} (drawn by the layered template)</summary>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <label htmlFor="mv-doc-hud-on" className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
+          <input id="mv-doc-hud-on" type="checkbox" checked={Boolean(overlay) && overlay.enabled !== false} onChange={(e) => save({ enabled: e.target.checked })} /> Show HUD
+        </label>
+        <label htmlFor="mv-doc-hud-tc" className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
+          <input id="mv-doc-hud-tc" type="checkbox" checked={overlay?.timecode ?? true} onChange={(e) => save({ timecode: e.target.checked })} /> Timecode
+        </label>
+        <label htmlFor="mv-doc-hud-tc-start" className="flex items-center gap-1">
+          Timecode starts at (s)
+          <input id="mv-doc-hud-tc-start" type="number" min={0} step={1} className={`${inputCls} w-24`} defaultValue={overlay?.timecodeStartSec ?? 0}
+            onBlur={(e) => save({ timecodeStartSec: Math.max(0, Number(e.target.value) || 0) })} />
+        </label>
+      </div>
+      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+        <div>
+          <label htmlFor="mv-doc-hud-title" className="block text-port-text-muted mb-0.5">Title lines (up to 4)</label>
+          <textarea id="mv-doc-hud-title" rows={3} className={`${inputCls} w-full`} {...field('titleLines')} />
+        </div>
+        <div>
+          <label htmlFor="mv-doc-hud-ticker" className="block text-port-text-muted mb-0.5">Ticker (one item per line)</label>
+          <textarea id="mv-doc-hud-ticker" rows={3} className={`${inputCls} w-full`} {...field('ticker')} />
+        </div>
+        <div>
+          <label htmlFor="mv-doc-hud-meter" className="block text-port-text-muted mb-0.5">Meter label</label>
+          <input id="mv-doc-hud-meter" type="text" maxLength={40} className={`${inputCls} w-full`} {...field('meterLabel')} />
+        </div>
+        <div>
+          <label htmlFor="mv-doc-hud-keys" className="block text-port-text-muted mb-0.5">Meter keyframes (seconds = percent, one per line)</label>
+          <textarea id="mv-doc-hud-keys" rows={3} placeholder={'0 = 100\n60 = 40'} className={`${inputCls} w-full`} {...field('keyframes')} />
+        </div>
+      </div>
+    </details>
+  );
+}
+
+/** The document's files, read when opened (the manifest route). */
+function DocumentFiles({ projectId, directory }) {
+  const [manifest, setManifest] = useState(null);
+  const [error, setError] = useState('');
+  const load = (open) => {
+    if (!open || manifest) return;
+    getMusicVideoCompositionDocument(projectId, { silent: true })
+      .then(setManifest)
+      .catch((err) => setError(err?.message || 'Could not list the document files'));
+  };
+  return (
+    <details key={directory} className="rounded border border-port-border p-2 text-xs" onToggle={(e) => load(e.currentTarget.open)}>
+      <summary className="cursor-pointer select-none text-port-text-muted min-h-[44px] sm:min-h-0 flex items-center">Files</summary>
+      {error && <p role="status" className="mt-1 text-port-error">{error}</p>}
+      {manifest && !manifest.available && <p className="mt-1 text-port-warning">The document folder is missing on this machine — import it again.</p>}
+      {manifest?.available && (
+        <ul className="mt-1 max-h-48 overflow-y-auto font-mono">
+          {manifest.files.map((file) => <li key={file.path} className="flex justify-between gap-2"><span className="min-w-0 break-all">{file.path}</span><span className="shrink-0 text-port-text-muted">{formatBytes(file.bytes)}</span></li>)}
+        </ul>
+      )}
+    </details>
+  );
+}
+
+/**
+ * The project's composition document (render style `document`): what is
+ * attached, import (template / zip / data folder), export, the HUD overlay and
+ * the document's files. The live preview is `CompositionPreviewPlayer`, docked
+ * beside the stage tabs so it stays visible while scenes and typography are
+ * edited.
+ */
+export default function DocumentCompositionPanel({ project, onProject, onSave }) {
+  const doc = project.composition?.document || null;
+  const [busy, setBusy] = useState(null);
+  // Replacing or detaching drops the current version folder once nothing
+  // points at it, so both ask for a second click (no window.confirm).
+  const [confirming, setConfirming] = useState(null);
+  const [folder, setFolder] = useState('');
+
+  const run = async (label, task, success) => {
+    setBusy(label);
+    const result = await Promise.resolve().then(task).catch((err) => { toast.error(err?.message || 'Composition document action failed'); return null; });
+    setBusy(null);
+    if (result?.project) onProject(result.project);
+    if (result && success) toast.success(success);
+    return result;
+  };
+  const confirmFirst = (key, action) => () => {
+    if (doc && confirming !== key) { setConfirming(key); return; }
+    setConfirming(null);
+    action();
+  };
+  const startTemplate = confirmFirst('template', () => run('template', () => startMusicVideoCompositionTemplate(project.id, 'layered', { silent: true }), 'Layered template copied into this project'));
+  const importZip = (file) => file && run('zip', () => importMusicVideoCompositionZip(project.id, file, { silent: true }), 'Composition document imported');
+  const importFolder = () => folder.trim() && run('folder', () => importMusicVideoCompositionDirectory(project.id, folder.trim(), { silent: true }), 'Composition document imported');
+  const exportZip = () => run('export', async () => {
+    const buffer = await getMusicVideoCompositionExport(project.id, { silent: true });
+    downloadBlob(buffer, `${(project.name || 'music-video').replace(/[^\w.-]+/g, '-')}-composition.zip`, 'application/zip');
+    return {};
+  });
+  const detach = confirmFirst('detach', () => run('detach', () => detachMusicVideoCompositionDocument(project.id, { silent: true }), 'Composition document detached'));
+
+  return (
+    <section className="mt-3 space-y-2 rounded-lg border border-port-border bg-port-bg p-2" aria-label="Composition document">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
+        <span className="text-sm text-port-text">Composition document</span>
+        {doc ? (
+          <span>
+            {SOURCE_LABELS[doc.source?.kind] || 'imported'}{doc.source?.name ? ` · ${doc.source.name}` : ''}
+            {doc.files != null ? ` · ${doc.files} files` : ''}{doc.bytes != null ? ` · ${formatBytes(doc.bytes)}` : ''}
+            {doc.updatedAt ? ` · updated ${timeAgo(doc.updatedAt)}` : ''}
+          </span>
+        ) : <span>None yet — start from the layered template or import your own.</span>}
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <button type="button" className={buttonCls} disabled={!!busy} onClick={startTemplate}
+          title="Copy PortOS's layered template (scene media, camera moves, grain, HUD, kinetic lyrics) into this project">
+          <LayoutTemplate size={14} /> {busy === 'template' ? 'Copying…' : confirming === 'template' ? 'Click again to replace' : doc ? 'Replace with template' : 'Start from template'}
+        </button>
+        <FilePickerButton accept=".zip,application/zip" onChange={(e) => importZip(e.target.files?.[0])} disabled={!!busy}
+          ariaLabel="Import zip composition document" className={`${buttonCls} cursor-pointer`}
+          title="A .zip whose root (or single top folder) holds index.html">
+          <FileArchive size={14} aria-hidden="true" /> {busy === 'zip' ? 'Importing…' : 'Import zip'}
+        </FilePickerButton>
+        <div className="flex items-end gap-1">
+          <div>
+            <label htmlFor="mv-doc-folder" className="block text-xs text-port-text-muted mb-0.5">Folder inside data/</label>
+            <input id="mv-doc-folder" type="text" value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="compositions/my-video"
+              className={`${inputCls} w-48`} />
+          </div>
+          <button type="button" className={buttonCls} disabled={!!busy || !folder.trim()} onClick={importFolder}>
+            <FolderInput size={14} /> {busy === 'folder' ? 'Importing…' : 'Import folder'}
+          </button>
+        </div>
+        <button type="button" className={buttonCls} disabled={!!busy || !doc} onClick={exportZip}>
+          <Download size={14} /> Export zip
+        </button>
+        <button type="button" className={buttonCls} disabled={!!busy || !doc} onClick={detach} title="Stop using this document (the render refuses until another is attached)">
+          <Unlink size={14} /> {confirming === 'detach' ? 'Click again to detach' : 'Detach'}
+        </button>
+      </div>
+      <OverlayEditor key={`${project.id}-${project.composition?.overlay ? 'hud' : 'none'}`} project={project} onSave={onSave} />
+      {doc && <DocumentFiles key={doc.directory} projectId={project.id} directory={doc.directory} />}
+    </section>
+  );
+}

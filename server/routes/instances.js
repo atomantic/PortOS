@@ -84,6 +84,10 @@ const updatePeerSchema = z.object({
   // category and back-subscribes all subscribable records to this peer.
   fullSync: z.boolean().optional(),
   syncCategories: syncCategoriesSchema,
+  // How Media Collection bytes arrive from this peer (mirrors MEDIA_SYNC_MODES
+  // in services/instances.js): copied locally or hosted
+  // by the peer and streamed on demand.
+  mediaSyncMode: z.enum(['copy', 'host']).optional(),
   // Accept empty string to clear; any other string is validated/normalized in the service
   host: z.string().optional().nullable(),
   auth: peerAuthSchema,

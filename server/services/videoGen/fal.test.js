@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdir, rm, readFile } from 'fs/promises';
+import { mkdir, rm, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -128,6 +128,49 @@ describe('videoGen/fal — _internals.buildRequestBody', () => {
 });
 
 describe('videoGen/fal — generateVideo', () => {
+  // A curated model builds its own body (lib/falVideoModels.js) — names and
+  // wire types per family — and the history records what was rendered and its
+  // list-price estimate. One family end to end; the per-family matrix is
+  // pinned in lib/falVideoModels.test.js.
+  it('builds a curated model\'s body through the catalog and records model, resolution and estimate', async () => {
+    const framePath = join(TEST_ROOT, 'frame.png');
+    await writeFile(framePath, Buffer.from('89504e470d0a1a0a', 'hex'));
+    const posted = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (opts?.method === 'POST') {
+        posted.push({ url, body: JSON.parse(opts.body) });
+        return jsonResponse({ request_id: 'rk', status_url: 'https://queue.fal.run/s', response_url: 'https://queue.fal.run/r' });
+      }
+      if (url === 'https://queue.fal.run/s') return jsonResponse({ status: 'COMPLETED' });
+      if (url === 'https://queue.fal.run/r') return jsonResponse({ video: { url: 'https://cdn.example.com/out.mp4' } });
+      if (url === 'https://cdn.example.com/out.mp4') return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+
+    const job = await fal.generateVideo({
+      apiKey: 'test-key', modelId: 'fal-ai/kling-video/v3/pro/image-to-video',
+      prompt: 'waves roll in', negativePrompt: 'text', duration: 7.4, width: 1080, height: 1920, sourceImagePath: framePath,
+    });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(posted).toHaveLength(1);
+    expect(posted[0].url).toBe('https://queue.fal.run/fal-ai/kling-video/v3/pro/image-to-video');
+    expect(posted[0].body).toEqual({
+      prompt: 'waves roll in', negative_prompt: 'text', start_image_url: expect.stringMatching(/^data:image\/png;base64,/),
+      duration: '8', generate_audio: false,
+    });
+    const [entry] = await loadHistory();
+    // 8s (the covering length) × $0.112/s audio off.
+    expect(entry).toMatchObject({ modelId: 'fal:fal-ai/kling-video/v3/pro/image-to-video', duration: 8, generateAudio: false, estimatedCostUsd: 0.896 });
+  });
+
+  it('refuses a start-frame-only model without a frame before submitting anything', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/veo3.1/fast/image-to-video', prompt: 'a fox' }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('submits, polls to completion, downloads the result, and finalizes history', async () => {
     const requestId = 'req-123';
     const statusUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/status`;
@@ -164,6 +207,8 @@ describe('videoGen/fal — generateVideo', () => {
 
     expect(history[0].id).toBe(job.jobId);
     expect(history[0].modelId).toBe('fal:fal-ai/x');
+    // An uncurated id keeps the legacy body and cannot be priced.
+    expect(history[0].estimatedCostUsd).toBeNull();
   });
 
   it('derives aspect_ratio from width/height when none is supplied explicitly', async () => {
@@ -608,6 +653,12 @@ describe('videoGen/fal — recover completed renders (#8564)', () => {
     expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed' });
     expect(counts).toEqual({ submit: 1, result: 1, video: phase === 'video' ? 1 : 0 });
     await expect(readFile(join(FAKE_VIDEOS_DIR, job.filename))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('keeps fal\'s reason when the result read reports a failed job', async () => {
+    installReads({ result: () => new Response(JSON.stringify({ detail: [{ loc: ['body', 'image_url'], msg: 'Image flagged by the content checker', type: 'content_policy_violation' }] }), { status: 422 }) });
+    const job = await generate();
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed', error: expect.stringContaining('HTTP 422 — image_url: Image flagged by the content checker') });
+    expect(counts).toEqual({ submit: 1, result: 1, video: 0 });
   });
   it('shares the ten-minute budget across result timeouts, backoff and a stalled video body', async () => {
     installReads({

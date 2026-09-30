@@ -33,6 +33,9 @@ import { getUniverseMutationEpoch } from './universeBuilder/store.js';
 import { getPipelineMutationEpoch } from './pipeline/syncEpoch.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
+import { getPeers } from './instances.js';
+import { markHosted } from './peerHostedMedia.js';
+import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
 import { getStoryBuilderMutationEpoch } from './storyBuilderStore/store.js';
@@ -815,6 +818,16 @@ async function applyMediaCollectionsRemote(remoteData, source) {
   // bulkUpdateCollectionItems) — a sync-driven write can't interleave with a
   // concurrent local mutation on the same JSON file.
   const result = await mergeMediaCollectionsFromSync(filtered, { source });
+  // `host`-mode peers keep the bytes: index this snapshot's items as peer-hosted
+  // so the collection renders them via the static-mount fallback. Covers items
+  // that only ever arrive through this snapshot path (no per-record push).
+  if (source?.peerId) {
+    const senderPeer = (await getPeers().catch(() => [])).find((p) => p.instanceId === source.peerId);
+    if (senderPeer?.mediaSyncMode === 'host') {
+      const live = filtered.filter((c) => c?.deleted !== true);
+      await markHosted(source.peerId, live.flatMap((c) => referenceCollectionAssetManifest(c)));
+    }
+  }
   if (result.applied) {
     console.log(`🔄 MediaCollections sync: merged ${result.count} collection(s)`);
   }

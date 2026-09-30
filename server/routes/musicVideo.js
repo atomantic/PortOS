@@ -8,6 +8,8 @@
  * arranged against the beat grid".
  */
 
+import { existsSync } from 'fs';
+import { unlink } from 'fs/promises';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
@@ -23,6 +25,7 @@ import {
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
   musicVideoLyricsImportSchema,
+  musicVideoLyricsImportTrackSchema,
   musicVideoLyricsAlignSchema,
   musicVideoTakeInputSchema,
   musicVideoTakeReviewSchema,
@@ -41,6 +44,16 @@ import {
   musicVideoAutoReviewResumeSchema,
   musicVideoProductionStartSchema,
   musicVideoProductionResumeSchema,
+  musicVideoDevArtifactImportSchema,
+  musicVideoDevArtifactNoteSchema,
+  musicVideoDevArtifactNoteUpdateSchema,
+  musicVideoDevArtifactReviewSchema,
+  musicVideoDevArtifactFileQuerySchema,
+  musicVideoCastAndSetsStartSchema,
+  musicVideoCastAndSetsRegenerateSchema,
+  musicVideoDocumentDirectoryImportSchema,
+  musicVideoDocumentFileQuerySchema,
+  musicVideoDocumentTemplateSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -93,8 +106,23 @@ import {
   startProduction, resumeProduction, stopProduction, cancelProduction, getProduction,
 } from '../services/musicVideo/productionService.js';
 import { planProject } from '../services/musicVideo/planner.js';
+import {
+  DOCUMENT_ZIP_MAX_BYTES,
+  detachDocument,
+  documentMimeType,
+  exportDocumentZip,
+  importDocumentDirectory,
+  importDocumentTemplate,
+  importDocumentZip,
+  readDocumentManifest,
+  resolveDocumentFile,
+} from '../services/musicVideo/compositionDocument.js';
+import { buildDocumentPreview } from '../services/musicVideo/documentPreview.js';
+import { isZipUpload } from '../lib/zipStream.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
+import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
+import { offsetLyricMarkers, relabelAnalysisSections } from '../services/musicVideo/lyricMarkers.js';
 import {
   updateTreatment,
   compileTreatment,
@@ -103,6 +131,25 @@ import {
   reviewProof,
 } from '../services/musicVideo/treatmentService.js';
 import { getTrack } from '../services/tracks/index.js';
+import {
+  listDevArtifacts,
+  getDevArtifact,
+  importDevArtifact,
+  resolveDevArtifactDownload,
+  addNote as addDevArtifactNote,
+  setNoteResolved as setDevArtifactNoteResolved,
+  reviewArtifact as reviewDevArtifact,
+  removeDevArtifact,
+} from '../services/musicVideo/devArtifactService.js';
+import { devArtifactTypeFor } from '../services/musicVideo/devArtifacts.js';
+import {
+  startCastAndSets,
+  regenerateCastAndSets,
+  resumeCastAndSets,
+  approveCastAndSets,
+  skipCastAndSets,
+  getCastAndSets,
+} from '../services/musicVideo/castAndSetsService.js';
 
 const router = Router();
 
@@ -178,6 +225,28 @@ router.delete('/:id/vocal-stem', asyncHandler(async (req, res) => {
   res.json(await detachVocalStem(req.params.id));
 }));
 
+// Separate the vocal from the song with demucs and attach it as the stem.
+// Kickoff returns 202 + a jobId (a running separation for the project is
+// re-attached, not doubled); progress streams over SSE. The first run
+// installs demucs into its own venv — only ever from this explicit request.
+// Lazy import: the demucs runner pulls the spawn/venv helpers only this needs.
+router.post('/:id/vocal-stem/separate', asyncHandler(async (req, res) => {
+  const { startVocalSeparation } = await import('../services/musicVideo/vocalSeparation.js');
+  res.status(202).json(await startVocalSeparation(req.params.id));
+}));
+
+router.get('/vocal-stem/separate/:jobId/events', asyncHandler(async (req, res) => {
+  const { attachVocalSeparationSseClient } = await import('../services/musicVideo/vocalSeparation.js');
+  if (!attachVocalSeparationSseClient(req.params.jobId, res)) {
+    throw new ServerError('Vocal separation job not found or expired', { status: 404, code: 'NOT_FOUND' });
+  }
+}));
+
+router.post('/vocal-stem/separate/:jobId/cancel', asyncHandler(async (req, res) => {
+  const { cancelVocalSeparation } = await import('../services/musicVideo/vocalSeparation.js');
+  res.json({ ok: cancelVocalSeparation(req.params.jobId) });
+}));
+
 // Resolve a project's source audio to an absolute path under data/music/. The
 // filename comes from the linked track or the uploaded-audio field; both are
 // validated as safe basenames so a tampered record can't escape the directory.
@@ -209,7 +278,9 @@ router.post('/:id/analyze', asyncHandler(async (req, res) => {
   if (!analysis) {
     throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
   }
-  const updated = await setProjectAnalysis(project.id, analysis);
+  // Timed lyrics with sheet headers name the fresh sections too (a no-op
+  // until the lines are aligned).
+  const updated = await setProjectAnalysis(project.id, relabelAnalysisSections(analysis, project.lyricCues, project.lyricMarkers));
   res.json(updated);
 }));
 
@@ -286,26 +357,40 @@ router.post('/:id/treatment/proofs/:proofId/review', asyncHandler(async (req, re
 // (plain lines arrive untimed, ready to be timed by hand). `replace` swaps the
 // project's cue list; `append` adds after it. The cues persist through the
 // ordinary project PATCH path, so ids/normalization match hand edits.
-const MAX_LYRIC_CUES = 2000;
+// Plain lines keep their section headers and stage directions as lyric
+// markers anchored to the imported lines (lyricMarkers.js).
 router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
   const { format = 'auto', text, mode = 'replace' } = validateRequest(musicVideoLyricsImportSchema, req.body);
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const { format: detected, cues } = parseLyricCues(text, format);
+  const { format: detected, cues, markers } = parseLyricCues(text, format);
   if (cues.length === 0) {
     throw new ServerError(`No lyric lines found in the ${detected} text`, { status: 422, code: 'NO_LYRICS' });
   }
-  const lyricCues = mode === 'append' ? [...(project.lyricCues || []), ...cues] : cues;
+  const existing = project.lyricCues || [];
+  const append = mode === 'append';
+  const lyricCues = append ? [...existing, ...cues] : cues;
   if (lyricCues.length > MAX_LYRIC_CUES) {
     throw new ServerError(`A project holds at most ${MAX_LYRIC_CUES} lyric cues`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const updated = await updateProject(project.id, { lyricCues });
+  const lyricMarkers = append
+    ? [...(project.lyricMarkers || []), ...offsetLyricMarkers(markers, existing.length)]
+    : markers;
+  const updated = await updateProject(project.id, { lyricCues, lyricMarkers });
   res.json({ project: updated, imported: cues.length, format: detected });
 }));
 
+// Import the linked track's lyric sheet ("Use track lyrics", and the
+// autopilot kickoff with `mode: 'if-empty'`, which never replaces lines).
+router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
+  const { mode = 'replace' } = validateRequest(musicVideoLyricsImportTrackSchema, req.body || {});
+  res.json(await importTrackLyrics(req.params.id, { mode }));
+}));
+
 // Word-level alignment (#9074). Nothing here runs until the director clicks
-// Align words or a line's Re-align. An unreachable whisper server is an error,
-// not an empty timing list.
+// Align words or a line's Re-align (or starts an autopilot run). The first
+// alignment downloads the music-grade whisper model; no whisper.cpp at all is
+// a 503 with install steps, not an empty timing list.
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
   res.json(await alignProjectLyrics(req.params.id, { cueId }));
@@ -405,6 +490,78 @@ router.post('/:id/code/generate', asyncHandler(async (req, res) => {
 router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
   res.json(await regenerateMusicVideoCodeSection(req.params.id, req.params.sectionId, body));
+}));
+
+// --- Composition document (render style `document`) ---
+// A project-owned HTML composition document (services/musicVideo/
+// compositionDocument.js): import a zip, a folder inside data/, or the shipped
+// template; export it; read its manifest; preview it. Files stay on this
+// install; the record keeps a pointer to the current immutable version.
+const requireProject = async (id) => {
+  const project = await getProject(id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  return project;
+};
+
+const documentZipUpload = uploadSingle('file', {
+  limits: { fileSize: DOCUMENT_ZIP_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (isZipUpload(file)) cb(null, true);
+    else cb(new ServerError('Upload a .zip of the composition document', { status: 400, code: 'VALIDATION_ERROR' }));
+  },
+});
+
+router.get('/:id/composition/document', asyncHandler(async (req, res) => {
+  res.json(await readDocumentManifest(await requireProject(req.params.id)));
+}));
+
+router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No file uploaded (multipart field "file")', { status: 400, code: 'VALIDATION_ERROR' });
+  try {
+    res.status(201).json(await importDocumentZip(req.params.id, req.file.path, req.file.originalname));
+  } finally {
+    await unlink(req.file.path).catch(() => {});
+  }
+}));
+
+router.post('/:id/composition/document/directory', asyncHandler(async (req, res) => {
+  const { directory } = validateRequest(musicVideoDocumentDirectoryImportSchema, req.body || {});
+  res.status(201).json(await importDocumentDirectory(req.params.id, directory));
+}));
+
+router.post('/:id/composition/document/template', asyncHandler(async (req, res) => {
+  const { template } = validateRequest(musicVideoDocumentTemplateSchema, req.body || {});
+  res.status(201).json(await importDocumentTemplate(req.params.id, template));
+}));
+
+router.get('/:id/composition/document/export', asyncHandler(async (req, res) => {
+  const { zip, filename } = await exportDocumentZip(await requireProject(req.params.id));
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(zip);
+}));
+
+router.get('/:id/composition/document/preview', asyncHandler(async (req, res) => {
+  res.json(await buildDocumentPreview(await requireProject(req.params.id)));
+}));
+
+// One document file, for the preview's asset bridge (fetched by the PortOS
+// page, never loaded by the sandboxed preview itself). Served inert: a
+// sandbox CSP, no sniffing, same-origin only.
+router.get('/:id/composition/document/file', asyncHandler(async (req, res) => {
+  const { path } = validateRequest(musicVideoDocumentFileQuerySchema, req.query || {});
+  const abs = await resolveDocumentFile(await requireProject(req.params.id), path);
+  res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Cache-Control', 'private, no-cache');
+  res.type(documentMimeType(path));
+  res.sendFile(abs, { dotfiles: 'allow' });
+}));
+
+router.delete('/:id/composition/document', asyncHandler(async (req, res) => {
+  await requireProject(req.params.id);
+  res.json(await detachDocument(req.params.id));
 }));
 
 // --- Draft excerpt render (#8986) ---
@@ -524,6 +681,115 @@ router.post('/:id/production-runs/:runId/stop', asyncHandler(async (req, res) =>
 
 router.post('/:id/production-runs/:runId/cancel', asyncHandler(async (req, res) => {
   res.json(await cancelProduction(req.params.id, req.params.runId));
+}));
+
+// --- Development artifacts ("ingredients") ---
+// Reviewable development files attached to the project: list, import/upload
+// (HTML, Markdown, MP4, PNG, JPG — a new artifact, or a new version of one),
+// serve, notes, review and soft delete. See services/musicVideo/devArtifacts.js.
+const DEV_ARTIFACT_MAX_BYTES = 512 * 1024 * 1024;
+const devArtifactUpload = uploadSingle('file', {
+  limits: { fileSize: DEV_ARTIFACT_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    const ext = String(file.originalname || '').split('.').pop();
+    if (String(file.originalname || '').includes('.') && devArtifactTypeFor(ext)) cb(null, true);
+    else cb(new ServerError('Unsupported file type — accepted: HTML, Markdown, MP4, PNG, JPG', { status: 400, code: 'VALIDATION_ERROR' }));
+  },
+});
+
+// A served artifact never runs with the PortOS origin: HTML is sandboxed by
+// its CSP even when opened directly (an opaque origin, no same-origin access),
+// may run its own inline script inside that sandbox, and can load nothing
+// from the network — images, media and fonts only as data:/blob: URLs.
+const DEV_ARTIFACT_HTML_CSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:";
+const DEV_ARTIFACT_MEDIA_CSP = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'";
+
+router.get('/:id/dev-artifacts', asyncHandler(async (req, res) => {
+  res.json(await listDevArtifacts(req.params.id));
+}));
+
+router.post('/:id/dev-artifacts', devArtifactUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No file uploaded (multipart field "file")', { status: 400, code: 'VALIDATION_ERROR' });
+  const input = (() => {
+    try {
+      return validateRequest(musicVideoDevArtifactImportSchema, req.body || {});
+    } catch (err) {
+      unlink(req.file.path).catch(() => {});
+      throw err;
+    }
+  })();
+  const out = await importDevArtifact(req.params.id, { ...input, tempPath: req.file.path, originalName: req.file.originalname });
+  res.status(201).json(out);
+}));
+
+router.get('/:id/dev-artifacts/:artifactId', asyncHandler(async (req, res) => {
+  res.json(await getDevArtifact(req.params.id, req.params.artifactId));
+}));
+
+router.get('/:id/dev-artifacts/:artifactId/file', asyncHandler(async (req, res) => {
+  const { version } = validateRequest(musicVideoDevArtifactFileQuerySchema, req.query || {});
+  const { path, mimeType } = await resolveDevArtifactDownload(req.params.id, req.params.artifactId, version ?? null);
+  if (!existsSync(path)) throw new ServerError('The artifact file is not on this machine', { status: 404, code: 'DEV_ARTIFACT_FILE_MISSING' });
+  const isHtml = mimeType === 'text/html';
+  res.setHeader('Content-Security-Policy', isHtml ? DEV_ARTIFACT_HTML_CSP : DEV_ARTIFACT_MEDIA_CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Cache-Control', 'private, no-cache');
+  // Markdown is shown as text (a browser would otherwise download it).
+  res.type(mimeType === 'text/markdown' ? 'text/plain; charset=utf-8' : (isHtml ? 'text/html; charset=utf-8' : mimeType));
+  res.sendFile(path, { dotfiles: 'deny' });
+}));
+
+router.post('/:id/dev-artifacts/:artifactId/notes', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoDevArtifactNoteSchema, req.body || {});
+  res.status(201).json(await addDevArtifactNote(req.params.id, req.params.artifactId, input));
+}));
+
+router.patch('/:id/dev-artifacts/:artifactId/notes/:noteId', asyncHandler(async (req, res) => {
+  const { resolved } = validateRequest(musicVideoDevArtifactNoteUpdateSchema, req.body || {});
+  res.json(await setDevArtifactNoteResolved(req.params.id, req.params.artifactId, req.params.noteId, resolved));
+}));
+
+router.post('/:id/dev-artifacts/:artifactId/review', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoDevArtifactReviewSchema, req.body || {});
+  res.json(await reviewDevArtifact(req.params.id, req.params.artifactId, input));
+}));
+
+router.delete('/:id/dev-artifacts/:artifactId', asyncHandler(async (req, res) => {
+  res.json(await removeDevArtifact(req.params.id, req.params.artifactId));
+}));
+
+// --- Cast & Sets check-in (runs before the shot plan) ---
+// Start / regenerate / resume write the checkpoint and return at once; the
+// direction call and the reference images advance in the background and
+// report over `music-video:cast-and-sets`. Only these requests (or a
+// production run the director started) begin work — nothing at boot does.
+router.get('/:id/cast-and-sets', asyncHandler(async (req, res) => {
+  res.json(await getCastAndSets(req.params.id));
+}));
+
+router.post('/:id/cast-and-sets', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsStartSchema, req.body || {});
+  res.status(202).json(await startCastAndSets(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/regenerate', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsRegenerateSchema, req.body || {});
+  res.status(202).json(await regenerateCastAndSets(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsStartSchema, req.body || {});
+  res.status(202).json(await resumeCastAndSets(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/approve', asyncHandler(async (req, res) => {
+  res.json(await approveCastAndSets(req.params.id));
+}));
+
+router.post('/:id/cast-and-sets/skip', asyncHandler(async (req, res) => {
+  res.json(await skipCastAndSets(req.params.id));
 }));
 
 // --- Director scene board ---

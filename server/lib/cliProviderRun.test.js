@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { isProcessAlive } from '../test/processAlive.js';
 
 // Wrap the REAL resolveWindowsExecutable in a spy (not a stub) so every
 // existing real-spawn test below is unaffected (a no-op pass-through on the
@@ -355,8 +356,7 @@ describe('runCliProviderPrompt — credential-bootstrap process-group teardown',
     // Signal 0 probes for existence without delivering anything. The group
     // SIGTERM has to have reached the `sleep`, not just the trapping wrapper.
     await new Promise(resolve => setTimeout(resolve, 200));
-    let alive = true;
-    try { process.kill(grandchildPid, 0); } catch { alive = false; }
+    const alive = isProcessAlive(grandchildPid);
     if (alive) process.kill(grandchildPid, 'SIGKILL');
     expect(alive).toBe(false);
   });

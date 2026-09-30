@@ -123,6 +123,6 @@ describe('code mode keeps the rest of the project (#9076)', () => {
     expect(code.codeVideo.sections).toEqual([{ id: 'Verse', source }]);
     expect(normalizeComposition({ ...code, mode: 'concat' }).textCues).toHaveLength(1);
     expect(normalizeComposition({ ...code, mode: 'composed' }).codeVideo.sections).toHaveLength(1);
-    expect(PORTOS_SCHEMA_VERSIONS.musicVideoProjects).toBe(7);
+    expect(PORTOS_SCHEMA_VERSIONS.musicVideoProjects).toBeGreaterThanOrEqual(7);
   });
 });

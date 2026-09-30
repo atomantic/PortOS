@@ -1,4 +1,4 @@
-import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCreativeContext, musicVideoDirectionContext } from '../../lib/musicVideoCreativeContext.js';
 /**
  * Music Video — autonomous shot planner (#1855; multi-shot + lyrics #8964).
  *
@@ -41,8 +41,8 @@ import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.j
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
-import { planShots, resolveClipCapacitySec, validSections } from './shotPlan.js';
-import { getProject, addProjectScenes } from './projects.js';
+import { directShots, planShots, resolveClipCapacitySec, validSections } from './shotPlan.js';
+import { getProject, addProjectScenes, mutateProjectRecord } from './projects.js';
 
 const SCENE_LABEL_MAX = 120;
 const SCENE_TEXT_MAX = 2000;
@@ -82,8 +82,31 @@ function sceneInputsFromShots(shots) {
       loop: false,
       lyricText: shot.lyricText,
       visualIntent: shot.visualIntent,
+      ...(shot.visualLayer ? {
+        visualLayer: shot.visualLayer, shotMode: shot.shotMode,
+        ...(shot.cardText !== undefined ? { cardText: shot.cardText } : {}),
+        ...directedPrompts(shot),
+      } : {}),
     };
   });
+}
+
+const PERFORMANCE_FRAME = 'Frontal medium close-up, face unobstructed, mouth fully visible for source-audio lip-sync.';
+
+// Deterministic direction survives no-provider and partial-response paths, and
+// prefixes generated prose so the assigned set/look and keyframe remain explicit.
+function directedPrompts(shot, generated = {}) {
+  const frame = [
+    shot.shotMode === 'performance' && PERFORMANCE_FRAME,
+    shot.protagonist && `Subject: ${quote([shot.protagonist.name, shot.protagonist.description, shot.protagonist.face, shot.protagonist.hair, shot.protagonist.signature].filter(Boolean).join('; '), 450)}`,
+    shot.set && `Location: ${quote(`${shot.set.name}. ${shot.set.description}. ${shot.set.lighting || ''}`, 550)}`,
+    shot.look && `Wardrobe: ${quote(`${shot.look.name}. ${shot.look.description}`, 350)}`,
+    generated.framePrompt || (shot.visualLayer === 'card' ? 'Graphic title card.' : 'Cinematic shot in the directed setting.'),
+  ].filter(Boolean).join(' ');
+  const motion = generated.prompt || (shot.visualLayer === 'card' ? 'Hold the graphic beat.'
+    : shot.shotMode === 'performance' ? `Perform to the source audio: ${shot.lyricText}`
+      : `Slow camera push; interpret the emotion and action of ${shot.lyricText || shot.visualIntent || shot.sectionLabel || 'this instrumental passage'}.`);
+  return { framePrompt: frame.slice(0, SCENE_TEXT_MAX), prompt: motion.slice(0, SCENE_TEXT_MAX) };
 }
 
 const quote = (text, max) => {
@@ -99,6 +122,7 @@ const quote = (text, max) => {
  */
 export function buildScenePlanPrompt(project, shots) {
   const concept = project.concept || {};
+  const direction = project.castAndSets?.status === 'skipped' ? null : project.castAndSets?.direction;
   const conceptLine = concept.prompt ? `Concept: ${concept.prompt}` : '';
   const styleLine = concept.style ? `Visual style: ${concept.style}` : '';
   // #8980: the treatment brief (when the director wrote one) steers the
@@ -115,6 +139,7 @@ export function buildScenePlanPrompt(project, shots) {
   const guidance = project.automation?.guidance?.trim();
   const guidanceLine = guidance ? `Director guidance: ${quote(guidance, PROMPT_GUIDANCE_MAX)}` : '';
   const hasLyrics = shots.some((s) => s.lyricText);
+  const hasDelivery = shots.some((s) => s.delivery?.length);
   const shotLines = shots.map((s, i) => {
     const duration = (s.endSec - s.startSec).toFixed(1);
     const energy = typeof s.sectionEnergy === 'number' ? s.sectionEnergy.toFixed(2) : 'unknown';
@@ -122,7 +147,12 @@ export function buildScenePlanPrompt(project, shots) {
     const parts = [`${i}. ${section} — ${duration}s, energy ${energy}`];
     parts.push(s.lyricText ? `lyrics: "${quote(s.lyricText, PROMPT_LYRIC_MAX)}"` : 'instrumental');
     if (s.visualIntent) parts.push(`intent: ${quote(s.visualIntent, PROMPT_LYRIC_MAX)}`);
+    if (s.delivery?.length) parts.push(`delivery: ${quote(s.delivery.join('; '), PROMPT_LYRIC_MAX)}`);
     if (s.hook) parts.push('OPENING HOOK');
+    if (s.visualLayer) parts.push(`layer: ${s.visualLayer}; mode: ${s.shotMode}`);
+    if (s.set) parts.push(`assigned set: ${quote(`${s.set.name}: ${s.set.description}; ${s.set.lighting || ''}`, 650)}`);
+    if (s.look) parts.push(`assigned look: ${quote(`${s.look.name}: ${s.look.description}`, 400)}`);
+    if (s.shotMode === 'performance') parts.push(PERFORMANCE_FRAME);
     return parts.join('; ');
   }).join('\n');
 
@@ -130,10 +160,11 @@ export function buildScenePlanPrompt(project, shots) {
 ${conceptLine}
 ${styleLine}
 ${musicVideoCreativeContext(concept)}
+${musicVideoDirectionContext(direction)}
 ${briefLines}
 ${guidanceLine}
 
-The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent):
+The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent${hasDelivery ? '; optional delivery directions from the lyric sheet' : ''}):
 ${shotLines}
 
 For EACH shot above, propose the shot for a generative video model:
@@ -141,7 +172,7 @@ For EACH shot above, propose the shot for a generative video model:
 - "prompt": the motion for that shot — camera move, subject motion, mood — building on the frame. Higher-energy sections read more kinetic; calmer sections more static/lingering.
 - Shots in the same section are one edited sequence: keep subject and setting continuous, but vary framing (wide / medium / close), angle, or action from shot to shot so consecutive shots cut rather than repeat.
 - The OPENING HOOK shot must grab attention immediately.
-${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text.\n' : ''}- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
+${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text in footage; assigned card layers use their explicit card text.\n' : ''}${hasDelivery ? '- Follow the delivery directions: spoken or whispered lines play as intimate close-ups; shouts land as hard-hitting cuts or impacts; a silence or stop is a held, frozen or cut-to-black beat.\n' : ''}- Keep the assigned layer and shot mode: performance uses source-audio lip-sync and a frontal medium close-up with the mouth visible; cutaways show narrative action without lip-sync; cards are graphic beats.\n- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
 
 Respond with ONLY a JSON array, one object per shot, in shot-index order (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
 [{ "index": 0, "framePrompt": "<the opening reference still, ready to render>", "prompt": "<the shot's motion, ready to render>" }]`;
@@ -253,7 +284,7 @@ export async function planProject(id, { seedPrompts = true, providerId, model, d
 
   // One shot list drives both the seeded scenes and the prompt, so prompt
   // indices agree 1:1 with `sceneInputs`.
-  const { shots, pacing } = planShots(sections, {
+  const { shots: tiledShots, pacing } = planShots(sections, {
     downbeats: project.audioAnalysis?.downbeats,
     beats: project.audioAnalysis?.beats,
     lyricCues: project.lyricCues,
@@ -261,6 +292,7 @@ export async function planProject(id, { seedPrompts = true, providerId, model, d
     pacing: project.pacing,
     clipCapacitySec: resolveClipCapacitySec(project.videoSettings),
   });
+  const shots = directShots(tiledShots, project);
   const sceneInputs = sceneInputsFromShots(shots);
 
   let promptsSeeded = false;
@@ -273,8 +305,11 @@ export async function planProject(id, { seedPrompts = true, providerId, model, d
       promptsSeeded = true;
       for (const [idx, fields] of seeded) {
         if (!sceneInputs[idx]) continue;
-        if (fields.framePrompt) sceneInputs[idx].framePrompt = fields.framePrompt;
-        if (fields.prompt) sceneInputs[idx].prompt = fields.prompt;
+        if (shots[idx].visualLayer) Object.assign(sceneInputs[idx], directedPrompts(shots[idx], fields));
+        else {
+          if (fields.framePrompt) sceneInputs[idx].framePrompt = fields.framePrompt;
+          if (fields.prompt) sceneInputs[idx].prompt = fields.prompt;
+        }
       }
     } else {
       promptsSkippedReason = reason;
@@ -288,7 +323,25 @@ export async function planProject(id, { seedPrompts = true, providerId, model, d
   // flight would otherwise be silently dropped from this response and
   // visually reverted by the client's replaceProject) and a redundant
   // second getProject round trip.
-  const { project: updated, scenes } = await addProjectScenes(id, sceneInputs);
+  const hasCards = sceneInputs.some((s) => s.visualLayer === 'card');
+  // Persist card scenes and the mode that renders them in the same transaction.
+  // Read the current composition under the lock so concurrent edits survive.
+  const { project: updated, scenes } = hasCards
+    ? await persistCardPlan(id, sceneInputs)
+    : await addProjectScenes(id, sceneInputs);
   console.log(`🪄 Music Video plan: seeded ${scenes.length} scene${scenes.length === 1 ? '' : 's'} for ${id} (prompts ${promptsSeeded ? 'seeded' : `skipped: ${promptsSkippedReason || 'n/a'}`})`);
   return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason, pacing };
+}
+
+async function persistCardPlan(id, sceneInputs) {
+  const { addScenes } = await import('./projectsLogic.js');
+  const { normalizeComposition } = await import('./composition.js');
+  return mutateProjectRecord(id, (current) => {
+    const outcome = addScenes(current, sceneInputs);
+    // An authored whole-song code/document renderer remains the operator's choice.
+    if (!current.composition?.mode || current.composition.mode === 'concat') {
+      outcome.project.composition = normalizeComposition({ ...current.composition, mode: 'composed' });
+    }
+    return outcome;
+  });
 }

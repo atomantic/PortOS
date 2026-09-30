@@ -72,7 +72,7 @@ import { markUsageRunReconciled, recordRunUsage } from './usage.js';
 // 144 once this slack is applied. Two overlapping runs would each fold the whole
 // overlap and double-bill it, so exclusivity is enforced separately by the
 // per-message claim below, not by the window.
-const WINDOW_SLACK_MS = 60_000;
+export const WINDOW_SLACK_MS = 60_000;
 
 // Messages already billed to a run, keyed `<transcript-key>:<message-key>`.
 // A transcript message must be counted exactly ONCE across every run that can
@@ -137,7 +137,7 @@ export function mergeUsageClaims({ claimedMessages: claimed = [], codexHighWater
 // install root — is what the CLI records; matching is therefore exact on the
 // recorded `workspacePath`, with a prefix allowance for a CLI invoked in a
 // subdirectory of the workspace (`server/`, `client/`).
-const cwdMatches = (transcriptCwd, workspacePath) => {
+export const cwdMatches = (transcriptCwd, workspacePath) => {
   if (!transcriptCwd || !workspacePath) return false;
   if (transcriptCwd === workspacePath) return true;
   return transcriptCwd.startsWith(`${workspacePath}/`);
@@ -286,7 +286,7 @@ const listDir = async (dir) => readdir(dir).catch(() => []);
  * `listDir` there hands that filename to callers expecting a session id, which
  * then fails `ENOTDIR` trying to read `<file>/summary.json` (#6218).
  */
-const listSubdirs = async (dir) => {
+export const listSubdirs = async (dir) => {
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 };
@@ -320,6 +320,20 @@ function codexDateDirs(root, fromMs, toMs) {
   }
   return [...days];
 }
+
+/**
+ * Token buckets for a `parseAgyTranscript` result. Antigravity writes no token
+ * counts, so every figure is chars/4 — but the model calls' replayed context is
+ * priced as cache reads (`contextChars`) rather than dropped, since dropping it
+ * is what made the plan read as cheaper than its subscription.
+ */
+export const agyEstimatedBuckets = (parsed) => ({
+  messages: parsed.messages,
+  tokensIn: estimateTokensFromChars(parsed.charsIn),
+  tokensOut: estimateTokensFromChars(parsed.charsOut),
+  cacheReadTokens: estimateTokensFromChars(parsed.contextChars),
+  cacheWriteTokens: 0
+});
 
 /**
  * Sum every transcript that overlaps a run's window in its working directory.
@@ -514,13 +528,7 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
       const text = await tryReadFile(transcriptPath);
       if (!text) continue;
       const parsed = parseAgyTranscript(text, { from, to, exclude: excludeFor(transcriptPath) });
-      const estimated = {
-        messages: parsed.messages,
-        tokensIn: estimateTokensFromChars(parsed.charsIn),
-        tokensOut: estimateTokensFromChars(parsed.charsOut),
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0
-      };
+      const estimated = agyEstimatedBuckets(parsed);
       if (totalTranscriptTokens(estimated) === 0) continue;
       reserveFrom(transcriptPath, parsed);
       // No model is named anywhere in the transcript — the UNKNOWN_MODEL bucket
@@ -651,7 +659,7 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
  * and provider ids alone can't express it. `recordRunUsage` reads only the
  * count fields, so the marker never reaches usage.json.
  */
-function recordsFromMeasured(providerId, recordedModel, measured, role) {
+export function recordsFromMeasured(providerId, recordedModel, measured, role) {
   // A family that mixed a measured session with an estimated one reports
   // `mixed` on every record it produced: the two shapes fold into the same
   // per-model buckets, so no record can honestly claim to be purely measured.

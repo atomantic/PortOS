@@ -4951,6 +4951,34 @@ describe('peerSync', () => {
       expect(found.name).toBe('Synced');
     });
 
+    it('host-mode peer: indexes collection bytes as peer-hosted instead of pulling them', async () => {
+      vi.mocked(getPeers).mockResolvedValue([{ id: 'p-host', instanceId: 'peer-host', name: 'Host', mediaSyncMode: 'host' }]);
+      const record = { id: 'col-h', name: 'Hosted', items: [{ kind: 'image', ref: 'hosted-only.png' }], updatedAt: '2026-05-23T00:00:00.000Z' };
+      const result = await applyIncomingPush({
+        kind: 'mediaCollection',
+        record,
+        assetManifest: [{ kind: 'image', filename: 'hosted-only.png', sha256: 'a'.repeat(64) }],
+        sourceInstanceId: 'peer-host',
+      });
+      // Nothing left to copy → the sender is not told bytes are "still syncing".
+      expect(result.missingAssets).toEqual([]);
+      expect(peerFetch).not.toHaveBeenCalledWith(expect.stringContaining('/data/images/hosted-only.png'), expect.anything(), expect.anything());
+      const { resolveMediaLocations } = await import('../peerHostedMedia.js');
+      expect((await resolveMediaLocations([{ kind: 'image', ref: 'hosted-only.png' }]))[0])
+        .toMatchObject({ location: 'remote', hostPeerId: 'peer-host' });
+    });
+
+    it('copy-mode peer (default): the same push still reports the asset as missing to copy', async () => {
+      vi.mocked(getPeers).mockResolvedValue([{ id: 'p-copy', instanceId: 'peer-copy', name: 'Copy' }]);
+      const result = await applyIncomingPush({
+        kind: 'mediaCollection',
+        record: { id: 'col-c', name: 'Copied', items: [{ kind: 'image', ref: 'copied.png' }], updatedAt: '2026-05-23T00:00:00.000Z' },
+        assetManifest: [{ kind: 'image', filename: 'copied.png', sha256: 'b'.repeat(64) }],
+        sourceInstanceId: 'peer-copy',
+      });
+      expect(result.missingAssets).toHaveLength(1);
+    });
+
     it('routes a mediaCollection push through mergeMediaCollectionsFromSync (mock assertion)', async () => {
       await applyIncomingPush({
         kind: 'mediaCollection',

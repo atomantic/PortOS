@@ -323,6 +323,20 @@ export function getReconciledUsageRunIds() {
  * A separate marker from `reconciledRuns` on purpose: the sibling pass has to be
  * able to run on a run whose own transcript was reconciled long ago (#5831).
  */
+/**
+ * Drop sibling markers that only guarded a single apply — the interactive scan's
+ * synthetic ids, which its own watermark makes redundant once the batch lands.
+ * Left in place they would grow `usage.json` by a key per family per day per scan.
+ */
+export async function forgetSiblingReconciledUsageRuns(runIds = []) {
+  if (!usageData?.siblingReconciledRuns) return;
+  let dropped = 0;
+  for (const runId of runIds) {
+    if (delete usageData.siblingReconciledRuns[runId]) dropped++;
+  }
+  if (dropped > 0) await saveUsage();
+}
+
 export function getSiblingReconciledUsageRunIds() {
   return Object.keys(usageData?.siblingReconciledRuns || {});
 }

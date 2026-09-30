@@ -3,12 +3,22 @@ import { trimTo } from './textUtils.js';
 const CONTEXT_MAX = 6000;
 const BIBLE_HEADER = 'Production bible (use the subjects relevant to this shot; preserve their identity; descriptions may be abbreviated):';
 
-/** Shared, bounded creative bible for planning, media generation and handoff. */
-export function musicVideoCreativeContext(concept) {
+// The mood board describes a LOOK. Its snapshot can still carry the board's own
+// subjects and places (image captions, or a synthesized style that pictures a
+// street or a bathroom), so it is labelled look-only wherever it is included.
+export const MOOD_BOARD_LOOK_LABEL = 'Mood board look (palette, lighting and texture only; never its locations, objects or poses)';
+
+/**
+ * Shared, bounded creative bible for planning, media generation and handoff.
+ * `moodBoard: false` leaves the mood-board look out — a motion prompt is
+ * conditioned on a reference frame that already carries the look, and the
+ * board's pictured places and subjects only fight the shot there.
+ */
+export function musicVideoCreativeContext(concept, { moodBoard = true } = {}) {
   if (!concept) return '';
   const styles = [
     concept.universeStyle && `Universe style: ${trimTo(concept.universeStyle, 800)}`,
-    concept.moodBoardStyle && `Mood board style: ${trimTo(concept.moodBoardStyle, 800)}`,
+    moodBoard && concept.moodBoardStyle && `${MOOD_BOARD_LOOK_LABEL}: ${trimTo(concept.moodBoardStyle, 800)}`,
   ].filter(Boolean);
   const subjects = (concept.subjects || []).slice(0, 24);
   const identities = subjects.map((s) =>
@@ -23,4 +33,18 @@ export function musicVideoCreativeContext(concept) {
     return `${identities[i]}${description ? ` — ${description}` : ''}`;
   });
   return [...styles, ...(lines.length ? [BIBLE_HEADER, ...lines] : [])].join('\n').slice(0, CONTEXT_MAX);
+}
+
+/** Bounded Cast & Sets bible; mood-board subjects are never location authority. */
+export function musicVideoDirectionContext(direction) {
+  if (!direction) return '';
+  const p = direction.protagonist || {};
+  return [
+    'Cast & Sets direction (authoritative locations and wardrobe):',
+    'The mood board is LOOK-ONLY: borrow palette, lighting and texture, never its literal locations, objects or narrative. Use the assigned set for each shot.',
+    `Story: ${trimTo(direction.logline, 400)} ${trimTo(direction.interpretation, 600)}`,
+    `Protagonist: ${[p.name, p.description, p.face, p.hair, p.signature, p.gesture, ...(p.rules || [])].filter(Boolean).map((s) => trimTo(s, 300)).join('; ')}`,
+    ...((direction.looks || []).slice(0, 8).map((l) => `Look ${trimTo(l.name, 80)}: ${trimTo(l.description, 300)}; chapters: ${trimTo(l.chapters, 120)}`)),
+    ...((direction.sets || []).slice(0, 8).map((s) => `Set ${trimTo(s.name, 80)}: ${trimTo(s.description, 300)}; lighting: ${trimTo(s.lighting, 120)}`)),
+  ].join('\n').slice(0, 6000);
 }

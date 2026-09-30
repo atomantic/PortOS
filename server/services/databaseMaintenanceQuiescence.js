@@ -1,7 +1,7 @@
 import { sep } from 'node:path';
 import { PATHS } from '../lib/paths.js';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
-import { classifyWriterQuiescence, createDatabaseWriterRegistry } from '../lib/databaseWriterRegistry.js';
+import { classifyWriterQuiescence, createDatabaseWriterRegistry, isLiveProcess } from '../lib/databaseWriterRegistry.js';
 import { isDetachedSupervisorCommand, signalProcessGroup, snapshotProcesses } from '../lib/detachedSpawn.js';
 import { sleep } from '../lib/fileUtils.js';
 import { stopOwnedDatabaseProducers } from './databaseMaintenanceProducers.js';
@@ -75,7 +75,7 @@ export async function reconcileDetachedWriters(id, token, { graceMs = TERMINATE_
     for (const group of live) signalProcessGroup(group, signal);
     await sleep(pollMs);
     processes = await snapshotProcesses();
-    live = new Set([...live].filter(group => processes.some(proc => proc.pgid === group)));
+    live = new Set([...live].filter(group => processes.some(proc => isLiveProcess(proc) && proc.pgid === group)));
     if (signal === 'SIGTERM' && Date.now() >= deadline) signal = 'SIGKILL';
     else if (signal === 'SIGKILL' && Date.now() >= deadline + graceMs) throw refused('writer process groups did not terminate');
   }
@@ -122,7 +122,7 @@ export async function assertPredecessorCoordinatorsStopped(id, token, { graceMs 
     const processes = await snapshotProcesses();
     const own = processes.find(proc => proc.pid === process.pid)?.pgid;
     // A recorded ID equal to our own group was empty when ours was created.
-    const occupied = processes.some(proc => proc.pgid !== own && groups.has(proc.pgid));
+    const occupied = processes.some(proc => isLiveProcess(proc) && proc.pgid !== own && groups.has(proc.pgid));
     consecutive = occupied ? 0 : consecutive + 1;
     if (occupied && Date.now() >= deadline) throw refused('a previous coordinator\'s dump or import process is still running');
     if (consecutive < 2) await sleep(pollMs);

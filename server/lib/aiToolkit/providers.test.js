@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
+import { withCodexShippedModels } from './internal/codexShippedModels.js';
 
 // Temp dir, NOT a cwd-rooted one — see providerStatus.test.js (#3823).
 let TEST_DATA_DIR;
@@ -682,13 +683,15 @@ describe('Provider Service', () => {
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([
         'gpt-6-astra',
+        'gpt-6.1-sol',
+        'gpt-6-sol',
+        'gpt-6-luna',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
         'gpt-5.4',
         'gpt-5.4-mini',
-        'gpt-5.3-codex-spark',
       ]);
       expect(codex.defaultModel).toBe('gpt-5.6-terra');
       expect(codex.lightModel).toBe('gpt-5.6-luna');
@@ -717,13 +720,15 @@ describe('Provider Service', () => {
       const codexTui = await providerService.getProviderById('codex-tui');
       expect(codexTui.models).toEqual([
         'gpt-6-astra',
+        'gpt-6.1-sol',
+        'gpt-6-sol',
+        'gpt-6-luna',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
         'gpt-5.4',
         'gpt-5.4-mini',
-        'gpt-5.3-codex-spark',
       ]);
       expect(codexTui.defaultModel).toBe('gpt-5.6-terra');
       expect(codexTui.lightModel).toBe('gpt-5.6-luna');
@@ -731,8 +736,10 @@ describe('Provider Service', () => {
       expect(codexTui.heavyModel).toBe('gpt-5.6-sol');
     });
 
-    it('widens a prior-seeded Codex catalog without changing selected pins', async () => {
-      const priorModels = ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'];
+    it.each([
+      ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
+      ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+    ].map(models => [models]))('widens a prior-seeded Codex catalog without changing selected pins (%j)', async (priorModels) => {
       await writeProvidersFile({
         activeProvider: 'codex',
         providers: {
@@ -753,13 +760,15 @@ describe('Provider Service', () => {
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([
         'gpt-6-astra',
+        'gpt-6.1-sol',
+        'gpt-6-sol',
+        'gpt-6-luna',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
         'gpt-5.4',
         'gpt-5.4-mini',
-        'gpt-5.3-codex-spark',
       ]);
       expect(codex.defaultModel).toBe('gpt-5.6-luna');
       expect(codex.lightModel).toBe('gpt-5.6-sol');
@@ -789,13 +798,15 @@ describe('Provider Service', () => {
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([
         'gpt-6-astra',
+        'gpt-6.1-sol',
+        'gpt-6-sol',
+        'gpt-6-luna',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
         'gpt-5.4',
         'gpt-5.4-mini',
-        'gpt-5.3-codex-spark',
       ]);
     });
 
@@ -1833,7 +1844,7 @@ rl.on('line', (line) => {
 
       const updated = await providerService.refreshProviderModels(p.id);
       expect(updated).not.toBeNull();
-      expect(updated.models).toEqual(['gpt-6-astra', 'gpt-5.6-sol']);
+      expect(updated.models).toEqual(withCodexShippedModels(['gpt-6-astra', 'gpt-5.6-sol']));
     });
 
     it.skipIf(process.platform === 'win32')('refreshes a Codex TUI provider too', async () => {
@@ -1853,7 +1864,7 @@ rl.on('line', (line) => {
 
       const updated = await providerService.refreshProviderModels(p.id);
       expect(updated).not.toBeNull();
-      expect(updated.models).toEqual(['gpt-6-astra', 'gpt-5.6-terra']);
+      expect(updated.models).toEqual(withCodexShippedModels(['gpt-6-astra', 'gpt-5.6-terra']));
     });
 
     it.skipIf(process.platform === 'win32')('refreshes a shipped codex-tui repointed at a wrapper command', async () => {
@@ -1876,7 +1887,7 @@ rl.on('line', (line) => {
 
       const updated = await providerService.refreshProviderModels('codex-tui');
       expect(updated, 'the id clause on the TUI arm matches').not.toBeNull();
-      expect(updated.models).toEqual(['gpt-6-astra', 'gpt-5.6-sol']);
+      expect(updated.models).toEqual(withCodexShippedModels(['gpt-6-astra', 'gpt-5.6-sol']));
     });
 
     it.skipIf(process.platform !== 'win32')('resolves the Windows codex.cmd shim before refreshing', async () => {
@@ -1893,7 +1904,7 @@ rl.on('line', (line) => {
           models: ['gpt-5.3-codex-spark'], defaultModel: 'gpt-5.3-codex-spark',
         });
         const updated = await providerService.refreshProviderModels(p.id);
-        expect(updated.models).toEqual(['gpt-6-astra']);
+        expect(updated.models).toEqual(withCodexShippedModels(['gpt-6-astra']));
       } finally {
         process.env.PATH = previousPath;
         await rm(shimDir, { recursive: true, force: true });

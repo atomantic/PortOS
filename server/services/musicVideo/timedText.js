@@ -17,16 +17,24 @@
 
 import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
+import { parseLyricSheet } from './lyricMarkers.js';
 
 const MAX_CUE_TEXT = 500;
 const MAX_SEC = 36000;
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
 
-/** One sung word: the director's spelling plus a key with punctuation stripped. */
+/**
+ * Comparison key for one sung word: lower case, letters and digits only.
+ * Apostrophes drop out entirely, so a sheet's curly `I’m` and a recognizer's
+ * straight `I'm` compare equal, and accented letters survive (`café`).
+ */
+export const lyricKey = (word) => String(word || '').toLowerCase().normalize('NFC').replace(/[^\p{L}\p{N}]+/gu, '');
+
+/** One sung word: the director's spelling plus its comparison key. */
 export function lyricTokens(text) {
   return String(text || '').split(/\s+/).filter(Boolean).map((w) => {
-    const key = w.toLowerCase().replace(/[^a-z0-9']+/g, '');
+    const key = lyricKey(w);
     return key ? { w, key } : null;
   }).filter(Boolean);
 }
@@ -87,7 +95,9 @@ export const normalizeLyricCues = (cues) => normalizeList(cues, 'lc', (cue) => {
   const text = trimTo(cue.text, MAX_CUE_TEXT);
   if (!text) return null;
   const words = normalizeWords(text, cue.words);
-  return words ? { text, words } : { text };
+  const matched = Number.isFinite(cue.matched) && cue.matched >= 0 && cue.matched <= 1
+    ? { matched: cue.matched } : {};
+  return { text, ...(words ? { words } : {}), ...matched };
 });
 
 /** Normalize an edited phrase list: keep ids, trim label/intent. */
@@ -104,6 +114,7 @@ export function invalidateTimedText(project) {
   const clearCues = (list) => (Array.isArray(list) ? list.map((e) => {
     const next = { ...e, startSec: null, endSec: null };
     delete next.words;
+    delete next.matched;
     return next;
   }) : list);
   return {
@@ -174,13 +185,6 @@ function parseSrt(text) {
   return cues;
 }
 
-function parsePlain(text) {
-  return text.split(/\r?\n/)
-    .map((line) => line.trim())
-    // Section headers like "[Chorus]" are structure, not sung text.
-    .filter((line) => line && !/^\[[^\]]*\]$/.test(line))
-    .map((line) => ({ text: line, startSec: null, endSec: null }));
-}
 
 function detectLyricsFormat(text) {
   if (/-->/.test(text)) return 'srt';
@@ -190,13 +194,16 @@ function detectLyricsFormat(text) {
 
 /**
  * Parse pasted/imported lyric text into cue inputs (not yet id'd — run the
- * result through `normalizeLyricCues`). Returns `{ format, cues }`.
+ * result through `normalizeLyricCues`). Returns `{ format, cues, markers }`.
+ * Plain text keeps its section headers and stage directions (`[Chorus]`,
+ * `[Spoken, close]`) as `markers` anchored to line indices instead of sung
+ * lines (lyricMarkers.js); timed formats carry none.
  */
 export function parseLyricCues(text, format = 'auto') {
   const source = typeof text === 'string' ? text : '';
   const resolved = format === 'auto' || !format ? detectLyricsFormat(source) : format;
-  const cues = resolved === 'lrc' ? parseLrc(source)
-    : resolved === 'srt' ? parseSrt(source)
-      : parsePlain(source);
-  return { format: resolved, cues };
+  if (resolved === 'lrc') return { format: resolved, cues: parseLrc(source), markers: [] };
+  if (resolved === 'srt') return { format: resolved, cues: parseSrt(source), markers: [] };
+  const { cues, markers } = parseLyricSheet(source);
+  return { format: resolved, cues, markers };
 }

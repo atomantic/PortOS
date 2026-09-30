@@ -15,41 +15,77 @@
  * that cannot serve a scene is skipped for that scene with the reason
  * recorded; when no pool route can, the run halts with every reason listed.
  *
- * `metered` routes spend money or remote quota. PortOS has no price catalog
- * for any of them, so their price is unknown (null) and a run with a dollar
- * cap refuses them; local routes cost $0.
+ * `metered` routes spend money or remote quota. fal.ai video routes are priced
+ * from the curated fal catalog (lib/falVideoModels.js via `falSceneTake`): the
+ * run's start-time price is a cutaway take on the project's fal model, and each
+ * step is charged its own scene's estimate (a lip-sync take costs by its audio
+ * window and resolution). Other metered routes have no price catalog, so their
+ * price is unknown (null) and a run with a dollar cap refuses them; local
+ * routes cost $0.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from '../../lib/generationModes.js';
+import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
-import { isPerformanceScene, performanceBlockedReason } from '../../lib/musicVideoShotTiming.js';
+import { falSceneTake, isPerformanceScene, performanceBlockedReason } from '../../lib/musicVideoShotTiming.js';
 import { maxInputImages, supportsCloudModelOverride } from '../../lib/imageGenCapabilities.js';
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { RUNNER_FAMILIES } from '../../lib/runners.js';
 import { poolHasRoute, routeKey } from './production.js';
 
-// The image backends accept at most four reference images for most models;
-// mirrors the board's MAX_CONDITIONING_REFERENCES (useMusicVideoSceneMedia.js).
-const MAX_CONDITIONING_REFERENCES = 4;
-
 const describe = (route) => `${route.kind} ${route.mode}${route.model ? ` (${route.model})` : ''}`;
 const isMetered = (route) => MUSIC_VIDEO_AUTOMATION_TOOLS.some((t) => t.id === `${route.kind}:${route.mode}` && t.metered);
 
-/** The price per generation this install can vouch for: 0 for local, null (unknown) for metered. */
-const routePriceUsd = (route) => (isMetered(route) ? null : 0);
+/**
+ * The render settings a fal route renders a scene with: the project's fal pins,
+ * with a route that names its own model overriding the cutaway model.
+ */
+export const falRouteVideoSettings = (project, route) => ({
+  ...(project?.videoSettings || {}),
+  ...(route?.model ? { falModelId: route.model } : {}),
+});
 
-/** routeKey → price map for a pool. */
-export const poolPricing = (pool) => Object.fromEntries(pool.map((r) => [routeKey(r), routePriceUsd(r)]));
+/**
+ * The price per generation this install can vouch for: 0 for local, the
+ * catalog estimate of a default-length cutaway take for a fal video route
+ * (null when its model is uncurated), null (unknown) for other metered routes.
+ */
+function routePriceUsd(route, project = null) {
+  if (!isMetered(route)) return 0;
+  if (route.kind === 'video' && route.mode === 'fal') {
+    return falSceneTake({ scene: null, videoSettings: falRouteVideoSettings(project, route) }).costUsd;
+  }
+  return null;
+}
 
-/** The visual-spec references a frame is conditioned on (capped to the backend limit). */
-export const conditioningReferences = (project) => (project?.visualSpec?.references || [])
-  .filter((ref) => ref?.condition && ref.imageId).slice(0, MAX_CONDITIONING_REFERENCES);
+/**
+ * What ONE step on `route` for `scene` should cost — the figure a step is
+ * charged against the dollar cap. For a fal clip it is that scene's own take
+ * (a performance by its audio window and lip-sync resolution, a cutaway by the
+ * length that covers the shot); otherwise the route's flat price.
+ */
+export function stepPriceUsd({ route, project, scene, stepKind }) {
+  if (stepKind !== 'frame' && route?.kind === 'video' && route.mode === 'fal' && scene) {
+    return falSceneTake({
+      scene,
+      videoSettings: falRouteVideoSettings(project, route),
+      songDurationSec: project?.audioAnalysis?.durationSec ?? null,
+    }).costUsd;
+  }
+  return routePriceUsd(route, project);
+}
+
+/** routeKey → price map for a pool (fal routes priced for `project`). */
+export const poolPricing = (pool, project = null) => Object.fromEntries(pool.map((r) => [routeKey(r), routePriceUsd(r, project)]));
+
+/** Shared scene-aware frame conditioning, with the legacy capped fallback. */
+export const conditioningReferences = musicVideoConditioningReferences;
 
 /** What a scene's `kind` generation needs from a route. */
 export function sceneRequirement(project, scene, stepKind) {
   return stepKind === 'frame'
-    ? { kind: 'image', conditioning: conditioningReferences(project).length }
+    ? { kind: 'image', conditioning: conditioningReferences(project, scene).length }
     : { kind: 'video', performance: isPerformanceScene(scene) };
 }
 

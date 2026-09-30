@@ -33,7 +33,7 @@ import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';
 import { sampleEvaluationFrames } from '../videoGen/local.js';
 import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, sleep } from '../../lib/fileUtils.js';
 import { PROJECT_TERMINAL_STATUSES, RUN_TERMINAL_STATUSES } from '../../lib/creativeDirectorPresets.js';
 import {
   DELIVERABLE_KINDS,
@@ -260,7 +260,7 @@ async function waitForSeedFrameThenAdvance(projectId, sceneId) {
       console.log(`⏳ CD scene ${sceneId} on ${projectId}: seed frame did not attach within ${SEED_FRAME_ATTACH_MAX_WAIT_MS}ms — rendering without it (text-to-video).`);
       break;
     }
-    await new Promise((r) => setTimeout(r, SEED_FRAME_ATTACH_POLL_SCHEDULE_MS[i]));
+    await sleep(SEED_FRAME_ATTACH_POLL_SCHEDULE_MS[i]);
   }
   // Force past the seed-defer gate for THIS scene: the job we were waiting on
   // is terminal (or backstopped), so if a stale/duplicate seed job for the

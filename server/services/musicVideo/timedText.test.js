@@ -33,6 +33,7 @@ describe('parseLyricCues', () => {
         { text: 'Hello there', startSec: 1, endSec: 3.5 },
         { text: 'Second', startSec: 62.25, endSec: 64 },
       ],
+      markers: [],
     });
   });
 
@@ -44,14 +45,58 @@ describe('parseLyricCues', () => {
     ]);
   });
 
-  it('imports plain lyrics as untimed lines, dropping section headers and blanks', () => {
+  it('imports plain lyrics as untimed lines, keeping section headers as markers', () => {
     expect(parseLyricCues('[Verse 1]\nWalking home\n\n  under neon  \n[Chorus]\n')).toEqual({
       format: 'text',
       cues: [
         { text: 'Walking home', startSec: null, endSec: null },
         { text: 'under neon', startSec: null, endSec: null },
       ],
+      markers: [
+        { type: 'section', label: 'Verse 1', kind: 'verse', line: 0 },
+        { type: 'section', label: 'Chorus', kind: 'chorus', line: 2 },
+      ],
     });
+  });
+
+  // The lyric-sheet vocabulary is a real input matrix: each row pins how one
+  // header or stage-direction shape becomes structure rather than sung text.
+  it('reads section headers and stage directions off a lyric sheet', () => {
+    const sheet = [
+      '[Intro]',
+      '(Spoken, close)',
+      'Hello there',
+      '[Pre-Chorus]',
+      'Up we go [Shouts]',
+      '(oh-oh)',
+      '[Stop — silence]',
+      '[Bridge — stripped groove]',
+      '[Whispered spoken]',
+      'Quiet now',
+      '[Stop-time]',
+      '[Final Chorus — full return]',
+      '*Handclaps*',
+      'Big finish',
+      '[Outro — drums cut, spoken]',
+    ].join('\n');
+    const { cues, markers } = parseLyricCues(sheet);
+    expect(cues.map((cue) => cue.text)).toEqual(['Hello there', 'Up we go', '(oh-oh)', 'Quiet now', 'Big finish']);
+    expect(markers).toEqual([
+      { type: 'section', label: 'Intro', kind: 'intro', line: 0 },
+      { type: 'direction', label: 'Spoken, close', kind: 'spoken', line: 0 },
+      { type: 'section', label: 'Pre-Chorus', kind: 'pre-chorus', line: 1 },
+      { type: 'direction', label: 'Shouts', kind: 'shouted', line: 1 },
+      { type: 'direction', label: 'Stop — silence', kind: 'silence', line: 3 },
+      { type: 'section', label: 'Bridge', kind: 'bridge', line: 3 },
+      { type: 'direction', label: 'stripped groove', kind: 'rhythm', line: 3 },
+      { type: 'direction', label: 'Whispered spoken', kind: 'whispered', line: 3 },
+      { type: 'direction', label: 'Stop-time', kind: 'hits', line: 4 },
+      { type: 'section', label: 'Final Chorus', kind: 'chorus', line: 4 },
+      { type: 'direction', label: 'full return', kind: 'note', line: 4 },
+      { type: 'direction', label: 'Handclaps', kind: 'rhythm', line: 4 },
+      { type: 'section', label: 'Outro', kind: 'outro', line: 5 },
+      { type: 'direction', label: 'drums cut, spoken', kind: 'spoken', line: 5 },
+    ]);
   });
 
   it('honors an explicit format over detection', () => {

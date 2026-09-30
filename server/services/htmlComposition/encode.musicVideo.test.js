@@ -19,7 +19,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
       proc.stdin.write = (buf, cb) => { bytes += buf.length; cb?.(); return true; };
       proc.stdin.end = () => { proc.emit('close', 0); };
       proc.kill = () => {};
-      spawned.push({ args, bytes: () => bytes });
+      spawned.push({ args, bytes: () => bytes, proc });
       return proc;
     },
   };
@@ -79,4 +79,43 @@ describe('encodeComposition music-video audio', () => {
     rmSync(scratch, { recursive: true, force: true });
     expect(result.status, `${result.stderr || ''}\n${result.stdout || ''}`).toBe(0);
   }, 150000);
+});
+
+describe('encodeComposition song-time windows', () => {
+  const recording = (fail = null) => {
+    const seeks = [];
+    return {
+      seeks,
+      page: {
+        check() {},
+        async evaluate(expression) {
+          const t = Number(/seek\(([^)]+)\)/.exec(expression)?.[1]);
+          if (Number.isFinite(t)) {
+            seeks.push(t);
+            if (fail && fail(t)) {
+              // The real encoder exits once its stdin is abandoned; this fake one closes on the failure.
+              spawned.at(-1).proc.emit('close', 1);
+              throw new Error('Composition script failed: video seek failed: media/scene-a.mp4');
+            }
+          }
+        },
+        async send(method) { return method === 'Page.captureScreenshot' ? { data: FRAME } : {}; },
+      },
+    };
+  };
+
+  it('seeks the window on the timeline it came from: frame n is drawn at offsetSec + n / fps', async () => {
+    spawned.length = 0;
+    const { page: windowPage, seeks } = recording();
+    await encodeComposition(windowPage, contract(0.5), '/tmp/window.mp4', { offsetSec: 61.25 });
+    expect(seeks).toEqual([61.25, 61.333333, 61.416667, 61.5, 61.583333, 61.666667]);
+    expect(spawned[0].args.join(' ')).toContain('-frames:v 6');
+  });
+
+  it('fails loudly, naming the frame, when a seek rejects', async () => {
+    spawned.length = 0;
+    const { page: failing } = recording((t) => t >= 10.25);
+    await expect(encodeComposition(failing, contract(1), '/tmp/fail.mp4', { offsetSec: 10 }))
+      .rejects.toThrow(/seek\(10\.25\) failed at frame 3: .*video seek failed/);
+  });
 });

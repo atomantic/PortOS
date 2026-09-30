@@ -50,7 +50,21 @@ export function sanitizeSoftDeleteFields(raw) {
  */
 export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = true } = {}) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
-  const { imageMode: _imageMode, imageModelId: _imageModelId, productionRuns: _productionRuns, ...shared } = record;
+  const {
+    imageMode: _imageMode, imageModelId: _imageModelId, productionRuns: _productionRuns,
+    // Development artifacts and the Cast & Sets checkpoint name files and jobs
+    // on this install only (services/musicVideo/devArtifacts.js, castAndSets.js).
+    devArtifacts: _devArtifacts, castAndSets: _castAndSets,
+    ...shared
+  } = record;
+  // A composition document names a folder on this install only
+  // (services/musicVideo/compositionDocument.js); the render mode and HUD
+  // settings still sync, and a peer without the files refuses to render.
+  if (shared.composition && typeof shared.composition === 'object' && !Array.isArray(shared.composition)
+    && Object.hasOwn(shared.composition, 'document')) {
+    const { document: _document, ...composition } = shared.composition;
+    shared.composition = composition;
+  }
   if (stripVideoBackend && shared.videoSettings
     && typeof shared.videoSettings === 'object' && !Array.isArray(shared.videoSettings)) {
     const { backend: _backend, ...sharedVideoSettings } = shared.videoSettings;

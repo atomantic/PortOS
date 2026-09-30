@@ -18,7 +18,7 @@ import { trackSourceLabel } from '../../lib/trackProvenance.js';
  */
 export default function TrackPanel({
   project, tracks, trackName, audioFilename, youtube,
-  renderBound, midiBound, onChangeTrack, onProjectUpdated,
+  renderBound, midiBound, onChangeTrack, onProjectUpdated, separation = null,
 }) {
   const blockedMessage = renderBound
     ? 'Wait for the current render to finish before changing the track'
@@ -42,7 +42,7 @@ export default function TrackPanel({
           onChange={(e) => e.target.value && onChangeTrack(e.target.value)}
           disabled={youtube.editJob.active || renderBound || midiBound}
           title={blockedMessage || undefined}
-          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50">
+          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 min-h-[44px] sm:min-h-0">
           <option value="">Change track…</option>
           {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
         </select>
@@ -63,6 +63,7 @@ export default function TrackPanel({
         project={project}
         hasAudio={Boolean(project.trackId || project.uploadedAudioFilename)}
         onUpdated={onProjectUpdated}
+        separation={separation}
       />
       {/* #8988: an optional, explicitly chosen bed mixed under the song. */}
       <SoundBedControl key={project.id} project={project} tracks={tracks} disabled={renderBound} onUpdated={onProjectUpdated} />
@@ -74,7 +75,7 @@ export default function TrackPanel({
             <audio src={audioUrl} controls preload="metadata" className="h-8 max-w-full" aria-label="Preview track audio" />
             <a href={audioUrl} download={audioFilename}
               title="Download the audio track"
-              className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs hover:bg-port-border/40">
+              className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0 hover:bg-port-border/40">
               <Download size={13} /> Download audio
             </a>
           </div>

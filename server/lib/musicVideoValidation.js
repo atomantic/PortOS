@@ -10,11 +10,12 @@
 
 import { z } from 'zod';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
-import { MUSIC_VIDEO_SHOT_MODES } from './musicVideoShotTiming.js';
+import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
   MUSIC_VIDEO_AUTOMATION_TOOL_IDS,
+  MUSIC_VIDEO_CHECKIN_MODES,
 } from './musicVideoAutomation.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
@@ -62,6 +63,20 @@ export const musicVideoVideoSettingsSchema = z.object({
   // not PortOS, owns the set of valid durations per model. null/omitted lets
   // the backend's model default apply.
   falDuration: z.number().min(1).max(60).nullable().optional(),
+  // fal.ai cutaway model (lib/falVideoModels.js) and its output resolution.
+  // Loosely validated like routes/videoGen.js's falModelId/falResolution: a
+  // peer on a newer catalog may pin a model this install does not curate yet,
+  // and the resolution alphabet is per model — the provider resolves both (an
+  // uncurated id renders on the legacy body with its cost reported unknown).
+  // null/omitted = the default model (Hailuo-02 image-to-video) / its default.
+  falModelId: z.string().min(1).max(200).nullable().optional(),
+  falResolution: z.string().min(1).max(16).nullable().optional(),
+  // Output resolution of a performance (lip-sync) take — fal's own alphabet
+  // for the lip-sync route. null/omitted = MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION.
+  falLipSyncResolution: z.enum(SOURCE_AUDIO_LIPSYNC.fal.resolutions).nullable().optional(),
+  // false = lip-sync to the audio alone, without the provider transcribing it
+  // first (sung words it mishears turn into the wrong mouth shapes).
+  falLipSyncTranscription: z.boolean().nullable().optional(),
   generationMode: z.enum(['image', 'audioReactive']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
@@ -89,6 +104,7 @@ export const musicVideoLyricCueSchema = z.object({
   startSec: timedSec,
   endSec: timedSec,
   words: z.array(lyricWordSchema).max(400).optional(),
+  matched: z.number().min(0).max(1).optional(),
 }).strict();
 
 // A musical-phrase annotation: a span of the song with an optional visual
@@ -110,7 +126,20 @@ export const musicVideoPacingSchema = z.object({
   hookSec: z.number().min(0.5).max(60).optional(),
 }).strict();
 
+// Lyric-sheet structure: a section header (`[Chorus]`) or a stage direction
+// (`[Spoken, close]`) anchored to the index of the lyric line it precedes.
+// `kind` is the normalized section part or delivery (see
+// services/musicVideo/lyricMarkers.js); a free string so a newer peer's
+// vocabulary still validates here.
+export const musicVideoLyricMarkerSchema = z.object({
+  type: z.enum(['section', 'direction']),
+  label: z.string().trim().min(1).max(120),
+  kind: z.string().max(32).optional(),
+  line: z.number().int().min(0).max(2000),
+}).strict();
+
 const lyricCueList = z.array(musicVideoLyricCueSchema).max(2000);
+const lyricMarkerList = z.array(musicVideoLyricMarkerSchema).max(500);
 const phraseList = z.array(musicVideoPhraseSchema).max(500);
 
 // ---- Visual specification + scene takes (#8965) ----------------------------
@@ -218,6 +247,13 @@ export const musicVideoLyricsImportSchema = z.object({
   mode: z.enum(['replace', 'append']).optional(),
 }).strict();
 
+// Import the linked track's lyric sheet. `replace` swaps the project's lines
+// for the sheet; `if-empty` (the autopilot kickoff) imports only when the
+// project has no lines yet, so a re-run never overwrites the director's edits.
+export const musicVideoLyricsImportTrackSchema = z.object({
+  mode: z.enum(['replace', 'if-empty']).optional(),
+}).strict();
+
 // Word alignment (#9074) runs only when the director clicks. `cueId` re-aligns
 // that line; omitted, every line is aligned.
 export const musicVideoLyricsAlignSchema = z.object({
@@ -231,7 +267,15 @@ export const musicVideoLyricsAlignSchema = z.object({
 // whole song as a seekable composition instead of generated footage. Cue text
 // is the director's own, rendered as an independent typography layer — never
 // baked into generated pixels. See services/musicVideo/composition.js.
-export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code'];
+// `document` renders a project-owned HTML composition document (its own
+// folder under data/music-video/<projectId>/composition/) seeked over the
+// song; see services/musicVideo/compositionDocument.js and documentRender.js.
+export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document'];
+// Shipped starting points a project can copy into its document folder.
+export const MUSIC_VIDEO_DOCUMENT_TEMPLATES = ['layered'];
+export const MUSIC_VIDEO_DOCUMENT_SOURCES = ['zip', 'directory', 'template'];
+// One immutable document version: data/music-video/<projectId>/composition/<versionId>.
+export const MUSIC_VIDEO_DOCUMENT_DIRECTORY = /^music-video\/[A-Za-z0-9_-]{1,100}\/composition\/[A-Za-z0-9_-]{1,100}$/;
 // One section function. Reject the calls that would make a frame depend on
 // the clock, entropy, or the network — the preview and the render both seek.
 export const MUSIC_VIDEO_CODE_SOURCE_MAX = 20000;
@@ -273,6 +317,35 @@ export const musicVideoCodeGenerateSchema = z.object({
   model: z.string().max(200).optional(),
 }).strict();
 
+// Where the project's composition document lives. Set only by the import
+// routes; a PATCH that carries it back is ignored (the stored pointer wins).
+export const musicVideoCompositionDocumentSchema = z.object({
+  directory: z.string().max(300).regex(MUSIC_VIDEO_DOCUMENT_DIRECTORY, 'directory is a composition document version folder'),
+  entry: z.literal('index.html').optional(),
+  updatedAt: z.string().max(40).nullable().optional(),
+  source: z.object({
+    kind: z.enum(MUSIC_VIDEO_DOCUMENT_SOURCES),
+    name: z.string().max(200).nullable().optional(),
+  }).strict().nullable().optional(),
+  files: z.number().int().min(0).max(4096).optional(),
+  bytes: z.number().int().min(0).optional(),
+}).strict();
+
+// The optional HUD block a composition document may draw (the shipped
+// layered template reads it from PORTOS_MV.composition.overlay).
+export const musicVideoCompositionOverlaySchema = z.object({
+  enabled: z.boolean().optional(),
+  titleLines: z.array(z.string().max(120)).max(4).optional(),
+  meter: z.object({
+    label: z.string().max(40).optional(),
+    // [songSec, percent] pairs, eased between.
+    keyframes: z.array(z.tuple([z.number().min(0).max(36000), z.number().min(0).max(100)])).max(200).optional(),
+  }).strict().nullable().optional(),
+  ticker: z.array(z.string().max(200)).max(40).optional(),
+  timecode: z.boolean().optional(),
+  timecodeStartSec: z.number().min(0).max(86400).optional(),
+}).strict();
+
 // Replaced whole by a project PATCH (the editor sends the full manifest).
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
@@ -284,6 +357,22 @@ export const musicVideoCompositionSchema = z.object({
   }).strict().optional(),
   posterSec: timedSec,
   codeVideo: musicVideoCodeVideoSchema.nullable().optional(),
+  document: musicVideoCompositionDocumentSchema.nullable().optional(),
+  overlay: musicVideoCompositionOverlaySchema.nullable().optional(),
+}).strict();
+
+// A relative folder inside data/ to copy a composition document from.
+export const musicVideoDocumentDirectoryImportSchema = z.object({
+  directory: z.string().min(1).max(1024).refine((value) => !value.startsWith('/') && !value.includes('\\') && !value.includes(':')
+    && !value.includes('\0') && !value.split('/').some((part) => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
+}).strict();
+
+export const musicVideoDocumentFileQuerySchema = z.object({
+  path: z.string().min(1).max(512),
+}).strict();
+
+export const musicVideoDocumentTemplateSchema = z.object({
+  template: z.enum(MUSIC_VIDEO_DOCUMENT_TEMPLATES).optional(),
 }).strict();
 
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
@@ -519,6 +608,75 @@ export const musicVideoAutomationSchema = z.object({
   tools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),
   guidance: z.string().max(MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX).optional(),
   budgetUsd: z.number().min(0).max(MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD).nullable().optional(),
+  // Check-in gates: `review` stops the autopilot for the director, `auto`
+  // approves and continues. Absent = review.
+  checkins: z.object({
+    castAndSets: z.enum(MUSIC_VIDEO_CHECKIN_MODES).optional(),
+  }).strict().optional(),
+}).strict();
+
+// ---- Development artifacts ("ingredients") ----------------------------------
+// Reviewable development files attached to a project (a Cast & Sets sheet, an
+// animatic, a treatment, a storyboard). Bytes live on disk; see
+// services/musicVideo/devArtifacts.js.
+export const MUSIC_VIDEO_DEV_ARTIFACT_KINDS = ['cast-sets', 'animatic', 'treatment', 'storyboard', 'other'];
+export const MUSIC_VIDEO_DEV_ARTIFACT_STATUSES = ['pending', 'approved', 'changes-requested'];
+
+const devArtifactNoteText = z.string().trim().min(1).max(2000);
+const devArtifactNoteTarget = z.string().trim().max(120).nullable().optional();
+
+// The text fields of a multipart import (the file itself is the `file` part).
+// `artifactId` adds a version to that artifact; otherwise kind + title create
+// one. `notes` is a JSON array of strings or `{ text, target }` objects.
+export const musicVideoDevArtifactImportSchema = z.object({
+  artifactId: z.string().min(1).max(64).optional(),
+  kind: z.enum(MUSIC_VIDEO_DEV_ARTIFACT_KINDS).optional(),
+  title: z.string().trim().min(1).max(200).optional(),
+  status: z.enum(MUSIC_VIDEO_DEV_ARTIFACT_STATUSES).optional(),
+  notes: z.preprocess((v) => {
+    if (typeof v !== 'string') return v;
+    try { return JSON.parse(v); } catch { return v; }
+  }, z.array(z.union([
+    devArtifactNoteText,
+    z.object({ text: devArtifactNoteText, target: devArtifactNoteTarget }).strict(),
+  ])).max(50)).optional(),
+}).strict().refine((b) => b.artifactId || b.kind, { message: 'kind is required for a new artifact', path: ['kind'] });
+
+export const musicVideoDevArtifactNoteSchema = z.object({
+  text: devArtifactNoteText,
+  target: devArtifactNoteTarget,
+}).strict();
+
+export const musicVideoDevArtifactNoteUpdateSchema = z.object({
+  resolved: z.boolean(),
+}).strict();
+
+export const musicVideoDevArtifactReviewSchema = z.object({
+  status: z.enum(MUSIC_VIDEO_DEV_ARTIFACT_STATUSES),
+  note: z.string().trim().max(2000).optional(),
+}).strict();
+
+export const musicVideoDevArtifactFileQuerySchema = z.object({
+  version: z.coerce.number().int().min(1).max(1000).optional(),
+}).strict();
+
+// ---- Cast & Sets check-in -----------------------------------------------------
+// Start / resume take an optional provider pin for the direction call.
+export const musicVideoCastAndSetsStartSchema = z.object({
+  providerId: z.string().min(1).max(64).optional(),
+  model: z.string().min(1).max(200).optional(),
+}).strict();
+
+// Regenerate with notes. Omitted notes = the open notes on the sheet. A
+// `target` names an image (`character`, `expressions`, `looks`, `set:<id>`,
+// `test:<n>`); any other note revises the direction.
+export const musicVideoCastAndSetsRegenerateSchema = z.object({
+  notes: z.array(z.object({
+    text: devArtifactNoteText,
+    target: devArtifactNoteTarget,
+  }).strict()).min(1).max(50).optional(),
+  providerId: z.string().min(1).max(64).optional(),
+  model: z.string().min(1).max(200).optional(),
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
@@ -534,6 +692,7 @@ export const musicVideoProjectCreateSchema = z.object({
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
   lyricCues: lyricCueList.optional(),
+  lyricMarkers: lyricMarkerList.optional(),
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
@@ -552,6 +711,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   automation: musicVideoAutomationSchema.nullable().optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
   lyricCues: lyricCueList.optional(),
+  lyricMarkers: lyricMarkerList.optional(),
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
@@ -715,6 +875,11 @@ export const musicVideoAudioAnalysisSchema = z.object({
     // Normalized 0..1 section loudness used by the energy-weighted auto-arranger
     // (#1915). Additive + optional so older cached analyses still validate.
     energy: z.number().min(0).optional(),
+    // Set when the label came from the aligned lyric sheet ("Chorus") rather
+    // than the detector ("Section 3"); `analysisLabel` keeps the detector's
+    // label so a later pass can restore it. Additive, so older analyses validate.
+    labelSource: z.enum(['analysis', 'lyrics']).optional(),
+    analysisLabel: z.string().max(120).optional(),
   })),
   durationSec: z.number(),
   // Explain whether the beat grid came from the full track, consensus among

@@ -1,12 +1,17 @@
 /**
  * Music Video word-level lyric alignment (#9074).
  *
- * Runs only when the director clicks Align words (or a line's Re-align).
- * The vocal stem is the audio when one is attached; otherwise the master.
- * ffmpeg decodes that file to 16 kHz mono PCM, the local whisper.cpp server
+ * Runs when the director clicks Align words (or a line's Re-align), or as a
+ * step of an autopilot run the director started. ffmpeg decodes the audio to
+ * 16 kHz mono PCM; a whisper runner (lyricTranscriber.js — whisper-cli with a
+ * music-grade model, the voice STT endpoint, or a temporary whisper-server)
  * returns word timings, and those timings are aligned to the director's
- * spelling. A line the singer skipped stays inside its own window and does
- * not move the lines around it. Times the director already set are kept.
+ * spelling. With a vocal stem attached, its phrases anchor short mix windows
+ * so post-silence words cannot drift back into the instrumental gap. A line
+ * the singer skipped stays inside its own window
+ * and does not move the lines around it. Times the director already set are
+ * kept. A whole-song alignment also names the analysis sections after the
+ * lyric sheet's `[Verse]`/`[Chorus]` headers (lyricMarkers.js).
  */
 
 import { mkdtemp, readFile, rm } from 'fs/promises';
@@ -14,19 +19,21 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
-import { transcribe } from '../voice/stt.js';
+import { musicVideoAudioAnalysisSchema } from '../../lib/musicVideoValidation.js';
 import { getProject, updateProject } from './projects.js';
 import {
   alignDirectorWords,
-  explainSttFailure,
-  lyricAlignChunkSec,
   lyricAlignFfmpegArgs,
-  mergeChunkWords,
-  pickAlignmentPath,
-  planAudioChunks,
-  sliceWav,
+  dropNonLyricWords,
+  mergeTranscripts,
+  detectVocalPhrases,
+  phraseWindows,
+  snapLineStarts,
+  vocalPcm,
   wavDurationSec,
+  pickAlignmentPath,
 } from './lyricAlignCore.js';
+import { relabelAnalysisSections } from './lyricMarkers.js';
 
 async function decodeSourceToWav(sourcePath) {
   const ffmpeg = await findFfmpeg();
@@ -47,55 +54,27 @@ async function decodeSourceToWav(sourcePath) {
   }
 }
 
-const audioKey = (project) => `${project?.trackId ?? ''}\u0000${project?.uploadedAudioFilename ?? ''}`;
+// Lazy: the runner pulls the download/spawn helpers only an alignment needs.
+async function resolveTranscriber() {
+  const { resolveAlignmentTranscriber } = await import('./lyricTranscriber.js');
+  return resolveAlignmentTranscriber();
+}
+
+const audioKey = (project) => `${project?.trackId ?? ''}\u0000${project?.uploadedAudioFilename ?? ''}\u0000${project?.vocalStemFilename ?? ''}`;
 const textKey = (cues) => (cues || []).map((cue) => `${cue.id ?? ''}\u0000${cue.text ?? ''}`).join('\n');
 
 function alignmentPrompt(cues) {
   return (cues || []).map((cue) => cue?.text || '').filter(Boolean).join('\n').slice(0, 800);
 }
 
-async function recognizeRegion(wav, region, transcribeFn, prompt) {
-  const duration = wavDurationSec(wav);
-  if (!(duration > 0)) {
-    throw new ServerError('Could not read the decoded vocal.', { status: 422, code: 'LYRIC_ALIGN_DECODE_FAILED' });
-  }
-  const regionStart = Math.max(0, region.startSec || 0);
-  const regionEnd = Math.min(duration, region.endSec ?? duration);
-  if (!(regionEnd > regionStart)) {
-    throw new ServerError('That lyric line has no audio window to align.', { status: 422, code: 'LYRIC_ALIGN_NO_WINDOW' });
-  }
-  const span = regionEnd - regionStart;
-  const chunks = planAudioChunks(span, { chunkSec: lyricAlignChunkSec() }).map((chunk) => ({
-    startSec: regionStart + chunk.startSec,
-    endSec: regionStart + chunk.endSec,
-  }));
-  console.log(`🎤 Aligning lyric words (${chunks.length} whisper ${chunks.length === 1 ? 'chunk' : 'chunks'})`);
-  const results = [];
-  for (const chunk of chunks) {
-    const slice = sliceWav(wav, chunk.startSec, chunk.endSec);
-    let result;
-    try {
-      result = await transcribeFn(slice, {
-        verbose: true,
-        mimeType: 'audio/wav',
-        filename: 'lyric-align.wav',
-        prompt,
-      });
-    } catch (err) {
-      console.error(`❌ Lyric alignment speech-to-text failed: ${err.message}`);
-      throw new ServerError(explainSttFailure(err), { status: 503, code: 'LYRIC_ALIGN_STT_UNAVAILABLE' });
-    }
-    results.push({
-      startSec: chunk.startSec,
-      endSec: chunk.endSec,
-      words: (result?.words || []).map((word) => ({
-        text: word.text,
-        startSec: word.startSec,
-        endSec: word.endSec,
-      })),
-    });
-  }
-  return mergeChunkWords(results);
+/** The analysis with its sections named after the lyric sheet, or null when nothing changes. */
+function relabeledAnalysis(project, cues) {
+  const analysis = project.audioAnalysis;
+  if (!analysis || !Array.isArray(analysis.sections)) return null;
+  const next = relabelAnalysisSections(analysis, cues, project.lyricMarkers || []);
+  if (JSON.stringify(next.sections) === JSON.stringify(analysis.sections)) return null;
+  const parsed = musicVideoAudioAnalysisSchema.safeParse(next);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -109,7 +88,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
     updateProject,
     resolveAudio: pickAlignmentPath,
     decodeAudio: decodeSourceToWav,
-    transcribe,
+    resolveTranscriber,
     ...options.deps,
   };
   const cueId = options.cueId || null;
@@ -122,22 +101,52 @@ export async function alignProjectLyrics(projectId, options = {}) {
   const cue = cueId ? cues.find((entry) => entry.id === cueId) : null;
   if (cueId && !cue) throw new ServerError('That lyric line is no longer on the project.', { status: 404, code: 'NOT_FOUND' });
 
-  const { path: audioPath, source } = await deps.resolveAudio(project);
+  const { path: audioPath, source, mixPath } = await deps.resolveAudio(project);
   const wav = await deps.decodeAudio(audioPath);
-  const duration = wavDurationSec(wav);
+  const mixWav = mixPath ? await deps.decodeAudio(mixPath) : null;
   const windowed = cue
     && typeof cue.startSec === 'number'
     && typeof cue.endSec === 'number'
     && cue.endSec > cue.startSec
     ? { startSec: cue.startSec, endSec: cue.endSec }
     : null;
-  const region = windowed
-    ? { startSec: windowed.startSec, endSec: Math.min(windowed.endSec, duration || windowed.endSec) }
-    : { startSec: 0, endSec: duration };
-  const recognized = await recognizeRegion(wav, region, deps.transcribe, alignmentPrompt(windowed ? [cue] : cues));
-  if (!windowed && recognized.length === 0) {
+  const region = windowed || { startSec: 0, endSec: null };
+  const promptCues = windowed ? [cue] : cues;
+  const prompt = alignmentPrompt(promptCues);
+  const phrases = mixWav ? detectVocalPhrases(vocalPcm(wav)) : [];
+  const windows = mixWav ? phraseWindows(phrases, wavDurationSec(mixWav)) : [];
+
+  const transcriber = await deps.resolveTranscriber();
+  let recognized;
+  try {
+    if (mixWav) {
+      recognized = [];
+      // The runner already slices and offsets each result onto the song clock.
+      // Sequential calls bound memory/GPU use and release one runner per song.
+      for (const [index, window] of windows.entries()) {
+        if (windowed && (window.endSec <= windowed.startSec || window.startSec >= windowed.endSec)) continue;
+        const startSec = Math.max(window.startSec, windowed?.startSec ?? 0);
+        const endSec = Math.min(window.endSec, windowed?.endSec ?? Infinity);
+        const words = await transcriber.transcribe(mixWav, { startSec, endSec, prompt });
+        const previous = windows[index - 1];
+        const following = windows[index + 1];
+        const ownStart = Math.max(startSec, previous ? (previous.endSec + window.startSec) / 2 : startSec);
+        const ownEnd = Math.min(endSec, following ? (window.endSec + following.startSec) / 2 : endSec);
+        recognized.push(...words.filter((word) => {
+          const midpoint = (word.startSec + word.endSec) / 2;
+          return midpoint >= ownStart && midpoint < ownEnd;
+        }));
+      }
+      recognized = dropNonLyricWords(recognized);
+    } else {
+      recognized = mergeTranscripts(await transcriber.transcribe(wav, { ...region, prompt }), [], promptCues.map((entry) => entry.text).join('\n'));
+    }
+  } finally {
+    await Promise.resolve(transcriber.release?.()).catch((err) => console.error(`❌ Could not stop the alignment runner: ${err.message}`));
+  }
+  if (!mixWav && !windowed && recognized.length === 0) {
     throw new ServerError(
-      'Speech-to-text returned no words for this audio. Enable the local whisper server in Settings → Voice and try Align words again.',
+      'Speech-to-text heard no words in this audio. Check the song has vocals, then try Align words again.',
       { status: 422, code: 'LYRIC_ALIGN_EMPTY' },
     );
   }
@@ -151,14 +160,24 @@ export async function alignProjectLyrics(projectId, options = {}) {
     throw new ServerError('The lyric lines changed while they were aligning. Run Align words again.', { status: 409, code: 'LYRIC_ALIGN_TEXT_CHANGED' });
   }
 
+  const align = (entries) => {
+    const aligned = alignDirectorWords(entries, recognized, { phraseAnchored: Boolean(mixWav) });
+    return mixWav ? snapLineStarts(aligned, phrases.map((phrase) => phrase.startSec), entries) : aligned;
+  };
   let nextCues;
   if (windowed) {
-    const [aligned] = alignDirectorWords([cue], recognized);
+    const [aligned] = align([freshCues.find((entry) => entry.id === cue.id)]);
     nextCues = freshCues.map((entry) => (entry.id === cue.id ? { ...entry, ...aligned, id: entry.id } : entry));
   } else {
-    const aligned = alignDirectorWords(freshCues, recognized);
+    const aligned = align(freshCues);
     nextCues = cueId ? freshCues.map((entry, index) => (entry.id === cueId ? aligned[index] : entry)) : aligned;
   }
-  console.log(`🎤 Aligned lyric words from the ${source}`);
-  return deps.updateProject(projectId, { lyricCues: nextCues });
+  const matched = nextCues.reduce((sum, entry) => sum + (entry.words || []).filter((word) => word.conf === 'matched').length, 0);
+  console.log(`🎤 Aligned lyric words from the ${source}${mixWav ? ' + mix' : ''} via ${transcriber.kind} (${matched} words matched)`);
+  const patch = { lyricCues: nextCues };
+  if (!cueId) {
+    const analysis = relabeledAnalysis(fresh, nextCues);
+    if (analysis) patch.audioAnalysis = analysis;
+  }
+  return deps.updateProject(projectId, patch);
 }

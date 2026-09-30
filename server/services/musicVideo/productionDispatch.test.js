@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { basename } from 'node:path';
 
 const enqueueJob = vi.fn(async () => ({ jobId: 'job-image' }));
 const submitVideoGenJob = vi.fn(async () => ({ jobId: 'job-video' }));
@@ -36,9 +37,30 @@ describe('production scene dispatch (#9066)', () => {
     expect(kind).toBe('image');
     expect(owner).toBe('music-video-production:mvpr-example');
     expect(params).toMatchObject({ mode: 'codex', musicVideo: tag, referenceImageStrengths: [1] });
+    // Frames are requested at the project's aspect (16:9 by default), never left to the backend.
+    expect(params).toMatchObject({ width: 1536, height: 864 });
     expect(params.prompt).toMatch(/^a lighthouse, noir/);
     expect(params.referenceImagePaths).toHaveLength(1);
     expect(params.referenceImagePaths[0]).toMatch(/ref-example\.png$/);
+  });
+
+  it('conditions an approved check-in frame on its character and mapped plate, even beyond the global cap', async () => {
+    const checkedIn = { ...project,
+      castAndSets: { status: 'approved', direction: { songMap: [{ section: 0, setId: 'harbor' }, { section: 1, setId: 'roof' }] } },
+      visualSpec: { references: [
+        { id: 'authored', imageId: 'authored.png', condition: true },
+        { id: 'mvr-cs-character', imageId: 'character.png', condition: true },
+        { id: 'mvr-cs-set-harbor', imageId: 'harbor.png', condition: true },
+        { id: 'mvr-cs-set-roof', imageId: 'roof.png', condition: false },
+      ] },
+    };
+    for (const [sectionIndex, plate] of [[0, 'harbor'], [1, 'roof']]) {
+      await dispatchProductionStep({ stepKind: 'frame', project: checkedIn, scene: { ...scene, sectionIndex },
+        route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
+      const params = enqueueJob.mock.calls.at(-1)[0].params;
+      expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['character.png', `${plate}.png`]);
+      expect(params.referenceImageStrengths).toEqual([1, 1]);
+    }
   });
 
   it('refuses a disabled backend instead of rendering on another one', async () => {
@@ -59,5 +81,24 @@ describe('production scene dispatch (#9066)', () => {
     expect(submitVideoGenJob).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'grok', mode: 'image', sourceImageFile: 'frame-example.png', grokDuration: 6, musicVideo: clipTag,
     }), {});
+  });
+
+  it('submits a fal clip as exactly the take the step was priced for (falSceneTake)', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    const falProject = { ...project, videoSettings: { backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', falResolution: '1080p' } };
+    // A 4s cutaway on Veo 3.1 Fast (4/6/8s clips) renders 4s at the pinned resolution.
+    await dispatchProductionStep({ stepKind: 'clip', project: falProject, scene, route: { kind: 'video', mode: 'fal', model: null }, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls[0][0]).toMatchObject({
+      backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', falDuration: 4, falResolution: '1080p',
+    });
+    // A performance take sends only its lip-sync resolution: its length follows the song slice.
+    await dispatchProductionStep({
+      stepKind: 'clip', project: falProject, scene: { ...scene, shotMode: 'performance' },
+      route: { kind: 'video', mode: 'fal', model: null }, tag: clipTag, settings,
+    });
+    const performance = submitVideoGenJob.mock.calls[1][0];
+    expect(performance).toMatchObject({ backend: 'fal', falResolution: '1080P' });
+    expect(performance).not.toHaveProperty('falDuration');
+    expect(performance).not.toHaveProperty('falModelId');
   });
 });

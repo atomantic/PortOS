@@ -619,7 +619,38 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // loss back, so the gate rejects the ahead transfer. The older peer is
   // never handed `mode: "code"` (an enum value it cannot store). It keeps
   // the concat/composed project it already understands.
-  musicVideoProjects: 7,
+  // v8 = lyric-sheet structure (`lyricMarkers`: section headers and stage
+  // directions anchored to lyric-line indices) and lyric-derived analysis
+  // section names (`audioAnalysis.sections[].labelSource`/`analysisLabel`).
+  // A v7 receiver stores the body verbatim but mis-executes it: its lyric
+  // import replaces the lines without replacing the markers, leaving them
+  // anchored to the wrong lines, and that edit wins LWW onto the upgraded
+  // peer. Records without either field need no rewrite.
+  // v9 = autopilot check-in gates (`automation.checkins.castAndSets`:
+  // `review` | `auto`). A v8 peer's automation normalizer rebuilds the brief
+  // from tools/guidance/budget only, so its next brief edit would drop the
+  // gate and win LWW back onto the upgraded peer, silently turning an
+  // auto-approve setting back into a stop. Gating makes a v8 receiver reject
+  // the ahead-version transfer until it upgrades; a record without the gate
+  // needs no rewrite (absent = `review`). The Cast & Sets checkpoint
+  // (`castAndSets`) and the development artifacts (`devArtifacts`) that ship
+  // with it are wire-local like `productionRuns` (lib/syncWire.js): their files
+  // live under this install's data/music-video/ and are not in the project's
+  // asset manifest, so they are never sent. What an approved check-in writes
+  // into ordinary fields (visual-spec references, concept subjects) syncs.
+  // v10 = composition mode `document` (a project-owned HTML composition
+  // document) and `composition.overlay` (its HUD settings). A v9 peer's
+  // normalizeComposition collapses the unknown mode to `concat` and drops the
+  // overlay, and its next composition edit would last-writer-wins both losses
+  // back, so the gate rejects the ahead transfer. The document pointer itself
+  // (`composition.document`) is wire-local like `devArtifacts`: its files live
+  // under this install's data/music-video/<projectId>/composition/ and are not
+  // in the asset manifest, so a peer keeps its own pointer (or none, and then
+  // refuses to render with COMPOSITION_DOCUMENT_MISSING).
+  // v11 = phrase-alignment confidence (`lyricCues[].matched`). Older peers
+  // drop it on edits or retain stale confidence after audio changes. Existing
+  // records need no rewrite: absent means alignment has not measured it.
+  musicVideoProjects: 11,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

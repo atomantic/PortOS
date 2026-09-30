@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Plus, Trash2, Upload } from 'lucide-react';
+import { ListMusic, Plus, Trash2, Upload } from 'lucide-react';
 
 // Client-minted ids keep a freshly added row addressable across saves without
 // waiting for the server (crypto.randomUUID is unavailable on the plain-HTTP
@@ -14,7 +14,7 @@ const PACING_FIELDS = [
   ['hookSec', 'Opening hook (s)', 'Cap on the very first shot so the video opens on a cut.', 0.5, 60],
 ];
 
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs';
+const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const MIN_WORD_SEC = 0.02;
 
@@ -94,8 +94,28 @@ function WordTimingRow({ cue, onPreview, onCommit }) {
  * correct it. Changing a line's text drops its word timings. Changing the
  * project's audio clears every timing (the text stays).
  */
-export default function LyricsPanel({ project, onEditLocal, onSave, onImport, importing, onAlign, aligning = false }) {
+// Marker chips read the sheet's structure back to the director: sections in
+// the accent colour, delivery directions muted.
+function MarkerChips({ markers }) {
+  if (!markers?.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1 pt-1">
+      {markers.map((marker, index) => (
+        <span key={`${marker.type}-${marker.label}-${index}`}
+          title={marker.type === 'section' ? 'Section from the lyric sheet' : 'Delivery direction from the lyric sheet'}
+          className={`rounded px-1.5 py-0.5 text-[10px] break-words ${marker.type === 'section' ? 'bg-port-accent/20 text-port-accent font-medium' : 'bg-port-border text-port-text-muted italic'}`}>
+          {marker.type === 'section' ? marker.label : `[${marker.label}]`}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export default function LyricsPanel({ project, onEditLocal, onSave, onImport, importing, onImportTrack, onAlign, aligning = false }) {
   const cues = project.lyricCues || [];
+  const markers = project.lyricMarkers || [];
+  const markersAt = (line) => markers.filter((marker) => marker.line === line);
+  const trailingMarkers = markers.filter((marker) => marker.line >= cues.length);
   const phrases = project.phrases || [];
   const pacing = project.pacing || {};
   const [importText, setImportText] = useState('');
@@ -109,6 +129,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
     lyricCues: cues.map((c) => {
       if (c.id !== id) return c;
       const next = { ...c, ...patch };
+      if (Object.hasOwn(patch, 'text') && patch.text !== c.text) delete next.matched;
       if (Object.hasOwn(patch, 'words') && patch.words == null) delete next.words;
       return next;
     }),
@@ -140,7 +161,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
     if (!onAlign || aligning) return;
     setAlignError('');
     Promise.resolve(onAlign(cueId)).catch((err) => {
-      setAlignError(err?.message || 'Speech-to-text is not running. Enable the local whisper server in Settings → Voice, then try Align words again.');
+      setAlignError(err?.message || 'Could not align the words to the vocal. Try Align words again.');
     });
   };
   const editWords = (id, words, save) => {
@@ -151,7 +172,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
 
   return (
     <details className="mt-2 bg-port-bg border border-port-border rounded-lg p-2 text-xs">
-      <summary className="cursor-pointer select-none text-port-text-muted">
+      <summary className="cursor-pointer select-none text-port-text-muted min-h-[44px] sm:min-h-0 flex flex-wrap items-center gap-x-1">
         Lyrics, phrases &amp; pacing — {cues.length} line{cues.length === 1 ? '' : 's'} ({timedCount} timed)
         · {phrases.length} phrase{phrases.length === 1 ? '' : 's'}
         <span className="block sm:inline sm:ml-1">— AI Plan cuts on timed lines and phrase edges; no lyrics = an instrumental plan.</span>
@@ -159,7 +180,16 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
 
       <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2">
         <section className="space-y-2 min-w-0">
-          <h4 className="font-medium text-port-text">Import lyrics</h4>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="font-medium text-port-text">Import lyrics</h4>
+            {onImportTrack && project.trackId && (
+              <button type="button" onClick={onImportTrack} disabled={importing}
+                title={cues.length ? 'Replace these lines with the linked track\'s lyric sheet' : 'Use the linked track\'s lyric sheet'}
+                className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0 disabled:opacity-50">
+                <ListMusic size={13} /> Use track lyrics
+              </button>
+            )}
+          </div>
           <label htmlFor="mv-lyrics-import" className="sr-only">Lyrics to import</label>
           <textarea id="mv-lyrics-import" rows={3} value={importText} onChange={(e) => setImportText(e.target.value)}
             placeholder={'Paste LRC ([00:12.50] line), SRT/WebVTT cues, or plain lines (imported untimed)'}
@@ -212,7 +242,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
             <span className="flex items-center gap-2">
               {onAlign && (
                 <button type="button" onClick={() => runAlign()} disabled={aligning || cues.length === 0 || !hasAudio}
-                  title={hasAudio ? 'Align each word to the vocal' : 'Attach a song before aligning words'}
+                  title={hasAudio ? 'Align each word to the vocal with local whisper.cpp (the first run downloads a 1.6 GB model)' : 'Attach a song before aligning words'}
                   className="min-h-[44px] sm:min-h-0 text-port-accent disabled:opacity-50">
                   {aligning ? 'Aligning…' : 'Align words'}
                 </button>
@@ -226,6 +256,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
           <div className="max-h-64 overflow-y-auto space-y-1 pr-1">
             {cues.map((cue, i) => (
               <div key={cue.id} className="space-y-1 border-b border-port-border/50 pb-1">
+                <MarkerChips markers={markersAt(i)} />
                 <div className="flex flex-wrap items-center gap-1">
                   <input type="number" min={0} step={0.01} aria-label={`Line ${i + 1} start (s)`} placeholder="start"
                     value={cue.startSec ?? ''} onChange={(e) => editCue(cue.id, { startSec: toSec(e.target.value) })}
@@ -249,11 +280,17 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                   <button type="button" onClick={() => replaceCues(cues.filter((c) => c.id !== cue.id))}
                     aria-label={`Delete line ${i + 1}`} className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
                 </div>
+                {typeof cue.matched === 'number' && cue.matched < 0.5 && (
+                  <span className="inline-block rounded bg-port-warning/10 px-1.5 py-0.5 text-port-warning">
+                    Low confidence — check by ear
+                  </span>
+                )}
                 <WordTimingRow cue={cue}
                   onPreview={(words) => editWords(cue.id, words, false)}
                   onCommit={(words) => editWords(cue.id, words, true)} />
               </div>
             ))}
+            {cues.length > 0 && <MarkerChips markers={trailingMarkers} />}
           </div>
 
           <div className="flex items-center justify-between pt-1">

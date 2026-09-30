@@ -4,7 +4,7 @@ import { compositionDraft, RENDER_STYLES, renderStyleLabel } from './composition
 // Client-minted ids keep a freshly added row addressable across saves (see LyricsPanel).
 const mintId = () => `mtc-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 const toSec = (value) => (value === '' ? null : Number(value));
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs';
+const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
 // Mirrors the server's composition enums (server/lib/musicVideoValidation.js).
 const TEMPLATES = [['fade', 'Fade'], ['rise', 'Rise'], ['typewriter', 'Typewriter'], ['pop', 'Pop']];
@@ -40,7 +40,7 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
 
   return (
     <details className="mt-2 bg-port-bg border border-port-border rounded-lg p-2 text-xs">
-      <summary className="cursor-pointer select-none text-port-text-muted">
+      <summary className="cursor-pointer select-none text-port-text-muted min-h-[44px] sm:min-h-0 flex flex-wrap items-center gap-x-1">
         Typography — {renderStyleLabel(composition.mode)} · {cues.length} text cue{cues.length === 1 ? '' : 's'}
         <span className="block sm:inline sm:ml-1">— timed text laid over the footage, kept inside the title-safe area.</span>
       </summary>
@@ -82,6 +82,7 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
 
       {composed && cues.length === 0 && <p className="mt-2 text-port-text-muted">No text cues yet — a composed render with none renders as plain cuts.</p>}
       {codeMode && <p className="mt-2 text-port-text-muted">Code-rendered draws the song in code. Text cues stay stored and come back if you switch to Composed.</p>}
+      {composition.mode === 'document' && <p className="mt-2 text-port-text-muted">The composition document reads these cues from <code>PORTOS_MV.textCues</code>: the layered template draws Hero cues as kinetic words on their sung times and uses Subtitle cues (or, with none, the timed lyrics) as subtitles.</p>}
       <div className="mt-2 max-h-72 overflow-y-auto space-y-1 pr-1">
         {cues.map((cue, i) => (
           <div key={cue.id} className="flex flex-wrap items-center gap-1">

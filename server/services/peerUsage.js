@@ -37,6 +37,8 @@ import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { buildUsageDigest, buildUsageReport, getUsage, USAGE_FILE } from './usage.js';
 import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './providerQuotaShare.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
+import { readLocalTranscriptUsage, sanitizeTranscriptDays, TRANSCRIPT_USAGE_FILE } from './claudeCodeTranscriptUsage.js';
+import { summarizeTranscriptDays, mergeModelRows } from './claudeCodeModelReport.js';
 
 const PEER_USAGE_FILE = join(PATHS.data, 'peer-usage.json');
 
@@ -168,6 +170,16 @@ async function readStore() {
 }
 
 /**
+ * A peer's Claude Code per-day, per-model token history, or null when it sent
+ * none (or an unorderable one). Rebuilt to the fixed day → model → counts shape.
+ */
+function sanitizeClaudeCode(raw) {
+  if (!isPlainObject(raw) || parseTsMs(raw.updatedAt) === null) return null;
+  const days = sanitizeTranscriptDays(raw.days);
+  return Object.keys(days).length > 0 ? { updatedAt: raw.updatedAt, days } : null;
+}
+
+/**
  * Coerce one wire entry into a stored entry, or null when it can't be trusted.
  * Pins identity (the entry must belong to the map key it arrived under),
  * orderability (a parseable stamp), and shape (`sanitizeDigest`).
@@ -187,6 +199,9 @@ function sanitizeEntry(entry, expectedId) {
     // Optional: a peer running an older build publishes no quota readings, and
     // the fleet quota view simply has one fewer contributor.
     quotas: sanitizeQuotaCards(entry.quotas),
+    // Optional and additive, like `quotas`: a peer on an older build publishes
+    // no Claude Code token history and simply contributes nothing to that report.
+    claudeCode: sanitizeClaudeCode(entry.claudeCode),
   };
 }
 
@@ -215,8 +230,14 @@ async function buildSelfEntry() {
   if (!instanceId) return null;
   const usage = selfDigest(getUsage());
   const { quotas, capturedAt: quotasAt } = await readLocalQuotaCards();
-  const capturedAt = compareNewerWins(quotasAt, usage.lastUpdated) ? quotasAt : usage.lastUpdated;
-  return { instanceId, name: name || instanceId, capturedAt, usage, quotas };
+  // An unreadable store publishes no history rather than failing every sync read.
+  const local = await readLocalTranscriptUsage().catch(() => null);
+  const claudeCode = local?.updatedAt && Object.keys(local.days).length > 0 ? local : null;
+  // capturedAt is the LWW stamp AND manifest fingerprint: the newest of every
+  // component, so a transcript-store refresh alone still gets pulled by peers.
+  const capturedAt = [usage.lastUpdated, quotasAt, claudeCode?.updatedAt].reduce(
+    (newest, ts) => (compareNewerWins(ts, newest) ? ts : newest));
+  return { instanceId, name: name || instanceId, capturedAt, usage, quotas, ...(claudeCode && { claudeCode }) };
 }
 
 /**
@@ -460,6 +481,31 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
 }
 
 /**
+ * Fleet-wide Claude Code tokens per model, priced at API rates, for a window.
+ * One row per instance that has published transcript history (this machine
+ * reads its live store), plus a combined per-model list. As with `getFleetUsage`,
+ * an instance the viewer marked as API-billed stays listed but does not feed the
+ * combined figures. Peer rows are as fresh as the last sync (`capturedAt`).
+ */
+export async function getFleetClaudeCodeModels({ from = null, to = null, apiBilledInstanceIds = [] } = {}) {
+  const { self, peers } = await entriesWithSelf();
+  const apiBilled = new Set(Array.isArray(apiBilledInstanceIds) ? apiBilledInstanceIds : []);
+  const row = (e, isSelf) => {
+    const { models, totals } = summarizeTranscriptDays(e.claudeCode.days, { from, to });
+    return { instanceId: e.instanceId, name: e.name || e.instanceId, self: isSelf, capturedAt: e.claudeCode.updatedAt, models, totals, usesSubscriptions: !apiBilled.has(e.instanceId) };
+  };
+  const instances = [
+    ...(self?.claudeCode ? [row(self, true)] : []),
+    ...peers.filter((e) => e.claudeCode).map((e) => row(e, false)),
+  ];
+  const combined = mergeModelRows(instances.filter((i) => i.usesSubscriptions).map((i) => i.models));
+  // Peers we know of that published no history (older build, or not scanned yet)
+  // — named so the UI can say why they are missing rather than dropping them.
+  const pending = peers.filter((e) => !e.claudeCode).map((e) => e.name || e.instanceId);
+  return { instances, pendingInstances: pending, ...combined };
+}
+
+/**
  * Every OTHER instance's last-known subscription-quota readings, for unifying
  * them with this machine's cards (`lib/fleetQuotas.js`).
  *
@@ -501,6 +547,6 @@ export async function forgetInstanceUsage(instanceId) {
 // Files whose fingerprint invalidates the category's checksum cache. The
 // instances file is in the set because the manifest is keyed by this instance's
 // ID — a re-identified machine must re-checksum even when no counter moved.
-export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, dataPath('instances.json')];
+export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, TRANSCRIPT_USAGE_FILE, dataPath('instances.json')];
 
 export { PEER_USAGE_FILE };

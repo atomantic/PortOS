@@ -50,9 +50,13 @@ describe('forge credential resolution', () => {
   it('pins the repository owner for PR operations without mutating ambient auth', async () => {
     githubAccount();
     const forge = await resolveForgeForRepo('/example/repo');
+    // The resolver strips every other ambient token; derive the expectation the
+    // same way so a CI/proxy environment that exports GITHUB_TOKEN can't fail it.
+    const expectedEnv = { ...process.env, GH_TOKEN: 'test-owner-token' };
+    for (const key of ['GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) delete expectedEnv[key];
     expect(forge).toEqual({
       cli: 'gh', host: 'github.com', owner: 'example-owner', account: 'example-owner',
-      env: { ...process.env, GH_TOKEN: 'test-owner-token' }, identity: null
+      env: expectedEnv, identity: null
     });
     expect(spawn).toHaveBeenNthCalledWith(3, 'gh', ['auth', 'token', '-u', 'example-owner', '-h', 'github.com'], { shell: false });
     expect(process.env.GH_TOKEN).toBe('test-ambient-token');

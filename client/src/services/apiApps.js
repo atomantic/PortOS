@@ -7,6 +7,8 @@ export const getAppLaunchVideos = (id, options) => request(`/apps/${encodeURICom
 // Installed motion toolkit (ffmpeg, optional agent skill packs) for launch-video options.
 export const getMotionToolkit = (options) => request('/html-composition/toolkit', options);
 
+export const installMotionSkills = (options) => request('/html-composition/toolkit/skills/install', { method: 'POST', ...options });
+
 // Apps. The default response remains the PM2-enriched list; `view=nav` and
 // `view=probe` are explicit projections for hot name-only and peer callers.
 export const getApps = ({ includeQuality = false, view, ...options } = {}) => {

@@ -10,6 +10,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
+import ClaudeCodeModelTokensCard from '../components/usage/ClaudeCodeModelTokensCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
@@ -402,6 +403,33 @@ function ProviderCostRows({ provider }) {
 
 // Time-filter pills + custom range, driven by URL search params so every
 // report view is shareable/bookmarkable (linkable-routes convention).
+// A native date input reports "" while its mm/dd/yyyy segments are only
+// partly typed, so binding it straight to the URL param wiped the field
+// mid-keystroke. Hold the draft locally and commit only complete dates (or an
+// explicit clear); re-sync when the committed value changes underneath.
+function RangeDateInput({ id, label, value, onCommit }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  const handleChange = (e) => {
+    const next = e.target.value;
+    setDraft(next);
+    if (next === '' && e.target.validity.badInput) return;
+    // Typing a year passes through 0002, 0020, 0202 — valid dates, not intent.
+    if (next !== '' && Number(next.slice(0, 4)) < 1900) return;
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <input
+      id={id}
+      aria-label={label}
+      type="date"
+      value={draft}
+      onChange={handleChange}
+      className="bg-transparent text-xs text-white outline-none [color-scheme:dark]"
+    />
+  );
+}
+
 function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -418,21 +446,9 @@ function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
       ))}
       <div className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${isCustom ? 'border-port-accent bg-port-accent/10' : 'border-port-border'}`}>
         <label htmlFor="usage-from" className="text-xs text-gray-400">From</label>
-        <input
-          id="usage-from"
-          type="date"
-          value={from}
-          onChange={(e) => onRange(e.target.value, to)}
-          className="bg-transparent text-xs text-white outline-none [color-scheme:dark]"
-        />
+        <RangeDateInput id="usage-from" label="From date" value={from} onCommit={(v) => onRange(v, to)} />
         <label htmlFor="usage-to" className="text-xs text-gray-400">To</label>
-        <input
-          id="usage-to"
-          type="date"
-          value={to}
-          onChange={(e) => onRange(from, e.target.value)}
-          className="bg-transparent text-xs text-white outline-none [color-scheme:dark]"
-        />
+        <RangeDateInput id="usage-to" label="To date" value={to} onCommit={(v) => onRange(from, v)} />
       </div>
     </div>
   );
@@ -711,6 +727,9 @@ function InternalUsageMetrics() {
           observed limit blocks that stand in for a quota meter. */}
       <FreeTierUsageCard freeTier={usage.freeTier} />
 
+      {/* Claude Code tokens per model (all instances) for the same window. */}
+      <ClaudeCodeModelTokensCard period={period} from={from} to={to} isCustom={isCustom} />
+
       {/* Same window, split by machine — renders only once a peer's usage has
           synced, so a single-machine install sees no change. */}
       <FleetUsageCard fleet={usage.fleet} onSaved={fetchUsage} />
@@ -723,13 +742,16 @@ function InternalUsageMetrics() {
         {/* 7-Day Activity */}
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Last 7 Days</h3>
-          <div className="flex items-end gap-1 sm:gap-2 h-24 sm:h-32">
+          <div className="flex items-end gap-1 sm:gap-2 h-32 sm:h-40">
             {usage.last7Days?.map((day, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center">
-                <div
-                  className="w-full bg-port-accent/60 rounded-t"
-                  style={{ height: `${(day.sessions / maxActivity) * 100}%`, minHeight: day.sessions > 0 ? 4 : 0 }}
-                />
+              <div key={i} className="flex-1 h-full flex flex-col items-center">
+                {/* percent heights need a definite-height parent, so the bar sits in a flex-1 slot */}
+                <div className="flex-1 w-full flex items-end min-h-0">
+                  <div
+                    className="w-full bg-port-accent/60 rounded-t"
+                    style={{ height: `${(day.sessions / maxActivity) * 100}%`, minHeight: day.sessions > 0 ? 4 : 0 }}
+                  />
+                </div>
                 <div className="text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2">{day.label}</div>
                 <div className="text-[10px] sm:text-xs text-gray-400">{day.sessions}</div>
               </div>
@@ -744,7 +766,7 @@ function InternalUsageMetrics() {
             {(() => {
               const maxHour = Math.max(1, ...(usage.hourlyActivity || []));
               return usage.hourlyActivity?.map((count, hour) => (
-                <div key={hour} className="flex-1 flex flex-col items-center">
+                <div key={hour} className="flex-1 h-full flex items-end">
                   <div
                     className="w-full bg-port-accent/40 rounded-t"
                     style={{ height: `${(count / maxHour) * 100}%`, minHeight: count > 0 ? 2 : 0 }}

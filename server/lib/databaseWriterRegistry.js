@@ -179,7 +179,13 @@ const START_SLACK_MS = 2000;
  *   job whose own group was never recorded, or an identity mismatch (possible
  *   PID reuse). Never safe to signal or to ignore.
  */
-export function classifyWriterQuiescence(row, processes) {
+// A zombie (ps state Z) is a reaped-by-nobody corpse: it holds no files open and
+// cannot write, so it must not keep a process group "occupied". Hosts whose
+// PID 1 does not reap orphans (containers without an init) leave them forever.
+export const isLiveProcess = proc => !String(proc.state ?? '').startsWith('Z');
+
+export function classifyWriterQuiescence(row, allProcesses) {
+  const processes = allProcesses.filter(isLiveProcess);
   if (row.kind === 'retired-exits') return { verdict: 'ambiguous', groups: [] };
   if (row.state === 'abandoned') return { verdict: 'quiescent', groups: [] };
   if (row.state === 'unresolved') return { verdict: 'pending', groups: [] };

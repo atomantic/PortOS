@@ -12,6 +12,15 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   attachSseClient: vi.fn(() => false), cancelJob: vi.fn(),
 }));
 vi.mock('../services/pipeline/audioMux.js', () => ({ resolveMusicTrackPath: vi.fn(async () => null) }));
+const skillState = vi.hoisted(() => ({ installed: false }));
+vi.mock('../lib/childProcess.js', async importOriginal => ({
+  ...(await importOriginal()),
+  execFile: vi.fn((command, args, options, callback) => { skillState.installed = true; callback(null); }),
+}));
+vi.mock('../lib/motionSkills.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, detectMotionSkills: () => actual.MOTION_SKILL_PACKS.map(pack => ({ id: pack.id, label: pack.label, skills: [...pack.skills], found: skillState.installed ? [...pack.skills] : [], installed: skillState.installed })) };
+});
 vi.mock('../lib/beatGrid.js', () => ({ getBeatGrid: vi.fn(async () => null) }));
 
 const app = express();
@@ -76,5 +85,16 @@ describe('GET /api/html-composition/beats (#8958)', () => {
     getBeatGrid.mockResolvedValueOnce(null);
     const response = await request(app).get('/api/html-composition/beats?musicTrack=example.mp3');
     expect(response.status).toBe(422);
+  });
+});
+
+describe('motion skills install', () => {
+  it('installs each missing skill pack through the skills CLI and returns the refreshed status', async () => {
+    const { execFile } = await import('../lib/childProcess.js');
+    const response = await request(app).post('/api/html-composition/toolkit/skills/install');
+    expect(response.status).toBe(200);
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFile.mock.calls[0][0]).toBe('npx');
+    expect(response.body.skillPacks.every(pack => pack.installed)).toBe(true);
   });
 });

@@ -10,8 +10,8 @@
  *
  *   - `SOURCE_AUDIO_LIPSYNC` — the capability snapshot per backend. Only fal.ai's
  *     documented MiniMax H3 lip-sync route (image_url + audio_url, at least 5s of
- *     audio, silently clipped beyond 14.8s, output length follows the clipped
- *     audio) is listed. Grok's CLI image_to_video lane takes no audio at all, so
+ *     audio, output length follows the audio, priced per output second by
+ *     resolution — lib/falVideoModels.js) is listed. Grok's CLI image_to_video lane takes no audio at all, so
  *     it is cutaway-only here until an actual adapter proves exact-source-audio
  *     conditioning — REST documentation for a different Grok surface is not that
  *     proof. Local runtimes are absent for the same reason.
@@ -26,12 +26,27 @@
  *     contiguous pieces within the lane's per-take limit, cut at a pause between
  *     sung lines, a lyric/phrase boundary or a beat (in that order).
  *
- * Dependency-free (only grokVideoClip.js, itself dependency-free) so the client
+ *   - `falSceneTake` — the fal.ai request (model, length, resolution) a scene
+ *     take makes on the fal lane and its estimated cost, shared by the board,
+ *     the submit path and the production autopilot's spend cap.
+ *
+ * Dependency-free (only grokVideoClip.js and falVideoModels.js, themselves
+ * dependency-free) so the client
  * re-exports it from `client/src/lib/musicVideoShotTiming.js` and the two sides
  * cannot drift.
  */
 
 import { GROK_VIDEO_DURATIONS, nearestGrokDuration } from './grokVideoClip.js';
+import {
+  FAL_DEFAULT_IMAGE_VIDEO_MODEL,
+  FAL_LIPSYNC_VIDEO_MODEL,
+  coerceFalVideoSeconds,
+  describeFalVideoRate,
+  estimateFalVideoCostUsd,
+  falVideoResolutions,
+  getFalVideoModel,
+  resolveFalVideoResolution,
+} from './falVideoModels.js';
 
 export const MUSIC_VIDEO_SHOT_MODES = Object.freeze(['cutaway', 'performance']);
 
@@ -63,18 +78,38 @@ export function selectedPerformanceInstruction(scene) {
 // or over the maximum (silently clipped by the provider).
 export const PERFORMANCE_WINDOW_MARGIN_SEC = 0.05;
 
-/** Verified source-audio lip-sync lanes, keyed by Music Video backend. */
+/**
+ * Default output resolution of a Music Video performance take. fal's own
+ * default is 768P; a sung close-up is the shot a viewer scrutinizes most, so
+ * the board asks for 1080P unless the project pins another
+ * (`videoSettings.falLipSyncResolution`).
+ */
+export const MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION = '1080P';
+
+/**
+ * Verified source-audio lip-sync lanes, keyed by Music Video backend.
+ *
+ * `maxAudioSec` is PortOS's per-take ceiling, not the provider's: fal accepts
+ * up to 15 minutes of audio. A performance take is one shot of the edit, and a
+ * flawed take can only be re-rolled whole, so a take is kept to about one
+ * sung phrase — 30s — and a longer shot is split on a lyric boundary. 30s also
+ * matches Seedance 2.5's audio-reference ceiling (30.2s), so a shot split for
+ * one lip-sync lane fits the other. Takes past 15s are billed at 1.2×; the
+ * cost label says so, and a director who wants to avoid it splits shorter.
+ */
 export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
   fal: Object.freeze({
     provider: 'fal',
     label: 'fal.ai MiniMax H3 lip-sync',
-    modelId: 'minimax/h3-max/lip-sync/image-to-video',
+    modelId: FAL_LIPSYNC_VIDEO_MODEL,
     minAudioSec: 5,
-    maxAudioSec: 14.8,
+    maxAudioSec: 30,
     transcription: true,
-    // fal.ai publishes no per-request price PortOS can read; say so plainly
-    // rather than inventing an estimate.
-    costLabel: 'cost unknown — billed to your fal.ai account',
+    resolutions: Object.freeze(falVideoResolutions(getFalVideoModel(FAL_LIPSYNC_VIDEO_MODEL))),
+    defaultResolution: MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION,
+    // The published rate at the default resolution; the board shows each
+    // take's own estimate beside it (falSceneTake).
+    costLabel: `${describeFalVideoRate(FAL_LIPSYNC_VIDEO_MODEL, MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION)} — billed to your fal.ai account`,
   }),
 });
 
@@ -336,3 +371,66 @@ export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, be
   }
   return { ok: true, pieces: chosen.pieces };
 }
+
+/**
+ * The fal.ai request one take of `scene` makes on the fal lane, and its
+ * estimated cost — the single answer the board's cost line, the submit
+ * payload and the production autopilot's dollar cap all read, so what the
+ * director is shown is what is sent and what is charged against the cap.
+ *
+ * A performance scene renders on the lip-sync route for its planned audio
+ * window at `videoSettings.falLipSyncResolution` (default 1080P). A cutaway
+ * renders on `videoSettings.falModelId` (default Hailuo-02 image-to-video) at
+ * `falResolution` (default: the model's), for the pinned `falDuration` or else
+ * the shot's span — rounded UP to a length the model delivers, so the clip
+ * covers the shot. An uncurated model keeps the legacy contract (only an
+ * explicit pin is sent) and reports cost unknown.
+ *
+ * Returns `{ performance, modelId, seconds, resolution, costUsd }`; `seconds`
+ * and `costUsd` are null when unknown (an untimed or unplannable performance,
+ * an uncurated model).
+ */
+export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null } = {}) {
+  const settings = videoSettings || {};
+  if (isPerformanceScene(scene)) {
+    const capability = SOURCE_AUDIO_LIPSYNC.fal;
+    const model = getFalVideoModel(capability.modelId);
+    const resolution = resolveFalVideoResolution(model, settings.falLipSyncResolution || capability.defaultResolution);
+    const plan = planPerformanceWindow({
+      startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability,
+    });
+    const seconds = plan.ok ? plan.windowSec : null;
+    return {
+      performance: true,
+      modelId: capability.modelId,
+      seconds,
+      resolution,
+      costUsd: seconds == null ? null : estimateFalVideoCostUsd({ modelId: capability.modelId, seconds, resolution }),
+    };
+  }
+  const modelId = settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL;
+  const model = getFalVideoModel(modelId);
+  if (!model) {
+    return { performance: false, modelId, seconds: settings.falDuration || null, resolution: settings.falResolution || null, costUsd: null };
+  }
+  const spanSec = typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
+    ? scene.endSec - scene.startSec
+    : null;
+  const seconds = coerceFalVideoSeconds(model, settings.falDuration || spanSec);
+  const resolution = resolveFalVideoResolution(model, settings.falResolution);
+  return { performance: false, modelId, seconds, resolution, costUsd: estimateFalVideoCostUsd({ modelId, seconds, resolution }) };
+}
+
+/**
+ * A `falSceneTake` as `/api/video-gen` fields. A performance take sends only
+ * its lip-sync resolution — its length follows the song slice the server cuts;
+ * a cutaway names its model, length and resolution. Unknown values stay absent
+ * so the server resolves its own defaults (an uncurated model's legacy body).
+ */
+export const falTakeRequestFields = (take) => (take.performance
+  ? (take.resolution ? { falResolution: take.resolution } : {})
+  : {
+    falModelId: take.modelId,
+    ...(take.seconds != null ? { falDuration: take.seconds } : {}),
+    ...(take.resolution ? { falResolution: take.resolution } : {}),
+  });

@@ -88,12 +88,53 @@ export function unplannedFreezes(freezes, sections) {
  * The reviewer prompt. `sections` and `frameTimes` are on the excerpt's own
  * timeline (0 = its start), which is also the timeline findings must use.
  */
-export function buildAutoReviewPrompt({ spanSec, sections = [], frameTimes = [], hasContactSheet = false, concept = null, fps = 24 }) {
+// The strip is tiled into 4x3 contact sheets (#9272) so a long edit can be
+// sampled densely without exceeding the reviewer's image cap.
+export const SHEET_COLUMNS = 4;
+export const SHEET_TILES = 12;
+export const MAX_REVIEW_IMAGES = 8;
+const STRIP_MIN_FRAMES = 12;
+const STRIP_MAX_FRAMES = 96;
+const SECONDS_PER_FRAME = 4;
+
+/**
+ * Song-relative times (on the excerpt's own timeline) to sample: at least one
+ * frame per 4s (12–96), and every section's midpoint. The remaining budget is
+ * spread evenly. Capped so the tiled sheets plus the boundary sheet stay
+ * within MAX_REVIEW_IMAGES.
+ */
+export function planStripTimes(spanSec, sections = [], { hasContactSheet = false } = {}) {
+  if (!(spanSec > 0)) return [];
+  const cap = Math.min(STRIP_MAX_FRAMES, SHEET_TILES * (MAX_REVIEW_IMAGES - (hasContactSheet ? 1 : 0)));
+  let mids = sections
+    .map((s) => (s.startSec + s.endSec) / 2)
+    .filter((t) => Number.isFinite(t) && t >= 0 && t <= spanSec);
+  // Every section keeps its frame even when that exceeds the 4s-per-frame
+  // budget; only the image cap trims sections.
+  const budget = Math.min(cap, Math.max(STRIP_MIN_FRAMES, Math.ceil(spanSec / SECONDS_PER_FRAME), mids.length));
+  if (mids.length > budget) mids = Array.from({ length: budget }, (_, i) => mids[Math.floor(((i + 0.5) * mids.length) / budget)]);
+  // Spend the rest of the budget where the existing samples are sparsest
+  // (greedy farthest-point), so fill frames never collide with a midpoint.
+  const times = [...mids];
+  const grid = Array.from({ length: budget * 4 }, (_, i) => ((i + 0.5) * spanSec) / (budget * 4));
+  while (times.length < budget) {
+    let best = grid[0];
+    let bestGap = -1;
+    for (const g of grid) {
+      const gap = times.length ? Math.min(...times.map((t) => Math.abs(t - g))) : Infinity;
+      if (gap > bestGap) { best = g; bestGap = gap; }
+    }
+    times.push(best);
+  }
+  return times.sort((a, b) => a - b).map((t) => Math.round(t * 1000) / 1000);
+}
+
+export function buildAutoReviewPrompt({ spanSec, sections = [], frameTimes = [], hasContactSheet = false, tiled = false, concept = null, fps = 24 }) {
   const sectionLines = sections.map((s, i) => `  ${i + 1}. ${s.startSec.toFixed(2)}s–${s.endSec.toFixed(2)}s — ${s.layer || 'footage'}`).join('\n') || '  (unknown)';
   const images = [
     hasContactSheet ? '- Image 1 is a contact sheet: one frame at every cut and title-cue boundary, in time order.' : null,
     frameTimes.length
-      ? `- ${hasContactSheet ? 'The remaining images' : 'The images'} are ${frameTimes.length} frames sampled evenly across the continuous excerpt, in order, at ${frameTimes.map((t) => `${t.toFixed(2)}s`).join(', ')}.`
+      ? `- ${hasContactSheet ? 'The remaining images' : 'The images'} are ${frameTimes.length} frames sampled across the continuous excerpt (at least one inside every section), in time order, at ${frameTimes.map((t) => `${t.toFixed(2)}s`).join(', ')}.${tiled ? ` They are tiled into contact sheets of up to ${SHEET_TILES} frames (${SHEET_COLUMNS} across, read left to right, top to bottom); each tile is the next time in that list.` : ''}`
       : null,
   ].filter(Boolean).join('\n');
   const brief = concept && (isNonBlankStr(concept.prompt) || isNonBlankStr(concept.style))

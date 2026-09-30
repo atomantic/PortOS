@@ -3,6 +3,10 @@
  *                                                                       `{ items, total, limit, offset }`)
  *   POST   /api/media/collections                  → Collection         (body: { name, description? })
  *   GET    /api/media/collections/:id              → Collection
+ *                                                  Each item carries `location` ('local' | 'remote' | 'missing')
+ *                                                  and, when remote, `hostPeerId`/`hostPeerName` (peer-hosted media)
+ *   POST   /api/media/collections/:id/localize     → { requested, started }  (body: { keys?: ["<kind>:<ref>"] };
+ *                                                                       copies peer-hosted items onto this machine)
  *   PATCH  /api/media/collections/:id              → Collection         (body: { name?, description?, coverKey?, source? })
  *   DELETE /api/media/collections/:id              → { id }
  *   POST   /api/media/collections/:id/items        → Collection         (body: { kind, ref })
@@ -16,6 +20,8 @@ import { z } from 'zod';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest, mediaCollectionBulkItemsSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import * as svc from '../services/mediaCollections.js';
+import { resolveMediaLocations, unmarkHosted, findHostPeer } from '../services/peerHostedMedia.js';
+import { pullMissingAssetsFromPeer, collectionVideoRefToFilename } from '../services/sharing/peerSyncAssets.js';
 
 const router = Router();
 
@@ -73,7 +79,36 @@ router.post('/', asyncHandler(async (req, res) => {
 
 router.get('/:id', asyncHandler(async (req, res) => {
   const c = await svc.getCollection(req.params.id).catch((err) => { throw mapServiceError(err); });
-  res.json(c);
+  const locations = await resolveMediaLocations(c.items);
+  res.json({ ...c, items: c.items.map((item, i) => ({ ...item, ...locations[i] })) });
+}));
+
+const localizeSchema = z.object({ keys: z.array(z.string().min(1).max(svc.REF_MAX_LENGTH + 8)).max(svc.ITEMS_MAX).optional() });
+
+// Copy peer-hosted items onto this machine. Pulls run in the background (a video
+// can be large); each landed file emits `peerSync:asset-arrived`, which the
+// collection page listens for, so there is nothing to poll.
+router.post('/:id/localize', asyncHandler(async (req, res) => {
+  const { keys } = validateRequest(localizeSchema, req.body ?? {});
+  const c = await svc.getCollection(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const wanted = keys ? new Set(keys) : null;
+  const items = c.items.filter((item) => !wanted || wanted.has(svc.itemKey(item)));
+  const locations = await resolveMediaLocations(items);
+  const byPeer = new Map();
+  items.forEach((item, i) => {
+    if (locations[i].location !== 'remote') return;
+    const filename = item.kind === 'video' ? collectionVideoRefToFilename(item.ref) : item.ref;
+    const list = byPeer.get(locations[i].hostPeerId) ?? [];
+    list.push({ kind: item.kind, filename });
+    byPeer.set(locations[i].hostPeerId, list);
+  });
+  const started = [...byPeer.values()].reduce((n, list) => n + list.length, 0);
+  Promise.all([...byPeer.entries()].map(async ([peerId, list]) => {
+    if (!await findHostPeer(peerId)) return; // disabled or removed peer: nothing to pull from
+    await pullMissingAssetsFromPeer(peerId, list, { includeMismatched: false });
+    await Promise.all(list.map((entry) => unmarkHosted(entry.kind, entry.filename)));
+  })).catch((err) => console.error(`❌ localize collection media failed: ${err.message}`));
+  res.status(202).json({ requested: items.length, started });
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

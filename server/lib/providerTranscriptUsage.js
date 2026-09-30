@@ -43,10 +43,13 @@ export function claudeProjectSlug(cwd) {
  * Parse newline-delimited JSON, skipping blank lines and any line that doesn't
  * parse. A partially-flushed final line is the common case for a session still
  * being appended to, so an unparseable line is normal input, not an error.
- * @param {string} text
+ * Already-parsed entries pass straight through, so a caller that windows one
+ * file several times parses it once.
+ * @param {string|object[]} text
  * @returns {object[]}
  */
-function parseJsonLines(text) {
+export function parseJsonLines(text) {
+  if (Array.isArray(text)) return text;
   const out = [];
   for (const line of String(text || '').split('\n')) {
     const trimmed = line.trim();
@@ -643,6 +646,18 @@ export function parseGrokChatHistory(jsonlText) {
   return { model, charsIn, charsOut, messages };
 }
 
+/** Chars one agy step contributes: its content, plus thinking and tool-call args for a model turn. */
+function agyStepChars(entry) {
+  let chars = typeof entry.content === 'string' ? entry.content.length : 0;
+  if (entry.type === 'PLANNER_RESPONSE') {
+    chars += typeof entry.thinking === 'string' ? entry.thinking.length : 0;
+    for (const call of entry.tool_calls || []) {
+      chars += typeof call?.args === 'object' ? JSON.stringify(call.args).length : 0;
+    }
+  }
+  return chars;
+}
+
 /**
  * ---------------------------------------------------------------------------
  * Antigravity (`agy`)
@@ -662,9 +677,20 @@ export function parseGrokChatHistory(jsonlText) {
  * those tool-result steps carry `source: 'MODEL'` even though the text is the
  * tool's, which is why the split keys off `type`, not `source`.
  *
+ * **Context replay.** An agent loop re-sends the whole conversation on every
+ * model call, so counting each step's text once (the original estimate) missed
+ * the bulk of the real bill. Each `PLANNER_RESPONSE` is one model call whose
+ * prompt is everything before it, so `contextChars` sums, over every in-window
+ * call, the chars that preceded it (prompt-cache reads; only the delta since the
+ * previous call is fresh input, which is what `charsIn` holds). The running
+ * context includes steps BEFORE the window, so a later run in a long
+ * conversation still pays for the history it replays. The hidden system prompt
+ * and tool schemas are not in the transcript, so this remains a floor, and
+ * callers keep the row an `estimate`.
+ *
  * @param {string} jsonlText raw file contents (may end mid-line)
  * @param {{ from?: number|null, to?: number|null, exclude?: {has:(k:string)=>boolean}|null }} [opts]
- * @returns {{ charsIn: number, charsOut: number, messages: number,
+ * @returns {{ charsIn: number, charsOut: number, contextChars: number, messages: number,
  *   countedKeys: string[], steps: number }} `steps` is the number of steps SEEN
  *   before windowing — the sentinel separating "unreadable/empty transcript"
  *   from "read, and this window's share is zero".
@@ -672,34 +698,36 @@ export function parseGrokChatHistory(jsonlText) {
 export function parseAgyTranscript(jsonlText, { from = null, to = null, exclude = null } = {}) {
   let charsIn = 0;
   let charsOut = 0;
+  let contextChars = 0;
   let messages = 0;
   let steps = 0;
   const counted = [];
+  // Chars of every step so far (windowed or not): the prompt the NEXT model call replays.
+  let runningContext = 0;
 
   for (const [index, entry] of parseJsonLines(jsonlText).entries()) {
     if (typeof entry.type !== 'string') continue;
     steps += 1;
+    const stepChars = agyStepChars(entry);
+    const replayed = runningContext;
+    runningContext += stepChars;
     if (!inWindow(toEpoch(entry.created_at), from, to)) continue;
     // `step_index` is the CLI's own ordinal and is stable across appends; the
     // parse ordinal only fills in for a step that somehow lacks one.
     const key = Number.isFinite(entry.step_index) ? `step-${entry.step_index}` : `#${index}`;
     if (exclude?.has(key)) continue;
 
-    let chars = typeof entry.content === 'string' ? entry.content.length : 0;
     if (entry.type === 'PLANNER_RESPONSE') {
-      chars += typeof entry.thinking === 'string' ? entry.thinking.length : 0;
-      for (const call of entry.tool_calls || []) {
-        chars += typeof call?.args === 'object' ? JSON.stringify(call.args).length : 0;
-      }
-      charsOut += chars;
+      charsOut += stepChars;
+      contextChars += replayed;
       messages += 1;
     } else {
-      charsIn += chars;
+      charsIn += stepChars;
     }
     counted.push(key);
   }
 
-  return { charsIn, charsOut, messages, countedKeys: counted, steps };
+  return { charsIn, charsOut, contextChars, messages, countedKeys: counted, steps };
 }
 
 /**

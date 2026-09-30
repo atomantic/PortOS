@@ -1,3 +1,4 @@
+import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
 import toast from '../components/ui/Toast';
 import { addMusicVideoSceneTake } from '../services/apiMusicVideo.js';
@@ -5,9 +6,11 @@ import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
-import { sceneVisualLayer } from '../lib/musicVideoLayers.js';
+import { isLayeredComposition, sceneVisualLayer } from '../lib/musicVideoLayers.js';
+import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
+import { MOTION_CONTINUITY_CLAUSE } from '../lib/musicVideoMotion.js';
 import {
-  approximateMotionCues, grokCoverage, isPerformanceScene, performanceBlockedReason,
+  approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
 } from '../lib/musicVideoShotTiming.js';
 
 // Audio-reactive generation conditions motion on the song itself, so the prompt
@@ -17,7 +20,7 @@ const AUDIO_REACTIVE_PERFORMANCE_GUARD = 'The music drives only environmental mo
 // The image backends accept at most four reference images for most models
 // (server imageGen/prepareParams.js), mirrored by the server's
 // MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES.
-export const MAX_CONDITIONING_REFERENCES = 4;
+export const MAX_CONDITIONING_REFERENCES = MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES;
 
 // Refusals the image route returns when the resolved backend can't consume
 // reference images — surfaced as explicit capability feedback, never retried
@@ -51,10 +54,8 @@ export function visualDirection(spec) {
   ].filter(Boolean).join('; ');
 }
 
-/** The spec references flagged to condition reference frames, capped to the backend limit. */
-export function conditioningReferences(spec) {
-  return (spec?.references || []).filter((ref) => ref.condition).slice(0, MAX_CONDITIONING_REFERENCES);
-}
+/** Shared scene-aware frame conditioning, with the legacy capped fallback. */
+export const conditioningReferences = musicVideoConditioningReferences;
 
 // A scene's authored span on the song, or null while it is untimed.
 const sceneSpanSec = (scene) => (typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
@@ -108,7 +109,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
 
   const style = project?.concept?.style?.trim();
   const direction = [musicVideoCreativeContext(project?.concept), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
-  const conditioning = conditioningReferences(project?.visualSpec);
+  // The i2v prompt leaves the mood-board look out (handoff.js composePrompt): the frame already carries it.
+  const motionDirection = [musicVideoCreativeContext(project?.concept, { moodBoard: false }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
+  const conditioning = conditioningReferences(project);
   // The image prompt for a scene's reference frame: its frame prompt (or the
   // shot prompt as a fallback) suffixed with the project's global concept style
   // and the visual spec's palette/camera direction (typography excluded, #8992).
@@ -122,7 +125,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // fallback) suffixed the same way. The reference frame already fixes the
   // look; this prompt guides the motion.
   const buildShotPrompt = (scene) =>
-    [(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, direction, scene.direction?.motionClause?.trim()].filter(Boolean).join(', ');
+    [(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim(), MOTION_CONTINUITY_CLAUSE].filter(Boolean).join(', ');
 
   /**
    * Render a still reference frame for one scene from its frame prompt. The
@@ -145,12 +148,14 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * confirmed submissions rather than every call it fired.
    */
   const generateFrame = (scene, { revisionId } = {}) => {
+    const conditioning = conditioningReferences(project, scene);
     const prompt = buildFramePrompt(scene);
     if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
     frameLane.startScene(scene.sceneId);
     return generateImage({
       prompt,
+      ...musicVideoFrameGenSize(project),
       ...(conditioning.length ? { referenceImageFiles: conditioning.map((ref) => ref.imageId) } : {}),
       musicVideo: { projectId, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) },
     }, { silent: true })
@@ -245,12 +250,14 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // Request the 6/10s clip that COVERS this shot; the saved pin is only
         // the fallback for a scene not yet timed on the song.
         ? { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : settings.grokDuration }
-        // fal.ai (#8968) — image-to-video only (see VideoRenderSettings); an
-        // absent falDuration lets the server fall back to the resolved
-        // model's own default rather than forcing a value.
+        // fal.ai (#8968) — image-to-video only (see VideoRenderSettings). The
+        // request is exactly the take the scene card prices (falSceneTake):
+        // a cutaway names its model, the length covering the shot (or the
+        // pinned length) and its resolution; a performance clip's length
+        // follows its song slice (server-side), so it sends only the lip-sync
+        // resolution.
         : settings.backend === 'fal'
-          // A performance clip's length follows its song slice (server-side).
-          ? (performance ? {} : { falDuration: settings.falDuration || undefined })
+          ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
           : settings.backend === 'local'
             ? { modelId: settings.modelId || undefined, disableAudio: true }
             // A named model is local-only machinery at the server boundary and
@@ -303,7 +310,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const scenes = project?.scenes || [];
   // #8985: a composed render's title cards need no frame, and its stills need
   // no clip — the batch generators skip them.
-  const layered = project?.composition?.mode === 'composed';
+  const layered = isLayeredComposition(project);
   const frameScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) !== 'card');
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const generateMissingFrames = () => {

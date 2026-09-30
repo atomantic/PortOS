@@ -31,8 +31,9 @@ import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isStr } from '../../lib/textUtils.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
+import { normalizeLyricMarkers } from './lyricMarkers.js';
 import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
-import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
+import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
@@ -121,6 +122,9 @@ export function buildProjectRecord(input, { id, now }) {
       modelId: videoSettings.modelId ?? null,
       grokDuration: videoSettings.grokDuration ?? 10,
       falDuration: videoSettings.falDuration ?? null,
+      falModelId: videoSettings.falModelId ?? null,
+      falResolution: videoSettings.falResolution ?? null,
+      falLipSyncResolution: videoSettings.falLipSyncResolution ?? null,
       generationMode: videoSettings.generationMode ?? 'image',
       audioReactiveLora: videoSettings.audioReactiveLora ?? null,
       audioReactiveScale: videoSettings.audioReactiveScale ?? 1.2,
@@ -137,10 +141,17 @@ export function buildProjectRecord(input, { id, now }) {
     // #8964 — editable timed lyric cues + phrase annotations (timed against
     // the current audio source) and the shot planner's pacing range.
     lyricCues: Array.isArray(input.lyricCues) ? normalizeLyricCues(input.lyricCues) : [],
+    // Section headers + stage directions read off the lyric sheet, anchored to
+    // cue indices (lyricMarkers.js). Present only when the sheet had any, so a
+    // record without them keeps its shape.
+    ...(Array.isArray(input.lyricMarkers) && input.lyricMarkers.length
+      ? { lyricMarkers: normalizeLyricMarkers(input.lyricMarkers) }
+      : {}),
     phrases: Array.isArray(input.phrases) ? normalizePhrases(input.phrases) : [],
     pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
-    composition: input.composition ? normalizeComposition(input.composition) : null,
+    // The document pointer is set only by the import routes, never on create.
+    composition: input.composition ? withStoredCompositionDocument(normalizeComposition(input.composition), null) : null,
     // #8988 — optional sound-design bed mixed under the song.
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
@@ -226,6 +237,12 @@ export function cloneProjectRecord(source, {
     ...(Array.isArray(source.autoReviews) ? { autoReviews: [] } : {}),
     // #9066: a production run executes against the SOURCE's scenes and jobs.
     ...(Array.isArray(source.productionRuns) ? { productionRuns: [] } : {}),
+    // Development artifacts ride along as-is: every version is an immutable
+    // file, so the clone points at the same bytes (devArtifacts.js). The Cast
+    // & Sets check-in keeps its direction and images, but its dispatch pin and
+    // production link belong to the source — a working stage reads as
+    // interrupted on the clone and can be resumed there.
+    ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
     renderHistoryId: null,
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
@@ -255,10 +272,17 @@ export function applyProjectPatch(project, patch) {
     ...('automation' in patch ? {
       automation: patch.automation ? normalizeMusicVideoAutomation(patch.automation, project.automation) : null,
     } : {}),
-    ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues) } : {}),
+    ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues).map((cue) => {
+      const previous = project.lyricCues?.find((entry) => entry.id === cue.id);
+      if (previous && previous.text !== cue.text) delete cue.matched;
+      return cue;
+    }) } : {}),
+    ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
     // #8984 — the composition manifest is replaced whole; null clears it.
-    ...('composition' in patch ? { composition: normalizeComposition(patch.composition) } : {}),
+    // The composition document pointer is owned by the import routes: a PATCH
+    // that echoes (or omits, or forges) it keeps the stored one.
+    ...('composition' in patch ? { composition: withStoredCompositionDocument(normalizeComposition(patch.composition), project.composition) } : {}),
     // #8988 — an explicitly chosen sound-design bed; null clears it.
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
   };
@@ -280,6 +304,9 @@ export function applyProjectPatch(project, patch) {
         modelId: null,
         grokDuration: 10,
         falDuration: null,
+        falModelId: null,
+        falResolution: null,
+        falLipSyncResolution: null,
         generationMode: 'image',
         audioReactiveLora: null,
         audioReactiveScale: 1.2,
@@ -623,6 +650,15 @@ export function mergeProjectRecord(local, remoteRaw) {
   if (Object.hasOwn(local, 'imageModelId')) remote.imageModelId = local.imageModelId;
   // #9066: this install's production-run checkpoint survives a newer remote.
   if (Object.hasOwn(local, 'productionRuns')) remote.productionRuns = local.productionRuns;
+  // Development artifacts and the Cast & Sets checkpoint are wire-local too:
+  // their files and jobs exist only on this install.
+  if (Object.hasOwn(local, 'devArtifacts')) remote.devArtifacts = local.devArtifacts;
+  if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
+  // The composition document's files live only on this install as well
+  // (compositionDocument.js), so its pointer survives a newer remote body.
+  if (local.composition?.document && remote.composition && typeof remote.composition === 'object' && !Array.isArray(remote.composition)) {
+    remote.composition = { ...remote.composition, document: local.composition.document };
+  }
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && Object.hasOwn(local.videoSettings, 'backend')) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'

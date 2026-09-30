@@ -48,6 +48,14 @@ export const importMusicVideoLyrics = (id, body, options = {}) => request(`/musi
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Import the linked track's lyric sheet: its lines become the project's lyric
+// cues and its `[Chorus]`/`[Spoken, close]` tags become lyric markers.
+// Body `{ mode?: 'replace' | 'if-empty' }` — `if-empty` never replaces lines.
+// Resolves to { project, imported, markers, skipped }.
+export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import-track`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // Align director lyric lines to the vocal (#9074). Body `{}` aligns every line;
 // `{ cueId }` re-aligns one line. Resolves to the updated project. Runs only
 // when the caller invokes it — there is no boot or import hook.
@@ -86,6 +94,15 @@ export const uploadMusicVideoVocalStem = (id, file, options = {}) => {
 };
 export const removeMusicVideoVocalStem = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/vocal-stem`, { method: 'DELETE', ...options });
+// Separate the vocal out of the song with demucs and attach it as the stem.
+// Kickoff resolves to { jobId }; the terminal `complete` frame carries the
+// updated project. The first run installs demucs, so it can take minutes.
+export const separateMusicVideoVocals = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/vocal-stem/separate`, { method: 'POST', body: '{}', ...options });
+export const musicVideoVocalSeparationEventsUrl = (jobId) =>
+  `/api/music-video/vocal-stem/separate/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoVocalSeparation = (jobId, options = {}) =>
+  request(`/music-video/vocal-stem/separate/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
 
 // ---- Scene takes (#8965) ----
 // Every render/import for a scene slot is an immutable take; the scene's
@@ -259,3 +276,72 @@ export const reviewMusicVideoTreatmentProof = (id, proofId, body, options = {}) 
   request(`/music-video/${encodeURIComponent(id)}/treatment/proofs/${encodeURIComponent(proofId)}/review`, {
     method: 'POST', body: JSON.stringify(body), ...options,
   });
+
+// ---- Development artifacts ("ingredients") ----
+// Reviewable development files attached to a project: a Cast & Sets sheet, an
+// animatic, a treatment, a storyboard. Every write resolves to `{ project, artifact }`.
+const devArtifactsPath = (id) => `/music-video/${encodeURIComponent(id)}/dev-artifacts`;
+// The served file (sandboxed HTML, Markdown as text, media). `version` null = current.
+export const musicVideoDevArtifactFileUrl = (id, artifactId, version = null) =>
+  `/api/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}/file${version ? `?version=${encodeURIComponent(version)}` : ''}`;
+// `fields`: { kind, title } for a new artifact, or { artifactId } for a new version.
+export const uploadMusicVideoDevArtifact = (id, file, fields = {}, options = {}) => {
+  const body = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    if (value != null && value !== '') body.append(key, value);
+  }
+  body.append('file', file, file.name || 'artifact');
+  return request(devArtifactsPath(id), { method: 'POST', body, ...options });
+};
+export const addMusicVideoDevArtifactNote = (id, artifactId, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}/notes`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const resolveMusicVideoDevArtifactNote = (id, artifactId, noteId, resolved, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}/notes/${encodeURIComponent(noteId)}`, { method: 'PATCH', body: JSON.stringify({ resolved }), ...options });
+// Body: { status: 'approved' | 'changes-requested' | 'pending', note? }.
+export const reviewMusicVideoDevArtifact = (id, artifactId, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}/review`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const deleteMusicVideoDevArtifact = (id, artifactId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dev-artifacts/${encodeURIComponent(artifactId)}`, { method: 'DELETE', ...options });
+
+// ---- Cast & Sets check-in (before the shot plan) ----
+// Start / regenerate / resume return at once (`{ project, stage }`); the stage
+// advances server-side and reports over the `music-video:cast-and-sets` socket event.
+export const startMusicVideoCastAndSets = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Body: { notes?: [{ text, target? }] } — omitted notes = the sheet's open notes.
+export const regenerateMusicVideoCastAndSets = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const resumeMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/resume`, { method: 'POST', body: '{}', ...options });
+export const approveMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...options });
+export const skipMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/skip`, { method: 'POST', ...options });
+
+// ---- Composition document (render style `document`) ----
+// A project-owned HTML composition document rendered over the song. Imports
+// resolve to `{ project, document }`; the manifest to `{ document, available,
+// files, totalBytes }`; the preview to `{ html, assets, width, height, fps, durationSec }`.
+const compositionDocumentPath = (id) => `/music-video/${encodeURIComponent(id)}/composition/document`;
+export const getMusicVideoCompositionDocument = (id, options = {}) => request(compositionDocumentPath(id), options);
+export const importMusicVideoCompositionZip = (id, file, options = {}) => {
+  const body = new FormData();
+  body.append('file', file, file.name || 'composition.zip');
+  return request(`${compositionDocumentPath(id)}/zip`, { method: 'POST', body, ...options });
+};
+export const importMusicVideoCompositionDirectory = (id, directory, options = {}) =>
+  request(`${compositionDocumentPath(id)}/directory`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
+export const startMusicVideoCompositionTemplate = (id, template = 'layered', options = {}) =>
+  request(`${compositionDocumentPath(id)}/template`, { method: 'POST', body: JSON.stringify({ template }), ...options });
+export const getMusicVideoCompositionExport = (id, options = {}) =>
+  request(`${compositionDocumentPath(id)}/export`, { responseType: 'arraybuffer', ...options });
+export const getMusicVideoCompositionPreview = (id, options = {}) => request(`${compositionDocumentPath(id)}/preview`, options);
+export const detachMusicVideoCompositionDocument = (id, options = {}) =>
+  request(compositionDocumentPath(id), { method: 'DELETE', ...options });
+// One preview asset (a scene take under /data, or a document file) as a Blob the
+// page posts into the sandboxed preview, which cannot fetch anything itself.
+export async function fetchMusicVideoPreviewAsset(url) {
+  const response = await fetch(url, { credentials: 'same-origin' });
+  if (!response.ok) throw new Error(`Could not load preview media (${response.status})`);
+  return response.blob();
+}

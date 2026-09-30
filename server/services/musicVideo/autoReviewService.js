@@ -27,10 +27,10 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { promisify } from 'util';
 import { ServerError } from '../../lib/errorHandler.js';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir } from '../../lib/fileUtils.js';
 import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
-import { extractEvaluationFrames, findFfmpeg, findFfprobe, safeUnder } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe, probeVideoStreamInfo, safeUnder } from '../../lib/ffmpeg.js';
 import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
@@ -56,7 +56,10 @@ import {
   stopAutoReviewOnProject,
 } from './autoReview.js';
 import {
+  SHEET_COLUMNS,
+  SHEET_TILES,
   buildAutoReviewPrompt,
+  planStripTimes,
   gateAutoReview,
   parseAutoReviewResponse,
   parseFreezeIntervals,
@@ -66,8 +69,6 @@ import {
 } from './autoReviewJudge.js';
 
 const execFileAsync = promisify(execFile);
-// Frames sampled evenly across the continuous excerpt for the reviewer.
-const STRIP_FRAMES = 12;
 // A run takes at most this many steps per advance before yielding — a guard
 // against a step that fails to change the record looping forever.
 const MAX_STEPS_PER_ADVANCE = 16;
@@ -139,6 +140,26 @@ async function callReviewer(run, prompt, screenshots) {
   return { text: result.text, used: { ...used, model: result.model || used.model } };
 }
 
+// Tile the sampled times into 4x3 contact sheets. Returns the sheet files and
+// the times actually captured (a failed sheet drops its own times, keeping
+// tiles and the prompt's frameTimes aligned).
+async function extractStripSheets(excerptPath, jobId, times) {
+  const { encodeFileContactSheetAtTimes } = await import('../htmlComposition/encode.js');
+  const info = await probeVideoStreamInfo(excerptPath).catch(() => ({}));
+  const fps = info.fps > 0 ? info.fps : 24;
+  await ensureDir(PATHS.videoThumbnails);
+  const sheets = [];
+  const captured = [];
+  for (let i = 0; i * SHEET_TILES < times.length; i += 1) {
+    const chunk = times.slice(i * SHEET_TILES, (i + 1) * SHEET_TILES);
+    const out = join(PATHS.videoThumbnails, `${jobId}-s${i + 1}.jpg`);
+    const ok = await encodeFileContactSheetAtTimes(excerptPath, out, chunk, { width: info.width, height: info.height, fps, columns: SHEET_COLUMNS })
+      .then(() => true, () => false);
+    if (ok && existsSync(out)) { sheets.push(out); captured.push(...chunk); }
+  }
+  return { sheets, captured };
+}
+
 /** Review one rendered draft. Never throws — a failed look is an inconclusive review. */
 async function reviewDraft(project, run, excerpt) {
   const excerptPath = safeUnder(PATHS.videos, excerpt.filename || '');
@@ -151,19 +172,18 @@ async function reviewDraft(project, run, excerpt) {
   }
   const analysis = await analyzeContinuousExcerpt(excerptPath, spanSec, sections).catch((err) => ({ ok: false, error: err.message }));
   const attemptN = run.attempts.length;
-  const stripNames = await extractEvaluationFrames(excerptPath, `mvar-${short(run.id)}-a${attemptN}`, STRIP_FRAMES).catch(() => []);
-  const strip = stripNames.map((name) => join(PATHS.videoThumbnails, name)).filter((p) => existsSync(p));
   const sheet = excerpt.contactSheetFilename ? safeUnder(PATHS.videoThumbnails, excerpt.contactSheetFilename) : null;
   const hasSheet = !!sheet && existsSync(sheet);
+  const planned = planStripTimes(spanSec, sections, { hasContactSheet: hasSheet });
+  const { sheets: strip, captured: frameTimes } = await extractStripSheets(excerptPath, `mvar-${short(run.id)}-a${attemptN}`, planned).catch(() => ({ sheets: [], captured: [] }));
   const screenshots = [...(hasSheet ? [sheet] : []), ...strip];
-  const frameTimes = strip.map((_, i) => (strip.length > 1 ? (i * spanSec) / (strip.length - 1) : 0));
-  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: strip.length };
+  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length };
 
   let parsed = null;
   let reviewerError = null;
   let used = { providerId: run.reviewer.providerId, model: run.reviewer.model };
   if (screenshots.length) {
-    const prompt = buildAutoReviewPrompt({ spanSec, sections, frameTimes, hasContactSheet: hasSheet, concept: project.concept });
+    const prompt = buildAutoReviewPrompt({ spanSec, sections, frameTimes, hasContactSheet: hasSheet, tiled: true, concept: project.concept });
     try {
       const reply = await callReviewer(run, prompt, screenshots);
       used = reply.used;

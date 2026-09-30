@@ -9,6 +9,7 @@ export const RENDER_STYLES = [
   ['concat', 'Footage'],
   ['composed', 'Composed'],
   ['code', 'Code-rendered'],
+  ['document', 'Composition document'],
 ];
 
 export function compositionDraft(project, patch = {}) {

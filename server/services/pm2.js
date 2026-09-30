@@ -5,7 +5,7 @@ import { writeFile, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { createRequire } from 'module';
 import { homedir } from 'os';
-import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
 import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
@@ -955,7 +955,7 @@ async function startFromEcosystemWindows(cwd, ecosystemFile, processNames, pm2Ho
   } finally {
     // spawnPm2StartEcosystem resolves on child 'close' (PM2 CLI has exited, config already loaded).
     // Small delay as extra safety before removing the temp file.
-    await new Promise(r => setTimeout(r, 500));
+    await sleep(500);
     await unlink(tempPath).catch(() => {});
   }
 }

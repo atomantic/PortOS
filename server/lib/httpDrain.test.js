@@ -109,12 +109,16 @@ describe('createHttpDrain', () => {
   });
 
   it('drops event streams at once and stops waiting on stuck requests at the deadline', async () => {
+    const stuckArrived = deferred();
     const { server, port } = await listen((req, res) => {
       if (req.url === '/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         res.write('data: hello\n\n');
       }
-      // '/stuck' never answers.
+      // '/stuck' never answers — but the drain may only begin once the server
+      // has actually received it, or a slow runner (Windows CI) drains an idle
+      // server and reports nothing remaining.
+      if (req.url === '/stuck') stuckArrived.resolve();
     });
     const drain = createHttpDrain([server]);
 
@@ -125,7 +129,7 @@ describe('createHttpDrain', () => {
     });
     const { closed: streamClosed } = await events;
     const stuck = request(port, '/stuck');
-    await new Promise((r) => setTimeout(r, 20));
+    await stuckArrived.promise;
 
     const drained = drain.begin(100);
     await streamClosed;

@@ -518,6 +518,10 @@ describe('providerModels', () => {
       // The gpt-6 gate does not cost Astra its Ultra rung.
       expect(buildEffortArgs('ultra', codex, [], 'gpt-6-astra'))
         .toEqual(['-c', 'model_reasoning_effort=ultra']);
+      expect(buildEffortArgs('ultra', codex, [], 'gpt-6.1-sol'))
+        .toEqual(['-c', 'model_reasoning_effort=ultra']);
+      expect(buildEffortArgs('minimal', codex, [], 'gpt-6.1-sol'))
+        .toEqual(['-c', 'model_reasoning_effort=low']);
     });
 
     it('returns [] when unset, unsupported, or already baked into existing args', () => {
@@ -799,7 +803,7 @@ describe('providerModels', () => {
 
     it('leaves every current Codex fallback choice available to server pickers', () => {
       const codexModels = SHIPPED_PROVIDERS.providers.codex.models;
-      expect(codexModels).toContain('gpt-5.3-codex-spark');
+      expect(codexModels).toContain('gpt-6.1-sol');
       expect(filterSelectableModels([
         CODEX_CONFIGURED_DEFAULT,
         ...codexModels,

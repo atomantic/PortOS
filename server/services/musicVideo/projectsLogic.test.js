@@ -128,6 +128,18 @@ describe('cloneProjectRecord', () => {
     expect(without).not.toHaveProperty('autoReviews');
   });
 
+  it('carries development artifacts and the Cast & Sets result to a clone, but not its dispatch pin or production link', () => {
+    const artifact = { id: 'mvd-1', kind: 'cast-sets', title: 'Sheet', status: 'approved', version: 2, file: 'music-video/mv-1/dev/mvd-1/v2.html', versions: [], notes: [] };
+    const clone = cloneProjectRecord({
+      ...baseProject(),
+      devArtifacts: [artifact],
+      castAndSets: { status: 'imaging', revision: 2, processId: 'proc-a', productionRunId: 'mvpr-1', artifactId: 'mvd-1', images: { character: { status: 'done', imageId: 'c.png' } } },
+    }, { id: 'mv-2', now: '2026-01-02T00:00:00.000Z' });
+    expect(clone.devArtifacts).toEqual([artifact]);
+    expect(clone.castAndSets).toMatchObject({ status: 'imaging', revision: 2, processId: null, productionRunId: null, artifactId: 'mvd-1' });
+    expect(cloneProjectRecord(baseProject(), { id: 'mv-3', now: '2026-01-02T00:00:00.000Z' })).not.toHaveProperty('castAndSets');
+  });
+
   it('can fork the board without carrying generated media', () => {
     const source = {
       ...baseProject(),
@@ -305,9 +317,13 @@ describe('applyProjectPatch', () => {
       automation: { tools: ['video:fal', 'image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25 },
     }, { id: 'mv-a', now: 'n' });
     // De-duplicated, in catalog order (image before video).
-    expect(created.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25 });
-    const edited = applyProjectPatch(created, { automation: { guidance: 'darker' } });
-    expect(edited.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'darker', budgetUsd: 25 });
+    // The Cast & Sets check-in gate defaults to review.
+    expect(created.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25, checkins: { castAndSets: 'review' } });
+    const auto = applyProjectPatch(created, { automation: { checkins: { castAndSets: 'auto' } } });
+    expect(auto.automation.checkins).toEqual({ castAndSets: 'auto' });
+    const edited = applyProjectPatch(auto, { automation: { guidance: 'darker' } });
+    // A guidance edit keeps the gate the director chose.
+    expect(edited.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'darker', budgetUsd: 25, checkins: { castAndSets: 'auto' } });
     expect(applyProjectPatch(edited, { automation: { budgetUsd: null } }).automation.budgetUsd).toBeNull();
     expect(applyProjectPatch(edited, { automation: null }).automation).toBeNull();
   });
@@ -322,6 +338,9 @@ describe('applyProjectPatch', () => {
       modelId: null,
       grokDuration: 6,
       falDuration: null,
+      falModelId: null,
+      falResolution: null,
+      falLipSyncResolution: null,
       generationMode: 'image',
       audioReactiveLora: null,
       audioReactiveScale: 1.2,
@@ -335,6 +354,9 @@ describe('applyProjectPatch', () => {
       modelId: 'ltx23_distilled_q4',
       grokDuration: 6,
       falDuration: null,
+      falModelId: null,
+      falResolution: null,
+      falLipSyncResolution: null,
       generationMode: 'image',
       audioReactiveLora: null,
       audioReactiveScale: 1.2,
@@ -573,6 +595,25 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(next.productionRuns).toEqual(runs);
   });
 
+  it('keeps development artifacts and the Cast & Sets checkpoint install-local (their files and jobs live here)', async () => {
+    const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
+    const devArtifacts = [{ id: 'mvd-1', kind: 'cast-sets', file: 'music-video/mv-1/dev/mvd-1/v1.html' }];
+    const castAndSets = { status: 'review', processId: 'proc-local' };
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'local', devArtifacts, castAndSets };
+    const wire = sanitizeRecordForWire('musicVideoProject', local);
+    expect(wire).not.toHaveProperty('devArtifacts');
+    expect(wire).not.toHaveProperty('castAndSets');
+
+    const foreign = { devArtifacts: [{ id: 'mvd-foreign' }], castAndSets: { status: 'imaging' } };
+    const inserted = mergeProjectRecord(null, { id: 'mv-2', updatedAt: '2026-01-02T00:00:00Z', ...foreign }).next;
+    expect(inserted).not.toHaveProperty('devArtifacts');
+    expect(inserted).not.toHaveProperty('castAndSets');
+    const { next } = mergeProjectRecord(local, { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit', ...foreign });
+    expect(next.name).toBe('remote edit');
+    expect(next.devArtifacts).toEqual(devArtifacts);
+    expect(next.castAndSets).toEqual(castAndSets);
+  });
+
   it('remote with a newer updatedAt wins', () => {
     const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'old' };
     const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'new' };
@@ -654,5 +695,50 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same' };
     const r = mergeProjectRecord(local, remote);
     expect(r.changed).toBe(false);
+  });
+});
+
+describe('composition document (render style `document`)', () => {
+  const pointer = { directory: 'music-video/mv-1/composition/doc-a1', entry: 'index.html', updatedAt: '2026-01-02T00:00:00.000Z', source: { kind: 'template', name: 'layered' }, files: 3, bytes: 42 };
+  const overlay = { enabled: true, titleLines: ['EXAMPLE'], meter: { label: 'LEVEL', keyframes: [[10, 40], [0, 100]] }, ticker: ['alpha'], timecode: false, timecodeStartSec: 0 };
+  const withDocument = () => ({ ...baseProject(), composition: { version: 1, mode: 'document', textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null, document: pointer, overlay } });
+
+  it('never takes the pointer from a create body, and keeps the HUD settings normalized', () => {
+    const created = buildProjectRecord({ name: 'Doc', composition: { mode: 'document', document: pointer, overlay } }, { id: 'mv-9', now: '2026-01-01T00:00:00.000Z' });
+    expect(created.composition.mode).toBe('document');
+    expect(created.composition).not.toHaveProperty('document');
+    expect(created.composition.overlay.meter.keyframes).toEqual([[0, 100], [10, 40]]);
+  });
+
+  it('keeps the stored pointer across a PATCH that echoes, forges or omits it', () => {
+    const project = withDocument();
+    const forged = { ...project.composition, document: { ...pointer, directory: 'music-video/mv-other/composition/doc-z9' } };
+    expect(applyProjectPatch(project, { composition: forged }).composition.document).toEqual(pointer);
+    const { document: _omit, ...omitted } = project.composition;
+    const next = applyProjectPatch(project, { composition: { ...omitted, overlay: { ...overlay, timecode: true } } });
+    expect(next.composition.document).toEqual(pointer);
+    expect(next.composition.overlay.timecode).toBe(true);
+    expect(applyProjectPatch(project, { composition: null }).composition).toBeNull();
+  });
+
+  it('carries the pointer to a clone (versions are immutable folders)', () => {
+    const clone = cloneProjectRecord(withDocument(), { id: 'mv-2', now: '2026-01-03T00:00:00.000Z' });
+    expect(clone.composition.document).toEqual(pointer);
+  });
+
+  it('keeps the pointer install-local: stripped from the wire, never taken from a peer, kept over a newer remote', async () => {
+    const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
+    const local = { ...withDocument(), updatedAt: '2026-01-01T00:00:00Z' };
+    const wire = sanitizeRecordForWire('musicVideoProject', local);
+    expect(wire.composition.mode).toBe('document');
+    expect(wire.composition.overlay).toEqual(overlay);
+    expect(wire.composition).not.toHaveProperty('document');
+
+    const foreign = { ...pointer, directory: 'music-video/mv-1/composition/doc-peer' };
+    const inserted = mergeProjectRecord(null, { ...local, id: 'mv-3', updatedAt: '2026-01-02T00:00:00Z', composition: { ...local.composition, document: foreign } }).next;
+    expect(inserted.composition).not.toHaveProperty('document');
+    const { next } = mergeProjectRecord(local, { ...local, updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit', composition: { ...local.composition, mode: 'document', document: foreign } });
+    expect(next.name).toBe('remote edit');
+    expect(next.composition.document).toEqual(pointer);
   });
 });

@@ -67,6 +67,12 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     // null/absent means "use fal's model default duration" — distinct from an
     // explicit pin, same null-means-unset contract as modelId above.
     falDuration: project?.videoSettings?.falDuration ?? null,
+    // fal cutaway model / its resolution, and the lip-sync take resolution —
+    // null means "the default" (Hailuo-02 image-to-video / that model's own /
+    // MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION), resolved by falSceneTake.
+    falModelId: project?.videoSettings?.falModelId ?? null,
+    falResolution: project?.videoSettings?.falResolution ?? null,
+    falLipSyncResolution: project?.videoSettings?.falLipSyncResolution ?? null,
     generationMode: project?.videoSettings?.generationMode || 'image',
     audioReactiveLora: project?.videoSettings?.audioReactiveLora || '',
     audioReactiveScale: project?.videoSettings?.audioReactiveScale ?? 1.2,

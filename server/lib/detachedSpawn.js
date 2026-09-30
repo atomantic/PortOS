@@ -523,16 +523,16 @@ const markAbandoned = (writer) => {
 // Process-table snapshot, POSIX only. `lstart` is fixed-format under LC_ALL=C;
 // an unparseable row throws rather than being skipped, because a skipped row
 // could be exactly the surviving writer a caller is looking for.
-const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})\s?(.*)$/;
+const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})\s?(.*)$/;
 export async function snapshotProcesses() {
   if (process.platform === 'win32') throw new Error('Process-group snapshots are unavailable on Windows');
-  const { stdout } = await execFileAsync('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'lstart=', '-o', 'command='],
+  const { stdout } = await execFileAsync('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'stat=', '-o', 'lstart=', '-o', 'command='],
     safeChildProcessOptions({ timeout: 15000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } }));
   const rows = stdout.split('\n').filter(line => line.trim()).map((line) => {
     const match = PS_ROW.exec(line);
-    const startedAt = match ? Date.parse(match[3]) : NaN;
+    const startedAt = match ? Date.parse(match[4]) : NaN;
     if (!match || !Number.isFinite(startedAt)) throw new Error('Unreadable process table');
-    return { pid: Number(match[1]), pgid: Number(match[2]), startedAt, command: match[4] };
+    return { pid: Number(match[1]), pgid: Number(match[2]), state: match[3], startedAt, command: match[5] };
   });
   if (!rows.some(row => row.pid === process.pid)) throw new Error('Incomplete process table');
   return rows;

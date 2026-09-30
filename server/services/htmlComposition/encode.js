@@ -18,9 +18,26 @@ async function frameFormat(page, { width, height, layout }) {
   page.check();
 }
 
+// A composition's seek(t) owns its frame: a rejection (a <video> that failed
+// to seek, a missing asset) or a hung seek must fail the render loudly and say
+// which frame, never capture whatever the page last painted.
+async function seekComposition(page, t, frame) {
+  try {
+    await page.evaluate(`globalThis.portosComposition.seek(${t})`);
+  } catch (error) {
+    throw new Error(`Composition seek(${t}) failed${frame == null ? '' : ` at frame ${frame}`}: ${error.message}`);
+  }
+}
+
+// PNG stays lossless; optimizeForSpeed only trades file size for encode time
+// (about 3x faster on photographic 1080p frames).
+const SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSurface: true, captureBeyondViewport: false });
+
 // Stream one frame at a time. The write callback supplies back-pressure and
 // the terminal race releases a pending write on exit, disconnect or cancel.
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+// `offsetSec` seeks a window of a longer timeline: frame n is drawn at
+// `offsetSec + n / fps` (a music-video excerpt stays on song time).
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const tag = await tagFilter();
@@ -77,12 +94,14 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     }
   };
   signal?.addEventListener('abort', stop, { once: true });
+  if (!Number.isFinite(offsetSec) || offsetSec < 0) throw new Error('offsetSec must be a non-negative number');
   const capture = async t => {
     page.check();
     // awaitPromise in evaluate is essential: each seek owns its paint.
-    await page.evaluate(`globalThis.portosComposition.seek(${t})`);
+    const at = offsetSec ? Math.round((offsetSec + t) * 1e6) / 1e6 : t;
+    await seekComposition(page, at, Math.round(t * fps));
     page.check();
-    const { data } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
+    const { data } = await page.send('Page.captureScreenshot', SCREENSHOT);
     page.check();
     return Buffer.from(data, 'base64');
   };
@@ -173,10 +192,10 @@ export async function encodeContactSheet(page, contract, outputPath, { times, si
   try {
     for (const t of times) {
       page.check();
-      await page.evaluate(`globalThis.portosComposition.seek(${t})`);
+      await seekComposition(page, t);
       page.check();
       // Chrome downscales to tile size, so full-resolution PNGs never cross CDP.
-      const { data } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false,
+      const { data } = await page.send('Page.captureScreenshot', { ...SCREENSHOT,
         clip: { x: 0, y: 0, width, height, scale: tileWidth / width } });
       signal?.throwIfAborted();
       await Promise.race([
@@ -233,13 +252,13 @@ export async function encodeReferenceContactSheet(videoPath, outputPath, { every
 // selection — rather than a `between(t,…)` time window: at 30/60fps a time
 // window can match several consecutive frames, overfilling the tile before
 // later boundary times are ever reached.
-export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times, { width, height, fps } = {}) {
+export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times, { width, height, fps, columns: requestedColumns } = {}) {
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   if (!Array.isArray(times) || times.length === 0) throw new Error('encodeFileContactSheetAtTimes: no sample times');
   if (!(fps > 0)) throw new Error('encodeFileContactSheetAtTimes: fps is required');
   const tileWidth = width && height && width < height ? 240 : 360;
-  const columns = Math.min(PROOF_COLUMNS, times.length);
+  const columns = Math.min(requestedColumns || PROOF_COLUMNS, times.length);
   const rows = Math.ceil(times.length / columns);
   // Two very close boundary times can round to the same frame index — the
   // dedup means the tile gets one fewer real frame than requested (a padded

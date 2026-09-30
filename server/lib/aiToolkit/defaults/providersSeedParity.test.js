@@ -90,7 +90,8 @@ describe('provider seed parity — data.reference ↔ aiToolkit sample', () => {
           expect(provider.models, `${seedName}.${id} lost its configured-default sentinel`).toContain(sentinel);
         }
         if (id === 'codex' || id === 'codex-tui') {
-          expect(provider.models, `${seedName}.${id} lost the current Codex Spark fallback`).toContain('gpt-5.3-codex-spark');
+          expect(provider.models, `${seedName}.${id} lost the current Codex Sol model`).toContain('gpt-6.1-sol');
+          expect(provider.models).not.toContain('gpt-5.3-codex-spark');
         }
       }
     }

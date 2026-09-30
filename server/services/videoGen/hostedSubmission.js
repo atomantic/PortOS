@@ -28,12 +28,17 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     }),
     errorCode: 'FAL_NOT_CONFIGURED',
     errorMessage: 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first',
+    // The model, resolution and audio flag are resolved against the curated
+    // catalog by videoGen/fal.js (an unsupported resolution falls back to the
+    // model's default there); provider audio is off unless asked for.
     buildParams: (body) => ({
       modelId: body.falModelId,
       aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
       width: body.width,
       height: body.height,
       duration: body.falDuration,
+      ...(body.falResolution ? { resolution: body.falResolution } : {}),
+      ...(body.falGenerateAudio === true ? { generateAudio: true } : {}),
     }),
   },
   [VIDEO_GEN_MODE.REACTOR]: {

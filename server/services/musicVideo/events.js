@@ -31,4 +31,13 @@ import { EventEmitter } from 'events';
 //   'production' → { projectId, runId, run, action, project } — a server-owned
 //     production run advanced (steps, route choices, spend, halts); socket.js
 //     bridges it to `music-video:production`.
+//
+// The Cast & Sets check-in adds:
+//   'cast-and-sets' → { projectId, stage, project } — the check-in stage
+//     advanced (direction, an image landed, the sheet is ready, approved);
+//     bridged to `music-video:cast-and-sets`. productionService.js listens so
+//     a production run waiting on the check-in continues once it settles.
+//   'dev-artifact'  → { projectId, artifactId, project } — a development
+//     artifact was added, versioned, noted, reviewed or deleted; bridged to
+//     `music-video:dev-artifact`.
 export const musicVideoEvents = new EventEmitter();

@@ -52,3 +52,24 @@ describe('VocalStemControl', () => {
     expect(screen.getByLabelText(/Add vocal stem/).disabled).toBe(true);
   });
 });
+
+describe('VocalStemControl separation', () => {
+  const slot = (overrides = {}) => ({
+    active: false, context: null, jobId: null, stage: null, stageLabel: null, percent: 0,
+    start: vi.fn(), cancel: vi.fn(), ...overrides,
+  });
+
+  it('starts a separation for this project, and shows its progress with a cancel while it runs', () => {
+    const idle = slot();
+    const { rerender } = render(<VocalStemControl project={project} hasAudio onUpdated={vi.fn()} separation={idle} />);
+    fireEvent.click(screen.getByRole('button', { name: /Separate vocals/ }));
+    expect(idle.start).toHaveBeenCalledWith('mv-1');
+
+    const running = slot({ active: true, context: 'mv-1', jobId: 'job-1', stage: 'separating', stageLabel: 'Separating vocals…', percent: 40 });
+    rerender(<VocalStemControl project={project} hasAudio onUpdated={vi.fn()} separation={running} />);
+    expect(screen.getByRole('button', { name: /Separating vocals… 40%/ }).disabled).toBe(true);
+    expect(screen.getByLabelText(/Add vocal stem/).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(running.cancel).toHaveBeenCalledOnce();
+  });
+});

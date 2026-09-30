@@ -15,6 +15,8 @@ export const automationDraftFrom = (automation) => ({
   tools: automation?.tools ?? DEFAULT_AUTOMATION_TOOLS,
   guidance: automation?.guidance ?? '',
   budget: automation?.budgetUsd != null ? String(automation.budgetUsd) : '',
+  // The Cast & Sets check-in stops the autopilot for review unless auto-approved.
+  castAndSetsCheckin: automation?.checkins?.castAndSets === 'auto' ? 'auto' : 'review',
 });
 
 export const automationFromDraft = (draft) => {
@@ -23,5 +25,6 @@ export const automationFromDraft = (draft) => {
     tools: draft.tools,
     guidance: draft.guidance.trim(),
     budgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : null,
+    checkins: { castAndSets: draft.castAndSetsCheckin === 'auto' ? 'auto' : 'review' },
   };
 };

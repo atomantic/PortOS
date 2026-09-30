@@ -105,7 +105,7 @@ describe('buildHandoffManifest typography (#8992)', () => {
 
     expect(manifest.visualSpec.typography).toBe('condensed sans, all caps, lower-third titles');
     expect(manifest.scenes[0].framePrompt).toBe('harbor at dawn, grainy 16mm, color palette #112233; camera: locked-off wides');
-    expect(manifest.scenes[0].shotPrompt).toBe('waves, grainy 16mm, color palette #112233; camera: locked-off wides');
+    expect(manifest.scenes[0].shotPrompt).toBe("waves, grainy 16mm, color palette #112233; camera: locked-off wides, hold the reference frame's lighting, time of day and palette for the whole shot");
     expect(manifest.scenes[0].framePrompt).not.toMatch(/typography/i);
     expect(manifest.scenes[0].shotPrompt).not.toMatch(/typography/i);
   });
@@ -125,5 +125,10 @@ describe('buildHandoffManifest typography (#8992)', () => {
    const manifest = buildHandoffManifest(await projects.getProject(p.id));
    expect(manifest.concept.subjects).toEqual(concept.subjects);
    expect(manifest.scenes[0].framePrompt).toContain('Example singer — Silver coat');
-   expect(manifest.scenes[0].shotPrompt).toContain('Mood board style: Watercolor');
+   expect(manifest.scenes[0].framePrompt).toContain('Mood board look (palette, lighting and texture only; never its locations, objects or poses): Watercolor');
+   // The motion prompt starts from the frame, which already carries the look.
+   expect(manifest.scenes[0].shotPrompt).not.toContain('Watercolor');
+   expect(manifest.scenes[0].shotPrompt).toContain("hold the reference frame's lighting, time of day and palette for the whole shot");
+   expect(manifest.scenes[0].framePrompt).not.toContain('hold the reference frame');
+   expect(manifest.scenes[0].shotPrompt).toContain('Universe style: Ink silhouettes');
  });

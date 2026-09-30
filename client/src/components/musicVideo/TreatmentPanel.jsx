@@ -16,7 +16,7 @@ const ROLE_STYLES = {
   payoff: 'bg-port-success/30 text-port-success',
   release: 'bg-port-border text-port-text-muted',
 };
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
+const inputCls = 'w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0';
 
 // One brief text field: buffered locally, committed on blur as a per-field patch.
 function BriefField({ id, label, value, onCommit, multiline = false, maxLength, placeholder }) {
@@ -86,7 +86,7 @@ export default function TreatmentPanel({ project, treatment: api }) {
 
   return (
     <details className="mt-2 rounded border border-port-border bg-port-bg/40 p-2">
-      <summary className="cursor-pointer text-xs text-port-text-muted select-none min-h-[32px] flex flex-wrap items-center gap-2">
+      <summary className="cursor-pointer text-xs text-port-text-muted select-none min-h-[44px] sm:min-h-[32px] flex flex-wrap items-center gap-2">
         <ScrollText size={13} />
         <span>Treatment</span>
         {t ? <span>· rev {t.revision}</span> : <span>· not started</span>}

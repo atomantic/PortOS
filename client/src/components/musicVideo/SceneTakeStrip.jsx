@@ -98,7 +98,7 @@ export default function SceneTakeStrip({
                     onBlur={() => saveNote(take)}
                     onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
                     placeholder="What to change next time"
-                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px]"
+                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px] min-h-[44px] sm:min-h-0"
                   />
                 </div>
               )}

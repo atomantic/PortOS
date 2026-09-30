@@ -1,5 +1,3 @@
-// @vitest-environment node
-
 import { describe, it, expect, beforeEach } from 'vitest';
 import { isInTimeWindow, isValidTimeString, MORNING_DEFAULT_WINDOW, pickActiveLayoutId, recordManualLayoutPick, TIME_STRING_RE } from './timeWindow.js';
 
@@ -60,13 +58,7 @@ describe('MORNING_DEFAULT_WINDOW', () => {
   });
 });
 
-// These describes need window.localStorage. The client's jsdom vitest runs
-// them in full (verified 13/13 tests pass under jsdom). The server's node-
-// env vitest also picks up `client/src/**/*.test.js` (see server/vitest.config.js
-// include list) and would crash here without the skip.
-const hasLocalStorage = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-
-describe.skipIf(!hasLocalStorage)('pickActiveLayoutId', () => {
+describe('pickActiveLayoutId', () => {
   beforeEach(() => { window.localStorage.clear(); });
 
   const layouts = [
@@ -104,7 +96,7 @@ describe.skipIf(!hasLocalStorage)('pickActiveLayoutId', () => {
   });
 });
 
-describe.skipIf(!hasLocalStorage)('recordManualLayoutPick — stale key pruning', () => {
+describe('recordManualLayoutPick — stale key pruning', () => {
   beforeEach(() => { window.localStorage.clear(); });
 
   it('removes prior-day userPick keys when recording today', () => {

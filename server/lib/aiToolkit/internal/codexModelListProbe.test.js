@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { withCodexShippedModels } from './codexShippedModels.js';
 import { EventEmitter } from 'events';
 
 // A fake child speaks the JSON-RPC handshake back, so this pins the PROTOCOL
@@ -56,7 +57,7 @@ describe('probeCodexModelsViaAppServer', () => {
       result: { data: [{ id: 'gpt-6-astra' }, { id: 'gpt-6-hidden', hidden: true }, 'gpt-6-sol', 'gpt-6-sol'] },
     })}\n`);
 
-    await expect(promise).resolves.toEqual(['gpt-6-astra', 'gpt-6-sol']);
+    await expect(promise).resolves.toEqual(withCodexShippedModels(['gpt-6-astra', 'gpt-6-sol']));
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
@@ -107,6 +108,6 @@ describe('probeCodexModelsViaAppServer', () => {
     child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: 2, result: { data: ['gpt-6-astra'] } })}\n`);
     child.emit('exit', 0, null); // must not flip an already-settled resolution to a rejection
 
-    await expect(promise).resolves.toEqual(['gpt-6-astra']);
+    await expect(promise).resolves.toEqual(withCodexShippedModels(['gpt-6-astra']));
   });
 });

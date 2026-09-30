@@ -42,6 +42,19 @@ describe('LyricsPanel word alignment', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/Settings → Voice/);
   });
 
+  it('flags only measured low confidence, and clears the badge data when the lyric text changes', () => {
+    const cues = [
+      { ...PROJECT.lyricCues[0], matched: 0.4 },
+      { id: 'b', text: 'new line', startSec: null, endSec: null },
+      { id: 'c', text: 'confident line', startSec: 5, endSec: 6, matched: 0.5 },
+    ];
+    const { onEditLocal } = renderPanel({ project: { ...PROJECT, lyricCues: cues } });
+    expect(screen.getAllByText('Low confidence — check by ear')).toHaveLength(1);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Line 1 text' }), { target: { value: 'changed line' } });
+    expect(onEditLocal.mock.lastCall[0].lyricCues[0].matched).toBeUndefined();
+    expect(onEditLocal.mock.lastCall[0].lyricCues[0].words).toBeUndefined();
+  });
+
   it('re-aligns one line and nudges a word boundary into the save', () => {
     const { onAlign, onSave } = renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Re-align line 1' }));
@@ -58,5 +71,30 @@ describe('LyricsPanel word alignment', () => {
         ],
       }],
     });
+  });
+});
+
+describe('LyricsPanel track lyrics', () => {
+  it('offers the linked track\'s lyric sheet, and shows its sections and directions over the lines', () => {
+    const onImportTrack = vi.fn();
+    renderPanel({
+      onImportTrack,
+      project: {
+        ...PROJECT,
+        lyricMarkers: [
+          { type: 'section', label: 'Chorus', kind: 'chorus', line: 0 },
+          { type: 'direction', label: 'Whispered spoken', kind: 'whispered', line: 0 },
+        ],
+      },
+    });
+    expect(screen.getByText('Chorus')).toBeTruthy();
+    expect(screen.getByText('[Whispered spoken]')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Use track lyrics/ }));
+    expect(onImportTrack).toHaveBeenCalledOnce();
+  });
+
+  it('has no track-lyrics button without a linked track', () => {
+    renderPanel({ onImportTrack: vi.fn(), project: { ...PROJECT, trackId: null } });
+    expect(screen.queryByRole('button', { name: /Use track lyrics/ })).toBeNull();
   });
 });

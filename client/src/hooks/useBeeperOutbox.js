@@ -97,10 +97,11 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
 
   /**
    * Send one existing row. Shared by the first attempt and the confirmation.
-   * `clearsDraft` says whether this send's text is the composer's current
-   * draft — the only case where finishing it should clear the composer.
+   * @param {object} [options]
+   * @param {boolean} [options.confirmFirstContact=false] Whether the human confirmed a first-contact send.
+   * @param {boolean} [options.clearsDraft=false] Whether this send's text is the composer's current draft.
    */
-  const dispatch = useCallback(async (entry, confirmFirstContact, clearsDraft = false) => {
+  const dispatch = useCallback(async (entry, { confirmFirstContact = false, clearsDraft = false } = {}) => {
     setSending(true);
     const [sent, err] = await sendOutboxEntry(entry.id, { confirmFirstContact }, { silent: true })
       .then((value) => [value, null])
@@ -165,7 +166,7 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
       setEntries((prev) => [entry, ...prev]);
       // Awaited into a local rather than returned bare: `return dispatch(...)`
       // would run the `finally` and drop the latch before the send resolved.
-      const dispatched = await dispatch(entry, false, clearsDraft);
+      const dispatched = await dispatch(entry, { clearsDraft });
       return dispatched;
     } finally {
       // `finally`, not a catch: nothing is swallowed, but the latch must not
@@ -177,7 +178,10 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
   /** The inline confirmation's "Send" — the same row, now explicitly confirmed. */
   const confirmAndSend = useCallback(async () => {
     if (!confirmation?.entry) return false;
-    return dispatch(confirmation.entry, true, confirmation.clearsDraft === true);
+    return dispatch(confirmation.entry, {
+      confirmFirstContact: true,
+      clearsDraft: confirmation.clearsDraft === true,
+    });
   }, [confirmation, dispatch]);
 
   /**
@@ -225,7 +229,7 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
    * manufacture a fresh phantom on every click the way retrying via `submit`
    * would. It never clears the composer: the row's text is not the draft.
    */
-  const retry = useCallback((entry) => dispatch(entry, false, false), [dispatch]);
+  const retry = useCallback((entry) => dispatch(entry), [dispatch]);
 
   /** Give up on a stalled `approved` row outright — see `discardEntry`. */
   const dismiss = useCallback((entry) => discardEntry(entry), [discardEntry]);

@@ -8,10 +8,11 @@ vi.mock('../promptRunner.js', () => ({
 vi.mock('./projects.js', () => ({
   getProject: vi.fn(),
   addProjectScenes: vi.fn(),
+  mutateProjectRecord: vi.fn(),
 }));
 
 import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
-import { getProject, addProjectScenes } from './projects.js';
+import { getProject, addProjectScenes, mutateProjectRecord } from './projects.js';
 import {
   validSections,
   buildScenePlanPrompt,
@@ -244,7 +245,7 @@ describe('buildScenePlanPrompt', () => {
       subjects: [{ id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' }],
     } }), shots);
     expect(prompt).toContain('Universe style: Ink silhouettes');
-    expect(prompt).toContain('Mood board style: Watercolor');
+    expect(prompt).toContain('Mood board look (palette, lighting and texture only; never its locations, objects or poses): Watercolor');
     expect(prompt).toContain('character (protagonist): Example singer — Silver coat');
     expect(prompt).toContain('Neon Nights');
     expect(prompt).toContain('cyberpunk chase');
@@ -471,6 +472,30 @@ Here is my answer:
     expect(lyricShots[0].endSec).toBeGreaterThanOrEqual(15);
   });
 
+  it('hands the lyric sheet\'s delivery directions to the first-pass prompt for the shot they fall in', async () => {
+    getProject.mockResolvedValue(makeProject({
+      lyricCues: [
+        { id: 'lc-1', text: 'come closer', startSec: 2, endSec: 4 },
+        { id: 'lc-2', text: 'let it out', startSec: 12, endSec: 14 },
+      ],
+      lyricMarkers: [
+        { type: 'direction', label: 'Whispered spoken', kind: 'whispered', line: 0 },
+        { type: 'direction', label: 'Shouts', kind: 'shouted', line: 1 },
+      ],
+    }));
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
+    runPromptThroughProvider.mockResolvedValue({ text: '[]' });
+
+    await planProject('mv-1');
+
+    const { prompt } = runPromptThroughProvider.mock.calls[0][0];
+    const lines = prompt.split('\n');
+    expect(lines.find((line) => line.includes('"come closer"'))).toMatch(/delivery: Whispered spoken/);
+    expect(lines.find((line) => line.includes('"let it out"'))).toMatch(/delivery: Shouts/);
+    expect(prompt).toMatch(/whispered lines play as intimate close-ups/);
+  });
+
   it('still honors the planned spans when the cached analysis has no beat grid', async () => {
     getProject.mockResolvedValue(makeProject({
       audioAnalysis: { bpm: null, beats: [], downbeats: [], sections: SECTIONS, durationSec: 30 },
@@ -484,5 +509,116 @@ Here is my answer:
     expect(seededInputs[0].startSec).toBe(0);
     expect(seededInputs.at(-1).endSec).toBe(30);
     for (let i = 1; i < seededInputs.length; i++) expect(seededInputs[i].startSec).toBe(seededInputs[i - 1].endSec);
+  });
+});
+
+// Regression: direction must affect persisted render-facing scenes, including
+// provider failure, rather than merely adding advice to an LLM prompt.
+describe('directed planner', () => {
+  function directedProject(backend = 'fal') {
+    return makeProject({
+      videoSettings: { backend }, pacing: { hookSec: 5, maxShotSec: 5 },
+      concept: { moodBoardStyle: 'Amber light in an example greenhouse' },
+      audioAnalysis: {
+        durationSec: 80, beats: Array.from({ length: 161 }, (_, i) => i / 2),
+        sections: [
+          { label: 'Verse', startSec: 0, endSec: 20 },
+          { label: 'Chorus', startSec: 20, endSec: 30 },
+          { label: 'Bridge', startSec: 30, endSec: 80 },
+        ],
+      },
+      lyricCues: Array.from({ length: 16 }, (_, i) => ({
+        text: i === 10 ? 'Rise' : `We follow the signal ${i}`, startSec: i * 5, endSec: (i + 1) * 5,
+      })),
+      lyricMarkers: [
+        { type: 'section', kind: 'chorus', label: 'Chorus', line: 4 },
+        { type: 'section', kind: 'bridge', label: 'Bridge', line: 6 },
+        { type: 'direction', kind: 'whispered', label: 'Whispered', line: 6 },
+        { type: 'direction', kind: 'spoken', label: 'Spoken, close', line: 7 },
+        { type: 'direction', kind: 'silence', label: 'Stop — silence', line: 8 },
+        { type: 'direction', kind: 'shouted', label: 'Shouts', line: 9 },
+        { type: 'direction', kind: 'note', label: 'Title moment', line: 11 },
+      ],
+      castAndSets: { status: 'approved', direction: {
+        protagonist: { name: 'Signal keeper', description: 'A solitary explorer', signature: 'silver badge' },
+        sets: [
+          { id: 'tower', name: 'Signal tower', description: 'An open steel platform', lighting: 'Dawn' },
+          { id: 'hall', name: 'Echo hall', description: 'A vaulted stone chamber', lighting: 'Blue lamps' },
+        ],
+        looks: [
+          { name: 'Field', description: 'Ochre coat', chapters: 'Verse, Bridge' },
+          { name: 'Stage', description: 'Silver jacket', chapters: 'Chorus' },
+        ],
+        songMap: [{ section: 0, setId: 'tower' }, { section: 1, setId: 'hall' }, { section: 2, setId: 'tower' }],
+      } },
+    });
+  }
+
+  async function runDirected(project, options = { seedPrompts: false }) {
+    getProject.mockResolvedValue(project);
+    // Exercise the real validated addScenes transform on a fresh record. A
+    // concurrent composition edit must survive the same atomic persistence.
+    mutateProjectRecord.mockImplementation(async (_id, transform) => transform({
+      ...project, composition: { mode: 'concat', style: { color: '#abcdef' } },
+    }));
+    return planProject('mv-1', options);
+  }
+
+  it('persists mapped sets/looks, supported performances and renderable cards without changing cuts', async () => {
+    const project = directedProject();
+    const { project: planned } = await runDirected(project);
+    const scenes = planned.scenes;
+    expect(scenes.map((s) => [s.startSec, s.endSec])).toEqual(Array.from({ length: 16 }, (_, i) => [i * 5, (i + 1) * 5]));
+    expect(scenes.slice(4, 8).every((s) => s.shotMode === 'performance')).toBe(true);
+    for (const scene of scenes.filter((s) => s.shotMode === 'performance')) {
+      expect(scene.framePrompt).toMatch(/Frontal medium close-up.*mouth fully visible/);
+    }
+    expect(scenes.slice(8, 12).every((s) => s.visualLayer === 'card')).toBe(true);
+    expect(scenes[8].cardText).toBe('');
+    expect(scenes[10].cardText).toBe('Rise');
+    expect(scenes[0].framePrompt).toMatch(/Signal keeper.*Signal tower.*Ochre coat/);
+    expect(scenes[4].framePrompt).toMatch(/Echo hall.*Silver jacket/);
+    expect(scenes.every((s) => !s.framePrompt.includes('greenhouse'))).toBe(true);
+    expect(scenes[0].prompt).toContain('We follow the signal 0');
+    expect(planned.composition).toMatchObject({ mode: 'composed', style: { color: '#abcdef' } });
+  });
+
+  it('caps performances by footage seconds and never assigns them to unsupported backends', async () => {
+    const project = directedProject();
+    project.lyricMarkers = [{ type: 'section', kind: 'chorus', label: 'Chorus', line: 0 }];
+    // Retain a card to exercise persisted output through the real transform.
+    for (const backend of ['fal', 'grok', 'local', null]) {
+      project.videoSettings.backend = backend;
+      const { project: planned } = await runDirected(project);
+      const duration = (list) => list.reduce((sum, s) => sum + s.endSec - s.startSec, 0);
+      const performances = planned.scenes.filter((s) => s.shotMode === 'performance');
+      expect(duration(performances)).toBeLessThanOrEqual(duration(planned.scenes.filter((s) => s.visualLayer === 'footage')) * 0.4);
+      expect(performances.length > 0).toBe(backend === 'fal');
+    }
+  });
+
+  it('gives the provider per-shot direction and preserves keyframe requirements after partial seeding', async () => {
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'example' }, selectedModel: 'example' });
+    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([{ index: 4, framePrompt: 'Soft light', prompt: 'Gentle camera arc' }]) });
+    const { project } = await runDirected(directedProject(), { seedPrompts: true });
+    const prompt = runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(prompt).toContain('mood board is LOOK-ONLY');
+    expect(prompt).toContain('Protagonist: Signal keeper');
+    expect(prompt).toContain('assigned set: Echo hall');
+    expect(prompt).toContain('assigned look: Stage');
+    expect(prompt).toContain('delivery: Whispered');
+    expect(project.scenes[4].framePrompt).toMatch(/mouth fully visible.*Echo hall.*Soft light/);
+    expect(project.scenes[4].prompt).toBe('Gentle camera arc');
+    expect(project.scenes[5].framePrompt).toContain('mouth fully visible');
+  });
+
+  it('leaves skipped-stage projects on the legacy scene path even with retained direction', async () => {
+    const project = directedProject();
+    project.castAndSets.status = 'skipped';
+    addProjectScenes.mockResolvedValue({ project, scenes: [] });
+    await runDirected(project);
+    expect(mutateProjectRecord).not.toHaveBeenCalled();
+    const inputs = addProjectScenes.mock.calls[0][1];
+    expect(inputs.every((s) => s.shotMode === undefined && s.visualLayer === undefined && s.framePrompt === undefined)).toBe(true);
   });
 });

@@ -29,8 +29,10 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
-import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath } from './render.js';
+import { assertCurrentPerformanceTakes } from './performanceShot.js';
+import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
+import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
 import { renderableCues, sectionCardCues } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
@@ -76,29 +78,62 @@ const unlinkUnder = (root, filename) => {
  * `revisionId` (#8987) links the render to an open selective revision in the
  * same write that creates the excerpt, so its finish settles that revision.
  */
-// A code-rendered project excerpts the same seekable composition, windowed,
-// instead of the footage concat. Footage generation is not involved.
-async function launchCodeExcerpt({ projectId, project, startSec, endSec, revisionId, handOff }) {
-  const full = prepareCodeRender(project);
-  // Same order as a full code render: a missing master throws before the
+// A code-rendered or composition-document project excerpts the same seekable
+// composition, windowed on song time, instead of the footage concat.
+const SEEKED_EXCERPTS = Object.freeze({
+  code: {
+    label: 'code',
+    prepare: async (project) => {
+      const full = prepareCodeRender(project);
+      return { full, totalSec: full.durationSec, songSections: full.song.sections.map((s) => ({ sceneId: s.sceneId || s.id, startSec: s.startSec, endSec: s.endSec })) };
+    },
+    encode: async ({ project, projectId, jobId, audioPath, outputPath, signal, onProgress, startSec, endSec }) => {
+      const plan = prepareCodeRender(project, { windowStart: startSec, windowEnd: endSec });
+      await encodeCodeComposition({
+        ...plan, audioPath, audioStartSec: startSec, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress,
+      });
+      return { width: plan.width, height: plan.height, fps: plan.fps, boundaryTimes: plan.sectionTimes };
+    },
+  },
+  document: {
+    label: 'composition document',
+    soundBed: true,
+    performanceTakes: true,
+    prepare: async (project) => {
+      const plan = await prepareDocumentRender(project);
+      const songSections = (project.scenes || [])
+        .filter((s) => s?.sceneId && typeof s.startSec === 'number' && typeof s.endSec === 'number' && s.endSec > s.startSec)
+        .map((s) => ({ sceneId: s.sceneId, startSec: s.startSec, endSec: s.endSec }));
+      return { plan, totalSec: plan.durationSec, songSections };
+    },
+    encode: ({ prepared, project, jobId, audioPath, soundBed, outputPath, signal, onProgress, startSec, endSec }) => encodeDocumentComposition({
+      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec,
+    }),
+  },
+});
+
+async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revisionId, handOff, renderer }) {
+  const prepared = await renderer.prepare(project);
+  // Same order as a full render: a missing master throws before the
   // excerpt is marked rendering.
   const audioPath = await resolveMasterAudioPath(project);
-  if (!(startSec >= 0) || !(endSec > startSec) || endSec > full.durationSec + 1e-6) {
+  if (renderer.performanceTakes) await assertCurrentPerformanceTakes(project, audioPath);
+  const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
+  if (!(startSec >= 0) || !(endSec > startSec) || endSec > prepared.totalSec + 1e-6) {
     throw new ServerError(
-      `The excerpt range must fall within the project's ${full.durationSec.toFixed(2)}s song`,
-      { status: 422, code: 'INVALID_EXCERPT_RANGE', context: { totalDuration: full.durationSec } },
+      `The excerpt range must fall within the project's ${prepared.totalSec.toFixed(2)}s song`,
+      { status: 422, code: 'INVALID_EXCERPT_RANGE', context: { totalDuration: prepared.totalSec } },
     );
   }
-  const endClamped = Math.min(endSec, full.durationSec);
-  const plan = prepareCodeRender(project, { windowStart: startSec, windowEnd: endClamped });
+  const endClamped = Math.min(endSec, prepared.totalSec);
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
   const filename = `music-video-excerpt-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
   const outputPath = join(PATHS.videos, filename);
-  const sections = full.song.sections
+  const sections = prepared.songSections
     .filter((section) => section.startSec < endClamped && section.endSec > startSec)
     .map((section) => ({
-      sceneId: section.sceneId || section.id,
+      sceneId: section.sceneId,
       startSec: round3(Math.max(section.startSec, startSec)),
       endSec: round3(Math.min(section.endSec, endClamped)),
     }));
@@ -109,44 +144,40 @@ async function launchCodeExcerpt({ projectId, project, startSec, endSec, revisio
   });
   const excerptId = excerpt.id;
   const jobId = excerptId;
-  const totalDuration = plan.durationSec;
+  const totalDuration = endClamped - startSec;
   const job = { id: jobId, projectId, excerptId, status: 'running', clients: [], process: null, totalDuration, overlayAbort: new AbortController() };
   jobs.set(jobId, job);
   projectExcerptRenders.set(projectId, jobId);
   handOff();
-  console.log(`🎬 Rendering code music-video excerpt [${jobId.slice(4, 12)}]: project=${projectId.slice(0, 8)} range=[${startSec.toFixed(2)},${endClamped.toFixed(2)}]s footage=off`);
+  const Label = `${renderer.label[0].toUpperCase()}${renderer.label.slice(1)}`;
+  console.log(`🎬 Rendering ${renderer.label} music-video excerpt [${jobId.slice(4, 12)}]: project=${projectId.slice(0, 8)} range=[${startSec.toFixed(2)},${endClamped.toFixed(2)}]s footage=off`);
   const { signal } = job.overlayAbort;
   const finalize = async (patch) => {
     projectExcerptRenders.delete(projectId);
     const persisted = await mutateProjectRecord(projectId, (current) => ({
       project: settleRevisionRender(applyExcerptPatch(current, excerptId, { ...patch, partialFilename: null, renderingOn: null }), excerptId, patch),
     })).then(() => true, (err) => {
-      console.error(`❌ Music-video code excerpt [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
+      console.error(`❌ Music-video ${renderer.label} excerpt [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
       return false;
     });
     closeJobAfterDelay(jobs, jobId);
     if (persisted) musicVideoEvents.emit('excerpt-render', { projectId, excerptId, status: patch.status });
     return persisted;
   };
-  encodeCodeComposition({
-    ...plan,
-    audioPath,
-    audioStartSec: startSec,
-    outputPath,
-    directory: `compositions/music-video/${projectId}/${jobId}`,
-    signal,
+  Promise.resolve().then(() => renderer.encode({
+    prepared, project, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped,
     onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
-  }).then(async () => {
+  })).then(async (encoded) => {
     job.overlayAbort = null;
     job.status = 'complete';
     let contactSheetFilename = null;
     try {
       contactSheetFilename = sheetFilenameFor(filename);
-      await writeCodeProofSheet(outputPath, join(PATHS.videoThumbnails, contactSheetFilename), plan.sectionTimes, {
-        width: plan.width, height: plan.height, fps: plan.fps,
+      await writeCodeProofSheet(outputPath, join(PATHS.videoThumbnails, contactSheetFilename), encoded.boundaryTimes, {
+        width: encoded.width, height: encoded.height, fps: encoded.fps,
       });
     } catch (err) {
-      console.warn(`⚠️ Music-video code excerpt contact sheet failed [${jobId.slice(4, 12)}]: ${err.message}`);
+      console.warn(`⚠️ Music-video ${renderer.label} excerpt contact sheet failed [${jobId.slice(4, 12)}]: ${err.message}`);
       contactSheetFilename = null;
     }
     const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null });
@@ -155,15 +186,15 @@ async function launchCodeExcerpt({ projectId, project, startSec, endSec, revisio
       broadcastSse(job, { type: 'error', error: 'The excerpt rendered, but saving the result failed — reload the project and try again' });
       return;
     }
-    console.log(`✅ Code music-video excerpt rendered [${jobId.slice(4, 12)}]: ${filename}`);
+    console.log(`✅ ${Label} music-video excerpt rendered [${jobId.slice(4, 12)}]: ${filename}`);
     broadcastSse(job, { type: 'complete', result: { excerptId, filename, path: `/data/videos/${filename}`, contactSheetFilename, contactSheetPath: contactSheetFilename ? `/data/video-thumbnails/${contactSheetFilename}` : null } });
   }).catch(async (err) => {
     const canceled = signal.aborted || err?.code === 'CANCELED';
     job.status = canceled ? 'canceled' : 'error';
-    const reason = canceled ? 'Render cancelled' : `Code excerpt failed: ${err.message}`;
+    const reason = canceled ? 'Render cancelled' : `${Label} excerpt failed: ${err.message}`;
     job.lastError = reason;
     const log = canceled ? console.log : console.error;
-    log(`${canceled ? '🛑' : '❌'} Music-video code excerpt ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(4, 12)}]: ${reason}`);
+    log(`${canceled ? '🛑' : '❌'} Music-video ${renderer.label} excerpt ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(4, 12)}]: ${reason}`);
     await unlink(outputPath).catch(() => {});
     broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
     await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
@@ -185,9 +216,10 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
 
   let handedOff = false;
   try {
-    if (project.composition?.mode === 'code') {
-      return await launchCodeExcerpt({
-        projectId, project, startSec, endSec, revisionId, handOff: () => { handedOff = true; },
+    const seeked = SEEKED_EXCERPTS[project.composition?.mode];
+    if (seeked) {
+      return await launchSeekedExcerpt({
+        projectId, project, startSec, endSec, revisionId, handOff: () => { handedOff = true; }, renderer: seeked,
       });
     }
     const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);

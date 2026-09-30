@@ -1405,6 +1405,8 @@ describe('nested sibling-family attribution', () => {
     expect(agy.source).toBe('estimate');
     expect(agy.tokensIn).toBe(100);
     expect(agy.tokensOut).toBe(50);
+    // The planner call replays the 400-char user turn: 100 tokens of cache read.
+    expect(agy.cacheReadTokens).toBe(100);
     // The transcript names no model, so the provider's own default is used.
     expect(agy.model).toBe('example-agy-model');
   });

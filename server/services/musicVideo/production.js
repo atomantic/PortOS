@@ -41,9 +41,10 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
-import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
+import { castAndSetsSettled } from './castAndSets.js';
 
 const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
   maxGenerations: Object.freeze({ min: 1, max: 500 }),
@@ -229,7 +230,7 @@ const JOB_KIND = Object.freeze({ frame: 'image', clip: 'video' });
 
 /** The scenes that need a still frame and a clip, per the project's render mode. */
 function productionTargets(project) {
-  const layered = project?.composition?.mode === 'composed';
+  const layered = isLayeredComposition(project);
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   return {
     frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) !== 'card'),
@@ -248,6 +249,8 @@ const slotSteps = (run, sceneId, stepKind, revisionId = null) => run.steps
 
 /**
  * Pure: what the run should do next, from the record and the queue alone:
+ *   `cast-and-sets` — the board is empty and no Cast & Sets check-in exists:
+ *                start one (it runs before the plan; see castAndSetsService.js);
  *   `plan`     — the board is empty: seed it (one planner call, first time only);
  *   `dispatch` — generate `kind` (frame|clip) for `sceneId`;
  *   `review`   — every scene holds its media: hand the continuous excerpt
@@ -275,6 +278,8 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   if (!scenes.length) {
     if (run.planned) return { type: 'halt', status: 'blocked', reason: 'Planning produced no scenes — check the song analysis' };
+    const gate = castAndSetsGate(project, run);
+    if (gate) return gate;
     return { type: 'plan' };
   }
   const targets = productionTargets(project);
@@ -305,6 +310,25 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
   };
 }
 
+/**
+ * The Cast & Sets check-in runs before the plan. Returns the step it needs,
+ * or null once it is approved or skipped.
+ */
+function castAndSetsGate(project, run) {
+  const stage = project?.castAndSets || null;
+  if (castAndSetsSettled(stage)) return null;
+  if (!stage) {
+    return run.castAndSetsStarted
+      ? { type: 'halt', status: 'blocked', reason: 'The Cast & Sets check-in did not start — start it from the Autopilot panel, or skip it' }
+      : { type: 'cast-and-sets' };
+  }
+  if (stage.status === 'review') return { type: 'wait', on: 'checkin' };
+  if (stage.status === 'failed') {
+    return { type: 'halt', status: 'blocked', reason: `The Cast & Sets check-in failed: ${stage.stopReason || 'unknown error'} — resume or skip it, then resume the run` };
+  }
+  return { type: 'wait', on: 'cast-and-sets' };
+}
+
 // ---- dispatch accounting ------------------------------------------------------
 
 /**
@@ -312,10 +336,12 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
  * 409 when the run is not running in this process, the slot already has a
  * live step (a concurrent advance or a double submit), or a limit would be
  * exceeded — so a job past the budget is refused before it is paid for.
+ * `costUsd` is the step's own estimate when the caller can price the scene
+ * (a fal take); absent, the route's start-time price applies.
  * Returns `{ project, run, step }`.
  */
 export function reserveProductionStep(project, runId, {
-  kind, sceneId, revisionId = null, route, rationale = '', processId,
+  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = null,
 }, now = new Date().toISOString()) {
   let step = null;
   const out = mutateRun(project, runId, (run) => {
@@ -329,7 +355,9 @@ export function reserveProductionStep(project, runId, {
     if (run.usage.generations >= run.limits.maxGenerations) {
       throw productionError(409, 'PRODUCTION_SPEND_LIMIT', `This production run reached its ${run.limits.maxGenerations}-generation limit`);
     }
-    const price = run.pricing?.[routeKey(route)];
+    // A scene-specific estimate (a fal take priced by its own length and
+    // resolution) wins over the route's flat start-time price.
+    const price = typeof stepCostUsd === 'number' ? stepCostUsd : run.pricing?.[routeKey(route)];
     const costUsd = typeof price === 'number' ? price : null;
     if (run.limits.spendCapUsd !== null) {
       if (costUsd === null) throw productionError(409, 'PRODUCTION_COST_UNKNOWN', 'This route has no known price, so the dollar cap cannot bound it');
@@ -432,6 +460,30 @@ export function reconcileProductionSteps(project, runId, jobs = [], nowMs = Date
 }
 
 // ---- lifecycle ---------------------------------------------------------------
+
+/** Mark the Cast & Sets check-in as started by this run (so a failed start halts instead of looping). */
+export const markProductionCastAndSets = (project, runId, now = new Date().toISOString()) =>
+  mutateRun(project, runId, () => ({ castAndSetsStarted: true }), now);
+
+/**
+ * An approved (or skipped) Cast & Sets check-in writes the visual spec and
+ * concept subjects a run's creative-setup checksum covers. A running run that
+ * has not planned yet was waiting on exactly that change, so its basis is
+ * re-captured in the same write instead of halting it `needs-replan`.
+ * Returns `{ project }`.
+ */
+export function rebaseProductionAfterCheckin(project, now = new Date().toISOString()) {
+  const runs = projectProductionRuns(project);
+  if (!runs.some((r) => r.status === 'running' && !r.planned)) return { project };
+  const revision = productionBasisRevision(project);
+  return {
+    project: {
+      ...project,
+      productionRuns: runs.map((r) => (r.status === 'running' && !r.planned
+        ? { ...r, basis: { revision, capturedAt: now }, updatedAt: now } : r)),
+    },
+  };
+}
 
 /** Mark the board as planned by this run (so an empty plan halts instead of looping). */
 export const markProductionPlanned = (project, runId, now = new Date().toISOString()) =>

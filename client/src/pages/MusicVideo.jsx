@@ -1,9 +1,7 @@
-import CreativeSetupPanel from '../components/musicVideo/CreativeSetupPanel.jsx';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
-import { Plus, Film } from 'lucide-react';
+import { Plus, Film, Copy, Trash2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import PageHeader from '../components/PageHeader';
 import {
   listMusicVideoProjects,
@@ -19,11 +17,16 @@ import {
   splitMusicVideoScene,
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
+  importMusicVideoTrackLyrics,
   alignMusicVideoLyrics,
 } from '../services/apiMusicVideo.js';
 import useFieldDraft from '../hooks/useFieldDraft.js';
 import useMusicVideoYoutubeImport from '../hooks/useMusicVideoYoutubeImport.js';
 import useMusicVideoMidiJob from '../hooks/useMusicVideoMidiJob.js';
+import useMusicVideoKickoff from '../hooks/useMusicVideoKickoff.js';
+import useMusicVideoCastAndSets from '../hooks/useMusicVideoCastAndSets.js';
+import useMusicVideoDevArtifacts from '../hooks/useMusicVideoDevArtifacts.js';
+import useMusicVideoVocalSeparation from '../hooks/useMusicVideoVocalSeparation.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
 import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
@@ -41,32 +44,29 @@ import MediaPreview from '../components/media/MediaPreview.jsx';
 import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
 import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
 import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
-import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
 import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.jsx';
-import AutomationPanel from '../components/musicVideo/AutomationPanel.jsx';
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
-import ProjectToolbar from '../components/musicVideo/ProjectToolbar.jsx';
-import TrackPanel from '../components/musicVideo/TrackPanel.jsx';
-import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
-import ProductionPanel from '../components/musicVideo/ProductionPanel.jsx';
-import ExcerptPanel from '../components/musicVideo/ExcerptPanel.jsx';
-import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
-import SceneCard from '../components/musicVideo/SceneCard.jsx';
-import LyricsPanel from '../components/musicVideo/LyricsPanel.jsx';
-import TypographyPanel from '../components/musicVideo/TypographyPanel.jsx';
-import CodeVideoPanel from '../components/musicVideo/CodeVideoPanel.jsx';
+import MusicVideoLayout from '../components/musicVideo/MusicVideoLayout.jsx';
+import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
+import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
+import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
+import BoardStage from '../components/musicVideo/stages/BoardStage.jsx';
+import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
+import ComposeStage from '../components/musicVideo/stages/ComposeStage.jsx';
+import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
 import { compositionDraft } from '../components/musicVideo/compositionDraft.js';
-import VisualSpecPanel from '../components/musicVideo/VisualSpecPanel.jsx';
-import TreatmentPanel from '../components/musicVideo/TreatmentPanel.jsx';
-import HandoffControls from '../components/musicVideo/HandoffControls.jsx';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
+import DevArtifactDrawer from '../components/musicVideo/DevArtifactDrawer.jsx';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker.jsx';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
+import {
+  deriveNextAction, deriveStages, projectSpend, resolvePreviewSource, resolveStageParam,
+} from '../lib/musicVideoStages.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
 const emptyCreateForm = () => ({
@@ -80,6 +80,11 @@ function autopilotBlocker(project) {
   if ((project.scenes || []).length > 0) return 'The board already has shots — edit them below or fork a new version to re-plan.';
   return null;
 }
+
+// The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
+const STAGE_VIEWS = {
+  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage,
+};
 
 const STATUS_COLORS = {
   draft: 'bg-port-border text-port-text',
@@ -96,7 +101,12 @@ export default function MusicVideo() {
   // scene board is directly shareable/bookmarkable and reachable from the
   // media job-completion hooks. selectProject() navigates; the browser URL is
   // the single source of truth for "which project is open".
-  const { projectId: routeProjectId } = useParams();
+  // The open stage is `/music-video/:projectId/:stage` (Setup, Cast & Sets,
+  // Board, Produce, Compose, Review); a missing or unknown stage opens the
+  // stage the project was in. A development artifact opens from its own deep
+  // link (/music-video/:projectId/:stage/dev/:artifactId, or the older
+  // /music-video/:projectId/dev/:artifactId), the version from `?v=`.
+  const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage } = useParams();
   const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [tracks, setTracks] = useState([]);
@@ -114,6 +124,16 @@ export default function MusicVideo() {
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(emptyCreateForm);
   const selected = projects.find((p) => p.id === selectedId) || null;
+
+  // Which stage tab is open. The URL is the source of truth; with none (or an
+  // unknown one) the tab is the stage the project was in when it was opened,
+  // pinned so a stage completing mid-session doesn't move the user off the tab
+  // they are working in — the header's next action tracks the project instead.
+  const progress = useMemo(() => deriveStages(selected), [selected]);
+  const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
+  if (selected && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
+  const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
+  const activeStage = resolveStageParam(routeStage) || pinnedStage || progress.current;
 
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
   // Functional merges keyed on the captured projectId/sceneId so an async result
@@ -139,6 +159,11 @@ export default function MusicVideo() {
       ...(!f.name || tracks.some((t) => t.title === f.name) ? { name: track.title || '' } : {}),
     })),
     onProjectUpdated: replaceProject,
+  });
+  // "Separate vocals" (demucs) — one slot shared by the stem control and the
+  // autopilot kickoff; the terminal frame carries the project with its stem.
+  const separation = useMusicVideoVocalSeparation({
+    onSeparated: (projectId, project) => patchProject(projectId, { vocalStemFilename: project.vocalStemFilename, updatedAt: project.updatedAt }),
   });
   const midi = useMusicVideoMidiJob({
     onTranscribed: (projectId, midiTranscription) => patchProject(projectId, { midiTranscription }),
@@ -167,6 +192,9 @@ export default function MusicVideo() {
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });
   const autoReview = useMusicVideoAutoReview({ project: selected, replaceProject, submitSections: revisions.submitSections });
   const production = useMusicVideoProduction({ project: selected, replaceProject });
+  // Cast & Sets check-in (before the plan) and the development files it saves.
+  const castSets = useMusicVideoCastAndSets({ project: selected, replaceProject });
+  const devArtifacts = useMusicVideoDevArtifacts({ project: selected, replaceProject });
   // Pre-production treatment (#8980): brief, compiled arc, shot direction,
   // proof checklist and the non-destructive Apply review.
   const treatment = useMusicVideoTreatment({ project: selected, onProjectPatch: patchProject, replaceProject });
@@ -323,15 +351,57 @@ export default function MusicVideo() {
       .finally(() => setPlanning(false));
   };
 
-  // Autopilot kickoff: analyze the song when it has no beat map yet, then plan
-  // every shot against the brief (the planner reads automation.guidance).
+  // Autopilot kickoff: analyze the song, import the track's lyric sheet,
+  // separate the vocal, align the words, then plan every shot against the
+  // brief (the planner reads automation.guidance). Each step only runs when
+  // its result is missing; lyric/vocal/alignment failures still plan.
   const autopilotBlockedReason = creativeSetupPending
     ? 'Save or cancel the creative setup before starting autopilot.'
     : autopilotBlocker(selected);
+  const kickoff = useMusicVideoKickoff({
+    analyze: () => handleAnalyze(),
+    importLyrics: (project) => importMusicVideoTrackLyrics(project.id, { mode: 'if-empty' }, { silent: true })
+      .then(({ project: next, imported }) => {
+        patchProject(next.id, { lyricCues: next.lyricCues, lyricMarkers: next.lyricMarkers, updatedAt: next.updatedAt });
+        if (imported) toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'} from the track`);
+        return next;
+      })
+      .catch((err) => { toast.error(err?.message || 'Could not import the track lyrics'); return null; }),
+    separateVocals: (project) => separation.run(project.id),
+    alignLyrics: (project) => alignMusicVideoLyrics(project.id, {}, { silent: true })
+      .then((next) => {
+        patchProject(next.id, { lyricCues: next.lyricCues, audioAnalysis: next.audioAnalysis, updatedAt: next.updatedAt });
+        toast.success('Aligned words to the vocal');
+        return next;
+      })
+      .catch((err) => { toast.error(err?.message || 'Could not align the words — planning without word timings'); return null; }),
+    castAndSets: (project) => castSets.runToCheckpoint(project),
+    plan: (project) => handlePlan(project),
+  });
+  // Approve & continue: the kickoff resumes past the check-in and plans —
+  // unless a server production run owns this board (it continues on its own).
+  const continueAfterCheckin = (res) => {
+    const next = res?.project;
+    if (!next || (next.scenes || []).length) return;
+    if ((next.productionRuns || []).some((r) => r.status === 'running')) return;
+    kickoff.run(next);
+  };
+  const approveCastAndSets = () => castSets.approve().then(continueAfterCheckin);
+  const skipCastAndSets = () => castSets.skip().then(continueAfterCheckin);
+  const openArtifact = (artifactId) => navigate(`/music-video/${encodeURIComponent(selected.id)}/${activeStage}/dev/${encodeURIComponent(artifactId)}`);
+  const closeArtifact = () => navigate(`/music-video/${encodeURIComponent(selected?.id || routeProjectId)}/${activeStage}`);
+  const openArtifactRecord = routeArtifactId
+    ? (selected?.devArtifacts || []).find((a) => a.id === routeArtifactId && !a.deleted) || null
+    : null;
+  const artifactVersion = Number(searchParams.get('v')) || openArtifactRecord?.version || null;
+  const setArtifactVersion = (version) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (version && version !== openArtifactRecord?.version) next.set('v', String(version)); else next.delete('v');
+    return next;
+  });
   const handleKickoff = () => {
-    if (!selected || analyzing || planning || autopilotBlockedReason) return;
-    (selected.audioAnalysis ? Promise.resolve(selected) : handleAnalyze())
-      .then((proj) => (proj?.audioAnalysis ? handlePlan(proj) : null));
+    if (!selected || analyzing || planning || kickoff.running || autopilotBlockedReason) return;
+    kickoff.run(selected);
   };
   // Saving a brief hands the project to autopilot, so mode follows it.
   const saveAutomation = (automation) => updateMusicVideoProject(selected.id, { automation, mode: 'autonomous' }, { silent: true })
@@ -458,6 +528,18 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Lyric import failed'))
       .finally(() => setImportingLyrics(false));
   };
+  // "Use track lyrics": replace the lines with the linked track's sheet.
+  const handleImportTrackLyrics = () => {
+    const projectId = selected.id;
+    setImportingLyrics(true);
+    importMusicVideoTrackLyrics(projectId, { mode: 'replace' }, { silent: true })
+      .then(({ project, imported, markers }) => {
+        patchProject(projectId, { lyricCues: project.lyricCues, lyricMarkers: project.lyricMarkers, updatedAt: project.updatedAt });
+        toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'}${markers ? ` and ${markers} section/direction marker${markers === 1 ? '' : 's'}` : ''} from the track`);
+      })
+      .catch((err) => toast.error(err?.message || 'Could not import the track lyrics'))
+      .finally(() => setImportingLyrics(false));
+  };
   // Alignment is a click, never an import side effect. The panel shows the
   // whisper setup error itself, so this request stays silent.
   const handleAlignLyrics = (cueId) => {
@@ -465,7 +547,7 @@ export default function MusicVideo() {
     setAligningLyrics(true);
     return alignMusicVideoLyrics(projectId, cueId ? { cueId } : {}, { silent: true })
       .then((project) => {
-        patchProject(projectId, { lyricCues: project.lyricCues, updatedAt: project.updatedAt });
+        patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt });
         toast.success(cueId ? 'Re-aligned that line' : 'Aligned words to the vocal');
       })
       .finally(() => setAligningLyrics(false));
@@ -598,7 +680,7 @@ export default function MusicVideo() {
         items.push(videoItem(take.assetId, `${take.assetId}.mp4`, take.prompt || scene.prompt || ''));
       }
     }
-    // Scenes can reuse the same frame/clip (ProjectToolbar surfaces a
+    // Scenes can reuse the same frame/clip (the Produce tab's generation controls surface a
     // "Repetition: N unique frames" badge). Dedupe by key so prev/next and
     // openPreview's .find() land on a single item rather than the first of
     // several identical keys with different prompts.
@@ -610,6 +692,140 @@ export default function MusicVideo() {
     const match = previewItems.find((i) => i.key === key);
     if (match) setPreview(match);
   }, [previewItems, setPreview]);
+
+  // ---- stage plumbing -------------------------------------------------------
+  // A header action that lands on a control (Attach a track, Set up production)
+  // scrolls to and focuses it once its stage has rendered.
+  const [pendingAnchor, setPendingAnchor] = useState(null);
+  useEffect(() => {
+    if (!pendingAnchor || pendingAnchor.stage !== activeStage) return;
+    const el = document.getElementById(pendingAnchor.id);
+    el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    const focusable = el?.matches?.('button, input, select, textarea, a') ? el : el?.querySelector?.('button, input, select, textarea, a');
+    focusable?.focus?.({ preventScroll: true });
+    setPendingAnchor(null);
+  }, [pendingAnchor, activeStage]);
+  const goToStage = (stage, anchor = null) => {
+    setPendingAnchor(anchor ? { stage, id: anchor } : null);
+    navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}`);
+  };
+
+  // The docked preview: scene cards seek it; on a phone it is a mini-player
+  // that starts collapsed. Both reset with the project.
+  const [seekRequest, setSeekRequest] = useState(null);
+  const [dockCollapsed, setDockCollapsed] = useState(true);
+  useEffect(() => { setSeekRequest(null); setDockCollapsed(true); }, [selectedId]);
+  const seekToScene = (scene) => {
+    if (typeof scene?.startSec !== 'number') return;
+    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1 }));
+  };
+
+  const audioFilename = projectAudioFilename(selected);
+  const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
+  const nextAction = selected ? deriveNextAction(selected, {
+    renderActive: renderTargetsSelected,
+    renderProgress: renderJob.progress,
+    renderPending: renderJob.pending,
+    renderBlockedByOther: !!renderJob.active && !renderTargetsSelected,
+    kickoffRunning: kickoff.running,
+    kickoffStep: kickoff.stepLabel,
+    kickoffBlockedReason: autopilotBlockedReason,
+    planning,
+    analyzing,
+  }) : null;
+  const runNextAction = () => {
+    if (!selected || !nextAction || nextAction.disabled) return;
+    if (nextAction.kind === 'goto') { goToStage(nextAction.stage, nextAction.anchor); return; }
+    switch (nextAction.id) {
+      case 'kickoff': handleKickoff(); break;
+      case 'analyze': handleAnalyze(); break;
+      case 'plan': handlePlan(); break;
+      case 'approve-cast-sets': approveCastAndSets(); break;
+      case 'resume-cast-sets': castSets.resume(); break;
+      case 'stop-production': production.stop(nextAction.runId); break;
+      case 'resume-production': production.resume(nextAction.runId, nextAction.acceptBasis ? { acceptBasis: true } : {}); break;
+      case 'render-final': renderJob.start(selected.id); break;
+      default: break;
+    }
+  };
+
+  // Everything the stage panels need, in one place: stages read what they
+  // use, so a panel moving between tabs never changes a signature here.
+  const board = selected ? {
+    project: selected,
+    locked: creativeSetupPending,
+    busy: { analyzing, planning, arranging, cloning },
+    tracks,
+    trackName,
+    audioFilename,
+    audioUrl,
+    youtube,
+    separation,
+    midi,
+    midiBound: midiTargetsSelected,
+    renderBound: renderTargetsSelected,
+    tempo,
+    videoSettings,
+    sceneMedia,
+    renderJob,
+    production,
+    castSets,
+    devArtifacts,
+    takes,
+    treatment,
+    excerpts,
+    revisions,
+    autoReview,
+    finalVideo,
+    kickoff,
+    conceptDraft,
+    styleDraft,
+    importingLyrics,
+    aligningLyrics,
+    autopilotBlockedReason,
+    canContinueShot,
+    replaceProject,
+    editProjectLocal,
+    saveProjectFields,
+    saveVisualSpec,
+    saveAutomation,
+    saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
+      patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec });
+    }),
+    setCreativeSetupPending,
+    setPickerTarget,
+    onAddReference: () => setPickerTarget({ type: 'reference' }),
+    onAnalyze: () => handleAnalyze(),
+    onPlan: () => handlePlan(),
+    onAutoArrange: handleAutoArrange,
+    onKickoff: handleKickoff,
+    onChangeTrack: handleChangeTrack,
+    onImportLyrics: handleImportLyrics,
+    onImportTrackLyrics: handleImportTrackLyrics,
+    onAlignLyrics: handleAlignLyrics,
+    onAddScene: handleAddScene,
+    onDeleteScene: handleDeleteScene,
+    onSplitScene: handleSplitScene,
+    onRenderStyle: (mode) => {
+      const composition = compositionDraft(selected, { mode });
+      editProjectLocal({ composition });
+      saveProjectFields({ composition });
+    },
+    onUploadArtifact: (file, fields) => devArtifacts.upload(file, fields).then((res) => {
+      if (res?.artifact) openArtifact(res.artifact.id);
+    }),
+    editSceneLocal,
+    saveScene,
+    moveScene,
+    commitSceneTiming,
+    approveCastAndSets,
+    skipCastAndSets,
+    openArtifact,
+    openPreview,
+    openContactSheet: () => setContactSheetOpen(true),
+    seekToScene,
+  } : null;
+  const StageView = STAGE_VIEWS[activeStage];
 
   return (
     <div className="space-y-4">
@@ -629,6 +845,20 @@ export default function MusicVideo() {
           open
           onClose={() => setPickerTarget(null)}
           onSelect={handleClipPickerSelect}
+        />
+      )}
+      {selected && (
+        <DevArtifactDrawer
+          key={routeArtifactId || 'none'}
+          open={!!routeArtifactId}
+          onClose={closeArtifact}
+          project={selected}
+          artifact={openArtifactRecord}
+          version={artifactVersion}
+          onVersionChange={setArtifactVersion}
+          ops={devArtifacts}
+          busy={devArtifacts.busy || castSets.busy}
+          castAndSets={{ regenerate: () => castSets.regenerate(), approveAndContinue: approveCastAndSets }}
         />
       )}
       {selected && (
@@ -671,6 +901,28 @@ export default function MusicVideo() {
                 </span>
               </span>
             )}
+            {selected && (
+              <span className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={handleClone}
+                  disabled={cloning}
+                  title={`Create an editable v${(selected.version || 1) + 1}; keep scene media attached and clear the final render`}
+                  className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm disabled:opacity-50 sm:min-h-0 sm:min-w-0"
+                >
+                  <Copy size={15} aria-hidden="true" /> <span className="max-sm:sr-only">{cloning ? 'Forking…' : `Fork v${(selected.version || 1) + 1}`}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDelete(selected.id)}
+                  title="Delete project"
+                  aria-label="Delete project"
+                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border px-2 py-1.5 text-sm text-port-error sm:min-h-0 sm:min-w-0"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </span>
+            )}
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
@@ -695,7 +947,6 @@ export default function MusicVideo() {
         submitting={creating}
       />
 
-
       <div>
         {!selected && !loading && routeProjectId && (
           <p className="text-sm text-port-text-muted">
@@ -716,202 +967,27 @@ export default function MusicVideo() {
           </div>
         )}
         {selected && (
-          <div className="space-y-3">
-            <AutomationPanel
-              key={`automation-${selected.id}`}
-              project={selected}
-              onSave={saveAutomation}
-              onKickoff={handleKickoff}
-              kickoffBusy={analyzing || planning}
-              kickoffBlockedReason={autopilotBlockedReason}
-            />
-            <CreativeSetupPanel key={`creative-${selected.id}`} project={selected} onPendingChange={setCreativeSetupPending}
-              onSave={(patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
-                patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec });
-              })} />
-            <fieldset disabled={creativeSetupPending} className="space-y-3 min-w-0">
-            <div className="bg-port-card border border-port-border rounded-lg p-3">
-              <ProjectToolbar
+          <MusicVideoLayout
+            project={selected}
+            trackLabel={trackName(selected.trackId)}
+            stage={activeStage}
+            onStageChange={(stage) => goToStage(stage)}
+            progress={progress}
+            nextAction={nextAction}
+            onNextAction={runNextAction}
+            spend={projectSpend(selected)}
+            dock={resolvePreviewSource(selected) ? (
+              <PreviewDock
                 project={selected}
-                onRenderStyle={(mode) => {
-                  const composition = compositionDraft(selected, { mode });
-                  editProjectLocal({ composition });
-                  saveProjectFields({ composition });
-                }}
-                midi={midi}
-                midiBound={midiTargetsSelected}
-                videoSettings={videoSettings}
-                sceneMedia={sceneMedia}
-                renderJob={renderJob}
-                busy={{ analyzing, planning, arranging, cloning }}
-                onAnalyze={handleAnalyze}
-                onPlan={() => handlePlan()}
-                onAutoArrange={handleAutoArrange}
-                onClone={handleClone}
-                onDelete={() => handleDelete(selected.id)}
+                audioUrl={audioUrl}
+                seekRequest={seekRequest}
+                collapsed={dockCollapsed}
+                onToggleCollapsed={() => setDockCollapsed((c) => !c)}
               />
-              {/* Restricted-model license gate for the saved scene-video
-                  renderer. Only mounts while that exact license is still
-                  unaccepted — after download-time acknowledgement it stays
-                  off the board. */}
-
-              {/* Track audio source is first in the edit workspace */}
-              <TrackPanel
-                project={selected}
-                tracks={tracks}
-                trackName={trackName}
-                audioFilename={projectAudioFilename(selected)}
-                youtube={youtube}
-                renderBound={renderTargetsSelected}
-                midiBound={midiTargetsSelected}
-                onChangeTrack={handleChangeTrack}
-                onProjectUpdated={replaceProject}
-              />
-              <AnalysisPanel
-                audioAnalysis={selected.audioAnalysis}
-                scenes={selected.scenes || []}
-                tempo={tempo}
-                onReanalyze={handleAnalyze}
-                analyzing={analyzing}
-              />
-              <LyricsPanel
-                project={selected}
-                onEditLocal={editProjectLocal}
-                onSave={saveProjectFields}
-                onImport={handleImportLyrics}
-                importing={importingLyrics}
-                onAlign={handleAlignLyrics}
-                aligning={aligningLyrics}
-              />
-
-              {/* Concept & style — global direction for the video */}
-              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div>
-                  <label htmlFor="mv-concept" className="block text-xs text-port-text-muted mb-1">Concept</label>
-                  <AutoSizeTextarea
-                    id="mv-concept"
-                    value={conceptDraft.value}
-                    rows={2}
-                    maxLength={8000}
-                    onChange={conceptDraft.onChange}
-                    onBlur={conceptDraft.onBlur}
-                    placeholder="What is this video about — story, theme, or narrative thread for the AI plan to build on."
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px]"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="mv-style" className="block text-xs text-port-text-muted mb-1">Visual style</label>
-                  <AutoSizeTextarea
-                    id="mv-style"
-                    value={styleDraft.value}
-                    rows={2}
-                    maxLength={2000}
-                    onChange={styleDraft.onChange}
-                    onBlur={styleDraft.onBlur}
-                    placeholder="Art style, references, palette, mood — appended to every generated frame and shot prompt."
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px]"
-                  />
-                </div>
-              </div>
-              <VisualSpecPanel
-                key={selected.id}
-                project={selected}
-                onSave={saveVisualSpec}
-                onAddReference={() => setPickerTarget({ type: 'reference' })}
-              />
-              <TypographyPanel
-                project={selected}
-                onEditLocal={editProjectLocal}
-                onSave={saveProjectFields}
-              />
-              <TreatmentPanel key={`treatment-${selected.id}`} project={selected} treatment={treatment} />
-              {selected.composition?.mode === 'code' && (
-                <CodeVideoPanel
-                  project={selected}
-                  audioUrl={projectAudioFilename(selected) ? trackAudioUrl(projectAudioFilename(selected)) : null}
-                  onProject={replaceProject}
-                />
-              )}
-              <RenderStatusPanel
-                rendering={renderTargetsSelected}
-                progress={renderJob.progress}
-                renderHistoryId={selected.renderHistoryId}
-                finalVideo={finalVideo}
-                onOpenPreview={openPreview}
-              />
-              <ProductionPanel project={selected} production={production} />
-              <ExcerptPanel
-                project={selected}
-                rendering={excerpts.rendering}
-                progress={excerpts.progress}
-                excerpts={selected.excerpts || []}
-                deletingId={excerpts.deletingId}
-                noteBusyId={excerpts.noteBusyId}
-                startExcerpt={excerpts.startExcerpt}
-                cancelExcerpt={excerpts.cancelExcerpt}
-                deleteExcerpt={excerpts.deleteExcerpt}
-                addNote={excerpts.addNote}
-                editNote={excerpts.editNote}
-                deleteNote={excerpts.deleteNote}
-                revision={{ ...revisions, genScenes: sceneMedia.genScenes, genVideoScenes: sceneMedia.genVideoScenes }}
-                autoReview={autoReview}
-              />
-              <HandoffControls
-                projectId={selected.id}
-                busy={takes.busy}
-                onExport={takes.exportHandoff}
-                onExportBundle={takes.exportHandoffBundle}
-                onImport={takes.importHandoffFiles}
-                onOpenContactSheet={() => setContactSheetOpen(true)}
-              />
-            </div>
-
-            {selected.audioAnalysis && (selected.scenes || []).length > 0 && (
-              <BeatTimeline audioAnalysis={selected.audioAnalysis} scenes={selected.scenes} lyricCues={selected.lyricCues} onCommit={commitSceneTiming} />
-            )}
-
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium">Scene board</h3>
-              <button onClick={handleAddScene} className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
-                <Plus size={15} /> Add scene
-              </button>
-            </div>
-
-            {(selected.scenes || []).length === 0 && <p className="text-sm text-port-text-muted">No scenes yet — add one to start the board.</p>}
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-              {(selected.scenes || []).map((scene, idx) => (
-                <SceneCard
-                  key={scene.sceneId}
-                  scene={scene}
-                  index={idx}
-                  isLast={idx === selected.scenes.length - 1}
-                  generatingFrame={sceneMedia.genScenes[scene.sceneId]}
-                  generatingVideo={sceneMedia.genVideoScenes[scene.sceneId]}
-                  settingsSaving={videoSettings.saving}
-                  videoBlockedReason={videoSettings.videoBlockedReason}
-                  lipSyncBackend={videoSettings.audioReactiveSelected ? 'local' : videoSettings.settings.backend}
-                  songDurationSec={selected.audioAnalysis?.durationSec ?? null}
-                  canContinueShot={canContinueShot}
-                  onMove={moveScene}
-                  onDelete={handleDeleteScene}
-                  onSplit={handleSplitScene}
-                  onEditLocal={editSceneLocal}
-                  onSave={saveScene}
-                  onGenerateFrame={sceneMedia.generateFrame}
-                  onGenerateVideo={sceneMedia.generateSceneVideo}
-                  onContinueVideo={sceneMedia.continueSceneVideo}
-                  onOpenPreview={openPreview}
-                  takeBusy={takes.busy}
-                  onSelectTake={takes.selectTake}
-                  onReviewTake={takes.reviewTake}
-                  onImportTake={(target) => setPickerTarget({ type: 'take', sceneId: target.sceneId })}
-                  onImportClipTake={(target) => setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
-                  layered={selected.composition?.mode === 'composed'}
-                />
-              ))}
-            </div>
-            </fieldset>
-          </div>
+            ) : null}
+          >
+            <StageView board={board} />
+          </MusicVideoLayout>
         )}
       </div>
     </div>

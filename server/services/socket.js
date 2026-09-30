@@ -313,6 +313,9 @@ const SIMPLE_BRIDGES = [
   { emitter: musicVideoEvents, event: 'scene-video', channel: 'music-video:scene-video' },
   { emitter: musicVideoEvents, event: 'auto-review', channel: 'music-video:auto-review' },
   { emitter: musicVideoEvents, event: 'production', channel: 'music-video:production' },
+  // The Cast & Sets check-in advancing, and a development artifact changing.
+  { emitter: musicVideoEvents, event: 'cast-and-sets', channel: 'music-video:cast-and-sets' },
+  { emitter: musicVideoEvents, event: 'dev-artifact', channel: 'music-video:dev-artifact' },
 ];
 
 let forwardingRegistered = false;

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { promisify } from 'util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
+import { isProcessAlive } from '../../test/processAlive.js';
 import {
   composeRef2vaSegments,
   MAX_REF2VA_XFADE_INPUTS,
@@ -104,9 +105,7 @@ describe('MiniMax H3 Ref2VA arbitrary-length wrapper', () => {
       expect(wrapperProcess.exitCode != null || wrapperProcess.signalCode != null).toBe(true);
     }, { timeout: 5000, interval: 25 });
     await vi.waitFor(() => {
-      let alive = true;
-      try { process.kill(runtimePid, 0); } catch { alive = false; }
-      expect(alive).toBe(false);
+      expect(isProcessAlive(runtimePid)).toBe(false);
     }, { timeout: 5000, interval: 25 });
   }, 25000);
 

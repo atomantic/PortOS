@@ -554,4 +554,11 @@ runBootSequence({ io, httpServer, localHttpServer, httpsEnabled, port: PORT, hos
 if (!isSmokeBoot()) {
   import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
     .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
+  // Local file scan only (no provider calls); keeps the federated Claude Code
+  // token history current even when the usage page is never opened.
+  import('./services/claudeCodeTranscriptUsage.js').then(({ startTranscriptUsageRefresh }) => startTranscriptUsageRefresh())
+    .catch((err) => console.error(`❌ Claude Code transcript usage refresh could not start: ${err.message}`));
+  // Same for interactive Grok / Antigravity sessions (local files, zero provider calls).
+  import('./services/usageInteractiveScan.js').then(({ startInteractiveUsageRefresh }) => startInteractiveUsageRefresh())
+    .catch((err) => console.error(`❌ Interactive usage scan could not start: ${err.message}`));
 }

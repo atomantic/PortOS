@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layered music-video composition</title>
+<style>
+@font-face { font-family: "MV Stencil"; src: url(fonts/big-shoulders-stencil-display-900.woff2) format("woff2"); font-weight: 900; }
+@font-face { font-family: "MV Mono"; src: url(fonts/ibm-plex-mono-400.woff2) format("woff2"); font-weight: 400; }
+@font-face { font-family: "MV Mono"; src: url(fonts/ibm-plex-mono-600.woff2) format("woff2"); font-weight: 600; }
+@font-face { font-family: "MV Cond"; src: url(fonts/ibm-plex-sans-condensed-500.woff2) format("woff2"); font-weight: 500; }
+@font-face { font-family: "MV Cond"; src: url(fonts/ibm-plex-sans-condensed-700.woff2) format("woff2"); font-weight: 700; }
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+/* The canvas keeps the render frame's pixels; CSS only fits it to the viewport
+   (the render's viewport IS the frame, the in-app preview is smaller). */
+#stage { display: block; width: 100vw; height: 100vh; object-fit: contain; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<!-- PortOS writes portos-mv.js (window.PORTOS_MV) and media/ next to this page at render time. -->
+<script src="portos-mv.js"></script><!-- portos-allow-hidden-content: the render-time data file -->
+<script src="engine.js"></script><!-- portos-allow-hidden-content: the reviewed template engine beside this page -->
+</body>
+</html>

@@ -223,3 +223,27 @@ Privacy is unchanged in kind — a quota card carries provider ids, percentages,
 reset times and the publishing instance's name; no prompts, no transcripts, no
 PII. The peer payload is rebuilt to the wire shape on arrival for the same
 recursion-depth reason the usage digest is.
+
+## Addendum: Claude Code transcript token history (per model, per day)
+
+The `usage` category also carries an optional `claudeCode` field per instance: a
+`{ updatedAt, days: { <YYYY-MM-DD>: { <model>: { messages, input, output,
+cacheRead, cacheWrite } } } }` map derived from the Claude Code CLI's local
+transcripts, so it covers sessions run outside PortOS. It exists so the Usage
+page can total tokens per model across the fleet and price them at API rates
+(`server/services/claudeCodeTranscriptUsage.js`, `getFleetClaudeCodeModels` in
+`peerUsage.js`).
+
+- **Additive and optional**, like `quotas`: an older peer drops the field and
+  contributes nothing to that report; no schema-version bump.
+- **Privacy:** model ids, UTC day buckets and token counts only — never prompts,
+  project paths, session ids or transcript text. Peer-supplied maps are rebuilt to
+  this fixed shape (day/model caps) before storage.
+- **Persisted locally** in `data/claude-code-transcript-usage.json` (per-field max
+  merge), so history survives the CLI pruning old transcripts. It is a derived
+  local cache: it ships no `data.reference/` seed and needs no migration — it is
+  rebuilt from the transcripts still on disk.
+- **Freshness:** refreshed lazily when the report is read and by a 30-minute
+  local file scan that starts after boot. No provider calls are made.
+- `capturedAt` is the newest of usage / quotas / transcript `updatedAt`, so a
+  transcript refresh alone still advances the slot peers pull.

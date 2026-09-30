@@ -44,6 +44,7 @@ const queue = {
 };
 const dispatch = vi.fn();
 const planProject = vi.fn();
+const startCastAndSets = vi.fn();
 const startAutoReview = vi.fn();
 const autoReview = { startAutoReview, resumeAutoReview: vi.fn(), stopAutoReview: vi.fn(async () => {}), cancelAutoReview: vi.fn(async () => {}) };
 
@@ -131,6 +132,7 @@ beforeEach(() => {
     dispatch,
     queue: async () => queue,
     planProject,
+    startCastAndSets,
     autoReview: async () => autoReview,
     releaseRevisionSection: vi.fn(async () => {}),
   });
@@ -171,8 +173,26 @@ describe('music video production run (#9066)', () => {
     expect(theRun().status).toBe('completed');
   });
 
+  it('in a composition document, skips frames for card scenes and clips for still/card scenes', async () => {
+    seedProject({
+      composition: { mode: 'document' },
+      scenes: [
+        { sceneId: 'mvs-a', label: 'A', framePrompt: 'a lighthouse', prompt: 'waves roll', startSec: 0, endSec: 4, takes: [] },
+        { sceneId: 'mvs-card', label: 'Card', visualLayer: 'card', startSec: 4, endSec: 6, takes: [] },
+        { sceneId: 'mvs-still', label: 'Still', visualLayer: 'still', framePrompt: 'a harbor', referenceImageId: 'harbor.png', startSec: 6, endSec: 8, takes: [] },
+      ],
+    });
+    await start();
+    // Only the footage scene needs a frame; the card needs none and the still already has one.
+    expect(dispatch.mock.calls.map(([a]) => [a.stepKind, a.scene.sceneId])).toEqual([['frame', 'mvs-a']]);
+    completeJob('job-1');
+    await settle();
+    // Only the footage scene needs a clip — the document draws the still and the card itself.
+    expect(dispatch.mock.calls.slice(1).map(([a]) => [a.stepKind, a.scene.sceneId])).toEqual([['clip', 'mvs-a']]);
+  });
+
   it('plans an empty board once, with the directive, before generating', async () => {
-    seedProject({ scenes: [] });
+    seedProject({ scenes: [], castAndSets: { status: 'skipped' } });
     planProject.mockImplementation(async () => {
       store.get('mv-example').scenes = [{ sceneId: 'mvs-p', framePrompt: 'x', prompt: 'y', startSec: 0, endSec: 4, takes: [] }];
       return { scenesAdded: 1 };
@@ -180,6 +200,50 @@ describe('music video production run (#9066)', () => {
     await start();
     expect(planProject).toHaveBeenCalledWith('mv-example', { seedPrompts: true, directive: 'moody, slow' });
     expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the Cast & Sets check-in before the plan and waits for the director in review mode', async () => {
+    seedProject({ scenes: [], visualSpec: { references: [] } });
+    startCastAndSets.mockImplementation(async (projectId, { productionRunId }) => {
+      store.get(projectId).castAndSets = { status: 'directing', productionRunId };
+      return {};
+    });
+    planProject.mockImplementation(async () => {
+      store.get('mv-example').scenes = [{ sceneId: 'mvs-p', framePrompt: 'x', prompt: 'y', startSec: 0, endSec: 4, takes: [] }];
+      return { scenesAdded: 1 };
+    });
+    await start();
+    expect(startCastAndSets).toHaveBeenCalledTimes(1);
+    expect(startCastAndSets.mock.calls[0][1]).toMatchObject({ productionRunId: theRun().id });
+    expect(planProject).not.toHaveBeenCalled();
+
+    // The sheet is waiting for its check-in: the run waits, it neither plans nor halts.
+    store.get('mv-example').castAndSets.status = 'review';
+    musicVideoEvents.emit('cast-and-sets', { projectId: 'mv-example', stage: { status: 'review' } });
+    await settle();
+    expect(planProject).not.toHaveBeenCalled();
+    expect(theRun()).toMatchObject({ status: 'running', planned: false, castAndSetsStarted: true });
+
+    // Approval writes new references (a creative-setup change) and re-bases the run in the same write.
+    const { rebaseProductionAfterCheckin } = await import('./production.js');
+    const project = store.get('mv-example');
+    project.castAndSets.status = 'approved';
+    project.visualSpec = { references: [{ id: 'mvr-cs-character', imageId: 'sheet.png', role: 'character', condition: true }] };
+    store.set('mv-example', rebaseProductionAfterCheckin(project).project);
+    musicVideoEvents.emit('cast-and-sets', { projectId: 'mv-example', stage: { status: 'approved' } });
+    await settle();
+    expect(planProject).toHaveBeenCalledTimes(1);
+    expect(theRun().status).toBe('running');
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('halts blocked when the Cast & Sets check-in fails, and never plans past it', async () => {
+    seedProject({ scenes: [], castAndSets: { status: 'failed', stopReason: 'no image backend' } });
+    await start();
+    expect(startCastAndSets).not.toHaveBeenCalled();
+    expect(planProject).not.toHaveBeenCalled();
+    expect(theRun()).toMatchObject({ status: 'blocked' });
+    expect(theRun().stopReason).toMatch(/no image backend/);
   });
 
   it('refuses a route outside the allowed pool before anything is enqueued', async () => {
@@ -323,6 +387,34 @@ describe('music video production run (#9066)', () => {
     await service.startProduction('mv-example', { pool: [POOL[0], POOL[2]], limits: { ...LIMITS, spendCapUsd: 5 } });
     await settle();
     expect(theRun().limits.spendCapUsd).toBe(5);
+  });
+
+  it('prices fal.ai clips from the catalog so a dollar cap bounds them, charging each scene its own take', async () => {
+    // Scene A is a 4s performance (lip-sync window padded to 5.05s), B a 4s
+    // cutaway on H3 Max (covered by its 5s minimum), both at 1080P list rates.
+    seedProject({
+      videoSettings: { backend: 'fal', falModelId: 'minimax/h3-max/image-to-video', falResolution: '1080P' },
+      audioAnalysis: { sections: [{ startSec: 0, endSec: 8, label: 'Verse' }], durationSec: 30 },
+    });
+    store.get('mv-example').scenes[0].shotMode = 'performance';
+    const falPool = [POOL[0], { kind: 'video', mode: 'fal', model: null }];
+    const usable = env.isVideoModeUsable;
+    env.isVideoModeUsable = (_settings, mode) => mode === 'local' || mode === 'fal';
+    try {
+      await start({ pool: falPool, limits: { ...LIMITS, spendCapUsd: 1.5 } });
+      // The run's start-time price for the route: a default-length cutaway.
+      expect(theRun().pricing).toEqual({ 'image:local:flux2-dev': 0, 'video:fal:': 0.8 });
+      completeJob('job-1');
+      completeJob('job-2');
+      await settle();
+    } finally {
+      env.isVideoModeUsable = usable;
+    }
+    const clips = theRun().steps.filter((s) => s.kind === 'clip');
+    // A's lip-sync take is charged 5.05s × $0.16; B's $0.80 would pass the cap.
+    expect(clips.map((s) => [s.sceneId, s.costUsd])).toEqual([['mvs-a', 0.808]]);
+    expect(theRun()).toMatchObject({ status: 'limit-reached', usage: { spentUsd: 0.808 }, stopReason: expect.stringMatching(/\$1\.5 cap/) });
+    expect(dispatch.mock.calls.filter(([a]) => a.stepKind === 'clip').map(([a]) => a.scene.sceneId)).toEqual(['mvs-a']);
   });
 
   it('after a restart nothing dispatches until an explicit resume, which neither duplicates live jobs nor re-charges them', async () => {

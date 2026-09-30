@@ -10,7 +10,7 @@ export default function ToggleChip({ id, label, hint, Icon, checked, onToggle })
     <label
       htmlFor={id}
       title={hint}
-      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer transition-colors ${checked
+      className={`flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] sm:min-h-0 rounded-lg border text-xs cursor-pointer transition-colors ${checked
         ? 'bg-port-accent/20 text-port-accent border-port-accent/40'
         : 'bg-port-bg text-gray-400 border-port-border hover:text-gray-200'}`}
     >

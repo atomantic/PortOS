@@ -228,6 +228,66 @@ project's video backend has a source-audio lip-sync lane (fal.ai today).
 The treatment's proof checklist treats readable text and audio alignment as
 judgeable only in the final render.
 
+## Music-video composition documents
+
+A Music Video project can own its whole edit as a composition document: set
+the render style to **Composition document** (`composition.mode: "document"`)
+and start from the shipped `layered` template, import a `.zip`, or copy a
+folder that already sits inside `data/`. Each import is an immutable version
+folder under `data/music-video/<projectId>/composition/`; imports refuse
+symlinks, special files, traversal names and the reserved names below
+(`server/services/musicVideo/compositionDocument.js`). Routes, all under
+`/api/music-video/:id/composition/document`: `GET` (manifest), `POST /zip`
+(multipart `file`), `POST /directory` (`{ directory }`), `POST /template`
+(`{ template: "layered" }`), `GET /export` (zip), `GET /preview`,
+`GET /file?path=` (one document file, served inert), `DELETE` (detach).
+
+Every render of the project — the final render, a draft excerpt, its contact
+sheet and the auto-review excerpt — copies the document into a job-private
+folder under `data/music-video-song-renders/<jobId>/` and adds, before the
+snapshot freezes (`server/services/musicVideo/documentRender.js`):
+
+- `portos-mv.js` — `window.PORTOS_MV = { project: { id, name, aspect }, render:
+  { width, height, fps, frames, durationSec }, song: { durationSec, bpm, beats,
+  downbeats, sections, words }, lyrics, lyricMarkers, scenes: [{ sceneId,
+  label, startSec, endSec, shotMode, visualLayer, stillMove, cardText,
+  cardColor, lyricText, direction, media: { kind, src, inSec, outSec, fps,
+  width, height } | null }], textCues, composition: { mode, style, posterSec,
+  overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
+  refuses `fetch`.
+- `song.json` — the same song block the code-rendered mode reads.
+- `media/scene-<sceneId>.<ext>` — each scene's selected take (its clip when
+  it has one, else its still), named by `scenes[].media.src`.
+
+Staged audio/video is streamed from disk by byte range rather than held in
+memory, so a song's worth of footage fits. The document stays on song time:
+an excerpt seeks the same song times as the full render (`startSec + n / fps`,
+snapped to the frame grid). The picture is captured silent and the master song
+(plus the optional sound-design bed) is muxed under it. The project's aspect
+ratio picks the frame; a page authored at another aspect must list that size
+in `portosComposition.formats` (its `layout({ width, height })` hook
+reframes). A `seek(t)` that rejects — for example a `<video>` that failed to
+seek — fails the render and names the frame. A page that draws `<video>`
+frames must await `seeked` before painting; the template seeks to the middle
+of the source frame so a frame boundary can never round to the previous one.
+
+The shipped `layered` template (`server/services/musicVideo/documentTemplates/layered/`)
+draws each scene's take with a gentle camera move and beat punch-ins, film
+grain and a vignette, a title card for card scenes, subtitles (the subtitle
+text cues, else the timed lyrics), kinetic hero words for cues flagged
+`hero`, and an optional HUD from `composition.overlay` (title lines, a meter
+with keyframes, a ticker, timecode). It declares all three frame sizes. Its
+fonts (IBM Plex Mono, IBM Plex Sans Condensed, Big Shoulders Stencil
+Display) are SIL Open Font License; the licenses ship beside them. Once
+copied into a project the files are the project's to edit — project-specific
+cards belong there, not in the template.
+
+The in-app preview is a self-contained `srcdoc` in an opaque-origin sandbox
+with no network: the server inlines the document's scripts, stylesheets and
+small assets, the PortOS page fetches the larger media on the user's behalf
+and posts it in as Blobs (`window.PORTOS_MV_ASSETS` resolves to
+`{ src: blobUrl }`), and the scrubber posts `portos-mv:seek` messages.
+
 ## Launch-video admission (API foundation)
 
 `POST /api/html-composition/render` accepts `launchVideo: { targetDurationSec: 20 }`.

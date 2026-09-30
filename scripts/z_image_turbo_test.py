@@ -23,6 +23,72 @@ class Qwen21Pipeline:
         return SimpleNamespace(images=[Image.new('RGBA', (32, 32), (10, 20, 30, 64))])
 
 
+class FakeReduction:
+    def __init__(self, value):
+        self.value = value
+
+    def all(self):
+        return self
+
+    def item(self):
+        return self.value
+
+
+class FakeTensor:
+    def __init__(self, *, finite=True, dtype='fp32'):
+        self.finite = finite
+        self.dtype = dtype
+        self.device = 'mps'
+
+    def to(self, *args, device=None, dtype=None):
+        if args:
+            self.device = args[0]
+        if device is not None:
+            self.device = device
+        if dtype is not None:
+            self.dtype = dtype
+        return self
+
+    def view(self, *_shape):
+        return self
+
+    def __mul__(self, _other):
+        return self
+
+    def __add__(self, _other):
+        return self
+
+    def __getitem__(self, _key):
+        return self
+
+
+class FakeVae:
+    def __init__(self, outcomes):
+        self.config = SimpleNamespace(latents_mean=[0.0], latents_std=[1.0], z_dim=1)
+        self.dtype = 'fp32'
+        self.outcomes = list(outcomes)
+        self.decode_dtypes = []
+
+    def to(self, *, dtype):
+        self.dtype = dtype
+        return self
+
+    def decode(self, _latents, return_dict=False):
+        self.decode_dtypes.append(self.dtype)
+        return (FakeTensor(finite=self.outcomes.pop(0), dtype=self.dtype),)
+
+
+class FakeQwenDecodePipeline:
+    vae_scale_factor = 8
+
+    def __init__(self, outcomes):
+        self.vae = FakeVae(outcomes)
+        self.image_processor = SimpleNamespace(postprocess=lambda decoded, output_type: [('image', decoded, output_type)])
+
+    def _unpack_latents(self, _latents, _height, _width, _scale_factor):
+        return FakeTensor(dtype='bf16')
+
+
 class RunnerContract(unittest.TestCase):
     def test_missing_pipeline_reports_runtime_remedy_before_exit_two(self):
         with patch.dict(sys.modules, {'torch': SimpleNamespace()}):
@@ -37,6 +103,41 @@ class RunnerContract(unittest.TestCase):
         self.assertIn('USER_ERROR:torch_runtime_broken', stderr.getvalue())
         self.assertIn('QwenImage21Pipeline', stderr.getvalue())
         self.assertIn('FLUX2_FORCE_REINSTALL=1', stderr.getvalue())
+
+    def test_qwen21_decode_guard_accepts_finite_output_and_retries_once(self):
+        torch = SimpleNamespace(
+            float32='fp32',
+            tensor=lambda _values: FakeTensor(),
+            isfinite=lambda tensor: FakeReduction(tensor.finite),
+        )
+        with patch.dict(sys.modules, {'torch': torch}):
+            runner = importlib.import_module('z_image_turbo')
+        for outcomes, expected_calls, expect_retry_log in (
+            ([True], ['fp32'], False),
+            ([False, True], ['fp32', 'fp32'], True),
+        ):
+            with self.subTest(outcomes=outcomes), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                pipe = FakeQwenDecodePipeline(outcomes)
+                images = runner.decode_qwen21_latents(pipe, FakeTensor(), 1216, 832)
+                self.assertEqual(images[0][0], 'image')
+                self.assertEqual(images[0][2], 'pil')
+                self.assertEqual(pipe.vae.decode_dtypes, expected_calls)
+                self.assertEqual('recovered after a float32 retry' in stderr.getvalue(), expect_retry_log)
+
+    def test_qwen21_decode_guard_fails_before_writing_non_finite_output(self):
+        torch = SimpleNamespace(
+            float32='fp32',
+            tensor=lambda _values: FakeTensor(),
+            isfinite=lambda tensor: FakeReduction(tensor.finite),
+        )
+        with patch.dict(sys.modules, {'torch': torch}):
+            runner = importlib.import_module('z_image_turbo')
+        pipe = FakeQwenDecodePipeline([False, False])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaisesRegex(RuntimeError, 'produced NaNs'):
+            runner.decode_qwen21_latents(pipe, FakeTensor(), 1216, 832)
+        self.assertEqual(pipe.vae.decode_dtypes, ['fp32', 'fp32'])
+        self.assertIn('USER_ERROR:qwen_mps_nan', stderr.getvalue())
 
     def test_qwen21_generation_and_edit_preserve_alpha(self):
         torch = SimpleNamespace(
@@ -59,6 +160,7 @@ class RunnerContract(unittest.TestCase):
                 if references:
                     argv += ['--reference-images'] + [str(source)] * references
                 pipe = Qwen21Pipeline()
+                stderr = io.StringIO()
                 with patch.object(sys, 'argv', argv), patch.multiple(
                     runner, pick_device=lambda _: 'cpu',
                     load_pipeline=lambda *a, **kw: (pipe, 'cpu'),
@@ -69,8 +171,11 @@ class RunnerContract(unittest.TestCase):
                     make_stepwise_callback=lambda *a, **kw: None,
                     set_vae_tiling=lambda *a: None,
                     to_i2i_pipeline=lambda _: self.fail('Unified pipeline must not be converted'),
-                ):
+                ), contextlib.redirect_stderr(stderr):
                     runner.main()
+                self.assertIn('🎨 qwen-image-2.1 generate', stderr.getvalue())
+                self.assertIn(f'references={references}', stderr.getvalue())
+                self.assertNotIn('🎨 z-image generate', stderr.getvalue())
                 self.assertEqual(pipe.received['steps'], 40)
                 self.assertEqual(pipe.received['cfg'], 1)
                 if references:
