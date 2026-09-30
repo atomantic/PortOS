@@ -16,6 +16,12 @@ const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null } 
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-stage-'),
 }));
+// The staging assertions stop before ffmpeg ever runs; CI images have no
+// ffmpeg on PATH, so resolve the lookup instead of depending on the host.
+vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  findFfmpeg: async () => 'ffmpeg',
+}));
 // Capture the frozen job folder the page would open, then stop the render.
 vi.mock('../htmlComposition/browser.js', () => ({
   openComposition: async (directory) => {
