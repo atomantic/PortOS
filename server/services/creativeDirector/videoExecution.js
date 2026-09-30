@@ -5,6 +5,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { isMediaAdmissionRefusal } from '../mediaJobQueue/admission.js';
 import { creativeDirectorVideoLimitsSchema } from '../../lib/creativeDirectorValidation.js';
 import { assertVideoOwner } from '../../lib/creativeDirectorVideoReview.js';
+import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, coerceFalVideoSeconds, estimateFalVideoCostUsd, getFalVideoModel } from '../../lib/falVideoModels.js';
 
 const ACTIVE = new Set(['planning', 'rendering', 'stitching']);
 const isMediaAttempt = attempt => ['clip', 'audio'].includes(attempt.kind);
@@ -28,6 +29,34 @@ export function effectiveVideoProject(project) {
     modelId: choices.video.modelId || project.modelId,
     modelOverrides: { ...project.modelOverrides, treatment: choices.treatment, plan: choices.plan,
       ...(choices.evaluation.type === 'api' ? { evaluation: choices.evaluation } : {}) } };
+}
+
+/**
+ * Catalog price of one fal clip, billed on the length the catalog coerces the
+ * request to. Null (unknown) for an uncurated model id or any other backend.
+ */
+function falClipCostUsd({ modelId, seconds, params = {} }) {
+  const cost = estimateFalVideoCostUsd({ modelId, seconds, resolution: params.resolution,
+    width: params.width, height: params.height, generateAudio: params.generateAudio === true });
+  return cost === null || cost === undefined ? null : cost;
+}
+
+const falModelFor = (modelId, hasSourceImage) => modelId || (hasSourceImage ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL);
+
+/**
+ * Preview total for a fal pin: one estimate per treatment scene, or — before a
+ * treatment exists — the target length cut into clips of the model's default
+ * length. Null when any clip is unpriceable.
+ */
+function estimateFalProjectCostUsd(project, video) {
+  const modelId = falModelFor(video.modelId, Boolean(project.startingImageFile));
+  const model = getFalVideoModel(modelId);
+  if (!model) return null;
+  const scenes = project.treatment?.scenes || [];
+  const seconds = scenes.length ? scenes.map(scene => scene.durationSeconds)
+    : Array.from({ length: Math.max(1, Math.ceil((Number(project.targetDurationSeconds) || 0) / (coerceFalVideoSeconds(model, null) || 1))) }, () => null);
+  const costs = seconds.map(value => falClipCostUsd({ modelId, seconds: value }));
+  return costs.some(cost => cost === null) ? null : Math.round(costs.reduce((sum, cost) => sum + cost, 0) * 1e4) / 1e4;
 }
 
 async function resolveChoices(project) {
@@ -78,7 +107,8 @@ async function resolveChoices(project) {
   const evaluation = vision ? { type: 'api', providerId: vision.provider.id, model: vision.model || vision.provider.defaultModel || null } : await agentChoice('evaluate');
   const { resolveVideoAudioChoice } = await import('./videoAudio.js');
   const audio = await resolveVideoAudioChoice(project);
-  return { video, treatment, plan, evaluation, audio, costEstimateUsd: null };
+  return { video, treatment, plan, evaluation, audio,
+    costEstimateUsd: pin.mode === 'fal' ? estimateFalProjectCostUsd(project, video) : null };
 }
 
 export async function getVideoExecutionPreview(projectId) {
@@ -111,7 +141,9 @@ export async function getVideoExecutionPreview(projectId) {
     configurationRevision: canonicalSnapshotChecksum({ input: videoConfigurationRevision(project), choices }),
     limits: creativeDirectorVideoLimitsSchema.parse(project.videoExecution?.limits || {}),
     execution,
-    costNotice: 'Provider prices and balances are unknown. Clip and agent-call limits are enforced; a dollar cap blocks calls whose price cannot be bounded.' };
+    costNotice: choices?.costEstimateUsd != null
+      ? 'Estimated from the fal.ai price catalog; balances are unknown. A dollar cap refuses any clip that would exceed it. Clip and agent-call limits are also enforced.'
+      : 'Provider prices and balances are unknown. Clip and agent-call limits are enforced; a dollar cap blocks calls whose price cannot be bounded.' };
 }
 
 async function ownedMutation(projectId, mutate) {
@@ -228,7 +260,14 @@ export async function reserveVideoAttempt(projectId, details) {
     if (!isClip && !isAudio && attempts.filter(attempt => !isMediaAttempt(attempt)).length >= limits.maxAgentCalls) blocker = 'The agent-call limit is exhausted. Review limits before Resume.';
     if (isAudio && (attempts.filter(attempt => attempt.kind === 'audio').length >= (limits.maxAudioJobs ?? 1) || sameKey.length > limits.maxRetries)) blocker = 'The audio job limit is exhausted. Review limits before Resume.';
     if (details.kind === 'plan' && attempts.filter(attempt => attempt.kind === 'plan').length > limits.maxReplans) blocker = 'The replan limit is exhausted. Review limits before Resume.';
-    if (limits.spendCapUsd !== null) blocker = 'The next call has unknown cost and cannot fit an enforceable dollar cap.';
+    // Only media is metered against the dollar cap; agent calls stay bounded by
+    // maxAgentCalls. A clip is charged its catalog estimate, and every earlier
+    // attempt counts as spent (a failed one may still have billed).
+    if (limits.spendCapUsd !== null && (isClip || isAudio)) {
+      const cost = isClip ? details.costUsd : null;
+      if (typeof cost !== 'number') blocker = 'The next call has unknown cost and cannot fit an enforceable dollar cap.';
+      else if (attempts.reduce((sum, attempt) => sum + (attempt.costUsd || 0), 0) + cost > limits.spendCapUsd + 1e-9) blocker = 'The next clip would exceed the dollar cap. Review limits before Resume.';
+    }
     if (blocker) return { project: { ...project, status: 'paused', failureReason: blocker, videoExecution: { ...execution, blocker }, updatedAt: now() }, result: null };
     const attempt = { ...details, id: randomUUID(), executionId: execution.id, productionRevision: project.videoWorkRevision || 0, status: 'submitting', at: now() };
     return { project: { ...project, videoExecution: { ...execution, attempts: [...attempts, attempt] }, updatedAt: now() }, result: attempt };
@@ -292,7 +331,9 @@ export async function enqueueVideoProductionJob(project, { kind = 'video', param
   validateVideoShot(project, { sceneId: sceneId || stepId, prompt: String(params.prompt || ''), durationSeconds: seconds }, false);
   const { hasConfiguredMediaRoute, enqueueUnattendedMediaJob } = await import('../federatedMedia/defaultRouting.js');
   if (await hasConfiguredMediaRoute(kind)) throw new ServerError('A standing peer route would change the reviewed video backend. Change Settings before Resume.', { status: 409, code: 'VIDEO_ROUTE_CHANGED' });
-  const attempt = await reserveVideoAttempt(project.id, { kind: 'clip', key: sceneId ? `scene:${sceneId}` : `step:${stepId}`, sceneId, stepId, workRevision, expectedProductionRevision: project.videoWorkRevision || 0 });
+  const costUsd = params.mode === 'fal'
+    ? falClipCostUsd({ modelId: falModelFor(params.modelId, Boolean(params.sourceImagePath)), seconds, params }) : null;
+  const attempt = await reserveVideoAttempt(project.id, { kind: 'clip', ...(costUsd !== null ? { costUsd } : {}), key: sceneId ? `scene:${sceneId}` : `step:${stepId}`, sceneId, stepId, workRevision, expectedProductionRevision: project.videoWorkRevision || 0 });
   if (!attempt) return null;
   const marker = { projectId: project.id, attemptId: attempt.id, executionId: attempt.executionId };
   try {
