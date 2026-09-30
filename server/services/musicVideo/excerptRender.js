@@ -29,6 +29,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
+import { assertCurrentPerformanceTakes } from './performanceShot.js';
 import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
@@ -97,6 +98,7 @@ const SEEKED_EXCERPTS = Object.freeze({
   document: {
     label: 'composition document',
     soundBed: true,
+    performanceTakes: true,
     prepare: async (project) => {
       const plan = await prepareDocumentRender(project);
       const songSections = (project.scenes || [])
@@ -115,6 +117,7 @@ async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revis
   // Same order as a full render: a missing master throws before the
   // excerpt is marked rendering.
   const audioPath = await resolveMasterAudioPath(project);
+  if (renderer.performanceTakes) await assertCurrentPerformanceTakes(project, audioPath);
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
   if (!(startSec >= 0) || !(endSec > startSec) || endSec > prepared.totalSec + 1e-6) {
     throw new ServerError(

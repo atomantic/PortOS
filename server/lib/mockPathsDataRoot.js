@@ -90,7 +90,9 @@ export function lazyTempDataRoot(prefix = 'portos-test-') {
 
 /** Remove every root `lazyTempDataRoot` handed out in this worker. */
 export function cleanupTempDataRoots() {
-  for (const root of lazyRoots.values()) rmSync(root, { recursive: true, force: true });
+  // Retries cover ENOTEMPTY/EBUSY from a just-killed child (a test Chrome's
+  // helpers) still flushing into the root while it is being removed.
+  for (const root of lazyRoots.values()) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   lazyRoots.clear();
 }
 
