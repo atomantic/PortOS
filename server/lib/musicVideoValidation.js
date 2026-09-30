@@ -544,6 +544,25 @@ export const musicVideoPublishCopyDraftSchema = z.object({
 }).strict();
 export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
+// #9282: posting to a platform through the PortOS Browser. One strict options
+// object covers every target; each target's payload builder reads only its own.
+export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno']);
+export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
+const publishUrl = z.string().url().max(500);
+export const musicVideoPublishPrepareSchema = z.object({
+  subreddit: z.string().max(40),
+  kind: z.enum(['self', 'link']),
+  url: publishUrl,
+  flairId: z.string().max(100),
+  flairText: z.string().max(64),
+  firstComment: kitText(10000),
+  territory: z.string().max(40),
+  songUrl: publishUrl,
+  pin: z.boolean(),
+  prompt: kitText(25000),
+  storyImage: z.string().min(1).max(300),
+}).partial().strict();
+
 export const musicVideoExcerptNoteSchema = z.object({
   atSec: z.number().min(0).max(36000),
   note: z.string().min(1).max(2000),

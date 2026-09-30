@@ -207,6 +207,15 @@ export const updateMusicVideoPublishCopy = (id, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'PATCH', body: JSON.stringify(patch || {}), ...options });
 export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/thumbnail`, { method: 'PUT', body: JSON.stringify({ filename }), ...options });
+// ---- Posting (#9282) ----
+// Prepare fills the platform's post in the PortOS Browser → { draftId, target,
+// summary, screenshot }; submit posts that live draft → { project, post }.
+export const prepareMusicVideoPublishDraft = (id, target, options = {}, reqOptions = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/${encodeURIComponent(target)}/prepare`, { method: 'POST', body: JSON.stringify(options || {}), ...reqOptions });
+export const submitMusicVideoPublishDraft = (id, draftId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/drafts/${encodeURIComponent(draftId)}/submit`, { method: 'POST', ...options });
+export const discardMusicVideoPublishDraft = (id, draftId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE', ...options });
 export const musicVideoExcerptRenderEventsUrl = (jobId) =>
   `/api/music-video/excerpt/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoExcerptRender = (jobId, options = {}) =>
