@@ -117,12 +117,26 @@ const LIMITS = { youtubeTitle: 100, shortsTitle: 100, xHook: 280, redditTitle: 3
 
 const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : '');
 
+// The JSON shape each platform's copy takes in the prompt.
+const COPY_SPECS = {
+  youtube: '"youtube":{"title":"<=100 chars","description":"2 short paragraphs + the links given","tags":["8-15 lowercase tags"]}',
+  shorts: '"shorts":{"title":"<=100 chars, ends with #shorts","description":"1-2 sentences + the full video URL if given"}',
+  x: '"x":{"hook":"<=280 chars, one surprising claim, no links","story":"the making-of as a long post"}',
+  tiktok: '"tiktok":{"caption":"1-2 sentences + 4-6 hashtags"}',
+  instagram: '"instagram":{"caption":"1-2 sentences + 4-6 hashtags"}',
+  reddit: '"reddit":{"title":"<=300 chars","body":"markdown: what it is, what it cost, how it was made"}',
+  stackerNews: '"stackerNews":{"title":"<=80 chars","body":"markdown, personal tone"}',
+};
+
 /**
  * The copy prompt. `notes` is the director's own making-of story and
  * `spentUsd` the generation spend; both are the facts the copy may claim —
- * nothing else about cost or process is invented.
+ * nothing else about cost or process is invented. `platforms` limits the
+ * draft to where the director posts (#9287); `lessons` are their own ratings
+ * of earlier posts (`{ platform, reception, notes }`), so the copy leans
+ * toward what landed and away from what didn't.
  */
-export function buildPublishCopyPrompt(project, { notes = '', spentUsd = null, links = {} } = {}) {
+export function buildPublishCopyPrompt(project, { notes = '', spentUsd = null, links = {}, platforms = PUBLISH_PLATFORMS, lessons = [] } = {}) {
   const lyrics = timedLines(project).map((l) => l.text).join('\n');
   const chapters = chaptersText(buildChapters(project));
   const facts = [
@@ -131,6 +145,11 @@ export function buildPublishCopyPrompt(project, { notes = '', spentUsd = null, l
     links.youtube ? `Full video URL: ${links.youtube}` : null,
     links.song ? `Song URL: ${links.song}` : null,
   ].filter(Boolean).join('\n');
+  const wanted = PUBLISH_PLATFORMS.filter((p) => platforms.includes(p));
+  const lessonText = lessons
+    .filter((l) => wanted.includes(l.platform) && (l.reception || l.notes))
+    .map((l) => `- ${l.platform}${l.reception ? ` (${l.reception})` : ''}: ${l.notes || 'no notes'}`)
+    .join('\n');
   return [
     'You write release copy for a music video the user made. Write in the first person as the artist: plain, specific, no hype words, no emoji, no hashtags except where a field asks for them.',
     'Use ONLY facts given below. Never invent costs, tools, durations or events.',
@@ -138,31 +157,27 @@ export function buildPublishCopyPrompt(project, { notes = '', spentUsd = null, l
     fenceBlock('Making-of notes from the artist', notes || '(none)', 6000),
     fenceBlock('Lyrics', lyrics || '(no timed lyrics)', 4000),
     chapters ? fenceBlock('Chapters', chapters, 1200) : '',
+    lessonText ? fenceBlock('How the artist rated earlier posts (lean toward what landed, avoid what did not)', lessonText, 3000) : '',
     'Return ONLY a JSON object with exactly these keys:',
-    '{"youtube":{"title":"<=100 chars","description":"2 short paragraphs + the links given","tags":["8-15 lowercase tags"]},',
-    ' "shorts":{"title":"<=100 chars, ends with #shorts","description":"1-2 sentences + the full video URL if given"},',
-    ' "x":{"hook":"<=280 chars, one surprising claim, no links","story":"the making-of as a long post"},',
-    ' "tiktok":{"caption":"1-2 sentences + 4-6 hashtags"},',
-    ' "instagram":{"caption":"1-2 sentences + 4-6 hashtags"},',
-    ' "reddit":{"title":"<=300 chars","body":"markdown: what it is, what it cost, how it was made"},',
-    ' "stackerNews":{"title":"<=80 chars","body":"markdown, personal tone"}}',
+    `{${wanted.map((p) => COPY_SPECS[p]).join(',\n ')}}`,
   ].filter(Boolean).join('\n\n');
 }
 
-/** The model's JSON reply as `{ platform: { field: text } }`, clipped to each platform's limits; null when unusable. */
-export function parsePublishCopy(text) {
+/** The model's JSON reply as `{ platform: { field: text } }` for `platforms`, clipped to each platform's limits; null when unusable. */
+export function parsePublishCopy(text, platforms = PUBLISH_PLATFORMS) {
   const { value } = extractJson(text, { blockType: 'object' });
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const v = (k) => (value[k] && typeof value[k] === 'object' ? value[k] : {});
-  const copy = {
-    youtube: { title: str(v('youtube').title, LIMITS.youtubeTitle), description: str(v('youtube').description, 5000), tags: (Array.isArray(v('youtube').tags) ? v('youtube').tags : []).map((t) => str(t, 60)).filter(Boolean).slice(0, 20) },
-    shorts: { title: str(v('shorts').title, LIMITS.shortsTitle), description: str(v('shorts').description, 5000) },
-    x: { hook: str(v('x').hook, LIMITS.xHook), story: str(v('x').story, 25000) },
-    tiktok: { caption: str(v('tiktok').caption, LIMITS.caption) },
-    instagram: { caption: str(v('instagram').caption, LIMITS.caption) },
-    reddit: { title: str(v('reddit').title, LIMITS.redditTitle), body: str(v('reddit').body, 40000) },
-    stackerNews: { title: str(v('stackerNews').title, LIMITS.stackerNewsTitle), body: str(v('stackerNews').body, 40000) },
+  const all = {
+    youtube: () => ({ title: str(v('youtube').title, LIMITS.youtubeTitle), description: str(v('youtube').description, 5000), tags: (Array.isArray(v('youtube').tags) ? v('youtube').tags : []).map((t) => str(t, 60)).filter(Boolean).slice(0, 20) }),
+    shorts: () => ({ title: str(v('shorts').title, LIMITS.shortsTitle), description: str(v('shorts').description, 5000) }),
+    x: () => ({ hook: str(v('x').hook, LIMITS.xHook), story: str(v('x').story, 25000) }),
+    tiktok: () => ({ caption: str(v('tiktok').caption, LIMITS.caption) }),
+    instagram: () => ({ caption: str(v('instagram').caption, LIMITS.caption) }),
+    reddit: () => ({ title: str(v('reddit').title, LIMITS.redditTitle), body: str(v('reddit').body, 40000) }),
+    stackerNews: () => ({ title: str(v('stackerNews').title, LIMITS.stackerNewsTitle), body: str(v('stackerNews').body, 40000) }),
   };
+  const copy = Object.fromEntries(PUBLISH_PLATFORMS.filter((p) => platforms.includes(p)).map((p) => [p, all[p]()]));
   const filled = Object.values(copy).some((fields) => Object.values(fields).some((f) => (Array.isArray(f) ? f.length : f)));
   return filled ? copy : null;
 }

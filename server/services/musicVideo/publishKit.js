@@ -211,20 +211,27 @@ function spentUsd(project) {
 }
 
 /**
- * Draft every platform's copy in ONE provider call the director asked for.
+ * Draft the copy for every platform the director posts to, in ONE provider call they asked for.
  * `notes` (their making-of story) is saved with the kit so a redraft reuses it.
  */
 export async function draftPublishKitCopy(projectId, { providerId = null, model = null, notes = '', links = {} } = {}, deps = {}) {
   const project = await requireProject(projectId);
+  const { getPublishPlatforms, publishHistory } = await import('./publish/platforms.js');
+  const enabled = deps.platforms || await getPublishPlatforms();
+  // Only where the director posts (#9287); Suno's caption reuses the YouTube description.
+  const platforms = PUBLISH_PLATFORMS.filter((p) => enabled[p]?.enabled || (p === 'youtube' && enabled.suno?.enabled));
+  if (!platforms.length) throw kitError(409, 'PUBLISH_NO_PLATFORMS', 'Turn on at least one platform under "Where you post" before drafting copy');
+  const history = deps.history || await publishHistory().catch(() => ({}));
+  const lessons = Object.entries(history).flatMap(([platform, h]) => (h?.notes || []).map((n) => ({ platform, ...n })));
   const { resolveProviderAndModel, runPromptThroughProvider } = deps.runner || await import('../promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider) throw kitError(503, 'NO_PROVIDER', 'No AI provider is available to draft the copy');
-  const prompt = buildPublishCopyPrompt(project, { notes, spentUsd: spentUsd(project), links });
+  const prompt = buildPublishCopyPrompt(project, { notes, spentUsd: spentUsd(project), links, platforms, lessons });
   const { text } = await runPromptThroughProvider({ provider, model: selectedModel, prompt, source: 'music-video-publish-copy' });
-  const copy = parsePublishCopy(text);
+  const copy = parsePublishCopy(text, platforms);
   if (!copy) throw kitError(502, 'PUBLISH_COPY_UNPARSEABLE', 'The copy draft came back without usable JSON — try again or another model');
   return mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
-    return { project: { ...current, publishKit: { ...kit, copy, notes, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
+    return { project: { ...current, publishKit: { ...kit, copy: { ...(kit.copy || {}), ...copy }, notes, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
   });
 }

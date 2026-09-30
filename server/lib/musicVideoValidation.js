@@ -549,6 +549,15 @@ export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().
 export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno']);
 export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
 const publishUrl = z.string().url().max(500);
+// #9287: which platforms the director posts to (opt-in), the account for each,
+// and a post's link, reception and notes.
+const publishPlatformEntry = z.object({ enabled: z.boolean(), account: z.string().max(100).nullable() }).partial().strict();
+export const musicVideoPublishPlatformsPatchSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS.map((t) => [t, publishPlatformEntry.optional()]))).strict();
+export const musicVideoPublishPostSchema = z.object({
+  url: publishUrl.nullable(),
+  reception: z.enum(['good', 'mixed', 'poor']).nullable(),
+  notes: z.string().max(2000).nullable(),
+}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, reception or notes is required' });
 export const musicVideoPublishPrepareSchema = z.object({
   subreddit: z.string().max(40),
   kind: z.enum(['self', 'link']),

@@ -62,8 +62,13 @@ function CopyField({ id, field, initial, onSave, disabled }) {
  * platform's copy in one provider call from the director's own making-of
  * notes, then edit and copy each field out.
  */
-export default function PublishKitPanel({ project, publishKit }) {
+export default function PublishKitPanel({ project, publishKit, enabledTargets }) {
   const kit = project?.publishKit || {};
+  // Copy only for where the director posts (#9287); Suno's caption reuses the YouTube description.
+  const copyFields = enabledTargets
+    ? PUBLISH_FIELDS.filter(({ platform }) => enabledTargets.includes(platform) || (platform === 'youtube' && enabledTargets.includes('suno')))
+    : PUBLISH_FIELDS;
+  const noPlatforms = !!enabledTargets && copyFields.length === 0;
   const idFor = (s) => `mv-publish-${project?.id}-${s}`;
   const [notes, setNotes] = useState(kit.notes || '');
   const [youtubeUrl, setYoutubeUrl] = useState(kit.links?.youtube || '');
@@ -176,14 +181,15 @@ export default function PublishKitPanel({ project, publishKit }) {
               label="Writer" compact alwaysShowModel modelDisabled={availableModels.length === 0}
               emptyProviderOption="Active provider (default)" emptyModelOption="Default model" disabled={publishKit.drafting} />
           )}
-          <button type="button" onClick={draft} disabled={publishKit.drafting}
+          <button type="button" onClick={draft} disabled={publishKit.drafting || noPlatforms}
             className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
             <Sparkles size={13} /> {publishKit.drafting ? 'Drafting…' : (kit.copy ? 'Redraft copy' : 'Draft copy')}
           </button>
         </div>
+        {noPlatforms && <p className="text-port-text-muted">Turn on a platform under Where you post to draft its copy.</p>}
         {kit.copy && (
           <div className="space-y-3" key={kit.copyDraftedAt || 'copy'}>
-            {PUBLISH_FIELDS.map(({ platform, label, fields }) => (
+            {copyFields.map(({ platform, label, fields }) => (
               <fieldset key={platform} className="space-y-1.5 rounded border border-port-border p-2">
                 <legend className="px-1 text-[11px] font-medium">{label}</legend>
                 {fields.map((field) => (

@@ -216,6 +216,13 @@ export const submitMusicVideoPublishDraft = (id, draftId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/drafts/${encodeURIComponent(draftId)}/submit`, { method: 'POST', ...options });
 export const discardMusicVideoPublishDraft = (id, draftId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE', ...options });
+// Where the director posts (#9287): { platforms, history } and platform toggles;
+// a post's link, reception and notes → { project, post }.
+export const getMusicVideoPublishPlatforms = (options = {}) => request('/music-video/publish/platforms', options);
+export const updateMusicVideoPublishPlatforms = (patch, options = {}) =>
+  request('/music-video/publish/platforms', { method: 'PUT', body: JSON.stringify(patch || {}), ...options });
+export const recordMusicVideoPublishPost = (id, target, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/posts/${encodeURIComponent(target)}`, { method: 'PUT', body: JSON.stringify(body || {}), ...options });
 export const musicVideoExcerptRenderEventsUrl = (jobId) =>
   `/api/music-video/excerpt/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoExcerptRender = (jobId, options = {}) =>

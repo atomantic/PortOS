@@ -70,6 +70,8 @@ describe('publishing kit build (#9281)', () => {
   });
 });
 
+const ALL_ON = Object.fromEntries(['youtube', 'shorts', 'x', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'suno'].map((t) => [t, { enabled: true }]));
+
 describe('publishing kit copy (#9281)', () => {
   const runner = (text) => ({
     resolveProviderAndModel: vi.fn(async () => ({ provider: { id: 'p1' }, selectedModel: 'm1' })),
@@ -78,7 +80,7 @@ describe('publishing kit copy (#9281)', () => {
 
   it('drafts every platform from one call and keeps each field editable', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
-    const deps = { runner: runner(JSON.stringify({ youtube: { title: 'A title', description: 'desc', tags: ['music'] }, x: { hook: 'a hook', story: 'story' } })) };
+    const deps = { platforms: ALL_ON, history: {}, runner: runner(JSON.stringify({ youtube: { title: 'A title', description: 'desc', tags: ['music'] }, x: { hook: 'a hook', story: 'story' } })) };
     const { project } = await kit.draftPublishKitCopy(id, { notes: 'made it on a Sunday', links: { youtube: 'https://example.com/v' } }, deps);
     expect(deps.runner.runPromptThroughProvider).toHaveBeenCalledTimes(1);
     expect(deps.runner.runPromptThroughProvider.mock.calls[0][0]).toMatchObject({ source: 'music-video-publish-copy' });
@@ -90,8 +92,32 @@ describe('publishing kit copy (#9281)', () => {
 
   it('reports an unusable draft instead of saving it', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
-    await expect(kit.draftPublishKitCopy(id, {}, { runner: runner('sorry, no JSON') })).rejects.toMatchObject({ status: 502, code: 'PUBLISH_COPY_UNPARSEABLE' });
+    await expect(kit.draftPublishKitCopy(id, {}, { platforms: ALL_ON, history: {}, runner: runner('sorry, no JSON') })).rejects.toMatchObject({ status: 502, code: 'PUBLISH_COPY_UNPARSEABLE' });
     expect((await projects.getProject(id)).publishKit).toBeFalsy();
+  });
+
+  it('drafts only the platforms the director posts to, keeps other copy, and passes their ratings on', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: { copy: { reddit: { title: 'kept', body: '' } } } } }));
+    const deps = {
+      platforms: { x: { enabled: true }, suno: { enabled: true }, reddit: { enabled: false } },
+      history: { x: { notes: [{ reception: 'good', notes: 'the cost hook worked' }] }, reddit: { notes: [{ reception: 'poor', notes: 'downvoted' }] } },
+      runner: runner(JSON.stringify({ youtube: { title: 'T' }, x: { hook: 'h' }, reddit: { title: 'ignored' } })),
+    };
+    const { project } = await kit.draftPublishKitCopy(id, {}, deps);
+    const prompt = deps.runner.runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(prompt).toContain('"x":{');
+    expect(prompt).toContain('"youtube":{'); // Suno's caption reuses it
+    expect(prompt).not.toContain('"reddit":{');
+    expect(prompt).toContain('x (good): the cost hook worked');
+    expect(prompt).not.toContain('downvoted');
+    expect(Object.keys(project.publishKit.copy).sort()).toEqual(['reddit', 'x', 'youtube']);
+    expect(project.publishKit.copy.reddit.title).toBe('kept');
+  });
+
+  it('refuses to draft before any platform is turned on', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await expect(kit.draftPublishKitCopy(id, {}, { platforms: {}, history: {}, runner: runner('{}') })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_NO_PLATFORMS' });
   });
 
   it('only selects a thumbnail the kit built', async () => {

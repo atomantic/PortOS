@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Send, ExternalLink, X as XIcon, LogIn } from 'lucide-react';
+import { Send, ExternalLink, X as XIcon, LogIn, Link as LinkIcon } from 'lucide-react';
 
 // Where the release goes, in posting order: the full video first so every
 // other post can link to it.
@@ -78,6 +78,48 @@ function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
   return null;
 }
 
+const RECEPTIONS = [['good', 'Good'], ['mixed', 'Mixed'], ['poor', 'Poor']];
+
+/** How a post landed: the director's rating and notes, which feed later copy drafts (#9287). */
+function PostFeedback({ idFor, label, post, onSave }) {
+  const [notes, setNotes] = useState(post.notes || '');
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={`How the ${label} post was received`}>
+        <span className="text-[11px] text-port-text-muted">Reception</span>
+        {RECEPTIONS.map(([value, text]) => (
+          <button key={value} type="button" aria-pressed={post.reception === value}
+            onClick={() => onSave({ reception: post.reception === value ? null : value })}
+            className={`rounded border px-2 py-1 text-[11px] min-h-[44px] sm:min-h-0 ${post.reception === value ? 'border-port-accent text-port-accent bg-port-accent/10' : 'border-port-border'}`}>
+            {text}
+          </button>
+        ))}
+      </div>
+      <textarea id={idFor('notes')} aria-label={`Notes on the ${label} post`} value={notes} rows={2} maxLength={2000}
+        placeholder="What worked or didn't (feeds the next copy draft)"
+        onChange={(e) => setNotes(e.target.value)}
+        onBlur={() => { if (notes.trim() !== (post.notes || '')) onSave({ notes: notes.trim() || null }); }}
+        className={inputCls} />
+    </div>
+  );
+}
+
+/** Record a post made outside PortOS, so its reception can be tracked too. */
+function ManualLink({ idFor, label, onSave }) {
+  const [url, setUrl] = useState('');
+  const valid = /^https?:\/\/\S+$/.test(url.trim());
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <input id={idFor('manual-url')} aria-label={`Link to a ${label} post made by hand`} value={url} placeholder="Posted by hand? Paste the link"
+        onChange={(e) => setUrl(e.target.value)} className={`${inputCls} flex-1 min-w-0`} />
+      <button type="button" disabled={!valid} onClick={() => onSave({ url: url.trim() }).then((post) => { if (post) setUrl(''); })}
+        className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+        <LinkIcon size={12} /> Record
+      </button>
+    </div>
+  );
+}
+
 function TargetRow({ project, kit, entry, publishing }) {
   const { target, label, note } = entry;
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
@@ -88,13 +130,14 @@ function TargetRow({ project, kit, entry, publishing }) {
   const error = publishing.errors[target];
   const posted = kit.posts?.[target];
   const flairs = draft?.summary?.flairs;
+  const account = publishing.platforms?.[target]?.account;
   const clean = Object.fromEntries(Object.entries(options).filter(([, v]) => v !== '' && v != null));
 
   return (
     <li className="rounded border border-port-border p-2 space-y-2">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-xs font-medium">{label}</div>
+          <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as @{account}</span>}</div>
           <div className="text-[11px] text-port-text-muted">{note}</div>
           {posted?.url && (
             <a href={posted.url} target="_blank" rel="noreferrer" className="text-[11px] text-port-accent flex items-center gap-1 break-all">
@@ -107,6 +150,9 @@ function TargetRow({ project, kit, entry, publishing }) {
           {busy === 'prepare' ? 'Filling…' : (draft ? 'Fill again' : 'Fill draft')}
         </button>
       </div>
+      {posted
+        ? <PostFeedback key={posted.url || 'post'} idFor={idFor} label={label} post={posted} onSave={(body) => publishing.recordPost(target, body)} />
+        : <ManualLink idFor={idFor} label={label} onSave={(body) => publishing.recordPost(target, body)} />}
       <TargetOptions target={target} kit={kit} options={options} setOption={setOption} flairs={flairs} idFor={idFor} />
       {error && (
         <div role="alert" className="text-[11px] text-port-error space-y-0.5">
@@ -147,12 +193,15 @@ function TargetRow({ project, kit, entry, publishing }) {
 export default function PublishPostingPanel({ project, publishing }) {
   const kit = project?.publishKit || {};
   if (!kit.builtAt) return null;
+  // Only the platforms the director turned on (#9287), in posting order.
+  const targets = PUBLISH_TARGETS.filter((entry) => publishing.enabledTargets?.includes(entry.target));
   return (
     <section aria-label="Post the release" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
       <h3 className="text-sm font-medium flex items-center gap-1.5"><Send size={14} /> Post the release</h3>
       <p className="text-port-text-muted">Sign in to each platform in the PortOS Browser first. Fill draft opens a new tab there and fills the post from the kit and copy above; nothing is posted until you review it and press Post.</p>
+      {!targets.length && <p className="text-port-text-muted">Turn on the platforms you use under Where you post to fill and post drafts here.</p>}
       <ul className="space-y-2">
-        {PUBLISH_TARGETS.map((entry) => <TargetRow key={entry.target} project={project} kit={kit} entry={entry} publishing={publishing} />)}
+        {targets.map((entry) => <TargetRow key={entry.target} project={project} kit={kit} entry={entry} publishing={publishing} />)}
       </ul>
     </section>
   );
