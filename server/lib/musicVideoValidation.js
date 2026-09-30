@@ -271,6 +271,8 @@ export const musicVideoLyricsAlignSchema = z.object({
 // folder under data/music-video/<projectId>/composition/) seeked over the
 // song; see services/musicVideo/compositionDocument.js and documentRender.js.
 export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document'];
+// #9290: 'scene' cuts once per planned shot; 'intercut' re-cuts on section energy and sung words.
+export const MUSIC_VIDEO_CUTTING_MODES = ['scene', 'intercut'];
 // Shipped starting points a project can copy into its document folder.
 export const MUSIC_VIDEO_DOCUMENT_TEMPLATES = ['layered'];
 export const MUSIC_VIDEO_DOCUMENT_SOURCES = ['zip', 'directory', 'template'];
@@ -350,6 +352,7 @@ export const musicVideoCompositionOverlaySchema = z.object({
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
   mode: z.enum(MUSIC_VIDEO_COMPOSITION_MODES).optional(),
+  cutting: z.enum(MUSIC_VIDEO_CUTTING_MODES).optional(),
   textCues: z.array(musicVideoTextCueSchema).max(1000).optional(),
   style: z.object({
     color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').optional(),

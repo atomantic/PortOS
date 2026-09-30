@@ -20,6 +20,7 @@ import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
 import {
   MUSIC_VIDEO_COMPOSITION_MODES as COMPOSITION_MODES,
+  MUSIC_VIDEO_CUTTING_MODES as CUTTING_MODES,
   MUSIC_VIDEO_DOCUMENT_DIRECTORY,
   MUSIC_VIDEO_DOCUMENT_SOURCES,
   MUSIC_VIDEO_TYPOGRAPHY_EMPHASES as TYPOGRAPHY_EMPHASES,
@@ -140,6 +141,8 @@ export function normalizeComposition(input) {
       font: pick(style.font, TYPOGRAPHY_FONTS, 'sans'),
     },
     posterSec: toTime(input.posterSec),
+    // Absent until chosen (#9290): the autopilot plan picks 'intercut' for an undecided project.
+    ...(CUTTING_MODES.includes(input.cutting) ? { cutting: input.cutting } : {}),
     // Absent unless a code video was actually stored, so a composed manifest
     // stays the shape peers and clones already compare.
     ...(codeVideo ? { codeVideo } : {}),
@@ -147,6 +150,15 @@ export function normalizeComposition(input) {
     ...(documentRef ? { document: documentRef } : {}),
     ...(overlay ? { overlay } : {}),
   };
+}
+
+/**
+ * #9290: the project with `cutting` defaulted for an autopilot production run
+ * (intercut) unless the director already chose how it cuts.
+ */
+export function withAutopilotCutting(project) {
+  if (!project || project.composition?.cutting) return project;
+  return { ...project, composition: normalizeComposition({ ...(project.composition || {}), cutting: 'intercut' }) };
 }
 
 /**

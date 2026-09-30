@@ -406,3 +406,17 @@ describe('resolveMasterAudioPath', () => {
     await expect(resolveMasterAudioPath({ trackId: 't1' })).rejects.toMatchObject({ status: 404, code: 'AUDIO_MISSING' });
   });
 });
+
+describe('frame-grid in-points (#9290)', () => {
+  it('starts a footage piece at its in-point on the frame grid, and a still or zero in-point at frame 0', () => {
+    const clips = [
+      { sceneId: 'a', videoPath: '/v/a.mp4', width: 1280, height: 720, fps: 24, inSec: 2, outSec: 3, duration: 1, sourceSec: 4, loop: false },
+      { sceneId: 'b', videoPath: '/v/b.mp4', width: 1280, height: 720, fps: 24, inSec: 0, outSec: 1, duration: 1, sourceSec: 4, loop: false },
+      { sceneId: 'c', layer: 'card', inSec: 0, outSec: 1, duration: 1, cardText: 'X', cardColor: '#000000' },
+    ];
+    const { args } = buildMusicVideoFfmpegArgs(clips, '/a/song.wav', '/o/out.mp4');
+    const graph = args[args.indexOf('-filter_complex') + 1];
+    expect(graph).toContain('trim=start_frame=48:end_frame=72');
+    expect(graph).toContain('trim=end_frame=24');
+  });
+});

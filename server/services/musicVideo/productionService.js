@@ -26,6 +26,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
+import { withAutopilotCutting } from './composition.js';
 import {
   attachProductionReview,
   cancelProductionOnProject,
@@ -302,7 +303,9 @@ export async function startProduction(projectId, { directive, pool: requested, l
   await requireProject(projectId);
   const pool = normalizeProductionPool(requested);
   await assertPoolEligible(pool, await deps.loadEnv());
-  const out = await mutateProjectRecord(projectId, (current) => startProductionOnProject(current, {
+  // The autopilot cuts on the song (#9290) unless the director chose how it
+  // cuts — set before the run captures its creative-setup basis.
+  const out = await mutateProjectRecord(projectId, (current) => startProductionOnProject(withAutopilotCutting(current), {
     directive, pool, limits, reviewer, processId: PROCESS_ID, pricing: poolPricing(pool, current),
   }));
   console.log(`🎬 Music Video production ${short(out.run.id)} started: ${out.run.pool.length} allowed route(s), ≤${out.run.limits.maxGenerations} generations, ≤${out.run.limits.maxReviewAttempts} reviews`);
