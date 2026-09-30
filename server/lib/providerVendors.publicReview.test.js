@@ -267,6 +267,8 @@ describe('public-review provider postures', () => {
       safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
     });
     expect(codexReview.args).toEqual(expect.arrayContaining(['exec', '--sandbox', 'read-only']));
+    // Scratch-cwd claim reviews must pass codex's trusted-directory check.
+    expect(codexReview.args).toContain('--skip-git-repo-check');
     expect(codexReview.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     // No enforced mode: the caller falls back to the vendor's ordinary argv.
     expect(buildCodeReviewSpawnConfig(antigravity, { safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE })).toBeNull();
