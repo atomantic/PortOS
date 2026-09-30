@@ -81,7 +81,8 @@ export const NO_LINKED_UNIVERSE_PLACEHOLDER = '(none — series has no linked Un
 const CHARACTER_FOUNDATION_PROMPT_MAX = CHARACTER_NARRATIVE_ARC_MAX;
 
 export function renderCharacterFoundationForArc(characters) {
-  return renderCharacterNarrativeContext(characters, { max: CHARACTER_FOUNDATION_PROMPT_MAX });
+  // Author-side planning needs the unrevealed canon to plan the full arc.
+  return renderCharacterNarrativeContext(characters, { max: CHARACTER_FOUNDATION_PROMPT_MAX, respectRevealGates: false });
 }
 
 export function appendCharacterFirstArcGuidance(shapeGuidance, characterFoundationText, characterArcs) {
@@ -127,7 +128,8 @@ export async function loadWorldContext(series) {
     // Universe canon — named characters/places/objects the arc references by
     // name. Separate from categories because the LLM should treat these as
     // first-class entities, not exploratory variations.
-    worldCanonText: renderCanonForPrompt(scopedWorld) || '(none — no named entities are tied to this series yet)',
+    // Author-side planning needs the unrevealed canon to plan the full arc.
+    worldCanonText: renderCanonForPrompt(scopedWorld, { respectRevealGates: false }) || '(none — no named entities are tied to this series yet)',
     worldCharacterFoundationText: renderCharacterFoundationForArc(planningCanon.characters),
     // Compact one-line-per-kind synopsis of canon — intended for text stages
     // (prose/teleplay/comic-script) where the full canon dump would dominate
