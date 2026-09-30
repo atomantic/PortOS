@@ -496,6 +496,22 @@ describe('Apps Lifecycle Routes', () => {
   });
 
   describe('GET /api/apps/:id/logs', () => {
+    it.each(['--force', '-1', '.hidden', 'other-app', '', 'x'.repeat(121)])('rejects unsafe or foreign process %s before PM2 reads', async (processName) => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', pm2ProcessNames: ['test-app', 'test-worker'] });
+      const response = await request(app).get(`/api/apps/app-001/logs?process=${processName}`);
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INVALID_PROCESS_NAME');
+      expect(pm2Service.getLogs).not.toHaveBeenCalled();
+    });
+
+    it('allows selecting another process owned by the same app', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', pm2ProcessNames: ['test-app', '_worker'] });
+      pm2Service.getLogs.mockResolvedValue('worker log');
+      const response = await request(app).get('/api/apps/app-001/logs?process=_worker');
+      expect(response.status).toBe(200);
+      expect(pm2Service.getLogs).toHaveBeenCalledWith('_worker', 100, undefined);
+    });
+
     it('should return logs for app process', async () => {
       const mockApp = {
         id: 'app-001',

@@ -124,6 +124,10 @@ export {
 // the well-known labels (api, ui, devUi, cdp, health).
 export const processListQuerySchema = z.object({ appId: z.string().min(1).optional() });
 
+// Reject option-shaped names before PM2 interprets positional arguments.
+export const pm2ProcessNameSchema = z.string().min(1).max(120)
+  .regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*$/, 'Must start with an alphanumeric character or underscore');
+
 export const logsQuerySchema = z.object({
   lines: z.coerce.number().int().min(1).max(5000).default(100),
   follow: z.enum(['true', 'false']).optional(),

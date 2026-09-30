@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { errorMiddleware } from '../lib/errorHandler.js';
 import { request } from '../../lib/testHelper.js';
 
 const makeLogProcess = () => {
@@ -32,6 +33,7 @@ import logsRoutes from './logs.js';
 const createApp = () => {
   const app = express();
   app.use('/api/logs', logsRoutes);
+  app.use(errorMiddleware);
   return app;
 };
 
@@ -44,6 +46,24 @@ describe('log routes PM2_HOME resolution', () => {
       queueMicrotask(() => child.emit('close', 0));
       return child;
     });
+  });
+
+  it.each(['--force', '-1', '.hidden', 'x'.repeat(121)])('rejects unsafe name %s before static or streaming PM2 reads', async (name) => {
+    for (const follow of ['false', 'true']) {
+      const response = await request(createApp()).get(`/api/logs/${name}?follow=${follow}`);
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INVALID_PROCESS_NAME');
+    }
+    expect(pm2Service.getLogs).not.toHaveBeenCalled();
+    expect(pm2Service.spawnPm2).not.toHaveBeenCalled();
+    expect(appProcessStatus.resolvePm2HomeForProcess).not.toHaveBeenCalled();
+  });
+
+  it.each(['1-worker', '_worker'])('reads accepted anchored name %s', async (name) => {
+    appProcessStatus.resolvePm2HomeForProcess.mockResolvedValue(undefined);
+    const response = await request(createApp()).get(`/api/logs/${name}`);
+    expect(response.status).toBe(200);
+    expect(pm2Service.getLogs).toHaveBeenCalledWith(name, 100, undefined);
   });
 
   it('uses the app custom home for every process in the app log response', async () => {
