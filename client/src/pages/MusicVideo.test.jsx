@@ -100,6 +100,18 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   resolveMusicVideoDevArtifactNote: vi.fn(),
   reviewMusicVideoDevArtifact: vi.fn(),
   deleteMusicVideoDevArtifact: vi.fn(),
+  getMusicVideoCompositionPreview: vi.fn(async () => ({ html: '<!doctype html><p>preview</p>', assets: [], width: 1920, height: 1080, fps: 24, durationSec: 60 })),
+  getMusicVideoCompositionDocument: vi.fn(),
+  fetchMusicVideoPreviewAsset: vi.fn(),
+  startMusicVideoCompositionTemplate: vi.fn(),
+  importMusicVideoCompositionZip: vi.fn(),
+  importMusicVideoCompositionDirectory: vi.fn(),
+  getMusicVideoCompositionExport: vi.fn(),
+  detachMusicVideoCompositionDocument: vi.fn(),
+  startMusicVideoProduction: vi.fn(),
+  resumeMusicVideoProduction: vi.fn(),
+  stopMusicVideoProduction: vi.fn(),
+  cancelMusicVideoProduction: vi.fn(),
 }));
 // Server pushes (production runs, the Cast & Sets check-in) arrive over the
 // socket; tests deliver them through this registry.
@@ -201,7 +213,7 @@ import {
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
-  startMusicVideoCastAndSets, approveMusicVideoCastAndSets,
+  startMusicVideoCastAndSets, approveMusicVideoCastAndSets, stopMusicVideoProduction,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
@@ -232,13 +244,17 @@ const PROJECT_ANALYZED = {
 // clicking a project navigates to its id'd URL, and the component re-reads
 // useParams() to open its board (no remount: both routes render the same
 // component type, so React preserves the instance across the param change).
+const MV_ROUTES = (
+  <Routes>
+    <Route path="/music-video" element={<MusicVideo />} />
+    <Route path="/music-video/:projectId" element={<MusicVideo />} />
+    <Route path="/music-video/:projectId/:stage" element={<MusicVideo />} />
+    <Route path="/music-video/:projectId/dev/:artifactId" element={<MusicVideo />} />
+    <Route path="/music-video/:projectId/:stage/dev/:artifactId" element={<MusicVideo />} />
+  </Routes>
+);
 const renderMV = () => render(
-  <MemoryRouter initialEntries={['/music-video']}>
-    <Routes>
-      <Route path="/music-video" element={<MusicVideo />} />
-      <Route path="/music-video/:projectId" element={<MusicVideo />} />
-    </Routes>
-  </MemoryRouter>,
+  <MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>,
 );
 
 // Flush pending pre-resolved mock promises inside act so their .then setState
@@ -263,11 +279,23 @@ const selectProject = async (projectId) => {
   return picker;
 };
 
-const openProject = async (project) => {
+// The page is a set of stage tabs (deep-linked as /music-video/:id/:stage); a
+// control is only on screen while its stage is open, so tests say which one.
+const STAGE_TABS = {
+  setup: /^Setup/, 'cast-sets': /^Cast & Sets/, board: /^Board/, produce: /^Produce/, compose: /^Compose/, review: /^Review/,
+};
+const openStage = async (stage) => {
+  const tab = await screen.findByRole('tab', { name: STAGE_TABS[stage] });
+  fireEvent.click(tab);
+  await waitFor(() => expect(screen.getByRole('tab', { name: STAGE_TABS[stage] })).toHaveAttribute('aria-selected', 'true'));
+};
+
+const openProject = async (project, stage = null) => {
   listMusicVideoProjects.mockResolvedValue([project]);
   renderMV();
   await selectProject(project.id);
   await screen.findByRole('heading', { level: 2, name: project.name });
+  if (stage) await openStage(stage);
 };
 
 const openCreateForm = async () => {
@@ -289,10 +317,7 @@ const renderMVWithNav = (to) => render(
   <MemoryRouter initialEntries={['/music-video']}>
     <LocationProbe />
     <NavTo to={to} />
-    <Routes>
-      <Route path="/music-video" element={<MusicVideo />} />
-      <Route path="/music-video/:projectId" element={<MusicVideo />} />
-    </Routes>
+    {MV_ROUTES}
   </MemoryRouter>,
 );
 
@@ -308,7 +333,7 @@ beforeEach(() => {
 
 describe('MusicVideo render control (#1760)', () => {
   it('enables Render and kicks off the job when a scene has a clip', async () => {
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'review');
     const renderBtn = await screen.findByRole('button', { name: /^Render final$/ });
     expect(renderBtn).toHaveProperty('disabled', false);
 
@@ -323,37 +348,48 @@ describe('MusicVideo render control (#1760)', () => {
     renderMusicVideoProject.mockImplementationOnce(() => new Promise((resolve) => { resolveKickoff = resolve; }));
     renderMV();
     await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('review');
 
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
     expect(screen.getByRole('button', { name: 'Preparing render…' })).toBeDisabled();
+    await openStage('setup');
     expect(screen.getByLabelText('Change track')).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Change track'), { target: { value: 'other-track' } });
     expect(updateMusicVideoProject).not.toHaveBeenCalled();
 
     await selectProject(other.id);
+    await openStage('review');
     const otherRender = screen.getByRole('button', { name: 'Rendering another project…' });
     expect(otherRender).toBeDisabled();
     fireEvent.click(otherRender);
     expect(renderMusicVideoProject).toHaveBeenCalledTimes(1);
-    expect(screen.getByLabelText('Change track')).not.toBeDisabled();
     expect(screen.queryByTitle('Cancel render')).not.toBeInTheDocument();
+    await openStage('setup');
+    expect(screen.getByLabelText('Change track')).not.toBeDisabled();
 
     await act(async () => { resolveKickoff({ jobId: 'render-first' }); });
     sseState.latest = { type: 'progress', progress: 0.375 };
     await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('review');
     expect(screen.getByTitle('Cancel render')).toHaveTextContent('38%');
+    // The header offers no second render while this one is in flight — it shows the progress.
+    expect(screen.getByRole('button', { name: 'Rendering… 38%' })).toBeDisabled();
+    await openStage('setup');
     expect(screen.getByLabelText('Change track')).toBeDisabled();
 
     // A metadata frame omits progress; the final-render adapter keeps 38%.
     sseState.latest = { type: 'status', message: 'Finishing output' };
     fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    await openStage('review');
     expect(screen.getByTitle('Cancel render')).toHaveTextContent('38%');
     await selectProject(other.id);
     sseState.latest = { type: 'complete', result: { id: 'rh-9' } };
     fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Unrelated draft' } });
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Music video rendered'));
+    await openStage('review');
     expect(screen.queryByText(/Open in Media History/i)).not.toBeInTheDocument();
     await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('review');
     expect(screen.getByText(/Open in Media History/i).closest('a')).toHaveAttribute('href', expect.stringContaining('preview=video%3Arh-9'));
   });
 
@@ -361,11 +397,13 @@ describe('MusicVideo render control (#1760)', () => {
     renderMusicVideoProject
       .mockRejectedValueOnce(Object.assign(new Error('Render is still preparing'), { status: 409, context: { jobId: null } }))
       .mockRejectedValueOnce(Object.assign(new Error('Render already exists'), { status: 409, context: { jobId: 'existing-render' } }));
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'review');
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Render is still preparing'));
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled();
+    await openStage('setup');
     expect(screen.getByLabelText('Change track')).toBeEnabled();
+    await openStage('review');
 
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
     fireEvent.click(await screen.findByTitle('Cancel render'));
@@ -382,9 +420,11 @@ describe('MusicVideo render control (#1760)', () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP, other]);
     renderMV();
     await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('review');
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
     await screen.findByTitle('Cancel render');
     await selectProject(other.id);
+    await openStage('review');
     sseState.latest = { type: 'error', error: 'Renderer stopped' };
     fireEvent.click(screen.getByRole('button', { name: /New project/i }));
     expect(toast.error).toHaveBeenCalledWith('Renderer stopped');
@@ -403,13 +443,13 @@ describe('MusicVideo render control (#1760)', () => {
   });
 
   it('disables Render when no scene has a generated clip', async () => {
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'review');
     const renderBtn = await screen.findByRole('button', { name: /^Render final$/ });
     expect(renderBtn).toHaveProperty('disabled', true);
   });
 
   it('shows the rendered-video link once a project carries a renderHistoryId', async () => {
-    await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' });
+    await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, 'review');
     await screen.findByText(/Download MP4/i);
     const link = await screen.findByText(/Open in Media History/i);
     // Media History matches video items by their `video:<id>` key via ?preview=.
@@ -419,7 +459,7 @@ describe('MusicVideo render control (#1760)', () => {
 
 describe('MusicVideo draft excerpt render (#8986)', () => {
   it('kicks off an excerpt render with the typed range and shows progress', async () => {
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'review');
     fireEvent.change(screen.getByLabelText('Start (sec)'), { target: { value: '10' } });
     fireEvent.change(screen.getByLabelText('End (sec)'), { target: { value: '20' } });
     fireEvent.click(screen.getByRole('button', { name: /Render excerpt/i }));
@@ -444,7 +484,7 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
         notes: [{ id: 'mvn-1', atSec: 3, note: 'lip-sync drifts here', verdict: null }],
       }],
     });
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'review');
     fireEvent.click(screen.getByRole('button', { name: /Render excerpt/i }));
     await waitFor(() => expect(renderMusicVideoExcerpt).toHaveBeenCalled());
     await settle();
@@ -469,7 +509,7 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
       project: { ...project, excerpts: [{ ...project.excerpts[0], notes: [{ id: 'mvn-1', atSec: 0, note: 'looks great', verdict: null }] }] },
       note: { id: 'mvn-1', atSec: 0, note: 'looks great', verdict: null },
     });
-    await openProject(project);
+    await openProject(project, 'review');
 
     fireEvent.change(screen.getByLabelText('New review note'), { target: { value: 'looks great' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
@@ -495,7 +535,7 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
       excerpts: [{ id: 'mve-1', startSec: 10, endSec: 20, status: 'complete', filename: 'excerpt-1.mp4', contactSheetFilename: null, error: null, notes: [] }],
     };
     deleteMusicVideoExcerpt.mockResolvedValue({ ...project, excerpts: [] });
-    await openProject(project);
+    await openProject(project, 'review');
     fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
     await waitFor(() => expect(deleteMusicVideoExcerpt).toHaveBeenCalledWith('mv-1', 'mve-1', { silent: true }));
     await waitFor(() => expect(screen.queryByLabelText(/Play excerpt/i)).not.toBeInTheDocument());
@@ -534,7 +574,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
     startMusicVideoRevision.mockResolvedValue({ project: opened, revision: opened.revisions[0], skippedSceneIds: [] });
     resumeMusicVideoRevision.mockResolvedValue({ project: opened, revision: opened.revisions[0], needsGeneration: [{ sceneId: 's2', kind: 'video' }], generating: [], render: null });
     generateVideo.mockResolvedValue({ jobId: 'video-job-s2' });
-    await openProject(REVIEWED);
+    await openProject(REVIEWED, 'review');
 
     fireEvent.click(await findEnabledByRole('button', { name: /Revise flagged/i }));
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
@@ -551,7 +591,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
       project: { ...ready, revisions: [{ ...ready.revisions[0], status: 'rendering', renderExcerptId: 'mve-2' }] },
       revision: { ...ready.revisions[0], status: 'rendering' }, needsGeneration: [], generating: [], render: { jobId: 'mve-2', excerptId: 'mve-2' },
     });
-    await openProject(ready);
+    await openProject(ready, 'review');
 
     fireEvent.click(await findEnabledByRole('button', { name: /Render revised draft/i }));
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
@@ -563,7 +603,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
   it('cancels an open revision', async () => {
     const open = withRevision(null);
     cancelMusicVideoRevision.mockResolvedValue({ project: { ...open, revisions: [{ ...open.revisions[0], status: 'canceled' }] }, revision: { ...open.revisions[0], status: 'canceled' } });
-    await openProject(open);
+    await openProject(open, 'review');
     fireEvent.click(await findEnabledByRole('button', { name: /Cancel revision/i }));
     await waitFor(() => expect(cancelMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
     await screen.findByText(/Revision — Cancelled/);
@@ -577,9 +617,10 @@ describe('MusicVideo project video renderer', () => {
     await openProject({
       ...PROJECT_NO_CLIP,
       videoSettings: { modelId: 'ltx23_distilled_q4' },
-    });
+    }, 'produce');
 
     expect(await screen.findByLabelText('Scene video renderer')).toHaveProperty('value', '');
+    await openStage('board');
     fireEvent.click(screen.getByRole('button', { name: /^Generate video$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalled());
     expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('backend');
@@ -587,7 +628,7 @@ describe('MusicVideo project video renderer', () => {
   });
 
   it('clears an existing backend pin with the Install default option', async () => {
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'produce');
 
     fireEvent.change(await screen.findByLabelText('Scene video renderer'), {
       target: { value: '' },
@@ -602,7 +643,7 @@ describe('MusicVideo project video renderer', () => {
 
   it('persists the local model and uses it for scene generation', async () => {
     generateVideo.mockResolvedValue({ jobId: 'video-job-1' });
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'produce');
 
     const model = await screen.findByLabelText('Local video model');
     fireEvent.change(model, { target: { value: 'ltx23_distilled_q4' } });
@@ -612,6 +653,7 @@ describe('MusicVideo project video renderer', () => {
       { silent: true },
     ));
 
+    await openStage('board');
     fireEvent.click(screen.getByRole('button', { name: /^Generate video$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'local',
@@ -623,7 +665,7 @@ describe('MusicVideo project video renderer', () => {
 
   it('continues an existing scene through the local model native extend mode', async () => {
     generateVideo.mockResolvedValue({ jobId: 'video-job-2' });
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'board');
 
     fireEvent.click(await screen.findByRole('button', { name: /^Continue shot$/ }));
 
@@ -639,7 +681,7 @@ describe('MusicVideo project video renderer', () => {
 
   it('uses project audio as no-vocals conditioning at the scene song offset', async () => {
     generateVideo.mockResolvedValue({ jobId: 'audio-reactive-job' });
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'produce');
 
     fireEvent.change(await screen.findByLabelText('Scene generation mode'), {
       target: { value: 'audioReactive' },
@@ -656,6 +698,7 @@ describe('MusicVideo project video renderer', () => {
       { silent: true },
     ));
 
+    await openStage('board');
     fireEvent.click(screen.getByRole('button', { name: /^Generate video$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'local',
@@ -680,7 +723,7 @@ describe('MusicVideo project video renderer', () => {
         audioReactiveLora: 'audio-reactive-v2.safetensors',
         audioReactiveScale: 1.2,
       },
-    });
+    }, 'produce');
 
     const lora = await screen.findByLabelText('Audio reactive LoRA');
     expect(lora.value).toBe('audio-reactive-v2.safetensors');
@@ -700,7 +743,7 @@ describe('MusicVideo project video renderer', () => {
       falEnabled: true,
       models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }],
     });
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'produce');
 
     fireEvent.change(await screen.findByLabelText('Scene video renderer'), {
       target: { value: 'fal' },
@@ -724,9 +767,10 @@ describe('MusicVideo project video renderer', () => {
     await openProject({
       ...PROJECT_NO_CLIP,
       videoSettings: { backend: 'fal', falDuration: 6 },
-    });
+    }, 'produce');
 
     expect(await screen.findByLabelText('fal.ai scene clip duration')).toHaveProperty('value', '6');
+    await openStage('board');
     // No model pin: the default Hailuo-02 image-to-video take, priced before it is paid for.
     expect((await screen.findByTestId('fal-cutaway-plan')).textContent).toContain('est. $0.27 (6s at 768P)');
     fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
@@ -749,7 +793,7 @@ describe('MusicVideo project video renderer', () => {
       ...PROJECT_NO_CLIP,
       videoSettings: { backend: 'fal', falModelId: 'minimax/h3-max/image-to-video', falResolution: '1080P' },
       scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 7.2 }],
-    });
+    }, 'board');
 
     // A 7.2s shot on H3 Max (5–15s whole seconds) renders 8s at $0.16/s.
     expect((await screen.findByTestId('fal-cutaway-plan')).textContent).toContain('est. $1.28 (8s at 1080P)');
@@ -759,6 +803,7 @@ describe('MusicVideo project video renderer', () => {
     })));
 
     // Switching model clears the resolution pin — its alphabet is per model.
+    await openStage('produce');
     fireEvent.change(await screen.findByLabelText('fal.ai cutaway model'), {
       target: { value: 'fal-ai/kling-video/v3/pro/image-to-video' },
     });
@@ -772,7 +817,7 @@ describe('MusicVideo project video renderer', () => {
   it('blocks fal.ai scene generation with a clear preflight reason when no API key is configured', async () => {
     // getVideoGenStatus's default mock omits falEnabled, so it resolves false —
     // exactly the "no fal.ai API key configured" install this covers.
-    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal' } });
+    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal' } }, 'board');
 
     const generate = await screen.findByRole('button', { name: /^Generate video$/ });
     expect(generate).toBeDisabled();
@@ -794,9 +839,10 @@ describe('MusicVideo project video renderer', () => {
     });
 
     it('labels Grok cutaway-only and blocks a performance shot on it without calling the provider', async () => {
-      await openProject(performanceProject({ backend: 'grok', grokDuration: 6 }));
+      await openProject(performanceProject({ backend: 'grok', grokDuration: 6 }), 'produce');
 
       expect(await screen.findByRole('option', { name: 'Grok video (cutaway only)' })).toBeTruthy();
+      await openStage('board');
       expect(await screen.findByText(/Grok video is cutaway-only/)).toBeTruthy();
       const generate = await screen.findByRole('button', { name: /^Generate video$/ });
       expect(generate).toBeDisabled();
@@ -810,7 +856,7 @@ describe('MusicVideo project video renderer', () => {
         models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }],
       });
       generateVideo.mockResolvedValue({ jobId: 'fal-lipsync-job' });
-      await openProject(performanceProject({ backend: 'fal', falDuration: 6 }));
+      await openProject(performanceProject({ backend: 'fal', falDuration: 6 }), 'board');
 
       const plan = await screen.findByTestId('performance-plan');
       expect(plan.textContent).toContain('minimax/h3-max/lip-sync/image-to-video');
@@ -827,7 +873,7 @@ describe('MusicVideo project video renderer', () => {
 
     it('persists a scene switched to a performance shot', async () => {
       updateMusicVideoScene.mockResolvedValue({ ...PROJECT_NO_CLIP.scenes[0], shotMode: 'performance' });
-      await openProject(PROJECT_NO_CLIP);
+      await openProject(PROJECT_NO_CLIP, 'board');
 
       fireEvent.change(await screen.findByLabelText('Shot'), { target: { value: 'performance' } });
       await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith(
@@ -845,7 +891,7 @@ describe('MusicVideo project video renderer', () => {
         { ...longShot, sceneId: 's1b', order: 1, label: 'Verse · 2/2', startSec: 21, videoHistoryId: null },
       ];
       splitMusicVideoScene.mockResolvedValue({ project: { ...project, scenes: pieces }, scenes: pieces });
-      await openProject(project);
+      await openProject(project, 'board');
 
       // The too-long refusal stays, now with a way out that never loops or stretches.
       expect(await screen.findByText(/Split the scene on a lyric or phrase boundary/)).toBeTruthy();
@@ -862,7 +908,7 @@ describe('MusicVideo project video renderer', () => {
         videoSettings: { backend: 'grok', grokDuration: 6 },
         phrases: [{ id: 'p1', startSec: 12, endSec: 15, intent: 'camera pushes in' }],
         scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 10, endSec: 17.2 }],
-      });
+      }, 'board');
 
       expect(await screen.findByText(/Grok renders a 10s clip for this 7\.2s cutaway/)).toBeTruthy();
       fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
@@ -880,7 +926,7 @@ describe('MusicVideo project video renderer', () => {
         PROJECT_WITH_CLIP.scenes[0],
         { ...PROJECT_WITH_CLIP.scenes[0], sceneId: 's2', order: 1 },
       ],
-    });
+    }, 'produce');
 
     expect(await screen.findByText('Repetition: 1 unique frames · 1 unique clips')).toBeTruthy();
   });
@@ -905,7 +951,7 @@ describe('MusicVideo restricted-model license gate', () => {
       models: [{ id: 'gated_model', name: 'Gated Model', runtime: 'ltx2', termsGate: GATE }],
     });
     generateVideo.mockResolvedValue({ jobId: 'gated-job' });
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'board');
 
     const generate = await findEnabledByRole('button', { name: /^Generate video$/ });
     expect(screen.queryByRole('checkbox', { name: /I am eligible/ })).toBeNull();
@@ -937,7 +983,7 @@ describe('MusicVideo project versions', () => {
 describe('MusicVideo audio preview + download', () => {
   it('shows preview player + download link for a linked track', async () => {
     listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon song.mp3' }]);
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'setup');
     const player = await screen.findByLabelText('Preview track audio');
     expect(player.getAttribute('src')).toBe('/data/music/neon%20song.mp3');
     const dl = screen.getByRole('link', { name: /Download audio/i });
@@ -950,20 +996,20 @@ describe('MusicVideo audio preview + download', () => {
       id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3',
       renders: [{ id: 'r-old', audioFilename: 'old.wav', source: '' }, { id: 'r-1', audioFilename: 'neon.mp3', source: 'suno' }],
     }]);
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'setup');
     expect(await screen.findByTitle('Audio imported from Suno')).toHaveTextContent('Suno');
   });
 
   it('falls back to the project uploaded-audio file when there is no linked track', async () => {
-    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: 'upload.wav' });
+    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: 'upload.wav' }, 'setup');
     const player = await screen.findByLabelText('Preview track audio');
     expect(player.getAttribute('src')).toBe('/data/music/upload.wav');
   });
 
   it('renders no audio controls when the project has no audio', async () => {
-    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null });
-    // Board opened (Render button present) but no audio surface.
-    await screen.findByRole('button', { name: /^Render final$/ });
+    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null }, 'setup');
+    // Setup opened (the track picker is present) but no audio surface.
+    await screen.findByLabelText('Change track');
     expect(screen.queryByLabelText('Preview track audio')).toBeNull();
     expect(screen.queryByRole('link', { name: /Download audio/i })).toBeNull();
   });
@@ -971,7 +1017,7 @@ describe('MusicVideo audio preview + download', () => {
 
 describe('MusicVideo musical timeline', () => {
   it('renders waveform, beat evidence, legend, and the detected rhythmic window', async () => {
-    await openProject(PROJECT_ANALYZED);
+    await openProject(PROJECT_ANALYZED, 'board');
     expect(screen.getByRole('img', { name: /audio waveform overview with 4 beats and 1 downbeats/i })).toBeTruthy();
     expect(screen.getByText(/waveform, sections, and 4\/4 beat-grid assumption/i)).toBeTruthy();
     expect(screen.getByText(/detected near 0:40\.00–1:10\.00/i)).toBeTruthy();
@@ -981,13 +1027,13 @@ describe('MusicVideo musical timeline', () => {
 
 describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
   it('disables the MIDI button when the project has no audio source', async () => {
-    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null });
+    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null }, 'setup');
     const btn = await screen.findByRole('button', { name: /^MIDI$/ });
     expect(btn).toHaveProperty('disabled', true);
   });
 
   it('kicks off a transcription for the selected project with the default model', async () => {
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'setup');
     const btn = await screen.findByRole('button', { name: /^MIDI$/ });
     expect(btn).toHaveProperty('disabled', false);
     fireEvent.click(btn);
@@ -995,7 +1041,7 @@ describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
   });
 
   it('kicks off a transcription with the chosen model size', async () => {
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'setup');
     fireEvent.change(await screen.findByLabelText('MuScriptor model size'), { target: { value: 'large' } });
     fireEvent.click(await screen.findByRole('button', { name: /^MIDI$/ }));
     await waitFor(() => expect(transcribeMusicVideoMidi).toHaveBeenCalledWith('mv-1', { model: 'large' }, { silent: true }));
@@ -1003,7 +1049,7 @@ describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
 
   it('shows the MIDI download link once the project carries a transcription pointer', async () => {
     listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3' }]);
-    await openProject({ ...PROJECT_WITH_CLIP, midiTranscription: { filename: 'neon-midi.mid', model: 'medium' } });
+    await openProject({ ...PROJECT_WITH_CLIP, midiTranscription: { filename: 'neon-midi.mid', model: 'medium' } }, 'setup');
     // Two links now: the download button and the MidiVisualization panel's
     // download icon (#2477) — both serve from the music dir (same static route
     // as the master audio) so the federated .mid resolves on peers too.
@@ -1015,7 +1061,7 @@ describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
 
 describe('MusicVideo autonomous shot planner (#1855)', () => {
   it('disables AI Plan until the track is analyzed', async () => {
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'board');
     const planBtn = await screen.findByRole('button', { name: /AI Plan/i });
     expect(planBtn).toHaveProperty('disabled', true);
   });
@@ -1024,7 +1070,7 @@ describe('MusicVideo autonomous shot planner (#1855)', () => {
     const plannedProject = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's1', order: 0, prompt: 'p' }] };
     planMusicVideoProject.mockResolvedValue({ project: plannedProject, scenesAdded: 1, promptsSeeded: false, promptsSkippedReason: 'no-provider' });
 
-    await openProject(PROJECT_ANALYZED);
+    await openProject(PROJECT_ANALYZED, 'board');
     const planBtn = await screen.findByRole('button', { name: /AI Plan/i });
     expect(planBtn).toHaveProperty('disabled', false);
 
@@ -1040,7 +1086,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
       { id: 'lc-2', text: 'second line', startSec: 3, endSec: null },
     ];
     importMusicVideoLyrics.mockResolvedValue({ project: { ...PROJECT_ANALYZED, lyricCues: cues }, imported: 2, format: 'lrc' });
-    await openProject(PROJECT_ANALYZED);
+    await openProject(PROJECT_ANALYZED, 'setup');
 
     fireEvent.change(screen.getByLabelText('Lyrics to import'), { target: { value: '[00:01.00]first line\n[00:03.00]second line' } });
     fireEvent.click(screen.getByRole('button', { name: /^Import lyrics$/ }));
@@ -1071,7 +1117,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
         { w: 'home', startSec: 1, endSec: 1.5, conf: 'interpolated' },
       ],
     }];
-    await openProject({ ...PROJECT_ANALYZED, lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: null, endSec: null }] });
+    await openProject({ ...PROJECT_ANALYZED, lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: null, endSec: null }] }, 'setup');
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
     alignMusicVideoLyrics.mockResolvedValue({ id: 'mv-3', lyricCues: cues, updatedAt: 't' });
     fireEvent.click(screen.getByRole('button', { name: 'Align words' }));
@@ -1091,8 +1137,9 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
       ],
     };
     updateMusicVideoScene.mockResolvedValue({});
-    await openProject(project);
-    expect(screen.getByText(/first line/)).toBeTruthy();
+    await openProject(project, 'board');
+    // The card's summary row and its editor both quote the lyric.
+    expect(screen.getAllByText(/first line/).length).toBeGreaterThan(0);
 
     const players = document.body.querySelectorAll('video[src^="/data/videos/h"]');
     expect(players).toHaveLength(2);
@@ -1117,7 +1164,7 @@ describe('MusicVideo typography composition (#8984)', () => {
       { id: 'lc-2', text: 'untimed line', startSec: null, endSec: null },
     ];
     updateMusicVideoProject.mockResolvedValue({});
-    await openProject({ ...PROJECT_ANALYZED, lyricCues });
+    await openProject({ ...PROJECT_ANALYZED, lyricCues }, 'compose');
 
     fireEvent.click(screen.getByRole('button', { name: /Copy timed lyrics \(1\)/ }));
     const text = await screen.findByLabelText('Text cue 1 text');
@@ -1149,10 +1196,11 @@ describe('MusicVideo section layers (#8985)', () => {
 
   it('makes a footage-less scene a title card so a composed project can render', async () => {
     updateMusicVideoScene.mockResolvedValue({});
-    await openProject({ ...PROJECT_WITH_CLIP, scenes, composition: composition('composed') });
+    await openProject({ ...PROJECT_WITH_CLIP, scenes, composition: composition('composed') }, 'review');
     const renderBtn = await screen.findByRole('button', { name: /^Render final$/ });
     expect(renderBtn).toBeDisabled();
 
+    await openStage('board');
     const layer = document.getElementById('mv-scene-s2-layer');
     fireEvent.change(layer, { target: { value: 'card' } });
     await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', 's2', { visualLayer: 'card' }, { silent: true }));
@@ -1161,13 +1209,16 @@ describe('MusicVideo section layers (#8985)', () => {
     fireEvent.blur(cardText);
     await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', 's2', { cardText: 'Chapter two' }, { silent: true }));
     // A card needs no frame or clip, so the board is ready; only the footage scene counts toward Videos.
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled());
+    await openStage('produce');
     expect(screen.getByRole('button', { name: /Videos 1\/1/ })).toBeTruthy();
+    await openStage('review');
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled());
   });
 
   it('keeps a plain render on footage and says the layer only applies to composed renders', async () => {
-    await openProject({ ...PROJECT_WITH_CLIP, scenes: [scenes[0], { ...scenes[1], visualLayer: 'card' }], composition: composition('concat') });
+    await openProject({ ...PROJECT_WITH_CLIP, scenes: [scenes[0], { ...scenes[1], visualLayer: 'card' }], composition: composition('concat') }, 'board');
     expect(await screen.findByText(/Title card sections render in composed mode/)).toBeTruthy();
+    await openStage('review');
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
   });
 });
@@ -1175,7 +1226,7 @@ describe('MusicVideo section layers (#8985)', () => {
 describe('MusicVideo concept & style editor (#3168)', () => {
   it('seeds the fields from the project and persists each on blur', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'A road trip through neon ruins', style: 'Cyberpunk anime' } };
-    await openProject(withConcept);
+    await openProject(withConcept, 'setup');
 
     const conceptField = await screen.findByLabelText('Concept');
     const styleField = screen.getByLabelText('Visual style');
@@ -1201,7 +1252,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
 
   it('does not re-PATCH when a field is focused and blurred without an edit', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'Unchanged', style: 'Unchanged' } };
-    await openProject(withConcept);
+    await openProject(withConcept, 'setup');
     const conceptField = await screen.findByLabelText('Concept');
     fireEvent.focus(conceptField);
     fireEvent.blur(conceptField);
@@ -1235,7 +1286,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
   });
 
   it('starts empty and enables AI Plan to use them once set', async () => {
-    await openProject(PROJECT_ANALYZED);
+    await openProject(PROJECT_ANALYZED, 'setup');
     const conceptField = await screen.findByLabelText('Concept');
     expect(conceptField).toHaveValue('');
 
@@ -1251,7 +1302,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
 
 describe('MusicVideo YouTube audio import (#1945)', () => {
   it('starts an import from the detail view and attaches the finished track to the project', async () => {
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'setup');
     const urlInput = screen.getByPlaceholderText(/Import audio from a YouTube URL/i);
     fireEvent.change(urlInput, { target: { value: 'https://youtu.be/dQw4w9WgXcQ' } });
     const row = urlInput.closest('div');
@@ -1271,15 +1322,15 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   });
 
   it('disables the Import button until a URL is entered', async () => {
-    await openProject(PROJECT_NO_CLIP);
-    // Exact name: the board also carries "Import take" / handoff import controls.
+    await openProject(PROJECT_NO_CLIP, 'setup');
+    // Exact name: other stages also carry "Import take" / handoff import controls.
     const importBtns = screen.getAllByRole('button', { name: /^Import$/i });
     expect(importBtns.length).toBeGreaterThan(0);
     importBtns.forEach((btn) => expect(btn).toHaveProperty('disabled', true));
   });
 
   it('running the create-form and detail-view imports at once does not orphan either job', async () => {
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'setup');
     await openCreateForm();
     importTrackFromYoutube
       .mockResolvedValueOnce({ jobId: 'yt-job-create' })
@@ -1361,7 +1412,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   });
 
   it('blocks deleting the selected project while its import is in flight', async () => {
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'setup');
     const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
       .find((el) => el.id !== 'mv-yt-create');
     fireEvent.change(editInput, { target: { value: 'https://youtu.be/xyz' } });
@@ -1509,7 +1560,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       prompt: 'Cosmic sci-fi',
     }]);
     updateMusicVideoProject.mockResolvedValue({ ...project, trackId: 'track-new', concept: { prompt: 'Space journey', style: 'Cosmic sci-fi' } });
-    await openProject(project);
+    await openProject(project, 'setup');
 
     const changeTrackSelect = screen.getByLabelText('Change track');
     fireEvent.change(changeTrackSelect, { target: { value: 'track-new' } });
@@ -1532,7 +1583,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     // An instrumental track: nothing to import, so nothing to separate or align.
     importMusicVideoTrackLyrics.mockResolvedValue({ project: analyzed, imported: 0, markers: 0, skipped: 'no-track-lyrics' });
     planMusicVideoProject.mockResolvedValue({ project: analyzed, scenesAdded: 3, promptsSeeded: true });
-    await openProject(project);
+    await openProject(project, 'produce');
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
     expect(analyzeMusicVideoProject).toHaveBeenCalledWith(project.id, { silent: true });
@@ -1550,11 +1601,14 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     const approved = { ...reviewing, castAndSets: { ...reviewing.castAndSets, status: 'approved' }, devArtifacts: [{ ...sheet, status: 'approved' }] };
     approveMusicVideoCastAndSets.mockResolvedValue({ project: approved, stage: approved.castAndSets });
     planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 2, promptsSeeded: true });
-    await openProject(project);
+    await openProject(project, 'produce');
 
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
     await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: reviewing, stage: reviewing.castAndSets });
+    // The check-in lives on the Cast & Sets tab; the header offers its approval.
+    expect(screen.getByRole('button', { name: 'Approve cast & sets' })).toBeEnabled();
+    await openStage('cast-sets');
     expect(await screen.findByText('Waiting for your check-in.')).toBeTruthy();
     await settle();
     expect(planMusicVideoProject).not.toHaveBeenCalled();
@@ -1570,7 +1624,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     const approved = { ...project, castAndSets: { status: 'approved', revision: 1, plan: {}, images: {} } };
     planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 2, promptsSeeded: true });
-    await openProject(project);
+    await openProject(project, 'produce');
 
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalled());
@@ -1591,12 +1645,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     const project = { ...PROJECT_NO_CLIP, devArtifacts: [sheet] };
     listMusicVideoProjects.mockResolvedValue([project]);
     render(
-      <MemoryRouter initialEntries={[`/music-video/${project.id}/dev/mvd-1?v=1`]}>
-        <Routes>
-          <Route path="/music-video/:projectId" element={<MusicVideo />} />
-          <Route path="/music-video/:projectId/dev/:artifactId" element={<MusicVideo />} />
-        </Routes>
-      </MemoryRouter>,
+      <MemoryRouter initialEntries={[`/music-video/${project.id}/cast-sets/dev/mvd-1?v=1`]}>{MV_ROUTES}</MemoryRouter>,
     );
     const frame = await screen.findByTitle('Cast & Sets — Nova v1');
     expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
@@ -1607,10 +1656,11 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   });
 
   it('blocks relinking the track while a render is in progress for the selected project', async () => {
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'review');
     fireEvent.click(await screen.findByRole('button', { name: /^Render final$/ }));
     await waitFor(() => expect(renderMusicVideoProject).toHaveBeenCalled());
 
+    await openStage('setup');
     const trackSelect = screen.getByLabelText('Change track');
     expect(trackSelect).toHaveProperty('disabled', true);
     fireEvent.change(trackSelect, { target: { value: 'other-track' } });
@@ -1626,16 +1676,11 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
 // View-only — no remix/clean action handlers. Keys are deep-linkable via ?preview=.
 describe('MusicVideo media lightbox (#3718)', () => {
   const renderMVAt = (path) => render(
-    <MemoryRouter initialEntries={[path]}>
-      <Routes>
-        <Route path="/music-video" element={<MusicVideo />} />
-        <Route path="/music-video/:projectId" element={<MusicVideo />} />
-      </Routes>
-    </MemoryRouter>,
+    <MemoryRouter initialEntries={[path]}>{MV_ROUTES}</MemoryRouter>,
   );
 
   it('opens the lightbox from a reference-frame thumbnail click', async () => {
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'board');
     fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' }));
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
     expect(dialog).toBeTruthy();
@@ -1645,7 +1690,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
   });
 
   it('opens the lightbox from a scene-clip expand control without hijacking play/pause', async () => {
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'board');
     // Inline thumb keeps its own controls attribute for native play/pause.
     const inlineVideo = document.querySelector('video[src="/data/videos/h1.mp4"]');
     expect(inlineVideo).toBeTruthy();
@@ -1660,7 +1705,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
   it('opens the final render from the resolved filename, not the history-id reconstruction', async () => {
     // getVideoHistoryItem is mocked → { id: 'rh-9', filename: 'final.mp4' }; the
     // final-render id is NOT its filename stem, so /data/videos/rh-9.mp4 404s.
-    await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' });
+    await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, 'review');
     const expand = await screen.findByRole('button', { name: 'View final video full size' });
     fireEvent.click(expand);
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
@@ -1675,7 +1720,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
     // the image model never saw. The sidecar is the only record of the real
     // one — and it also carries the `cleanedFrom` lineage the hand-rolled item
     // shape used to drop.
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'board');
     fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' }));
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
     await waitFor(() => {
@@ -1717,7 +1762,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       universeStyle: 'Ink silhouettes', moodBoardStyle: 'Watercolor', subjects: [
         { id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' },
       ],
-    } });
+    } }, 'board');
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       prompt: expect.stringContaining('character (protagonist): Example singer — Silver coat'),
@@ -1731,7 +1776,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       new Error('Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend'),
       { code: 'REFERENCE_IMAGES_FLUX2_ONLY', status: 400 },
     ));
-    await openProject(SPEC_PROJECT);
+    await openProject(SPEC_PROJECT, 'board');
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith({
       prompt: 'harbor at dawn, grainy 16mm, color palette #112233; camera: locked-off wides',
@@ -1775,7 +1820,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       referenceImageId: 'take-b.png',
       takes: [{ ...scene.takes[0], status: 'rejected' }, scene.takes[1]],
     });
-    await openProject({ ...PROJECT_NO_CLIP, id: 'mv-takes', name: 'Takes Project', scenes: [scene] });
+    await openProject({ ...PROJECT_NO_CLIP, id: 'mv-takes', name: 'Takes Project', scenes: [scene] }, 'board');
 
     const strip = screen.getByRole('list', { name: /Frame takes/ });
     expect(within(strip).getByText(/imported · midjourney/)).toBeTruthy();
@@ -1799,7 +1844,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       imported: [{ sceneId: 's1', takeId: 't-mj', kind: 'image', assetId: 'upload-0001.png', originalName: 'S01-s1-harbor.png' }],
       skipped: [],
     });
-    await openProject(SPEC_PROJECT);
+    await openProject(SPEC_PROJECT, 'review');
 
     const file = new File(['png-bytes'], 'S01-s1-harbor.png', { type: 'image/png' });
     fireEvent.change(screen.getByLabelText('Import generated files'), { target: { files: [file] } });
@@ -1810,12 +1855,13 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     expect(uploadGalleryImage).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Imported 1 take from midjourney'));
     // The imported take filled the empty slot on the board.
+    await openStage('board');
     expect(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' })).toBeTruthy();
   });
 
   it('downloads the ZIP handoff bundle from Export bundle (#8978)', async () => {
     getMusicVideoHandoffBundle.mockResolvedValueOnce(new ArrayBuffer(8));
-    await openProject(SPEC_PROJECT);
+    await openProject(SPEC_PROJECT, 'review');
     fireEvent.click(await screen.findByRole('button', { name: /^Export bundle$/ }));
     await waitFor(() => expect(getMusicVideoHandoffBundle).toHaveBeenCalledWith('mv-spec', { silent: true }));
     await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(
@@ -1839,7 +1885,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
       places: [{ id: 'p1', name: 'Harbor', imageRefs: ['harbor.png'] }], // already a reference
       objects: [],
     });
-    await openProject(UNIVERSE_PROJECT);
+    await openProject(UNIVERSE_PROJECT, 'setup');
 
     fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
     await waitFor(() => expect(getUniverse).toHaveBeenCalledWith('u1', { silent: true }));
@@ -1860,7 +1906,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
     getUniverse.mockResolvedValue({
       characters: [], places: [{ id: 'p1', name: 'Harbor', imageRefs: ['harbor.png'] }], objects: [],
     });
-    await openProject(UNIVERSE_PROJECT);
+    await openProject(UNIVERSE_PROJECT, 'setup');
     fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
     await waitFor(() => expect(getUniverse).toHaveBeenCalledTimes(1));
     expect(updateMusicVideoProject).not.toHaveBeenCalled();
@@ -1870,7 +1916,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
   it('applies the pull against the latest references, not a stale click-time snapshot (race guard)', async () => {
     let resolveUniverse;
     getUniverse.mockReturnValueOnce(new Promise((resolve) => { resolveUniverse = resolve; }));
-    await openProject(UNIVERSE_PROJECT);
+    await openProject(UNIVERSE_PROJECT, 'setup');
 
     fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
     await waitFor(() => expect(getUniverse).toHaveBeenCalledTimes(1));
@@ -1896,7 +1942,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
   });
 
   it('does not offer Pull from universe when the project has no linked universe', async () => {
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'setup');
     expect(screen.queryByRole('button', { name: /Pull from universe/i })).toBeNull();
   });
 });
@@ -1906,7 +1952,7 @@ describe('MusicVideo per-scene clip import (#8978)', () => {
     addMusicVideoSceneTake.mockResolvedValueOnce({
       scene: { ...PROJECT_NO_CLIP.scenes[0], videoHistoryId: 'rh-9', takes: [{ takeId: 't1', kind: 'video', assetId: 'rh-9', status: 'candidate' }] },
     });
-    await openProject(PROJECT_NO_CLIP);
+    await openProject(PROJECT_NO_CLIP, 'board');
 
     fireEvent.click(await screen.findByRole('button', { name: /^Import clip take$/ }));
     const dialog = await screen.findByRole('dialog', { name: /Pick a video from your gallery/i });
@@ -1931,9 +1977,173 @@ describe('MusicVideo scene clip non-MP4 playback (#8978)', () => {
     getVideoHistoryItem.mockImplementation((id) => (id === 'h1'
       ? Promise.resolve({ id: 'h1', filename: 'h1.mov' })
       : Promise.reject(Object.assign(new Error('Not found'), { status: 404 }))));
-    await openProject(PROJECT_WITH_CLIP);
+    await openProject(PROJECT_WITH_CLIP, 'board');
 
     await waitFor(() => expect(document.querySelector('video[src="/data/videos/h1.mov"]')).toBeTruthy());
     expect(document.querySelector('video[src="/data/videos/h1.mp4"]')).toBeNull();
+  });
+});
+
+describe('MusicVideo stage tabs (#9243)', () => {
+  const renderAt = (path) => render(
+    <MemoryRouter initialEntries={[path]}>
+      <LocationProbe />
+      {MV_ROUTES}
+    </MemoryRouter>,
+  );
+  const selectedTab = () => screen.getByRole('tab', { selected: true });
+
+  it('opens the stage named in the URL, falls back to the project\'s own stage for an unknown one, and the tabs navigate', async () => {
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
+    renderAt('/music-video/mv-1/produce');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(selectedTab()).toHaveTextContent(/^Produce/);
+    expect(screen.getByRole('button', { name: 'Set up autopilot' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('tab', { name: STAGE_TABS.board }));
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/music-video/mv-1/board'));
+    expect(selectedTab()).toHaveTextContent(/^Board/);
+    expect(screen.getByRole('button', { name: /Add scene/ })).toBeTruthy();
+  });
+
+  it('falls back to the stage the project is in when the URL names no stage or an unknown one', async () => {
+    // Track linked but not analyzed: Setup.
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
+    renderAt('/music-video/mv-1/not-a-stage');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(selectedTab()).toHaveTextContent(/^Setup/);
+  });
+
+  it('keeps the open tab when a stage completes, while the header moves on to the next action', async () => {
+    const analyzed = { ...PROJECT_NO_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis };
+    analyzeMusicVideoProject.mockResolvedValue(analyzed);
+    await openProject(PROJECT_NO_CLIP);
+    expect(selectedTab()).toHaveTextContent(/^Setup/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze song' }));
+    await waitFor(() => expect(analyzeMusicVideoProject).toHaveBeenCalledWith('mv-2', { silent: true }));
+    // Analysis is done and the shot has no frame or clip: the header now points at production…
+    expect(await screen.findByRole('button', { name: 'Set up production' })).toBeTruthy();
+    // …but the tab the director is working in is not pulled out from under them.
+    expect(selectedTab()).toHaveTextContent(/^Setup/);
+  });
+
+  it('every control has exactly one home tab', async () => {
+    const project = { ...PROJECT_WITH_CLIP, castAndSets: { status: 'review', revision: 1, plan: {}, images: {} }, audioAnalysis: PROJECT_ANALYZED.audioAnalysis };
+    const landmarks = {
+      setup: { 'Change track': () => screen.queryByLabelText('Change track'), 'Concept': () => screen.queryByLabelText('Concept'), MIDI: () => screen.queryByRole('button', { name: /^MIDI$/ }) },
+      'cast-sets': { 'Cast & Sets check-in': () => screen.queryByLabelText('Cast & Sets check-in') },
+      board: { 'AI Plan': () => screen.queryByRole('button', { name: /AI Plan/ }), 'Add scene': () => screen.queryByRole('button', { name: /Add scene/ }), 'Shot prompt': () => screen.queryByLabelText('Shot prompt') },
+      produce: { 'Autopilot': () => screen.queryByLabelText('Autopilot'), 'Scene video renderer': () => screen.queryByLabelText('Scene video renderer'), 'Start production': () => screen.queryByRole('button', { name: /Start production/ }) },
+      compose: { 'Render style': () => document.getElementById('mv-toolbar-render-style'), Typography: () => screen.queryByText(/^Typography —/) },
+      review: { 'Render final': () => screen.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': () => screen.queryByRole('button', { name: /Render excerpt/ }), 'Import development file': () => screen.queryByLabelText('Import development file') },
+    };
+    await openProject(project);
+    for (const [stage, own] of Object.entries(landmarks)) {
+      await openStage(stage);
+      for (const [name, find] of Object.entries(own)) expect(find(), `${name} on ${stage}`).toBeTruthy();
+      for (const [other, theirs] of Object.entries(landmarks)) {
+        if (other === stage) continue;
+        for (const [name, find] of Object.entries(theirs)) expect(find(), `${name} must not be on ${stage}`).toBeFalsy();
+      }
+    }
+  });
+
+  describe('the sticky header\'s next action', () => {
+    it('runs the autopilot for a fresh autopilot project', async () => {
+      // The check-in is already skipped, so the run goes straight from analysis to the plan.
+      const project = { ...PROJECT_NO_CLIP, scenes: [], lyricCues: [], castAndSets: { status: 'skipped' }, automation: { tools: ['image:local'], guidance: '', budgetUsd: null } };
+      const analyzed = { ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis };
+      analyzeMusicVideoProject.mockResolvedValue(analyzed);
+      importMusicVideoTrackLyrics.mockResolvedValue({ project: analyzed, imported: 0, markers: 0 });
+      planMusicVideoProject.mockResolvedValue({ project: analyzed, scenesAdded: 1, promptsSeeded: false });
+      await openProject(project);
+      fireEvent.click(screen.getByRole('button', { name: 'Run autopilot' }));
+      await waitFor(() => expect(analyzeMusicVideoProject).toHaveBeenCalledWith(project.id, { silent: true }));
+      await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
+    });
+
+    it('approves the Cast & Sets check-in it is waiting on, from any tab', async () => {
+      const waiting = {
+        ...PROJECT_ANALYZED, scenes: [], lyricCues: [], automation: { tools: ['image:local'], guidance: '', budgetUsd: null },
+        castAndSets: { status: 'review', revision: 1, plan: {}, images: {} },
+      };
+      const approved = { ...waiting, castAndSets: { ...waiting.castAndSets, status: 'approved' } };
+      approveMusicVideoCastAndSets.mockResolvedValue({ project: approved, stage: approved.castAndSets });
+      importMusicVideoTrackLyrics.mockResolvedValue({ project: approved, imported: 0, markers: 0 });
+      planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 1, promptsSeeded: false });
+      await openProject(waiting, 'setup');
+      fireEvent.click(screen.getByRole('button', { name: 'Approve cast & sets' }));
+      await waitFor(() => expect(approveMusicVideoCastAndSets).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalled());
+    });
+
+    it('stops a running production run and shows what it has spent against its cap', async () => {
+      const run = {
+        id: 'run-1', status: 'running', interrupted: false, directive: '', stopReason: null, error: null, pool: [],
+        limits: { maxGenerations: 12, maxReviewAttempts: 3, spendCapUsd: 20 }, usage: { generations: 3, spentUsd: 4.5 }, steps: [],
+      };
+      const project = { ...PROJECT_ANALYZED, productionRuns: [run] };
+      stopMusicVideoProduction.mockResolvedValue({ project, run });
+      await openProject(project, 'board');
+      expect(screen.getByText('$4.50 / $20.00')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Stop production' }));
+      await waitFor(() => expect(stopMusicVideoProduction).toHaveBeenCalledWith('mv-3', 'run-1', { silent: true }));
+    });
+
+    it('takes a finished project to its final video', async () => {
+      await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'board');
+      fireEvent.click(screen.getByRole('button', { name: 'Watch final video' }));
+      await waitFor(() => expect(selectedTab()).toHaveTextContent(/^Review/));
+      expect(document.getElementById('mv-final-video')).toBeTruthy();
+    });
+  });
+
+  describe('docked preview', () => {
+    const DOCUMENT = { directory: 'music-video/mv-doc/composition/doc-a', entry: 'index.html', updatedAt: '2026-01-01T00:00:00.000Z', source: { kind: 'template', name: 'layered' }, files: 9, bytes: 90000 };
+    const docProject = {
+      ...PROJECT_WITH_CLIP,
+      id: 'mv-doc',
+      name: 'Document Project',
+      audioAnalysis: null,
+      composition: { version: 1, mode: 'document', textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null, document: DOCUMENT },
+      scenes: [
+        { sceneId: 's1', order: 0, prompt: 'a', referenceImageId: 'img1', videoHistoryId: 'h1', startSec: 0, endSec: 4 },
+        { sceneId: 's2', order: 1, prompt: 'b', referenceImageId: 'img1', videoHistoryId: 'h1', startSec: 4, endSec: 8 },
+      ],
+    };
+
+    it('seeks the player to a scene\'s start when its card is opened, and mounts only once a preview stage is visited', async () => {
+      listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3' }]);
+      await openProject(docProject, 'setup');
+      expect(screen.queryByTitle('Composition document preview')).toBeNull();
+
+      await openStage('board');
+      expect(await screen.findByTitle('Composition document preview')).toBeTruthy();
+      await waitFor(() => expect(screen.getByText('0.00s / 60.0s')).toBeTruthy());
+      fireEvent.click(screen.getByText('Scene 2'));
+      await waitFor(() => expect(screen.getByText('4.00s / 60.0s')).toBeTruthy());
+      fireEvent.click(screen.getByText('Scene 1'));
+      await waitFor(() => expect(screen.getByText('0.00s / 60.0s')).toBeTruthy());
+    });
+
+    it('falls back to the latest finished draft excerpt when there is no composition document', async () => {
+      const project = {
+        ...PROJECT_WITH_CLIP,
+        excerpts: [
+          { id: 'mve-1', startSec: 0, endSec: 10, status: 'complete', filename: 'excerpt-old.mp4', notes: [] },
+          { id: 'mve-2', startSec: 10, endSec: 20, status: 'complete', filename: 'excerpt-new.mp4', notes: [] },
+        ],
+      };
+      await openProject(project, 'board');
+      const player = await screen.findByLabelText('Latest draft excerpt preview');
+      expect(player.getAttribute('src')).toBe('/data/videos/excerpt-new.mp4');
+      expect(screen.queryByTitle('Composition document preview')).toBeNull();
+    });
+
+    it('offers no preview when the project has neither a document nor a finished excerpt', async () => {
+      await openProject(PROJECT_WITH_CLIP, 'board');
+      expect(screen.queryByLabelText('Preview')).toBeNull();
+    });
   });
 });

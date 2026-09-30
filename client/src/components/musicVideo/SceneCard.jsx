@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
@@ -54,6 +54,11 @@ const COVERAGE_TOLERANCE_SEC = 0.25;
  * A shot longer than that lane renders in one take (the lip-sync audio window,
  * or Grok's longest clip) offers `onSplit(sceneId, backend)`, which cuts it
  * into contiguous scenes at lyric pauses / phrase boundaries server-side.
+ *
+ * The card is a disclosure: collapsed it is one row — frame thumbnail, title,
+ * timing, lyric line and status — and it opens on tap to the full editor.
+ * Opening or closing it also calls `onSeek(scene)`, so the docked preview
+ * jumps to the scene's start.
  */
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo,
@@ -61,7 +66,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null,
+  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
@@ -111,13 +116,24 @@ export default function SceneCard({
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   return (
-    <div className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-sm font-medium truncate">
+    <details className="group min-w-0 rounded-lg border border-port-border bg-port-card">
+      <summary
+        onClick={() => onSeek?.(scene)}
+        className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none [&::-webkit-details-marker]:hidden"
+      >
+        <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-port-text-muted transition-transform group-open:rotate-90" />
+        {scene.referenceImageId ? (
+          <img src={`/data/images/${scene.referenceImageId}`} alt="" loading="lazy" className="aspect-video w-16 shrink-0 rounded border border-port-border object-cover sm:w-20" />
+        ) : (
+          <span className="flex aspect-video w-16 shrink-0 items-center justify-center rounded border border-dashed border-port-border text-port-text-muted sm:w-20" aria-hidden="true">
+            <ImageIcon size={14} />
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">
             {scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}
           </div>
-          <div className="text-[11px] text-port-text-muted">
+          <div className="truncate text-[11px] text-port-text-muted">
             #{scene.order + 1}
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
               ? ` · ${formatDurationSec(scene.endSec - scene.startSec)} · ${formatDurationSec(scene.startSec)}–${formatDurationSec(scene.endSec)}`
@@ -126,269 +142,275 @@ export default function SceneCard({
             {scene.videoHistoryId ? ' · video ready' : ''}
             {clipSec != null ? ` · clip ${clipSec.toFixed(1)}s` : ''}
           </div>
+          {scene.lyricText && <div className="truncate text-[11px] italic text-port-text-muted">♪ {scene.lyricText}</div>}
         </div>
-        <div className="flex items-center gap-2">
+        {(generatingFrame || generatingVideo) && (
+          <Activity size={14} className="shrink-0 animate-spin text-port-accent" aria-label="Generating" />
+        )}
+      </summary>
+      <div className="space-y-2 p-3 pt-0">
+        <div className="flex items-center justify-end gap-2">
           <button onClick={() => onMove(index, -1)} disabled={index === 0} aria-label="Move up" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 disabled:opacity-30" title="Move up"><ArrowUp size={14} /></button>
           <button onClick={() => onMove(index, 1)} disabled={isLast} aria-label="Move down" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 disabled:opacity-30" title="Move down"><ArrowDown size={14} /></button>
           <button onClick={() => onDelete(scene.sceneId)} aria-label="Delete scene" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
         </div>
-      </div>
-      <textarea
-        aria-label="Shot prompt"
-        value={scene.prompt || ''} rows={2}
-        onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
-        onBlur={(e) => onSave(scene.sceneId, { prompt: e.target.value })}
-        placeholder="Shot prompt — what this scene's video should show"
-        className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-      />
-      {(scene.lyricText || scene.visualIntent || scene.direction) && (
-        <div className="text-[11px] text-port-text-muted space-y-0.5">
-          {scene.lyricText && <p className="italic break-words">♪ {scene.lyricText}</p>}
-          {scene.visualIntent && <p className="break-words">Intent: {scene.visualIntent}</p>}
-          {/* Applied treatment direction (#8980) — appended to both generated prompts. */}
-          {scene.direction && (
-            <p className="break-words" title={scene.direction.frameClause}>
-              Direction: {scene.direction.mode}{scene.direction.focalSubject ? ` · ${scene.direction.focalSubject}` : ''}
-              {scene.direction.typographyRole !== 'none' ? ` · ${scene.direction.typographyRole} text, ${scene.direction.negativeSpace} region kept clear` : ' · no text'}
-            </p>
-          )}
-        </div>
-      )}
-      <div className="flex flex-wrap gap-2 items-center text-xs">
-        {SCENE_TIME_FIELDS.map(([labelText, key]) => {
-          const toValue = (v) => (v === '' ? null : Number(v));
-          return (
-            <label key={key} className="flex items-center gap-1">{labelText}
-              <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-16 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
-                onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
-                onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
-            </label>
-          );
-        })}
-        <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
-          <input type="checkbox" checked={!!scene.beatAligned}
-            onChange={(e) => { onEditLocal(scene.sceneId, { beatAligned: e.target.checked }); onSave(scene.sceneId, { beatAligned: e.target.checked }); }} />
-          Beat-aligned
-        </label>
-        <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
-          <input type="checkbox" checked={loops} disabled={performance} onChange={(e) => applyPatch({ loop: e.target.checked })} />
-          Loop clip
-        </label>
-        {/* A performance is sung footage — only the footage layer offers it. */}
-        {layer === 'footage' && (
-          <>
-            <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
-            <select id={shotModeId} value={performance ? 'performance' : 'cutaway'}
-              onChange={(e) => applyPatch({ shotMode: e.target.value })}
-              className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
-              title="Cutaway: any video lane animates the frame under the song. Performance: a singer lip-synced to the song itself (needs a source-audio provider).">
-              <option value="cutaway">Cutaway</option>
-              <option value="performance">Performance (lip-sync)</option>
-            </select>
-          </>
-        )}
-      </div>
-      <div className="flex flex-wrap gap-2 items-center text-xs">
-        <label htmlFor={fieldId('layer')}>Layer</label>
-        <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
-          className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
-          {MUSIC_VIDEO_VISUAL_LAYERS.map((value) => <option key={value} value={value}>{LAYER_LABELS[value]}</option>)}
-        </select>
-        {layer === 'still' && (
-          <>
-            <label htmlFor={fieldId('move')}>Move</label>
-            <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
-              className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
-              {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
-            </select>
-          </>
-        )}
-        {layer === 'card' && (
-          <>
-            <label htmlFor={fieldId('card-text')}>Card text</label>
-            <input id={fieldId('card-text')} type="text" maxLength={500} value={scene.cardText || ''}
-              placeholder="Title shown on the card"
-              onChange={(e) => onEditLocal(scene.sceneId, { cardText: e.target.value })}
-              onBlur={(e) => onSave(scene.sceneId, { cardText: e.target.value.trim() || null })}
-              className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0" />
-            <label htmlFor={fieldId('card-color')}>Background</label>
-            <input id={fieldId('card-color')} type="color" value={scene.cardColor || '#000000'}
-              onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
-              onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
-              className="h-8 w-10 min-h-[44px] sm:min-h-0 bg-port-bg border border-port-border rounded" />
-          </>
-        )}
-      </div>
-      {layer !== 'footage' && !layered && (
-        <p className="text-[11px] text-port-text-muted">
-          {LAYER_LABELS[layer]} sections render in composed mode — a plain render plays this scene&apos;s footage.
-        </p>
-      )}
-      {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
-        <p role="alert" className="text-[11px] text-port-warning">
-          Set a start and end — a {layer === 'card' ? 'title card' : 'still'} runs for exactly its span.
-        </p>
-      )}
-      {performance && performanceBlocked && (
-        <div role="alert" className="flex items-start gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
-          <AlertTriangle size={13} className="shrink-0 mt-0.5" />
-          <span className="min-w-0 break-words">{performanceBlocked}</span>
-        </div>
-      )}
-      {performance && !performanceBlocked && (
-        <p className="text-[11px] text-port-text-muted break-words" data-testid="performance-plan">
-          Lip-sync via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
-          {plan.editInSec > 0 ? ` · shot starts ${plan.editInSec.toFixed(2)}s into the take` : ''} · {performanceCost}
-        </p>
-      )}
-      {falTake && !falTake.performance && (
-        <p className="text-[11px] text-port-text-muted break-words" data-testid="fal-cutaway-plan">
-          fal.ai renders {falTake.seconds != null ? `a ${falTake.seconds}s ` : 'a '}clip on {getFalVideoModel(falTake.modelId)?.label || falTake.modelId}
-          {' · '}{falCost || 'cost unknown — billed to your fal.ai account'}
-        </p>
-      )}
-      {grokPlan && (
-        <p className={`text-[11px] break-words ${grokPlan.needsSplit ? 'text-port-warning' : 'text-port-text-muted'}`}>
-          Grok renders a {grokPlan.requestSec}s clip for this {timedSpan.toFixed(1)}s cutaway
-          {grokPlan.needsSplit ? ` — ${grokPlan.uncoveredSec.toFixed(1)}s uncovered; split the scene rather than loop it` : ''}. Motion timing in the prompt is approximate.
-        </p>
-      )}
-      {canSplit && onSplit && (
-        <button type="button" onClick={() => onSplit(scene.sceneId, lipSyncBackend || null)}
-          className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
-          title={`Cut this ${timedSpan.toFixed(1)}s shot into scenes of at most ${splitLimit.toFixed(2)}s at lyric pauses or phrase boundaries — nothing is looped or stretched`}>
-          <Scissors size={13} /> Split on lyric boundaries
-        </button>
-      )}
-      {underCovered && (
-        <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
-          <AlertTriangle size={13} className="shrink-0" />
-          <span className="min-w-0 flex-1 basis-48">
-            Shot runs {spanSec.toFixed(1)}s but its clip is {clipSec.toFixed(1)}s — the render won&apos;t repeat it.
-            Trim the shot, continue or regenerate a longer clip, or loop it on purpose.
-          </span>
-          <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + clipSec) * 1000) / 1000 })}
-            className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Trim to clip</button>
-          <button type="button" onClick={() => applyPatch({ loop: true })}
-            className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
-        </div>
-      )}
-      {/* Reference frame — the still image that seeds this shot (Phase 1b) */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
         <textarea
-          aria-label="Reference frame prompt"
-          value={scene.framePrompt || ''} rows={2}
-          onChange={(e) => onEditLocal(scene.sceneId, { framePrompt: e.target.value })}
-          onBlur={(e) => onSave(scene.sceneId, { framePrompt: e.target.value || null })}
-          placeholder="Reference frame prompt — the still that seeds this shot (defaults to the shot prompt)"
-          className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+          aria-label="Shot prompt"
+          value={scene.prompt || ''} rows={2}
+          onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
+          onBlur={(e) => onSave(scene.sceneId, { prompt: e.target.value })}
+          placeholder="Shot prompt — what this scene's video should show"
+          className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
         />
-        <div className="flex items-center gap-2">
-          {scene.referenceImageId && (
-            <button
-              type="button"
-              onClick={() => onOpenPreview?.(`image:${scene.referenceImageId}`)}
-              aria-label={`View scene ${index + 1} reference frame full size`}
-              title={`View scene ${index + 1} reference frame full size`}
-              className="shrink-0 rounded border border-port-border overflow-hidden focus:outline-none focus:ring-2 focus:ring-port-accent"
-            >
-              <img
-                src={`/data/images/${scene.referenceImageId}`}
-                alt=""
-                className="w-32 aspect-video object-cover block"
-              />
-            </button>
-          )}
-          <div className="flex flex-col gap-1">
-            <button onClick={() => onGenerateFrame(scene)} disabled={!!generatingFrame}
-              className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-              title={scene.referenceImageId
-                ? 'Render another candidate frame — your selected frame stays until you pick a new one'
-                : 'Generate a still reference frame for this scene'}>
-              {generatingFrame ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
-              {generatingFrame ? 'Generating frame…' : (scene.referenceImageId ? 'New frame take' : 'Generate frame')}
-            </button>
-            {onImportTake && (
-              <button type="button" onClick={() => onImportTake(scene)} disabled={takeBusy}
-                className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-                title="Add a frame from the gallery or an upload (e.g. made in an external tool) as a take">
-                <ImagePlus size={14} /> Import take
-              </button>
+        {(scene.lyricText || scene.visualIntent || scene.direction) && (
+          <div className="text-[11px] text-port-text-muted space-y-0.5">
+            {scene.lyricText && <p className="italic break-words">♪ {scene.lyricText}</p>}
+            {scene.visualIntent && <p className="break-words">Intent: {scene.visualIntent}</p>}
+            {/* Applied treatment direction (#8980) — appended to both generated prompts. */}
+            {scene.direction && (
+              <p className="break-words" title={scene.direction.frameClause}>
+                Direction: {scene.direction.mode}{scene.direction.focalSubject ? ` · ${scene.direction.focalSubject}` : ''}
+                {scene.direction.typographyRole !== 'none' ? ` · ${scene.direction.typographyRole} text, ${scene.direction.negativeSpace} region kept clear` : ' · no text'}
+              </p>
             )}
           </div>
+        )}
+        <div className="flex flex-wrap gap-2 items-center text-xs">
+          {SCENE_TIME_FIELDS.map(([labelText, key]) => {
+            const toValue = (v) => (v === '' ? null : Number(v));
+            return (
+              <label key={key} className="flex items-center gap-1">{labelText}
+                <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-16 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                  onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
+                  onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
+              </label>
+            );
+          })}
+          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
+            <input type="checkbox" checked={!!scene.beatAligned}
+              onChange={(e) => { onEditLocal(scene.sceneId, { beatAligned: e.target.checked }); onSave(scene.sceneId, { beatAligned: e.target.checked }); }} />
+            Beat-aligned
+          </label>
+          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
+            <input type="checkbox" checked={loops} disabled={performance} onChange={(e) => applyPatch({ loop: e.target.checked })} />
+            Loop clip
+          </label>
+          {/* A performance is sung footage — only the footage layer offers it. */}
+          {layer === 'footage' && (
+            <>
+              <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
+              <select id={shotModeId} value={performance ? 'performance' : 'cutaway'}
+                onChange={(e) => applyPatch({ shotMode: e.target.value })}
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                title="Cutaway: any video lane animates the frame under the song. Performance: a singer lip-synced to the song itself (needs a source-audio provider).">
+                <option value="cutaway">Cutaway</option>
+                <option value="performance">Performance (lip-sync)</option>
+              </select>
+            </>
+          )}
         </div>
-      </div>
-      <SceneTakeStrip scene={scene} kind="image" busy={takeBusy}
-        onSelect={(take) => onSelectTake?.(scene, take)}
-        onReview={(take, review) => onReviewTake?.(scene, take, review)}
-        onOpenPreview={onOpenPreview} />
-      {/* Scene clip — i2v video generated from the reference frame (Phase 1) */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {scene.videoHistoryId && (
-          <div className="relative w-40 shrink-0">
-            <video
-              ref={clipPlayerRef}
-              src={clipSrc}
-              className="w-full aspect-video object-cover rounded border border-port-border bg-black"
-              muted
-              playsInline
-              preload="metadata"
-              controls
-              onLoadedMetadata={(e) => {
-                const sec = e.currentTarget.duration;
-                if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec });
-              }}
-            />
-            {/* Corner expand — do not put the open handler on <video> itself;
-                that would fight native play/pause controls. Shape matches
-                ScenePreview's open-in-new-tab overlay. Pause first so the
-                lightbox's unmuted autoplay doesn't double-play the audio. */}
-            <button
-              type="button"
-              onClick={() => {
-                clipPlayerRef.current?.pause();
-                onOpenPreview?.(`video:${scene.videoHistoryId}`);
-              }}
-              aria-label={`View scene ${index + 1} clip full size`}
-              title={`View scene ${index + 1} clip full size`}
-              className="always-dark absolute top-1 right-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 flex items-center justify-center rounded bg-black/50 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
-            >
-              <Maximize2 className="w-3 h-3" />
-            </button>
+        <div className="flex flex-wrap gap-2 items-center text-xs">
+          <label htmlFor={fieldId('layer')}>Layer</label>
+          <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
+            className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+            {MUSIC_VIDEO_VISUAL_LAYERS.map((value) => <option key={value} value={value}>{LAYER_LABELS[value]}</option>)}
+          </select>
+          {layer === 'still' && (
+            <>
+              <label htmlFor={fieldId('move')}>Move</label>
+              <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+                {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+              </select>
+            </>
+          )}
+          {layer === 'card' && (
+            <>
+              <label htmlFor={fieldId('card-text')}>Card text</label>
+              <input id={fieldId('card-text')} type="text" maxLength={500} value={scene.cardText || ''}
+                placeholder="Title shown on the card"
+                onChange={(e) => onEditLocal(scene.sceneId, { cardText: e.target.value })}
+                onBlur={(e) => onSave(scene.sceneId, { cardText: e.target.value.trim() || null })}
+                className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0" />
+              <label htmlFor={fieldId('card-color')}>Background</label>
+              <input id={fieldId('card-color')} type="color" value={scene.cardColor || '#000000'}
+                onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
+                onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
+                className="h-8 w-10 min-h-[44px] sm:min-h-0 bg-port-bg border border-port-border rounded" />
+            </>
+          )}
+        </div>
+        {layer !== 'footage' && !layered && (
+          <p className="text-[11px] text-port-text-muted">
+            {LAYER_LABELS[layer]} sections render in composed mode — a plain render plays this scene&apos;s footage.
+          </p>
+        )}
+        {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
+          <p role="alert" className="text-[11px] text-port-warning">
+            Set a start and end — a {layer === 'card' ? 'title card' : 'still'} runs for exactly its span.
+          </p>
+        )}
+        {performance && performanceBlocked && (
+          <div role="alert" className="flex items-start gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
+            <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+            <span className="min-w-0 break-words">{performanceBlocked}</span>
           </div>
         )}
-        <button onClick={() => onGenerateVideo(scene)}
-          disabled={settingsSaving || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason || !!performanceBlocked}
-          className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-          title={videoBlockedReason || performanceBlocked
-            || (!scene.referenceImageId ? 'Generate a reference frame first'
-              : performance ? `Lip-sync this scene's frame to the song via ${capability.label} — ${performanceCost}`
-                : "Generate this scene's video from its reference frame (i2v)")}>
-          {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
-          {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}
-        </button>
-        {scene.videoHistoryId && canContinueShot && (
-          <button
-            onClick={() => onContinueVideo(scene)}
-            disabled={settingsSaving || !!generatingVideo}
-            className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-            title="Native-extend this clip from its final latent frames and attach the longer result to this scene"
-          >
-            <Video size={14} /> Continue shot
+        {performance && !performanceBlocked && (
+          <p className="text-[11px] text-port-text-muted break-words" data-testid="performance-plan">
+            Lip-sync via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
+            {plan.editInSec > 0 ? ` · shot starts ${plan.editInSec.toFixed(2)}s into the take` : ''} · {performanceCost}
+          </p>
+        )}
+        {falTake && !falTake.performance && (
+          <p className="text-[11px] text-port-text-muted break-words" data-testid="fal-cutaway-plan">
+            fal.ai renders {falTake.seconds != null ? `a ${falTake.seconds}s ` : 'a '}clip on {getFalVideoModel(falTake.modelId)?.label || falTake.modelId}
+            {' · '}{falCost || 'cost unknown — billed to your fal.ai account'}
+          </p>
+        )}
+        {grokPlan && (
+          <p className={`text-[11px] break-words ${grokPlan.needsSplit ? 'text-port-warning' : 'text-port-text-muted'}`}>
+            Grok renders a {grokPlan.requestSec}s clip for this {timedSpan.toFixed(1)}s cutaway
+            {grokPlan.needsSplit ? ` — ${grokPlan.uncoveredSec.toFixed(1)}s uncovered; split the scene rather than loop it` : ''}. Motion timing in the prompt is approximate.
+          </p>
+        )}
+        {canSplit && onSplit && (
+          <button type="button" onClick={() => onSplit(scene.sceneId, lipSyncBackend || null)}
+            className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
+            title={`Cut this ${timedSpan.toFixed(1)}s shot into scenes of at most ${splitLimit.toFixed(2)}s at lyric pauses or phrase boundaries — nothing is looped or stretched`}>
+            <Scissors size={13} /> Split on lyric boundaries
           </button>
         )}
-        {onImportClipTake && (
-          <button type="button" onClick={() => onImportClipTake(scene)} disabled={takeBusy}
-            className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-            title="Pick an existing clip from the gallery (e.g. made in an external tool) as a take">
-            <Clapperboard size={14} /> Import clip take
-          </button>
+        {underCovered && (
+          <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
+            <AlertTriangle size={13} className="shrink-0" />
+            <span className="min-w-0 flex-1 basis-48">
+              Shot runs {spanSec.toFixed(1)}s but its clip is {clipSec.toFixed(1)}s — the render won&apos;t repeat it.
+              Trim the shot, continue or regenerate a longer clip, or loop it on purpose.
+            </span>
+            <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + clipSec) * 1000) / 1000 })}
+              className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Trim to clip</button>
+            <button type="button" onClick={() => applyPatch({ loop: true })}
+              className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
+          </div>
         )}
+        {/* Reference frame — the still image that seeds this shot (Phase 1b) */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+          <textarea
+            aria-label="Reference frame prompt"
+            value={scene.framePrompt || ''} rows={2}
+            onChange={(e) => onEditLocal(scene.sceneId, { framePrompt: e.target.value })}
+            onBlur={(e) => onSave(scene.sceneId, { framePrompt: e.target.value || null })}
+            placeholder="Reference frame prompt — the still that seeds this shot (defaults to the shot prompt)"
+            className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+          />
+          <div className="flex items-center gap-2">
+            {scene.referenceImageId && (
+              <button
+                type="button"
+                onClick={() => onOpenPreview?.(`image:${scene.referenceImageId}`)}
+                aria-label={`View scene ${index + 1} reference frame full size`}
+                title={`View scene ${index + 1} reference frame full size`}
+                className="shrink-0 rounded border border-port-border overflow-hidden focus:outline-none focus:ring-2 focus:ring-port-accent"
+              >
+                <img
+                  src={`/data/images/${scene.referenceImageId}`}
+                  alt=""
+                  className="w-32 aspect-video object-cover block"
+                />
+              </button>
+            )}
+            <div className="flex flex-col gap-1">
+              <button onClick={() => onGenerateFrame(scene)} disabled={!!generatingFrame}
+                className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
+                title={scene.referenceImageId
+                  ? 'Render another candidate frame — your selected frame stays until you pick a new one'
+                  : 'Generate a still reference frame for this scene'}>
+                {generatingFrame ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
+                {generatingFrame ? 'Generating frame…' : (scene.referenceImageId ? 'New frame take' : 'Generate frame')}
+              </button>
+              {onImportTake && (
+                <button type="button" onClick={() => onImportTake(scene)} disabled={takeBusy}
+                  className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
+                  title="Add a frame from the gallery or an upload (e.g. made in an external tool) as a take">
+                  <ImagePlus size={14} /> Import take
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+        <SceneTakeStrip scene={scene} kind="image" busy={takeBusy}
+          onSelect={(take) => onSelectTake?.(scene, take)}
+          onReview={(take, review) => onReviewTake?.(scene, take, review)}
+          onOpenPreview={onOpenPreview} />
+        {/* Scene clip — i2v video generated from the reference frame (Phase 1) */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {scene.videoHistoryId && (
+            <div className="relative w-40 shrink-0">
+              <video
+                ref={clipPlayerRef}
+                src={clipSrc}
+                className="w-full aspect-video object-cover rounded border border-port-border bg-black"
+                muted
+                playsInline
+                preload="metadata"
+                controls
+                onLoadedMetadata={(e) => {
+                  const sec = e.currentTarget.duration;
+                  if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec });
+                }}
+              />
+              {/* Corner expand — do not put the open handler on <video> itself;
+                  that would fight native play/pause controls. Shape matches
+                  ScenePreview's open-in-new-tab overlay. Pause first so the
+                  lightbox's unmuted autoplay doesn't double-play the audio. */}
+              <button
+                type="button"
+                onClick={() => {
+                  clipPlayerRef.current?.pause();
+                  onOpenPreview?.(`video:${scene.videoHistoryId}`);
+                }}
+                aria-label={`View scene ${index + 1} clip full size`}
+                title={`View scene ${index + 1} clip full size`}
+                className="always-dark absolute top-1 right-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 flex items-center justify-center rounded bg-black/50 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
+              >
+                <Maximize2 className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+          <button onClick={() => onGenerateVideo(scene)}
+            disabled={settingsSaving || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason || !!performanceBlocked}
+            className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
+            title={videoBlockedReason || performanceBlocked
+              || (!scene.referenceImageId ? 'Generate a reference frame first'
+                : performance ? `Lip-sync this scene's frame to the song via ${capability.label} — ${performanceCost}`
+                  : "Generate this scene's video from its reference frame (i2v)")}>
+            {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
+            {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}
+          </button>
+          {scene.videoHistoryId && canContinueShot && (
+            <button
+              onClick={() => onContinueVideo(scene)}
+              disabled={settingsSaving || !!generatingVideo}
+              className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
+              title="Native-extend this clip from its final latent frames and attach the longer result to this scene"
+            >
+              <Video size={14} /> Continue shot
+            </button>
+          )}
+          {onImportClipTake && (
+            <button type="button" onClick={() => onImportClipTake(scene)} disabled={takeBusy}
+              className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
+              title="Pick an existing clip from the gallery (e.g. made in an external tool) as a take">
+              <Clapperboard size={14} /> Import clip take
+            </button>
+          )}
+        </div>
+        <SceneTakeStrip scene={scene} kind="video" busy={takeBusy}
+          onSelect={(take) => onSelectTake?.(scene, take)}
+          onReview={(take, review) => onReviewTake?.(scene, take, review)}
+          onOpenPreview={onOpenPreview} />
       </div>
-      <SceneTakeStrip scene={scene} kind="video" busy={takeBusy}
-        onSelect={(take) => onSelectTake?.(scene, take)}
-        onReview={(take, review) => onReviewTake?.(scene, take, review)}
-        onOpenPreview={onOpenPreview} />
-    </div>
+    </details>
   );
 }

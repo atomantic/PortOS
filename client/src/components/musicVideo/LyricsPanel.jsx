@@ -171,7 +171,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
 
   return (
     <details className="mt-2 bg-port-bg border border-port-border rounded-lg p-2 text-xs">
-      <summary className="cursor-pointer select-none text-port-text-muted">
+      <summary className="cursor-pointer select-none text-port-text-muted min-h-[44px] sm:min-h-0 flex flex-wrap items-center gap-x-1">
         Lyrics, phrases &amp; pacing — {cues.length} line{cues.length === 1 ? '' : 's'} ({timedCount} timed)
         · {phrases.length} phrase{phrases.length === 1 ? '' : 's'}
         <span className="block sm:inline sm:ml-1">— AI Plan cuts on timed lines and phrase edges; no lyrics = an instrumental plan.</span>
