@@ -41,7 +41,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
-import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
 import { castAndSetsSettled } from './castAndSets.js';
@@ -230,7 +230,7 @@ const JOB_KIND = Object.freeze({ frame: 'image', clip: 'video' });
 
 /** The scenes that need a still frame and a clip, per the project's render mode. */
 function productionTargets(project) {
-  const layered = project?.composition?.mode === 'composed';
+  const layered = isLayeredComposition(project);
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   return {
     frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) !== 'card'),

@@ -1217,7 +1217,7 @@ describe('MusicVideo section layers (#8985)', () => {
 
   it('keeps a plain render on footage and says the layer only applies to composed renders', async () => {
     await openProject({ ...PROJECT_WITH_CLIP, scenes: [scenes[0], { ...scenes[1], visualLayer: 'card' }], composition: composition('concat') }, 'board');
-    expect(await screen.findByText(/Title card sections render in composed mode/)).toBeTruthy();
+    expect(await screen.findByText(/Title card sections render in composed or document mode/)).toBeTruthy();
     await openStage('review');
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
   });

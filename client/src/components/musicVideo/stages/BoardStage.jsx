@@ -2,6 +2,7 @@ import { Plus } from 'lucide-react';
 import BeatTimeline from '../BeatTimeline.jsx';
 import SceneCard from '../SceneCard.jsx';
 import { PlanActions } from '../ProjectActionGroups.jsx';
+import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 
 /**
  * Board: plan and arrange the shots, the beat timeline, and the scene cards —
@@ -61,7 +62,7 @@ export default function BoardStage({ board }) {
               onReviewTake={takes.reviewTake}
               onImportTake={(target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId })}
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
-              layered={project.composition?.mode === 'composed'}
+              layered={isLayeredComposition(project)}
             />
           ))}
         </div>

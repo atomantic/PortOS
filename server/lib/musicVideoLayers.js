@@ -13,7 +13,17 @@
 export const MUSIC_VIDEO_VISUAL_LAYERS = ['footage', 'still', 'card'];
 export const MUSIC_VIDEO_STILL_MOVES = ['hold', 'push', 'pan'];
 
-/** The layer a scene contributes; `layered` is true only for a composed render. */
+/**
+ * Whether a composition honours per-scene layers: a composed render cuts
+ * stills and cards itself, and a composition document (mode `document`) is
+ * handed each scene's layer in `window.PORTOS_MV` and draws still/card scenes
+ * itself — neither needs a clip for them, and a card needs no frame either.
+ * Plain concat and code renders play footage only.
+ */
+export const LAYERED_COMPOSITION_MODES = Object.freeze(['composed', 'document']);
+export const isLayeredComposition = (project) => LAYERED_COMPOSITION_MODES.includes(project?.composition?.mode);
+
+/** The layer a scene contributes; `layered` is true only for a layered composition (see isLayeredComposition). */
 export function sceneVisualLayer(scene, { layered = false } = {}) {
   const layer = scene?.visualLayer;
   return layered && (layer === 'still' || layer === 'card') ? layer : 'footage';

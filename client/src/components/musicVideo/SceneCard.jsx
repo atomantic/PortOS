@@ -242,7 +242,7 @@ export default function SceneCard({
         </div>
         {layer !== 'footage' && !layered && (
           <p className="text-[11px] text-port-text-muted">
-            {LAYER_LABELS[layer]} sections render in composed mode — a plain render plays this scene&apos;s footage.
+            {LAYER_LABELS[layer]} sections render in composed or document mode — a plain render plays this scene&apos;s footage.
           </p>
         )}
         {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (

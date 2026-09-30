@@ -173,6 +173,24 @@ describe('music video production run (#9066)', () => {
     expect(theRun().status).toBe('completed');
   });
 
+  it('in a composition document, skips frames for card scenes and clips for still/card scenes', async () => {
+    seedProject({
+      composition: { mode: 'document' },
+      scenes: [
+        { sceneId: 'mvs-a', label: 'A', framePrompt: 'a lighthouse', prompt: 'waves roll', startSec: 0, endSec: 4, takes: [] },
+        { sceneId: 'mvs-card', label: 'Card', visualLayer: 'card', startSec: 4, endSec: 6, takes: [] },
+        { sceneId: 'mvs-still', label: 'Still', visualLayer: 'still', framePrompt: 'a harbor', referenceImageId: 'harbor.png', startSec: 6, endSec: 8, takes: [] },
+      ],
+    });
+    await start();
+    // Only the footage scene needs a frame; the card needs none and the still already has one.
+    expect(dispatch.mock.calls.map(([a]) => [a.stepKind, a.scene.sceneId])).toEqual([['frame', 'mvs-a']]);
+    completeJob('job-1');
+    await settle();
+    // Only the footage scene needs a clip — the document draws the still and the card itself.
+    expect(dispatch.mock.calls.slice(1).map(([a]) => [a.stepKind, a.scene.sceneId])).toEqual([['clip', 'mvs-a']]);
+  });
+
   it('plans an empty board once, with the directive, before generating', async () => {
     seedProject({ scenes: [], castAndSets: { status: 'skipped' } });
     planProject.mockImplementation(async () => {
