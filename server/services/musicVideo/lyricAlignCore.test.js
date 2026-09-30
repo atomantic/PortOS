@@ -19,6 +19,9 @@ describe('vocal phrase anchors', () => {
     expect(phrases[0].endSec).toBeCloseTo(2.4, 1);
     expect(phrases[1].startSec).toBeCloseTo(3, 1);
     expect(detectVocalPhrases(new Float32Array(16000))).toEqual([]);
+    const quietBed = detectVocalPhrases(signal(6, [[1, 5, 0.007], [1, 2], [4, 5]]));
+    expect(quietBed).toHaveLength(2);
+    expect(quietBed[1].startSec).toBeGreaterThanOrEqual(quietBed[0].endSec);
   });
 
   it('splits a long sustained phrase at its deepest dip and bounds flat phrases', () => {

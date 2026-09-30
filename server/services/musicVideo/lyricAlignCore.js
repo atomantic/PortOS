@@ -575,15 +575,19 @@ export function detectVocalPhrases(pcm, sampleRate = LYRIC_ALIGN_SAMPLE_RATE) {
   };
   let start = null;
   let silent = 0;
+  let onsetFloor = 0;
   for (let i = 0; i < rms.length; i++) {
     if (rms[i] >= threshold) {
       if (start == null) {
         start = i;
-        while (start > 0 && rms[start - 1] >= onsetThreshold) start--;
+        while (start > onsetFloor && rms[start - 1] >= onsetThreshold) start--;
       }
       silent = 0;
     } else if (start != null && ++silent >= 10) {
       emit(start, i - silent + 1);
+      // A quiet bed above the onset threshold must not walk the next phrase
+      // backward through a silence split into an already-emitted phrase.
+      onsetFloor = i + 1;
       start = null;
       silent = 0;
     }
