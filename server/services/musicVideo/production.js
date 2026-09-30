@@ -108,7 +108,7 @@ function pruneRuns(runs) {
  * part of it: the run itself seeds and fills them, and a director editing one
  * scene's prompt mid-run changes only what that scene generates next.
  */
-export function productionBasisRevision(project, version = 1) {
+function productionBasisRevision(project, version = 1) {
   const pick = (value) => value ?? null;
   return canonicalSnapshotChecksum({
     concept: pick(project?.concept),

@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 
 // ---- in-memory project store with a single write tail ----------------------
 const store = new Map();
@@ -29,7 +30,6 @@ vi.mock('./projects.js', () => ({
 
 const { musicVideoEvents } = await import('./events.js');
 const service = await import('./productionService.js');
-const { productionBasisRevision } = await import('./production.js');
 
 // ---- queue, lanes and review doubles ------------------------------------------
 let jobs;
@@ -513,7 +513,17 @@ describe('music video production run (#9066)', () => {
     seedProject();
     await start();
     const stored = store.get('mv-example');
-    stored.productionRuns[0].basis = { revision: productionBasisRevision(stored), capturedAt: stored.productionRuns[0].createdAt };
+    // Reconstruct the version-one persisted basis from its old field contract.
+    const pick = (value) => value ?? null;
+    const oldRevision = canonicalSnapshotChecksum({
+      concept: pick(stored.concept), visualSpec: pick(stored.visualSpec),
+      ...(stored.styleReferences?.length ? { styleReferences: stored.styleReferences } : {}),
+      brief: pick(stored.treatment?.brief), automation: pick(stored.automation),
+      audio: { trackId: pick(stored.trackId), uploadedAudioFilename: pick(stored.uploadedAudioFilename),
+        sections: pick(stored.audioAnalysis?.sections), durationSec: pick(stored.audioAnalysis?.durationSec) },
+      pacing: pick(stored.pacing), composition: pick(stored.composition?.mode),
+    });
+    stored.productionRuns[0].basis = { revision: oldRevision, capturedAt: stored.productionRuns[0].createdAt };
     completeJob('job-1');
     await settle();
     expect(theRun().status).toBe('running');
