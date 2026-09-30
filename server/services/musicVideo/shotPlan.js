@@ -24,6 +24,8 @@
  * invented. Pure and deterministic: same inputs → same plan.
  */
 
+import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { deliveryNotesWithin } from './lyricMarkers.js';
 import { snapSectionsToGrid } from './audioAnalysis.js';
 
 const EPS = 1e-6;
@@ -86,6 +88,7 @@ function resolvePacing(pacing, clipCapacitySec) {
 /** Timed cues sorted by start, each with a resolved end (explicit, next cue, or capped open end). */
 function timedCues(cues) {
   const timed = (Array.isArray(cues) ? cues : [])
+    .map((c, line) => ({ ...c, line }))
     .filter((c) => c && typeof c.text === 'string' && c.text.trim() && typeof c.startSec === 'number')
     .slice()
     .sort((a, b) => a.startSec - b.startSec);
@@ -93,7 +96,7 @@ function timedCues(cues) {
     const next = timed[i + 1];
     const openEnd = Math.min(c.startSec + OPEN_CUE_MAX_SEC, next ? next.startSec : Infinity);
     const endSec = typeof c.endSec === 'number' && c.endSec > c.startSec ? c.endSec : openEnd;
-    return { text: c.text.trim(), startSec: c.startSec, endSec };
+    return { line: c.line, text: c.text.trim(), startSec: c.startSec, endSec };
   });
 }
 
@@ -263,4 +266,54 @@ export function planShots(sections, {
     });
   });
   return { shots, pacing: resolved };
+}
+
+/** Enrich an already-tiled plan; never move a cut to accommodate direction. */
+export function directShots(shots, project) {
+  const direction = project.castAndSets?.status === 'skipped' ? null : project.castAndSets?.direction;
+  const cues = project.lyricCues || [];
+  const markers = project.lyricMarkers || [];
+  const timed = timedCues(cues);
+  const directed = shots.map((shot) => {
+    const delivery = deliveryNotesWithin(cues, markers, shot.startSec, shot.endSec);
+    if (!direction) return { ...shot, ...(delivery.length ? { delivery } : {}) };
+    const setId = direction.songMap?.find((m) => m.section === shot.sectionIndex)?.setId;
+    const set = direction.sets?.find((s) => s.id === setId)
+      || direction.sets?.find((s) => s.sections?.some((label) => label.toLowerCase() === shot.sectionLabel?.toLowerCase()))
+      || direction.sets?.[0];
+    const chapter = shot.sectionLabel?.toLowerCase();
+    const look = direction.looks?.find((l) => chapter && l.chapters?.toLowerCase().includes(chapter))
+      || direction.looks?.find((l) => direction.tests?.some((t) => t.setId === set?.id && t.look === l.name))
+      || direction.looks?.[0];
+    // Keep the cue's original index: markers refer to sheet order, not sorted time.
+    const line = phraseFor(timed, shot.startSec, shot.endSec)?.line ?? -1;
+    const activeSection = markers.filter((m) => m.type === 'section' && line >= m.line)
+      .sort((a, b) => a.line - b.line).at(-1);
+    const kinds = markers.filter((m) => m.type === 'direction' && (delivery.includes(m.label) || m.line === line));
+    const silence = kinds.some((m) => m.kind === 'silence');
+    const card = silence || kinds.some((m) => ['shouted', 'hits'].includes(m.kind) || /\btitle\b/i.test(m.label))
+      || (shot.lyricText && shot.lyricText.trim().split(/\s+/).length === 1);
+    const intimate = kinds.some((m) => m.kind === 'whispered' || (m.kind === 'spoken' && /close/i.test(m.label)));
+    const sungHook = ['chorus', 'hook', 'refrain'].includes(activeSection?.kind)
+      || /^(?:(?:final|last|double|big)\s+)?(?:chorus|hook|refrain)\b/i.test(shot.sectionLabel || '');
+    return {
+      ...shot, delivery, set, look, protagonist: direction.protagonist,
+      visualLayer: card ? 'card' : 'footage', shotMode: 'cutaway',
+      ...(card ? { cardText: silence ? '' : (shot.lyricText || project.name || '').slice(0, 500) } : {}),
+      performanceCandidate: !card && !!shot.lyricText && (intimate || (sungHook && kinds.length === 0)),
+    };
+  });
+  if (!direction) return directed;
+  const footageSec = directed.filter((s) => s.visualLayer === 'footage').reduce((sum, s) => sum + s.endSec - s.startSec, 0);
+  let used = 0;
+  if (performanceCapability(project.videoSettings?.backend)) {
+    for (const shot of directed) {
+      const duration = shot.endSec - shot.startSec;
+      if (shot.performanceCandidate && used + duration <= footageSec * 0.4 + EPS) {
+        shot.shotMode = 'performance';
+        used += duration;
+      }
+    }
+  }
+  return directed;
 }
