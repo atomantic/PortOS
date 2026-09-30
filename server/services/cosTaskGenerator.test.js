@@ -2028,7 +2028,8 @@ describe('buildClaimWorkTask reviewer pin', () => {
     const { prompt } = await buildClaimWorkTask(app, { reviewers: ['provider:example-reviewer'] });
     expect(prompt).toContain('kind: "claim-review"');
     expect(prompt).toContain('toolFree: true');
-    expect(prompt).toContain('Provider CLIs run in an isolated scratch directory with the diff inlined');
+    expect(prompt).toContain('Provider CLIs run in an isolated scratch directory with the diff inlined, under an enforced no-tool or read-only vendor profile');
+    expect(prompt).toContain('a CLI without one is unavailable before launch');
     expect(prompt).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
     expect(prompt).toContain('an optional inconclusive result remains non-blocking');
   });
