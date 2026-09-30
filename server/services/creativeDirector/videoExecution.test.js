@@ -226,3 +226,36 @@ it('generates one explicitly selected soundtrack, retains its Track, and reuses 
   expect(state.project.videoExecution.blocker).toMatch(/audio job limit/);
   expect(enqueueJob).toHaveBeenCalledTimes(1);
 });
+
+const HAILUO_T2V = 'fal-ai/minimax/hailuo-02/standard/text-to-video';
+const falProject = (modelId = HAILUO_T2V) => { state.project.renderBackend = { video: { mode: 'fal', modelId } }; state.settings = { videoGen: { fal: { apiKey: 'example-key' } } }; };
+const enqueueFal = (params = {}, sceneId = 'opening') => enqueueVideoProductionJob(state.project, { sceneId, workRevision: 0,
+  params: { mode: 'fal', videoMode: 'text', modelId: HAILUO_T2V, prompt: 'Example landscape', duration: 6, ...params } });
+
+it('prices a curated fal pin so a dollar cap can start and bound the run', async () => {
+  falProject();
+  const preview = await getVideoExecutionPreview('example-video');
+  expect(preview.canStart).toBe(true);
+  expect(preview.choices.costEstimateUsd).toBeGreaterThan(0);
+  const clip = preview.choices.costEstimateUsd;
+  await startVideoExecution('example-video', await startInput({ spendCapUsd: clip * 1.5 }));
+  expect(await enqueueFal()).toMatchObject({ jobId: 'example-job-1' });
+  const [attempt] = state.project.videoExecution.attempts;
+  expect(attempt.costUsd).toBeGreaterThan(0);
+  // A second clip would push the reserved total past the cap: refused before enqueue.
+  state.project.treatment.scenes.push({ sceneId: 'second', order: 1, status: 'pending', workRevision: 0 });
+  expect(await enqueueFal({}, 'second')).toBeNull();
+  expect(state.project.videoExecution.blocker).toMatch(/exceed the dollar cap/);
+  expect(enqueueUnattendedMediaJob).toHaveBeenCalledTimes(1);
+});
+
+it('still refuses a dollar cap for an uncurated fal model or an unpriced backend', async () => {
+  falProject('fal-ai/example/uncurated');
+  expect((await getVideoExecutionPreview('example-video')).choices.costEstimateUsd).toBeNull();
+  await expect(startVideoExecution('example-video', await startInput({ spendCapUsd: 5 }))).rejects.toMatchObject({ code: 'VIDEO_COST_UNKNOWN' });
+  // A clip whose model the catalog cannot price is refused at reservation.
+  state.project.renderBackend = { video: { mode: 'fal', modelId: HAILUO_T2V } };
+  await startVideoExecution('example-video', await startInput({ spendCapUsd: 5 }));
+  expect(await enqueueFal({ modelId: 'fal-ai/example/uncurated' })).toBeNull();
+  expect(state.project.videoExecution.blocker).toMatch(/unknown cost/);
+});
