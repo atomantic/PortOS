@@ -23,6 +23,7 @@ vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js');
 const projects = await import('./projects.js');
 const service = await import('./castAndSetsService.js');
+const production = await import('./production.js');
 
 const app = express();
 app.use(express.json());
@@ -88,7 +89,7 @@ async function land(projectId, keys = null) {
     job.landed = true;
     const filename = `${job.id}.png`;
     writeFileSync(join(IMAGES(), filename), PNG);
-    await service.onCastAndSetsImageSettled({ projectId, key: keyOf(job), jobId: job.id, filename });
+    await service.onCastAndSetsImageSettled({ projectId, key: keyOf(job), jobId: job.id, filename, productionRunId: job.params.musicVideo.productionRunId, productionStepKey: job.params.musicVideo.productionStepKey });
   }
 }
 
@@ -135,6 +136,87 @@ beforeEach(() => {
   });
 });
 afterAll(cleanupTempDataRoots);
+
+async function productionCheckin(limits, price = 0.25) {
+  const project = await seed();
+  const { run } = await projects.mutateProjectRecord(project.id, (current) => production.startProductionOnProject(current, {
+    pool: [{ kind: 'image', mode: 'codex', model: null }],
+    processId: 'example-process', limits: { maxReviewAttempts: 2, ...limits }, pricing: { 'image:codex:': price },
+  }));
+  await service.startCastAndSets(project.id, { productionRunId: run.id });
+  return { project, run };
+}
+
+describe('Cast & Sets production accounting', () => {
+  it.each([
+    { maxGenerations: 2 },
+    { maxGenerations: 20, spendCapUsd: 0.5 },
+  ])('rejects the entire plan before queueing when its limit is insufficient: %j', async (limits) => {
+    const { project } = await productionCheckin(limits);
+    await until(async () => (await current(project.id)).productionRuns[0].status === 'limit-reached', 'the budget halt');
+    const saved = await current(project.id);
+    expect(jobs).toHaveLength(0);
+    expect(saved.productionRuns[0].usage).toEqual({ generations: 0, spentUsd: 0 });
+    expect(saved.productionRuns[0].steps).toHaveLength(0);
+    expect(saved.castAndSets.status).toBe('failed');
+  });
+
+  it('charges every image once, links its job, and settles completion idempotently', async () => {
+    const { project, run } = await productionCheckin({ maxGenerations: 20, spendCapUsd: 5 });
+    await runTo(project.id, 'review');
+    const saved = await current(project.id);
+    const count = Object.keys(saved.castAndSets.plan).length;
+    expect(jobs).toHaveLength(count);
+    expect(saved.productionRuns[0].usage).toEqual({ generations: count, spentUsd: count * 0.25 });
+    expect(saved.productionRuns[0].steps).toHaveLength(count);
+    for (const job of jobs) {
+      expect(job.params.musicVideo.productionRunId).toBe(run.id);
+      expect(saved.productionRuns[0].steps.find((s) => s.key === job.params.musicVideo.productionStepKey))
+        .toMatchObject({ status: 'completed', jobId: job.id, kind: 'checkin' });
+    }
+    const job = jobs[0];
+    await service.onCastAndSetsImageSettled({
+      projectId: project.id, key: keyOf(job), jobId: job.id, filename: job.id + '.png',
+      productionRunId: run.id, productionStepKey: job.params.musicVideo.productionStepKey,
+    });
+    expect((await current(project.id)).productionRuns[0].usage).toEqual(saved.productionRuns[0].usage);
+  });
+
+  it('refunds a refused submission and charges a new attempt when resumed', async () => {
+    enqueue.mockRejectedValueOnce(new Error('Example queue refusal'));
+    const { project } = await productionCheckin({ maxGenerations: 20 });
+    await until(async () => jobs.length === 3, 'the other initial images');
+    const before = await current(project.id);
+    const count = Object.keys(before.castAndSets.plan).length;
+    expect(before.productionRuns[0].usage.generations).toBe(count - 1);
+    expect(before.productionRuns[0].steps.find((s) => s.sceneId === 'character')).toMatchObject({ status: 'refused' });
+    await land(project.id);
+    await runTo(project.id, 'review');
+    const after = await current(project.id);
+    expect(after.productionRuns[0].usage.generations).toBe(count);
+    expect(after.productionRuns[0].steps.filter((s) => s.sceneId === 'character').map((s) => s.status))
+      .toEqual(['refused', 'completed']);
+  });
+
+  it('charges failed queued jobs and their retry, and refunds images skipped before submission', async () => {
+    const { project, run } = await productionCheckin({ maxGenerations: 20 });
+    await until(async () => jobs.length === 4, 'the initial images');
+    const job = jobs.find((j) => keyOf(j) === 'character');
+    job.landed = true;
+    await service.onCastAndSetsImageSettled({
+      projectId: project.id, key: keyOf(job), jobId: job.id, error: 'Example render failure',
+      productionRunId: run.id, productionStepKey: job.params.musicVideo.productionStepKey,
+    });
+    await until(async () => jobs.length === 5, 'the retry');
+    const saved = await current(project.id);
+    const count = Object.keys(saved.castAndSets.plan).length;
+    expect(saved.productionRuns[0].usage.generations).toBe(count + 1);
+    await service.skipCastAndSets(project.id);
+    const skipped = await current(project.id);
+    expect(skipped.productionRuns[0].usage.generations).toBe(5);
+    expect(skipped.productionRuns[0].steps.filter((s) => s.status === 'reserved')).toHaveLength(0);
+  });
+});
 
 describe('Cast & Sets check-in', () => {
   it('directs, renders the character sheet first, builds the sheet, waits for review, and applies the approval', async () => {
