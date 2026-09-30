@@ -6,6 +6,7 @@ import {
 import { timeUntil } from '../../../../utils/formatters';
 import { describeCron, summarizeAppSchedules } from '../../../../utils/cronHelpers';
 import { formatSkipCauses } from '../../../../lib/perpetualSkipCauses';
+import { TASK_READINESS_REASON } from '../../../../../../server/lib/taskReadinessReasons.js';
 
 // The cadence model is two variants; `perpetual` is an orthogonal flag that
 // renders as its own badge alongside whichever one is selected.
@@ -138,6 +139,7 @@ export const STATUS_GROUPS = {
   'on-demand': { label: 'On-Demand', dot: 'bg-gray-400', order: 1 },
   waiting: { label: 'Waiting', dot: 'bg-port-warning', order: 2 },
   disabled: { label: 'Disabled', dot: 'bg-gray-600', order: 3 },
+  unknown: { label: 'Unknown', dot: 'bg-port-warning', order: 4 },
 };
 
 /**
@@ -158,6 +160,26 @@ export function isManualOnlyCadence({ type, perpetual, autoStart, appSchedules }
   return type === 'on-demand' && (!perpetual || autoStart === false);
 }
 
+// Explicit rendering coverage for every wire reason. The cadence group still
+// depends on the task config; a new reason must be classified deliberately.
+export const TASK_READINESS_REASON_RENDERING = Object.freeze({
+  [TASK_READINESS_REASON.REQUIRES_INSTALL_WIDE_TARGET]: 'cadence',
+  [TASK_READINESS_REASON.DISABLED]: 'cadence',
+  [TASK_READINESS_REASON.FEATURE_DISABLED]: 'cadence',
+  [TASK_READINESS_REASON.ON_DEMAND_ONLY]: 'cadence',
+  [TASK_READINESS_REASON.WEEKDAY_ONLY]: 'cadence',
+  [TASK_READINESS_REASON.DISABLED_FOR_APP]: 'cadence',
+  [TASK_READINESS_REASON.FAILURE_PARKED]: 'cadence',
+  [TASK_READINESS_REASON.PERPETUAL_PARKED]: 'cadence',
+  [TASK_READINESS_REASON.PERPETUAL_RECHECK]: 'cadence',
+  [TASK_READINESS_REASON.PERPETUAL_DRAIN]: 'cadence',
+  [TASK_READINESS_REASON.INVALID_CRON]: 'cadence',
+  [TASK_READINESS_REASON.CRON_DUE]: 'cadence',
+  [TASK_READINESS_REASON.CRON_COOLDOWN]: 'cadence',
+  [TASK_READINESS_REASON.FAILURE_COOLDOWN]: 'cadence',
+  [TASK_READINESS_REASON.WAITING_ON_DEPENDENCIES]: 'waiting',
+});
+
 // Classify a task config into one status group (mutually exclusive).
 // Disabled wins over everything; then dependency-wait; then cadence — a
 // perpetual on-demand task is "active" because its drain runs unattended, and
@@ -165,7 +187,9 @@ export function isManualOnlyCadence({ type, perpetual, autoStart, appSchedules }
 // without anybody pressing Run, which is what this group means.
 export function getTaskStatusGroup(config) {
   if (!config?.enabled) return 'disabled';
-  if (config.status?.reason === 'waiting-on-dependencies') return 'waiting';
+  const reason = config.status?.reason;
+  if (reason != null && !Object.hasOwn(TASK_READINESS_REASON_RENDERING, reason)) return 'unknown';
+  if (TASK_READINESS_REASON_RENDERING[reason] === 'waiting') return 'waiting';
   return isManualOnlyCadence(config) ? 'on-demand' : 'active';
 }
 
@@ -257,6 +281,7 @@ export function coverageTone(enabled, total) {
 export function describeNextRun(config) {
   const group = getTaskStatusGroup(config);
   if (group === 'disabled') return { text: 'Paused', tone: 'text-gray-500' };
+  if (group === 'unknown') return { text: 'Unknown schedule state', tone: 'text-port-warning', warn: true };
   if (group === 'waiting') {
     const deps = config.status?.pendingDeps?.join(', ');
     return {
@@ -288,7 +313,7 @@ export function describeNextRun(config) {
       return { text: 'draining — runs back-to-back until done', tone: 'text-port-success' };
     }
     // Global (non-app) perpetual task: the global status.reason is accurate.
-    if (config.status?.reason === 'perpetual-parked') {
+    if (config.status?.reason === TASK_READINESS_REASON.PERPETUAL_PARKED) {
       const next = config.status?.nextRunAt;
       const skipSummary = formatSkipCauses(config.status?.parkSkipCauses);
       const skipSuffix = skipSummary ? ` — ${skipSummary}` : '';
@@ -334,6 +359,7 @@ export const TASK_FILTERS = [
   { id: 'on-demand', label: 'On-Demand', emptyMessage: 'No on-demand tasks.', match: ([, config]) => getTaskStatusGroup(config) === 'on-demand' },
   { id: 'waiting', label: 'Waiting', emptyMessage: 'No tasks waiting on dependencies.', match: ([, config]) => getTaskStatusGroup(config) === 'waiting' },
   { id: 'disabled', label: 'Disabled', emptyMessage: 'No disabled tasks.', match: ([, config]) => getTaskStatusGroup(config) === 'disabled' },
+  { id: 'unknown', label: 'Unknown', emptyMessage: 'No tasks with unknown status.', match: ([, config]) => getTaskStatusGroup(config) === 'unknown' },
 ];
 export const DEFAULT_FILTER_ID = TASK_FILTERS[0].id;
 

@@ -1118,6 +1118,16 @@ describe('taskSchedule', () => {
   })
 
   describe('shouldRunTask', () => {
+    it('keeps invalid cron verdicts one shape before and after cron parsing', async () => {
+      mockSchedule({ tasks: { 'ui-bugs': { type: 'cron', enabled: true, cronExpression: 'not a cron' } } })
+      const malformed = await shouldRunTask('ui-bugs')
+      mockSchedule({ tasks: { 'ui-bugs': { type: 'cron', enabled: true, cronExpression: '0 7 * * *' } } })
+      parseCronToNextRun.mockReturnValue(null)
+      const unresolvable = await shouldRunTask('ui-bugs')
+      expect(malformed).toEqual({ shouldRun: false, reason: 'invalid-cron', cronExpression: null })
+      expect(unresolvable).toEqual({ shouldRun: false, reason: 'invalid-cron', cronExpression: '0 7 * * *' })
+    })
+
     it('does not run a task whose required instance feature is disabled', async () => {
       isInstanceFeatureEnabled.mockResolvedValue(false)
       mockSchedule({ tasks: { 'jira-sprint-manager': { type: 'rotation', enabled: true } } })
