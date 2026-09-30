@@ -2,7 +2,7 @@ import { Film, Music, Activity, Image as ImageIcon, Video, Wand2 } from 'lucide-
 import RecordRenderPinRow from '../imageGen/RecordRenderPinRow.jsx';
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
 import VideoRenderSettings from './VideoRenderSettings.jsx';
-import { sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { isLayeredComposition, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { compositionDraft, RENDER_STYLES } from './compositionDraft.js';
 
 /**
@@ -89,7 +89,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia }) {
   // #8985: in a composed render a still needs only its frame and a title card
   // needs neither frame nor clip, so the counts cover the scenes that use them.
   const mode = project.composition?.mode || 'concat';
-  const layered = mode === 'composed';
+  const layered = isLayeredComposition(project);
   const codeMode = mode === 'code';
   const frameScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) !== 'card');
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
@@ -165,7 +165,7 @@ export function RenderFinalButton({ project, renderJob }) {
   const scenes = project.scenes || [];
   const sceneCount = scenes.length;
   const mode = project.composition?.mode || 'concat';
-  const layered = mode === 'composed';
+  const layered = isLayeredComposition(project);
   const codeMode = mode === 'code';
   const documentMode = mode === 'document';
   const readySceneCount = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;

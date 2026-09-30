@@ -6,7 +6,7 @@ import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
-import { sceneVisualLayer } from '../lib/musicVideoLayers.js';
+import { isLayeredComposition, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import {
   approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
 } from '../lib/musicVideoShotTiming.js';
@@ -305,7 +305,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const scenes = project?.scenes || [];
   // #8985: a composed render's title cards need no frame, and its stills need
   // no clip — the batch generators skip them.
-  const layered = project?.composition?.mode === 'composed';
+  const layered = isLayeredComposition(project);
   const frameScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) !== 'card');
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const generateMissingFrames = () => {

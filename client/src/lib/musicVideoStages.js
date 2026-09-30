@@ -4,7 +4,7 @@
  * spend. Pure functions over the project record so the header, the progress
  * strip and the tests all read the same answer.
  */
-import { sceneRenderReady } from './musicVideoLayers.js';
+import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
 
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Setup', title: 'Setup' },
@@ -85,7 +85,7 @@ export function deriveStages(project) {
   const cast = project?.castAndSets || null;
   const run = currentProductionRun(project);
   const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status);
-  const layered = mode === 'composed';
+  const layered = isLayeredComposition(project);
   // Code and document renders draw the picture themselves; scene footage is optional there.
   const footageOptional = mode === 'code' || mode === 'document';
   const planned = scenes.length > 0;

@@ -9,4 +9,6 @@ export {
   sceneVisualLayer,
   sceneHasAuthoredSpan,
   sceneRenderReady,
+  isLayeredComposition,
+  LAYERED_COMPOSITION_MODES,
 } from '../../../server/lib/musicVideoLayers.js';
