@@ -61,21 +61,18 @@ vi.mock('../lib/ffmpeg.js', async (importOriginal) => {
     ...real,
     findFfmpeg: vi.fn(async () => (h.analysisAvailable ? 'ffmpeg' : null)),
     findFfprobe: vi.fn(async () => (h.analysisAvailable ? 'ffprobe' : null)),
-    // Real frame files, so the reviewer sees a non-empty continuous strip.
-    extractEvaluationFrames: vi.fn(async (_path, id, count) => {
-      mkdir(PATHS.videoThumbnails, { recursive: true });
-      return Array.from({ length: count }, (_, i) => {
-        const name = `${id}-f${i + 1}.jpg`;
-        write(joinPath(PATHS.videoThumbnails, name), 'jpg');
-        return name;
-      });
-    }),
+    probeVideoStreamInfo: vi.fn(async () => ({ width: 640, height: 360, fps: 24, frameCount: null })),
   };
 });
 vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: vi.fn(() => true), closeJobAfterDelay: vi.fn() }));
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-test') }));
 vi.mock('../lib/killWithEscalation.js', () => ({ killWithEscalation: vi.fn((proc) => proc.emit('close', null, 'SIGTERM')) }));
-vi.mock('../services/htmlComposition/encode.js', () => ({ encodeFileContactSheetAtTimes: vi.fn(async () => {}) }));
+// Real sheet files, so the reviewer sees a non-empty continuous strip.
+vi.mock('../services/htmlComposition/encode.js', async () => {
+  const { writeFileSync: write, mkdirSync: mkdir } = await import('fs');
+  const { dirname } = await import('path');
+  return { encodeFileContactSheetAtTimes: vi.fn(async (_video, out) => { mkdir(dirname(out), { recursive: true }); write(out, 'jpg'); }) };
+});
 vi.mock('../services/mediaJobQueue/index.js', async () => ({
   mediaJobEvents: new (await import('events')).EventEmitter(),
   listJobs: vi.fn(({ kind } = {}) => h.jobs.filter((j) => !kind || j.kind === kind)),
