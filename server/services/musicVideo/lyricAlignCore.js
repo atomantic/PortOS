@@ -533,7 +533,11 @@ function alignDirectorWords(cues, recognizedWords, { phraseAnchored = false } = 
       delete cleared.words;
       return cleared;
     }
-    if (!phraseAnchored) return applyWordTimes(cue, words);
+    if (!phraseAnchored) {
+      const aligned = applyWordTimes(cue, words);
+      delete aligned.matched;
+      return aligned;
+    }
     const matched = words.filter((word) => word.conf === 'matched').length / words.length;
     // A weak recognition must not overwrite even an untimed line with invented
     // timing. Keep its previous word boundaries too, if any.
@@ -707,6 +711,10 @@ export function snapLineStarts(lines, onsets, originals = []) {
       .sort((a, b) => Math.abs(a - first) - Math.abs(b - first))[0];
     if (onset == null) return line;
     const delta = onset - first;
+    // A snap is optional evidence, never permission to move karaoke words
+    // outside the line window the director explicitly set.
+    if (original.startSec != null && first + delta < original.startSec) return line;
+    if (original.endSec != null && line.words.at(-1).endSec + delta > original.endSec) return line;
     return {
       ...line,
       startSec: original.startSec ?? round3(onset),

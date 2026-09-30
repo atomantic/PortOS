@@ -60,6 +60,18 @@ describe('phrase lyric matching', () => {
     expect(line.words[3].startSec).toBeCloseTo(1.6);
   });
 
+  it('skips a snap that would cross either authored line boundary', () => {
+    const cues = [
+      { text: 'hello morning', startSec: 2, endSec: 3 },
+      { text: 'quiet evening', startSec: 5, endSec: 5.8 },
+    ];
+    const recognized = [...words('hello morning', 2.1), ...words('quiet evening', 5.1)];
+    const aligned = alignDirectorWords(cues, recognized, { phraseAnchored: true });
+    expect(snapLineStarts(aligned, [1.9, 5.3], cues)).toEqual(aligned);
+    const [fallback] = alignDirectorWords([{ ...cues[0], matched: 0.2 }], words('hello morning', 2.1));
+    expect(fallback.matched).toBeUndefined();
+  });
+
   it('preserves low-confidence prior times and words, while snapping confident words together and honoring authored sides', () => {
     const cues = [
       { text: 'hello morning', startSec: null, endSec: null },
