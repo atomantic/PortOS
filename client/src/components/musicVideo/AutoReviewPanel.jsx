@@ -20,7 +20,7 @@ const ACTION_LABELS = {
   generate: (a) => `Generating ${a.sections?.length || 0} revised section${a.sections?.length === 1 ? '' : 's'}…`,
 };
 const ACTIVE = new Set(['running', 'stopped', 'limit-reached']);
-const inputCls = 'w-20 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs';
+const inputCls = 'w-20 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
 /** The latest run worth showing: the live one, else the most recent. */
 export const currentAutoReview = (project) => {

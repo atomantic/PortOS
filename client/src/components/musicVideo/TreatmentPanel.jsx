@@ -16,7 +16,7 @@ const ROLE_STYLES = {
   payoff: 'bg-port-success/30 text-port-success',
   release: 'bg-port-border text-port-text-muted',
 };
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
+const inputCls = 'w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0';
 
 // One brief text field: buffered locally, committed on blur as a per-field patch.
 function BriefField({ id, label, value, onCommit, multiline = false, maxLength, placeholder }) {

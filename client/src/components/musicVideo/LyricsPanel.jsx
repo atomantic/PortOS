@@ -14,7 +14,7 @@ const PACING_FIELDS = [
   ['hookSec', 'Opening hook (s)', 'Cap on the very first shot so the video opens on a cut.', 0.5, 60],
 ];
 
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs';
+const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const MIN_WORD_SEC = 0.02;
 

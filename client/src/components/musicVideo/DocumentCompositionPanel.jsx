@@ -12,7 +12,7 @@ import {
 } from '../../services/apiMusicVideo.js';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs';
+const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 const SOURCE_LABELS = { template: 'template', zip: 'zip', directory: 'folder' };
 
 const linesOf = (value) => String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);
@@ -52,10 +52,10 @@ function OverlayEditor({ project, onSave }) {
     <details className="rounded border border-port-border p-2 text-xs">
       <summary className="cursor-pointer select-none text-port-text-muted">HUD overlay — {overlay?.enabled === false || !overlay ? 'off' : 'on'} (drawn by the layered template)</summary>
       <div className="mt-2 flex flex-wrap items-center gap-3">
-        <label htmlFor="mv-doc-hud-on" className="flex items-center gap-1">
+        <label htmlFor="mv-doc-hud-on" className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
           <input id="mv-doc-hud-on" type="checkbox" checked={Boolean(overlay) && overlay.enabled !== false} onChange={(e) => save({ enabled: e.target.checked })} /> Show HUD
         </label>
-        <label htmlFor="mv-doc-hud-tc" className="flex items-center gap-1">
+        <label htmlFor="mv-doc-hud-tc" className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
           <input id="mv-doc-hud-tc" type="checkbox" checked={overlay?.timecode ?? true} onChange={(e) => save({ timecode: e.target.checked })} /> Timecode
         </label>
         <label htmlFor="mv-doc-hud-tc-start" className="flex items-center gap-1">

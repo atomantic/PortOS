@@ -18,7 +18,7 @@ export default function YoutubeImportControls({ id, url, onUrlChange, job, onSta
         // isn't inside a <form>.
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (url.trim()) onStart(); } }}
         placeholder="Import audio from a YouTube URL…" aria-label="Import audio from a YouTube URL"
-        className={`${compact ? 'flex-1 min-w-[160px]' : 'flex-1 min-w-0'} bg-port-bg border border-port-border rounded px-2 ${py} text-sm disabled:opacity-50`}
+        className={`${compact ? 'flex-1 min-w-[160px]' : 'flex-1 min-w-0'} bg-port-bg border border-port-border rounded px-2 ${py} text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0`}
       />
       {job.active ? (
         <button type="button" onClick={job.cancel}

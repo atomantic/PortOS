@@ -100,7 +100,7 @@ export default function TreatmentApplyReview({ project, api }) {
                         <p className="text-port-text-muted">{name} — treatment: {snippet(s.suggested[field])}</p>
                       </div>
                     ))}
-                    <label className="flex items-center gap-1.5">
+                    <label className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
                       <input type="checkbox" checked={!!overwrite[s.sceneId]}
                         onChange={(e) => setOverwrite((prev) => ({ ...prev, [s.sceneId]: e.target.checked }))} />
                       Use the treatment&apos;s prompts for this scene
@@ -111,7 +111,7 @@ export default function TreatmentApplyReview({ project, api }) {
             ))}
           </ul>
           {preview.textCueCandidates > 0 && (
-            <label htmlFor={idFor('cues')} className="flex items-center gap-1.5">
+            <label htmlFor={idFor('cues')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
               <input id={idFor('cues')} type="checkbox" checked={addTextCues} onChange={(e) => setAddTextCues(e.target.checked)} />
               Add {preview.textCueCandidates} text cue{preview.textCueCandidates === 1 ? '' : 's'} from the timed lyrics, placed in each shot&apos;s reserved region
             </label>

@@ -4,7 +4,7 @@ import { compositionDraft, RENDER_STYLES, renderStyleLabel } from './composition
 // Client-minted ids keep a freshly added row addressable across saves (see LyricsPanel).
 const mintId = () => `mtc-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 const toSec = (value) => (value === '' ? null : Number(value));
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs';
+const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
 // Mirrors the server's composition enums (server/lib/musicVideoValidation.js).
 const TEMPLATES = [['fade', 'Fade'], ['rise', 'Rise'], ['typewriter', 'Typewriter'], ['pop', 'Pop']];

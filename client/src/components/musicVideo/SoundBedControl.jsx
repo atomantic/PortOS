@@ -42,7 +42,7 @@ export default function SoundBedControl({ project, tracks, disabled, onUpdated }
         <label htmlFor={selectId} className="text-[10px] text-port-text-muted flex items-center gap-1"><Waves size={11} /> Sound-design bed</label>
         <select id={selectId} value={bed?.trackId || ''} disabled={off}
           onChange={(e) => save(e.target.value ? { trackId: e.target.value, volume } : null)}
-          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 max-w-[16rem]">
+          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 max-w-[16rem] min-h-[44px] sm:min-h-0">
           <option value="">None — the song is the only audio</option>
           {candidates.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
         </select>
