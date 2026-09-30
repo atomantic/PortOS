@@ -4,6 +4,7 @@ import useFieldDraft from '../../hooks/useFieldDraft.js';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
+import MediumPlanSummary from './MediumPlanSummary.jsx';
 import TreatmentShotList from './TreatmentShotList.jsx';
 import TreatmentProofs from './TreatmentProofs.jsx';
 import TreatmentApplyReview from './TreatmentApplyReview.jsx';
@@ -239,6 +240,7 @@ export default function TreatmentPanel({ project, treatment: api }) {
                 {arc.balance.rationale && <p className="text-port-text-muted">{arc.balance.rationale}</p>}
               </div>
             </div>
+            <MediumPlanSummary project={project} />
             <TreatmentShotList project={project} treatment={t} onSave={api.save} />
             <TreatmentProofs project={project} treatment={t} onReview={api.reviewProof} />
             <TreatmentApplyReview project={project} api={api} />

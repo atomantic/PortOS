@@ -15,6 +15,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   MUSIC_VIDEO_STATUSES,
@@ -158,6 +159,7 @@ export function buildProjectRecord(input, { id, now }) {
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
+    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy),
     scenes: [],
     renderHistoryId: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
@@ -268,6 +270,7 @@ export function applyProjectPatch(project, patch) {
   // `visualSpec` patch merges per sub-field the same way (#8965).
   const timedPatch = {
     ...patch,
+    ...(patch.productionPolicy ? { productionPolicy: normalizeMusicVideoProductionPolicy(patch.productionPolicy, project.productionPolicy) } : {}),
     ...(patch.visualSpec ? { visualSpec: normalizeVisualSpec(patch.visualSpec, project.visualSpec) } : {}),
     // Automation brief merges per sub-field; null clears it.
     ...('automation' in patch ? {

@@ -201,7 +201,16 @@ describe('startReferenceGeneration', () => {
             mode, designPrompt, correctionPrompt: '  repair the hem  ',
           });
           const job = enqueueJob.mock.calls[0][0];
-          const normalized = JSON.stringify(job).replaceAll(TEST_ROOT, '<test-root>').replaceAll(id, '<record>');
+          // Normalize native paths BEFORE JSON escapes Windows backslashes.
+          // Only fixture-rooted paths change; prompts and other payload bytes
+          // retain their exact snapshot contract.
+          const normalized = JSON.stringify(job, (_key, value) => {
+            if (typeof value !== 'string') return value;
+            const stable = value.startsWith(TEST_ROOT)
+              ? '<test-root>' + value.slice(TEST_ROOT.length).replaceAll('\\', '/')
+              : value;
+            return stable.replaceAll(id, '<record>');
+          });
           return {
             payloadSHA256: createHash('sha256').update(normalized).digest('hex'),
             manifestWrites: manifestWrites.length,

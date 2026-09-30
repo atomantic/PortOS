@@ -1,3 +1,4 @@
+import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
 import { formatTimecode } from '../../utils/formatters.js';
 
@@ -57,10 +58,19 @@ export default function TreatmentShotList({ project, treatment, onSave }) {
                 {scene?.lyricText ? <span className="text-port-text-muted truncate max-w-[16rem]">· “{scene.lyricText}”</span> : <span className="text-port-text-muted">· instrumental</span>}
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-1.5">
+                <DirectionSelect id={idFor(d.sceneId, 'medium')} label="Planned medium" value={d.medium || ''}
+                  options={[['', 'Not planned'], ...Object.entries(MUSIC_VIDEO_MEDIUM_LABELS)]} onChange={(medium) => medium && save(d.sceneId, { medium, mediumPinned: true })} />
+                <DirectionText id={idFor(d.sceneId, 'medium-rationale')} label="Medium rationale" value={d.mediumRationale || ''} maxLength={1000}
+                  onCommit={(mediumRationale) => save(d.sceneId, { mediumRationale })} />
+                <label htmlFor={idFor(d.sceneId, 'medium-pin')} className="flex items-center gap-1.5 text-xs min-h-[44px]">
+                  <input id={idFor(d.sceneId, 'medium-pin')} type="checkbox" checked={d.mediumPinned === true}
+                    onChange={(e) => save(d.sceneId, { mediumPinned: e.target.checked })} />
+                  Keep medium on recompile
+                </label>
                 <DirectionSelect id={idFor(d.sceneId, 'mode')} label="Mode" value={d.mode}
                   options={MODES.map((m) => [m, m])} onChange={(mode) => save(d.sceneId, { mode })} />
-                <DirectionSelect id={idFor(d.sceneId, 'route')} label="Route" value={d.route}
-                  options={ROUTES} onChange={(route) => save(d.sceneId, { route })} />
+                {project.productionPolicy?.strategy !== 'code-first' && <DirectionSelect id={idFor(d.sceneId, 'route')} label="Route" value={d.route}
+                  options={ROUTES} onChange={(route) => save(d.sceneId, { route })} />}
                 <DirectionSelect id={idFor(d.sceneId, 'type')} label="Typography" value={d.typographyRole}
                   options={TYPE_ROLES} onChange={(typographyRole) => save(d.sceneId, { typographyRole })} />
                 <DirectionSelect id={idFor(d.sceneId, 'space')} label="Reserved region" value={d.negativeSpace}
