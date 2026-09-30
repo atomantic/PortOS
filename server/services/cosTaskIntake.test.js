@@ -88,3 +88,39 @@ describe('createCosTaskSchema ↔ buildTaskMetadata parity', () => {
     expect(buildTaskMetadata({ description: 'x', notARequestField: true }, 'user', { now: NOW })).toEqual(base());
   });
 });
+
+describe('buildTaskMetadata worktree PR defaults', () => {
+  it.each(['commit-push', 'leave-uncommitted'])(
+    'defaults a user worktree task with whenDone=%s to reviewed PR completion',
+    (whenDone) => {
+      const metadata = buildTaskMetadata({ description: 'x', useWorktree: true, whenDone }, 'user', { now: NOW });
+
+      expect(metadata.openPR).toBe(true);
+      expect(metadata.prCompletion).toBe(PR_COMPLETIONS.REVIEW_THEN_MERGE);
+    },
+  );
+
+  it('preserves an explicit openPR false when whenDone is set', () => {
+    const metadata = buildTaskMetadata({
+      description: 'x',
+      useWorktree: true,
+      whenDone: 'commit-push',
+      openPR: false,
+    }, 'user', { now: NOW });
+
+    expect(metadata.openPR).toBe(false);
+  });
+
+  it('does not default internal worktree tasks to opening a PR', () => {
+    const metadata = buildTaskMetadata({ description: 'x', useWorktree: true }, 'internal', { now: NOW });
+
+    expect(metadata).not.toHaveProperty('openPR');
+  });
+
+  it('defaults a user worktree task without whenDone to reviewed PR completion', () => {
+    const metadata = buildTaskMetadata({ description: 'x', useWorktree: true }, 'user', { now: NOW });
+
+    expect(metadata.openPR).toBe(true);
+    expect(metadata.prCompletion).toBe(PR_COMPLETIONS.REVIEW_THEN_MERGE);
+  });
+});
