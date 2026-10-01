@@ -578,7 +578,7 @@ function resolveReferenceRenderRoute(settings, body, mode, spritePin) {
       status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL',
     });
   }
-  const effectiveModel = mode === IMAGE_GEN_MODE.CODEX || mode === IMAGE_GEN_MODE.AGY
+  const effectiveModel = cloud?.supportsModelOverride
     ? cloud.modelId
     : mode === IMAGE_GEN_MODE.LOCAL
       ? selectedLocalModel.id

@@ -13,6 +13,7 @@ import {
   resolveQueueImageMode,
 } from './modes.js';
 import { recordRenderPin } from '../../lib/renderTargets.js';
+import { FAL_IMAGE_DEFAULT_MODEL } from '../../lib/falImageModels.js';
 
 const settingsWith = (imageGen) => ({ imageGen });
 
@@ -156,6 +157,41 @@ describe('resolveCloudProviderConfig', () => {
   it('only counts a strict `true` toggle as enabled', () => {
     const cloud = resolveCloudProviderConfig(settingsWith({ codex: { enabled: 'yes' } }), IMAGE_GEN_MODE.CODEX);
     expect(cloud.enabled).toBe(false);
+  });
+});
+
+describe('resolveCloudProviderConfig — fal.ai', () => {
+  it('defaults to Nano Banana Pro and bundles only the model — never the API key', () => {
+    const cloud = resolveCloudProviderConfig(settingsWith({ fal: { enabled: true } }), IMAGE_GEN_MODE.FAL);
+    expect(cloud.enabled).toBe(true);
+    expect(cloud.modelId).toBe(FAL_IMAGE_DEFAULT_MODEL);
+    expect(cloud.jobParams).toEqual({ mode: IMAGE_GEN_MODE.FAL, model: 'fal-ai/nano-banana-pro' });
+  });
+
+  it('honors a saved catalog model, and a per-render catalog override over it', () => {
+    const settings = settingsWith({ fal: { enabled: true, model: 'fal-ai/flux-2-pro' } });
+    expect(resolveCloudProviderConfig(settings, IMAGE_GEN_MODE.FAL).modelId).toBe('fal-ai/flux-2-pro');
+    const overridden = resolveCloudProviderConfig(settings, IMAGE_GEN_MODE.FAL, {
+      model: 'fal-ai/bytedance/seedream/v5/lite/edit',
+    });
+    expect(overridden.providerParams).toEqual({ model: 'fal-ai/bytedance/seedream/v5/lite/edit' });
+  });
+
+  it('refuses a per-render model outside the catalog instead of paying for a guess', () => {
+    const settings = settingsWith({ fal: { enabled: true } });
+    expect(() => resolveCloudProviderConfig(settings, IMAGE_GEN_MODE.FAL, { model: 'gpt-5.6-luna' }))
+      .toThrow(expect.objectContaining({ status: 400, code: 'FAL_IMAGE_MODEL_UNKNOWN' }));
+  });
+
+  it('degrades a hand-edited saved model outside the catalog to the shipped default', () => {
+    const cloud = resolveCloudProviderConfig(settingsWith({ fal: { enabled: true, model: 'fal-ai/unknown' } }), IMAGE_GEN_MODE.FAL);
+    expect(cloud.modelId).toBe(FAL_IMAGE_DEFAULT_MODEL);
+  });
+
+  it('is disabled until the toggle is on', () => {
+    const cloud = resolveCloudProviderConfig(settingsWith({}), IMAGE_GEN_MODE.FAL);
+    expect(cloud.enabled).toBe(false);
+    expect(cloud.disabledError).toMatchObject({ status: 400, code: 'FAL_IMAGEGEN_DISABLED' });
   });
 });
 

@@ -23,7 +23,7 @@ const { getActiveApps, updateAppTaskTypeOverride } = await import('./apps.js');
 const { collectRecordPins, clearRecordPin } = await import('./modelPinRecords.js');
 const { getAllTemplates, updateTemplate } = await import('./taskTemplates.js');
 const {
-  auditModelPins, clearModelPin, MODEL_OVERRIDE_CAPABLE_MODES, PINNED_IMAGE_MODE_IDS,
+  auditModelPins, clearModelPin, MODEL_OVERRIDE_CAPABLE_MODES, PINNED_IMAGE_MODE_IDS, CATALOG_VALIDATED_IMAGE_MODE_IDS,
 } = await import('./modelPinAudit.js');
 
 // The retirement that motivated #7315: `gemini-3.5-flash-low` is gone, the
@@ -71,7 +71,9 @@ describe('image-gen pin coverage', () => {
   it('audits every cloud mode that can carry a model override', () => {
     // Without this, a third override-capable backend lands a capability entry
     // and is then silently un-audited — its pins would never surface.
-    expect([...PINNED_IMAGE_MODE_IDS].sort()).toEqual([...MODEL_OVERRIDE_CAPABLE_MODES].sort());
+    // A mode may instead be listed as catalog-validated (its ids are PortOS's
+    // own, not a provider record's) — but never in both, and never in neither.
+    expect([...PINNED_IMAGE_MODE_IDS, ...CATALOG_VALIDATED_IMAGE_MODE_IDS].sort()).toEqual([...MODEL_OVERRIDE_CAPABLE_MODES].sort());
   });
 });
 

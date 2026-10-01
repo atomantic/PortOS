@@ -32,7 +32,7 @@
  */
 
 import { join } from 'path';
-import { CLOUD_IMAGE_GEN_MODES, IMAGE_TOOL_NAMES, modeLabel } from './imageGen/modes.js';
+import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_TOOL_NAMES, modeLabel } from './imageGen/modes.js';
 import { imageGenEvents } from './imageGenEvents.js';
 import { atomicWrite, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -56,7 +56,12 @@ const UNKNOWN_BLOCK_TTL_MS = 60 * 60 * 1000;
 // hand-maintained list, so a 4th cloud backend is tracked the moment it is
 // added there. Display names come from `modeLabel` for the same reason — one
 // backend must not appear under two names across the UI.
-export const isQuotaTrackedImageMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode);
+//
+// fal.ai is the one cloud backend excluded: it is billed per image on a metered
+// account, not drawn from a subscription quota window, so there is no reset to
+// observe and its failures (content policy, bad input) are not quota blocks.
+// Its spend is recorded per render instead (`estimatedCostUsd` in the sidecar).
+export const isQuotaTrackedImageMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode) && mode !== IMAGE_GEN_MODE.FAL;
 
 /** Card id for the image-gen quota card, in the same namespace as the provider
  * family ids in providerUsage.js — a per-family read has to be able to name it. */

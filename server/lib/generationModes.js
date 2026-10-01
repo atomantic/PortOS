@@ -12,16 +12,21 @@ export const IMAGE_GEN_MODE = Object.freeze({
   CODEX: 'codex',
   GROK: 'grok',
   AGY: 'agy',
+  // fal.ai's metered queue REST API (services/imageGen/fal.js) — the same
+  // literal as VIDEO_GEN_MODE.FAL below: one provider, one key, one id.
+  FAL: 'fal',
 });
 
 export const IMAGE_GEN_MODES = Object.freeze(Object.values(IMAGE_GEN_MODE));
 
-// Cloud-CLI image backends spend remote quota and run through the media queue's
-// parallel cloud lane rather than the local accelerator lane.
+// Cloud image backends spend remote quota (or money, for fal.ai) and run
+// through the media queue's parallel cloud lane rather than the local
+// accelerator lane.
 export const CLOUD_IMAGE_GEN_MODES = Object.freeze([
   IMAGE_GEN_MODE.CODEX,
   IMAGE_GEN_MODE.GROK,
   IMAGE_GEN_MODE.AGY,
+  IMAGE_GEN_MODE.FAL,
 ]);
 
 // The external SD-API backend remains synchronous; every other image backend
@@ -33,13 +38,12 @@ export const QUEUEABLE_IMAGE_MODES = Object.freeze([
 
 // Video deliberately shares the image backend discriminator namespace. Local
 // video's text/image/fflf modes are a separate semantic value carried elsewhere.
-// FAL and REACTOR have no image-gen counterpart (issues #6213/#6214 are
-// video-only), so they are video-only literals rather than re-exports of an
-// IMAGE_GEN_MODE entry.
+// REACTOR has no image-gen counterpart (issue #6214 is video-only), so it is a
+// video-only literal rather than a re-export of an IMAGE_GEN_MODE entry.
 export const VIDEO_GEN_MODE = Object.freeze({
   LOCAL: IMAGE_GEN_MODE.LOCAL,
   GROK: IMAGE_GEN_MODE.GROK,
-  FAL: 'fal',
+  FAL: IMAGE_GEN_MODE.FAL,
   REACTOR: 'reactor',
 });
 

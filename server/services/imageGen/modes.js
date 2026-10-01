@@ -100,6 +100,7 @@ const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.CODEX]: 'Codex',
   [IMAGE_GEN_MODE.GROK]: 'Grok',
   [IMAGE_GEN_MODE.AGY]: 'Agy',
+  [IMAGE_GEN_MODE.FAL]: 'fal.ai',
   [IMAGE_GEN_MODE.EXTERNAL]: 'External',
 });
 
@@ -174,8 +175,9 @@ export const nearestAgyAspectRatio = (width, height) => nearestAspectRatio(width
 /**
  * Resolve the queue-capable image mode for a render request: the per-request
  * override (honored only when that backend is enabled/available), else the
- * saved dispatcher default, else codex → grok → agy → local. External never
- * queues. Hoisted from the pipeline visual stages (#2896) so sprite renders and
+ * saved dispatcher default, else the first enabled cloud backend in
+ * CLOUD_IMAGE_GEN_MODES order (codex → grok → agy → fal) → local. External
+ * never queues. Hoisted from the pipeline visual stages (#2896) so sprite renders and
  * any future queued surface share one enable-gating ladder — see issue #2881
  * for the wider param-assembly consolidation.
  *
@@ -184,20 +186,11 @@ export const nearestAgyAspectRatio = (width, height) => nearestAspectRatio(width
  * this exact same ladder.
  */
 export function resolveQueueImageMode(requested, settings) {
-  const codexEnabled = settings?.imageGen?.codex?.enabled === true;
-  const grokEnabled = settings?.imageGen?.grok?.enabled === true;
-  const agyEnabled = settings?.imageGen?.agy?.enabled === true;
-  if (requested === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
-  if (requested === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
-  if (requested === IMAGE_GEN_MODE.AGY && agyEnabled) return IMAGE_GEN_MODE.AGY;
+  const cloudEnabled = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode) && settings?.imageGen?.[mode]?.enabled === true;
+  if (cloudEnabled(requested)) return requested;
   if (requested === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
   const settingsMode = settings?.imageGen?.mode;
-  if (settingsMode === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
-  if (settingsMode === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
-  if (settingsMode === IMAGE_GEN_MODE.AGY && agyEnabled) return IMAGE_GEN_MODE.AGY;
+  if (cloudEnabled(settingsMode)) return settingsMode;
   if (settingsMode === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
-  if (codexEnabled) return IMAGE_GEN_MODE.CODEX;
-  if (grokEnabled) return IMAGE_GEN_MODE.GROK;
-  if (agyEnabled) return IMAGE_GEN_MODE.AGY;
-  return IMAGE_GEN_MODE.LOCAL;
+  return CLOUD_IMAGE_GEN_MODES.find(cloudEnabled) || IMAGE_GEN_MODE.LOCAL;
 }

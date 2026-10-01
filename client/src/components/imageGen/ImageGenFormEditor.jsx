@@ -13,7 +13,9 @@ import InitImagePicker from './InitImagePicker';
 import LoraPicker from './LoraPicker';
 import ReferenceImagePicker from './ReferenceImagePicker';
 import { appendTriggerWords } from '../../lib/loraTriggers';
-import { AGY_IMAGEGEN_DEFAULT_MODEL, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import {
+  AGY_IMAGEGEN_DEFAULT_MODEL, FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE, falImageFamily,
+} from '../../lib/imageGenBackends';
 
 const ERROR_HEADINGS = {
   gated_repo: 'Model access required',
@@ -36,8 +38,10 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
     effectiveMode,
     isLocalMode,
     isAgyMode,
+    isFalMode,
     remoteTarget,
     effectiveAgyModel,
+    effectiveFalModel,
   } = backend;
   const {
     generating,
@@ -226,11 +230,13 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             modelStatus={isLocalMode ? modelDownload.getStatus(fields.modelId) : null}
             onModelDownload={isLocalMode ? modelDownload.start : undefined}
             onModelDownloadCancel={modelDownload.cancel}
-            cloudModels={isAgyMode ? backend.agy.models : []}
-            cloudModel={effectiveAgyModel}
-            onCloudModelChange={fields.setAgyModel}
-            cloudModelLabel="Agent model"
-            cloudModelDefaultLabel={settings.savedAgyModel || AGY_IMAGEGEN_DEFAULT_MODEL}
+            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : []}
+            cloudModel={isFalMode ? effectiveFalModel : effectiveAgyModel}
+            onCloudModelChange={isFalMode ? fields.setFalModel : fields.setAgyModel}
+            cloudModelLabel={isFalMode ? 'fal.ai model' : 'Agent model'}
+            cloudModelDefaultLabel={isFalMode
+              ? falImageFamily(settings.savedFalModel || FAL_IMAGE_DEFAULT_MODEL)?.label || FAL_IMAGE_DEFAULT_MODEL
+              : settings.savedAgyModel || AGY_IMAGEGEN_DEFAULT_MODEL}
           />
           {isAgyMode && backend.agy.error && (
             <p role="status" className="text-xs text-port-warning">

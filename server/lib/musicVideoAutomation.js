@@ -21,6 +21,7 @@ const IMAGE_TOOL_LABELS = {
   [IMAGE_GEN_MODE.CODEX]: 'Codex image gen',
   [IMAGE_GEN_MODE.GROK]: 'Grok image gen',
   [IMAGE_GEN_MODE.AGY]: 'Antigravity image gen',
+  [IMAGE_GEN_MODE.FAL]: 'fal.ai image gen',
   [IMAGE_GEN_MODE.EXTERNAL]: 'External SD API',
 };
 const VIDEO_TOOL_LABELS = {

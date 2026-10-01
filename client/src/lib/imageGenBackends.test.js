@@ -27,7 +27,7 @@ describe('imageGenReadiness', () => {
 describe('I2I_CAPABLE_MODES / isI2iCapableMode', () => {
   it('treats every generation backend as i2i-capable, but not external', () => {
     expect(I2I_CAPABLE_MODES).toEqual([
-      IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY,
+      IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL,
     ]);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.LOCAL)).toBe(true);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.CODEX)).toBe(true);
@@ -65,6 +65,16 @@ describe('input-image capability helpers', () => {
     // an init image doesn't eat into them.
     expect(referenceSlotsFor(IMAGE_GEN_MODE.CODEX, { hasInitImage: true })).toBe(4);
     expect(referenceSlotsFor(IMAGE_GEN_MODE.GROK, { hasInitImage: false })).toBe(4);
+  });
+
+  it('caps fal.ai per model — the chosen model\'s limit, else the smallest in the catalog', () => {
+    const options = { maxSlots: 10, hasInitImage: true };
+    // FLUX.2 [pro] edit takes 9 images total; an init image leaves 8 refs.
+    expect(referenceSlotsFor(IMAGE_GEN_MODE.FAL, { ...options, cloudModelId: 'fal-ai/flux-2-pro' })).toBe(8);
+    // Nano Banana takes 14, so the form's own 10 slots are the ceiling.
+    expect(referenceSlotsFor(IMAGE_GEN_MODE.FAL, { ...options, cloudModelId: 'fal-ai/nano-banana-pro' })).toBe(10);
+    // Unknown model → the catalog floor, never a slot some fal model would drop.
+    expect(referenceSlotsFor(IMAGE_GEN_MODE.FAL, options)).toBe(8);
   });
 
   it('reserves the init slot within Qwen’s ten inputs', () => {

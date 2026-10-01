@@ -2,8 +2,9 @@
  * Image Gen — Mode-aware dispatcher.
  *
  * Reads settings.imageGen.mode (default 'external' for backward compat) and
- * routes generate/status calls to one of three providers: external SD-API,
- * local mflux/diffusers, or the Codex CLI built-in image_gen tool.
+ * routes generate/status calls to a provider: external SD-API, local
+ * mflux/diffusers, one of the cloud CLIs (codex / grok / agy), or fal.ai's
+ * metered queue API.
  *
  * Per-request mode override: callers (the route, the voice tool) may pass
  * `params.mode` to force a specific backend without changing the saved
@@ -20,6 +21,7 @@ import * as local from './local.js';
 import * as codex from './codex.js';
 import * as grok from './grok.js';
 import * as agy from './agy.js';
+import * as fal from './fal.js';
 import {
   IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES, isEditCapableMode,
 } from './modes.js';
@@ -36,6 +38,7 @@ const CLOUD_PROVIDERS = {
   [IMAGE_GEN_MODE.CODEX]: codex,
   [IMAGE_GEN_MODE.GROK]: grok,
   [IMAGE_GEN_MODE.AGY]: agy,
+  [IMAGE_GEN_MODE.FAL]: fal,
 };
 
 // Re-export the enum + array so the existing import surface from this module
@@ -146,7 +149,8 @@ export async function generateImage(params) {
   delete normalized.cloudModelIsShippedDefault;
   // Input images are supported by local (mflux/diffusers --image-path plus
   // FLUX.2 --reference-images), codex (image_gen.referenced_image_paths via the
-  // CLI's -i flag), grok (image_edit.image) and agy (generate_image.ImagePaths).
+  // CLI's -i flag), grok (image_edit.image), agy (generate_image.ImagePaths) and
+  // fal.ai (the model family's /edit endpoint's image_urls).
   // External SD-API has no input-image wiring in this codebase, so drop them
   // there rather than failing the whole render — the prompt still produces a
   // useful txt2img. (The route/prepareParams path rejects instead, because it
@@ -233,7 +237,7 @@ export async function generateAvatar({ name, characterClass, prompt }) {
 // Callers wanting all of them can read individual providers via the
 // re-exports below.
 export async function getActiveJob() {
-  const jobs = [local.getActiveJob(), external.getActiveJob(), codex.getActiveJob(), grok.getActiveJob(), agy.getActiveJob()].filter(Boolean);
+  const jobs = [local.getActiveJob(), external.getActiveJob(), codex.getActiveJob(), grok.getActiveJob(), agy.getActiveJob(), fal.getActiveJob()].filter(Boolean);
   if (!jobs.length) return null;
   return jobs.sort((a, b) => {
     const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
@@ -250,6 +254,7 @@ export const attachSseClient = (jobId, res) => {
   if (codex.attachSseClient(jobId, res)) return true;
   if (grok.attachSseClient(jobId, res)) return true;
   if (agy.attachSseClient(jobId, res)) return true;
+  if (fal.attachSseClient(jobId, res)) return true;
   return false;
 };
 
@@ -264,10 +269,11 @@ export const cancel = () => {
   const codexCancelled = codex.cancelAll();
   const grokCancelled = grok.cancelAll();
   const agyCancelled = agy.cancelAll();
-  return localCancelled || codexCancelled || grokCancelled || agyCancelled;
+  const falCancelled = fal.cancelAll();
+  return localCancelled || codexCancelled || grokCancelled || agyCancelled || falCancelled;
 };
 
 // Re-exports so routes can hit a specific backend directly when the request
 // is shape-specific (gallery, LoRAs). The dispatcher is for the generic
 // generate/status flow used by all modes.
-export { local, external, codex, grok, agy };
+export { local, external, codex, grok, agy, fal };

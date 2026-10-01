@@ -17,6 +17,7 @@ import {
 } from '../../lib/scenePrompt.js';
 import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../../lib/reactorVideoClip.js';
+import { CLOUD_IMAGE_GEN_MODES } from '../../lib/generationModes.js';
 import {
   mergeNegativePromptTokens, stripStyleClause, universeStylePreset, universeVisualStyleTokens,
 } from '../../lib/universeVisualStyle.js';
@@ -461,7 +462,8 @@ export async function compileFableLoomVisualRequest({
 
 export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4 }) {
   const localFlux2 = mode === 'local' && model?.runner === 'flux2';
-  const cloudEdit = ['codex', 'grok', 'agy'].includes(mode);
+  // Every cloud image backend accepts reference images (imageGenCapabilities.js).
+  const cloudEdit = CLOUD_IMAGE_GEN_MODES.includes(mode);
   return Object.freeze({
     version: 1, kind: 'image', backend: mode, modelId: model?.id || null,
     modelRevision: model?.revision || null,

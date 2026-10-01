@@ -30,22 +30,28 @@ import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { anyAbortSignal } from '../../lib/requestAbort.js';
-import { describeFetchError } from '../../lib/fetchErrorChain.js';
-import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
-import { detectImageFormat } from '../../lib/mimeTypes.js';
-import { probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL,
   FAL_DEFAULT_TEXT_VIDEO_MODEL,
   buildFalVideoRequest,
   getFalVideoModel,
 } from '../../lib/falVideoModels.js';
+import { probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { getSettings } from '../settings.js';
 import { nearestAspectRatio } from '../imageGen/modes.js';
+import {
+  FAL_QUEUE_BASE, awaitFalCompletion, cancelFalRequest, createFalRequestEntry, fileToDataUri,
+  readCompletedFalResult, resolveFalApiKey, submitFalRequest,
+} from '../falQueue.js';
+
+// The queue transport (submit / poll / retrieve / cancel) is shared with the
+// fal.ai image backend in `services/falQueue.js`. Re-exported so existing
+// importers of the key resolver and base URL keep their path.
+export { FAL_QUEUE_BASE, resolveFalApiKey };
 
 // The aspect_ratio set the LEGACY body sends for a model outside the curated
 // catalog — matches the free-tool automation's FAL_ASPECT_RATIOS
@@ -54,21 +60,11 @@ import { nearestAspectRatio } from '../imageGen/modes.js';
 export const FAL_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
 export const deriveAspectRatio = (width, height) => nearestAspectRatio(width, height, FAL_ASPECT_RATIOS);
 
-export const FAL_QUEUE_BASE = 'https://queue.fal.run';
-
 // The defaults when a request names no model, one text-first and one
 // image-first (MiniMax Hailuo-02 standard) — owned by the catalog.
 export const FAL_DEFAULT_TEXT_MODEL = FAL_DEFAULT_TEXT_VIDEO_MODEL;
 export const FAL_DEFAULT_IMAGE_MODEL = FAL_DEFAULT_IMAGE_VIDEO_MODEL;
 
-const FAL_SUBMIT_TIMEOUT_MS = 30_000;
-const FAL_POLL_TIMEOUT_MS = 15_000;
-const FAL_POLL_INTERVAL_MS = 3000;
-// A transient status-fetch failure (network blip, fal.ai 5xx) gets this many
-// additional attempts — on the same FAL_POLL_INTERVAL_MS cadence, never
-// resubmitting the paid generation — before the run is abandoned (#8340).
-const FAL_MAX_STATUS_RETRIES = 2;
-const FAL_MAX_READ_RETRIES = 2;
 // Bounds completed-result retrieval, backoff, and the WHOLE download — headers and every byte of the video — now that
 // `fetchWithTimeout` holds its deadline through body consumption. It used to
 // bound only the headers, which left the multi-MB transfer itself with no
@@ -98,39 +94,6 @@ export const getActiveJob = () => {
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
-/**
- * Resolve the fal.ai API key: settings override, else the `FAL_KEY` env var
- * (same settings-wins-over-env precedence as `loras.js`'s Civitai key).
- */
-export function resolveFalApiKey(settings) {
-  const fromSettings = (settings?.videoGen?.fal?.apiKey || '').trim();
-  if (fromSettings) return fromSettings;
-  const fromEnv = (process.env.FAL_KEY || '').trim();
-  return fromEnv || null;
-}
-
-// Best-effort, idempotent cancellation of the remote fal.ai request — shared
-// by explicit user cancellation (cancel()/cancelAll()) and every local
-// abandonment path (exhausted status retries, the render deadline) so an
-// already-known cancel_url is never left unsent (#8340). A caught failure is
-// logged for diagnosis but never rethrown: the local job still finalizes as
-// failed/canceled either way. Guarded so it never re-sends once fired, and
-// never fires once the remote request already reached a fal-reported
-// terminal state (COMPLETED/ERROR) — there is nothing left to cancel there.
-async function cancelFalRequest(entry) {
-  if (!entry || entry.canceledRemote || entry.remoteTerminal || !entry.cancelUrl || !entry.apiKey) return;
-  entry.canceledRemote = true;
-  try {
-    const res = await fetchWithTimeout(entry.cancelUrl, {
-      method: 'PUT',
-      headers: { Authorization: `Key ${entry.apiKey}` },
-    }, FAL_POLL_TIMEOUT_MS);
-    if (!res.ok) console.error(`❌ fal.ai cancellation request failed: HTTP ${res.status}`);
-  } catch (err) {
-    console.error(`❌ fal.ai cancellation request failed: ${err?.message || err}`);
-  }
-}
-
 export const cancel = (jobId) => {
   if (!jobId) {
     throw new Error("videoGen/fal.cancel requires a jobId — use cancelAll() to terminate every in-flight render");
@@ -149,13 +112,6 @@ export const cancelAll = () => {
   for (const id of ids) cancel(id);
   return true;
 };
-
-async function toDataUri(imagePath) {
-  const buf = await readFile(imagePath);
-  const detected = detectImageFormat(buf);
-  const mime = detected?.mime || 'image/png';
-  return `data:${mime};base64,${buf.toString('base64')}`;
-}
 
 // Legacy source-audio body for a lip-sync model id outside the catalog; the
 // curated MiniMax H3 lip-sync route (#8977) builds through the catalog, which
@@ -180,83 +136,6 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
   if (aspectRatio) body.aspect_ratio = aspectRatio;
   if (imageDataUri) body.image_url = imageDataUri;
   return body;
-}
-
-async function submitFalJob({ apiKey, modelId, body }) {
-  const res = await fetchWithTimeout(`${FAL_QUEUE_BASE}/${modelId}`, {
-    method: 'POST',
-    headers: { Authorization: `Key ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, FAL_SUBMIT_TIMEOUT_MS);
-  const payload = await res.json().catch(() => null);
-  if (!res.ok || !payload?.request_id) {
-    const reason = payload?.detail ? JSON.stringify(payload.detail) : `HTTP ${res.status}`;
-    throw new ServerError(`fal.ai rejected the request: ${reason}`, { status: 502, code: 'FAL_SUBMIT_FAILED' });
-  }
-  return payload;
-}
-
-async function pollFalStatus({ statusUrl, apiKey }) {
-  const res = await fetchWithTimeout(statusUrl, {
-    headers: { Authorization: `Key ${apiKey}` },
-  }, FAL_POLL_TIMEOUT_MS);
-  if (!res.ok) throw new ServerError(`fal.ai status check failed: HTTP ${res.status}`, { status: 502, code: 'FAL_STATUS_FAILED' });
-  return res.json();
-}
-
-/** A short, single-line reason from a fal error response body (`detail` string or validation list), or ''. */
-async function falErrorDetail(response) {
-  const text = typeof response.text === 'function' ? await response.text().catch(() => '') : '';
-  if (!text) return '';
-  let reason = text;
-  try {
-    const body = JSON.parse(text);
-    const detail = body?.detail ?? body?.error ?? body?.message;
-    reason = Array.isArray(detail)
-      ? detail.map((d) => [d?.loc?.slice?.(-1)?.[0], d?.msg || d?.type].filter(Boolean).join(': ')).join('; ')
-      : typeof detail === 'string' ? detail : JSON.stringify(detail ?? body);
-  } catch { /* not JSON: keep the text */ }
-  return reason.replace(/\s+/g, ' ').trim().slice(0, 300);
-}
-
-// Retry only reads of the already-paid render, including body consumption.
-// Schema/JSON errors and permanent HTTP failures must not enter this loop.
-async function readCompletedRender(url, { apiKey, signal, deadline, video = false }) {
-  for (let attempt = 0; ; attempt += 1) {
-    signal.throwIfAborted();
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error('fal.ai retrieval deadline exceeded');
-    let response;
-    try {
-      response = await fetchWithTimeout(url, {
-        ...(apiKey ? { headers: { Authorization: `Key ${apiKey}` } } : {}),
-        signal,
-      }, Math.min(remaining, video ? FAL_DOWNLOAD_TIMEOUT_MS : FAL_POLL_TIMEOUT_MS));
-      if (!response.ok) {
-        const transientRead = response.status === 408 || response.status === 429 || (response.status >= 500 && response.status <= 599);
-        // A permanent failure on the result read is how fal reports a job that
-        // failed on its side (a 422 with a `detail` naming the input or policy
-        // violation). Keep that reason — without it the job just says "HTTP 422".
-        const detail = !transientRead && !video ? await falErrorDetail(response) : '';
-        const error = new Error(`fal.ai ${video ? 'video download' : 'result retrieval'} failed: HTTP ${response.status}${detail ? ` — ${detail}` : ''}`);
-        error.transientRead = transientRead;
-        throw error;
-      }
-      const value = await (video ? response.arrayBuffer() : response.json());
-      signal.throwIfAborted();
-      return value;
-    } catch (err) {
-      // Release error responses without waiting for an error body to download.
-      // A rejected consumer has already released its fetch deadline.
-      if (response?.body && !response.bodyUsed) void response.body.cancel().catch(() => {});
-      signal.throwIfAborted();
-      if (err instanceof SyntaxError) throw new Error('fal.ai did not return valid result JSON');
-      const transient = err.transientRead ?? (err.name === 'AbortError' || err.name === 'TimeoutError' ||
-        /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|EAI_AGAIN|UND_ERR_(SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT)|fetch failed|network error|socket hang up/i.test(describeFetchError(err)));
-      if (!transient || attempt >= FAL_MAX_READ_RETRIES) throw err;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(500 * (2 ** attempt), Math.max(0, deadline - Date.now()))));
-    }
-  }
 }
 
 export async function generateVideo({
@@ -381,13 +260,11 @@ async function runFalVideo(job, jobId, {
   apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta,
   audioFilePath = null, enableTranscription = false, requestSpec = null,
 }) {
-  const entry = {
-    apiKey, controller: new AbortController(), aborted: false, cancelUrl: null, canceledRemote: false, remoteTerminal: false,
-  };
+  const entry = createFalRequestEntry(apiKey);
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
   try {
-    const imageDataUri = sourceImagePath ? await toDataUri(sourceImagePath) : null;
+    const imageDataUri = sourceImagePath ? await fileToDataUri(sourceImagePath) : null;
     const audioDataUri = audioFilePath
       ? `data:audio/wav;base64,${(await readFile(audioFilePath)).toString('base64')}`
       : null;
@@ -399,59 +276,35 @@ async function runFalVideo(job, jobId, {
     // Cancelled while the inputs were being read: nothing was submitted, so
     // there is nothing to pay for or cancel remotely.
     if (entry.aborted) return finalizeCanceled(job, jobId);
-    const submitted = await submitFalJob({ apiKey, modelId, body });
-    entry.cancelUrl = submitted.cancel_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${submitted.request_id}/cancel`;
-    const statusUrl = submitted.status_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${submitted.request_id}/status`;
-    const responseUrl = submitted.response_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${submitted.request_id}`;
+    const submitted = await submitFalRequest({ apiKey, modelId, body });
+    entry.cancelUrl = submitted.cancel_url;
+    const responseUrl = submitted.response_url;
 
-    let statusFailures = 0;
-    while (Date.now() < deadline) {
-      if (entry.aborted) return finalizeCanceled(job, jobId);
-      videoGenEvents.emit('activity', { generationId: jobId });
-      let status;
-      try {
-        status = await pollFalStatus({ statusUrl, apiKey });
-      } catch (err) {
-        statusFailures += 1;
-        if (statusFailures > FAL_MAX_STATUS_RETRIES) {
-          await cancelFalRequest(entry);
-          return finalizeJobFailure(job, jobId, null, `fal.ai status checks failed ${statusFailures} times in a row: ${err?.message || err}`);
-        }
-        await new Promise((r) => setTimeout(r, FAL_POLL_INTERVAL_MS));
-        continue;
-      }
-      statusFailures = 0;
-      if (status.status === 'COMPLETED') {
-        entry.remoteTerminal = true;
-        break;
-      }
-      if (status.status === 'ERROR') {
-        entry.remoteTerminal = true;
-        return finalizeJobFailure(job, jobId, null, `fal.ai render failed: ${status.error || 'unknown error'}`);
-      }
+    const polled = await awaitFalCompletion({
+      entry, statusUrl: submitted.status_url, apiKey, deadline, timeoutMs: FAL_RENDER_TIMEOUT_MS,
+      onPoll: () => videoGenEvents.emit('activity', { generationId: jobId }),
       // fal's own queue maps to SUBMIT rather than to the queued step: the
       // ladder's `queued` is PortOS's local queue, and stepping back to it
       // after the handover would read as the render having lost its place.
-      if (status.status === 'IN_PROGRESS') emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.RENDER, 'Rendering…');
-      else emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Queued at fal.ai…');
-      await new Promise((r) => setTimeout(r, FAL_POLL_INTERVAL_MS));
-    }
-    if (entry.aborted) return finalizeCanceled(job, jobId);
-    if (Date.now() >= deadline) {
-      await cancelFalRequest(entry);
-      return finalizeJobFailure(job, jobId, null, `fal.ai did not finish within ${Math.round(FAL_RENDER_TIMEOUT_MS / 1000)}s`);
-    }
+      onStatus: (status) => (status === 'IN_PROGRESS'
+        ? emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.RENDER, 'Rendering…')
+        : emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Queued at fal.ai…')),
+    });
+    if (polled.outcome === 'canceled') return finalizeCanceled(job, jobId);
+    if (polled.outcome === 'failed') return finalizeJobFailure(job, jobId, null, polled.reason);
 
     const buffer = await withAbortTimeout(FAL_DOWNLOAD_TIMEOUT_MS, async (timeoutSignal) => {
       const signal = anyAbortSignal([timeoutSignal, entry.controller.signal]);
       const retrievalDeadline = Date.now() + FAL_DOWNLOAD_TIMEOUT_MS;
-      const result = await readCompletedRender(responseUrl, { apiKey, signal, deadline: retrievalDeadline });
+      const result = await readCompletedFalResult(responseUrl, { apiKey, signal, deadline: retrievalDeadline });
       const videoUrl = result?.video?.url || result?.video_url || result?.output?.video?.url;
       if (typeof videoUrl !== 'string' || !videoUrl.trim()) {
         throw new Error('fal.ai completed but returned no video URL');
       }
       emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.FETCH, 'Downloading video…');
-      return Buffer.from(await readCompletedRender(videoUrl, { signal, deadline: retrievalDeadline, video: true }));
+      return Buffer.from(await readCompletedFalResult(videoUrl, {
+        signal, deadline: retrievalDeadline, binary: true, binaryTimeoutMs: FAL_DOWNLOAD_TIMEOUT_MS, label: 'video download',
+      }));
     });
     if (entry.aborted) return finalizeCanceled(job, jobId);
     await writeFile(outputPath, buffer);
@@ -504,5 +357,5 @@ const finalizeCanceled = finalizeJobFailure.canceled;
 // Test-only handles.
 export const _internals = {
   buildRequestBody,
-  toDataUri,
+  toDataUri: fileToDataUri,
 };

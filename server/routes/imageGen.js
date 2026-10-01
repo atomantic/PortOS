@@ -19,7 +19,7 @@ import {
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
-import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
+import { maxInputImages, resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
 import setupRouter from './imageGenSetup.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { recordUserAction } from '../services/userActions.js';
@@ -479,7 +479,9 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       capability: fableLoomImageCapabilities({
         mode: providerMode,
         model,
-        inputBudget: mode === IMAGE_GEN_MODE.AGY ? 3 : MAX_REFERENCE_IMAGES,
+        // The backend's own input cap (per model for fal.ai), never above
+        // the form ceiling.
+        inputBudget: Math.min(maxInputImages(mode, cloud?.modelId) ?? MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGES),
       }),
       authoredPrompt: params.prompt,
       authoredNegativePrompt: params.negativePrompt,
