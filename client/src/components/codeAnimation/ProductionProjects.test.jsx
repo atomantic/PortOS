@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
@@ -14,6 +14,7 @@ vi.mock('../../services/apiCodeAnimation', () => ({
   startCodeAnimationStageRun: vi.fn(), cancelCodeAnimationStageRun: vi.fn(),
 }));
 import * as api from '../../services/apiCodeAnimation';
+import socket from '../../services/socket';
 import ProductionProjects from './ProductionProjects';
 
 const project = {
@@ -51,6 +52,29 @@ beforeEach(() => {
 });
 
 describe('Production project rendered interactions', () => {
+  it('starts from saved settings, immediately displays revision-bound audio, and keeps older evidence visibly stale', async () => {
+    const user = userEvent.setup();
+    api.listCodeAnimationProjectHistory.mockResolvedValue(page([{ id: 'example-sound-run', status: 'completed', data: {
+      kind: 'production-stages', stages: [], soundtrack: { revisionId: 'old-revision', packageHash: 'example-bound-hash',
+        artifact: { relativePath: 'code-animations/projects/example/runs/example/artifacts/sound-example.wav' },
+        measured: { durationMs: 2000, sampleRate: 48000 }, events: [{ label: 'Impact', firstSeconds: 0.5, frame: 6 }],
+        unverified: [{ dimension: 'hearing', reason: 'Listening quality is unverified.' }] },
+      output: { path: '/data/videos/example.mp4', audioEvidence: { decodedDurationSeconds: 2 } },
+    } }]));
+    api.startCodeAnimationStageRun.mockResolvedValue({ id: 'example-live-run', status: 'running', kind: 'production-stages', stages: [] });
+    api.preflightCodeAnimationProject.mockResolvedValue({ capabilities: {} });
+    renderPage();
+    expect(await screen.findByText('Sound evidence belongs to an older revision.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Production soundtrack preview')).toHaveAttribute('src', '/data/code-animations/projects/example/runs/example/artifacts/sound-example.wav');
+    expect(screen.getByLabelText('Production final film')).toHaveAttribute('src', '/data/videos/example.mp4');
+    expect(screen.getByText(/Final MP4 audio decoded and measured/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Run production stages' }));
+    await user.click(await screen.findByRole('button', { name: 'Start run' }));
+    expect(api.startCodeAnimationStageRun).toHaveBeenCalledWith(project.id, {}, { silent: true });
+    expect(await screen.findByRole('button', { name: 'Cancel run' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Run production stages' })).toBeDisabled();
+  });
+
   it('opens a URL-selected detail and applies accepted-source responses immediately', async () => {
     const user = userEvent.setup();
     renderPage();
@@ -99,7 +123,7 @@ describe('Production project rendered interactions', () => {
     const stopped = { id: 'run-stopped', status: 'canceled', createdAt: '2026-01-01T00:00:00Z', data: runData({ resumable: true, stopReason: 'canceled' }) };
     api.listCodeAnimationProjectHistory.mockResolvedValue(page([stopped]));
     api.preflightCodeAnimationProject.mockResolvedValue({ problems: [], capabilities: { imageInputAccepted: true } });
-    api.startCodeAnimationStageRun.mockResolvedValue({ id: 'run-new' });
+    api.startCodeAnimationStageRun.mockResolvedValue({ id: 'run-new', status: 'running', ...runData() });
     renderPage();
     expect(await screen.findByText(/Unverified: semantic-visual/)).toBeInTheDocument();
     expect(screen.getByText('Verified: audio')).toBeInTheDocument();
@@ -112,6 +136,15 @@ describe('Production project rendered interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Start run' }));
     await waitFor(() => expect(api.startCodeAnimationStageRun).toHaveBeenCalledWith(project.id, { visualReview: true }, { silent: true }));
 
+    expect(screen.getByRole('button', { name: 'Resume run' })).toBeDisabled();
+    api.cancelCodeAnimationStageRun.mockResolvedValue({ id: 'run-new', canceling: true });
+    await user.click(screen.getByRole('button', { name: 'Cancel run' }));
+    expect(api.cancelCodeAnimationStageRun).toHaveBeenCalledWith(project.id, 'run-new', { silent: true });
+    api.listCodeAnimationProjectHistory.mockResolvedValue(page([{ id: 'run-new', status: 'canceled', data: runData() }, stopped]));
+    await act(async () => {
+      for (const [event, handler] of socket.on.mock.calls) if (event === 'code-animation:changed') handler({ id: project.id });
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume run' })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: 'Resume run' }));
     await waitFor(() => expect(api.startCodeAnimationStageRun).toHaveBeenCalledWith(project.id, { resumeFromRunId: 'run-stopped' }, { silent: true }));
     expect(screen.queryByText(/Package import/)).toBeNull();

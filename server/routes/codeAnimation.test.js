@@ -239,7 +239,7 @@ describe('Code Animation portable packages', () => {
   });
 
   it.each([
-    ['unknown version', (v) => { v.schemaVersion = 2; }],
+    ['unknown version', (v) => { v.schemaVersion = 3; }],
     ['installation command', (v) => { v.manifest.renderer.command = 'example executable'; }],
     ['case collision', (v) => { v.files.push({ ...v.files[0], path: 'SRC/scene.py' }); }],
     ['duplicate path', (v) => { v.files.push({ ...v.files[0] }); }],

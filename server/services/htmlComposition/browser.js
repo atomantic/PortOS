@@ -96,7 +96,8 @@ export async function openComposition(directory, { signal, validateAssets, strea
   signal?.throwIfAborted();
   const response = await cdpRequest('/json/version');
   if (!response.ok) throw new Error('Managed browser is unavailable');
-  const { webSocketDebuggerUrl } = await response.json();
+  const version = await response.json();
+  const { webSocketDebuggerUrl } = version;
   if (!webSocketDebuggerUrl) throw new Error('Managed browser has no CDP endpoint');
   const ws = new WebSocket(webSocketDebuggerUrl, { handshakeTimeout: 10000 });
   const pending = new Map();
@@ -129,6 +130,12 @@ export async function openComposition(directory, { signal, validateAssets, strea
     const key = decodeURIComponent(url.pathname);
     const asset = url.origin === ORIGIN && !url.username && !url.password && params.request.method === 'GET' && assets.get(key);
     if (!asset) {
+      // A foreground headless target may ask for Chrome's implicit favicon.
+      // Answer the absent local icon without allowing any network request.
+      if (url.origin === ORIGIN && !url.username && !url.password && params.request.method === 'GET' && key === '/favicon.ico') {
+        await send('Fetch.fulfillRequest', { requestId: params.requestId, responseCode: 204, body: '' });
+        return;
+      }
       // Do not continue even a failed request. Disconnect destroys the context.
       throw new Error(`Refused composition request: ${params.request.url}`);
     }
@@ -212,7 +219,11 @@ export async function openComposition(directory, { signal, validateAssets, strea
       // Defense in depth for browser-originated HTTP requests outside Fetch.
       proxyServer: 'http://127.0.0.1:9', proxyBypassList: '<-loopback>',
     }, null));
-    const { targetId } = await send('Target.createTarget', { url: 'about:blank', browserContextId: contextId, hidden: true, background: true }, null);
+    // Headless Chrome has no tab UI to hide. Give its compositor a foreground
+    // target: hidden targets can stall surface screenshots on Linux. Headed
+    // managed browsers retain the hidden, background rendering posture.
+    const headless = /HeadlessChrome\//.test(version['User-Agent'] || '');
+    const { targetId } = await send('Target.createTarget', { url: 'about:blank', browserContextId: contextId, hidden: !headless, background: !headless }, null);
     ({ sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }, null));
     await send('Page.enable');
     await send('Runtime.enable');

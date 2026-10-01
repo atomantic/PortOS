@@ -44,4 +44,8 @@ export const codeAnimationStageRunSchema = z.object({
   resumeFromRunId: z.string().uuid().optional(),
   // Opt-in: ask the project's vision-capable authoring route to review the style frames.
   visualReview: z.boolean().optional(),
+  audioConsent: z.boolean().default(false),
+  audioProviderId: z.string().trim().min(1).max(128).optional(),
+  audioModel: z.string().trim().min(1).max(256).optional(),
+  audioBudgetUsd: z.number().positive().max(1000).optional(),
 }).strict().refine(value => !(value.revisionId && value.resumeFromRunId), 'Choose a revision or a run to resume, not both');

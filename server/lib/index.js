@@ -810,3 +810,4 @@ export * from './musicVideoNarrativeEvents.js';
 export * from './persistentMindContextEvents.js';
 
 export * from './scheduleExecutionFieldsValidation.js';
+export * from './codeAnimationSound.js';

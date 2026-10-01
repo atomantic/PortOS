@@ -23,6 +23,7 @@ import { analyzeEvidence, evaluateVerdict } from './evidence.js';
 import { buildExportShim, injectExportShim } from './export.js';
 import * as store from './projectStore.js';
 import { readProjectFiles, sourceHashOf, stageProjectFiles, stageRenderSource, writeRunArtifact } from './projectFiles.js';
+import { checkSoundConsent, produceSoundtrack, muxSoundtrack } from './sound.js';
 import { renderViaMediaQueue, sampleFilm } from './stageRender.js';
 
 export const STAGE_RUN_KIND = 'production-stages';
@@ -88,6 +89,7 @@ function checkBudget(ctx) {
 async function reserve(ctx, bytes) {
   if (!await store.reserveRunBytes(ctx.runId, ctx.projectId, bytes)) throw exhausted('disk');
   ctx.state.spent.diskBytes += bytes;
+  ctx.state.reservedBytes += bytes;
 }
 
 /**
@@ -96,7 +98,7 @@ async function reserve(ctx, bytes) {
  */
 async function runStage(ctx, key, revision, body, { renders = false } = {}) {
   checkBudget(ctx);
-  const entry = { key, stageRunId: randomUUID(), revisionId: revision.id, sourceHash: revision.sourceHash, status: 'running', startedAt: iso() };
+  const entry = { key, stageRunId: randomUUID(), revisionId: revision.id, sourceHash: revision.sourceHash, packageHash: revision.packageHash, status: 'running', startedAt: iso() };
   ctx.state.stages.push(entry);
   await persist(ctx);
   const { ms, dimension } = remainingMs(ctx);
@@ -119,7 +121,7 @@ async function runStage(ctx, key, revision, body, { renders = false } = {}) {
 }
 
 const reusable = (ctx, key, revision) => ctx.prior.find(stage => stage.key === key && stage.revisionId === revision.id
-  && stage.sourceHash === revision.sourceHash && stage.status === 'completed');
+  && stage.sourceHash === revision.sourceHash && stage.packageHash === revision.packageHash && stage.status === 'completed');
 
 /** Build the immutable, staged browser copy of a revision once per run. */
 async function stageRevision(ctx, revision) {
@@ -230,7 +232,7 @@ async function reviewStage(ctx, revision, style) {
 function inspectStage(ctx, revision, style, pilot, review = null) {
   return runStage(ctx, 'inspect', revision, async () => {
     // Each piece of evidence names the source it measured; a mismatch is stale.
-    const evidence = { sourceHash: style.sourceHash === pilot.sourceHash ? style.sourceHash : null, styleStageRunId: style.stageRunId, pilotStageRunId: pilot.stageRunId };
+    const evidence = { packageHash: revision.packageHash, sourceHash: style.sourceHash === pilot.sourceHash ? style.sourceHash : null, styleStageRunId: style.stageRunId, pilotStageRunId: pilot.stageRunId };
     let analysis;
     if (style.filmError) {
       analysis = { findings: [{ kind: 'film-error', severity: 'error', detail: `The film did not run: ${style.filmError}`, measured: { error: style.filmError } }], verified: [], unverified: [{ dimension: 'visual-motion', reason: 'The film did not render.' }] };
@@ -246,7 +248,7 @@ function inspectStage(ctx, revision, style, pilot, review = null) {
     const capturedAt = iso();
     const advisory = (review?.reviewFindings || []).map(item => ({ kind: 'visual-review', severity: 'warning', detail: item.detail, atSeconds: item.atSeconds, measured: { reviewer: review.reviewer } }));
     const findings = [...analysis.findings, ...advisory].map(finding => ({ ...finding, sourceHash: revision.sourceHash, revisionId: revision.id, evidenceStageRunIds: [style.stageRunId, pilot.stageRunId], capturedAt }));
-    const verdict = evaluateVerdict({ evidence, sourceHash: revision.sourceHash, findings, unverified: analysis.unverified });
+    const verdict = evaluateVerdict({ evidence, packageHash: revision.packageHash, sourceHash: revision.sourceHash, findings, unverified: analysis.unverified });
     return { evidence, findings, verified: analysis.verified, verdict };
   });
 }
@@ -324,15 +326,17 @@ async function repairStage(ctx, revision, findings) {
   return created;
 }
 
-async function finalStage(ctx, revision, verdictStage) {
+async function finalStage(ctx, revision, verdictStage, soundtrack) {
   // Re-evaluate against the revision about to render: stale or failed evidence never reaches the renderer.
-  const verdict = evaluateVerdict({ evidence: verdictStage.evidence, sourceHash: revision.sourceHash, findings: verdictStage.findings, unverified: verdictStage.verdict.unverified });
+  const verdict = evaluateVerdict({ evidence: verdictStage.evidence, packageHash: revision.packageHash, sourceHash: revision.sourceHash, findings: verdictStage.findings, unverified: verdictStage.verdict.unverified });
   if (verdict.status !== 'pass') throw new ServerError(`The final render needs passing evidence (${verdict.status})`, { status: 409, code: 'CODE_ANIMATION_EVIDENCE_NOT_PASSING' });
   const stage = await runStage(ctx, 'final', revision, async ({ signal }) => {
     const result = await ctx.deps.render({ directory: revision.staged, signal });
-    return { output: { jobId: result.jobId ?? null, videoId: result.id ?? null, filename: result.filename ?? null, path: result.path ?? null, revisionId: revision.id, sourceHash: revision.sourceHash } };
+    signal.throwIfAborted();
+    const audioEvidence = await ctx.deps.mux({ projectId: ctx.projectId, revision, soundtrack, result, signal, reserve: bytes => reserve(ctx, bytes) });
+    return { audioEvidence, output: { packageHash: revision.packageHash, audioHash: soundtrack.artifact?.sha256 ?? null, jobId: result.jobId ?? null, videoId: result.id ?? null, filename: result.filename ?? null, path: result.path ?? null, revisionId: revision.id, sourceHash: revision.sourceHash } };
   }, { renders: true });
-  ctx.state.output = { ...stage.output, stageRunId: stage.stageRunId, verifiedDimensions: verdictStage.verified, unverified: verdict.unverified };
+  ctx.state.output = { ...stage.output, stageRunId: stage.stageRunId, audioEvidence: stage.audioEvidence, soundtrack, verifiedDimensions: [...verdictStage.verified.filter(key => key !== 'audio'), ...stage.audioEvidence.verified], unverified: [...verdict.unverified.filter(item => item.dimension !== 'audio'), ...soundtrack.unverified] };
 }
 
 async function execute(ctx, start) {
@@ -345,7 +349,14 @@ async function execute(ctx, start) {
     const inspected = await inspectStage(ctx, revision, style, pilot, review);
     ctx.state.findings = inspected.findings;
     ctx.state.verdict = { ...inspected.verdict, revisionId: revision.id, sourceHash: revision.sourceHash };
-    if (inspected.verdict.status === 'pass') return finalStage(ctx, revision, inspected);
+    if (inspected.verdict.status === 'pass') {
+      const soundtrack = await runStage(ctx, 'soundtrack', revision, ({ signal }) => ctx.deps.sound({
+        projectId: ctx.projectId, runId: ctx.runId, revision, signal, reserve: bytes => reserve(ctx, bytes),
+      }), { renders: true });
+      ctx.state.soundtrack = soundtrack;
+      ctx.state.verdict = { ...ctx.state.verdict, unverified: [...ctx.state.verdict.unverified.filter(item => item.dimension !== 'audio'), ...soundtrack.unverified] };
+      return finalStage(ctx, revision, inspected, soundtrack);
+    }
     revision = await repairStage(ctx, revision, inspected.findings);
   }
 }
@@ -373,7 +384,7 @@ async function finish(ctx, run) {
   return status;
 }
 
-const defaultDeps = { sample: sampleFilm, render: renderViaMediaQueue, repair: repairViaAuthoringRoute, review: reviewViaAuthoringRoute };
+const defaultDeps = { sound: produceSoundtrack, mux: muxSoundtrack, sample: sampleFilm, render: renderViaMediaQueue, repair: repairViaAuthoringRoute, review: reviewViaAuthoringRoute };
 
 /**
  * Start a user-requested production run. Resolves with the persisted run once
@@ -396,6 +407,7 @@ export async function startProductionStageRun(projectId, input, deps = {}) {
   if (record.manifest.renderer.kind !== 'browser') {
     throw new ServerError('Only browser-rendered projects can run these stages', { status: 409, code: 'CODE_ANIMATION_RENDERER_UNSUPPORTED' });
   }
+  checkSoundConsent(record.manifest.audio, request);
   const revision = { ...record };
   const runId = randomUUID();
   const priorSpent = prior?.data.spent;
@@ -404,7 +416,7 @@ export async function startProductionStageRun(projectId, input, deps = {}) {
     budgets: project.budgets, requested: project.localSettings, effective: null, reservedBytes: 0,
     spent: { iterations: priorSpent?.iterations ?? 0, tokens: priorSpent?.tokens ?? 0, renderMs: priorSpent?.renderMs ?? 0, diskBytes: 0, elapsedMs: 0, priorElapsedMs: priorSpent?.elapsedMs ?? 0 },
     visualReview: request.visualReview ?? prior?.data.visualReview ?? false,
-    stages: [], findings: [], verdict: null, output: null, repairs: prior?.data.repairs ?? [],
+    stages: [], findings: [], verdict: null, soundtrack: null, output: null, repairs: prior?.data.repairs ?? [],
     resumedFrom: prior?.id ?? null, stopReason: null, resumable: false, executed: true,
   };
   const ctx = {

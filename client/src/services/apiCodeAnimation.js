@@ -70,3 +70,5 @@ export const cancelCodeAnimationStageRun = (id, runId, options) => request(`/cod
 export const getCodeAnimationExecution = (options) => request('/code-animation/execution', options);
 export const updateCodeAnimationExecutionTools = (tools, options) => request('/code-animation/execution/tools', { method: 'PUT', body: JSON.stringify(tools), ...options });
 export const probeCodeAnimationExecution = (options) => request('/code-animation/execution/probe', { method: 'POST', ...options });
+
+// Explicit production workflows. Preview and final use the stored soundtrack artifact.

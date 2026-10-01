@@ -126,7 +126,8 @@ export default function ProductionProjects() {
         </div>
         <p className="text-xs text-gray-400">Imports never execute source or install dependencies. Failed candidates retain accepted source. Accepting source records your selection; it does not mark rendering, motion or sound as verified.</p>
         <p className="text-xs text-gray-400">Requested model: {project.localSettings?.model || 'Unspecified'} · Mode: {project.localSettings?.mode || 'Unspecified'}</p>
-        <ProductionStageRuns project={project} runs={history.items.filter(isStageRun)} disabled={busy || dirty} />
+        <ProductionStageRuns project={project} runs={history.items.filter(isStageRun)} disabled={busy || dirty}
+          onRunStarted={run => history.setItems(previous => [{ id: run.id, status: run.status, data: run, createdAt: new Date().toISOString() }, ...previous.filter(item => item.id !== run.id)])} />
         <ul className="space-y-2">
           {history.items.filter(run => !isStageRun(run)).map(run => <li key={run.id} className="min-w-0 space-y-1 rounded border border-port-border p-3">
             <div className="flex flex-wrap justify-between gap-2 text-sm"><span>Package import · {run.status}</span><span>{timeAgo(run.createdAt)}</span></div>

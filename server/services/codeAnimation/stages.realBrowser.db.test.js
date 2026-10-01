@@ -3,14 +3,15 @@
 // new revision, and finally encoded by the real renderer and ffmpeg. PostgreSQL
 // (portos_test) holds the project and run records; no provider is called.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { _cleanupTestBrowser, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -56,7 +57,10 @@ const manifest = {
   styleGuide: 'Flat shapes', renderer: { kind: 'browser', version: 'synthetic-v1', engine: null },
   format: { width: 1280, height: 720, fps: 12, durationSeconds: 2 }, seed: 1,
   entrypoints: [{ role: 'preview', path: 'index.html' }], assets: [], shots: [], events: [],
-  audio: { kind: 'silence' }, execution: { requested: null, effective: null },
+  audio: { kind: 'procedural', version: 1, events: [
+    { label: 'Impact', atSeconds: 0.5, effect: 'impact', durationSeconds: 0.2, gain: 0.8 },
+    { label: 'Reveal', atSeconds: 1.25, effect: 'reveal', durationSeconds: 0.4, gain: 0.6 },
+  ] }, execution: { requested: null, effective: null },
 };
 
 let proc;
@@ -66,7 +70,7 @@ let projectId;
 describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const profile = join(lazyTempDataRoot('portos-code-animation-stages-'), 'chrome-test-profile');
-    proc = spawn(chrome, ['--headless=new', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
     try {
       const ws = await _waitForTestChrome(proc);
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
@@ -93,9 +97,9 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
     const { done } = await startProductionStageRun(projectId, {}, {
       repair, render: ({ directory }) => renderComposition({ directory, jobId: 'stages-acceptance' }),
     });
-    expect(await done).toBe('completed');
-
+    const status = await done;
     const [{ data }] = (await getProductionHistory(projectId, { limit: 1, offset: 0 })).items;
+    expect(status, JSON.stringify(data.findings)).toBe('completed');
     const inspections = data.stages.filter(stage => stage.key === 'inspect');
     expect(inspections[0].findings.map(finding => finding.kind)).toContain('frozen-film');
     expect(inspections[0].verdict.status).toBe('fail');
@@ -118,5 +122,49 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
     const frames = Number(execFileSync(ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-count_frames', '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', video]).toString().trim());
     expect(frames).toBe(24);
     expect(data.output.revisionId).toBe(data.currentRevisionId);
+    const sound = data.soundtrack;
+    expect(sound.measured).toMatchObject({ sampleRate: 48000, frames: 96000, durationMs: 2000, nonFinite: 0 });
+    const wav = await readFile(join(PATHS.data, sound.artifact.relativePath));
+    const { synthesizeSoundtrack } = await import('../../lib/codeAnimationSound.js');
+    expect(wav.equals(synthesizeSoundtrack(sound.timeline))).toBe(true);
+    expect(createHash('sha256').update(wav).digest('hex')).toBe(data.output.audioHash);
+    expect(data.output.audioEvidence).toMatchObject({ packageHash: sound.packageHash,
+      stream: { codec_name: 'aac', sample_rate: '48000' }, verified: expect.arrayContaining(['audio-stream', 'audio-duration', 'audio-event-placement']) });
+    const decoded = execFileSync(ffmpeg, ['-v', 'error', '-i', video, '-map', '0:a:0', '-ar', '48000', '-ac', '1', '-f', 's16le', 'pipe:1'], { maxBuffer: 1024 * 1024 });
+    expect(decoded.length / 2 / 48000).toBeCloseTo(2, 1);
+    for (const expected of [0.5, 1.25]) {
+      // Independent decode: energy before the onset is silent, the authored window contains the event.
+      let quietPeak = 0; let activePeak = 0;
+      for (let i = Math.round((expected - 0.15) * 48000); i < Math.round((expected - 0.05) * 48000); i++) quietPeak = Math.max(quietPeak, Math.abs(decoded.readInt16LE(i * 2)));
+      for (let i = Math.round(expected * 48000); i < Math.round((expected + 0.1) * 48000); i++) activePeak = Math.max(activePeak, Math.abs(decoded.readInt16LE(i * 2)));
+      expect(quietPeak).toBeLessThan(100);
+      expect(activePeak).toBeGreaterThan(1000);
+    }
+    expect(data.output.unverified.map(item => item.dimension)).toContain('hearing');
+    // Renderer-independent library/upload snapshots survive a real final mux;
+    // changing the original asset after staging cannot change the candidate.
+    const { stageProductionSoundAsset } = await import('./soundAssets.js');
+    for (const source of ['upload', 'library']) {
+      const root = source === 'upload' ? PATHS.uploads : PATHS.music;
+      await mkdir(root, { recursive: true });
+      const { pcmToWavBuffer } = await import('../../lib/chiptuneRender.js');
+      const left = new Float32Array(96000);
+      for (let i = 0; i < left.length; i++) left[i] = wav.readInt16LE(44 + i * 2) / 32768;
+      const stereo = pcmToWavBuffer([left, Float32Array.from(left, sample => -sample)], { sampleRate: 48000 });
+      await writeFile(join(root, 'example.wav'), stereo);
+      const staged = await stageProductionSoundAsset(projectId, { revisionId: data.currentRevisionId, source, filename: 'example.wav' });
+      await writeFile(join(root, 'example.wav'), 'replaced');
+      const next = await startProductionStageRun(projectId, { revisionId: staged.revision.id }, {
+        render: ({ directory }) => renderComposition({ directory, jobId: `sound-${source}-acceptance` }),
+      });
+      expect(await next.done).toBe('completed');
+      const saved = (await getProductionHistory(projectId, { limit: 1, offset: 0 })).items[0].data;
+      expect(saved.soundtrack.kind).toBe('file');
+      expect(saved.soundtrack.measured.channels).toBe(2);
+      expect(saved.output.audioEvidence.decodedChannels).toBe(2);
+      expect(saved.output.audioEvidence.peak).toBeGreaterThan(0.1);
+      expect(saved.output.audioEvidence.decodedDurationSeconds).toBeCloseTo(2, 1);
+      expect(saved.output.audioEvidence.packageHash).toBe(staged.revision.packageHash);
+    }
   }, 180000);
 });

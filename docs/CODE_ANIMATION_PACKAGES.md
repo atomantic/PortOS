@@ -180,3 +180,49 @@ limits: it runs inside the shared managed Chromium (Chromium's renderer sandbox
 contains page code, not a PortOS-owned process group), with per-command
 timeouts and render cancellation but no per-render memory cap. Its boundary
 tests are `server/services/htmlComposition/index.test.js`.
+
+
+## Offline Production sound
+
+Production stage runs produce sound only after an explicit **Run production stages** / **Start run** action. Packages with intentional `silence` remain silent.
+Legacy `procedural` notes and unstaged `external` declarations fail visibly;
+they do not earn a successful soundtrack verdict. Fast HTML export keeps its
+existing procedural/upload limitation notes.
+
+Package v1 remains readable. Package v2 introduces audio contract version 1:
+
+```json
+{"kind":"procedural","version":1,"events":[
+  {"label":"Impact","atSeconds":0.5,"effect":"impact","durationSeconds":0.2,"gain":0.8},
+  {"label":"Reveal","atSeconds":1.25,"effect":"reveal","durationSeconds":0.4,"gain":0.6}
+]}
+```
+
+Times are seconds, rounded to the nearest film frame and then the 48,000 Hz
+sample grid. Impact/reveal effects produce deterministic 16-bit mono WAV bytes.
+The timeline is bounded to 128 events, four seconds per event and 180 seconds
+of total synthesis work. Event durations must fit the film. Preview plays the
+persisted WAV used by final muxing; a live Web Audio clock is never captured.
+
+Portable `file` audio is normalized to this same grid (trimmed or padded, without
+looping), preserving stereo channels. `POST /api/code-animation/projects/:id/sound-assets` accepts an explicit
+`revisionId`, `source` (`upload` or `library`) and existing audio `filename`
+basename. It copies validated asset bytes into a new immutable package candidate;
+there are no host-path inputs. The portable package limits still apply (2 MiB
+per file, 8 MiB total). Importing or staging never calls a provider.
+
+Sound artifacts and measured evidence live in the existing project run records
+and managed run directories. Package, source, timeline and audio hashes bind
+that evidence to its immutable revision. Failed/canceled candidates leave
+accepted source and earlier sound artifacts intact. A restart marks stranded
+runs interrupted; resume is an explicit action and sound is rebuilt/remeasured.
+The disk, time and render budgets cover offline audio as well as visual work.
+
+Final MP4 sound must pass real ffprobe stream/duration checks and bounded PCM
+decode measurements, including synthetic event placement. Listening quality
+remains unverified. A `generated` declaration (package v2, `version: 1`, `prompt`)
+is distinct from procedural/file sound: a stage request requires explicit
+`audioConsent`, `audioProviderId`, `audioModel` and a separate positive
+`audioBudgetUsd`. No provider audio adapter is available yet, so even consented
+requests fail before provider dispatch; stage externally produced bytes as a
+portable file instead. There are no startup audio calls or automatic resumes.
