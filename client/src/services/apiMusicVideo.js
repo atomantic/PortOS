@@ -395,3 +395,9 @@ export async function fetchMusicVideoPreviewAsset(url) {
   if (!response.ok) throw new Error(`Could not load preview media (${response.status})`);
   return response.blob();
 }
+
+
+export const getMusicVideoDependencyImpact = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dependency-impact`, options);
+export const startMusicVideoDependencyRepair = (id, basis, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dependency-repairs`, { method: 'POST', body: JSON.stringify({ basis }), ...options });

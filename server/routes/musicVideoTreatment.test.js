@@ -13,6 +13,7 @@ import express from 'express';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
+import { captureMusicVideoEvidence } from '../lib/musicVideoDependencies.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
@@ -456,7 +457,7 @@ describe('treatment proofs, clone and motion references', () => {
     expect(clip.status).toBe(422);
     expect(clip.body.error).toMatch(/final render/);
 
-    await projects.updateProject(project.id, { renderHistoryId: 'render-1' });
+    await projects.updateProject(project.id, { renderHistoryId: 'render-1', renderDependencies: captureMusicVideoEvidence(await projects.getProject(project.id)) });
     const passed = await review(body.treatment.revision, { status: 'passed', evidence: { videoHistoryId: 'render-1', note: 'cut lands on the downbeat, text readable' } });
     expect(passed.status).toBe(200);
     const stored = (await reload(project.id)).treatment.proofs.find((p) => p.id === seq.id);

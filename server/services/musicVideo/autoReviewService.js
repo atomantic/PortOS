@@ -37,7 +37,7 @@ import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { startExcerptRender } from './excerptRender.js';
-import { cancelRevision, resumeRevision } from './revisionService.js';
+import { cancelRevision, getDependencyImpact, resumeRevision } from './revisionService.js';
 import { projectExcerpts } from './excerpt.js';
 import { projectRevisions, releaseRevisionClaim, revisionSectionStates, startRevisionOnProject } from './revision.js';
 import {
@@ -264,7 +264,12 @@ async function takeSteps(projectId, runId) {
       const begun = await mutateProjectRecord(projectId, (current) => beginAttemptReview(current, runId));
       publish(projectId, begun.project, begun.run, { type: 'reviewing', excerptId: step.excerptId });
       const excerpt = projectExcerpts(project).find((e) => e.id === step.excerptId);
-      const review = await reviewDraft(project, run, excerpt);
+      let review = await reviewDraft(project, run, excerpt);
+      const impact = await getDependencyImpact(projectId);
+      if (impact.shots.some((shot) => {
+        const scene = project.scenes.find((entry) => entry.sceneId === shot.sceneId);
+        return scene && scene.startSec < excerpt.endSec && scene.endSec > excerpt.startSec;
+      })) review = { ...review, verdict: 'inconclusive', reason: 'A derived clip or its sung window changed — repair and review a fresh draft' };
       const out = await mutateProjectRecord(projectId, (current) => recordAttemptReview(current, runId, review));
       const log = review.verdict === 'inconclusive' ? console.warn : console.log;
       log(`🔎 Music Video auto-review ${short(runId)} attempt ${run.attempts.length}: ${review.verdict} (${review.findings.length} finding${review.findings.length === 1 ? '' : 's'})`);

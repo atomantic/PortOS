@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
 import {
+  startMusicVideoDependencyRepair,
   startMusicVideoRevision,
   resumeMusicVideoRevision,
   cancelMusicVideoRevision,
@@ -115,7 +116,12 @@ export default function useMusicVideoRevisions({ project, replaceProject, sceneM
       return res;
     }));
 
+  const repair = (basis) => run(() => startMusicVideoDependencyRepair(projectId, basis, { silent: true }).then((res) => {
+    replaceProject(res.project);
+    return res;
+  })).then((res) => res?.revision ? resume(res.revision.id) : null);
+
   // Also used by an opt-in auto-review run (#8988), which hands its revised
   // sections to the open board over the `music-video:auto-review` event.
-  return { busy, revise, resume, cancel, submitSections: generateSections };
+  return { busy, repair, revise, resume, cancel, submitSections: generateSections };
 }

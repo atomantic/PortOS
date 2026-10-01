@@ -1,3 +1,4 @@
+import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 /**
  * Music Video — server-owned production run (#9066): pure record transforms.
  *
@@ -353,6 +354,8 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
       return { type: 'wait', on: 'review' };
     }
     if (review.status === 'passed') {
+      const evidence = review.attempts?.at(-1)?.review?.dependencies;
+      if (musicVideoDependencyChanges(project, evidence).length) return { type: 'halt', status: 'needs-human', reason: 'The passing review has changed or unrecorded dependencies — rebuild and review the current draft' };
       if (!run.authoring) return { type: 'halt', status: 'completed', reason: null };
       if (run.documentCheckpoint?.directory !== project.composition?.document?.directory) return { type: 'halt', status: 'needs-replan', reason: 'The selected document changed after review — start a fresh run' };
       if (!run.finalRender) return { type: 'render-document' };

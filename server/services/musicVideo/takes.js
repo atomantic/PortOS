@@ -21,6 +21,7 @@
  * take the first time a take operation touches the scene (no record rewrite).
  */
 
+import { captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -39,7 +40,7 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, inputAssets = null, now }) {
   return {
     takeId: `mvt-${randomUUID()}`,
     kind,
@@ -51,6 +52,8 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
     sourceImageId: clip(sourceImageId, 256),
     originalName: takeOriginalName(originalName),
     status: 'candidate',
+    ...(dependencies ? { dependencies: structuredClone(dependencies) } : {}),
+    ...(inputAssets?.length ? { inputAssets: structuredClone(inputAssets) } : {}),
     // #8980 — 'motion-reference' scaffolding never fills the slot on its own.
     use: use === 'motion-reference' ? 'motion-reference' : 'final',
     note: null,
@@ -106,7 +109,7 @@ function findSceneIndex(project, sceneId) {
 function replaceScene(project, idx, scene) {
   const scenes = project.scenes.slice();
   scenes[idx] = scene;
-  return { ...project, scenes, updatedAt: new Date().toISOString() };
+  return retainMusicVideoDependencies(project, { ...project, scenes, updatedAt: new Date().toISOString() });
 }
 
 /**
@@ -125,11 +128,12 @@ function appendToScene(scene, inputs, now) {
   const appended = [];
   for (const input of inputs) {
     const existing = takes.find((t) => t.kind === input.kind && t.assetId === input.assetId);
-    const take = existing || buildTake({ ...input, now });
+    const dependencies = input.dependencies || (input.kind === 'video' && input.sourceImageId ? captureTakeDependencies(scene, input.sourceImageId) : null);
+    const take = existing || buildTake({ ...input, dependencies, now });
     if (!existing) takes = [...takes, take];
     appended.push(take);
     const field = TAKE_SLOT[input.kind];
-    if (!isNonBlankStr(next[field]) && take.status !== 'rejected' && take.use !== 'motion-reference') next[field] = take.assetId;
+    if (!isNonBlankStr(next[field]) && take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges({ scenes: [scene] }, scene, take).length) next[field] = take.assetId;
   }
   next.takes = pruneTakes(takes, next);
   return { scene: next, appended };
@@ -165,7 +169,7 @@ export function appendTakesAcrossScenes(project, items) {
     entries.forEach((e, i) => { appended[e.index] = { sceneId: scene.sceneId, take: result.appended[i] }; });
     return result.scene;
   });
-  return { project: { ...project, scenes, updatedAt: now }, appended };
+  return { project: retainMusicVideoDependencies(project, { ...project, scenes, updatedAt: now }), appended };
 }
 
 function locateTake(project, sceneId, takeId) {

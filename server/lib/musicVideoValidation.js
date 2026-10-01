@@ -219,6 +219,8 @@ export const musicVideoTakeInputSchema = z.object({
   source: z.enum(['generated', 'imported']).optional(),
   provider: providerSlug.optional(),
   originalName: z.string().max(255).optional(),
+  sourceImageId: galleryImageName.optional(),
+  inputAssets: z.array(z.object({ role: z.enum(['crop', 'mask']), assetId: galleryImageName, revision: z.number().int().min(1).max(1000000) }).strict()).max(4).optional(),
   use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
 }).strict().superRefine((take, ctx) => {
   const check = take.kind === 'image' ? galleryImageName : videoHistoryIdSchema;
@@ -633,6 +635,8 @@ export const musicVideoExcerptNoteUpdateSchema = z.object({
 // Reject the flagged sections of a reviewed draft excerpt and regenerate only
 // those. `sceneIds` names the sections explicitly; omitted, every section
 // holding a `flagged` note is revised. See services/musicVideo/revision.js.
+export const musicVideoDependencyRepairSchema = z.object({ basis: z.string().min(1).max(128) }).strict();
+
 export const musicVideoRevisionStartSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(200)).min(1).max(500).optional(),
 }).strict();

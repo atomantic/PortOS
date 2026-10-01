@@ -19,6 +19,7 @@
  * against the freshest record under the backend's write serialization.
  */
 
+import { musicVideoDependencyImpact } from '../../lib/musicVideoDependencies.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { cancelExcerptRender, startExcerptRender } from './excerptRender.js';
@@ -30,6 +31,7 @@ import {
   releaseRevisionClaim,
   revisionGenerationJobs,
   revisionSectionStates,
+  startDependencyRepairOnProject,
   startRevisionOnProject,
 } from './revision.js';
 import { chargeAutoReviewGeneration, refundAutoReviewGeneration, runOwningRevision } from './autoReview.js';
@@ -58,15 +60,24 @@ export async function assertRevisionOpen(projectId, revisionId, { sceneId = null
   if (!revisionId) return;
   const project = await getProject(projectId);
   assertRevisionOpenForGeneration(project, revisionId, { sceneId, kind });
-  if (!project || !runOwningRevision(project, revisionId)) return;
+  const revision = projectRevisions(project).find((entry) => entry.id === revisionId);
+  if (!project || (!runOwningRevision(project, revisionId) && revision?.type !== 'dependencies')) return;
   const { listJobs } = await import('../mediaJobQueue/index.js');
   const jobs = [...listJobs({ kind: 'video' }), ...listJobs({ kind: 'image' })];
   await mutateProjectRecord(projectId, (current) => {
     const revision = assertRevisionOpenForGeneration(current, revisionId, { sceneId, kind });
     const inFlight = sceneId && revisionGenerationJobs(current, revision, jobs)
       .some((job) => job.params?.musicVideo?.sceneId === sceneId && (!kind || job.kind === kind));
-    if (inFlight) {
+    if (inFlight && revision.type !== 'dependencies') {
       throw new ServerError('This section is already generating for the auto-review run', { status: 409, code: 'AUTO_REVIEW_SECTION_IN_FLIGHT', context: { sceneId } });
+    }
+    if (revision.type === 'dependencies') {
+      const section = revision.sections.find((entry) => entry.sceneId === sceneId && entry.kind === kind);
+      if (inFlight || (section.submissionClaimedAt && Date.now() - Date.parse(section.submissionClaimedAt) < 30_000)) {
+        throw new ServerError('This repair section is already submitting or generating', { status: 409, code: 'REVISION_SECTION_IN_FLIGHT' });
+      }
+      const updated = { ...revision, sections: revision.sections.map((entry) => entry === section ? { ...entry, submissionClaimedAt: new Date().toISOString() } : entry) };
+      return { project: { ...current, revisions: current.revisions.map((entry) => entry.id === revisionId ? updated : entry) } };
     }
     return chargeAutoReviewGeneration(current, revisionId, { sceneId, kind, jobs });
   });
@@ -135,4 +146,36 @@ export async function cancelRevision(projectId, revisionId, { alsoOnProject = nu
   }
   if (canceledJobIds.length) console.log(`🛑 Music Video revision ${revisionId.slice(4, 12)} cancelled ${canceledJobIds.length} generation job(s)`);
   return { project, revision, canceledJobIds };
+}
+
+
+async function dependencyImpactFor(project) {
+  const performanceScenes = (project.scenes || []).filter((scene) => scene.shotMode === 'performance' && scene.videoHistoryId);
+  let performanceChanges = [];
+  if (performanceScenes.length) {
+    const { resolveMasterAudioPath } = await import('./render.js');
+    const { findStalePerformanceTakes } = await import('./performanceShot.js');
+    performanceChanges = await resolveMasterAudioPath(project).then((path) => findStalePerformanceTakes(project, path),
+      () => performanceScenes.map((scene) => ({ sceneId: scene.sceneId, reason: 'Current song audio is unavailable; window evidence cannot be verified' })));
+  }
+  return musicVideoDependencyImpact(project, performanceChanges);
+}
+
+export async function getDependencyImpact(projectId) {
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  return dependencyImpactFor(project);
+}
+
+export async function startDependencyRepair(projectId, input) {
+  const before = await getProject(projectId);
+  if (!before) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const impact = await dependencyImpactFor(before);
+  const structuralBasis = musicVideoDependencyImpact(before).basis;
+  return mutateProjectRecord(projectId, (current) => {
+    if (musicVideoDependencyImpact(current).basis !== structuralBasis) {
+      throw new ServerError('Assets changed while checking the repair preview', { status: 409, code: 'DEPENDENCY_PREVIEW_CHANGED' });
+    }
+    return startDependencyRepairOnProject(current, impact, input);
+  });
 }

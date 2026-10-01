@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from 'vitest';
 import { rmSync } from 'fs';
 import { join } from 'path';
+import { captureMusicVideoEvidence, musicVideoDependencyImpact } from '../../lib/musicVideoDependencies.js';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
@@ -79,6 +80,23 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
   afterAll(async () => {
     await query(`DELETE FROM music_video_projects WHERE id LIKE $1`, [`${PRUNE_PREFIX}%`]).catch(() => {});
     await close();
+  });
+
+  it('round-trips dependency evidence and selective invalidation through PostgreSQL and peer merge', async () => {
+    const created = await db.createProject({ name: 'Example dependency record' });
+    await db.updateProject(created.id, { scenes: [{ sceneId: 'a', startSec: 0, endSec: 5, referenceImageId: 'plate.png', videoHistoryId: null, takes: [] }] });
+    await db.appendSceneTakes(created.id, 'a', [{ kind: 'video', assetId: 'clip-example', source: 'generated', sourceImageId: 'plate.png' }]);
+    const before = await db.getProject(created.id);
+    await db.mutateProjectRecord(created.id, (current) => ({ project: { ...current, excerpts: [{ id: 'excerpt-example', status: 'complete', dependencies: captureMusicVideoEvidence(before) }] } }));
+    await db.updateScene(created.id, 'a', { referenceImageId: 'new-plate.png' });
+    const stale = await db.getProject(created.id);
+    expect(musicVideoDependencyImpact(stale).shots.map((shot) => shot.sceneId)).toEqual(['a']);
+    expect(stale.excerpts[0].dependencies.version).toBe(1);
+    const remote = { ...stale, id: 'mv-peer-example', updatedAt: '2099-01-01T00:00:00.000Z' };
+    await db.mergeProjectsFromSync([remote]);
+    const synced = await db.getProject(remote.id);
+    expect(synced.scenes[0].takes[0].dependencies).toEqual(stale.scenes[0].takes[0].dependencies);
+    expect(musicVideoDependencyImpact(synced).shots).toEqual(musicVideoDependencyImpact(stale).shots);
   });
 
   it('backfills a missing JSONB id from the primary-key column', async () => {

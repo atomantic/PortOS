@@ -75,6 +75,7 @@ const hook = createMediaJobImageHook({
     // edit in/out points and capability it was generated against — the
     // renderer places the take by it, so a later retime can't misalign lips.
     shotInstruction: job.params?.shotInstruction ?? null,
+    dependencies: job.params?.musicVideoDependencies ?? null,
   }]),
   onAttached: ({ projectId, sceneId, videoHistoryId }, { scene, appended }) => {
     musicVideoEvents.emit('scene-video', {
