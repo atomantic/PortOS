@@ -77,7 +77,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
 
   afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));
 
-  it('awaits every seek, encodes exactly 12 frames, keeps the target hidden and registers a thumbnail', async () => {
+  it('awaits every seek, encodes exactly 12 frames, disposes its private target and registers a thumbnail', async () => {
     const input = await composition();
     const before = await browserSession.send('Target.getTargets');
     const observed = [];
@@ -102,7 +102,9 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     // rather than requiring the browser's unrelated internal targets to freeze.
     const extraTargets = (await Promise.all(observed)).flatMap(snapshot => snapshot.targetInfos).filter(info => info.url === 'https://composition.invalid/index.html');
     expect(extraTargets.length).toBeGreaterThan(0);
-    expect(extraTargets.every(info => info.type === 'other')).toBe(true); // hidden CDP target type
+    // This suite owns a headless browser: its compositor needs a page target,
+    // while headed managed browsers continue using a hidden target.
+    expect(extraTargets.every(info => info.type === 'page')).toBe(true);
     const renderContexts = new Set(extraTargets.map(info => info.browserContextId));
     expect(before.targetInfos.every(info => !renderContexts.has(info.browserContextId))).toBe(true);
     const after = await browserSession.send('Target.getTargets');
@@ -380,7 +382,7 @@ globalThis.portosComposition = { durationSec:1, fps:12, width:1280, height:720, 
     const onProgress = event => {
       if (event.generationId !== input.jobId || closed) return;
       closed = browserSession.send('Target.getTargets').then(({ targetInfos }) => {
-        const target = targetInfos.find(info => info.type === 'other');
+        const target = targetInfos.find(info => info.url === 'https://composition.invalid/index.html');
         return browserSession.send('Target.closeTarget', { targetId: target.targetId });
       });
     };
