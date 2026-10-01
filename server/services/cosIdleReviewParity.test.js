@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   emitLog: vi.fn(),
   recordDecision: vi.fn(async () => {}),
   apps: [], requests: [], activity: {}, cards: {}, persisted: [], executions: [], perpetualDispatches: [],
-  noWork: false, budget: { exceeded: null, budget: {}, usage: {} }, preflightInputs: [], hookInputs: [], userTasks: [],
+  autoApprove: true, noWork: false, budget: { exceeded: null, budget: {}, usage: {} }, preflightInputs: [], hookInputs: [], userTasks: [],
 }));
 
 vi.mock('./cosEvents.js', () => ({
@@ -104,7 +104,7 @@ vi.mock('./taskTypeHooks.js', async (importActual) => ({
 }));
 vi.mock('./taskLearning.js', async (importActual) => ({
   ...(await importActual()),
-  getTaskTypeConfidence: async () => ({ autoApprove: true }),
+  getTaskTypeConfidence: async () => ({ autoApprove: mocks.autoApprove }),
 }));
 vi.mock('./cosTaskPreStepBlocks.js', async (importActual) => ({
   ...(await importActual()),
@@ -164,6 +164,7 @@ beforeEach(() => {
   mocks.executions = [];
   mocks.perpetualDispatches = [];
   mocks.noWork = false;
+  mocks.autoApprove = true;
   mocks.budget = { exceeded: null, budget: {}, usage: {} };
   mocks.preflightInputs = [];
   mocks.hookInputs = [];
@@ -248,6 +249,9 @@ describe.each(engines)('%s idle admission public boundary', (name, run) => {
     mocks.requestsAfterPriority0 = true;
     mocks.cards['preflight-demand-1'] = { outcome: 'waiting' };
     mocks.noWork = noWork;
+    // A manual receipt supplies consent even when the ordinary scheduled
+    // task would need approval because its learned confidence is low.
+    mocks.autoApprove = false;
     mocks.interval.perpetual = true;
     await run();
     expect(mocks.requests).toEqual([]);
@@ -256,6 +260,7 @@ describe.each(engines)('%s idle admission public boundary', (name, run) => {
       outcome: noWork ? 'nothing-to-do' : 'handed-off', taskId: readyTasks()[0]?.id ?? null,
     });
     expect(mocks.perpetualDispatches).toHaveLength(noWork ? 0 : 1);
+    if (!noWork) expect(readyTasks()[0]).toMatchObject({ autoApproved: true, approvalRequired: false });
     if (!noWork) expect(readyTasks()[0].metadata).toMatchObject({
       onDemand: true, onDemandOrigin: 'user',
       provider: 'example-provider', model: 'example-model', effort: 'high',

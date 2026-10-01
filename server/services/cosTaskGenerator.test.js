@@ -380,28 +380,6 @@ describe('isConfiguredApprovalRequired', () => {
   });
 });
 
-describe('the on-demand consent flip reaches every drain path', () => {
-  // Run Now is the user's sign-off. Without this flip, a safety-kind or
-  // low-confidence type (release-check used to match `\brelease\b`) is
-  // persisted as APPROVAL, Priority 2 will not pick it, and force-spawn
-  // refuses it — so "Run Now" sits in awaiting-approve forever.
-  //
-  // The two Priority-0 engines run ONE shared drain now, and its
-  // consent-before-admission ordering is pinned behaviorally in
-  // onDemandDrain.test.js. What is left here is the THIRD path — idle review
-  // stealing a queued on-demand request — which carries its own copy.
-
-  it('idle-review steal path consents when it drains an on-demand request', () => {
-    const start = GEN_SRC.indexOf('async function generateManagedAppImprovementTask(app, state');
-    expect(start).toBeGreaterThan(-1);
-    // Slice to the end of the function, not a fixed byte window: the consent line
-    // sits at the bottom of a body that grows, so a magic number makes an
-    // unrelated comment above it read as a missing consent call.
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch, skip: null };', start));
-    expect(body).toMatch(/selectionReason === 'on-demand'\) applyOnDemandConsent\(task\)/);
-  });
-});
-
 // #1650/#4520: a task this instance must not run — a live lease held by ANOTHER
 // instance, or a pin naming another instance — must be skipped during candidate
 // selection, BEFORE the engine emits `task:ready` + trackSpawn. Otherwise that
