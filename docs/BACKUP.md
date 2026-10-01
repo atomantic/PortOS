@@ -16,7 +16,7 @@ pool at server startup. Changing `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, or
 `PGPASSWORD` requires restarting PortOS. Inherited libpq overrides (including
 `PGHOSTADDR`, service files and `PGOPTIONS`) are removed from these subprocesses.
 TLS is captured at startup too: disabled TLS stays disabled, verified TLS uses
-`verify-full` with system trust (requires libpq 17 or newer), and `no-verify` uses `require`. Inline TLS
+`verify-full` with a temporary PEM file containing Node’s active trust roots, and `no-verify` uses `require`. Inline TLS
 certificate settings are refused rather than silently weakened. Executable
 resolution (`PATH` and `PORTOS_PGDUMP`) is preserved.
 

@@ -1353,7 +1353,7 @@ describe('restorePostgres', () => {
     await flush();
     proc.emit('close', 0);
     await flush();
-    expect(ensureSchema).toHaveBeenCalledWith({ force: true });
+    await vi.waitFor(() => expect(ensureSchema).toHaveBeenCalledWith({ force: true }));
     expect(runDbMigrations).not.toHaveBeenCalled();
     expect(settled).toBe(false);
     finishSchema();

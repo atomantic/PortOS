@@ -27,7 +27,7 @@ vi.mock('./fileUtils.js', async (importOriginal) => {
 import { readdir } from 'fs/promises';
 import { execFileAsync } from './fileUtils.js';
 import {
-  buildPgToolEnv,
+  withPgToolEnv,
   pickPgDump,
   discoverPgDumpCandidates,
   resolvePgDump,
@@ -176,19 +176,35 @@ describe('resolvePgDumpBinary', () => {
 });
 
 describe('PostgreSQL tool TLS policy', () => {
-  it('uses system trust for verified TLS and preserves direct negotiation', () => {
-    expect(buildPgToolEnv({ password: 'example', ssl: true, sslnegotiation: 'direct' }, { PATH: '/example/bin', PGSSLROOTCERT: 'poisoned', PGSSLMODE: 'disable' })).toMatchObject({
-      PATH: '/example/bin', PGPASSWORD: 'example', PGSSLMODE: 'verify-full', PGSSLROOTCERT: 'system', PGSSLNEGOTIATION: 'direct',
+  it('uses explicit trust roots for verified TLS and preserves direct negotiation', async () => {
+    await withPgToolEnv({ password: 'example', ssl: true, sslnegotiation: 'direct' }, env => {
+      expect(env).toMatchObject({ PGPASSWORD: 'example', PGSSLMODE: 'verify-full', PGSSLNEGOTIATION: 'direct' });
+      expect(env.PGSSLROOTCERT).toMatch(/roots.pem$/);
     });
   });
 
-  it('requires encrypted no-verify TLS without loading ambient root certificates', () => {
-    const env = buildPgToolEnv({ ssl: { rejectUnauthorized: false } }, {});
-    expect(env.PGSSLMODE).toBe('require');
-    expect(env.PGSSLROOTCERT).toMatch(/portos-unused-root-.*\.crt$/);
+  it('requires encrypted no-verify TLS without loading ambient root certificates', async () => {
+    await withPgToolEnv({ ssl: { rejectUnauthorized: false } }, env => {
+      expect(env.PGSSLMODE).toBe('require');
+      expect(env.PGSSLROOTCERT).toMatch(/portos-unused-root-.*\.crt$/);
+    });
   });
 
-  it('refuses inline certificates rather than discarding the pool authentication policy', () => {
-    expect(() => buildPgToolEnv({ ssl: { ca: 'example-ca' } }, {})).toThrow('inline pool TLS');
+  it('refuses inline certificates rather than discarding the pool authentication policy', async () => {
+    await expect(withPgToolEnv({ ssl: { ca: 'example-ca' } }, () => {})).rejects.toThrow('inline pool TLS');
+  });
+});
+
+describe('managed PostgreSQL TLS roots', () => {
+  it('removes the private trust file when the child callback rejects', async () => {
+    const { readFile, stat } = await import('node:fs/promises');
+    let path;
+    await expect(withPgToolEnv({ ssl: true }, async env => {
+      path = env.PGSSLROOTCERT;
+      expect(await readFile(path, 'utf8')).toContain('BEGIN CERTIFICATE');
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+      throw new Error('example spawn failure');
+    })).rejects.toThrow('example spawn failure');
+    await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
