@@ -174,9 +174,9 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
-  // Ordinary code review preserves the scratch-only fallback for a harness
-  // without an enforced mode. Claim review must refuse it before process launch.
-  it('runs an ordinary review in scratch but refuses an unconfined claim review', async () => {
+  // Regression: the claim bridge must launch a configured agy reviewer even
+  // though agy cannot enforce a no-tool/read-only posture.
+  it('runs ordinary and claim reviews in scratch without requiring an enforced mode', async () => {
     for (const command of ['agy', 'custom-agent']) {
       getProviderById.mockResolvedValue({ ...provider, type: 'cli', command });
       runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
@@ -187,8 +187,12 @@ describe('configured provider reviewers', () => {
       expect(args.cwd).not.toBe(process.cwd());
       await expect(access(args.cwd)).rejects.toThrow();
       runCliProviderPrompt.mockClear();
-      expect(await runLocalCodeReview(claimRequest)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
-      expect(runCliProviderPrompt).not.toHaveBeenCalled();
+      expect(await runLocalCodeReview(claimRequest)).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
+      const claimArgs = runCliProviderPrompt.mock.lastCall[0];
+      expect(claimArgs).toMatchObject({ safetyProfile: 'public-review-gate', codeReview: true,
+        prompt: expect.stringContaining('Perform a review only: do not edit files') });
+      expect(claimArgs.cwd).not.toBe(process.cwd());
+      await expect(access(claimArgs.cwd)).rejects.toThrow();
     }
   });
 

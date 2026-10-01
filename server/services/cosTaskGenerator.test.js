@@ -2024,12 +2024,13 @@ describe('claim worktree per-app namespacing', () => {
 describe('buildClaimWorkTask reviewer pin', () => {
   const app = { id: 'acme', name: 'Acme App', repoPath: '/repos/acme' };
 
-  it('passes the strict claim policy through the generated provider request', async () => {
+  it('passes scratch isolation and the optional vendor sandbox policy through the generated provider request', async () => {
     const { prompt } = await buildClaimWorkTask(app, { reviewers: ['provider:example-reviewer'] });
     expect(prompt).toContain('kind: "claim-review"');
     expect(prompt).toContain('toolFree: true');
-    expect(prompt).toContain('Provider CLIs run in an isolated scratch directory with the diff inlined, under an enforced no-tool or read-only vendor profile');
-    expect(prompt).toContain('a CLI without one is unavailable before launch');
+    expect(prompt).toContain('Provider CLIs run in an isolated scratch directory with the diff inlined, without forge or cloud credentials');
+    expect(prompt).toContain('Prefer an enforced no-tool or read-only vendor profile when available');
+    expect(prompt).toContain('Lack of enforceable isolation alone does not make a code reviewer unavailable');
     expect(prompt).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
     expect(prompt).toContain('an optional inconclusive result remains non-blocking');
   });
