@@ -76,6 +76,11 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No same-record write-back cycle: listing reads generation sidecars, generation writes new candidate names; approval reads provenance strictly."
   },
   {
+    "key": "superColliderRuntime.js :: evidencePath",
+    "reason": "Authoritative rebuild: each probe writes a complete new evidence record from its own render; the tolerant read only feeds the status verdict and never a write.",
+    "issue": "#9412"
+  },
+  {
     "key": "tools.js :: toolPath ( id )",
     "reason": "No failed-read write-back: updateTool returns on null; registerTool is an explicit complete replacement."
   },
