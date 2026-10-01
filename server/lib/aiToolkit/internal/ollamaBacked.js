@@ -76,10 +76,11 @@ export function ollamaBaseFromProvider(provider) {
  * `numCtx` falls THROUGH to the runtime rung rather than collapsing the whole
  * ceiling to "none", so a malformed record cannot silently widen the budget.
  *
- * One deliberate limit, conservative (it can only under-plan): only Ollama
- * honors the runner's top-level `num_ctx`; every other OpenAI-compatible
- * endpoint ignores it, so there the field describes a window nothing enforces
- * and must never refuse a request. Hence the `isOllamaBackedProvider` gate —
+ * One deliberate limit, conservative (it can only under-plan): only an Ollama
+ * daemon is sent `numCtx` (the runner moves such a run to the native
+ * `/api/chat`, see ./ollamaNativeChat.js, because `/v1` ignores `num_ctx`);
+ * every other OpenAI-compatible endpoint has no such knob, so there the field
+ * describes a window nothing enforces and must never refuse a request. Hence the `isOllamaBackedProvider` gate —
  * and why this lives beside that predicate rather than in its own module, which
  * would add a module to the import closure of every suite reaching either end
  * of one rule.

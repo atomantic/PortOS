@@ -7,6 +7,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, ERROR_CATEGORIES } from './errorDetection.js';
 import { apiGenerationOptions } from './internal/generationOptions.js';
+import { buildOllamaNativeChatBody, ollamaNativeChatUrl, ollamaNativeFrameToChunk } from './internal/ollamaNativeChat.js';
 import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
 // The two streaming ceilings (no-progress bound, absolute runtime cap) live in
 // a leaf module so a host's own backstop timer can read the absolute bound
@@ -768,10 +769,26 @@ export function createRunnerService(config = {}) {
           return runId;
         }
       }
+      // An Ollama provider with a `numCtx` goes to the native `/api/chat`:
+      // `/v1/chat/completions` cannot carry a context window (it ignores
+      // `num_ctx` in any position), so the model would load at the daemon
+      // default and silently drop the prompt's head. See
+      // ./internal/ollamaNativeChat.js.
+      const nativeOllamaUrl = ollamaNativeChatUrl(provider);
+      const requestModel = model || provider.defaultModel;
+      const requestBody = nativeOllamaUrl
+        ? buildOllamaNativeChatBody({ model: requestModel, messageContent, provider, generation: apiGenerationOptions(provider), maxTokens })
+        : {
+            model: requestModel,
+            messages: [{ role: 'user', content: messageContent }],
+            stream: true,
+            ...apiGenerationOptions(provider),
+            ...(Number.isInteger(maxTokens) && maxTokens > 0 ? { max_tokens: maxTokens } : {}),
+          };
       const response = !endpointGuard.allowed
         ? { ok: false, error: `Endpoint blocked: ${endpointGuard.reason}`, status: 0 }
         : ready.success
-        ? await fetchWithPreHeaderRetry(() => fetch(`${provider.endpoint}/chat/completions`, {
+        ? await fetchWithPreHeaderRetry(() => fetch(nativeOllamaUrl || `${provider.endpoint}/chat/completions`, {
             method: 'POST',
             headers,
             signal: controller.signal,
@@ -779,18 +796,7 @@ export function createRunnerService(config = {}) {
             // / `absoluteTimeout` above as the run's only bounds — see
             // ./internal/streamTransport.js for what fired first without it.
             dispatcher: streamTransportDispatcher(),
-            body: JSON.stringify({
-              model: model || provider.defaultModel,
-              messages: [{ role: 'user', content: messageContent }],
-              stream: true,
-              ...apiGenerationOptions(provider),
-              ...(Number.isInteger(maxTokens) && maxTokens > 0 ? { max_tokens: maxTokens } : {}),
-              // Ollama's OpenAI-compatible endpoint defaults to a ~4K context
-              // window and silently truncates longer prompts. A top-level
-              // num_ctx lifts it (honored by Ollama, ignored by other
-              // OpenAI-style endpoints). Only sent when the provider opts in.
-              ...(Number(provider.numCtx) > 0 ? { num_ctx: Number(provider.numCtx) } : {})
-            })
+            body: JSON.stringify(requestBody)
           }), {
             signal: controller.signal,
             // A caller-owned budget/admission hook accounts for one invocation;
@@ -836,6 +842,18 @@ export function createRunnerService(config = {}) {
         // the terminal-sentinel comparison, or `[DONE]\r` falls through to
         // JSON.parse and throws at the very end of an otherwise-good stream.
         const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+        // The native Ollama stream is NDJSON — one bare JSON object per line,
+        // no `data: ` framing — reshaped into the OpenAI chunk read below.
+        if (nativeOllamaUrl) {
+          if (!line.trim()) return;
+          const frame = safeJsonParse(line, null);
+          if (!frame) {
+            console.error(`❌ Run ${runId} skipped an unparseable stream frame (${line.length} chars)`);
+            return;
+          }
+          consumeChunk(ollamaNativeFrameToChunk(frame));
+          return;
+        }
         if (!line.startsWith('data: ')) return;
 
         const data = line.slice(6);
@@ -853,6 +871,12 @@ export function createRunnerService(config = {}) {
           console.error(`❌ Run ${runId} skipped an unparseable stream frame (${data.length} chars)`);
           return;
         }
+        consumeChunk(parsed);
+      };
+
+      // One OpenAI-shaped chunk — an SSE `data:` frame, or a native Ollama
+      // frame already reshaped by ollamaNativeFrameToChunk.
+      const consumeChunk = (parsed) => {
         const choice = parsed?.choices?.[0];
         if (typeof choice?.finish_reason === 'string') finishReason = choice.finish_reason;
         const delta = choice?.delta;

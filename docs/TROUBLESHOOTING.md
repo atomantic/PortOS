@@ -234,6 +234,22 @@ Two caveats:
 The Models → Runtimes page shows the window loaded models are actually running
 at, and flags it when it's below what an agent harness needs.
 
+### Ollama API provider ignores its num_ctx (prompts truncated to ~2K tokens)
+
+**Symptom**: a local mind or CoS run on the `ollama` API provider behaves as if
+it forgot most of its prompt; the Ollama log repeats
+`truncating input prompt limit=2050 prompt=14776` and `ollama ps` shows the
+model at `CONTEXT 4096` even though **Local num_ctx** is set higher.
+
+**Cause**: Ollama's OpenAI-compatible `/v1/chat/completions` has no way to set
+the context window — it ignores `num_ctx` in any position — so each `/v1`
+request loads the model at the daemon default.
+
+**Solution**: update PortOS. An API run whose Ollama provider sets **Local
+num_ctx** is sent to Ollama's native `/api/chat` with `options.num_ctx`, which
+loads the model at that window. Runs with no num_ctx stay on `/v1` and use the
+daemon default (`OLLAMA_CONTEXT_LENGTH`).
+
 ## Chief of Staff Issues
 
 ### CoS Not Running

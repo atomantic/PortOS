@@ -402,22 +402,92 @@ describe('AI Toolkit runner service', () => {
     expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
   });
 
-  it('sends num_ctx in the request body when the provider opts in', async () => {
+  // Ollama's `/v1/chat/completions` ignores `num_ctx` in every position, so a
+  // configured window silently never applied and every long prompt was cut to
+  // its ~2K-token tail. A run that asks for a window must reach `/api/chat`.
+  const stubNdjsonFetch = (frames) => {
+    const encoder = new TextEncoder();
+    let i = 0;
+    const fetch = vi.fn(async () => ({ ok: true, body: { getReader: () => ({
+      read: async () => (i < frames.length
+        ? { done: false, value: encoder.encode(frames[i++]) }
+        : { done: true, value: undefined }),
+    }) } }));
+    vi.stubGlobal('fetch', fetch);
+    return fetch;
+  };
+
+  it('sends an Ollama run with numCtx to native /api/chat and reads its NDJSON stream', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const line = (frame) => `${JSON.stringify(frame)}\n`;
+    // The first frame is split mid-JSON across two reads.
+    const first = line({ message: { role: 'assistant', content: '', thinking: 'mull' }, done: false });
+    const fetch = stubNdjsonFetch([
+      first.slice(0, 20), first.slice(20),
+      line({ message: { role: 'assistant', content: 'he' }, done: false }),
+      line({ message: { role: 'assistant', content: 'llo' }, done: false }),
+      line({ message: { role: 'assistant', content: '' }, done: true, done_reason: 'length', prompt_eval_count: 9000 }),
+    ]);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise((resolve) => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-numctx',
+      provider: runReady({ numCtx: 16384, temperature: 0.6, thinking: false }),
+      model: null, prompt: 'hi', maxTokens: 256, workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+
+    expect(await completed).toMatchObject({ success: true, finishReason: 'length' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe('http://localhost:11434/api/chat');
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
+      model: 'llama3',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+      think: false,
+      options: { num_ctx: 16384, temperature: 0.6, num_predict: 256 },
+    });
+    expect(await readFile(join(dataDir, 'runs', 'run-numctx', 'output.txt'), 'utf-8')).toBe('hello');
+  });
+
+  it('fails an Ollama native run whose stream reports an error frame', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    stubNdjsonFetch([`${JSON.stringify({ error: 'model runner has unexpectedly stopped' })}\n`]);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise((resolve) => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-numctx-error', provider: runReady({ numCtx: 16384 }), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+
+    const result = await completed;
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('model runner has unexpectedly stopped');
+  });
+
+  it('keeps a non-Ollama endpoint with numCtx on /chat/completions and sends it no num_ctx', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
     const fetch = stubStreamingFetch();
-
-    const runner = createRunnerService({
-      dataDir,
-      hooks: { ensureProviderReady: async () => ({ success: true }) }
-    });
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
     let done;
     const completed = new Promise((resolve) => { done = resolve; });
-    await runner.executeApiRun({ runId: 'run-numctx', provider: runReady({ numCtx: 32768 }), model: null, prompt: 'hi', workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: () => done() });
+    await runner.executeApiRun({
+      runId: 'run-llama-numctx',
+      provider: runReady({ id: 'llama', endpoint: 'http://127.0.0.1:5568/v1', llamaBacked: true, numCtx: 16384 }),
+      model: null, prompt: 'hi', workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: () => done(),
+    });
     await completed;
 
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(fetch.mock.calls[0][1].body).num_ctx).toBe(32768);
+    expect(fetch.mock.calls[0][0]).toBe('http://127.0.0.1:5568/v1/chat/completions');
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body.num_ctx).toBeUndefined();
+    expect(body.options).toBeUndefined();
   });
 
   it('sends configured Ollama temperature and thinking mode', async () => {
@@ -512,6 +582,7 @@ describe('AI Toolkit runner service', () => {
     await completed;
 
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe('http://localhost:11434/v1/chat/completions');
     expect('num_ctx' in JSON.parse(fetch.mock.calls[0][1].body)).toBe(false);
   });
 
