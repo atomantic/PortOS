@@ -641,7 +641,7 @@ describe('MoodBoardDetail desktop layout', () => {
 
     const parentGrid = itemsSection.parentElement;
     expect(parentGrid).toBe(addAside.parentElement);
-    expect(parentGrid.className).toContain('lg:grid-cols-');
+    expect(parentGrid.className).toContain('@4xl/board:grid-cols-');
     expect(parentGrid.firstElementChild).toBe(itemsSection);
     expect(parentGrid.lastElementChild).toBe(addAside);
 

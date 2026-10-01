@@ -256,7 +256,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
   const showCompose = plan.analyzed > 0;
 
   return (
-    <section className="bg-port-card border border-port-border rounded-md p-3">
+    <section className="@container/board-style min-w-0 bg-port-card border border-port-border rounded-md p-3">
       <div className="flex items-center gap-2 mb-2">
         <ScanEye className="w-4 h-4 text-port-accent" aria-hidden="true" />
         <h2 className="text-sm font-medium text-white">Board style</h2>
@@ -264,8 +264,8 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
           Analyze pins → composite style → poster
         </span>
       </div>
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="w-full sm:w-36 shrink-0">
+      <div className="flex flex-col @xl/board-style:flex-row gap-3">
+        <div className="w-full @xl/board-style:w-36 shrink-0">
           <div className="aspect-[3/2] w-full rounded-md overflow-hidden border border-port-border bg-port-bg">
             {jobId ? (
               <MediaJobThumb jobId={jobId} onFilename={handleComplete} size="fill" label="Board poster" />
