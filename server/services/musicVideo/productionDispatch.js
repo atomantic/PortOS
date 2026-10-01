@@ -1,3 +1,4 @@
+import { currentPlateEvidence } from '../../lib/musicVideoPlateEvidence.js';
 /**
  * Music Video production run (#9066) — server-side scene generation.
  *
@@ -42,7 +43,10 @@ async function guardRevision(tag, kind) {
 
 /** Enqueue a scene's reference frame on exactly `route`. Returns `{ jobId }`. */
 async function dispatchFrame({ project, scene, route, tag, settings }) {
-  const prompt = sceneFramePrompt(project, scene);
+  const basePrompt = sceneFramePrompt(project, scene);
+  const repairing = project.productionRuns?.find((run) => run.id === tag.productionRunId)?.steps?.find((step) => step.key === tag.productionStepKey)?.plateRepairBasis;
+  const unmet = repairing ? (scene.takes || []).flatMap((take) => currentPlateEvidence(scene, take)?.checks.filter((check) => check.status === 'fail').map((check) => `${check.requirement}: ${check.note}`) || []) : [];
+  const prompt = basePrompt && [basePrompt, unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${[...new Set(unmet)].join('\n')}` : ''].filter(Boolean).join('\n');
   if (!prompt) throw unprompted(scene, 'frame');
   const referenceImagePaths = conditioningReferences(project, scene)
     .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);

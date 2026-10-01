@@ -1,3 +1,4 @@
+import { plateRequirementBasis, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 /**
  * Music Video — server-owned production run (#9066): pure record transforms.
@@ -269,13 +270,17 @@ export function assertProductionStepOpen(project, runId, stepKey, { sceneId, kin
     }
     if (kind !== 'code' && step.submissionBasis !== productionSceneBasis(project, sceneId)) throw productionError(409, 'PRODUCTION_BASIS_CHANGED', 'This shot changed while its provider request was being prepared');
   }
+  if (kind === 'video' && step.plateAdmission) {
+    const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
+    if (scene.referenceImageId !== step.plateAdmission.assetId || plateRequirementBasis(scene) !== step.plateAdmission.basis || !selectedPlatePasses(scene, runId)) throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'The selected plate or its requirements changed before animation');
+  }
   return step;
 }
 
 // ---- deriving the next step -------------------------------------------------
 
 const SLOT = Object.freeze({ frame: 'referenceImageId', clip: 'videoHistoryId' });
-const JOB_KIND = Object.freeze({ frame: 'image', clip: 'video', author: 'code' });
+const JOB_KIND = Object.freeze({ frame: 'image', clip: 'video', author: 'code', plate: 'plate' });
 
 const productionSceneBasis = (project, sceneId) => canonicalSnapshotChecksum({
   scene: (project.scenes || []).find((scene) => scene.sceneId === sceneId) || null,
@@ -439,7 +444,7 @@ function castAndSetsGate(project, run) {
  * Returns `{ project, run, step }`.
  */
 export function reserveProductionStep(project, runId, {
-  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = undefined,
+  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = undefined, plateRepairBasis = null,
 }, now = new Date().toISOString()) {
   let step = null;
   const out = mutateRun(project, runId, (run) => {
@@ -447,8 +452,10 @@ export function reserveProductionStep(project, runId, {
     if (run.processId !== processId) throw productionError(409, 'PRODUCTION_INTERRUPTED', 'The server restarted since this run was started — resume it first');
     assertProductionActive(project, runId, processId);
     const author = kind === 'author';
+    const plate = kind === 'plate';
+    const plateRoute = plate && route?.kind === 'plate' && (!run.reviewer?.providerId || route.mode === run.reviewer.providerId) && (!run.reviewer?.model || route.model === run.reviewer.model);
     const authorRoute = author && run.authoring && route?.kind === 'code' && route.mode === run.authoring.providerId && route.model === run.authoring.model;
-    if (!(authorRoute || (!author && poolHasRoute(run, route)))) throw productionError(409, 'PRODUCTION_ROUTE_NOT_ALLOWED', `${route?.kind} ${route?.mode} is not in this run's allowed pool`);
+    if (!(authorRoute || plateRoute || (!author && !plate && poolHasRoute(run, route)))) throw productionError(409, 'PRODUCTION_ROUTE_NOT_ALLOWED', `${route?.kind} ${route?.mode} is not in this run's allowed pool`);
     if (!author && run.authoring) {
       const medium = project.treatment?.shotDirections?.find((d) => d.sceneId === sceneId)?.medium;
       if ((kind === 'clip' && medium !== 'generated-footage') || (kind === 'frame' && !['still', 'generated-footage'].includes(medium))) throw productionError(409, 'PRODUCTION_MEDIUM_CONFLICT', 'This shot does not permit the requested generation');
@@ -471,6 +478,7 @@ export function reserveProductionStep(project, runId, {
       }
     }
     if (run.steps.length >= MAX_RUN_STEPS) throw productionError(409, 'PRODUCTION_STEP_LIMIT', 'This run recorded its maximum number of steps');
+    const scene = (project.scenes || []).find((entry) => entry.sceneId === sceneId);
     step = {
       key: `${kind}:${sceneId}:${revisionId || 'base'}:${existing.length + 1}`,
       kind,
@@ -479,6 +487,8 @@ export function reserveProductionStep(project, runId, {
       route: { kind: route.kind, mode: route.mode, model: route.model || null },
       rationale: trimTo(rationale, MAX_ERROR_LEN) || '',
       costUsd,
+      ...(kind === 'clip' && scene?.direction?.actionContract ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene) } } : {}),
+      ...(plateRepairBasis ? { plateRepairBasis } : {}),
       ...(run.authoring && !author ? { submissionBasis: productionSceneBasis(project, sceneId) } : {}),
       ...(run.authoring && kind === 'clip' ? { editInterval: (({ startSec, endSec }) => ({ startSec, endSec }))(project.scenes.find((scene) => scene.sceneId === sceneId)) } : {}),
       status: 'reserved',
@@ -548,9 +558,9 @@ export function reconcileProductionSteps(project, runId, jobs = [], nowMs = Date
   let usage = run.usage;
   const steps = run.steps.map((step) => {
     if (!LIVE_STEP.has(step.status)) return step;
-    // An authoring call is not a queue job: after interruption its reserved
+    // A direct provider call is not a queue job: after interruption its reserved
     // budget stays spent, and explicit Resume may retry with another charge.
-    if (step.kind === 'author') return { ...step, status: 'failed', error: 'Authoring interrupted — resume explicitly to retry', settledAt: now };
+    if (step.kind === 'author' || step.kind === 'plate') return { ...step, status: 'failed', error: 'Provider call interrupted — resume explicitly to retry', settledAt: now };
     const job = (jobs || []).find((j) => (step.jobId && j.id === step.jobId)
       || (j.params?.musicVideo?.productionRunId === runId && j.params.musicVideo.productionStepKey === step.key));
     if (job) {

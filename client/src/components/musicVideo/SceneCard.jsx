@@ -1,3 +1,4 @@
+import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useRef, useState } from 'react';
@@ -185,6 +186,7 @@ export default function SceneCard({
           </div>
         )}
         <ShotActionInspector contract={scene.direction?.actionContract} scene={scene} />
+        <PlateComparison scene={scene} />
         <div className="flex flex-wrap gap-2 items-center text-xs">
           {SCENE_TIME_FIELDS.map(([labelText, key]) => {
             const toValue = (v) => (v === '' ? null : Number(v));

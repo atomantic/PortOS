@@ -797,3 +797,5 @@ export * from './imageLimits.js';
 export * from './musicVideoActionContract.js';
 export * from './musicVideoGrade.js';
 export * from './musicVideoDependencies.js';
+
+export * from './musicVideoPlateEvidence.js';
