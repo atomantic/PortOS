@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { plateReviewEvidence, reviewPlate } from './plateReview.js';
-import { plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
+import { reviewPlate } from './plateReview.js';
+import { plateReviewEvidence, plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
 const runner = vi.hoisted(() => ({ runPromptThroughProvider: vi.fn(), assertVisionRunUsedImages: vi.fn() }));
 vi.mock('../promptRunner.js', () => runner);
 vi.mock('../../lib/pathSafety.js', () => ({ resolveGalleryImage: (assetId) => `/synthetic/${assetId}` }));

@@ -1,4 +1,5 @@
 /** Asset-bound still-image admission for authored shots. Shared with the comparison UI. */
+import { extractJson } from './jsonExtract.js';
 import { canonicalStringify } from './objects.js';
 
 export function plateRequirementBasis(scene) {
@@ -44,4 +45,19 @@ export function selectedPlatePasses(scene, runId) {
   const evidence = currentPlateEvidence(scene, take);
   const requirements = plateRequirements(scene);
   return evidence?.runId === runId && evidence.verdict === 'pass' && requirements.every(({ id }) => evidence.checks?.some((check) => check.id === id && check.status === 'pass'));
+}
+
+/** Invalid, absent or incomplete responses fail closed with concrete unverified checks. */
+export function plateReviewEvidence(scene, assetId, runId, text, used = {}) {
+  const requirements = plateRequirements(scene);
+  const { value } = extractJson(String(text || ''), { shapePredicate: (candidate) => candidate && Array.isArray(candidate.checks) });
+  const checks = requirements.map(({ id, requirement }) => {
+    const matches = Array.isArray(value?.checks) ? value.checks.filter((check) => check?.id === id) : [];
+    const result = matches.length === 1 ? matches[0] : null;
+    const usable = ['pass', 'fail', 'unverified'].includes(result?.status) && typeof result.note === 'string' && result.note.trim();
+    return { id, requirement, status: usable ? result.status : 'unverified', note: usable ? result.note.trim().slice(0, 1000) : 'The reviewer supplied no usable evidence for this requirement' };
+  });
+  return { assetId, runId, basis: plateRequirementBasis(scene), checks,
+    verdict: checks.some((check) => check.status === 'unverified') ? 'unverified' : checks.some((check) => check.status === 'fail') ? 'fail' : 'pass',
+    ...used, reviewedAt: new Date().toISOString() };
 }

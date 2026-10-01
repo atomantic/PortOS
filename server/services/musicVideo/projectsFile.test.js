@@ -1,4 +1,4 @@
-import { plateReviewEvidence } from './plateReview.js';
+import { plateReviewEvidence } from '../../lib/musicVideoPlateEvidence.js';
 import { plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
 /**
  * Music Video file-backend round-trip (#1760). Runs against a tmpdir in the

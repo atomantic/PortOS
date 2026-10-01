@@ -1,5 +1,5 @@
 import { startProductionOnProject, markProductionPlanned, reserveProductionStep } from './production.js';
-import { plateReviewEvidence } from './plateReview.js';
+import { plateReviewEvidence } from '../../lib/musicVideoPlateEvidence.js';
 import { plateRequirements } from '../../lib/musicVideoPlateEvidence.js';
 import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 /**
