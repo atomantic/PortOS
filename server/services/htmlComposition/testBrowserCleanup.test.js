@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _cleanupTestBrowser, _waitForTestChrome } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
 
 function child() {
   const proc = new EventEmitter();
@@ -72,6 +72,101 @@ describe('test Chrome startup', () => {
     await vi.advanceTimersByTimeAsync(20000);
     await rejected;
     expectStartupClean(proc);
+  });
+});
+
+describe('real capture diagnostics boundary', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('keeps live capture moving and forwards progress/results with bounded numeric phase timings', async () => {
+    const page = { check: vi.fn(), evaluate: vi.fn(), send: vi.fn() };
+    const progress = vi.fn();
+    const encode = _withTestCaptureDiagnostics(async (traced, contract, path, options) => {
+      expect(path).toBe('/private/example-output.mp4');
+      expect(options.offsetSec).toBe(10);
+      for (let n = 0; n < 3; n++) {
+        page.evaluate.mockImplementationOnce(async () => { await vi.advanceTimersByTimeAsync(10000); });
+        page.send.mockImplementationOnce(async () => { await vi.advanceTimersByTimeAsync(10000); });
+        await traced.evaluate(`globalThis.portosComposition.seek(${10 + n})`);
+        await traced.send('Page.captureScreenshot', { format: 'png' });
+        options.onProgress((n + 1) / 3, { frame: n + 1, frames: 3 });
+        expect(options.signal.aborted).toBe(false);
+      }
+      return { sampleHistogram: { 1: 3 } };
+    });
+    await expect(encode(page, { durationSec: 3, fps: 1 }, '/private/example-output.mp4', { onProgress: progress, offsetSec: 10 }))
+      .resolves.toEqual({ sampleHistogram: { 1: 3 } });
+    expect(progress.mock.calls).toEqual([[1 / 3, { frame: 1, frames: 3 }], [2 / 3, { frame: 2, frames: 3 }], [1, { frame: 3, frames: 3 }]]);
+    expect(page.evaluate.mock.calls.map(([expression]) => expression)).toEqual([
+      'globalThis.portosComposition.seek(10)', 'globalThis.portosComposition.seek(11)', 'globalThis.portosComposition.seek(12)',
+    ]);
+    const lines = console.log.mock.calls.map(([line]) => line);
+    expect(lines).toHaveLength(5);
+    expect(lines.at(-1)).toContain('frames=3/3 elapsedMs=60000 idleMs=0 setupMs=0 seekMs=30000 captureMs=30000 encodeMs=0');
+    expect(lines.join('\n')).not.toContain('example-output');
+    expect(console.error).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('aborts a stalled encoder drain with its last completed frame and clears the watchdog', async () => {
+    let ownedStopped = false;
+    const encode = _withTestCaptureDiagnostics(async (page, contract, path, { signal, onProgress }) => {
+      await page.evaluate('globalThis.portosComposition.seek(0)');
+      await page.send('Page.captureScreenshot');
+      onProgress(1, { frame: 1, frames: 1 });
+      await new Promise((resolve, reject) => signal.addEventListener('abort', () => {
+        ownedStopped = true;
+        reject(signal.reason);
+      }, { once: true }));
+    });
+    const result = encode({ evaluate: async () => {}, send: async () => {} }, { durationSec: 1, fps: 1 }, '/private/example-output.mp4');
+    const rejected = expect(result).rejects.toThrow('Test Chrome capture stalled; phase=encode frames=1/1 elapsedMs=30000 idleMs=30000');
+    await vi.advanceTimersByTimeAsync(30000);
+    await rejected;
+    expect(ownedStopped).toBe(true);
+    expect(console.error.mock.calls.flat().join('\n')).not.toContain('example-output');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('stops a late browser response after the test deadline before starting an encoder', async () => {
+    const deadline = new AbortController();
+    const timedOut = new Error('Test deadline');
+    let reply;
+    const response = new Promise(resolve => { reply = resolve; });
+    const startedEncoder = vi.fn();
+    const encode = _withTestCaptureDiagnostics(async page => {
+      await page.send('Emulation.setDeviceMetricsOverride');
+      page.check();
+      startedEncoder();
+    }, { getTestSignal: () => deadline.signal });
+    const result = encode({ send: () => response, check() {} }, { durationSec: 1, fps: 12 }, '/private/example-output.mp4');
+    const rejected = expect(result).rejects.toBe(timedOut);
+    deadline.abort(timedOut);
+    reply();
+    await rejected;
+    expect(startedEncoder).not.toHaveBeenCalled();
+    expect(console.error.mock.calls.flat().join('\n')).toContain('phase=setup frames=0/12');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('preserves a caller cancellation and removes diagnostics on the failure path', async () => {
+    const controller = new AbortController();
+    const canceled = new Error('Render canceled');
+    const encode = _withTestCaptureDiagnostics(async (page, contract, path, { signal }) => {
+      controller.abort(canceled);
+      signal.throwIfAborted();
+    });
+    await expect(encode({}, { durationSec: 1, fps: 12 }, '/private/example-output.mp4', { signal: controller.signal }))
+      .rejects.toBe(canceled);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { vitestCiPool } from '../scripts/vitestCiPool.js';
+import { vitestCaptureProjects, vitestCiPool } from '../scripts/vitestCiPool.js';
 import { DB_TEST_INCLUDE } from './vitest.config.db.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './test/staleRunRoots.js';
 
@@ -84,7 +84,7 @@ process.env.NODE_ENV = 'test';
 // engines), so every supported Node build respects it.
 process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 
-export default defineConfig({
+const config = defineConfig({
   test: {
     ...vitestCiPool(),
     // Workers get their own process.env — set it there as well as above.
@@ -235,3 +235,9 @@ export default defineConfig({
     globalSetup: ['./test/runTempRoot.js'],
   }
 });
+
+// Both projects share the safety env, setup files and time budgets. The
+// root globalSetup owns one temp root across BOTH groups; project teardown
+// must not remove it while another group still needs it.
+config.test.projects = vitestCaptureProjects(config.test);
+export default config;

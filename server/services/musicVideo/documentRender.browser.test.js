@@ -5,7 +5,7 @@
  * every time, and carries the master song. Skips without Chrome or ffmpeg.
  */
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -26,6 +26,15 @@ vi.mock('../promptRunner.js', () => ({
   },
 }));
 
+vi.mock('../htmlComposition/encode.js', async importOriginal => {
+  const actual = await importOriginal();
+  const { _withTestCaptureDiagnostics } = await import('../htmlComposition/testBrowserCleanup.js');
+  return { ...actual, encodeComposition: _withTestCaptureDiagnostics(actual.encodeComposition, { getTestSignal: () => testSignal }) };
+});
+
+let testSignal;
+beforeEach(({ signal }) => { testSignal = signal; });
+
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: (path) => fetch(`${endpoint}${path}`) }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
@@ -39,7 +48,7 @@ const { importDocumentTemplate } = await import('./compositionDocument.js');
 const { generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js');
 const { buildDocumentPreview } = await import('./documentPreview.js');
 const projects = await import('./projects.js');
-const { _cleanupTestBrowser } = await import('../htmlComposition/testBrowserCleanup.js');
+const { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
 
 afterAll(() => cleanupTempDataRoots());
 
@@ -54,15 +63,8 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
   let browser;
   beforeAll(async () => {
     const profile = join(PATHS.data, 'chrome-test-profile');
-    proc = spawn(chrome, ['--headless=new', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
-    const ws = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Test Chrome did not start')), 20000);
-      proc.once('error', reject);
-      proc.stderr.on('data', (bytes) => {
-        const match = bytes.toString().match(/DevTools listening on (ws:\/\/\S+)/);
-        if (match) { clearTimeout(timer); resolve(match[1]); }
-      });
-    });
+    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
+    const ws = await _waitForTestChrome(proc);
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
     browser = await chromium.connectOverCDP(endpoint);
   }, 30000);
