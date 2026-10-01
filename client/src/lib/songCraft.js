@@ -1,10 +1,16 @@
+import {
+  RHYTHM_SHAPES as SHARED_RHYTHM_SHAPES,
+  VOICE_LAYERS as SHARED_VOICE_LAYERS,
+  HARMONY_PARTS as SHARED_HARMONY_PARTS,
+} from '../../../server/lib/songCraftParts.js';
+
 // Canonical a cappella song-craft reference data: dirge rhythm shapes, the
 // layer-building ladder, a learning sequence, musical-notation help, and the
 // movable-do solfège scale. The Songs Guide page renders directly from these
 // arrays (rhythm shapes, layer ladder, learning steps, notation, solfège), and
 // the Song editor reuses RHYTHM_SHAPES and VOICE_LAYERS for its picker options
 // so the editor and the docs never drift. Keep this module pure (no React, no
-// imports) — it is mirrored into the client lib barrel and unit-tested.
+// side effects) — shared vocabulary comes from a pure server/lib leaf.
 
 // --- Rhythm shapes ---------------------------------------------------------
 // A "rhythm shape" is the felt pulse + note-length feel a song leans on. A
@@ -13,62 +19,43 @@
 // the typical tempo band, `feel` the conductor's count, and `count` a spoken
 // counting pattern the singer can tap. `dirge` marks the shapes that suit a
 // lament so the guide can highlight the slow family the user asked about.
-export const RHYTHM_SHAPES = [
-  {
-    id: 'slow-4-4',
-    label: 'Slow 4/4 ballad',
-    dirge: true,
+const RHYTHM_SHAPES_PRESENTATION = {
+  'slow-4-4': {
     bpm: { min: 56, max: 76, label: '56–76 BPM' },
-    feel: 'Four even beats per bar, weight on 1 and 3.',
     count: '1 — 2 — 3 — 4',
     note: 'The default lament pulse. "500 Miles" lives here: long sustained vowels on the downbeats, lyrics breathing across the bar rather than chopping it up.',
   },
-  {
-    id: 'dirge-6-8',
-    label: 'Compound 6/8 dirge',
-    dirge: true,
+  'dirge-6-8': {
     bpm: { min: 40, max: 60, label: '40–60 BPM (dotted-quarter pulse)' },
-    feel: 'Two slow pulses per bar, each split into three — a swaying funeral-march lilt.',
     count: 'ONE-and-a Two-and-a',
     note: 'The rocking 6/8 underpins many spirituals and laments. Conduct in 2, sing in 6 — the triple subdivision gives the grief a heave-and-settle.',
   },
-  {
-    id: 'rubato-free',
-    label: 'Rubato / free-time lament',
-    dirge: true,
+  'rubato-free': {
     bpm: { min: null, max: null, label: 'No fixed tempo — follow the lead' },
-    feel: 'Pulse stretches and contracts with the phrase; the lead breathes, the layers follow.',
     count: 'Follow the words, not a click',
     note: 'Used for the most exposed laments. Drop the metronome: cadence on the lyric, let the harmony swell and release with the lead singer.',
   },
-  {
-    id: 'cut-time-march',
-    label: 'Cut-time processional',
-    dirge: true,
+  'cut-time-march': {
     bpm: { min: 60, max: 84, label: '60–84 BPM (half-note pulse)' },
-    feel: 'Two broad pulses per bar — a walking, processional tread.',
     count: 'ONE . . . TWO . . .',
     note: 'A dirge that moves. The half-note pulse keeps it solemn but gives a forward, funeral-procession walk under the melody.',
   },
-  {
-    id: 'driving-4-4',
-    label: 'Driving 4/4 (uptempo)',
-    dirge: false,
+  'driving-4-4': {
     bpm: { min: 96, max: 132, label: '96–132 BPM' },
-    feel: 'Steady, energetic four — backbeat emphasis on 2 and 4.',
     count: '1 2 3 4 with a clap on 2 & 4',
     note: 'Not a dirge — the contrast point. Useful when a set needs to lift out of the laments; clap or stomp the backbeat to drive it.',
   },
-  {
-    id: 'waltz-3-4',
-    label: 'Waltz 3/4',
-    dirge: false,
+  'waltz-3-4': {
     bpm: { min: 84, max: 144, label: '84–144 BPM' },
-    feel: 'Three beats per bar, strong downbeat then two lighter beats.',
     count: 'ONE two three',
     note: 'A lilting triple meter. Slowed right down it can read as a tender lament; kept moving it sways.',
   },
-];
+};
+
+export const RHYTHM_SHAPES = SHARED_RHYTHM_SHAPES.map((part) => ({
+  ...RHYTHM_SHAPES_PRESENTATION[part.id],
+  ...part,
+}));
 
 // Human-readable label for a rhythm shape id — `Slow 4/4 ballad · dirge
 // (56–76 BPM)`. Shared by the editor's <select> options and the read-only
@@ -92,56 +79,37 @@ export const rhythmShapeLabel = (id) => {
 // inner voices → upper voices); `voices` names the typical SATB-ish home.
 // songCraft.test.js guards that every layer id+label still exists in
 // HARMONY_PARTS so the two vocabularies can't drift apart.
-export const VOICE_LAYERS = [
-  {
-    id: 'melody',
-    label: 'Melody',
+const VOICE_LAYERS_PRESENTATION = {
+  'melody': {
     order: 1,
-    voices: 'Any — the tune everyone knows',
-    role: 'The lead — the song itself. Everyone learns this first so the harmony has a home to orbit.',
     advice: 'Lock the lead before adding anything. If the melody is shaky, every layer above it wobbles.',
   },
-  {
-    id: 'bass',
-    label: 'Bass',
+  'bass': {
     order: 2,
-    voices: 'Bass',
-    role: 'The harmonic floor — the root of each chord with the fifth as gentle movement.',
     advice: 'Add the bass second. It defines the chord under the melody and gives the upper voices their tuning reference.',
   },
-  {
-    id: 'mid-harmony-1',
-    label: 'Mid Harmony I',
+  'mid-harmony-1': {
     order: 3,
-    voices: 'Alto / Tenor',
-    role: 'The main moving inner voice — a third/sixth below the melody but landing on chord tones.',
     advice: 'The richest harmony, so build it first among the inner voices. Move smoothly and favour common tones between chords.',
   },
-  {
-    id: 'mid-harmony-2',
-    label: 'Mid Harmony II',
+  'mid-harmony-2': {
     order: 4,
-    voices: 'Alto',
-    role: 'A low inner pad — sustained chord tones below the melody (often the 3rd or 5th of the chord).',
     advice: 'Fills the chord under Mid Harmony I. Sustain and move by step; do not chase the melody.',
   },
-  {
-    id: 'high-harmony-2',
-    label: 'High Harmony II',
+  'high-harmony-2': {
     order: 5,
-    voices: 'Soprano / Tenor',
-    role: 'A sustained upper chord tone with gentle suspensions — carries the leading tone that pulls back to the tonic.',
     advice: 'A held pad above the inner voices. Keep the dominant-7 third so it resolves up to the tonic.',
   },
-  {
-    id: 'high-harmony-1',
-    label: 'High Harmony I',
+  'high-harmony-1': {
     order: 6,
-    voices: 'Soprano',
-    role: 'The sparse top descant — mostly sustained high chord tones, entering on the emotional phrases.',
     advice: 'The shimmer on top. Save it for the climaxes; rest through the opening and enter late.',
   },
-];
+};
+
+export const VOICE_LAYERS = SHARED_VOICE_LAYERS.map((part) => ({
+  ...VOICE_LAYERS_PRESENTATION[part.id],
+  ...part,
+}));
 
 // --- Harmony parts (sheet-music variations) --------------------------------
 // The set of sheet-music parts a song can carry beyond its base melody. The
@@ -158,70 +126,32 @@ export const VOICE_LAYERS = [
 //
 // `order` lays the stack low→high for the View-tab switcher; `range` and
 // `voicing` are the per-voice rules the derive prompt and the UI hint inject.
-// Mirrored (id/label/role/order/range/voicing) in server/lib/songCraftRef.js so
-// the AI prompt and the editor agree.
-export const HARMONY_PARTS = [
-  {
-    id: 'melody',
-    label: 'Melody',
-    role: 'melody',
-    order: 0,
-    range: 'as written',
-    derivable: false,
-    voicing: 'The lead — carries the lyric and rhythmic detail. The base every harmony targets.',
+// Identity and voicing come from the same vocabulary the AI prompts use.
+const HARMONY_PARTS_PRESENTATION = {
+  'melody': {
     advice: 'This is the base score. Lock it first; every derived part is voiced against its chords and phrasing.',
   },
-  {
-    id: 'bass',
-    label: 'Bass',
-    role: 'bass',
-    order: 1,
-    range: 'G2–D3 (down to E2)',
-    derivable: true,
-    voicing: 'Root of each chord, with the fifth as gentle movement — a hymn-like root–fifth–root drone.',
+  'bass': {
     advice: 'The harmonic floor and tuning reference. Long tones or soft pulses on beats 1 and 3; keep it simple.',
   },
-  {
-    id: 'mid-harmony-2',
-    label: 'Mid Harmony II',
-    role: 'harmony',
-    order: 2,
-    range: 'B2–E4',
-    derivable: true,
-    voicing: 'Low inner pad — sustained chord tones below the melody (often the 3rd or 5th of the chord).',
+  'mid-harmony-2': {
     advice: 'Fills the chord under Mid Harmony I. Sustain and move by step; do not chase the melody.',
   },
-  {
-    id: 'mid-harmony-1',
-    label: 'Mid Harmony I',
-    role: 'harmony',
-    order: 3,
-    range: 'D3–G4',
-    derivable: true,
-    voicing: 'The main moving inner voice — a third/sixth below the melody but landing on chord tones.',
+  'mid-harmony-1': {
     advice: 'The richest harmony. Move smoothly, favour common tones between chords, hold on a chord tone when the melody passes through a non-chord note.',
   },
-  {
-    id: 'high-harmony-2',
-    label: 'High Harmony II',
-    role: 'harmony',
-    order: 4,
-    range: 'G3–B4',
-    derivable: true,
-    voicing: 'Sustained upper chord tone with gentle suspensions — carries the leading tone (the F# on D7) that pulls back to G.',
+  'high-harmony-2': {
     advice: 'A held pad above the inner voices. Keep the dominant-7 third (F# under D7) — it resolves up to the tonic.',
   },
-  {
-    id: 'high-harmony-1',
-    label: 'High Harmony I',
-    role: 'harmony',
-    order: 5,
-    range: 'B3–E5',
-    derivable: true,
-    voicing: 'Sparse top descant — mostly sustained high chord tones, entering on the emotional phrases.',
+  'high-harmony-1': {
     advice: 'The shimmer on top. Save it for the climaxes; rest through the opening and enter late, mostly long notes.',
   },
-];
+};
+
+export const HARMONY_PARTS = SHARED_HARMONY_PARTS.map((part) => ({
+  ...HARMONY_PARTS_PRESENTATION[part.id],
+  ...part,
+}));
 
 // The parts the AI derive tool generates from the base melody (everything except
 // the melody itself, which is the input). Declaration order is low→high.
