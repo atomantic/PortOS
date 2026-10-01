@@ -202,7 +202,7 @@ export default function PublishPostingPanel({ project, publishing }) {
       <p className="text-port-text-muted">Sign in to each platform in the PortOS Browser first. Fill draft opens a new tab there and fills the post from the kit and copy above; nothing is posted until you review it and press Post.</p>
       {!targets.length && <p className="text-port-text-muted">Turn on the platforms you use under Where you post to fill and post drafts here.</p>}
       <ul className="space-y-2">
-        {targets.map((entry) => <TargetRow key={entry.target} project={project} kit={kit} entry={entry} publishing={publishing} />)}
+        {targets.map((entry) => <TargetRow key={`${project.id}-${entry.target}`} project={project} kit={kit} entry={entry} publishing={publishing} />)}
       </ul>
     </section>
   );

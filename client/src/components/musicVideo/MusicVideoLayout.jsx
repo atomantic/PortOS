@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowRight, CheckCircle2, Circle, CircleDot, Clapperboard, Film, Layers, LayoutGrid, Music, Play,
-  SlidersHorizontal, Users,
+  Send, SlidersHorizontal, Users,
 } from 'lucide-react';
 import TabPills from '../ui/TabPills.jsx';
 import Pill from '../ui/Pill.jsx';
@@ -12,6 +12,7 @@ import { formatUsd } from '../../utils/formatters.js';
 // repeated glyph would be a repeated destination.
 const STAGE_ICONS = {
   setup: SlidersHorizontal, 'cast-sets': Users, board: LayoutGrid, produce: Clapperboard, compose: Layers, review: Film,
+  publish: Send,
 };
 const STATE_MARKS = {
   done: { Icon: CheckCircle2, cls: 'text-port-success', label: 'done' },

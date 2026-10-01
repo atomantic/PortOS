@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {
   prepareMusicVideoPublishDraft,
@@ -8,6 +8,8 @@ import {
   updateMusicVideoPublishPlatforms,
   recordMusicVideoPublishPost,
 } from '../services/apiMusicVideo.js';
+
+const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
 
 /**
  * Music Video posting (#9282). Each platform is two explicit steps: `prepare`
@@ -23,9 +25,13 @@ import {
  */
 export default function useMusicVideoPublishing({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
-  const [drafts, setDrafts] = useState({});
-  const [busy, setBusy] = useState({});
-  const [errors, setErrors] = useState({});
+  // A selection lifetime, rather than just the id, also rejects an old reply
+  // after switching A → B → A. Hide the previous state in the first render.
+  const selection = useRef({ projectId });
+  if (selection.current.projectId !== projectId) selection.current = { projectId };
+  const scope = selection.current;
+  const [posting, setPosting] = useState({ ...EMPTY_POSTING, scope });
+  const { drafts, busy, errors } = posting.scope === scope ? posting : EMPTY_POSTING;
   const [platforms, setPlatforms] = useState(null);
   const [history, setHistory] = useState({});
 
@@ -34,50 +40,52 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     .catch(() => setPlatforms((prev) => prev || {})), []);
   useEffect(() => { loadPlatforms(); }, [loadPlatforms]);
 
-  const setFor = (setter, target, value) => setter((prev) => {
-    const next = { ...prev };
+  const setFor = (field, target, value) => setPosting((prev) => {
+    if (selection.current !== scope) return prev;
+    const state = prev.scope === scope ? prev : { ...EMPTY_POSTING, scope };
+    const next = { ...state[field] };
     if (value == null) delete next[target];
     else next[target] = value;
-    return next;
+    return { ...state, [field]: next };
   });
   const fail = (target, err) => {
-    setFor(setErrors, target, { message: err?.message || 'Failed', code: err?.code || null, url: err?.context?.url || null });
+    setFor('errors', target, { message: err?.message || 'Failed', code: err?.code || null, url: err?.context?.url || null });
   };
 
   const prepare = (target, options = {}) => {
-    setFor(setBusy, target, 'prepare');
-    setFor(setErrors, target, null);
+    setFor('busy', target, 'prepare');
+    setFor('errors', target, null);
     return prepareMusicVideoPublishDraft(projectId, target, options, { silent: true })
-      .then((draft) => { setFor(setDrafts, target, draft); return draft; })
-      .catch((err) => { setFor(setDrafts, target, null); fail(target, err); return null; })
-      .finally(() => setFor(setBusy, target, null));
+      .then((draft) => { setFor('drafts', target, draft); return draft; })
+      .catch((err) => { setFor('drafts', target, null); fail(target, err); return null; })
+      .finally(() => setFor('busy', target, null));
   };
 
   const submit = (target) => {
     const draft = drafts[target];
     if (!draft) return Promise.resolve(null);
-    setFor(setBusy, target, 'submit');
-    setFor(setErrors, target, null);
+    setFor('busy', target, 'submit');
+    setFor('errors', target, null);
     return submitMusicVideoPublishDraft(projectId, draft.draftId, { silent: true })
       .then((res) => {
         if (res?.project) replaceProject?.(res.project);
         loadPlatforms();
-        setFor(setDrafts, target, null);
+        setFor('drafts', target, null);
         toast.success('Posted');
         return res?.post || null;
       })
       .catch((err) => {
         // A gone draft can't be posted again; the director fills it afresh.
-        if (err?.code === 'PUBLISH_DRAFT_MISSING') setFor(setDrafts, target, null);
+        if (err?.code === 'PUBLISH_DRAFT_MISSING') setFor('drafts', target, null);
         fail(target, err);
         return null;
       })
-      .finally(() => setFor(setBusy, target, null));
+      .finally(() => setFor('busy', target, null));
   };
 
   const discard = (target) => {
     const draft = drafts[target];
-    setFor(setDrafts, target, null);
+    setFor('drafts', target, null);
     if (draft) discardMusicVideoPublishDraft(projectId, draft.draftId, { silent: true }).catch(() => {});
   };
 
