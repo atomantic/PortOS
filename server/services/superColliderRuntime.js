@@ -80,7 +80,7 @@ function createDockerCli(bin) {
 }
 
 /** The local docker CLI, or null when it is not installed. */
-async function resolveDockerCli() {
+export async function resolveDockerCli() {
   const bin = await whichFirst('docker') || DOCKER_FALLBACK_PATHS.find((path) => existsSync(path)) || null;
   return bin ? createDockerCli(bin) : null;
 }

@@ -91,6 +91,61 @@ The image is stamped with two labels: the runtime version (`SUPERCOLLIDER_RUNTIM
 
 The runner (`runSuperColliderContainer`) enforces a wall-time limit and cancellation. It always runs `docker rm --force` afterwards, because killing the docker CLI does not stop a container. Removing the container removes every process inside it. Files the container writes are read back only if they are regular files within the size limit (`readContainedOutput`). A symlink in the output directory cannot point the host at its own files.
 
+## Renders
+
+A Music Designer render is a media-queue job of kind `supercollider` (`server/services/superColliderRender.js`). It runs on the queue's serialized local lane, the same lane as HTML compositions, so it never competes with another heavy local render for the machine.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/music/supercollider/status` | The readiness verdict above. Reads only; never builds or renders. |
+| `POST /api/music/supercollider/setup` | SSE stream of an explicit setup (`{ "rebuild": true }` to repair). The build continues if the page closes. |
+| `POST /api/music/supercollider/render` | `{ code, durationSec, seed? }`, with a whole-second duration from 4 to 120 s. Returns `202 { jobId, position, status, seed, sourceHash }`. Returns `409 SUPERCOLLIDER_UNAVAILABLE` with the setup action when the runtime is not ready. |
+| `GET /api/music/supercollider/renders/:jobId/events` | Queue progress over SSE: `queued`, `started`, `progress`/`status` phases, then `complete` with the preview, `error`, or `canceled` |
+| `POST /api/music/supercollider/renders/:jobId/cancel` | Cancel. The container is force-removed. |
+| `GET /api/music/supercollider/renders/:jobId/audio` | The validated preview WAV |
+
+What one render does:
+
+1. **Snapshot.** The job's params carry the source text, so each job, including a retry, writes its own copy into `data/supercollider/jobs/<jobId>/in/`. A shipped wrapper (`render.scd`) sits beside it. The source cannot name any path, format or duration.
+2. **Contain.** Both run through `runSuperColliderContainer` under the policy above, pinned to the verified image id. The only writable mount is `data/supercollider/jobs/<jobId>/out/`. The host stops the container early if that directory exceeds its byte or file-count budget.
+3. **Score.** The wrapper compiles the source. On a parse error nothing runs. It then seeds the interpreter and evaluates the source, whose **last expression must be a pattern** (for example `Pbind` or `Ppar`). It scores that pattern for exactly the requested duration at 120 BPM. It sends every SynthDef the source `.add`ed, plus the stock `\default`, and renders 48 kHz stereo float through non-realtime `scsynth`.
+4. **Validate.** The host reads back one regular file within a size bound; symlinks are refused. It decodes the file and checks that it has 2 channels at 48 kHz, lasts the requested duration within 50 ms, contains only finite samples, and peaks above -40 dBFS.
+5. **Publish or clean up.** A passing render becomes a preview: `data/supercollider/previews/<jobId>.wav` plus a `<jobId>.json` provenance sidecar. The sidecar records the source, its SHA-256, the seed, the settings, the runtime version, the policy version, the image id and the measured audio. Previews expire after 24 hours. A preview never changes a track. Saving one as a take is a separate action. The job directory is removed on every outcome, and the container is always force-removed.
+
+Before each render, the service removes leftovers from a crashed process: labeled render containers and job directories older than any possible run (the wall limit plus 5 minutes).
+
+Failures carry a `SUPERCOLLIDER_*` code:
+
+| Code | Cause |
+|---|---|
+| `SUPERCOLLIDER_UNAVAILABLE` | The runtime is not `ready`. The message names the setup step. |
+| `SUPERCOLLIDER_SYNTAX_ERROR` | The source did not compile. The message includes sclang's `line N char M`. |
+| `SUPERCOLLIDER_SOURCE_ERROR` | Evaluating the source threw an error. |
+| `SUPERCOLLIDER_NOT_A_PATTERN` | The source's last value was not a pattern. |
+| `SUPERCOLLIDER_SCORE_ERROR` / `SUPERCOLLIDER_SYNTHESIS_FAILED` | Scoring or `scsynth` failed. |
+| `SUPERCOLLIDER_TIMEOUT` | The render ran past the wall limit (180 s) and was killed. |
+| `SUPERCOLLIDER_OUTPUT_QUOTA` | The render wrote more output than its budget allows. |
+| `SUPERCOLLIDER_OUTPUT_INVALID` | The output is missing, a symlink, the wrong format, the wrong length, non-finite, or silent. |
+| `SUPERCOLLIDER_CANCELED` | The user canceled the render. |
+
+### Live containment evidence
+
+`server/services/superColliderRender.test.js` covers the workflow against a Docker double. The real boundary is exercised by an opt-in suite that needs a machine where setup has passed:
+
+```bash
+cd server && PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js
+```
+
+The suite renders stock synths and measures the result. It then confirms that generated source cannot do any of the following:
+
+- read an unmounted host file or the server's environment,
+- write to its input or root filesystem, directly or through a shell,
+- connect to a host listener,
+- load an operator startup file,
+- run as root.
+
+It also checks syntax errors, the timeout, cancellation and overlapping renders. With the flag set, an unready runtime fails the suite rather than skipping it.
+
 ## Platform evidence
 
 The recipe targets Linux `amd64` and `arm64` Docker engines. Readiness is per machine: a host is `ready` only after the probe has passed on that host's engine with the current image. The probe result records the engine version, OS and architecture, so the evidence names the platform it was proven on. Any other configuration stays visibly unavailable.
@@ -111,3 +166,4 @@ Import the contract rather than re-deriving it:
 - `server/lib/superColliderRuntime.js`: version and policy constants, `SUPERCOLLIDER_RENDER_FORMAT`, `SUPERCOLLIDER_CONTAINER_LIMITS`, `SUPERCOLLIDER_CONTAINER_LABEL` (for orphan sweeps), `buildSuperColliderRunArgs`, `evaluateSuperColliderStatus`
 - `server/services/superColliderRuntime.js`: `getSuperColliderStatus`, `setupSuperColliderRuntime` (concurrent calls share one run), `runSuperColliderContainer`, `readContainedOutput`
 - `server/lib/wavAudioFile.js`: `measureWavAudio` for decoded duration, channel, rate, level and non-finite checks
+- `server/services/superColliderRender.js`: `renderSuperColliderSource` (one contained render to a validated preview), `readSuperColliderPreview(jobId)` → `{ wavPath, preview }` for saving a preview as a take, `presentSuperColliderPreview`

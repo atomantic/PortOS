@@ -754,6 +754,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/writers-room` | Writers Room |
 | `/api/universe-builder` | Universe Builder |
 | `/api/authors`, `/api/artists`, `/api/albums`, `/api/tracks`, `/api/music` | Music/creator catalogs |
+| `/api/music/supercollider` | Contained SuperCollider runtime status, setup and offline renders ([SUPERCOLLIDER.md](./SUPERCOLLIDER.md)) |
 | `/api/pipeline` | Series/comic pipeline |
 | `/api/conflict-journal` | Sync conflict journal |
 | `/api/importer` | Story importer |

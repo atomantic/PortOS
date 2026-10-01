@@ -114,7 +114,7 @@ describe('SuperCollider runtime setup', () => {
     const hostFile = join(dataDir, 'host-audio.wav');
     writeFileSync(hostFile, stereoWav(2, 0.25));
     const linked = await setupSuperColliderRuntime({ docker: fakeDocker({ render: (out) => symlinkSync(hostFile, join(out, 'smoke.wav')) }), dataDir });
-    expect(linked.status.smoke).toMatchObject({ ok: false, error: 'the probe wrote no readable WAV' });
+    expect(linked.status.smoke).toMatchObject({ ok: false, error: 'no readable WAV was written' });
 
     const docker = fakeDocker({ render: () => {}, runResult: { success: false, error: 'timed out after 120s' } });
     const timedOut = await setupSuperColliderRuntime({ docker, dataDir });

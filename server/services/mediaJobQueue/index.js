@@ -170,7 +170,9 @@ async function safeUnlinkUpload(path) {
 // KNOWN_MEDIA_KINDS in federatedMedia/) are closed lists that do not name it,
 // so shipping a user's source video across the wire would take a deliberate
 // edit to one of them rather than a mode string slipping through.
-export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'html-composition', 'image', 'training', 'audio']);
+// 'supercollider' (#9413) is likewise local-only: it executes untrusted source
+// inside this machine's verified container, so no peer map names it.
+export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'html-composition', 'image', 'training', 'audio', 'supercollider']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 // Returns a Promise that resolves to the gen module for the given job's
@@ -191,6 +193,7 @@ function getGenModuleForJob(job) {
   if (job.kind === 'video') return import('../videoGen/local.js');
   if (job.kind === 'training') return import('../loraTraining/index.js');
   if (job.kind === 'audio') return import('../audioGen/local.js');
+  if (job.kind === 'supercollider') return import('../superColliderRender.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../imageGen/grok.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.AGY) return import('../imageGen/agy.js');
@@ -1173,7 +1176,7 @@ async function runJobLifecycle(job, markDispatched) {
 
   const emitter = job.kind === 'video' || job.kind === 'video-upscale' || job.kind === 'html-composition' ? videoGenEvents
     : job.kind === 'training' ? trainingEvents
-    : job.kind === 'audio' ? audioGenEvents
+    : job.kind === 'audio' || job.kind === 'supercollider' ? audioGenEvents
     : imageGenEvents;
   const dispatcher = makeGenDispatcher(emitter, job, handlers);
   dispatcher.attach();
@@ -1288,6 +1291,7 @@ async function runJobLifecycle(job, markDispatched) {
       : job.kind === 'video-upscale' ? mod.runVideoUpscale(request)
       : job.kind === 'training' ? mod.runTraining(request)
       : job.kind === 'audio' ? mod.generateAudio(request)
+      : job.kind === 'supercollider' ? mod.renderSuperCollider(request)
       : mod.generateImage(request);
     markDispatched();
     await kickoff;
