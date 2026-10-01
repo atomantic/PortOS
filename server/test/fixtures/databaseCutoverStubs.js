@@ -63,6 +63,12 @@ const log = line => appendFileSync(${JSON.stringify(events)}, line + '\\n');
 // boot that was still pending (or never started) when the test gave up.
 const trace = step => console.error(new Date().toISOString() + ' surrogate ' + process.pid + ' port ' + process.env.PGPORT + ' ' + step);
 trace('started');
+// A killed Vitest worker cannot run afterEach. Its pipe closes even on
+// SIGKILL, so the owned surrogate exits instead of writing into a swept root.
+if (process.argv.includes('--owner-bound')) {
+  process.stdin.on('end', () => process.exit(0));
+  process.stdin.resume();
+}
 try {
   const { awaitDatabaseCutoverRelease } = await import(${JSON.stringify(handshakeUrl)});
   const released = await awaitDatabaseCutoverRelease({ pollMs: 20, releaseTimeoutMs: 20000 });
@@ -80,13 +86,23 @@ setInterval(() => {}, 1000);
   chmodSync(surrogate, 0o644);
 
   const pidsPath = join(dir, 'surrogates');
+  const ownedServers = [];
   return {
     setHealth: value => writeFileSync(join(dir, 'pg-health'), value),
     // Make the next stubbed PM2 restart hand the server this endpoint instead
     // of the one the saved configuration names (a stale cached environment).
     overrideRestartPool: endpoint => writeFileSync(join(dir, 'restart-pool.json'), JSON.stringify(endpoint)),
     clearRestartPool: () => writeFileSync(join(dir, 'restart-pool.json'), 'null'),
-    launchServer: endpoint => launchSurrogateServer(root, dir, endpoint),
+    // Ordinary fixture servers belong to the test worker. Keep their handles
+    // so teardown waits for exit before removing files they may still write.
+    launchServer: endpoint => launchSurrogateServer(root, dir, endpoint, child => {
+      const closed = new Promise(resolve => child.once('close', resolve));
+      ownedServers.push({ child, closed });
+    }),
+    stopSurrogates: () => Promise.all(ownedServers.map(({ child, closed }) => {
+      child.kill('SIGKILL');
+      return closed;
+    })),
     surrogatePids: () => (existsSync(pidsPath) ? readFileSync(pidsPath, 'utf8').split('\n').filter(Boolean).map(Number) : []),
   };
 }
@@ -102,16 +118,25 @@ export function restartedServerEndpoint(root, dir) {
   return endpoints[mode] ?? Object.values(endpoints)[0];
 }
 
-/** A surrogate ordinary server whose pool is `endpoint`. Returns its pid. */
-export function launchSurrogateServer(root, dir, endpoint) {
+/**
+ * A surrogate ordinary server whose pool is `endpoint`. Returns its pid.
+ * onOwnedChild binds direct test launches to their worker's lifetime. The
+ * detached maintenance-worker fixture omits it: its restarted server must
+ * survive that coordinator's successful exit, like a real PM2 restart.
+ */
+export function launchSurrogateServer(root, dir, endpoint, onOwnedChild) {
   const env = { ...process.env, NODE_ENV: 'test', PORTOS_DATA_ROOT: root,
     PGHOST: endpoint.host, PGPORT: String(endpoint.port), PGDATABASE: endpoint.database, PGUSER: endpoint.user,
     PGPASSWORD: 'example-password', NODE_OPTIONS: `--import=${pathToFileURL(join(dir, 'pg-register.mjs')).href}` };
   delete env.VITEST;
   const stderr = openSync(join(dir, 'surrogate-stderr.log'), 'a');
-  const child = spawn(process.execPath, [join(dir, 'server-surrogate.mjs')], { env, stdio: ['ignore', 'ignore', stderr], detached: true });
+  const args = [join(dir, 'server-surrogate.mjs'), ...(onOwnedChild ? ['--owner-bound'] : [])];
+  const child = spawn(process.execPath, args, { env, stdio: [onOwnedChild ? 'pipe' : 'ignore', 'ignore', stderr], detached: true });
   closeSync(stderr);
+  child.once('error', err => console.error('Cutover surrogate launch failed: ' + (err.code ?? 'error')));
+  onOwnedChild?.(child);
+  child.stdin?.unref();
   child.unref();
-  appendFileSync(join(dir, 'surrogates'), `${child.pid}\n`);
+  if (Number.isSafeInteger(child.pid)) appendFileSync(join(dir, 'surrogates'), `${child.pid}\n`);
   return child.pid;
 }
