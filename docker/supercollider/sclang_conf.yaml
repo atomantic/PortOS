@@ -1,0 +1,8 @@
+# Stock class library only. excludeDefaultPaths drops the system and user
+# Extensions directories, so no Quark, extension or operator customization can
+# load; the private tmpfs home holds no startup file either.
+includePaths:
+    - /usr/local/share/SuperCollider/SCClassLibrary
+excludePaths: []
+postInlineWarnings: false
+excludeDefaultPaths: true

@@ -9,6 +9,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | Doc | Covers |
 |-----|--------|
 | [HTML_COMPOSITIONS.md](./HTML_COMPOSITIONS.md) | Seekable HTML scenes rendered offline to MP4 through hidden managed-browser targets |
+| [SUPERCOLLIDER.md](./SUPERCOLLIDER.md) | Managed SuperCollider Docker runtime: `setup:supercollider`, readiness states, containment policy and platform evidence |
 | [CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md) | Versioned portable Code Animation source/brief packages and non-executing validation |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
 | [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |
