@@ -40,14 +40,15 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES, isRunCanceledError, isRuntimeBudgetError } from '../lib/aiToolkit/errorDetection.js';
 import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
-import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
+import { contextWindowRejection, knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
+import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
 import { apiRunAbsoluteTimeoutMs } from '../lib/aiToolkit/internal/runTimeouts.js';
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
-import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens } from '../lib/contextBudget.js';
+import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens, localOutputReserveTokens } from '../lib/contextBudget.js';
 import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
 import { attachGatewaySiblingKey } from '../lib/providerGateways.js';
 
@@ -1295,6 +1296,51 @@ function stripFallbackContext(err) {
 }
 
 /**
+ * Whether `provider` generates on a local inference server — an API provider
+ * served by an Ollama daemon, flagged as llama.cpp / LM Studio / MTPLX / vLLM /
+ * SGLang, or pointed at a loopback endpoint. These are the windows a cloud-sized
+ * output reserve can swallow whole.
+ */
+function isLocalInferenceProvider(provider) {
+  if (provider?.type !== PROVIDER_TYPES.API) return false;
+  return isOllamaBackedProvider(provider)
+    || provider.llamaBacked === true
+    || provider.lmstudioBacked === true
+    || provider.mtplxBacked === true
+    || provider.vllmBacked === true
+    || provider.sglangBacked === true
+    || isLocalEndpoint(provider.endpoint);
+}
+
+/**
+ * The output reserve (and generation cap) for a run on a LOCAL model.
+ *
+ * A caller's declared `outputReserveTokens` is a cloud-sized number (the
+ * persistent mind declares 8,192). On a 16K local daemon that reserve alone is
+ * half the window, so since #9437 made the mind declare it on every wake, a
+ * ~13.5K-token prompt that fits was refused before dispatch ("known 16384-token
+ * context is below the 21744-token request budget"). For a local provider with
+ * a KNOWN window the reserve shrinks to `localOutputReserveTokens` (floor 2,048,
+ * ⅛ of the window, never above what was declared), and the request's
+ * `max_tokens` / `num_predict` is capped at the same number so generation
+ * cannot outgrow the room the gate planned for.
+ *
+ * Unchanged when the caller named its own `maxTokens` (it sized the answer
+ * deliberately), declared no reserve, the window is unknown, or the provider
+ * is not local.
+ *
+ * @returns {Promise<{ outputReserveTokens: number|undefined, maxTokens: number|undefined }>}
+ */
+async function resolveLocalOutputBudget(provider, model, { outputReserveTokens, maxTokens }) {
+  const unchanged = { outputReserveTokens, maxTokens };
+  if (Number.isInteger(maxTokens) && maxTokens > 0) return unchanged;
+  if (!Number.isFinite(Number(outputReserveTokens)) || !isLocalInferenceProvider(provider)) return unchanged;
+  const observed = withOllamaRuntimeContextWindow(await withObservedContextWindowsLazy(provider));
+  const reserve = localOutputReserveTokens(outputReserveTokens, knownContextWindow(observed, model));
+  return reserve ? { outputReserveTokens: reserve, maxTokens: reserve } : unchanged;
+}
+
+/**
  * The budget a pre-dispatch REFUSAL is allowed to act on.
  *
  * `requiredContextTokens` is the prompt plus an output reserve, and when the
@@ -1446,11 +1492,12 @@ async function executeProviderRunOnce({
   // context gate needs it on EVERY attempt — a caller that supplies its own
   // runId (stageRunner, the loops) skips that branch entirely and would
   // otherwise dispatch ungated.
-  const requestCapabilities = buildRequestCapabilities({ prompt, screenshots, outputReserveTokens, callerPolicy });
+  const localBudget = await resolveLocalOutputBudget(provider, effectiveModel, { outputReserveTokens, maxTokens });
+  const requestCapabilities = buildRequestCapabilities({ prompt, screenshots, outputReserveTokens: localBudget.outputReserveTokens, callerPolicy });
   await assertRequestFitsContext(
     effectiveProvider,
     effectiveModel,
-    refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens }),
+    refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens: localBudget.outputReserveTokens }),
     { runId: callerRunId, startTime: Date.now() },
   );
 
@@ -1726,7 +1773,7 @@ async function executeProviderRunOnce({
       // a per-call override (e.g. the importer's long stage timeout) governs the
       // ceiling instead of the runner's provider/default fallback — same
       // caller-override precedence CLI/TUI runs already get.
-      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
+      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens: effectiveProvider === provider ? localBudget.maxTokens : maxTokens, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.

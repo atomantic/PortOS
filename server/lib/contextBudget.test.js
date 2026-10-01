@@ -10,6 +10,8 @@ import {
   CHARS_PER_TOKEN,
   FALLBACK_CONTEXT_WINDOW,
   MANUSCRIPT_FLOOR_TOKENS,
+  localOutputReserveTokens,
+  LOCAL_OUTPUT_RESERVE_FLOOR_TOKENS,
 } from './contextBudget.js';
 
 const section = (n, chars) => ({ number: n, text: 'x'.repeat(chars) });
@@ -30,6 +32,30 @@ const paragraphs = (paras, chars) =>
   Array.from({ length: paras }, (_, i) => `${String.fromCharCode(97 + (i % 26))}`.repeat(chars)).join('\n\n');
 
 describe('contextBudget', () => {
+  describe('localOutputReserveTokens', () => {
+    it('shrinks a cloud-sized reserve to fit a 16K local window', () => {
+      // Helm: qwen3:8b at num_ctx 16384 with the mind's declared 8,192 reserve.
+      expect(localOutputReserveTokens(8_192, 16_384)).toBe(LOCAL_OUTPUT_RESERVE_FLOOR_TOKENS);
+    });
+
+    it('scales with the window but never above what the caller declared', () => {
+      expect(localOutputReserveTokens(8_192, 32_768)).toBe(4_096);
+      expect(localOutputReserveTokens(8_192, 131_072)).toBe(8_192);
+      expect(localOutputReserveTokens(1_000, 16_384)).toBe(1_000);
+    });
+
+    it('never lets the floor take more than a quarter of a tiny window', () => {
+      expect(localOutputReserveTokens(8_192, 4_096)).toBe(1_024);
+    });
+
+    it('returns null when the reserve or the window is unknown', () => {
+      expect(localOutputReserveTokens(undefined, 16_384)).toBeNull();
+      expect(localOutputReserveTokens(8_192, null)).toBeNull();
+      expect(localOutputReserveTokens(0, 16_384)).toBeNull();
+      expect(localOutputReserveTokens(8_192, -1)).toBeNull();
+    });
+  });
+
   describe('estimateTokens', () => {
     it('estimates chars/4, rounding up, and tolerates null', () => {
       expect(estimateTokens('')).toBe(0);

@@ -34,6 +34,36 @@ const CONTEXT_TRIM_MARKER = '\n…[context trimmed to fit the model window]…';
 // Ollama's historical default so we never plan for more than we can be sure of.
 export const FALLBACK_CONTEXT_WINDOW = 8_192;
 
+// Output reserve for a LOCAL model whose window is known. A caller's generic
+// reserve (8K) was sized for cloud windows; on a 16K local daemon it alone is
+// half the window, so a prompt that fits with ample room to answer was refused
+// before dispatch. The local reserve is the larger of a modest floor and an
+// eighth of the window, never more than a quarter of the window (so the floor
+// cannot swallow a tiny window) and never more than the caller declared.
+export const LOCAL_OUTPUT_RESERVE_FLOOR_TOKENS = 2_048;
+export const LOCAL_OUTPUT_RESERVE_WINDOW_DIVISOR = 8;
+export const LOCAL_OUTPUT_RESERVE_MAX_WINDOW_DIVISOR = 4;
+
+/**
+ * The output reserve to plan (and cap generation at) for a local model:
+ * `min(declared, floor(window / 4), max(LOCAL_OUTPUT_RESERVE_FLOOR_TOKENS, floor(window / 8)))`
+ * — 2,048 on a 16K window, 4,096 on 32K, 1,024 on 4K.
+ * Returns `null` when either input is missing or not a positive number — an
+ * unknown window or an undeclared reserve is not something to shrink.
+ *
+ * @param {number|null|undefined} declaredReserveTokens
+ * @param {number|null|undefined} contextWindow
+ * @returns {number|null}
+ */
+export function localOutputReserveTokens(declaredReserveTokens, contextWindow) {
+  const declared = Number(declaredReserveTokens);
+  const window = Number(contextWindow);
+  if (!Number.isFinite(declared) || declared <= 0 || !Number.isFinite(window) || window <= 0) return null;
+  const scaled = Math.max(LOCAL_OUTPUT_RESERVE_FLOOR_TOKENS, Math.floor(window / LOCAL_OUTPUT_RESERVE_WINDOW_DIVISOR));
+  const ceiling = Math.floor(window / LOCAL_OUTPUT_RESERVE_MAX_WINDOW_DIVISOR);
+  return Math.max(1, Math.floor(Math.min(declared, ceiling, scaled)));
+}
+
 /** chars/4 token estimate. Conservative (real tokenizers pack denser). */
 export const estimateTokens = (text) => Math.ceil(String(text ?? '').length / CHARS_PER_TOKEN);
 
