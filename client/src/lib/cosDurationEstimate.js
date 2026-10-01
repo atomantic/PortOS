@@ -1,10 +1,5 @@
 // Shared CoS duration/ETA estimator for the agent and task cards.
 //
-// MIRROR: keep the key composition aligned with server/services/taskLearning/store.js's
-// `executionDurationKey()` / `executionKeyPrefix()`. The server owns the buckets;
-// composing the same key here is what attaches a card's ETA to the historical runs
-// that produced it — the same discipline `cosTaskType.js` follows for the task type.
-//
 // The cascade answers from the NARROWEST bucket with enough evidence, mirroring the
 // server's `getTaskDurationEstimate` (#8001):
 //   1. execution      — this task type on THIS provider + model + effort
@@ -22,46 +17,11 @@
 
 import { extractCosTaskType } from './cosTaskType.js';
 
-// Effort sentinel for a provider with no effort control — MIRRORS the server's
-// EXECUTION_EFFORT_NONE. Absent effort is its own bucket, never a key ending in a
-// bare separator that both `''` and `undefined` would collapse into.
-export const EXECUTION_EFFORT_NONE = 'default';
+import { executionDurationKey, executionKeyPrefix, MIN_EXECUTION_SAMPLES } from '../../../server/lib/executionDurationKey.js';
+export { EXECUTION_EFFORT_NONE, executionDurationKey, executionKeyPrefix, MIN_EXECUTION_SAMPLES } from '../../../server/lib/executionDurationKey.js';
 
-const EXECUTION_KEY_SEPARATOR = '|';
-
-// Minimum completions before an execution-scoped bucket outranks the broader
-// task-type average — MIRRORS the server's MIN_EXECUTION_SAMPLES. One run of a
-// specific provider/model/effort says less than a rich task-type history does.
-//
-// Rungs 3 and 4 deliberately carry NO threshold here: `getAllTaskDurations`
-// already filters what it publishes, and the cards have always shown whatever
-// task-type row arrived. The server's own reader applies its thresholds against
-// the RAW store, which this payload is a projection of — so the mirror is the key
-// composition, the cascade ORDER, and this execution-rung bar, not every gate.
-const MIN_EXECUTION_SAMPLES = 3;
-
-// A key part must be a non-empty string that cannot itself contain the separator
-// (MIRRORS the server): otherwise `a|p|m|x` is both "model m at effort x" and
-// "model m|x at no effort", and the rollup would match an unrelated identity.
-const nonEmptyKeyPart = (value) => {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed && !trimmed.includes(EXECUTION_KEY_SEPARATOR) ? trimmed : null;
-};
-
-/** `taskType|providerId|model`, or null when any part is missing. Pure. */
-export function executionKeyPrefix({ taskType, providerId, model } = {}) {
-  const parts = [nonEmptyKeyPart(taskType), nonEmptyKeyPart(providerId), nonEmptyKeyPart(model)];
-  if (parts.some((part) => part === null)) return null;
-  return parts.join(EXECUTION_KEY_SEPARATOR);
-}
-
-/** `taskType|providerId|model|effort`, or null when any required part is missing. Pure. */
-export function executionDurationKey({ taskType, providerId, model, effort } = {}) {
-  const prefix = executionKeyPrefix({ taskType, providerId, model });
-  if (prefix === null) return null;
-  return `${prefix}${EXECUTION_KEY_SEPARATOR}${nonEmptyKeyPart(effort) ?? EXECUTION_EFFORT_NONE}`;
-}
+// Rungs 3 and 4 deliberately carry no threshold here: getAllTaskDurations
+// pre-filters the published task-type and overall rows at one completion.
 
 const hasDuration = (row) => !!row && !!row.avgDurationMs;
 
