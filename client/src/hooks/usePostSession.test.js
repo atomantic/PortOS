@@ -1029,3 +1029,84 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
     expect(next.result.current.runId).toBeNull();
   });
 });
+
+describe('usePostSession — authoritative saved drill results (#9459)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    sessionStorage.clear();
+    generatePostDrill.mockResolvedValue({ type: 'stroop', config: { seed: 'example' }, trials: [] });
+  });
+
+  async function completeRun(training = false, count = 1) {
+    const hook = renderHook(() => usePostSession());
+    await act(async () => {
+      await hook.result.current.startSession({ drills: Array.from({ length: count }, () => ({ type: 'stroop', config: {} })), training });
+    });
+    act(() => hook.result.current.completeCognitiveDrill({
+      module: 'cognitive', type: 'stroop', config: { seed: 'example' },
+      score: 100, accuracy: 1, avgResponseMs: 100, completion: 1,
+      questions: [{ prompt: 'RED', answered: 'red', correct: true, responseMs: 100 }],
+      totalMs: 100,
+    }));
+    return hook;
+  }
+
+  it('adopts the entire scored task bundle together with the saved overall score', async () => {
+    const tasks = [{ type: 'stroop', module: 'cognitive', score: 80, avgResponseMs: 1500,
+      questions: [{ prompt: 'RED', answered: 'blue', correct: false, responseMs: 1500 }] }];
+    submitPostSession.mockResolvedValue({ id: 'example-session', score: 80, tasks });
+    const { result } = await completeRun();
+    await act(async () => { await result.current.saveSession({}); });
+    expect(result.current.state).toBe('saved');
+    expect(result.current.sessionScore).toBe(80);
+    expect(result.current.drillResults).toEqual(tasks);
+  });
+
+  it('matches training acknowledgements by stable identity while retaining execution order and presentation context', async () => {
+    const { result } = await completeRun(true, 2);
+    await act(async () => { await result.current.nextDrill(); });
+    act(() => result.current.completeCognitiveDrill({
+      module: 'cognitive', type: 'stroop', config: { seed: 'second' },
+      score: 100, questions: [], totalMs: 500,
+    }));
+    submitTrainingRun.mockImplementation(async input => ({
+      id: input.id,
+      attempts: input.attempts.map((attempt, index) => ({
+        ...attempt, difficulty: { seed: `saved-${index}` }, score: 80 - index,
+        totalMs: 1500, avgResponseMs: 1500,
+        questions: [{ prompt: `Saved ${index}`, correct: false }],
+        scorerProvenance: 'server-deterministic',
+      })).reverse(),
+    }));
+    await act(async () => { await result.current.saveSession({}); });
+    const submitted = submitTrainingRun.mock.calls[0][0].attempts;
+    expect(result.current.drillResults.map(result => result.id)).toEqual(submitted.map(attempt => attempt.id));
+    expect(result.current.drillResults[0]).toMatchObject({
+      type: 'stroop', config: { seed: 'saved-0' }, score: 80, avgResponseMs: 1500,
+      totalMs: 1500, questions: [{ prompt: 'Saved 0', correct: false }],
+      scorerProvenance: 'server-deterministic',
+    });
+    expect(result.current.drillResults[1].score).toBe(79);
+  });
+
+  it.each([false, true])('applies an explicitly empty saved bundle (training=%s)', async training => {
+    const submit = training ? submitTrainingRun : submitPostSession;
+    submit.mockResolvedValue({ id: 'example-saved', score: 0, [training ? 'attempts' : 'tasks']: [] });
+    const { result } = await completeRun(training);
+    await act(async () => { await result.current.saveSession({}); });
+    expect(result.current.drillResults).toEqual([]);
+  });
+
+  it.each([false, true])('keeps results retryable on rejection and intact on a minimal acknowledgement (training=%s)', async training => {
+    const submit = training ? submitTrainingRun : submitPostSession;
+    submit.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ id: 'example-saved', score: 80 });
+    const { result } = await completeRun(training);
+    const local = result.current.drillResults;
+    await act(async () => { await result.current.saveSession({}); });
+    expect(result.current.state).toBe('complete');
+    expect(result.current.drillResults).toEqual(local);
+    await act(async () => { await result.current.saveSession({}); });
+    expect(result.current.state).toBe('saved');
+    expect(result.current.drillResults).toEqual(local);
+  });
+});

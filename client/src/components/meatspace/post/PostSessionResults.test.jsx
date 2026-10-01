@@ -1,6 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import PostSessionResults from './PostSessionResults';
+import PostSessionSummary from './PostSessionSummary';
+import { usePostSession } from '../../../hooks/usePostSession';
+import { generatePostDrill, submitPostSession } from '../../../services/api';
+
+vi.mock('../../../services/api', () => ({
+  generatePostDrill: vi.fn(), submitPostSession: vi.fn(),
+  scorePostLlmDrill: vi.fn(), submitTrainingRun: vi.fn(),
+}));
+vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 // Issue #2093 — the drill-breakdown expansion previously only ever showed
 // data for LLM drills (`isLlm && isExpanded && result.evaluation`); math and
@@ -176,5 +185,45 @@ describe('PostSessionResults estimation grading band', () => {
     renderResults({ drillResults: [estimationResult({ difficulty: { count: 5, tolerancePct: 3 } })] });
     fireEvent.click(screen.getByText('Estimation'));
     expect(screen.getByText('Within 3% counts — 3 significant figures is close enough')).toBeInTheDocument();
+  });
+});
+
+
+describe('PostSessionResults saved acknowledgement (#9459)', () => {
+  it('renders the saved score, metrics, and question review identically to the History summary', async () => {
+    sessionStorage.clear();
+    const tasks = [{ type: 'stroop', module: 'cognitive', score: 80, accuracy: 1, avgResponseMs: 1500,
+      completion: 1, questions: [{ prompt: 'Saved color', expected: 'red', answered: 'red', correct: true, responseMs: 1500 }] }];
+    generatePostDrill.mockResolvedValue({ type: 'stroop', trials: [], config: {} });
+    submitPostSession.mockResolvedValue({ id: 'example-session', score: 80, tasks });
+    function LiveResults() {
+      const session = usePostSession();
+      return <>
+        <button onClick={() => session.startSession({ drills: [{ type: 'stroop', config: {} }] })}>Start example</button>
+        <button onClick={() => session.completeCognitiveDrill({
+          type: 'stroop', module: 'cognitive', score: 100, accuracy: 1, avgResponseMs: 100,
+          questions: [{ prompt: 'Local color', correct: true }],
+        })}>Finish example</button>
+        <PostSessionResults session={session} onSaved={() => {}} onBack={() => {}} />
+      </>;
+    }
+    const live = render(<LiveResults />);
+    await act(async () => fireEvent.click(screen.getByText('Start example')));
+    fireEvent.click(screen.getByText('Finish example'));
+    expect(screen.getByText('100% acc · 0.1s')).toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByText('Save Session')));
+    expect(screen.getByText('Back to Launcher')).toBeInTheDocument();
+    expect(screen.getByText('100% acc · 1.5s')).toBeInTheDocument();
+    const drillRow = screen.getByText('Stroop').closest('button');
+    expect(within(drillRow).getByText('80')).toBeInTheDocument();
+    fireEvent.click(drillRow);
+    expect(screen.getByText('Saved color')).toBeInTheDocument();
+    expect(screen.queryByText('Local color')).not.toBeInTheDocument();
+    const liveTable = live.container.querySelector('table').textContent;
+    live.unmount();
+    const history = render(<PostSessionSummary drillResults={tasks} sessionScore={80} />);
+    expect(screen.getByText('100% acc · 1.5s')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Stroop'));
+    expect(history.container.querySelector('table').textContent).toBe(liveTable);
   });
 });
