@@ -25,12 +25,9 @@ async function loadHistory() {
   return JSON.parse(data);
 }
 
-// When the install is password protected (Settings → Security on :5555), this
-// sidecar honours the same gate. It listens on 0.0.0.0 for tailnet access and
-// can restart/stop PM2 processes and stream logs, so leaving it open while
-// :5555 asks for a password would make the password meaningless. On an install
-// with no password set, the gate is a no-op — the documented single-user
-// trust model is unchanged.
+// Reads honour the optional instance password. Process mutations additionally
+// require an operator session, or a genuine local connection without a password.
+// Reachability on the private network does not grant host-control authority.
 // `/` serves the static shell, which renders its own login overlay driven by
 // GET /api/auth/status — it carries no data, so it stays publicly reachable.
 const auth = createSidecarAuthGate({
@@ -92,7 +89,7 @@ async function isRegisteredProcess(processName) {
 }
 
 // API: Restart a PM2 process
-app.post('/api/restart/:process', async (req, res) => {
+app.post('/api/restart/:process', auth.requireHostControl, async (req, res) => {
   const processName = req.params.process;
   if (!(await isRegisteredProcess(processName))) {
     return res.status(400).json({ success: false, error: 'Unknown process' });
@@ -111,7 +108,7 @@ app.post('/api/restart/:process', async (req, res) => {
 });
 
 // API: Stop a PM2 process
-app.post('/api/stop/:process', async (req, res) => {
+app.post('/api/stop/:process', auth.requireHostControl, async (req, res) => {
   const processName = req.params.process;
   if (!(await isRegisteredProcess(processName))) {
     return res.status(400).json({ success: false, error: 'Unknown process' });
