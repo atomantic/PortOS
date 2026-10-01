@@ -36,6 +36,7 @@ import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { ALWAYS_RUN_TESTS } from './ci-test-plan.js';
+import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -185,6 +186,8 @@ export function parseArgs(argv) {
 }
 
 function main() {
+  assertNodeVersion();
+
   const unmerged = spawnSync('git', ['ls-files', '-u', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' });
   if (unmerged.status !== 0) {
     console.error(`❌ Cannot inspect the Git index for unresolved conflicts: ${unmerged.stderr || 'git ls-files failed'}`);
