@@ -87,19 +87,6 @@ function hasCompose() {
   }
 }
 
-// Check if the container is already running
-function isContainerRunning() {
-  try {
-    const output = execFileSync('docker', ['compose', 'ps', '--format', 'json', 'db'], {
-      stdio: 'pipe',
-      cwd: rootDir
-    }).toString();
-    return output.includes('"running"') || output.includes('"Running"');
-  } catch {
-    return false;
-  }
-}
-
 // Domain-level readiness check: the configured PG_USER role can authenticate
 // to PG_DATABASE AND the `memories` table from init-db.sql exists in the
 // public schema. This is what `db.sh setup-native` produces. The probe
@@ -300,29 +287,17 @@ if (!hasCompose()) {
   handleDockerUnavailable('docker compose not available — database setup failed', 'not_installed');
 }
 
-if (isContainerRunning()) {
-  // "running" is the container state, not DB readiness — Postgres inside it may
-  // still be initializing. Now that PG is mandatory and boot fail-fasts, confirm
-  // it actually accepts connections before reporting success, or `npm start`
-  // proceeds into PM2 against a not-yet-ready DB and crash-loops.
-  if (waitForHealth()) {
-    console.log('✅ PostgreSQL already running');
-    process.exit(0);
-  }
-  console.error('❌ PostgreSQL container is running but not accepting connections');
-  console.error('   Check status: docker compose logs db');
-  process.exit(1);
-}
-
-// Start the container
-console.log('🐳 Starting PostgreSQL container...');
+// Compose reconciles changed bindings/ports for existing containers while
+// preserving the named data volume, and reuses unchanged running containers.
+// Readiness inside a container cannot prove its host publication is current.
+console.log('🐳 Reconciling PostgreSQL container configuration...');
 try {
   execFileSync('docker', ['compose', 'up', '-d', 'db'], {
     stdio: 'inherit',
     cwd: rootDir
   });
 } catch (err) {
-  console.error(`❌ Failed to start PostgreSQL container: ${err.message}`);
+  console.error(`❌ Failed to reconcile PostgreSQL container: ${err.message}`);
   console.error('   Keep the selected backend; check Docker and run: docker compose logs db');
   process.exit(1);
 }
