@@ -133,9 +133,7 @@ import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 // suite, and evaluateTasks for the cos route + `import * as cos`.
 import {
   evaluateTasks,
-  generateIdleReviewTask,
   queueEligibleImprovementTasks,
-  recordDeferredPerpetualDispatch,
   admitAutoApprovedSystemTasks,
   admitPendingUserTasks,
   resolveAutonomyBudget,
@@ -160,12 +158,10 @@ import {
   clearSpawningJob
 } from './cosJobScheduler.js';
 
-// Pure priority/capacity helpers for dequeueNextTask (extracted to cosDequeue.js,
-// issue #2530). The per-cycle capacity tracker + idle tier-eligibility
-// predicate are shared with the scheduler unit tests so they exercise the real
-// guards instead of a local replica. The async tiers stay here as
-// `spawnDequeuePriorityN(ctx)` helpers.
-import { closeStolenIdleReviewCard, createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible } from './cosDequeue.js';
+// Shared capacity and idle-review admission owner. The engines retain their
+// priority ordering and dispatch adapters; cosDequeue owns idle preparation's
+// capacity precheck and its committed handoff.
+import { admitIdleReviewTask, createDequeueCapacity, countRunningAgentsByLocalEndpoint } from './cosDequeue.js';
 import { buildLocalEndpointSlotContext, localEndpointCapacityError } from './cosLocalEndpointSlots.js';
 import {
   initializePersistentMindSupervisor,
@@ -1132,37 +1128,23 @@ async function spawnDequeuePriority2AutoApproved(ctx) {
 
 /**
  * Priority 3 — idle review task, only when the daemon is completely idle this
- * cycle (shared `isIdleTierEligible` predicate: nothing spawned, no pending user
- * tasks, idle review on, auto-run in execute).
+ * cycle. The shared owner checks eligibility and capacity before preparation,
+ * then performs the committed handoff.
  */
 async function spawnDequeuePriority3IdleReview(ctx) {
-  const { state, capacity, ignoreTaskId } = ctx;
-
-  if (!isIdleTierEligible({
-    spawned: capacity.spawned,
+  const { capacity } = ctx;
+  return admitIdleReviewTask({
+    state: ctx.state,
+    alreadySpawned: capacity.spawned,
     hasPendingUserTasks: ctx.hasPendingUserTasks,
-    idleReviewEnabled: state.config.idleReviewEnabled,
-    autonomyMode: ctx.cosAutonomyMode
-  })) return;
-
-  const freshCosTasks = await getCosTasks();
-  const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
-  if (pendingSystemTasks === 0) {
-    const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateIdleReviewTask(state, { ignoreTaskId });
-    // Committed tier — `generateIdleReviewTask` has already bound the app-review
-    // marker and advanced the 30-minute cooldown, and only `holdTask` releases
-    // that marker, which requires the emit. A denial would leave the app reading
-    // "in review" indefinitely (#978's mode). See canSpawnCommitted (#4834).
-    const admitted = idleTask && capacity.canSpawnCommitted(idleTask, ctx.autonomousSpawnCeiling);
-    if (admitted) {
-      await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
-      cosEvents.emit('task:ready', idleTask);
-      capacity.trackSpawn(idleTask);
-    }
-    // This tier may have STOLEN a human's on-demand request. Closing its card is
-    // the tier's job because only here is the admission decision final.
-    await closeStolenIdleReviewCard(preflightCardId, admitted ? idleTask : null);
-  }
+    cosAutonomyMode: ctx.cosAutonomyMode,
+    autonomousSlotCeiling: ctx.autonomousSpawnCeiling,
+    ignoreTaskId: ctx.ignoreTaskId,
+  }, {
+    canSpawn: (task, ceiling) => capacity.canSpawnCommitted(task, ceiling),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
 }
 
 // Every dequeue below is scheduled from a timer/setImmediate outside the request

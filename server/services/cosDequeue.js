@@ -8,10 +8,10 @@
  * tests share ONE implementation instead of the tests re-deriving a local
  * replica of the guards.
  *
- * The async tiers themselves (which load schedules, generate tasks, emit
- * `task:ready`, advance cooldowns) stay in cos.js as `spawnDequeuePriorityN(ctx)`
- * helpers — they're integration-level and pinned by source-order regression
- * tests — but every capacity/gate decision they make routes through here.
+ * Idle review has one shared admission/handoff workflow here: check the
+ * autonomous ceiling and project eligibility BEFORE preparation can consume a
+ * human request or commit cooldown/marker state. The two engines retain only
+ * their trigger ordering and dispatch adapters.
  *
  * Priority-tier order (pinned by the source-order regression test in
  * cos.test.js): 0 on-demand (bypasses pause) → 1 user → 2 auto-approved →
@@ -61,7 +61,7 @@ import { hasActiveTaskOwner } from './agentState.js';
  * Emitting instead is strictly better — the authoritative cap at subAgentSpawner's
  * `task:ready` chokepoint HOLDS the task (still `pending`, marker released, job
  * reservation freed), which is exactly the outcome these tiers cannot produce.
- * The global/per-project caps carry the same hazard here; that is pre-existing.
+ * Idle review prechecks global/project capacity before preparation below.
  */
 export function createDequeueCapacity(state, {
   agentsByProject = {},
@@ -84,7 +84,9 @@ export function createDequeueCapacity(state, {
   let spawned = 0;
 
   const admit = (task, ceiling, gateLocalEndpoint) => {
-    if (hasActiveTaskOwner(task.id, state.agents)) return false;
+    // App eligibility probes have no task id yet; only real tasks can have
+    // an owner (a running legacy agent may also have no taskId).
+    if (task.id && hasActiveTaskOwner(task.id, state.agents)) return false;
     if (spawned >= ceiling) return false;
     const project = task.metadata?.app || '_self';
     if ((spawnProjectCounts[project] || 0) >= perProjectLimit) return false;
@@ -177,6 +179,45 @@ export async function closeStolenIdleReviewCard(cardId, admittedTask) {
   if (!cardId) return null;
   const { finishPreflightDispatch } = await import('./preflightTaskCard.js');
   return finishPreflightDispatch(cardId, admittedTask?.id ?? null);
+}
+
+/**
+ * Shared idle-review lifecycle for the periodic and dequeue engines. Capacity
+ * comes from each engine's existing tracker; the same committed admission
+ * predicate filters apps before generation and admits the resulting task.
+ * Local-endpoint denial remains the spawn chokepoint's durable hold/release.
+ */
+export async function admitIdleReviewTask({
+  state,
+  alreadySpawned,
+  hasPendingUserTasks,
+  cosAutonomyMode,
+  autonomousSlotCeiling,
+  ignoreTaskId = null,
+}, { canSpawn, emitSpawn, trackSpawn }) {
+  if (!isIdleTierEligible({
+    spawned: alreadySpawned,
+    hasPendingUserTasks,
+    idleReviewEnabled: state.config.idleReviewEnabled,
+    autonomyMode: cosAutonomyMode,
+  }) || alreadySpawned >= autonomousSlotCeiling) return;
+
+  // Deferred: the generator imports this owner, and ordinary capacity users
+  // need neither the task store nor the prompt-generation dependency graph.
+  const { getCosTasks } = await import('./cosTaskStore.js');
+  if ((await getCosTasks()).autoApproved?.length) return;
+  const { generateIdleReviewTask, recordDeferredPerpetualDispatch } = await import('./cosTaskGenerator.js');
+  const { task, pendingPerpetualDispatch, preflightCardId } = await generateIdleReviewTask(state, {
+    ignoreTaskId,
+    isAppEligible: (app) => canSpawn({ metadata: { app: app.id } }, autonomousSlotCeiling),
+  });
+  const admitted = task && canSpawn(task, autonomousSlotCeiling);
+  if (admitted) {
+    await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
+    emitSpawn(task);
+    trackSpawn(task);
+  }
+  await closeStolenIdleReviewCard(preflightCardId, admitted ? task : null);
 }
 
 /**

@@ -1585,11 +1585,12 @@ describe('cos.js source — priority + capacity invariants', () => {
     // — scope to the whole cosTaskGenerator module (the engine).
     const evalIdleTier = extractFnBody(GEN_SRC, GEN_SRC.indexOf('async function spawnPriority4IdleReview'));
 
-    expect(idleTier, 'idle tier must call the shared isIdleTierEligible predicate').toMatch(/isIdleTierEligible\(/);
-    expect(idleTier, 'idle tier must pass state.config.idleReviewEnabled into the predicate').toMatch(/idleReviewEnabled:\s*state\.config\.idleReviewEnabled/);
+    expect(idleTier, 'dequeue idle tier must call the shared workflow').toMatch(/admitIdleReviewTask\(/);
+    expect(evalIdleTier, 'evaluate idle tier must call the shared workflow').toMatch(/admitIdleReviewTask\(/);
     expect(idlePred, 'isIdleTierEligible must fence on spawned === 0 && idleReviewEnabled').toMatch(/spawned\s*===\s*0\s*&&\s*!!idleReviewEnabled/);
-    expect(evalIdleTier, 'evaluate idle tier must call the shared predicate').toMatch(/isIdleTierEligible\(/);
-    expect(evalIdleTier).toMatch(/spawned:\s*tasksToSpawn\.length/);
+    const idleWorkflow = extractFnBody(DEQ_SRC, DEQ_SRC.indexOf('export async function admitIdleReviewTask'));
+    expect(idleWorkflow).toMatch(/isIdleTierEligible\(/);
+    expect(idleWorkflow).toMatch(/idleReviewEnabled:\s*state\.config\.idleReviewEnabled/);
   });
 
   it('CoS auto-run domain gate (#711) fences autonomous spawns in BOTH engines', () => {
@@ -1617,7 +1618,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(evalFn, `evaluateTasks must fence autonomous spawns on cosAutonomyMode === 'execute'`).toMatch(/cosAutonomyMode\s*===\s*['"]execute['"]/);
     // Dequeue's idle tier gates through the shared predicate, and its
     // auto-approved tier delegates to the same pass as evaluateTasks.
-    expect(dequeueSrc, `dequeueNextTask must gate the idle tier via the eligibility predicate`).toMatch(/isIdleTierEligible\(/);
+    expect(dequeueSrc, `dequeueNextTask must delegate idle admission to the shared workflow`).toMatch(/admitIdleReviewTask\(/);
     expect(dequeueP2, 'dequeue auto-approved tier must call the shared pass').toMatch(/admitAutoApprovedSystemTasks\(/);
     expect(GEN_SRC, 'the shared pass must withhold spawns unless mode is execute').toMatch(/cosAutonomyMode\s*!==\s*['"]execute['"]/);
     expect(DEQ_SRC, `cosDequeue predicates must enforce autonomyMode === 'execute'`).toMatch(/autonomyMode\s*===\s*['"]execute['"]/);
