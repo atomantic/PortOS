@@ -1043,3 +1043,25 @@ describe('Practice Plan save body ↔ postConfigUpdateSchema (issue #3252)', () 
     expect(() => postConfigUpdateSchema.parse(body)).toThrow();
   });
 });
+
+describe('postConfigUpdateSchema cognitive pair constraints (#9460)', () => {
+  const patch = (type, cfg) => ({ cognitive: { drillTypes: { [type]: cfg } } });
+  const issues = (body) => {
+    const r = postConfigUpdateSchema.safeParse(body);
+    return r.success ? [] : r.error.issues.map(i => i.path.join('.'));
+  };
+
+  it.each([
+    ['go-no-go', { progressive: false, stimulusMs: 2000, responseDeadlineMs: 500 }, 'cognitive.drillTypes.go-no-go.responseDeadlineMs'],
+    ['digit-span', { progressive: false, startLength: 9, maxLength: 3 }, 'cognitive.drillTypes.digit-span.maxLength'],
+    ['reaction-time', { minDelayMs: 5000, maxDelayMs: 300 }, 'cognitive.drillTypes.reaction-time.maxDelayMs'],
+  ])('rejects an inverted %s pair with a field-level issue', (type, cfg, path) => {
+    expect(issues(patch(type, cfg))).toEqual([path]);
+  });
+
+  it('accepts valid pairs, partial records, and ladder-managed (progressive) values', () => {
+    expect(issues(patch('reaction-time', { minDelayMs: 500, maxDelayMs: 500 }))).toEqual([]);
+    expect(issues(patch('digit-span', { maxLength: 3 }))).toEqual([]);
+    expect(issues(patch('go-no-go', { stimulusMs: 2000, responseDeadlineMs: 500 }))).toEqual([]);
+  });
+});

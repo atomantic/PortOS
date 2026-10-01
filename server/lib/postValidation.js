@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES, LLM_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from './postDrillTypes.js';
+import { validateCognitivePair } from './postCognitiveConfig.js';
 import { TOPIC_IDS } from './postTopics.js';
 import { HHMM_STRICT_RE } from './timezone.js';
 import { POST_LLM_MAX_SEMANTIC_CANDIDATES, postLlmEvaluationSchema } from './postLlmContracts.js';
@@ -375,6 +376,14 @@ export const postConfigUpdateSchema = z.object({
   cognitive: z.object({
     enabled: z.boolean().optional(),
     drillTypes: z.partialRecord(z.enum(COGNITIVE_DRILL_TYPES), drillTypeConfigSchema).optional()
+  }).superRefine((cog, ctx) => {
+    // Joint constraints the generators would otherwise silently rewrite. A
+    // one-field patch is re-checked against stored values in updatePostConfig.
+    for (const [type, cfg] of Object.entries(cog.drillTypes || {})) {
+      for (const { field, message } of validateCognitivePair(type, cfg)) {
+        ctx.addIssue({ code: 'custom', path: ['drillTypes', type, field], message });
+      }
+    }
   }).optional(),
   // Memory practice (issue #3252). Mirrors the other module blocks, plus an
   // `items` map so an INDIVIDUAL memorized text — e.g. the seeded Elements Song

@@ -6,6 +6,7 @@ import { FormField } from '../../ui/FormField';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
 import { GOAL_DEFS, POST_TOPICS, MODULE_LABELS, DRILL_LABELS, DRILL_DESCRIPTIONS, composedSessionDrillTypes } from './constants';
+import { COGNITIVE_PAIR_CONSTRAINTS, validateCognitivePair, dependentMin } from '../../../../../server/lib/postCognitiveConfig.js';
 import { CognitiveDrillTutorialPreview, CognitiveDrillHowItWorksButton } from './CognitiveDrillTutorial';
 
 // Modules a Full/Quick composed session can draw from (issue #2100), DERIVED
@@ -173,6 +174,8 @@ function seedLlmDrillTypes(saved) {
 // PostCognitiveDrillRunner.jsx). A `timeLimitSec` knob was previously
 // surfaced/validated for these drills without ever being consumed, which
 // promised behavior that didn't happen (issue #2008).
+const pairBounds = (type, side) => ({ min: COGNITIVE_PAIR_CONSTRAINTS[type][side].min, max: COGNITIVE_PAIR_CONSTRAINTS[type][side].max });
+
 const COGNITIVE_DRILL_META = {
   'n-back': {
     // `progressive: true` marks a laddered drill (ProgressiveBadge + toggle
@@ -198,8 +201,8 @@ const COGNITIVE_DRILL_META = {
         { value: 'forward', label: 'Forward' },
         { value: 'backward', label: 'Backward' },
       ] },
-      { key: 'startLength', label: 'Start Length', type: 'number', min: 3, max: 9 },
-      { key: 'maxLength', label: 'Max Length', type: 'number', min: 3, max: 12 },
+      { key: 'startLength', label: 'Start Length', type: 'number', ...pairBounds('digit-span', 'low') },
+      { key: 'maxLength', label: 'Max Length', type: 'number', ...pairBounds('digit-span', 'high') },
       { key: 'showMs', label: 'Show Time (ms)', type: 'number', min: 400, max: 4000 },
     ],
     defaults: { enabled: true, progressive: true, direction: 'forward', startLength: 3, maxLength: 8, showMs: 1000 },
@@ -242,8 +245,8 @@ const COGNITIVE_DRILL_META = {
         { value: 'choice', label: 'Choice' },
       ] },
       { key: 'count', label: 'Trials', type: 'number', min: 5, max: 40 },
-      { key: 'minDelayMs', label: 'Min Delay (ms)', type: 'number', min: 300, max: 5000 },
-      { key: 'maxDelayMs', label: 'Max Delay (ms)', type: 'number', min: 300, max: 8000 },
+      { key: 'minDelayMs', label: 'Min Delay (ms)', type: 'number', ...pairBounds('reaction-time', 'low') },
+      { key: 'maxDelayMs', label: 'Max Delay (ms)', type: 'number', ...pairBounds('reaction-time', 'high') },
       // Only meaningful in Choice mode (the generator ignores it for Simple),
       // but shown unconditionally — DrillCard has no per-field conditional
       // visibility and this mirrors how other fields already behave.
@@ -270,12 +273,12 @@ const COGNITIVE_DRILL_META = {
     fields: [
       { key: 'count', label: 'Trials', type: 'number', min: 6, max: 60 },
       { key: 'noGoPct', label: 'No-Go Trials (%)', type: 'number', min: 5, max: 80 },
-      { key: 'stimulusMs', label: 'Stimulus (ms)', type: 'number', min: 100, max: 2000 },
+      { key: 'stimulusMs', label: 'Stimulus (ms)', type: 'number', ...pairBounds('go-no-go', 'low') },
       { key: 'lureSimilarity', label: 'Lure Similarity', type: 'select', options: [
         { value: 'low', label: 'Low' },
         { value: 'high', label: 'High' },
       ] },
-      { key: 'responseDeadlineMs', label: 'Response Deadline (ms)', type: 'number', min: 500, max: 5000 },
+      { key: 'responseDeadlineMs', label: 'Response Deadline (ms)', type: 'number', ...pairBounds('go-no-go', 'high') },
     ],
     defaults: { enabled: false, progressive: true, count: 20, noGoPct: 25, stimulusMs: 600, lureSimilarity: 'low', responseDeadlineMs: 1400 },
   },
@@ -465,7 +468,7 @@ function GroupBulkToggle({ groupLabel, onEnableAll, onDisableAll }) {
   );
 }
 
-function DrillCard({ type, meta, drillConfig, enabled, accent, onToggle, onUpdateField, adaptiveInfo, progressive, onToggleProgressive, progressInfo, managedFieldKeys = [], speedGated = false, managedLabel = 'Manual knobs', onPreviewHowItWorks }) {
+function DrillCard({ type, meta, drillConfig, enabled, accent, onToggle, onUpdateField, adaptiveInfo, progressive, onToggleProgressive, progressInfo, managedFieldKeys = [], speedGated = false, managedLabel = 'Manual knobs', onPreviewHowItWorks, fieldErrors = [] }) {
   // Label and description both come from the shared registries in constants.js —
   // the per-module META objects carry only the knobs, so a drill rename is one edit.
   const label = DRILL_LABELS[type];
@@ -545,8 +548,9 @@ function DrillCard({ type, meta, drillConfig, enabled, accent, onToggle, onUpdat
               ) : (
                 <input
                   type="number"
-                  min={field.min}
+                  min={COGNITIVE_PAIR_CONSTRAINTS[type]?.high.key === field.key ? dependentMin(type, drillConfig) : field.min}
                   max={field.max}
+                  aria-invalid={fieldErrors.some(e => e.field === field.key) || undefined}
                   value={drillConfig[field.key] ?? ''}
                   onChange={e => onUpdateField(field.key, e.target.value)}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
@@ -556,6 +560,10 @@ function DrillCard({ type, meta, drillConfig, enabled, accent, onToggle, onUpdat
           ))}
         </div>
       )}
+
+      {fieldErrors.map(e => (
+        <p key={e.field} role="alert" className="text-xs text-port-error mt-2">{e.message}</p>
+      ))}
 
       {enabled && supportsProgressive && progressive && <ProgressiveBadge info={progressInfo} speedGated={speedGated} managedLabel={managedLabel} />}
       {enabled && !(supportsProgressive && progressive) && <AdaptiveBadge info={adaptiveInfo} />}
@@ -819,6 +827,11 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   const availableModels = filterSelectableModels(selectedProvider?.models);
 
   async function handleSave() {
+    const pairError = Object.entries(cognitiveDrillTypes).flatMap(([type, cfg]) => validateCognitivePair(type, cfg))[0];
+    if (pairError) {
+      toast.error(pairError.message);
+      return;
+    }
     setSaving(true);
     const updated = await updatePostConfig({
       mentalMath: { drillTypes },
@@ -1117,6 +1130,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                 speedGated={false}
                 managedLabel="The difficulty knobs"
                 onPreviewHowItWorks={() => setHowItWorksType(type)}
+                fieldErrors={validateCognitivePair(type, drillConfig)}
               />
             );
           })}

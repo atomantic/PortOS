@@ -642,3 +642,30 @@ describe('PostDrillConfig', () => {
     });
   });
 });
+
+describe('PostDrillConfig cognitive pair constraints (#9460)', () => {
+  const invalidConfig = {
+    ...config,
+    cognitive: {
+      enabled: true,
+      drillTypes: { 'reaction-time': { enabled: true, mode: 'simple', count: 15, minDelayMs: 5000, maxDelayMs: 300, choices: 3 } },
+    },
+  };
+
+  it('shows a named field error and blocks Save for an inverted pair', async () => {
+    await renderConfig(<PostDrillConfig config={invalidConfig} onSaved={vi.fn()} onBack={vi.fn()} />);
+    expect(screen.getByRole('alert').textContent).toBe('Max Delay (ms) must be at least Min Delay (ms) (5000)');
+    await saveConfig();
+    expect(updatePostConfig).not.toHaveBeenCalled();
+  });
+
+  it('raises the dependent field minimum to the paired value and allows Save once valid', async () => {
+    await renderConfig(<PostDrillConfig config={invalidConfig} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const maxInput = screen.getByLabelText('Max Delay (ms)');
+    expect(maxInput.getAttribute('min')).toBe('5000');
+    fireEvent.change(maxInput, { target: { value: '6000' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalledTimes(1);
+  });
+});
