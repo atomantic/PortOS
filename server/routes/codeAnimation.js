@@ -11,6 +11,8 @@
  *   POST /api/code-animation/:id/export     queue a frame-exact MP4 render → 202 media job
  *   GET  /api/code-animation/:id/package    download a portable source package
  *   POST /api/code-animation/packages/validate   check package data/integrity only
+ *   POST /api/code-animation/projects/:id/stage-runs            start a bounded production run → 202
+ *   POST /api/code-animation/projects/:id/stage-runs/:runId/cancel   stop an active run
  */
 
 import { Router } from 'express';
@@ -32,7 +34,8 @@ import {
 import { startCodeAnimationExport } from '../services/codeAnimation/export.js';
 import { exportCodeAnimationPackage } from '../services/codeAnimation/package.js';
 import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../lib/codeAnimationPackage.js';
-import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema } from '../lib/codeAnimationProjects.js';
+import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema, codeAnimationStageRunSchema } from '../lib/codeAnimationProjects.js';
+import { startProductionStageRun, cancelProductionStageRun } from '../services/codeAnimation/stages.js';
 import {
   createProductionProject, getProductionProject, patchProductionProject,
   listProductionProjects, getProductionHistory, importProductionPackage,
@@ -209,6 +212,17 @@ router.post('/projects/:id/accept', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   const { revisionId } = validateRequest(z.object({ revisionId: z.string().uuid() }).strict(), req.body);
   res.json(await acceptProductionSource(id, revisionId));
+}));
+// An explicit, user-started stage run (style frame → pilot → inspect → repair → final).
+// 202: the run continues in the background; progress arrives as code-animation:changed.
+router.post('/projects/:id/stage-runs', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  const { run } = await startProductionStageRun(id, validateRequest(codeAnimationStageRunSchema, req.body ?? {}));
+  res.status(202).json(run);
+}));
+router.post('/projects/:id/stage-runs/:runId/cancel', asyncHandler(async (req, res) => {
+  const { id, runId } = validateRequest(z.object({ id: z.string().uuid(), runId: z.string().uuid() }).strict(), req.params);
+  res.json(cancelProductionStageRun(id, runId));
 }));
 router.get('/projects/:id/brief', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);

@@ -110,3 +110,75 @@ export async function interruptImports(projectId, activeIds) {
   await query(`UPDATE code_animation_project_runs SET status = 'interrupted', completed_at = NOW()
     WHERE project_id = $1 AND status = 'staging' AND NOT (id = ANY($2::text[]))`, [projectId, activeIds]);
 }
+
+// ---- Stage runs (#9389): one active run per project, durable status ----
+
+const RUN_ACTIVE = 'running';
+
+/**
+ * Insert a running stage run. Rows left `running` by a previous process (not in
+ * `activeIds`) are marked interrupted first, so a restart never blocks the
+ * project and never silently resumes. Another live run is a conflict.
+ */
+export async function startStageRun(id, projectId, data, activeIds) {
+  return withTransaction(async client => {
+    const project = await client.query('SELECT data FROM code_animation_projects WHERE id = $1 FOR UPDATE', [projectId]);
+    if (!project.rows[0]) throw missing();
+    await client.query(`UPDATE code_animation_project_runs SET status = 'interrupted',
+      data = data || '{"resumable":true}'::jsonb, completed_at = NOW()
+      WHERE project_id = $1 AND status = $2 AND data->>'kind' = 'production-stages' AND NOT (id = ANY($3::text[]))`,
+    [projectId, RUN_ACTIVE, activeIds]);
+    const live = await client.query(`SELECT id FROM code_animation_project_runs
+      WHERE project_id = $1 AND status = $2 AND data->>'kind' = 'production-stages' LIMIT 1`, [projectId, RUN_ACTIVE]);
+    if (live.rows[0]) {
+      throw new ServerError('A production run is already active for this project', { status: 409, code: 'CODE_ANIMATION_RUN_ACTIVE' });
+    }
+    await client.query(`INSERT INTO code_animation_project_runs (id, project_id, revision_id, status, data)
+      VALUES ($1, $2, $3, $4, $5)`, [id, projectId, data.sourceRevisionId, RUN_ACTIVE, data]);
+  });
+}
+
+export async function saveStageRun(id, status, data, { revisionId = null, completed = false } = {}) {
+  await query(`UPDATE code_animation_project_runs SET status = $2, data = $3,
+    revision_id = COALESCE($4, revision_id), completed_at = CASE WHEN $5 THEN NOW() ELSE completed_at END WHERE id = $1`,
+  [id, status, data, revisionId, completed]);
+}
+
+export async function getRunRecord(projectId, runId) {
+  const { rows } = await query(`SELECT id, status, revision_id AS "revisionId", data, created_at AS "createdAt",
+    completed_at AS "completedAt" FROM code_animation_project_runs WHERE project_id = $1 AND id = $2`, [projectId, runId]);
+  return rows[0] || null;
+}
+
+/** Add `bytes` to a run's disk reservation unless it would exceed the project budget. */
+export async function reserveRunBytes(runId, projectId, bytes) {
+  return withTransaction(async client => {
+    const project = await client.query('SELECT data FROM code_animation_projects WHERE id = $1 FOR UPDATE', [projectId]);
+    if (!project.rows[0]) throw missing();
+    const used = await client.query("SELECT COALESCE(SUM((data->>'reservedBytes')::bigint), 0) AS bytes FROM code_animation_project_runs WHERE project_id = $1", [projectId]);
+    if (Number(used.rows[0].bytes) + bytes > project.rows[0].data.budgets.diskBytes) return false;
+    await client.query(`UPDATE code_animation_project_runs SET data = jsonb_set(data, '{reservedBytes}',
+      to_jsonb(COALESCE((data->>'reservedBytes')::bigint, 0) + $2::bigint)) WHERE id = $1`, [runId, bytes]);
+    return true;
+  });
+}
+
+/** A repaired source is a new immutable candidate revision; the accepted one is untouched. */
+export async function commitRepairRevision(projectId, revision) {
+  return withTransaction(async client => {
+    const { rows } = await client.query(`SELECT ${columns} FROM code_animation_projects WHERE id = $1 FOR UPDATE`, [projectId]);
+    if (!rows[0]) throw missing();
+    await client.query(`INSERT INTO code_animation_project_revisions
+      (id, project_id, package_hash, source_hash, total_bytes, data) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [revision.id, projectId, revision.packageHash, revision.sourceHash, revision.totalBytes, revision]);
+    const saved = await client.query(`UPDATE code_animation_projects SET candidate_revision_id = $2, updated_at = NOW()
+      WHERE id = $1 RETURNING ${columns}`, [projectId, revision.id]);
+    return present(saved.rows[0]);
+  });
+}
+
+export async function interruptStageRuns(projectId, activeIds) {
+  await query(`UPDATE code_animation_project_runs SET status = 'interrupted',
+    data = data || '{"resumable":true}'::jsonb, completed_at = NOW()
+    WHERE project_id = $1 AND status = 'running' AND data->>'kind' = 'production-stages' AND NOT (id = ANY($2::text[]))`, [projectId, activeIds]);
+}

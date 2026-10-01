@@ -36,3 +36,10 @@ export const codeAnimationProjectSchema = z.object({
 }).strict();
 
 export const codeAnimationProjectPatchSchema = partialWithoutDefaults(codeAnimationProjectSchema);
+
+// POST /projects/:id/stage-runs. Starting is an explicit user action; the body
+// can only name which stored revision to work from or which stopped run to resume.
+export const codeAnimationStageRunSchema = z.object({
+  revisionId: z.string().uuid().optional(),
+  resumeFromRunId: z.string().uuid().optional(),
+}).strict().refine(value => !(value.revisionId && value.resumeFromRunId), 'Choose a revision or a run to resume, not both');
