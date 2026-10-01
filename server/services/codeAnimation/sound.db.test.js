@@ -23,6 +23,7 @@ import { errorMiddleware } from '../../lib/errorHandler.js';
 import { request } from '../../lib/testHelper.js';
 import { PATHS } from '../../lib/paths.js';
 import { createCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
+import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { soundTimeline, synthesizeSoundtrack } from '../../lib/codeAnimationSound.js';
 import { evaluateVerdict } from './evidence.js';
 import { sampleFilm, renderViaMediaQueue } from './stageRender.js';
@@ -114,7 +115,10 @@ describe.skipIf(!ready)('Revision-bound sound public workflows', () => {
     const wav = synthesizeSoundtrack(soundTimeline(revision.manifest));
     for (const source of ['upload', 'library']) {
       const root = source === 'upload' ? PATHS.uploads : PATHS.music;
-      await mkdir(root, { recursive: true }); await writeFile(join(root, 'example.wav'), wav);
+      const left = new Float32Array(96000);
+      for (let i = 0; i < left.length; i++) left[i] = wav.readInt16LE(44 + i * 2) / 32768;
+      const antiPhase = pcmToWavBuffer([left, Float32Array.from(left, sample => -sample)], { sampleRate: 48000 });
+      await mkdir(root, { recursive: true }); await writeFile(join(root, 'example.wav'), antiPhase);
       const response = await post(`/projects/${project.id}/sound-assets`, { revisionId: revision.id, source, filename: 'example.wav' });
       expect(response.status).toBe(201);
       const exported = (await get(`/projects/${project.id}/revisions/${response.body.revision.id}/package`)).body;
@@ -122,7 +126,8 @@ describe.skipIf(!ready)('Revision-bound sound public workflows', () => {
       // Once staged, the original is irrelevant to offline production.
       await writeFile(join(root, 'example.wav'), 'replaced');
       const run = await terminal(project.id, () => post(`/projects/${project.id}/stage-runs`, {}));
-      expect(run.data.soundtrack).toMatchObject({ kind: 'file', measured: { durationMs: 2000, frames: 96000 } });
+      expect(run.data.soundtrack).toMatchObject({ kind: 'file', measured: { durationMs: 2000, frames: 96000, channels: 2 } });
+      expect(run.data.soundtrack.measured.rms).toBeGreaterThan(0.01);
     }
     expect((await post(`/projects/${project.id}/sound-assets`, { revisionId: revision.id, source: 'upload', filename: '/private/example.wav' })).status).toBe(400);
   });

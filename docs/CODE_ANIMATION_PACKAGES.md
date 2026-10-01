@@ -205,7 +205,7 @@ of total synthesis work. Event durations must fit the film. Preview plays the
 persisted WAV used by final muxing; a live Web Audio clock is never captured.
 
 Portable `file` audio is normalized to this same grid (trimmed or padded, without
-looping). `POST /api/code-animation/projects/:id/sound-assets` accepts an explicit
+looping), preserving stereo channels. `POST /api/code-animation/projects/:id/sound-assets` accepts an explicit
 `revisionId`, `source` (`upload` or `library`) and existing audio `filename`
 basename. It copies validated asset bytes into a new immutable package candidate;
 there are no host-path inputs. The portable package limits still apply (2 MiB

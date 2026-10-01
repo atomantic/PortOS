@@ -147,7 +147,11 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
     for (const source of ['upload', 'library']) {
       const root = source === 'upload' ? PATHS.uploads : PATHS.music;
       await mkdir(root, { recursive: true });
-      await writeFile(join(root, 'example.wav'), wav);
+      const { pcmToWavBuffer } = await import('../../lib/chiptuneRender.js');
+      const left = new Float32Array(96000);
+      for (let i = 0; i < left.length; i++) left[i] = wav.readInt16LE(44 + i * 2) / 32768;
+      const stereo = pcmToWavBuffer([left, Float32Array.from(left, sample => -sample)], { sampleRate: 48000 });
+      await writeFile(join(root, 'example.wav'), stereo);
       const staged = await stageProductionSoundAsset(projectId, { revisionId: data.currentRevisionId, source, filename: 'example.wav' });
       await writeFile(join(root, 'example.wav'), 'replaced');
       const next = await startProductionStageRun(projectId, { revisionId: staged.revision.id }, {
@@ -156,6 +160,8 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
       expect(await next.done).toBe('completed');
       const saved = (await getProductionHistory(projectId, { limit: 1, offset: 0 })).items[0].data;
       expect(saved.soundtrack.kind).toBe('file');
+      expect(saved.soundtrack.measured.channels).toBe(2);
+      expect(saved.output.audioEvidence.decodedChannels).toBe(2);
       expect(saved.output.audioEvidence.peak).toBeGreaterThan(0.1);
       expect(saved.output.audioEvidence.decodedDurationSeconds).toBeCloseTo(2, 1);
       expect(saved.output.audioEvidence.packageHash).toBe(staged.revision.packageHash);

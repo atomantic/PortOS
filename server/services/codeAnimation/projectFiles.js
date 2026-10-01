@@ -157,7 +157,7 @@ export async function readRunArtifact(projectId, runId, name, sha256) {
   const handle = await open(join(dir, name), constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.size > 44 + 180 * 48000 * 2) throw unsafe();
+    if (!info.isFile() || info.size > 44 + 180 * 48000 * 2 * 2) throw unsafe();
     const bytes = await handle.readFile();
     if (createHash('sha256').update(bytes).digest('hex') !== sha256) throw unsafe();
     return bytes;
