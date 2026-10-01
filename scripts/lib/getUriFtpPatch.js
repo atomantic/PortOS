@@ -30,7 +30,8 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 export const GET_URI_PATCH_TARGET_VERSION = '6.0.5';
-export const GET_URI_PATCH_MARKER = '/* portos-patch #9462: unix LIST modified date */';
+const MARKER_BEGIN = '/* portos-patch #9462 begin';
+const MARKER_END = '/* portos-patch #9462 end */\n';
 
 const ANCHOR = 'lastModified = entry.modifiedAt;';
 const HELPER_ANCHOR = 'const ftp = ';
@@ -88,25 +89,39 @@ export function parseUnixListDate(raw, now = Date.now()) {
   throw fail();
 }
 
-/**
- * Patch `<nodeModulesDir>/get-uri/dist/ftp.js` in place. Idempotent. Returns
- * `absent` (get-uri not installed here), `patched`, `already-patched`, or
- * `unrecognized` (a get-uri this patch was not written for — never edited blind).
- */
-export function applyGetUriFtpPatch(nodeModulesDir) {
-  const file = join(nodeModulesDir, 'get-uri', 'dist', 'ftp.js');
-  if (!existsSync(file)) return 'absent';
-  const source = readFileSync(file, 'utf8');
-  if (source.includes(GET_URI_PATCH_MARKER)) return 'already-patched';
-  if (!source.includes(ANCHOR) || !source.includes(HELPER_ANCHOR)) return 'unrecognized';
-  const helper = `${GET_URI_PATCH_MARKER}\n${parseUnixListDate.toString()}\n`;
-  const patched = source.replace(ANCHOR, PATCHED).replace(HELPER_ANCHOR, `${helper}${HELPER_ANCHOR}`);
-  writeFileSync(file, patched);
-  return 'patched';
-}
-
 /** Changes whenever the injected code or its target does — see trusted-rebuild-stamp.js. */
 export const patchFingerprint = () => createHash('sha256')
   .update([GET_URI_PATCH_TARGET_VERSION, ANCHOR, PATCHED, parseUnixListDate.toString()].join('\0'))
   .digest('hex')
   .slice(0, 16);
+
+// Reverts a previously injected patch so a changed patch replaces it instead of
+// stacking on (or being skipped behind) the old one.
+const stripPatch = (source) => {
+  const start = source.indexOf(MARKER_BEGIN);
+  const end = source.indexOf(MARKER_END);
+  const base = start !== -1 && end > start
+    ? source.slice(0, start) + source.slice(end + MARKER_END.length)
+    : source;
+  return base.replace(/lastModified = entry\.modifiedAt \?\? parseUnixListDate\([^;]*\);/, ANCHOR);
+};
+
+/**
+ * Patch `<nodeModulesDir>/get-uri/dist/ftp.js` in place. Idempotent, and a
+ * changed patch replaces the one an earlier install injected. Returns `absent`
+ * (get-uri not installed here), `patched`, `already-patched`, or
+ * `unrecognized` (a get-uri this patch was not written for — never edited blind).
+ */
+export function applyGetUriFtpPatch(nodeModulesDir) {
+  const file = join(nodeModulesDir, 'get-uri', 'dist', 'ftp.js');
+  if (!existsSync(file)) return 'absent';
+  const installed = readFileSync(file, 'utf8');
+  const fingerprint = patchFingerprint();
+  if (installed.includes(`${MARKER_BEGIN} ${fingerprint} */`)) return 'already-patched';
+  const source = stripPatch(installed);
+  if (!source.includes(ANCHOR) || !source.includes(HELPER_ANCHOR)) return 'unrecognized';
+  const helper = `${MARKER_BEGIN} ${fingerprint} */\n${parseUnixListDate.toString()}\n${MARKER_END}`;
+  const patched = source.replace(ANCHOR, PATCHED).replace(HELPER_ANCHOR, `${helper}${HELPER_ANCHOR}`);
+  writeFileSync(file, patched);
+  return 'patched';
+}

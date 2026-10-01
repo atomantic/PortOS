@@ -5,7 +5,6 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import {
-  GET_URI_PATCH_MARKER,
   applyGetUriFtpPatch,
   parseUnixListDate,
   patchFingerprint
@@ -92,7 +91,20 @@ describe('applyGetUriFtpPatch', () => {
     const once = readFileSync(join(nodeModules, 'get-uri', 'dist', 'ftp.js'), 'utf8');
     expect(applyGetUriFtpPatch(nodeModules)).toBe('already-patched');
     expect(readFileSync(join(nodeModules, 'get-uri', 'dist', 'ftp.js'), 'utf8')).toBe(once);
-    expect(once.split(GET_URI_PATCH_MARKER)).toHaveLength(2);
+    expect(once.match(/portos-patch #9462 begin/g)).toHaveLength(1);
+  });
+
+  it('replaces an older injected patch instead of keeping or stacking it', () => {
+    const nodeModules = install();
+    applyGetUriFtpPatch(nodeModules);
+    const file = join(nodeModules, 'get-uri', 'dist', 'ftp.js');
+    const current = readFileSync(file, 'utf8');
+    // Simulate a tree patched by an earlier release of this patch.
+    writeFileSync(file, current
+      .replace(/begin [0-9a-f]{16}/, 'begin 0000000000000000')
+      .replace(/function parseUnixListDate[\s\S]*?\n}\n/, 'function parseUnixListDate() { return new Date(0); }\n'));
+    expect(applyGetUriFtpPatch(nodeModules)).toBe('patched');
+    expect(readFileSync(file, 'utf8')).toBe(current);
   });
 
   it('reports a missing install and never edits a get-uri it does not recognize', () => {
