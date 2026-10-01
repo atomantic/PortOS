@@ -72,6 +72,7 @@ function RunView({ run, production, codeFirst }) {
       </div>
       {run.directive && <p className="text-port-text-muted break-words">Directive: {run.directive}</p>}
       {run.authoring && <p className="text-port-text-muted">Authoring: {run.authoring.providerId} · {run.authoring.model} · {run.authoring.costUsd == null ? 'unknown dollar cost (generation count still bounded)' : 'no per-call dollar charge; local compute or quota may apply'}</p>}
+      {steps.some((step) => step.kind === 'plate') && <p className="text-port-text-muted">Plate preflight calls consume the generation limit. {steps.some((step) => step.kind === 'plate' && step.costUsd == null) ? 'Their dollar cost is unpriced; use a free vision API reviewer for dollar-capped runs.' : 'Their reserved dollar cost is included in the run total.'}</p>}
       {run.authoring && <p className="text-port-text-muted">{['author', 'frame', 'clip'].map((kind) => {
         const used = steps.filter((step) => step.kind === kind && step.status !== 'refused');
         const cost = used.reduce((total, step) => total + (step.costUsd || 0), 0);

@@ -1,3 +1,5 @@
+import { plateReviewEvidence } from './plateReview.js';
+import { plateRequirements } from '../../lib/musicVideoPlateEvidence.js';
 import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 /**
  * Music Video production run (#9066) — orchestration contract with injected
@@ -45,6 +47,8 @@ const queue = {
   mediaJobEvents,
 };
 const dispatch = vi.fn();
+const reviewPlate = vi.fn();
+const resolvePlateReviewer = vi.fn();
 const planProject = vi.fn();
 const startCastAndSets = vi.fn();
 const startAutoReview = vi.fn();
@@ -122,6 +126,11 @@ beforeEach(() => {
   nextJobId = 0;
   vi.clearAllMocks();
   dispatch.mockImplementation(enqueueing);
+  resolvePlateReviewer.mockResolvedValue({ provider: { id: 'reviewer-example', type: 'api' }, model: 'vision-example', costUsd: 0 });
+  reviewPlate.mockImplementation(async ({ scene, assetId, runId, beforeExecute }) => {
+    await beforeExecute();
+    return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({ id, status: 'pass', note: 'Visible starting state' })) }));
+  });
   planProject.mockResolvedValue({ scenesAdded: 0 });
   startAutoReview.mockImplementation(async (projectId, input) => {
     const reviewRun = { id: 'mvar-example', status: 'running', productionRunId: input.productionRunId, limits: input.limits, usage: { reviews: 0, generations: 0 } };
@@ -131,6 +140,7 @@ beforeEach(() => {
   });
   service.__setProductionDepsForTests({
     loadEnv: async () => env,
+    reviewPlate, resolvePlateReviewer,
     dispatch,
     queue: async () => queue,
     planProject,
@@ -843,4 +853,115 @@ it('requires reauthoring and a new review after an accepted policy/selected-asse
   expect(author).toHaveBeenCalledTimes(2);
   expect(autoReview.cancelAutoReview).toHaveBeenCalledWith('mv-example', 'mvar-example');
   expect(theRun().documentCheckpoint.directory).toBe(current().composition.document.directory);
+});
+
+// These workflow tests catch spending video budget before asset-bound admission,
+// loss of candidate history, and stop/selection races while vision is in flight.
+describe('authored plate preflight', () => {
+  const contract = { version: 1, purpose: 'Two people greet', actions: [{ startSec: 0, endSec: 2, subject: 'Person A', description: 'waves' }], reactions: [{ startSec: 2, endSec: 4, subject: 'Person B', description: 'waves back' }] };
+  const plateScene = () => ({ sceneId: 'mvs-a', label: 'Greeting', startSec: 0, endSec: 4, framePrompt: 'Two people greet', prompt: 'Both wave', referenceImageId: 'one.png', direction: { actionContract: contract }, takes: [{ takeId: 'take-one', kind: 'image', assetId: 'one.png', status: 'candidate' }] });
+  const verdict = (args, status) => plateReviewEvidence(args.scene, args.assetId, args.runId, JSON.stringify({ checks: plateRequirements(args.scene).map(({ id }) => ({ id, status: id === 'plate-2' ? status : 'pass', note: status === 'fail' ? 'Second person is missing' : 'Visible' })) }));
+
+  it('selects a qualifying existing candidate, retains the failed original, and charges every analysis before video', async () => {
+    const scene = plateScene();
+    scene.takes.push({ takeId: 'take-two', kind: 'image', assetId: 'two.png', status: 'candidate' });
+    seedProject({ scenes: [scene] });
+    reviewPlate.mockImplementation(async (args) => { await args.beforeExecute(); return verdict(args, args.assetId === 'one.png' ? 'fail' : 'pass'); });
+    await start();
+    expect(current().scenes[0].referenceImageId).toBe('two.png');
+    expect(current().scenes[0].takes.map((take) => take.assetId)).toEqual(['one.png', 'two.png']);
+    expect(current().scenes[0].takes[0].plateEvidence.verdict).toBe('fail');
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0][0]).toMatchObject({ stepKind: 'clip', scene: { referenceImageId: 'two.png' } });
+    expect(theRun().usage.generations).toBe(3);
+  });
+
+  it('repairs at most once through the allowed image queue and charges the repair plus both reviews', async () => {
+    seedProject({ scenes: [plateScene()] });
+    reviewPlate.mockImplementation(async (args) => { await args.beforeExecute(); return verdict(args, args.assetId === 'one.png' ? 'fail' : 'pass'); });
+    await start();
+    expect(dispatch.mock.calls.map(([args]) => args.stepKind)).toEqual(['frame']);
+    const repairJob = jobs[0];
+    repairJob.status = 'completed';
+    store.get('mv-example').scenes[0].takes.push({ takeId: 'take-repaired', kind: 'image', assetId: 'repaired.png', status: 'candidate' });
+    mediaJobEvents.emit('completed', repairJob);
+    musicVideoEvents.emit('scene-image', { projectId: 'mv-example', sceneId: 'mvs-a' });
+    await settle();
+    expect(dispatch.mock.calls.map(([args]) => args.stepKind)).toEqual(['frame', 'clip']);
+    expect(current().scenes[0].referenceImageId).toBe('repaired.png');
+    expect(current().scenes[0].takes.map((take) => take.assetId)).toEqual(['one.png', 'repaired.png']);
+    expect(theRun().usage.generations).toBe(4);
+  });
+
+  it('leaves inconclusive analysis resumable without a generation retry loop', async () => {
+    seedProject({ scenes: [plateScene()] });
+    reviewPlate.mockImplementation(async (args) => verdict(args, 'unverified'));
+    await start();
+    expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 1 } });
+    expect(dispatch).not.toHaveBeenCalled();
+    await settle();
+    expect(reviewPlate).toHaveBeenCalledTimes(1);
+    expect(theRun().stopReason).toMatch(/inconclusive/);
+  });
+
+  it('blocks unknown-cost vision before a dollar-capped run spends, then resumes with a free reviewer', async () => {
+    seedProject({ scenes: [plateScene()] });
+    resolvePlateReviewer.mockResolvedValue({ provider: { id: 'reviewer-example' }, model: 'vision-example', costUsd: null });
+    await start({ pool: [POOL[0], POOL[2]], limits: { ...LIMITS, spendCapUsd: 5 } });
+    expect(theRun().status).toBe('blocked');
+    expect(reviewPlate).not.toHaveBeenCalled();
+    expect(theRun().usage.generations).toBe(0);
+    resolvePlateReviewer.mockResolvedValue({ provider: { id: 'reviewer-example' }, model: 'vision-example', costUsd: 0 });
+    reviewPlate.mockImplementation(async (args) => verdict(args, 'fail'));
+    await service.resumeProduction('mv-example', theRun().id, { limits: { maxGenerations: 10 } });
+    await settle();
+    expect(dispatch.mock.calls.map(([args]) => args.stepKind)).toEqual(['frame']);
+    expect(theRun().usage.generations).toBe(2);
+  });
+
+  it('refuses repair when the preceding analysis exhausted the generation budget', async () => {
+    seedProject({ scenes: [plateScene()] });
+    reviewPlate.mockImplementation(async (args) => verdict(args, 'fail'));
+    await start({ limits: { ...LIMITS, maxGenerations: 1 } });
+    expect(theRun()).toMatchObject({ status: 'limit-reached', usage: { generations: 1 } });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not animate or store approval when the selection changes during vision', async () => {
+    seedProject({ scenes: [plateScene()] });
+    reviewPlate.mockImplementation(async (args) => {
+      store.get('mv-example').scenes[0].referenceImageId = 'other.png';
+      return verdict(args, 'pass');
+    });
+    await start();
+    expect(theRun().status).toBe('blocked');
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(current().scenes[0].takes[0].plateEvidence).toBeUndefined();
+  });
+
+  it('rejects a selection race at the final video submission boundary', async () => {
+    seedProject({ scenes: [plateScene()] });
+    dispatch.mockImplementation(async ({ tag }) => {
+      store.get('mv-example').scenes[0].referenceImageId = 'changed-after-reservation.png';
+      await service.assertProductionSubmission('mv-example', tag.productionRunId, tag.productionStepKey, { sceneId: 'mvs-a', kind: 'video' });
+      return enqueueing({ stepKind: 'clip', tag });
+    });
+    await start();
+    expect(jobs).toHaveLength(0);
+    expect(theRun().status).toBe('blocked');
+    expect(theRun().usage.generations).toBe(1);
+  });
+
+  it('honors cancellation while plate analysis is running, retaining its spend and no video job', async () => {
+    seedProject({ scenes: [plateScene()] });
+    let finish;
+    reviewPlate.mockImplementation((args) => new Promise((resolve) => { finish = () => resolve(verdict(args, 'pass')); }));
+    const { run } = await service.startProduction('mv-example', { pool: POOL, limits: LIMITS, reviewer: {} });
+    while (!finish) await new Promise((resolve) => setTimeout(resolve, 0));
+    await service.cancelProduction('mv-example', run.id);
+    finish();
+    await settle();
+    expect(theRun()).toMatchObject({ status: 'canceled', usage: { generations: 1 } });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });

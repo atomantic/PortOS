@@ -1,3 +1,4 @@
+import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
@@ -87,6 +88,7 @@ export default function TreatmentShotList({ project, treatment, onSave }) {
                 <DirectionText id={idFor(d.sceneId, 'out')} label="Exit" value={d.transitionOut} maxLength={300}
                   onCommit={(transitionOut) => save(d.sceneId, { transitionOut })} />
               </div>
+              <PlateComparison scene={scene} />
               <ShotActionInspector contract={d.actionContract} scene={scene} onSave={(actionContract) => save(d.sceneId, { actionContract })} />
               {d.rationale && <p className="text-[11px] text-port-text-muted">{d.rationale}</p>}
               {d.typographyRole !== 'none' && d.negativeSpace === 'none' && (
