@@ -215,6 +215,12 @@ export function cloneProjectRecord(source, {
     createdAt: now,
     updatedAt: now,
     scenes,
+    ...(source.composition?.grade ? { composition: {
+      ...source.composition,
+      grade: { ...source.composition.grade, sections: (source.composition.grade.sections || []).map((section) => ({
+        ...section, sceneId: sceneIdMap.get(section.sceneId) ?? section.sceneId,
+      })) },
+    } } : {}),
     // #8980 — the treatment's shot directions and proofs follow the scenes to
     // their new ids; proof evidence the clone can't back is dropped.
     treatment: source.treatment ? remapTreatmentForClone(source.treatment, sceneIdMap, {

@@ -37,7 +37,7 @@ const SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSu
 // the terminal race releases a pending write on exit, disconnect or cancel.
 // `offsetSec` seeks a window of a longer timeline: frame n is drawn at
 // `offsetSec + n / fps` (a music-video excerpt stays on song time).
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, videoFilter = null, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const tag = await tagFilter();
@@ -62,7 +62,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   const args = ['-hide_banner', '-loglevel', 'error', ...input, '-framerate', String(fps * sub), '-i', 'pipe:0'];
   if (exactAudio) args.push('-ss', String(exactAudio.startSec ?? 0), '-t', String(durationSec), '-i', exactAudio.path);
   else if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
-  args.push('-map', '0:v', '-vf', [motionBlurFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
+  args.push('-map', '0:v', '-vf', [motionBlurFilter, videoFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
   if (exactAudio) args.push('-map', '1:a', ...AAC_ENCODE_ARGS);
   else if (musicPath) args.push('-map', '1:a', '-af', `atrim=duration=${durationSec},asetpts=PTS-STARTPTS,afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
   args.push('-frames:v', String(numFrames), '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath);

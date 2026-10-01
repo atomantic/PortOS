@@ -1,3 +1,4 @@
+import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render a project's composition document over the song.
  *
@@ -345,6 +346,7 @@ export async function encodeDocumentComposition({
     const target = documentTargetFrame({ ...parsed.data, motionBlur: 1 }, project);
     const window = documentRenderWindow(target, { windowStart, windowEnd });
     await encodeComposition(page, { ...target, durationSec: window.durationSec }, silent, {
+      videoFilter: musicVideoGradeFilter(project.composition?.grade, data.scenes, { fps: target.fps, offsetSec: window.startSec }),
       signal, offsetSec: window.startSec, onProgress: (fraction) => onProgress?.(fraction * 0.95),
     });
     page.check();

@@ -811,3 +811,4 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `musicVideoActionContract.js` | Versioned shot intent shape/timing validation and clip-relative frame/motion prompt compilation, shared by treatment and the board. |
 | `sheetPointers.js` | Browser-safe persisted character-sheet layout: `LEGACY_SHEET_VARIANT_ID`, `readSheetPointer`, `listSheetPointers`, identity-preserving `applySheetPointerToCharacter`, and default-variant browser adapter `applySheetPointer`. |
+| `musicVideoGrade.js` | Opt-in Music Video grade presets, bounded normalization, and shared song-timed RGB curves with deterministic grain for composed and document encodes. |

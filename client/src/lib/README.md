@@ -299,3 +299,5 @@ grep -i "what you want to do" client/src/lib/README.md
 
 | `layoutRoutes.js` | `isFullWidthRoute(pathname)` classifies routes that own their scrolling layout. |
 | `navPresentation.js` | Sidebar icon presentation and section ordering, separate from the Layout React refresh boundary. |
+
+| `musicVideoGrade.js` | Shared Music Video grade preset and grain bounds for the composition controls. |

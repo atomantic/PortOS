@@ -1,3 +1,4 @@
+import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -363,6 +364,14 @@ export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
   mode: z.enum(MUSIC_VIDEO_COMPOSITION_MODES).optional(),
   cutting: z.enum(MUSIC_VIDEO_CUTTING_MODES).optional(),
+  grade: z.object({
+    preset: z.enum(MUSIC_VIDEO_GRADE_PRESETS).optional(),
+    grain: z.number().min(0).max(MUSIC_VIDEO_GRADE_MAX_GRAIN).optional(),
+    sections: z.array(z.object({
+      sceneId: z.string().min(1).max(120),
+      preset: z.enum(MUSIC_VIDEO_GRADE_PRESETS),
+    }).strict()).max(1000).optional(),
+  }).strict().nullable().optional(),
   textCues: z.array(musicVideoTextCueSchema).max(1000).optional(),
   style: z.object({
     color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').optional(),

@@ -2188,3 +2188,28 @@ describe('MusicVideo stage tabs (#9243)', () => {
     });
   });
 });
+
+it('waits for a grade save before rendering and keeps the saved look when a later save fails', async () => {
+  const project = { ...PROJECT_WITH_CLIP, composition: { mode: 'composed', textCues: [], style: { color: '#ffffff', font: 'sans' } } };
+  let finishSave;
+  updateMusicVideoProject.mockImplementationOnce((_id, patch) => new Promise((resolve) => {
+    finishSave = () => resolve({ ...project, ...patch });
+  }));
+  await openProject(project, 'compose');
+  fireEvent.change(screen.getByLabelText('Default section look'), { target: { value: 'teal-night' } });
+  await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id,
+    { composition: expect.objectContaining({ grade: expect.objectContaining({ preset: 'teal-night' }) }) }, { silent: true }));
+  expect(screen.getByLabelText('Default section look')).toBeDisabled();
+  expect(screen.getByLabelText('Default section look').value).toBe('neutral');
+  await openStage('review');
+  expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
+  expect(renderMusicVideoProject).not.toHaveBeenCalled();
+  await act(async () => { finishSave(); });
+  expect(screen.getByRole('button', { name: /^Render final$/ })).not.toBeDisabled();
+  await openStage('compose');
+  expect(screen.getByLabelText('Default section look').value).toBe('teal-night');
+  updateMusicVideoProject.mockRejectedValueOnce(new Error('Grade save unavailable'));
+  fireEvent.change(screen.getByLabelText('Default section look'), { target: { value: 'golden-hour' } });
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Grade save unavailable'));
+  expect(screen.getByLabelText('Default section look').value).toBe('teal-night');
+});
