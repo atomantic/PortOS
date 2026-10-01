@@ -181,7 +181,7 @@ describe('stageRunner — context windows', () => {
       { type: 'api', endpoint: 'http://localhost:11434/v1', numCtx: 131_072, modelContextWindows: { 'qwen3:32b': 40_960 } },
       'qwen3:32b'
     )).toBe(40_960);
-    // Only Ollama honors the runner's top-level num_ctx; for anything else the
+    // Only an Ollama daemon is sent num_ctx (native /api/chat); for anything else the
     // field constrains nothing, so the ladder is untouched.
     expect(effectiveContextWindow(
       { id: 'codex', type: 'cli', command: 'codex', numCtx: 32_768 },
