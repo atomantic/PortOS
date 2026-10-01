@@ -68,13 +68,13 @@ const takeTails = new Map();
  * engine updates alongside (e.g. a title). Resolves to the updated track, or
  * null when the track is gone. Shared by the offline LLM-music renderers.
  */
-export function appendActiveTake(trackId, { audioFilename, engine, prompt, durationSec }, patch = {}) {
+export function appendActiveTake(trackId, { audioFilename, engine, prompt, durationSec, codeProvenance }, patch = {}) {
   // Serialized per track: two renders finishing together would otherwise both
   // read the same history and the later write would drop the other's take.
   const run = (takeTails.get(trackId) || Promise.resolve()).catch(() => null).then(async () => {
     const current = await getTrack(trackId);
     if (!current) return null;
-    const { renders } = buildRenderAppend(current, { audioFilename, prompt, engine, durationSec });
+    const { renders } = buildRenderAppend(current, { audioFilename, prompt, engine, durationSec, codeProvenance });
     return updateTrack(trackId, { ...patch, audioFilename, engine, modelId: '', durationSec, renders });
   });
   takeTails.set(trackId, run);

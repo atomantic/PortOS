@@ -20,8 +20,10 @@ import { ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { trimTo } from '../lib/textUtils.js';
 import { wavDurationMs, writeWavAudioFile } from '../lib/wavAudioFile.js';
+import { readFile } from 'fs/promises';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import * as tracks from './tracks/index.js';
+import { readSuperColliderPreview } from './superColliderRender.js';
 
 const CODE_ENGINE = 'code';
 // Strudel was the first language; Tone.js the second; SuperCollider is rendered server-side (contained, offline; no browser frame) (client/src/components/music/strudelFrame.js
@@ -169,5 +171,44 @@ export async function saveCodeTakeToTrack({ trackId, wav, prompt, title }) {
   }, title ? { title } : {});
   if (!updated) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`🎹 Saved code-rendered take (${durationSec}s)`);
+  return { track: updated, filename, durationSec };
+}
+
+/**
+ * Save a finished SuperCollider preview as the track's active take (#9414).
+ * The audio is read back from the host-written preview store (never from a
+ * container), re-checked as a PCM WAV, and stored with the provenance that
+ * reproduces it: language, source, hash, seed, runtime version and settings.
+ * Previewing alone never reaches here, so it cannot change a track.
+ */
+export async function saveSuperColliderTakeToTrack({ trackId, jobId, prompt, title }) {
+  const found = await readSuperColliderPreview(jobId);
+  if (!found) throw new ServerError('Preview not found or expired. Render it again.', { status: 404, code: 'SUPERCOLLIDER_PREVIEW_NOT_FOUND' });
+  const track = await tracks.getTrack(trackId);
+  if (!track) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
+  const wav = await readFile(found.wavPath);
+  const durationMs = wavDurationMs(wav);
+  if (!durationMs) throw new ServerError('The preview is not a PCM WAV file', { status: 400, code: 'MUSIC_CODE_TAKE_NOT_WAV' });
+
+  const { preview } = found;
+  const filename = await writeWavAudioFile(wav, PATHS.music, `music-${randomUUID()}`);
+  const durationSec = Math.max(1, Math.round(durationMs / 1000));
+  const updated = await tracks.appendActiveTake(trackId, {
+    audioFilename: filename,
+    prompt: prompt || track.prompt,
+    engine: CODE_ENGINE,
+    durationSec,
+    codeProvenance: {
+      language: preview.language,
+      source: preview.source,
+      sourceHash: preview.sourceHash,
+      seed: preview.seed,
+      runtimeVersion: preview.runtime?.version,
+      policyVersion: preview.runtime?.policyVersion,
+      settings: preview.settings,
+    },
+  }, title ? { title } : {});
+  if (!updated) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
+  console.log(`🎛️ Saved SuperCollider take (${durationSec}s, seed ${preview.seed})`);
   return { track: updated, filename, durationSec };
 }
