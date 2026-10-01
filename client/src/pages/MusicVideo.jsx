@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
-import { Plus, Film, Copy, Trash2 } from 'lucide-react';
+import { Plus, Film, Copy, Trash2, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import {
@@ -34,6 +34,7 @@ import useMusicVideoPublishing from '../hooks/useMusicVideoPublishing.js';
 import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
 import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
 import useMusicVideoProduction from '../hooks/useMusicVideoProduction.js';
+import useAutonomousMusicVideo from '../hooks/useAutonomousMusicVideo.js';
 import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
@@ -47,6 +48,8 @@ import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
 import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
 import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
 import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.jsx';
+import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawer.jsx';
+import AutonomousRunPanel from '../components/musicVideo/AutonomousRunPanel.jsx';
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import MusicVideoLayout from '../components/musicVideo/MusicVideoLayout.jsx';
@@ -127,6 +130,7 @@ export default function MusicVideo() {
   const [importingLyrics, setImportingLyrics] = useState(false);
   const [aligningLyrics, setAligningLyrics] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [autonomousOpen, setAutonomousOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(emptyCreateForm);
   const selected = projects.find((p) => p.id === selectedId) || null;
@@ -202,6 +206,7 @@ export default function MusicVideo() {
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });
   const autoReview = useMusicVideoAutoReview({ project: selected, replaceProject, submitSections: revisions.submitSections });
   const production = useMusicVideoProduction({ project: selected, replaceProject });
+  const autonomous = useAutonomousMusicVideo({ project: selected, replaceProject });
   // Cast & Sets check-in (before the plan) and the development files it saves.
   const castSets = useMusicVideoCastAndSets({ project: selected, replaceProject });
   const devArtifacts = useMusicVideoDevArtifacts({ project: selected, replaceProject });
@@ -951,6 +956,14 @@ export default function MusicVideo() {
             )}
             <button
               type="button"
+              onClick={() => setAutonomousOpen(true)}
+              title="One prompt in — lyrics, a Suno song, a mood board and the video out"
+              className="flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+            >
+              <Wand2 size={15} /> Autonomous
+            </button>
+            <button
+              type="button"
               onClick={() => setCreateOpen(true)}
               className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
             >
@@ -973,6 +986,16 @@ export default function MusicVideo() {
         submitting={creating}
       />
 
+      <AutonomousStartDrawer
+        open={autonomousOpen}
+        onClose={() => setAutonomousOpen(false)}
+        onStarted={(proj) => {
+          setProjects((prev) => [...prev, proj]);
+          selectProject(proj.id);
+          setAutonomousOpen(false);
+        }}
+      />
+
       <div>
         {!selected && !loading && routeProjectId && (
           <p className="text-sm text-port-text-muted">
@@ -982,14 +1005,23 @@ export default function MusicVideo() {
         )}
         {!selected && (loading || !routeProjectId) && (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
-            <p className="text-sm text-port-text-muted mb-3">Pick a project in the header, or start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn.</p>
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="inline-flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
-            >
-              <Plus size={15} /> New music video
-            </button>
+            <p className="text-sm text-port-text-muted mb-3">Pick a project in the header, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="inline-flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+              >
+                <Plus size={15} /> New music video
+              </button>
+              <button
+                type="button"
+                onClick={() => setAutonomousOpen(true)}
+                className="inline-flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+              >
+                <Wand2 size={15} /> Autonomous
+              </button>
+            </div>
           </div>
         )}
         {selected && (
@@ -1012,7 +1044,10 @@ export default function MusicVideo() {
               />
             ) : null}
           >
-            <StageView key={selected.id} board={board} />
+            <div className="space-y-3 min-w-0">
+              <AutonomousRunPanel key={`autonomous-${selected.id}`} project={selected} auto={autonomous} />
+              <StageView key={selected.id} board={board} />
+            </div>
           </MusicVideoLayout>
         )}
       </div>

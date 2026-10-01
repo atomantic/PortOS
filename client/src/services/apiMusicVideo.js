@@ -292,6 +292,20 @@ export const stopMusicVideoProduction = (id, runId, options = {}) =>
 export const cancelMusicVideoProduction = (id, runId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/production-runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST', ...options });
 
+// ---- Fully-autonomous run: one prompt → lyrics → Suno song → video ----
+// Start body: { prompt, tools?, models?, budgetUsd?, limits?, checkpoints?, instrumental?, guidance?,
+// providerId?, model?, authoring? } → 202 { project, run }. The run advances server-side and reports
+// over the `music-video:autonomous` socket event. Resume approves the checkpoint it waits on (optionally
+// with edited { lyrics, style }) or retries the stage that stopped.
+export const startAutonomousMusicVideo = (body, options = {}) =>
+  request('/music-video/autonomous', { method: 'POST', body: JSON.stringify(body), ...options });
+export const resumeAutonomousMusicVideo = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/autonomous/resume`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const stopAutonomousMusicVideo = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/autonomous/stop`, { method: 'POST', ...options });
+export const cancelAutonomousMusicVideo = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/autonomous/cancel`, { method: 'POST', ...options });
+
 // ---- Pre-production treatment (#8980) ----
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to the
 // board's scene ids and a proof checklist. Every write names the treatment

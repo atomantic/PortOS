@@ -748,7 +748,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/media-jobs` | Async media job queue |
 | `/api/creative-director` | Creative Director projects |
 | `/api/fableloom` | FableLoom interactive story generation |
-| `/api/music-video` | Music video projects |
+| `/api/music-video` | Music video projects; [one-prompt autonomous runs](./features/music-video-autonomous.md) at `/api/music-video/autonomous` |
 | `/api/mood-boards` | Mood boards |
 | `/api/decks` | Decks (playing-card / tarot designer) |
 | `/api/writers-room` | Writers Room |

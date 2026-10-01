@@ -643,6 +643,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // live under this install's data/music-video/ and are not in the project's
   // asset manifest, so they are never sent. What an approved check-in writes
   // into ordinary fields (visual-spec references, concept subjects) syncs.
+  // The fully-autonomous run (`autonomousRun`, services/musicVideo/autonomousService.js)
+  // is wire-local like `productionRuns`: it names this install's providers, Suno
+  // songs and production run, and a peer must never execute it — no bump.
   // v10 = composition mode `document` (a project-owned HTML composition
   // document) and `composition.overlay` (its HUD settings). A v9 peer's
   // normalizeComposition collapses the unknown mode to `concat` and drops the

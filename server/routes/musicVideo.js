@@ -56,6 +56,8 @@ import {
   musicVideoAutoReviewResumeSchema,
   musicVideoProductionStartSchema,
   musicVideoProductionResumeSchema,
+  musicVideoAutonomousStartSchema,
+  musicVideoAutonomousResumeSchema,
   musicVideoDevArtifactImportSchema,
   musicVideoDevArtifactNoteSchema,
   musicVideoDevArtifactNoteUpdateSchema,
@@ -74,7 +76,6 @@ import {
 } from '../lib/validation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { safeUnder } from '../lib/ffmpeg.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
@@ -105,7 +106,8 @@ import {
   attachMidiTranscriptionSseClient,
   cancelMidiTranscription,
 } from '../services/audioMidiTranscription.js';
-import { analyzeAudioFile, analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
+import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
+import { analyzeProjectSong, resolveProjectAudioPath } from '../services/musicVideo/projectAudio.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
@@ -126,6 +128,9 @@ import {
 import {
   startProduction, resumeProduction, stopProduction, cancelProduction, getProduction,
 } from '../services/musicVideo/productionService.js';
+import {
+  startAutonomousVideo, getAutonomousRun, resumeAutonomousVideo, stopAutonomousVideo, cancelAutonomousVideo,
+} from '../services/musicVideo/autonomousService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import {
   DOCUMENT_ZIP_MAX_BYTES,
@@ -145,7 +150,7 @@ import { isZipUpload } from '../lib/zipStream.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
-import { offsetLyricMarkers, relabelAnalysisSections } from '../services/musicVideo/lyricMarkers.js';
+import { offsetLyricMarkers } from '../services/musicVideo/lyricMarkers.js';
 import {
   updateTreatment,
   compileTreatment,
@@ -153,7 +158,6 @@ import {
   applyTreatment,
   reviewProof,
 } from '../services/musicVideo/treatmentService.js';
-import { getTrack } from '../services/tracks/index.js';
 import {
   listDevArtifacts,
   getDevArtifact,
@@ -282,41 +286,11 @@ router.post('/vocal-stem/separate/:jobId/cancel', asyncHandler(async (req, res) 
   res.json({ ok: cancelVocalSeparation(req.params.jobId) });
 }));
 
-// Resolve a project's source audio to an absolute path under data/music/. The
-// filename comes from the linked track or the uploaded-audio field; both are
-// validated as safe basenames so a tampered record can't escape the directory.
-async function resolveAudioPath(project) {
-  let filename = null;
-  if (project.trackId) {
-    const track = await getTrack(project.trackId);
-    if (!track) throw new ServerError('Linked track not found', { status: 404, code: 'NOT_FOUND' });
-    filename = track.audioFilename;
-  } else if (project.uploadedAudioFilename) {
-    filename = project.uploadedAudioFilename;
-  }
-  if (!filename) {
-    throw new ServerError('Project has no audio to analyze — set a track or upload audio first', { status: 400, code: 'NO_AUDIO' });
-  }
-  const safe = safeUnder(PATHS.music, filename);
-  if (!safe) throw new ServerError('Invalid audio filename', { status: 400, code: 'VALIDATION_ERROR' });
-  return safe;
-}
-
 // Run the offline beat/tempo/section analysis and cache it on the project.
 // Synchronous: the DSP pass over a song-length track is a couple of seconds, so
 // it returns the updated project directly (the SSE-streamed render lands later).
 router.post('/:id/analyze', asyncHandler(async (req, res) => {
-  const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const audioPath = await resolveAudioPath(project);
-  const analysis = await analyzeAudioFile(audioPath);
-  if (!analysis) {
-    throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
-  }
-  // Timed lyrics with sheet headers name the fresh sections too (a no-op
-  // until the lines are aligned).
-  const updated = await setProjectAnalysis(project.id, relabelAnalysisSections(analysis, project.lyricCues, project.lyricMarkers));
-  res.json(updated);
+  res.json(await analyzeProjectSong(req.params.id));
 }));
 
 // Manual-tempo fallback: lets a director supply a known BPM + first-downbeat
@@ -333,7 +307,7 @@ router.post('/:id/analyze/manual', asyncHandler(async (req, res) => {
   const cached = project.audioAnalysis;
   const analysis = cached && Array.isArray(cached.sections) && typeof cached.durationSec === 'number'
     ? buildManualAnalysisFromCached(cached, { bpm, offsetSec })
-    : await analyzeAudioFileManual(await resolveAudioPath(project), { bpm, offsetSec });
+    : await analyzeAudioFileManual(await resolveProjectAudioPath(project), { bpm, offsetSec });
   if (!analysis) {
     throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
   }
@@ -443,7 +417,7 @@ router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
   const { model } = validateRequest(musicVideoTranscribeMidiRequestSchema, req.body || {});
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const audioPath = await resolveAudioPath(project);
+  const audioPath = await resolveProjectAudioPath(project);
   const projectId = project.id;
   // Audio-source identity at kickoff — the completion callback re-checks it so
   // a transcription of the OLD track can't land on a project whose audio was
@@ -843,6 +817,35 @@ router.post('/:id/production-runs/:runId/stop', asyncHandler(async (req, res) =>
 
 router.post('/:id/production-runs/:runId/cancel', asyncHandler(async (req, res) => {
   res.json(await cancelProduction(req.params.id, req.params.runId));
+}));
+
+// --- Fully-autonomous run (one prompt → lyrics → Suno song → video) ---
+// The alternate entry point: no track, style or board is picked up front. Start
+// creates the project and returns at once; the run advances in the background
+// (brief → lyrics → mood board → Suno → analysis → production) and reports over
+// `music-video:autonomous`. Optional checkpoints park it for approval. Only these
+// explicit requests (or the scheduled task) begin work — nothing at boot does.
+router.post('/autonomous', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoAutonomousStartSchema, req.body || {});
+  res.status(202).json(await startAutonomousVideo(input));
+}));
+
+router.get('/:id/autonomous', asyncHandler(async (req, res) => {
+  res.json(await getAutonomousRun(req.params.id));
+}));
+
+// Resume a parked/failed/interrupted run, or approve the checkpoint it waits on.
+router.post('/:id/autonomous/resume', asyncHandler(async (req, res) => {
+  const edits = validateRequest(musicVideoAutonomousResumeSchema, req.body || {});
+  res.json(await resumeAutonomousVideo(req.params.id, edits));
+}));
+
+router.post('/:id/autonomous/stop', asyncHandler(async (req, res) => {
+  res.json(await stopAutonomousVideo(req.params.id));
+}));
+
+router.post('/:id/autonomous/cancel', asyncHandler(async (req, res) => {
+  res.json(await cancelAutonomousVideo(req.params.id));
 }));
 
 // --- Development artifacts ("ingredients") ---

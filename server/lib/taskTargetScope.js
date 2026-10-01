@@ -48,6 +48,7 @@ export function requiresManagedAppTarget(taskType) {
  */
 export const PROGRAMMATIC_SCHEDULED_TASK_TYPES = Object.freeze([
   'development-watchdog',
+  'music-video-autopilot',
   'universe-bible-describe',
   'universe-bible-images',
 ]);

@@ -31,6 +31,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [MODEL_ACCESS.md](./MODEL_ACCESS.md) | Scoping a provider to the models your plan entitles you to — free tiers, allow/deny globs, gateway inheritance |
 | [MODEL-COMPARISON.md](./MODEL-COMPARISON.md) | Sourced provider/model/effort comparisons, cost estimates and CoS research refresh |
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
+| [features/music-video-autonomous.md](./features/music-video-autonomous.md) | One-prompt autonomous music videos: brief → lyrics → mood board → Suno song → production, optional checkpoints, and the `music-video-autopilot` scheduled task that turns Brain ideas into videos |
 | [features/music-video-temporal-evidence.md](./features/music-video-temporal-evidence.md) | Performance source provenance, synchronized playback and optional local temporal analyzer protocol |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
