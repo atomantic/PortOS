@@ -202,7 +202,8 @@ describe('managed PostgreSQL TLS roots', () => {
     await expect(withPgToolEnv({ ssl: true }, async env => {
       path = env.PGSSLROOTCERT;
       expect(await readFile(path, 'utf8')).toContain('BEGIN CERTIFICATE');
-      expect((await stat(path)).mode & 0o777).toBe(0o600);
+      // Windows does not expose POSIX permission bits.
+      if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o600);
       throw new Error('example spawn failure');
     })).rejects.toThrow('example spawn failure');
     await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
