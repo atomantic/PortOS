@@ -1314,3 +1314,19 @@ it('keeps a dangerous scan report visible while the summary is collapsed', () =>
   expect(screen.getByRole('link', { name: 'View scan report (DANGEROUS)' })).toHaveAttribute('href', '/example-report');
   expect(screen.queryByText('Example scan summary')).not.toBeInTheDocument();
 });
+
+
+it('loads prior pipeline stage output through the full transcript disclosure', async () => {
+  const record = { ...agent, metadata: { ...agent.metadata, taskSummary: 'Pipeline complete', pipeline: {
+    stages: [{ name: 'Plan' }, { name: 'Implement' }], currentStage: 1,
+    stageResults: [{ stage: 0, agentId: 'prior-stage', success: true }],
+  } }, output: [{ line: 'Implementation transcript' }] };
+  api.getCosAgent.mockImplementation(async id => id === 'prior-stage'
+    ? { output: [{ line: 'Prior planning transcript' }] } : record);
+  render(<MemoryRouter><AgentCard agent={record} completed /></MemoryRouter>);
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
+  expect(await screen.findByText('Implementation transcript')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /Plan/ }));
+  expect(await screen.findByText('Prior planning transcript')).toBeInTheDocument();
+});
