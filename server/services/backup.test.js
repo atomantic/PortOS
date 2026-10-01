@@ -26,7 +26,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
-import { basename, join as joinPath } from 'path';
+import { basename, dirname, join as joinPath } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // runBackup persists state to PATHS.data/backup/state.json. Re-root PATHS at
@@ -2837,7 +2837,7 @@ describe('runBackup lifecycle', () => {
       spawn.mockReturnValue(proc);
       const pending = runBackup(destRoot).catch(error => error);
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
-      const newDir = spawn.mock.calls[0][1].at(-1).replace(/\/data$/, '');
+      const newDir = dirname(spawn.mock.calls[0][1].at(-1));
       expect(basename(newDir)).not.toBe(oldId);
       await expect(fsp.access(joinPath(root, `.${basename(newDir)}.in-progress`))).resolves.toBeUndefined();
       proc.emit('close', 1);
