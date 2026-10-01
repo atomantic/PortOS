@@ -34,7 +34,6 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 
 const { PATHS } = await import('../../lib/paths.js');
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { encodeDocumentComposition, prepareDocumentRender } = await import('./documentRender.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
 const { generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js');
@@ -121,6 +120,9 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
   }, 120000);
 
   it('matches bounded grades across real composed/document ramps and song-time excerpts', async () => {
+    // render.js initializes the media registry. Import it only when this test
+    // runs: a skipped browser suite never executes afterAll cleanup.
+    const { buildMusicVideoFfmpegArgs } = await import('./render.js');
     // Synthetic reference: horizontal RGB/grey ramps plus hard black/white
     // endpoints. No install data, provider calls, or network images.
     const width = 1280;
