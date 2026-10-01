@@ -112,5 +112,8 @@ describe('scheduled-task params', () => {
     expect(saved.musicVideoAutopilot).toMatchObject({ tools: ['image:local'], ideaTags: ['Song', 'song'], budgetUsd: 3 });
     expect(saved.musicVideoAutopilot).toEqual(normalizeAutopilotParams(saved.musicVideoAutopilot));
     expect(sanitizeTaskMetadata({ musicVideoAutopilot: 'nope' })).toBeNull();
+    // The existing-mood-board pick round-trips; blank collapses to "generate one".
+    expect(sanitizeTaskMetadata({ musicVideoAutopilot: { moodBoardId: ' mb-1 ' } }).musicVideoAutopilot.moodBoardId).toBe('mb-1');
+    expect(sanitizeTaskMetadata({ musicVideoAutopilot: { moodBoardId: '  ' } }).musicVideoAutopilot.moodBoardId).toBeNull();
   });
 });

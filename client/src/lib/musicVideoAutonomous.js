@@ -27,6 +27,7 @@ export const emptyAutonomousDraft = () => ({
   budget: '',
   maxGenerations: String(AUTONOMOUS_DEFAULT_LIMITS.maxGenerations),
   checkpoints: [],
+  moodBoardId: '',
 });
 
 const optionalInt = (raw) => {
@@ -50,6 +51,7 @@ export function autonomousRequestFromDraft(draft, { providerId, model } = {}) {
     budgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : null,
     ...(maxGenerations ? { limits: { maxGenerations } } : {}),
     checkpoints: draft.checkpoints,
+    ...(draft.moodBoardId ? { moodBoardId: draft.moodBoardId } : {}),
     ...(providerId ? { providerId, ...(model ? { model } : {}) } : {}),
   };
 }
@@ -66,3 +68,40 @@ export function autonomousStageRows(run) {
 
 /** True while the run can still move (or be nudged): the project page keeps its panel prominent. */
 export const isAutonomousLive = (run) => !!run && AUTONOMOUS_LIVE_STATUSES.includes(run.status);
+
+/** The Schedule-card form's draft for a saved `taskMetadata.musicVideoAutopilot` (the prompt comes from a Brain idea, so there is none). */
+export function autopilotDraftFromParams(params) {
+  const p = params && typeof params === 'object' ? params : {};
+  const { prompt: _prompt, ...base } = emptyAutonomousDraft();
+  return {
+    ...base,
+    instrumental: p.instrumental === true,
+    tools: Array.isArray(p.tools) ? [...p.tools] : base.tools,
+    models: { ...(p.models || {}) },
+    guidance: p.guidance || '',
+    budget: p.budgetUsd != null ? String(p.budgetUsd) : '',
+    maxGenerations: String(p.limits?.maxGenerations ?? AUTONOMOUS_DEFAULT_LIMITS.maxGenerations),
+    checkpoints: Array.isArray(p.checkpoints) ? [...p.checkpoints] : [],
+    moodBoardId: p.moodBoardId || '',
+    ideaTags: (p.ideaTags || []).join(', '),
+  };
+}
+
+/**
+ * The `musicVideoAutopilot` params a draft saves. Starts from the saved params
+ * so fields the form does not edit (review attempts, authoring provider, song
+ * source) survive a save; the server re-normalizes it all on write.
+ */
+export function autopilotParamsFromDraft(draft, saved, { providerId, model } = {}) {
+  const { prompt: _prompt, ...request } = autonomousRequestFromDraft({ ...draft, prompt: '' }, {});
+  const { llm: _llm, ...kept } = saved && typeof saved === 'object' ? saved : {};
+  return {
+    ...kept,
+    ...request,
+    models: request.models || {},
+    limits: { ...(kept.limits || {}), ...(request.limits || {}) },
+    moodBoardId: draft.moodBoardId || null,
+    ideaTags: String(draft.ideaTags || '').split(',').map((t) => t.trim()).filter(Boolean),
+    ...(providerId ? { llm: { providerId, model: model || null } } : {}),
+  };
+}

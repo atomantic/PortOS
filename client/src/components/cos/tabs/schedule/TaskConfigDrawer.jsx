@@ -6,6 +6,7 @@ import { pipelineStages } from './scheduleConstants';
 import PipelineStageConfig from './PipelineStageConfig';
 import GlobalConfigControls from './GlobalConfigControls';
 import PerAppOverrideList from './PerAppOverrideList';
+import MusicVideoAutopilotSettings from './MusicVideoAutopilotSettings';
 
 // Slide-over panel holding the full configuration for a single task.
 // Receives the live config object so it re-renders against the freshest
@@ -15,6 +16,8 @@ import PerAppOverrideList from './PerAppOverrideList';
 // single section runs off the bottom of the drawer:
 //   - Stage config      — per-stage provider/model (only when the task has a
 //                         pipeline; count = number of stages)
+//   - Video settings    — the music-video-autopilot task's run settings
+//                         (only for that task type)
 //   - Global defaults   — schedule/provider/prompt controls (always present)
 //   - Per-app options   — turns the task on/off per app, plus that app's
 //                         optional per-app settings (only when there are
@@ -48,13 +51,15 @@ export default function TaskConfigDrawer({
 
   // Tabs are dynamic: a task without a pipeline hides Stage config, and an
   // install with no active apps hides Per-app options — never an empty tab.
+  const hasVideoSettings = taskType === 'music-video-autopilot';
   const tabs = [
+    hasVideoSettings && { id: 'video', label: 'Video settings' },
     hasStages && { id: 'stages', label: 'Stage config', count: stages.length },
     { id: 'global', label: 'Global defaults' },
     hasOverrides && { id: 'overrides', label: 'Per-app options', count: activeApps.length },
   ].filter(Boolean);
   const tabIds = tabs.map(t => t.id);
-  const defaultTab = hasStages ? 'stages' : 'global';
+  const defaultTab = hasVideoSettings ? 'video' : hasStages ? 'stages' : 'global';
   const [activeTab, setActiveTab] = useDrawerTab('taskTab', defaultTab, tabIds);
 
   return (
@@ -79,6 +84,17 @@ export default function TaskConfigDrawer({
               config={config}
               providers={providers}
               providersLoaded={providersLoaded}
+              onUpdate={onUpdate}
+              updating={updating}
+              setUpdating={setUpdating}
+            />
+          )}
+
+          {activeTab === 'video' && hasVideoSettings && (
+            <MusicVideoAutopilotSettings
+              key={taskType}
+              taskType={taskType}
+              config={config}
               onUpdate={onUpdate}
               updating={updating}
               setUpdating={setUpdating}

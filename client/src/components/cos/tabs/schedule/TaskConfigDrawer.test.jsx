@@ -20,6 +20,10 @@ vi.mock('./PerAppOverrideList', () => ({
   default: ({ taskType }) => <div data-testid="override-list">overrides:{taskType}</div>,
 }));
 
+vi.mock('./MusicVideoAutopilotSettings', () => ({
+  default: ({ taskType }) => <div data-testid="video-settings">video:{taskType}</div>,
+}));
+
 import TaskConfigDrawer from './TaskConfigDrawer';
 
 const STAGED_CONFIG = {
@@ -109,6 +113,14 @@ describe('TaskConfigDrawer tabbed layout', () => {
   it('hides the Per-app options tab when there are no active apps', () => {
     renderDrawer({ apps: [{ id: 'a', name: 'A', archived: true }] });
     expect(screen.queryByRole('tab', { name: /Per-app options/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the Video settings tab (default) only for the music-video-autopilot task', () => {
+    renderDrawer({ taskType: 'music-video-autopilot', config: { type: 'on-demand' } });
+    expect(screen.getByTestId('video-settings')).toBeInTheDocument();
+    cleanup();
+    renderDrawer();
+    expect(screen.queryByRole('tab', { name: /Video settings/ })).not.toBeInTheDocument();
   });
 
   it('renders nothing when config is not yet loaded', () => {
