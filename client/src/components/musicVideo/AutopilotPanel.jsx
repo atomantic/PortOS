@@ -80,6 +80,7 @@ function RunView({ run, production, codeFirst }) {
       }).join(' · ')}. Reviewer calls use the separate review limit and may also cost money.</p>}
       <p className="text-port-text-muted">Allowed: {(run.pool || []).map(routeLabel).join(', ')}</p>
       {hint && <p className="text-port-warning break-words">{hint}</p>}
+      {steps.some((step) => step.retryBlocked) && <p className="text-port-warning">Terminal refusal recorded: unchanged inputs will not be submitted again on Resume. Repair the shot or cancel and choose another supported route. No new spend is reserved while blocked.</p>}
       {run.error && <p role="status" className="text-port-error break-words">{run.error}</p>}
       {failures.length > 0 && <p className="text-port-error">{failures.length} step{failures.length === 1 ? '' : 's'} failed — see the list below.</p>}
       {steps.length > 0 && (

@@ -226,6 +226,17 @@ describe('AutopilotPanel production run', () => {
     expect(await screen.findByText('Running')).toBeTruthy();
   });
 
+  it('explains a terminal refusal without hiding the stop and recovery controls', () => {
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [run({
+      status: 'blocked', steps: [{ key: 'frame:a:base:1', kind: 'frame', route: { kind: 'image', mode: 'local' },
+        status: 'refused', error: 'Unsupported request', retryBlocked: true }],
+    })] }} />);
+    expect(screen.getByText(/unchanged inputs will not be submitted again/)).toBeTruthy();
+    expect(screen.getByText(/No new spend is reserved while blocked/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Cancel/ })).toBeTruthy();
+    expect(api.resumeMusicVideoProduction).not.toHaveBeenCalled();
+  });
+
   it('shows an interrupted run and resumes it only on request; pushed projects update it', async () => {
     api.resumeMusicVideoProduction.mockResolvedValue({ project: { id: 'p1', productionRuns: [run()] }, run: run() });
     render(<ProductionHarness initial={{ id: 'p1', productionRuns: [run({ interrupted: true })] }} />);

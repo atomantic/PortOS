@@ -260,7 +260,12 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   const sent = await deps.dispatch({ stepKind, project: reserved.project, scene: reserved.project.scenes.find((s) => s.sceneId === sceneId), route: choice.route, tag, settings: env.settings })
     .catch((err) => ({ error: err }));
   if (sent.error) {
-    await mutateProjectRecord(projectId, (current) => settleProductionStep(current, runId, step.key, { status: 'refused', error: sent.error.message }));
+    await mutateProjectRecord(projectId, (current) => settleProductionStep(current, runId, step.key, { status: 'refused', error: sent.error.message,
+      errorCode: sent.error.code || 'PRODUCTION_INVALID_REQUEST',
+      // Invalid input/capability refusals cannot heal by repeating the request.
+      // Availability and transport errors remain explicitly resumable.
+      retryBlocked: [400, 422].includes(sent.error.status) || /(?:UNSUPPORTED|INCAPABLE)$/.test(sent.error.code || ''),
+    }));
     if (revisionId) await deps.releaseRevisionSection(projectId, revisionId, sceneId).catch(() => {});
     console.warn(`⚠️ Music Video production ${short(runId)} ${stepKind} for ${sceneId} refused: ${sent.error.message}`);
     return { halt: { status: 'blocked', reason: `The ${stepKind} for "${scene.label || sceneId}" was refused: ${sent.error.message}` } };
