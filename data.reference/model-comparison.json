@@ -56256,6 +56256,81 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "OpenRouter routed price, not the model creator first-party price. Cached-token, audio and per-request charges are not represented by this schema; free routes remain subject to upstream limits and terms."
+    },
+    {
+      "provider": "Ornith",
+      "model": "ornith-1.0-35b",
+      "effort": "reasoning",
+      "billing": "local",
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "id": "portos-research-20261001-ornith-1.0-35b-base",
+      "configuration": "Qwen3.5 35B A3B base-model proxy; unmeasured post-training and local build",
+      "benchmark": "PortOS Research Index v1 (AA v4.3.2 scale)",
+      "quality": {
+        "value": 19,
+        "source": {
+          "url": "https://huggingface.co/ornith-ai/Ornith-1.0-35B",
+          "retrievedAt": "2026-10-01T01:32:34Z",
+          "methodology": "PortOS estimate: use the published Qwen3.5 35B A3B reasoning AA v4.3.2 index (19, itself a publisher estimate) as a low-confidence base-model proxy. The Ornith model card identifies Qwen3.5 post-training. No gain from coding post-training, requested effort, quantization or runtime is assumed. This is not an Ornith general-intelligence measurement. Base score: https://artificialanalysis.ai/models/qwen3-5-35b-a3b."
+        }
+      },
+      "notes": "Ornith publisher coding results are stored separately; their percentages are not AA index points. Local API charges are zero, while hardware, electricity and throughput remain machine-specific. Research required for a measured general-intelligence score."
+    },
+    {
+      "provider": "Ornith",
+      "model": "ornith-1.0-35b",
+      "effort": "reasoning",
+      "billing": "local",
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "id": "ornith-publisher-20261001-35b-terminal-bench-2.1-terminus2",
+      "configuration": "Ornith publisher Terminal-Bench 2.1 (Terminus-2)",
+      "benchmark": "Ornith publisher Terminal-Bench 2.1 (Terminus-2)",
+      "quality": {
+        "value": 64.2,
+        "source": {
+          "url": "https://huggingface.co/ornith-ai/Ornith-1.0-35B",
+          "retrievedAt": "2026-10-01T01:32:34Z",
+          "methodology": "Publisher coding success percentage; Harbor/Terminus-2, 128K context, temperature 1.0, top_p 1.0; five-run average. The model card reports a four-hour timeout and an adjusted chat template. This is not a general-intelligence index or local throughput measurement."
+        }
+      },
+      "notes": "Publisher result for the base checkpoint; local quantization and hardware are unmeasured. Keep this harness-specific score separate from the AA intelligence index."
+    },
+    {
+      "provider": "Ornith",
+      "model": "ornith-1.0-35b",
+      "effort": "reasoning",
+      "billing": "local",
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "id": "ornith-publisher-20261001-35b-swebench-verified",
+      "configuration": "Ornith publisher SWE-bench Verified (OpenHands)",
+      "benchmark": "Ornith publisher SWE-bench Verified (OpenHands)",
+      "quality": {
+        "value": 75.6,
+        "source": {
+          "url": "https://huggingface.co/ornith-ai/Ornith-1.0-35B",
+          "retrievedAt": "2026-10-01T01:32:34Z",
+          "methodology": "Publisher coding success percentage; OpenHands, temperature 1.0, top_p 0.95, 256K context. This is not a general-intelligence index or local throughput measurement."
+        }
+      },
+      "notes": "Publisher result for the base checkpoint; local quantization and hardware are unmeasured. Keep this harness-specific score separate from the AA intelligence index."
     }
   ]
 }

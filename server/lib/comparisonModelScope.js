@@ -102,6 +102,7 @@ const ALIASES = new Map([
   ['gemini-3.1-pro', 'gemini-3.1-pro-preview'],
   ['grok-3-mini', 'grok-3-mini-reasoning'],
   ['kimi-k2-instruct', 'kimi-k2'],
+  ['qwen3-coder-30b-a3b', 'qwen3-coder-30b-a3b-instruct'],
   ['nemotron-3-ultra', 'nemotron-3-ultra-550b-a55b'],
   ['claude-fable-5-1', 'claude-fable-5.1'],
   // Published Bedrock model ids and dated API aliases for the same weights.
@@ -174,7 +175,9 @@ export function catalogSlugForProviderModel(modelId) {
   // A local-shaped id never reaches the rules below, declared or not: they were
   // written for hosted ids and mis-strip a GGUF repo name. A declared entry
   // resolves to its reviewed benchmark name; an undeclared one resolves to ''.
-  if (isLocalCatalogId(modelId)) return catalogSlugForLocalModel(modelId);
+  // OpenCode can qualify a local install id with its runtime namespace.
+  const localId = modelId.replace(/^(?:ollama|lmstudio)\//i, '');
+  if (isLocalCatalogId(localId)) return catalogSlugForLocalModel(localId);
 
   // Bedrock's namespace and serving-version suffix are not weight revisions.
   if (slug.startsWith('amazon-bedrock/')) slug = slug.slice('amazon-bedrock/'.length)

@@ -28,7 +28,11 @@ describe('catalogSlugForProviderModel', () => {
     for (const id of ['ornith:35b', 'lmstudio-community/Ornith-1.0-35B-GGUF', 'ORNITH:35B']) {
       expect(catalogSlugForProviderModel(id)).toBe('ornith-1.0-35b');
     }
-    expect(catalogSlugForProviderModel('qwen3-coder:30b')).toBe('qwen3-coder-30b-a3b');
+    expect(catalogSlugForProviderModel('qwen3-coder:30b')).toBe('qwen3-coder-30b-a3b-instruct');
+    expect(catalogSlugForProviderModel('ollama/qwen3-coder:30b')).toBe('qwen3-coder-30b-a3b-instruct');
+    expect(catalogSlugForProviderModel('qwen3-coder-30b-a3b')).toBe('qwen3-coder-30b-a3b-instruct');
+    expect(catalogSlugForProviderModel('qwen2.5-coder:32b')).toBe('qwen2.5-coder-instruct-32b');
+    expect(catalogSlugForProviderModel('lmstudio-community/Qwen2.5-Coder-7B-Instruct-GGUF')).toBe('qwen2.5-coder-instruct-7b');
     expect(catalogSlugForProviderModel('unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF')).toBe('devstral-small-2-24b');
   });
 
@@ -43,7 +47,6 @@ describe('catalogSlugForProviderModel', () => {
     // so silence — not a wrong guess — is the correct answer.
     expect(catalogSlugForProviderModel('hf.co/fdtn-ai/Foundation-Sec-8B-Reasoning-Q8_0-GGUF:Q8_0')).toBe('');
     expect(catalogSlugForProviderModel('qwen3.8:27b-mlx')).toBe('');
-    expect(catalogSlugForProviderModel('qwen2.5-coder:32b')).toBe('');
     expect(catalogSlugForProviderModel('lmstudio-community/LFM2.5-1.2B-Thinking-GGUF')).toBe('');
   });
 

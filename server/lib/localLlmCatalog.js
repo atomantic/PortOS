@@ -695,7 +695,7 @@ export const LOCAL_LLM_CATALOG = [
   // ── Coding / agentic tier ──
   {
     key: 'qwen3-coder-30b',
-    benchmarkModel: 'qwen3-coder-30b-a3b',
+    benchmarkModel: 'qwen3-coder-30b-a3b-instruct',
     name: 'Qwen3-Coder 30B',
     category: 'coding',
     recommendedFor: ['coding', 'general'],
@@ -715,6 +715,7 @@ export const LOCAL_LLM_CATALOG = [
   },
   {
     key: 'qwen2.5-coder-7b',
+    benchmarkModel: 'qwen2.5-coder-instruct-7b',
     name: 'Qwen2.5-Coder 7B',
     category: 'coding',
     recommendedFor: ['coding'],
@@ -743,6 +744,7 @@ export const LOCAL_LLM_CATALOG = [
   },
   {
     key: 'qwen2.5-coder-32b',
+    benchmarkModel: 'qwen2.5-coder-instruct-32b',
     name: 'Qwen2.5-Coder 32B',
     category: 'coding',
     recommendedFor: ['coding', 'reasoning'],
