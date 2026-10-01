@@ -1,3 +1,5 @@
+import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../../server/lib/imageLimits.js';
+export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../../server/lib/imageLimits.js';
 // Shared resolution presets for image generation. Used by the standalone
 // Image Gen page and the Universe Builder batch render so the size dropdown
 // stays consistent everywhere.
@@ -55,12 +57,6 @@ export const RESOLUTIONS = [
   { label: '2160×3840 (4K portrait)', w: 2160, h: 3840, compatible: ['codex'] },
   { label: '2880×2880 (4K square)', w: 2880, h: 2880, compatible: ['codex'] },
 ];
-
-// Mirror of server/lib/validation.js MAX_IMAGE_EDGE / MAX_IMAGE_PIXELS — the
-// gpt-image-2 / image-gen route ceiling (each edge ≤ 3840, total ≤ 8,294,400).
-// Keep in sync with that module.
-export const MAX_IMAGE_EDGE = 3840;
-export const MAX_IMAGE_PIXELS = 8_294_400;
 
 // Clamp arbitrary source dimensions (e.g. an uploaded photo) down to the
 // server's per-edge and total-pixel caps, preserving aspect ratio and snapping

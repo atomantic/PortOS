@@ -1,7 +1,12 @@
+import { MAX_IMAGE_EDGE as SERVER_MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS as SERVER_MAX_IMAGE_PIXELS } from '../../../server/lib/imageLimits.js';
 import { describe, it, expect } from 'vitest';
 import { clampImageDimensions, clampImageEdge, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageGenResolutions';
 
 describe('clampImageEdge', () => {
+  it('uses the caps enforced by server validation', () => {
+    expect([MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS]).toEqual([SERVER_MAX_IMAGE_EDGE, SERVER_MAX_IMAGE_PIXELS]);
+  });
+
   it('passes valid edges through unchanged', () => {
     expect(clampImageEdge(704)).toBe(704);
     expect(clampImageEdge(1280)).toBe(1280);
