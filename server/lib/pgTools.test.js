@@ -27,6 +27,7 @@ vi.mock('./fileUtils.js', async (importOriginal) => {
 import { readdir } from 'fs/promises';
 import { execFileAsync } from './fileUtils.js';
 import {
+  buildPgToolEnv,
   pickPgDump,
   discoverPgDumpCandidates,
   resolvePgDump,
@@ -171,5 +172,23 @@ describe('resolvePgDumpBinary', () => {
     expect(result).toEqual({ binary: 'pg_dump', satisfies: true });
     // Unknown version + no override ⇒ skip discovery I/O entirely.
     expect(execFileAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe('PostgreSQL tool TLS policy', () => {
+  it('uses system trust for verified TLS and preserves direct negotiation', () => {
+    expect(buildPgToolEnv({ password: 'example', ssl: true, sslnegotiation: 'direct' }, { PATH: '/example/bin', PGSSLROOTCERT: 'poisoned', PGSSLMODE: 'disable' })).toMatchObject({
+      PATH: '/example/bin', PGPASSWORD: 'example', PGSSLMODE: 'verify-full', PGSSLROOTCERT: 'system', PGSSLNEGOTIATION: 'direct',
+    });
+  });
+
+  it('requires encrypted no-verify TLS without loading ambient root certificates', () => {
+    const env = buildPgToolEnv({ ssl: { rejectUnauthorized: false } }, {});
+    expect(env.PGSSLMODE).toBe('require');
+    expect(env.PGSSLROOTCERT).toMatch(/portos-unused-root-.*\.crt$/);
+  });
+
+  it('refuses inline certificates rather than discarding the pool authentication policy', () => {
+    expect(() => buildPgToolEnv({ ssl: { ca: 'example-ca' } }, {})).toThrow('inline pool TLS');
   });
 });

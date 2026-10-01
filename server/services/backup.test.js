@@ -47,7 +47,9 @@ afterAll(() => {
 
 
 // Mock the DB health check and child_process.spawn before importing backup.js
+const poolConfig = vi.hoisted(() => Object.freeze({ host: 'db.example.test', port: 5439, database: 'example_db', user: 'example_user', password: 'example-secret', ssl: false, sslnegotiation: 'postgres' }));
 vi.mock('../lib/db.js', () => ({
+  POOL_CONFIG: poolConfig,
   checkHealth: vi.fn(),
   query: vi.fn().mockResolvedValue({ rows: [] }),
   withDatabaseMaintenance: vi.fn(fn => fn()),
@@ -825,6 +827,18 @@ describe('openSnapshotStream', () => {
   });
 });
 
+
+function assertPoolToolSpawn([, args, { env }]) {
+  for (const [flag, key] of [['-h', 'host'], ['-p', 'port'], ['-U', 'user'], ['-d', 'database']]) {
+    expect(args[args.indexOf(flag) + 1]).toBe(String(poolConfig[key]));
+  }
+  expect(env.PGPASSWORD).toBe(poolConfig.password);
+  expect(env.PGSSLMODE).toBe('disable');
+  expect(env.PGSSLNEGOTIATION).toBe('postgres');
+  for (const key of ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS', 'PGHOST', 'PGDATABASE']) expect(env).not.toHaveProperty(key);
+  expect(env.PATH).toBe(process.env.PATH);
+}
+
 describe('dumpPostgres status classification', () => {
   let dumpPostgres;
   beforeEach(async () => {
@@ -919,6 +933,21 @@ describe('dumpPostgres status classification', () => {
     expect(result.status).toBe('skipped');
     expect(result.reason).toBe('not_configured');
     if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
+  });
+
+  it('dumps the checked pool endpoint despite changed credentials and poisoned libpq settings', async () => {
+    for (const key of ['PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGPASSWORD', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS', 'PGSSLMODE']) vi.stubEnv(key, 'poisoned');
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096 });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from('CREATE TABLE public.memories (id uuid);\n')]));
+    const result = dumpPostgres('/tmp/example.sql');
+    await flush();
+    assertPoolToolSpawn(spawn.mock.calls[0]);
+    proc.emit('close', 0);
+    expect(await result).toMatchObject({ status: 'ok' });
+    vi.unstubAllEnvs();
   });
 
   it('returns failed/pg_dump_missing when spawn errors', async () => {
@@ -1627,7 +1656,7 @@ describe('restorePostgres', () => {
   // and --single-transaction rolls the whole replay back, so a failed restore
   // leaves the live DB untouched instead of half-dropped. Both flags are load
   // bearing — a refactor that drops either turns a failed restore into data loss.
-  it('passes --single-transaction and ON_ERROR_STOP=1 with the default PGPASSWORD', async () => {
+  it('passes atomic replay flags with the captured pool credentials', async () => {
     vi.stubEnv('PGPASSWORD', '');
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
     mockLegacyDumpRead();
@@ -1644,11 +1673,11 @@ describe('restorePostgres', () => {
     // Assert the flag/value pairing, not just membership: '-v' followed by
     // something else would still satisfy arrayContaining.
     expect(args[args.indexOf('-v') + 1]).toBe('ON_ERROR_STOP=1');
-    expect(opts.env.PGPASSWORD).toBe('portos');
+    expect(opts.env.PGPASSWORD).toBe(poolConfig.password);
   });
 
-  it('prefers an explicit PGPASSWORD over the portos default', async () => {
-    vi.stubEnv('PGPASSWORD', 'from-env');
+  it('ignores changed endpoint, password and inherited libpq policy during restore', async () => {
+    for (const key of ['PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGPASSWORD', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS', 'PGSSLMODE']) vi.stubEnv(key, 'poisoned');
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
     mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
@@ -1658,7 +1687,7 @@ describe('restorePostgres', () => {
     await flush();
     proc.emit('close', 0);
     await p;
-    expect(spawn.mock.calls[0][2].env.PGPASSWORD).toBe('from-env');
+    assertPoolToolSpawn(spawn.mock.calls[0]);
   });
 });
 
