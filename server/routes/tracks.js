@@ -18,6 +18,7 @@
  *   DELETE /api/tracks/:id/audio        → Track      (clear the audio pointer)
  *   POST   /api/tracks/:id/waveform/draw   → { sketch, llm, track } (LLM-drawn sketch, stored on the track)
  *   POST   /api/tracks/:id/waveform/render → { track, filename, durationSec } (drawn-waveform take)
+ *   POST   /api/tracks/:id/supercollider/take → { track, filename, durationSec } (a finished SuperCollider preview saved as the take, with provenance)
  *   POST   /api/tracks/:id/code/render → { track, filename, durationSec } (multipart 'track' WAV recorded from code)
  *
  * Tracks store only a pointer (`audioFilename`) into the shared music library
@@ -59,7 +60,7 @@ import { YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE } from '../lib/youtub
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 import { drawWaveSketchForTrack, renderWaveSketchToTrack } from '../services/musicWaveform.js';
 import { PAINTED_CANVAS_LIMITS } from '../lib/paintedCanvas.js';
-import { saveCodeTakeToTrack } from '../services/musicCode.js';
+import { saveCodeTakeToTrack, saveSuperColliderTakeToTrack } from '../services/musicCode.js';
 
 const router = Router();
 
@@ -375,6 +376,20 @@ router.post('/:id/code/render', musicUpload, asyncHandler(async (req, res) => {
   const wav = await readFile(req.file.path).finally(() => unlink(req.file.path).catch(() => {}));
   const body = validateRequest(codeRenderSchema, req.body ?? {});
   res.json(await saveCodeTakeToTrack({ trackId: req.params.id, wav, ...body }));
+}));
+
+// Save a finished SuperCollider preview as the active take (#9414). The preview
+// id comes from the render job; the audio and provenance are read back from the
+// host-written preview store, so the client cannot supply either.
+const superColliderTakeSchema = z.object({
+  jobId: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/),
+  prompt: z.string().trim().max(tracks.PROMPT_MAX).optional(),
+  title: z.string().trim().max(200).optional(),
+});
+
+router.post('/:id/supercollider/take', asyncHandler(async (req, res) => {
+  const body = validateRequest(superColliderTakeSchema, req.body ?? {});
+  res.json(await saveSuperColliderTakeToTrack({ trackId: req.params.id, ...body }));
 }));
 
 // Make a past render the active one (re-point the player + gen-metadata badges

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
-import { readdir, rm } from 'fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 
 // Code-engine takes land in the shared music library; point it at a temp dir
@@ -16,6 +18,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return { ...actual, PATHS: { ...actual.PATHS, music: musicDir } };
 });
 // The drawn-waveform draw route runs one LLM call — stub the provider seam.
+const { readSuperColliderPreview } = vi.hoisted(() => ({ readSuperColliderPreview: vi.fn() }));
+vi.mock('../services/superColliderRender.js', () => ({ readSuperColliderPreview }));
 vi.mock('../services/promptRunner.js', async () => ({
   ...(await vi.importActual('../services/promptRunner.js')),
   resolveProviderAndModel: vi.fn(async () => ({ provider: { id: 'prov-1', type: 'api' }, selectedModel: 'model-x' })),
@@ -473,6 +477,59 @@ describe('tracks routes', () => {
       tracks.getTrack.mockResolvedValue(null);
       const r = await post(multipart(wav));
       expect(r.status).toBe(404);
+    });
+  });
+
+  describe('POST /:id/supercollider/take (#9414)', () => {
+    let previewDir;
+    afterAll(async () => {
+      await rm(musicDir, { recursive: true, force: true });
+      if (previewDir) await rm(previewDir, { recursive: true, force: true });
+    });
+    const preview = {
+      jobId: 'job-12345678', language: 'supercollider', source: 'Pbind(\\degree, 0)', sourceHash: 'a'.repeat(64), seed: 7,
+      settings: { durationSec: 2, sampleRate: 8000, channels: 2, tempoBpm: 120 }, runtime: { version: '3.14.1-portos.1', policyVersion: 1 },
+    };
+    const wavBytes = (() => {
+      const dataBytes = 8000 * 4 * 2;
+      const buf = Buffer.alloc(44 + dataBytes);
+      buf.write('RIFF', 0); buf.writeUInt32LE(36 + dataBytes, 4); buf.write('WAVE', 8);
+      buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(2, 22);
+      buf.writeUInt32LE(8000, 24); buf.writeUInt32LE(8000 * 4, 28); buf.writeUInt16LE(4, 32); buf.writeUInt16LE(16, 34);
+      buf.write('data', 36); buf.writeUInt32LE(dataBytes, 40);
+      return buf;
+    })();
+    const take = (body) => request(app).post('/api/tracks/track-1/supercollider/take').send(body);
+
+    it('stores the preview audio with its source, hash, seed and runtime as the active take', async () => {
+      await mkdir(musicDir, { recursive: true });
+      previewDir = await mkdtemp(join(tmpdir(), 'sc-preview-'));
+      const wavPath = join(previewDir, 'preview-src.wav');
+      await writeFile(wavPath, wavBytes);
+      tracks.getTrack.mockResolvedValue({ id: 'track-1', prompt: 'saved prompt', renders: [] });
+      readSuperColliderPreview.mockResolvedValue({ wavPath, preview });
+      const r = await take({ jobId: 'job-12345678', title: 'Night Drive' });
+      expect(r.status).toBe(200);
+      expect(await readdir(musicDir)).toContain(r.body.filename);
+      expect(tracks.appendActiveTake).toHaveBeenCalledWith('track-1', {
+        audioFilename: r.body.filename, prompt: 'saved prompt', engine: 'code', durationSec: 2,
+        codeProvenance: {
+          language: 'supercollider', source: preview.source, sourceHash: preview.sourceHash, seed: 7,
+          runtimeVersion: '3.14.1-portos.1', policyVersion: 1, settings: preview.settings,
+        },
+      }, { title: 'Night Drive' });
+    });
+
+    it('404s for an expired preview and never touches the track', async () => {
+      readSuperColliderPreview.mockResolvedValue(null);
+      const r = await take({ jobId: 'job-12345678' });
+      expect(r.status).toBe(404);
+      expect(r.body.code).toBe('SUPERCOLLIDER_PREVIEW_NOT_FOUND');
+      expect(tracks.appendActiveTake).not.toHaveBeenCalled();
+    });
+
+    it('rejects a job id that is not a plain id', async () => {
+      expect((await take({ jobId: '../etc/passwd' })).status).toBe(400);
     });
   });
 

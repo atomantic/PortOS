@@ -68,11 +68,13 @@ export const removeAudioModel = (engine, id, requestOptions = {}) =>
 // and invokes `onEvent({ type, progress, message, ... })` per frame, resolving
 // when the stream ends. (POST-with-SSE: we use fetch + a manual reader since
 // EventSource is GET-only.) Returns a Promise<void>.
-export async function installAudioModel({ engine, repo, name }, onEvent) {
-  const res = await fetch('/api/music/models', {
+export const installAudioModel = ({ engine, repo, name }, onEvent) => postForSseFrames('/api/music/models', { engine, repo, name }, onEvent);
+
+async function postForSseFrames(url, payload, onEvent) {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ engine, repo, name }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok || !res.body) {
     // This streaming fetch bypasses request(), so it must honor session expiry
@@ -84,7 +86,7 @@ export async function installAudioModel({ engine, repo, name }, onEvent) {
     // Match request()'s convention: the parsed body IS the error object (code at
     // top level). maybeRedirectToLogin bounces to /login on 401 AUTH_REQUIRED.
     maybeRedirectToLogin(res, parsed || {});
-    throw new Error((typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.message) || raw || `Install failed (${res.status})`);
+    throw new Error((typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.message) || raw || `Request failed (${res.status})`);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -102,3 +104,26 @@ export async function installAudioModel({ engine, repo, name }, onEvent) {
     }
   }
 }
+
+// ---- SuperCollider (contained offline renders for the Code engine, #9414) ----
+// Readiness is read-only: status never builds or renders. → { state, ready, message, action, ... }.
+export const getSuperColliderStatus = (requestOptions = {}) => request('/music/supercollider/status', requestOptions);
+
+// Explicit setup (builds the managed image, 10–30 min first time). Streams
+// { type: 'log' | 'complete' | 'error', ... } frames to `onEvent`.
+export const setupSuperCollider = ({ rebuild = false } = {}, onEvent) => postForSseFrames('/api/music/supercollider/setup', { rebuild }, onEvent);
+
+// Queue a render of the editor's source → { jobId, position, status, seed, sourceHash }.
+// body: { code, durationSec, seed? }. 409 SUPERCOLLIDER_UNAVAILABLE when not ready.
+export const renderSuperCollider = (body, requestOptions = {}) => request('/music/supercollider/render', {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
+// SSE path for a render's progress (feed it to useSseProgress); cancel stops the container.
+export const superColliderRenderEventsUrl = (jobId) => `/api/music/supercollider/renders/${encodeURIComponent(jobId)}/events`;
+export const cancelSuperColliderRender = (jobId, requestOptions = {}) => request(`/music/supercollider/renders/${encodeURIComponent(jobId)}/cancel`, {
+  method: 'POST',
+  ...requestOptions,
+});

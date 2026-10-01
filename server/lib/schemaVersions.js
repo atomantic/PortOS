@@ -302,7 +302,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // A <=v8 peer's sanitizer would strip it and LWW the unlabelled take back, so
   // an exported song would silently lose its attribution. Pre-v9 renders read
   // as `source: ''` (unrecorded); nothing to migrate.
-  tracks: 9,
+  // tracks v10 = render-history entries gained `codeProvenance` (#9414: the
+  // language, source, hash, seed, runtime version and settings of a
+  // server-rendered SuperCollider take). A <=v9 peer's sanitizer would strip it
+  // and LWW the unreproducible take back. Absent on every older render; nothing
+  // to migrate.
+  tracks: 10,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the

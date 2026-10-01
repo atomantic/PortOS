@@ -146,6 +146,29 @@ The suite renders stock synths and measures the result. It then confirms that ge
 
 It also checks syntax errors, the timeout, cancellation and overlapping renders. With the flag set, an unready runtime fails the suite rather than skipping it.
 
+## In the Music Designer
+
+Pick **SuperCollider** beside Strudel and Tone.js in the Code engine. The AI writes (or revises) `sclang` source from the description; you can edit it freely. Nothing runs in the browser.
+
+- **Unavailable runtime.** The panel reads `GET /api/music/supercollider/status` and, when the state is not `ready`, shows the message and next step. **Set up SuperCollider** starts the explicit setup (it never starts by itself) and streams its log. Docker states offer **Check again** instead, because PortOS never changes your Docker installation.
+- **Render preview.** Queues a render of the editor's source for the **Render length** (4–120 s). Progress, queue position and **Cancel** come from the media-queue stream. A passing render plays in a normal audio control. A preview never changes the track, and a failed or canceled render leaves nothing behind.
+- **Save as take.** Sends only the preview's job id to `POST /api/tracks/:id/supercollider/take`. The server reads the audio and the provenance back from its own preview store, so the client cannot supply either. Editing the code after a preview disables saving that preview, because the audio no longer matches the text. Previews expire after 24 hours.
+
+### Take provenance
+
+A saved take is an ordinary `engine: 'code'` render in the track's history. A server-rendered one also carries `codeProvenance`:
+
+| Field | Meaning |
+|---|---|
+| `language` | `supercollider` |
+| `source` | The exact source that rendered the audio (up to 20,000 characters) |
+| `sourceHash` | SHA-256 of that source |
+| `seed` | The interpreter seed used for the render |
+| `runtimeVersion`, `policyVersion` | The SuperCollider runtime and containment policy that produced it |
+| `settings` | `durationSec`, `sampleRate`, `channels`, `tempoBpm` |
+
+Re-rendering the same source with the same seed and settings reproduces the take only on the same tested runtime version and platform. Other versions or architectures are not promised to match. The record rides the render history through the existing track store and sync (tracks schema v10, additive; older renders simply have none, so there is nothing to migrate). A peer on schema v9 or older refuses newer track records instead of stripping the field.
+
 ## Platform evidence
 
 The recipe targets Linux `amd64` and `arm64` Docker engines. Readiness is per machine: a host is `ready` only after the probe has passed on that host's engine with the current image. The probe result records the engine version, OS and architecture, so the evidence names the platform it was proven on. Any other configuration stays visibly unavailable.
