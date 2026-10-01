@@ -1,3 +1,4 @@
+import ShotActionInspector from './ShotActionInspector.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
@@ -85,7 +86,7 @@ export default function SceneCard({
   // Source-clip length, read from the inline player's metadata and keyed to
   // the clip it was measured from so a regenerated clip is re-measured.
   const [clipMeta, setClipMeta] = useState(null);
-  const clipSec = clipMeta?.id === scene.videoHistoryId ? clipMeta.sec : null;
+  const clipSec = clipMeta && clipMeta.id === scene.videoHistoryId ? clipMeta.sec : null;
   // Pre-#8964 scenes have no `loop` key and keep the legacy loop-to-fill render.
   const loops = scene.loop !== false;
   const spanSec = scene.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
@@ -176,6 +177,7 @@ export default function SceneCard({
             )}
           </div>
         )}
+        <ShotActionInspector contract={scene.direction?.actionContract} scene={scene} />
         <div className="flex flex-wrap gap-2 items-center text-xs">
           {SCENE_TIME_FIELDS.map(([labelText, key]) => {
             const toValue = (v) => (v === '' ? null : Number(v));

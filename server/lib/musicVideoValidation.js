@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
@@ -464,8 +465,11 @@ export const musicVideoProductionPolicySchema = z.object({
   maxGeneratedVideoPercent: z.number().min(0).max(100).optional(),
 }).strict();
 
+export const musicVideoActionContractSchema = z.custom((value) => value != null && !shotActionContractProblem(value), { message: 'Invalid shot action contract' });
+
 export const musicVideoShotDirectionPatchSchema = z.object({
   sceneId: z.string().min(1).max(64),
+  actionContract: musicVideoActionContractSchema.nullable().optional(),
   medium: z.enum(MUSIC_VIDEO_MEDIA).optional(),
   mediumRationale: treatmentText(1000),
   mediumPinned: z.boolean().optional(),

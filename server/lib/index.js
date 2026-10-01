@@ -792,3 +792,5 @@ export * from './musicVideoMediumPlan.js';
 
 // Flat: validation re-exports these same bindings.
 export * from './imageLimits.js';
+
+export * from './musicVideoActionContract.js';

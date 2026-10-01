@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   compileFableLoomVisualRequest: vi.fn(),
   enqueueJob: vi.fn(),
   fableLoomVideoCapabilities: vi.fn(),
+  getMusicVideoProject: vi.fn(async () => null),
   getLoom: vi.fn(async () => null),
   prepareRemoteMediaJob: vi.fn(),
   prepareVideoGenParams: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('../fableLoom/visualConditioning.js', () => ({
   fableLoomVideoCapabilities: mocks.fableLoomVideoCapabilities,
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: mocks.enqueueJob }));
+vi.mock('../musicVideo/projects.js', () => ({ getProject: mocks.getMusicVideoProject }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: mocks.preparePerformanceShot }));
 vi.mock('../musicVideo/revisionService.js', () => ({ assertRevisionOpen: mocks.assertRevisionOpen }));
 vi.mock('../musicVideo/productionService.js', () => ({ assertProductionSubmission: mocks.assertProductionSubmission }));
@@ -70,6 +72,7 @@ describe('submitVideoGenJob', () => {
     vi.clearAllMocks();
     mocks.enqueueJob.mockReturnValue(queued);
     mocks.preparePerformanceShot.mockResolvedValue(null);
+    mocks.getMusicVideoProject.mockResolvedValue(null);
   });
 
   it('submits a federated job with only the remote-media marker', async () => {
@@ -275,5 +278,63 @@ describe('submitVideoGenJob', () => {
       expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
+  });
+});
+
+// Regression: client-built prompts could bypass current shot timing and lose padded-window intent.
+describe('shot intent at the video submission boundary', () => {
+  const contract = { version: 1, purpose: 'The listener decides to stay',
+    actions: [{ startSec: 0, endSec: 1, subject: 'Singer', description: 'Offers a hand' }],
+    reactions: [{ startSec: 1, endSec: 2, subject: 'Listener', description: 'Accepts' }],
+    acceptanceCriteria: ['Both actions are visible'],
+  };
+  const project = () => ({ scenes: [{ sceneId: 's', startSec: 10, endSec: 14, direction: { actionContract: contract } }],
+    lyricCues: [{ text: 'Stay', startSec: 10.5, endSec: 11.5, words: [{ w: 'Stay', startSec: 10.5, endSec: 11.5 }] }],
+    audioAnalysis: { features: { onsets: { low: [10.75], mid: [], high: [] } } },
+  });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.enqueueJob.mockReturnValue(queued);
+    mocks.prepareVideoGenParams.mockResolvedValue(localPrepared());
+    mocks.preparePerformanceShot.mockResolvedValue(null);
+    mocks.getMusicVideoProject.mockResolvedValue(project());
+  });
+
+  it('queues current action/reaction, actual words/onsets and immutable intent even when the client omitted it', async () => {
+    await submitVideoGenJob({ prompt: 'Legacy free text', musicVideo: { projectId: 'p', sceneId: 's' } }, {});
+    const { params } = mocks.enqueueJob.mock.calls[0][0];
+    expect(params.prompt).toContain('Legacy free text');
+    expect(params.prompt).toContain('Reaction 1.000s–2.000s: Listener');
+    expect(params.prompt).toContain('Word 0.500s–1.500s: Stay');
+    expect(params.prompt).toContain('Musical onsets: 0.750s');
+    expect(params.shotInstruction.actionContract).toEqual(contract);
+  });
+
+  it('shifts contract and words into a padded performance window exactly once', async () => {
+    mocks.prepareVideoGenParams.mockResolvedValue({ backend: 'fal', cleanupStaged: vi.fn(), sourceImagePath: '/example/frame.png' });
+    mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: '/example/audio.wav', modelId: 'lip-sync', resolution: '1080P',
+      shotInstruction: { version: 1, shotMode: 'performance', songInterval: { startSec: 10, endSec: 14 }, edit: { inSec: 1.5, outSec: 5.5 } } });
+    await submitVideoGenJob({ prompt: 'Legacy\nShot intent (clip-relative seconds):\nstale intent\nEnd shot intent.. Keep moving', backend: 'fal', musicVideo: { projectId: 'p', sceneId: 's' } }, {});
+    const { params } = mocks.enqueueJob.mock.calls[0][0];
+    expect(params.prompt).toContain('Action 1.500s–2.500s: Singer');
+    expect(params.prompt).toContain('Word 2.000s–3.000s: Stay');
+    expect(params.prompt).not.toContain('stale intent');
+    expect(params.prompt).toContain('Keep moving');
+    expect(params.shotInstruction.edit.inSec).toBe(1.5);
+  });
+
+  it('refuses a provider clip shorter than the final action before enqueue', async () => {
+    mocks.prepareVideoGenParams.mockResolvedValue({ backend: 'fal', cleanupStaged: vi.fn(), sourceImagePath: '/example/frame.png' });
+    await expect(submitVideoGenJob({ prompt: 'Legacy', backend: 'fal', falDuration: 1, musicVideo: { projectId: 'p', sceneId: 's' } }, {})).rejects.toMatchObject({ code: 'MUSIC_VIDEO_ACTION_CONTRACT_INVALID' });
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('refuses a later shortened scene before queue spend and rolls back staged inputs', async () => {
+    const changed = project(); changed.scenes[0].endSec = 11;
+    mocks.getMusicVideoProject.mockResolvedValue(changed);
+    const prepared = localPrepared(); mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+    await expect(submitVideoGenJob({ prompt: 'Legacy', musicVideo: { projectId: 'p', sceneId: 's' } }, {})).rejects.toMatchObject({ code: 'MUSIC_VIDEO_ACTION_CONTRACT_INVALID' });
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
   });
 });
