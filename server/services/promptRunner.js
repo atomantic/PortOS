@@ -1341,6 +1341,29 @@ async function resolveLocalOutputBudget(provider, model, { outputReserveTokens, 
 }
 
 /**
+ * The prompt room a LOCAL provider leaves once its output reserve is planned,
+ * for callers that build their own prompt and want to fit it rather than be
+ * refused (the persistent mind's tool rounds). Uses the same window lookup and
+ * the same `localOutputReserveTokens` sizing as the dispatch gate, so a prompt
+ * kept under `maxPromptTokens` (chars/4) is one the gate admits.
+ *
+ * Returns `null` for a cloud / CLI provider, an undeclared reserve, or an
+ * unknown window — callers then build exactly as before.
+ *
+ * @param {{ provider: object, model?: string|null, outputReserveTokens: number }} args
+ * @returns {Promise<{ contextWindow: number, outputReserveTokens: number, maxPromptTokens: number }|null>}
+ */
+export async function resolveLocalPromptBudget({ provider, model = null, outputReserveTokens }) {
+  if (!isLocalInferenceProvider(provider)) return null;
+  const resolvedModel = model || provider?.defaultModel || null;
+  const observed = withOllamaRuntimeContextWindow(await withObservedContextWindowsLazy(provider));
+  const contextWindow = knownContextWindow(observed, resolvedModel);
+  const reserve = localOutputReserveTokens(outputReserveTokens, contextWindow);
+  if (!reserve) return null;
+  return { contextWindow, outputReserveTokens: reserve, maxPromptTokens: Math.max(0, contextWindow - reserve) };
+}
+
+/**
  * The budget a pre-dispatch REFUSAL is allowed to act on.
  *
  * `requiredContextTokens` is the prompt plus an output reserve, and when the

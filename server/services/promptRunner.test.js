@@ -84,7 +84,7 @@ const observedWindows = await import('./observedContextWindows.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { apiRunAbsoluteTimeoutMs } = await import('../lib/aiToolkit/internal/runTimeouts.js');
 const { CREATIVE_LATITUDE_HEADING, withCreativeLatitude } = await import('../lib/creativeLatitude.js');
-const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities, assertVisionRunUsedImages } = await import('./promptRunner.js');
+const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities, assertVisionRunUsedImages, resolveLocalPromptBudget } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', type: 'api', defaultModel: 'm-default', ...extra,
@@ -2697,6 +2697,19 @@ describe('promptRunner — context gate on the requested provider', () => {
       });
 
       expect(runner.executeApiRun.mock.calls[0][0].maxTokens).toBe(6_000);
+    });
+
+    it('reports the prompt room a local window leaves after its reserve', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(20_480));
+      await expect(resolveLocalPromptBudget({ provider: localOllama(), outputReserveTokens: 8_192 })).resolves.toEqual({
+        contextWindow: 20_480, outputReserveTokens: 2_560, maxPromptTokens: 17_920,
+      });
+      await expect(resolveLocalPromptBudget({
+        provider: apiProvider({ id: 'cloud-api', defaultModel: 'qwen3.8-27b', endpoint: 'https://api.example.com/v1' }),
+        outputReserveTokens: 8_192,
+      })).resolves.toBeNull();
+      observedWindows.withObservedContextWindows.mockImplementation(async (provider) => provider);
+      await expect(resolveLocalPromptBudget({ provider: localOllama(), outputReserveTokens: 8_192 })).resolves.toBeNull();
     });
 
     it('keeps the declared reserve for a cloud provider', async () => {
