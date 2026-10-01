@@ -81,8 +81,10 @@ const memoryCandidateSchema = z.object({
 }).strict();
 
 export const persistentMindResponseSchema = z.object({
-  thinkingSummary: z.string().trim().max(4_000).optional().default(''),
-  message: z.string().trim().max(8_000).optional().default(''),
+  // A local model may use null for absent optional prose. Normalize only
+  // absence; malformed text and every action contract remain strict.
+  thinkingSummary: z.string().trim().max(4_000).nullish().transform(value => value ?? ''),
+  message: z.string().trim().max(8_000).nullish().transform(value => value ?? ''),
   memoryCandidates: z.array(memoryCandidateSchema).max(MAX_MEMORY_CANDIDATES_PER_TURN).optional().default([]),
   taskRequests: z.array(persistentMindTaskRequestSchema)
     .max(PERSISTENT_MIND_TASK_LIMITS.maxPerTurn)
