@@ -27,6 +27,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `appDeployFlags.js` | Shared allowlist of flags PortOS may forward to a managed app's `deploy.sh`, consumed by socket validation and deployment orchestration without reversing the lib/services dependency. |
 | `apiContractSchemas.js` | Canonical Zod request contracts for externally callable APIs plus `zodToOpenApiSchema` (plain JSON Schema — the 3.0.3 conversion happens at the OpenAPI document boundary, not here); runtime routes and OpenAPI use the same schema objects. |
+| `codeAnimationContainment.js` | Code Animation production worker containment contract: per-platform enforced mechanism (macOS Seatbelt, otherwise refusal), deny-by-default Seatbelt profile, from-scratch worker environment, operator tool-root rules, tool configuration and worker limit schemas. Pure; the runner is `services/codeAnimation/containedWorker.js`. |
 | `codeAnimationPackage.js` | Versioned data-only Code Animation package schema, byte/path/reference integrity limits, SHA-256 revision binding, `createCodeAnimationPackage` and `summarizeCodeAnimationPackage`; validation never executes or stages code. |
 | `socketEventContracts.js` | Payload contracts for modeled Socket.IO events, reusing live Zod validation for inbound events and documenting public outbound snapshots. |
 | `socketEventInventory.js` | Cached source-derived Socket.IO event inventory: event names and directions only, with no checked-in manifest or positional source metadata. |

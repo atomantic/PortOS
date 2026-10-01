@@ -7,6 +7,7 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../../services/apiCodeAnimation', () => ({
   preflightCodeAnimationProject: vi.fn(),
+  getCodeAnimationExecution: vi.fn(), updateCodeAnimationExecutionTools: vi.fn(), probeCodeAnimationExecution: vi.fn(),
   listCodeAnimationProjects: vi.fn(), createCodeAnimationProject: vi.fn(), getCodeAnimationProject: vi.fn(),
   updateCodeAnimationProject: vi.fn(), importCodeAnimationPackage: vi.fn(), acceptCodeAnimationSource: vi.fn(),
   getCodeAnimationProjectBrief: vi.fn(), getCodeAnimationRevisionPackage: vi.fn(), listCodeAnimationProjectHistory: vi.fn(),
@@ -28,6 +29,12 @@ const project = {
   acceptedRevisionId: null, candidateRevisionId: '00000000-0000-4000-8000-000000000002',
 };
 const page = (items = []) => ({ items, nextCursor: null });
+const execution = (overrides = {}) => ({
+  platform: 'darwin', mechanism: { id: 'macos-seatbelt', supported: true, reason: null }, probe: null,
+  tools: { blender: { executable: null, problem: 'Not configured.' } },
+  lanes: { browser: { mechanism: 'chromium-cdp-sandbox' }, blender: { ready: false, reason: 'Blender: Not configured.' } },
+  ...overrides,
+});
 const renderPage = (entry = '/code-animation/production/' + project.id) => render(
   <MemoryRouter initialEntries={[entry]}><Routes>
     <Route path="/code-animation/production" element={<ProductionProjects />} />
@@ -39,6 +46,7 @@ beforeEach(() => {
   api.listCodeAnimationProjects.mockResolvedValue(page([project]));
   api.getCodeAnimationProject.mockResolvedValue(project);
   api.listCodeAnimationProjectHistory.mockResolvedValue(page());
+  api.getCodeAnimationExecution.mockResolvedValue(execution());
 });
 
 describe('Production project rendered interactions', () => {
@@ -104,5 +112,26 @@ describe('Production project rendered interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Create Production project' }));
     expect(await screen.findByRole('button', { name: 'Save project settings' })).toBeInTheDocument();
     expect(api.getCodeAnimationProject).toHaveBeenCalledWith(project.id, expect.objectContaining({ silent: true }));
+  });
+
+  it('reports refused containment and checks only a saved operator tool path', async () => {
+    const user = userEvent.setup();
+    renderPage('/code-animation/production');
+    expect(await screen.findByText('Blender: Not configured.')).toBeInTheDocument();
+    const path = '/Applications/Example.app/Contents/MacOS/Blender';
+    await user.type(screen.getByLabelText('Blender executable (operator-owned)'), path);
+    expect(screen.getByRole('button', { name: 'Run containment check' })).toBeDisabled();
+    const saved = execution({ tools: { blender: { executable: path, problem: null } }, lanes: { browser: { mechanism: 'chromium-cdp-sandbox' }, blender: { ready: false, reason: 'Run the containment check.' } } });
+    api.updateCodeAnimationExecutionTools.mockResolvedValue(saved);
+    await user.click(screen.getByRole('button', { name: 'Save tool' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run containment check' })).toBeEnabled());
+    expect(api.updateCodeAnimationExecutionTools).toHaveBeenCalledWith({ blender: { executable: path } }, { silent: true });
+    api.probeCodeAnimationExecution.mockResolvedValue({ ...saved,
+      probe: { passed: true, refused: null, checks: [{ id: 'network', passed: true, detail: 'Outbound network was refused by the sandbox.' }],
+        tools: { blender: { passed: false, detail: 'Blender did not start under containment (failed: exit).' } } },
+      lanes: { ...saved.lanes, blender: { ready: false, reason: 'Blender did not start under containment.' } } });
+    await user.click(screen.getByRole('button', { name: 'Run containment check' }));
+    expect(await screen.findByText(/Containment proven: 1 of 1 checks/)).toBeInTheDocument();
+    expect(screen.getByText('Blender did not start under containment.')).toBeInTheDocument();
   });
 });

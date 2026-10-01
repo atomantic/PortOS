@@ -15,6 +15,7 @@ import { formatCount, formatBytes, timeAgo } from '../../utils/formatters';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import ProductionProjectForm from './ProductionProjectForm';
 import ProductionPreflight from './ProductionPreflight';
+import ProductionContainment from './ProductionContainment';
 
 const EVENTS = ['code-animation:changed'];
 const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm hover:border-port-accent disabled:opacity-50';
@@ -94,6 +95,7 @@ export default function ProductionProjects() {
       </div>
       <InfiniteScrollFooter hasMore={projects.hasMore} loading={projects.loading} error={projects.error} onLoadMore={projects.loadMore} autoLoad={false} label="Load older projects" />
     </section>
+    <ProductionContainment />
 
     {projectId && resource.loading && <p>Loading production project…</p>}
     {resource.error && <div role="alert" className="rounded border border-port-error p-3">

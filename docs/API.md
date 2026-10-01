@@ -769,6 +769,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/sprites` | Sprite catalog / export |
 | `/api/threejs-models` | Procedural Three.js models |
 | `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
+| `/api/code-animation/execution` | Code Animation contained production execution: platform sandbox and lane readiness (`GET /`), operator-owned tool paths (`PUT /tools`, host control) and the on-demand adversarial containment check (`POST /probe`, host control) ([contract](CODE_ANIMATION_PACKAGES.md#contained-production-execution)) |
 | `/api/image-to-3d` | Image-to-3D conversion |
 | `/api/rigging` | Auto-skin rigging and animation retargeting for image-to-3D models |
 | `/api/privacy` | PII vault / trusted-org / broker opt-out |

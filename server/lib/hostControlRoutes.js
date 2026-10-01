@@ -277,6 +277,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Runs the configured local or provider reviewer on a caller-supplied diff.
   'POST /api/code-review/local',
 
+  // Code Animation contained execution (#9388): choosing the installed tool a
+  // worker runs, and the containment check that spawns sandboxed processes.
+  'PUT /api/code-animation/execution/tools',
+  'POST /api/code-animation/execution/probe',
+
   // Providers: which binary runs, with which args, against which endpoint and
   // credentials; installing or launching runtimes; signing a CLI in or out.
   // `PUT /api/providers/:id` also matches `/active` and `/bootstraps`.
@@ -389,12 +394,13 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
 /**
  * `PUT /api/settings` slices that set what runs or the guardrails around it:
- * harness enablement and wrapper CLIs, the code-review chain, the untrusted
- * content screen in front of agent work, scheduled self-update, and scheduled
- * series autopilots. The store is polymorphic, so its other slices stay open.
+ * harness enablement and wrapper CLIs, the Code Animation worker tools, the
+ * code-review chain, the untrusted content screen in front of agent work,
+ * scheduled self-update, and scheduled series autopilots. The store is polymorphic, so its other slices stay open.
  */
 export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'autoUpdate',
+  'codeAnimationExecution',
   'codeReview',
   'credentialBootstraps',
   'harnesses',

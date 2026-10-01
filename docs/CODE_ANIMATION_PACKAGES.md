@@ -92,3 +92,91 @@ model access at the vendor, or render readiness. Production authoring dispatch,
 render/inspection/research adapters, fallback decisions and actual-run provenance
 remain pending under #9387 and the execution slices of #9383. Package export and
 import remain available for external authoring.
+
+## Contained production execution
+
+A job directory is not a boundary. Production package code (a Blender scene
+script, a generated renderer) runs only through the contained worker in
+`server/services/codeAnimation/containedWorker.js`, under an enforced OS
+mechanism. Where no mechanism is available the worker refuses with 503
+`CODE_ANIMATION_CONTAINMENT_UNAVAILABLE`; there is no uncontained fallback.
+Authoring stays outside the worker: provider transport, credentials and any
+research access belong to the authoring route, never to execution.
+
+| Platform | Mechanism | Status |
+|---|---|---|
+| macOS | Seatbelt kernel sandbox (`/usr/bin/sandbox-exec`, deny-by-default profile) | Supported; proven on demand by the containment check |
+| Linux | None implemented (bubblewrap/user namespaces are the candidate) | Refused |
+| Windows | None implemented | Refused |
+
+Each run gets a fresh UUID workspace under `data/code-animation-workspaces/`
+(excluded from backups, removed when the run ends, swept on the next run after
+a crash) with `input/` (staged files, read-only), `output/`, `tmp/` and a
+private `home/`. The Seatbelt profile allows:
+
+- exec of exactly the operator-configured executable; **fork is denied**, so a
+  worker is one process and cannot start a shell, package manager or helper;
+- reads of system libraries, Homebrew package code (`Cellar/`, `opt/`, not
+  `var/` or `etc/`), the tool's install roots and the staged input;
+- writes to `output/`, `tmp/` and `home/` only;
+- metadata (not listing or content) of those roots' ancestor directories.
+
+Everything else is denied, including all network (loopback and Unix sockets
+too, so PortOS's API and local services are unreachable), Mach/XPC services
+(keychain, pasteboard, launchd) and IPC. The environment is built from scratch
+(paths only), so no `PORTOS_API_TOKEN`, provider key, cloud credential or proxy
+setting is inherited. The process runs in its own process group: cancellation
+and every limit `SIGKILL` the group, and the result reports whether the group
+was verified empty. Limits: wall time, total bytes and file count of the
+writable directories (watchdog), single-file size (`RLIMIT_FSIZE`), resident
+memory (watchdog), open descriptors, no core dumps. Output that is not a
+regular, singly-linked file (a symlink or hard link the worker made) fails the
+run and is never handed to the caller.
+
+Installed tools are operator-owned machine-local settings
+(`codeAnimationExecution` in `data/settings.json`). Packages cannot name an
+executable, install command or mount. A tool must be an existing absolute
+executable outside PortOS data; workers can read its app bundle (macOS
+`.app`), its prefix's `bin/`, `lib/`, `libexec/`, `share/` and `Frameworks/`
+when it lives in a `bin/` directory, or otherwise its own directory — and none
+of those may contain PortOS data or the home directory.
+
+- `GET /api/code-animation/execution` reports the platform mechanism, the
+  configured tools, the last containment check and each lane's readiness.
+  Readiness fails closed: the Blender lane is ready only after a containment
+  check has passed in this server process with the currently configured
+  executable.
+- `PUT /api/code-animation/execution/tools` sets `{ blender: { executable } }`
+  (`null` clears it). Host control: it chooses what a worker runs.
+- `POST /api/code-animation/execution/probe` runs the containment check on
+  demand (host control; never at boot; no provider call). PortOS's own Node
+  interpreter runs synthetic hostile scripts through the same staging, profile,
+  environment and limits, and each check must observe the sandbox refusing:
+  reading a file outside the workspace, listing PortOS data or the home
+  directory, writing outside the workspace or into staged input, starting a
+  process, writing a file over the size limit, inheriting environment
+  variables, connecting to a loopback listener (which must see no connection)
+  or to the network. Positive control: the worker must still write its report.
+  Separate runs must be terminated by the wall-time, disk, memory and
+  cancellation limits with an empty process group. A configured Blender is then
+  started contained with `--background --factory-startup --version`.
+
+Known limits: Blender is granted CPU rendering only — no GPU/Metal device or
+window-server access — and has not been verified under this profile on a
+machine with Blender installed; a Blender that cannot start contained keeps its
+lane refused. Seatbelt (`sandbox-exec`) is deprecated by Apple but remains the
+mechanism Chromium and the private security assessment harness use. A host
+that already runs PortOS inside another sandbox may be unable to apply a nested
+profile; the check then fails and execution stays refused. Memory and total
+disk are watchdog-enforced (1 s interval in production), so a worker can
+briefly exceed them before it is killed.
+
+The browser lane does not use this worker. It reuses the HTML-composition
+renderer sandbox (`server/services/htmlComposition/browser.js`): an in-memory
+asset snapshot (symlinks refused), every request intercepted with only the
+snapshot origin fulfilled, network/WebSocket/WebRTC/workers/frames refused, and
+a disposable credential-free browser context closed on cancel or failure. Its
+limits: it runs inside the shared managed Chromium (Chromium's renderer sandbox
+contains page code, not a PortOS-owned process group), with per-command
+timeouts and render cancellation but no per-render memory cap. Its boundary
+tests are `server/services/htmlComposition/index.test.js`.

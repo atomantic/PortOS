@@ -62,3 +62,9 @@ export const cancelCodeAnimationExport = (exportJobId, options) => request(`/htm
 });
 
 export const preflightCodeAnimationProject = (id, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/preflight`, options);
+
+// Contained production execution (#9388): capability report, operator tool
+// paths, and the on-demand adversarial containment check.
+export const getCodeAnimationExecution = (options) => request('/code-animation/execution', options);
+export const updateCodeAnimationExecutionTools = (tools, options) => request('/code-animation/execution/tools', { method: 'PUT', body: JSON.stringify(tools), ...options });
+export const probeCodeAnimationExecution = (options) => request('/code-animation/execution/probe', { method: 'POST', ...options });

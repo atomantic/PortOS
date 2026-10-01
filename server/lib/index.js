@@ -20,6 +20,7 @@ export * from './appPromptPlaceholders.js';
 export * from './appDeployFlags.js';
 export * from './apiContractSchemas.js';
 export * from './codeAnimationPackage.js';
+export * from './codeAnimationContainment.js';
 export * from './autonomousJobTask.js';
 export * from './asyncApiSpec.js';
 export * from './avatarVariants.js';
