@@ -16,7 +16,8 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 
 const { PATHS } = await import('../../lib/paths.js');
-const { findFfmpeg, runFfmpegProcess } = await import('../../lib/ffmpeg.js');
+const ffmpegService = await import('../../lib/ffmpeg.js');
+const { findFfmpeg, runFfmpegProcess } = ffmpegService;
 const projects = await import('./projects.js');
 const { saveHistory } = await import('../videoGen/history.js');
 const kit = await import('./publishKit.js');
@@ -50,6 +51,33 @@ describe('publishing kit build (#9281)', () => {
   it('refuses to build before there is a final render', async () => {
     const { id } = await projects.createProject({ name: 'Unrendered' });
     await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ status: 409, code: 'NO_FINAL_RENDER' });
+  });
+
+  it('reserves a build before async prerequisites and releases the reservation after setup fails', async () => {
+    const { id } = await projects.createProject({ name: 'Example Concurrent Build' });
+    await mkdir(PATHS.videos, { recursive: true });
+    await writeFile(join(PATHS.videos, 'concurrent-master.mp4'), 'placeholder; never encoded');
+    await saveHistory([{ id: 'concurrent-render', filename: 'concurrent-master.mp4', durationSec: 36 }]);
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: 'concurrent-render' } }));
+    let releasePrerequisite;
+    const pendingPrerequisite = new Promise(resolve => { releasePrerequisite = resolve; });
+    const probe = vi.spyOn(ffmpegService, 'findFfmpeg').mockReturnValue(pendingPrerequisite);
+    try {
+      const first = kit.startPublishKitBuild(id);
+      const firstFailure = first.catch(error => error);
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+      const overlap = kit.startPublishKitBuild(id);
+      releasePrerequisite(null);
+      await expect(overlap).rejects.toMatchObject({ status: 409, code: 'PUBLISH_KIT_BUILD_IN_PROGRESS' });
+      expect(await firstFailure).toMatchObject({ code: 'FFMPEG_MISSING' });
+      expect(probe).toHaveBeenCalledTimes(1);
+      // A failed setup must leave the project available for the next attempt.
+      await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ code: 'FFMPEG_MISSING' });
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally {
+      releasePrerequisite(null);
+      probe.mockRestore();
+    }
   });
 
   it.skipIf(!ffmpeg)('turns the final render into encodes, thumbnails, captions and chapters, and frees a rebuilt kit\'s old files', { timeout: 120000 }, async () => {
