@@ -365,6 +365,23 @@ describe('music routes', () => {
       expect(prompt).not.toContain('Strudel');
     });
 
+    it('writes SuperCollider code with its own prompt contract and rejects unknown languages', async () => {
+      promptRunner.runPromptThroughProvider.mockResolvedValue({ text: '```supercollider\nSynthDef(\\\\pad, { Out.ar(0, SinOsc.ar(220)!2) }).add;\n```', model: 'fake-model' });
+      const r = await request(app).post('/api/music/code').send({
+        description: 'slow ambient drone', language: 'supercollider', providerId: 'fake-provider',
+      });
+      expect(r.status).toBe(200);
+      expect(r.body.language).toBe('supercollider');
+      expect(r.body.code).toContain('SynthDef');
+      const prompt = promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt;
+      expect(prompt).toContain('SuperCollider');
+      expect(prompt).toContain('slow ambient drone');
+      expect(prompt).toContain('unixCmd');
+      expect(prompt).not.toContain('Strudel');
+      const bad = await request(app).post('/api/music/code').send({ description: 'x', language: 'csound' });
+      expect(bad.status).toBe(400);
+    });
+
     it('sends the editor code back as the revision target', async () => {
       promptRunner.runPromptThroughProvider.mockResolvedValue({ text: 'note("c3").s("sine")' });
       const r = await request(app).post('/api/music/code').send({
