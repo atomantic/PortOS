@@ -1012,7 +1012,7 @@ export default function MusicVideo() {
               />
             ) : null}
           >
-            <StageView board={board} />
+            <StageView key={selected.id} board={board} />
           </MusicVideoLayout>
         )}
       </div>

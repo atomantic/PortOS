@@ -228,6 +228,7 @@ import {
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
   startMusicVideoCastAndSets, approveMusicVideoCastAndSets, stopMusicVideoProduction,
+  getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
@@ -2034,6 +2035,29 @@ describe('MusicVideo stage tabs (#9243)', () => {
     </MemoryRouter>,
   );
   const selectedTab = () => screen.getByRole('tab', { selected: true });
+
+  it('uses the newly selected project making-of notes and links when drafting publication copy', async () => {
+    const first = { ...PROJECT_WITH_CLIP, publishKit: { notes: 'Example first story', links: { youtube: 'https://example.com/first' } } };
+    const second = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Example Other Project', publishKit: { notes: 'Example second story', links: { youtube: 'https://example.com/second' } } };
+    listMusicVideoProjects.mockResolvedValue([first, second]);
+    getMusicVideoPublishPlatforms.mockResolvedValueOnce({ platforms: { youtube: { enabled: true } } });
+    draftMusicVideoPublishCopy.mockResolvedValueOnce({ project: second });
+    render(<MemoryRouter initialEntries={['/music-video/mv-1/publish']}>
+      <NavTo to="/music-video/mv-other/publish" />
+      {MV_ROUTES}
+    </MemoryRouter>);
+    const notes = await screen.findByLabelText(/Making-of notes/);
+    expect(notes).toHaveValue('Example first story');
+    fireEvent.change(notes, { target: { value: 'Example unsaved first story' } });
+    fireEvent.click(screen.getByRole('button', { name: 'go-/music-video/mv-other/publish' }));
+    await screen.findByRole('heading', { level: 2, name: second.name });
+    expect(await screen.findByLabelText(/Making-of notes/)).toHaveValue('Example second story');
+    expect(screen.getByLabelText(/Full video URL/)).toHaveValue('https://example.com/second');
+    fireEvent.click(screen.getByRole('button', { name: 'Draft copy' }));
+    await waitFor(() => expect(draftMusicVideoPublishCopy).toHaveBeenCalledWith(second.id, {
+      notes: 'Example second story', links: { youtube: 'https://example.com/second' },
+    }));
+  });
 
   it('opens the stage named in the URL, falls back to the project\'s own stage for an unknown one, and the tabs navigate', async () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
