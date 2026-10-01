@@ -35,6 +35,7 @@
     "test:db": "npm run test:db --prefix server",
     "setup:llm": "node scripts/setup-llm.js",
     "setup:motion": "node scripts/setup-motion.js",
+    "setup:supercollider": "node scripts/setup-supercollider.js",
     "setup:browser": "node scripts/setup-browser.js",
     "setup:facetime": "node scripts/setup-facetime.js",
     "setup:remote-desktop": "node scripts/setup-remote-desktop.js",

@@ -491,6 +491,7 @@ export * from './chiptuneScore.js';
 export * from './pitchMath.js';
 export * from './musicVideoLayers.js';
 export * from './wavAudioFile.js';
+export * from './superColliderRuntime.js';
 export * from './waveSketch.js';
 export * from './paintedCanvas.js';
 export * from './spectrogramImage.js';

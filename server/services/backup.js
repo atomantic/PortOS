@@ -181,6 +181,10 @@ export const DEFAULT_EXCLUDES = [
   // would claim gigabytes of models that machine does not have, and offer delete
   // buttons for them. It is fully re-derivable by a rescan from Models → Status.
   { path: '/model-manifest.json', reason: 'Tracked downloaded-model inventory — machine-local and re-derivable by rescanning the model stores; a restored copy would describe another machine\'s disks', overridable: false },
+  // Anchored, like every entry here. Readiness evidence is bound to THIS
+  // machine's local image id (a restored copy would read as stale anyway) and
+  // the rest is in-flight render scratch; setup re-derives all of it.
+  { path: '/supercollider/', reason: 'SuperCollider runtime readiness evidence and in-flight render scratch — machine-local, re-derived by npm run setup:supercollider', overridable: false },
   // Sprite animation-run raw intermediates: 30–96 ffmpeg-extracted PNGs per
   // run, byte-for-byte regenerable from the archived source video by the
   // deterministic postprocess (walkPostprocess.js). The source video, packaged
