@@ -131,6 +131,14 @@ describe('startAutonomousVideo', () => {
     await vi.waitFor(() => expect(calls).toContain('production')); // let the background run finish before the next test resets the doubles
   });
 
+  it('reuses an existing mood board instead of generating one', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', moodBoardId: 'board-existing' });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(calls).not.toContain('board');
+    expect(runOf().output.moodBoardId).toBe('board-existing');
+    expect(doubles.updateProject).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ visualSpec: { moodBoardId: 'board-existing' } }));
+  });
+
   it('rejects a blank prompt', async () => {
     await expect(service.startAutonomousVideo({ prompt: '   ' })).rejects.toMatchObject({ status: 400 });
     expect(calls).toEqual([]);

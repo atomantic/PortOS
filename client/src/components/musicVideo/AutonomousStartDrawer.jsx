@@ -2,16 +2,16 @@ import { useState } from 'react';
 import { Wand2 } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
+import ToolPicker from './ToolPicker.jsx';
+import MoodBoardPicker from './MoodBoardPicker.jsx';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { startAutonomousMusicVideo } from '../../services/apiMusicVideo.js';
-import { MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideoAutomation.js';
 import {
-  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, autonomousMedium, autonomousRequestFromDraft, emptyAutonomousDraft,
+  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, autonomousRequestFromDraft, emptyAutonomousDraft,
 } from '../../lib/musicVideoAutonomous.js';
 
-const GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
 /**
@@ -25,15 +25,9 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   const [submitting, setSubmitting] = useState(false);
   const llm = useProviderModels({ allowDefault: true, silent: true });
   const patch = (next) => setDraft((d) => ({ ...d, ...next }));
-  const picked = new Set(draft.tools);
-  const medium = autonomousMedium(draft.tools);
-  const toggleTool = (id) => patch({
-    tools: MUSIC_VIDEO_AUTOMATION_TOOL_IDS.filter((t) => (t === id ? !picked.has(t) : picked.has(t))),
-  });
   const toggleCheckpoint = (id) => patch({
     checkpoints: AUTONOMOUS_CHECKPOINT_IDS.filter((c) => (c === id ? !draft.checkpoints.includes(c) : draft.checkpoints.includes(c))),
   });
-  const modelTools = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group !== 'code' && picked.has(t.id));
   const valid = draft.prompt.trim().length > 0;
 
   const handleSubmit = (e) => {
@@ -82,51 +76,9 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
 
         <ToggleChip id="mv-auto-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 
-        <fieldset className="min-w-0" aria-labelledby="mv-auto-tools-label">
-          <span id="mv-auto-tools-label" className="block text-xs text-port-text-muted mb-1">How the video is made</span>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            {GROUPS.map(([group, label]) => (
-              <div key={group} className="border border-port-border rounded p-2 min-w-0">
-                <div className="text-[11px] uppercase tracking-wide text-port-text-muted mb-1">{label}</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group === group).map((tool) => (
-                    <ToggleChip
-                      key={tool.id}
-                      id={`mv-auto-tool-${tool.id}`}
-                      label={tool.metered ? `${tool.label} $` : tool.label}
-                      hint={tool.metered ? 'Spends money or remote quota' : undefined}
-                      checked={picked.has(tool.id)}
-                      onToggle={() => toggleTool(tool.id)}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-          <p className="text-[11px] text-port-text-muted mt-1">
-            {medium === 'code'
-              ? 'Only “Render with code” is picked: the video is drawn by code — no images or footage are generated.'
-              : 'Image and video tools drive the production run; it stops at the generation limit and the budget.'}
-          </p>
-        </fieldset>
+        <ToolPicker tools={draft.tools} models={draft.models} onChange={patch} />
 
-        {modelTools.length > 0 && (
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
-            {modelTools.map((tool) => (
-              <div key={tool.id} className="min-w-0">
-                <label htmlFor={`mv-auto-model-${tool.id}`} className="block text-xs text-port-text-muted mb-1">{tool.label} model (optional)</label>
-                <input
-                  id={`mv-auto-model-${tool.id}`}
-                  value={draft.models[tool.id] || ''}
-                  onChange={(e) => patch({ models: { ...draft.models, [tool.id]: e.target.value } })}
-                  placeholder="Install default"
-                  maxLength={200}
-                  className={inputClass}
-                />
-              </div>
-            ))}
-          </div>
-        )}
+        <MoodBoardPicker id="mv-auto-mood-board" value={draft.moodBoardId} onChange={(moodBoardId) => patch({ moodBoardId })} />
 
         <div>
           <label htmlFor="mv-auto-guidance" className="block text-xs text-port-text-muted mb-1">Guidance (optional)</label>

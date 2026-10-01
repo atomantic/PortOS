@@ -138,7 +138,7 @@ const STAGES = {
 
   async style({ project, run }) {
     const board = run.output.moodBoard;
-    const moodBoardId = run.output.moodBoardId || (await deps.createMoodBoard(board)).id;
+    const moodBoardId = run.brief.moodBoardId || run.output.moodBoardId || (await deps.createMoodBoard(board)).id;
     // The board is also the project's linked mood board; the server derives the
     // authored style snapshot from it (styleSnapshots.js).
     await deps.updateProject(project.id, {

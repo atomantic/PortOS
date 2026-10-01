@@ -20,6 +20,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   stopAutonomousMusicVideo: vi.fn(),
   cancelAutonomousMusicVideo: vi.fn(),
 }));
+vi.mock('../../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'mb-1', name: 'Neon Rain' }]) }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({
@@ -131,10 +132,12 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.click(screen.getByLabelText('Lyrics', { selector: '#mv-auto-checkpoint-lyrics' }));
     fireEvent.change(screen.getByLabelText(/local image gen model/i), { target: { value: 'flux2-dev' } });
     fireEvent.change(screen.getByLabelText(/budget cap/i), { target: { value: '12' } });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Neon Rain' })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('Mood board'), { target: { value: 'mb-1' } });
     fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalled());
     expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({
-      checkpoints: ['lyrics'], models: { 'image:local': 'flux2-dev' }, budgetUsd: 12,
+      checkpoints: ['lyrics'], models: { 'image:local': 'flux2-dev' }, budgetUsd: 12, moodBoardId: 'mb-1',
     });
   });
 });

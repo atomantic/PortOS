@@ -121,6 +121,8 @@ function normalizeAutonomousSettings(raw = {}) {
       maxReviewAttempts: int(raw.limits?.maxReviewAttempts, AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts, AUTONOMOUS_DEFAULT_LIMITS.maxReviewAttempts),
     },
     checkpoints,
+    // An existing mood board to reuse instead of generating one (blank = generate).
+    moodBoardId: clean(raw.moodBoardId, 64) || null,
     llm: llmProvider ? { providerId: llmProvider, model: llmModel || null } : null,
     authoring: authoringProvider && authoringModel ? { providerId: authoringProvider, model: authoringModel } : null,
   };

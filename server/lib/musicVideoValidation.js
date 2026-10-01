@@ -749,6 +749,8 @@ export const musicVideoAutonomousStartSchema = z.object({
     maxReviewAttempts: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.max).optional(),
   }).strict().optional(),
   checkpoints: z.array(z.enum(AUTONOMOUS_CHECKPOINT_IDS)).max(AUTONOMOUS_CHECKPOINT_IDS.length).optional(),
+  // Reuse this existing mood board instead of generating one from the prompt.
+  moodBoardId: z.string().trim().min(1).max(64).nullable().optional(),
   // The LLM that writes the brief and lyrics (blank = the install's active provider).
   providerId: z.string().trim().min(1).max(200).nullable().optional(),
   model: z.string().trim().min(1).max(200).nullable().optional(),
