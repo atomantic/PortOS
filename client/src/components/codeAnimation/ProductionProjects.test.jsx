@@ -51,6 +51,29 @@ beforeEach(() => {
 });
 
 describe('Production project rendered interactions', () => {
+  it('starts from saved settings, immediately displays revision-bound audio, and keeps older evidence visibly stale', async () => {
+    const user = userEvent.setup();
+    api.listCodeAnimationProjectHistory.mockResolvedValue(page([{ id: 'example-sound-run', status: 'completed', data: {
+      kind: 'production-stages', stages: [], soundtrack: { revisionId: 'old-revision', packageHash: 'example-bound-hash',
+        artifact: { relativePath: 'code-animations/projects/example/runs/example/artifacts/sound-example.wav' },
+        measured: { durationMs: 2000, sampleRate: 48000 }, events: [{ label: 'Impact', firstSeconds: 0.5, frame: 6 }],
+        unverified: [{ dimension: 'hearing', reason: 'Listening quality is unverified.' }] },
+      output: { path: '/data/videos/example.mp4', audioEvidence: { decodedDurationSeconds: 2 } },
+    } }]));
+    api.startCodeAnimationStageRun.mockResolvedValue({ id: 'example-live-run', status: 'running', kind: 'production-stages', stages: [] });
+    api.preflightCodeAnimationProject.mockResolvedValue({ capabilities: {} });
+    renderPage();
+    expect(await screen.findByText('Sound evidence belongs to an older revision.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Production soundtrack preview')).toHaveAttribute('src', '/data/code-animations/projects/example/runs/example/artifacts/sound-example.wav');
+    expect(screen.getByLabelText('Production final film')).toHaveAttribute('src', '/data/videos/example.mp4');
+    expect(screen.getByText(/Final MP4 audio decoded and measured/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Run production stages' }));
+    await user.click(await screen.findByRole('button', { name: 'Start run' }));
+    expect(api.startCodeAnimationStageRun).toHaveBeenCalledWith(project.id, {}, { silent: true });
+    expect(await screen.findByRole('button', { name: 'Cancel run' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Run production stages' })).toBeDisabled();
+  });
+
   it('opens a URL-selected detail and applies accepted-source responses immediately', async () => {
     const user = userEvent.setup();
     renderPage();

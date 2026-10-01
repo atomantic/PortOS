@@ -16,6 +16,7 @@
  */
 
 import { Router } from 'express';
+import { soundAssetSchema, stageProductionSoundAsset } from '../services/codeAnimation/soundAssets.js';
 import { preflightProductionProject } from '../services/codeAnimation/preflight.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -207,6 +208,10 @@ router.get('/projects/:id/history', asyncHandler(async (req, res) => {
 router.post('/projects/:id/import', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   res.status(201).json(await importProductionPackage(id, validateRequest(codeAnimationPackageSchema, req.body)));
+}));
+router.post('/projects/:id/sound-assets', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.status(201).json(await stageProductionSoundAsset(id, validateRequest(soundAssetSchema, req.body)));
 }));
 router.post('/projects/:id/accept', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);

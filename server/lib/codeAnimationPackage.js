@@ -53,9 +53,16 @@ export const codeAnimationManifestSchema = z.object({
     label: text(200), startSeconds: z.number().nonnegative(), endSeconds: z.number().positive(),
   }).strict()).max(128),
   events: z.array(z.object({ label: text(200), atSeconds: z.number().nonnegative() }).strict()).max(512),
-  audio: z.discriminatedUnion('kind', [
+  audio: z.union([
     z.object({ kind: z.literal('silence') }).strict(),
     z.object({ kind: z.literal('procedural'), notes: text(1500) }).strict(),
+    // Audio contract v1 ships in package v2; legacy package v1 remains readable.
+    z.object({ kind: z.literal('procedural'), version: z.literal(1), events: z.array(z.object({
+      label: text(200), atSeconds: z.number().nonnegative(),
+      effect: z.enum(['impact', 'reveal']), durationSeconds: z.number().min(0.02).max(4),
+      gain: z.number().min(0.01).max(1),
+    }).strict()).min(1).max(128) }).strict(),
+    z.object({ kind: z.literal('generated'), version: z.literal(1), prompt: text(4000) }).strict(),
     // External audio is a declaration only: it contains no install-local URL/id.
     z.object({ kind: z.literal('external'), notes: text(1500) }).strict(),
     z.object({ kind: z.literal('file'), path: pathSchema }).strict(),
@@ -79,7 +86,7 @@ const revisionHashOf = ({ schemaVersion, manifest, files }) => digest(canonicalS
 }));
 
 const shapeSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.union([z.literal(1), z.literal(2)]),
   manifest: codeAnimationManifestSchema,
   files: z.array(fileSchema).min(1).max(L.files),
   revisionHash: hashSchema,
@@ -125,6 +132,20 @@ export const codeAnimationPackageSchema = shapeSchema.superRefine((pkg, ctx) => 
     issue(['manifest', 'audio', 'path'], 'Audio file is missing');
   }
   const duration = pkg.manifest.format.durationSeconds;
+  const audio = pkg.manifest.audio;
+  if (audio.version && pkg.schemaVersion !== 2) issue(['schemaVersion'], 'Versioned audio requires package v2');
+  if (audio.kind === 'procedural' && audio.version === 1) {
+    if (audio.events.reduce((sum, event) => sum + event.durationSeconds, 0) > 180) {
+      issue(['manifest', 'audio', 'events'], 'Sound synthesis exceeds the bounded event workload');
+    }
+    const fps = pkg.manifest.format.fps;
+    for (const [index, event] of audio.events.entries()) {
+      const start = Math.round(event.atSeconds * fps) / fps;
+      if (start + event.durationSeconds > Math.round(duration * fps) / fps + 1e-9) {
+        issue(['manifest', 'audio', 'events', index], 'Sound event must fit within the film frame grid');
+      }
+    }
+  }
   for (const [index, shot] of pkg.manifest.shots.entries()) {
     if (shot.endSeconds <= shot.startSeconds || shot.endSeconds > duration) {
       issue(['manifest', 'shots', index], 'Shot must have positive length within the film');
@@ -139,7 +160,7 @@ export const codeAnimationPackageSchema = shapeSchema.superRefine((pkg, ctx) => 
 /** Build a package from explicit metadata and text/binary file bytes. */
 export function createCodeAnimationPackage(manifest, files) {
   const payload = {
-    schemaVersion: 1,
+    schemaVersion: manifest.audio.version ? 2 : 1,
     manifest,
     files: files.map(({ path, content, encoding = 'utf8' }) => ({
       path, content, encoding, sha256: digest(Buffer.from(content, encoding === 'base64' ? 'base64' : 'utf8')),

@@ -20,6 +20,11 @@ describe('production evidence analysis', () => {
       .toEqual(['error:duration-mismatch', 'error:frame-size-mismatch']);
   });
 
+  it('rejects a renderer using a different frame grid than the sound timeline', () => {
+    expect(kinds(analyzeEvidence({ manifest: manifest(), pilot: { samples: samples(['a', 'b']) }, contract: { ...contract, fps: 24 } })))
+      .toEqual(['error:frame-rate-mismatch']);
+  });
+
   it('flags a declared event with no visible change, and keeps unmeasured dimensions unverified', () => {
     const withEvent = manifest({ events: [{ label: 'Hop', atSeconds: 1.5 }], audio: { kind: 'external', notes: 'x' } });
     const result = analyzeEvidence({ manifest: withEvent, pilot: { samples: samples(['a', 'b', 'c', 'c', 'c', 'f']).map(sample => ({ ...sample, t: sample.t / 2 })) }, contract });

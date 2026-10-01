@@ -149,3 +149,17 @@ export async function stageRenderSource(projectId, runId, revisionId, files, ent
   }
   return { directory: `code-animations/projects/${projectId}/runs/${runId}/render/${revisionId}` };
 }
+
+/** Read a known sound artifact with the same directory/no-follow/hash guard as source. */
+export async function readRunArtifact(projectId, runId, name, sha256) {
+  if (!/^sound-[a-f0-9-]+\.wav$/.test(name)) throw unsafe();
+  const dir = await runDirectory(projectId, runId, ['artifacts'], { create: false });
+  const handle = await open(join(dir, name), constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > 44 + 180 * 48000 * 2) throw unsafe();
+    const bytes = await handle.readFile();
+    if (createHash('sha256').update(bytes).digest('hex') !== sha256) throw unsafe();
+    return bytes;
+  } finally { await handle.close(); }
+}

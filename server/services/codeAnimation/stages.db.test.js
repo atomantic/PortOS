@@ -72,7 +72,7 @@ describe.skipIf(!ready)('Production stage runs', () => {
     expect(saved).toMatchObject({ id: run.id, status: 'completed' });
     const data = saved.data;
     expect(data.stages.map(stage => `${stage.key}:${stage.revisionId === revision.id ? 'v1' : 'v2'}`))
-      .toEqual(['style-frame:v1', 'pilot:v1', 'inspect:v1', 'repair:v1', 'style-frame:v2', 'pilot:v2', 'inspect:v2', 'final:v2']);
+      .toEqual(['style-frame:v1', 'pilot:v1', 'inspect:v1', 'repair:v1', 'style-frame:v2', 'pilot:v2', 'inspect:v2', 'soundtrack:v2', 'final:v2']);
     expect(new Set(data.stages.map(stage => stage.stageRunId)).size).toBe(data.stages.length);
     const [first, second] = data.stages.filter(stage => stage.key === 'inspect');
     expect(first.findings.some(finding => finding.kind === 'frozen-film' && finding.sourceHash === revision.sourceHash && finding.capturedAt)).toBe(true);
@@ -92,7 +92,7 @@ describe.skipIf(!ready)('Production stage runs', () => {
     // Render only after passing evidence, from this run's own copy of the repaired revision.
     expect(render).toHaveBeenCalledTimes(1);
     expect(render.mock.calls[0][0].directory).toContain(`/runs/${run.id}/render/${current.candidateRevisionId}`);
-    expect(data.output).toMatchObject({ jobId: 'media-job', revisionId: current.candidateRevisionId, verifiedDimensions: expect.arrayContaining(['visual-motion', 'audio']) });
+    expect(data.output).toMatchObject({ jobId: 'media-job', revisionId: current.candidateRevisionId, verifiedDimensions: expect.arrayContaining(['visual-motion', 'intentional-silence']) });
     expect(data.spent).toMatchObject({ iterations: 1, tokens: 100 });
     for (const artifact of data.stages.find(stage => stage.key === 'style-frame').artifacts) {
       expect(await exists(join(PATHS.data, artifact.relativePath))).toBe(true);

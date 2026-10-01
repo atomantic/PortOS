@@ -49,7 +49,7 @@ export async function preflightProductionProject(id) {
   const result = { requested, resolved: null, effective: null, executed: false, problems,
     substitution: substitutionOf(requested), allowFallback: substitutionOf(requested) === 'allowed',
     capabilities: { packageImportExport: true, authoringDispatch: false, renderTools: false, imageInspection: false, research: false },
-    notes: ['Settings preview only. Authoring, rendering, visual inspection and research adapters are not connected; use package export/import.'],
+    notes: ['This checks saved authoring settings only. Explicit production stages measure rendering, motion and sound; visual review and research remain unverified.'],
   };
   if (!requested.providerId) {
     problems.push('Select an authoring provider explicitly.');

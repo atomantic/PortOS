@@ -44,6 +44,7 @@ export function analyzeEvidence({ manifest, pilot, contract, review = null }) {
     if (Math.abs(contract.durationSec - durationSeconds) > 1 / fps + 1e-9) {
       add('duration-mismatch', 'error', `The film declares ${contract.durationSec}s but the brief asks for ${durationSeconds}s.`, { measured: { declared: contract.durationSec, expected: durationSeconds } });
     }
+    if (contract.fps !== fps) add('frame-rate-mismatch', 'error', `The film renders ${contract.fps}fps but the sound timeline uses ${fps}fps.`, { measured: { declared: contract.fps, expected: fps } });
     if (contract.width !== width || contract.height !== height) {
       add('frame-size-mismatch', 'error', `The film renders ${contract.width}x${contract.height} but the brief asks for ${width}x${height}.`, { measured: { declared: `${contract.width}x${contract.height}`, expected: `${width}x${height}` } });
     }
@@ -89,9 +90,9 @@ export function analyzeEvidence({ manifest, pilot, contract, review = null }) {
  * source), missing evidence and any error finding never pass; unverified
  * dimensions are listed, never counted as verified.
  */
-export function evaluateVerdict({ evidence, sourceHash, findings, unverified }) {
+export function evaluateVerdict({ evidence, sourceHash, packageHash, findings, unverified }) {
   if (!evidence || !evidence.sourceHash) return { status: 'unverified', reason: 'No evidence was captured.', unverified };
-  if (evidence.sourceHash !== sourceHash) return { status: 'stale', reason: 'The evidence was captured against a different source revision.', unverified };
+  if ((packageHash && evidence.packageHash !== packageHash) || evidence.sourceHash !== sourceHash) return { status: 'stale', reason: 'The evidence was captured against a different source revision.', unverified };
   if (findings.some(finding => finding.severity === 'error')) return { status: 'fail', reason: 'Measured errors remain.', unverified };
   return { status: 'pass', reason: null, unverified };
 }
