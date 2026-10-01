@@ -30,6 +30,7 @@ function harness({ healthy = ['musicgen', 'acestep'], tracks = {}, jobs = {}, wa
     queueGeneration: vi.fn(async () => ({ jobId: 'job-1', status: 'queued' })),
     getJob: async (id) => state.jobs[id] || null,
     getTrack: async (id) => state.tracks[id] || null,
+    cancelJob: vi.fn(async () => true),
     // The completion hook attaches the audio a beat after the job reports done.
     waitForJob: vi.fn(async (id) => waited?.(state, id) ?? { id, status: 'completed', result: { filename: 'song.wav' } }),
     sleep: vi.fn(async () => { state.tracks['t-1'] = { id: 't-1', audioFilename: 'song.wav' }; }),
@@ -135,6 +136,8 @@ describe('the default job waiter', () => {
     queue.events.emit('canceled', { id: 'job-8', status: 'canceled' });
     await expect(canceled).rejects.toMatchObject({ code: 'LOCAL_SONG_FAILED' });
 
-    await expect(waitWith('job-7', { timeoutMs: 5 })).rejects.toMatchObject({ code: 'LOCAL_SONG_TIMEOUT' });
+    const cancelJob = vi.fn(async () => true);
+    await expect(waitWith('job-7', { timeoutMs: 5, cancelJob })).rejects.toMatchObject({ code: 'LOCAL_SONG_TIMEOUT' });
+    expect(cancelJob).toHaveBeenCalledWith('job-7'); // the abandoned render must not keep the GPU busy
   });
 });

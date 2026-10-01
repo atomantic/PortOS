@@ -39,6 +39,7 @@ const defaults = {
   queueGeneration: async (body) => (await import('../musicGeneration.js')).queueMusicGeneration(body),
   getJob: async (id) => (await import('../mediaJobQueue/index.js')).getJob(id),
   getTrack: async (id) => (await import('../tracks/index.js')).getTrack(id),
+  cancelJob: async (id) => (await import('../mediaJobQueue/index.js')).cancelJob(id),
   // Resolves with the job once it reaches a terminal state (the queue's own
   // events; an already-finished job resolves at once).
   waitForJob: async (jobId, { timeoutMs }) => {
@@ -120,7 +121,11 @@ export async function generateLocalSong({ trackId, title, prompt, lyrics = '', i
     console.log(`🎵 Autonomous music video queued a local song on ${engine.id} (job ${String(jobId).slice(0, 8)})`);
   }
 
-  job = await deps.waitForJob(jobId, { timeoutMs });
+  job = await deps.waitForJob(jobId, { timeoutMs }).catch(async (err) => {
+    // Give up on the render too, or it keeps the GPU busy behind the next scheduled run.
+    if (err.code === 'LOCAL_SONG_TIMEOUT') await deps.cancelJob(jobId).catch(() => {});
+    throw err;
+  });
   if (job.status !== 'completed') {
     throw fail(502, 'LOCAL_SONG_FAILED', `The local song ${job.status === 'canceled' ? 'was canceled' : 'failed to render'}${job.error ? `: ${trimTo(job.error, 300)}` : ''}`, { jobId });
   }
