@@ -101,7 +101,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
     return { schedule };
   }
 
-  for (const request of onDemandRequests) {
+  for (const queuedRequest of onDemandRequests) {
     // This request's programmatic-phase card, or null for the automated origins
     // that are never carded — `cardIdForRequest` owns that policy, so this
     // engine and the idle-review steal cannot disagree about who gets a card.
@@ -110,43 +110,44 @@ export async function drainOnDemandRequests(ctx, adapter) {
     // BEFORE it reads the task file, which matters because an automated refill
     // drain would otherwise pay a cold whole-file parse per request just to
     // discover it has no card.
-    const cardId = cardIdForRequest(request);
+    const queuedCardId = cardIdForRequest(queuedRequest);
 
     // Already handled above (and its request cleared) — `onDemandRequests` is
     // a snapshot taken before that drain.
-    if (handledProgrammatically.has(request.id)) {
-      await finishPreflightCard(cardId, { outcome: 'programmatic' });
+    if (handledProgrammatically.has(queuedRequest.id)) {
+      await finishPreflightCard(queuedCardId, { outcome: 'programmatic' });
       continue;
     }
 
-    // Open the card BEFORE the capacity check, so a Run that has to wait for a
-    // free slot still shows up on the Tasks page as waiting. Until this existed
-    // nothing appeared there until an agent task did — which for pr-reviewer is
-    // after the whole security preflight — and the click read as a no-op. Only
-    // a human's Run is carded: a drain refill or a quota-burn step has nobody
-    // waiting on it, and carding those would fill the page with noise. Repeat
-    // cycles re-enter here and `addTask` rejects the duplicate id, so a request
-    // that waits several cycles keeps ONE card rather than gaining one per tick.
-    if (cardId) {
+    // Keep waiting requests visible without claiming capacity-deferred work.
+    // Otherwise only the claim winner opens/reports into the card. Repeated
+    // waiting cycles are idempotent: startPreflightCard deduplicates by id.
+    const openCard = async (record = queuedRequest) => {
+      if (!cardIdForRequest(record)) return;
       await startPreflightCard({
-        requestId: request.id,
-        taskType: request.taskType,
-        appId: request.appId ?? null,
-        appName: apps.find(app => app.id === request.appId)?.name || null,
-        targetPullRequest: request.targetPullRequest ?? null,
+        requestId: record.id,
+        taskType: record.taskType,
+        appId: record.appId ?? null,
+        appName: apps.find(app => app.id === record.appId)?.name || null,
+        targetPullRequest: record.targetPullRequest ?? null,
       });
-    }
+    };
 
     // Abandon this request: clear it from the queue and tell the user's card why.
     // One helper so the log line and the card can never name different reasons —
     // the same hand-mirroring this module's header exists to eliminate.
     const dropRequest = async (level, reason, note) => {
-      emitLog(level, `On-demand request dropped — ${note}`, { requestId: request.id, taskType: request.taskType });
-      await taskScheduleMod.clearOnDemandRequest(request.id);
-      await finishPreflightCard(cardId, { outcome: 'failed', reason, note });
+      const claimed = await taskScheduleMod.clearOnDemandRequest(queuedRequest.id);
+      if (!claimed) return;
+      await openCard(claimed);
+      emitLog(level, `On-demand request dropped — ${note}`, { requestId: queuedRequest.id, taskType: queuedRequest.taskType });
+      await finishPreflightCard(cardIdForRequest(claimed), { outcome: 'failed', reason, note });
     };
 
-    if (capacityExhausted()) break;
+    if (capacityExhausted()) {
+      await openCard();
+      break;
+    }
 
     if (!isImprovementEnabled(state)) {
       await dropRequest('warn', 'improvement-disabled',
@@ -155,9 +156,9 @@ export async function drainOnDemandRequests(ctx, adapter) {
     }
 
     // Removed tasks never run; only automated requests honor schedule disablement.
-    if (!schedule.tasks[request.taskType] || (!isManualOnDemandRequest(request) && !schedule.tasks[request.taskType].enabled)) {
+    if (!schedule.tasks[queuedRequest.taskType] || (!isManualOnDemandRequest(queuedRequest) && !schedule.tasks[queuedRequest.taskType].enabled)) {
       await dropRequest('info', 'task-type-disabled',
-        `The scheduled task type '${request.taskType}' is disabled or no longer registered.`);
+        `The scheduled task type '${queuedRequest.taskType}' is disabled or no longer registered.`);
       continue;
     }
 
@@ -173,11 +174,11 @@ export async function drainOnDemandRequests(ctx, adapter) {
     // Determine target app (if any)
     let targetApp = null;
 
-    if (request.appId) {
-      targetApp = apps.find(a => a.id === request.appId);
+    if (queuedRequest.appId) {
+      targetApp = apps.find(a => a.id === queuedRequest.appId);
       if (!targetApp) {
         await dropRequest('warn', 'app-unknown',
-          `App '${request.appId}' is no longer active, so this run has nothing to target.`);
+          `App '${queuedRequest.appId}' is no longer active, so this run has nothing to target.`);
         continue;
       }
     }
@@ -187,15 +188,24 @@ export async function drainOnDemandRequests(ctx, adapter) {
     // safe only when the final `canSpawn` could not deny; per-project capacity
     // can deny while global slots remain, which discarded the prepared task and
     // closed the visible card without ever creating an agent task.
-    if (projectCapacityExhausted(targetApp?.id ?? request.appId ?? null)) {
+    if (projectCapacityExhausted(targetApp?.id ?? queuedRequest.appId ?? null)) {
+      await openCard();
       emitLog('debug', `On-demand request deferred — per-project agent limit reached`, {
-        requestId: request.id,
-        taskType: request.taskType,
+        requestId: queuedRequest.id,
+        taskType: queuedRequest.taskType,
       });
       continue;
     }
 
-    await taskScheduleMod.clearOnDemandRequest(request.id);
+    // Both engines can hold this snapshot. Only the atomic removal winner
+    // owns preparation, accounting, and the shared card's terminal outcome.
+    const request = await taskScheduleMod.clearOnDemandRequest(queuedRequest.id);
+    if (!request) continue;
+    // Receipts are immutable while queued; resolve dispatch from the claimed
+    // record as well, rather than keeping snapshot objects across ownership.
+    targetApp = request.appId ? apps.find(app => app.id === request.appId) : null;
+    const cardId = cardIdForRequest(request);
+    await openCard(request);
     // Off the queue and into preparation. A task type with its own preflight
     // (pr-reviewer) has no `prepare` step and reports its real first step
     // moments later, so this is a no-op there rather than a competing claim.

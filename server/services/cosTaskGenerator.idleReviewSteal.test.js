@@ -22,7 +22,7 @@ const preflight = vi.hoisted(() => ({ reporter: vi.fn((cardId) => ({ boundTo: ca
 const pipeline = vi.hoisted(() => ({ securityPreflight: vi.fn(async () => ({ skipped: true, reason: 'no-external-open-prs' })) }));
 const scheduleMocks = vi.hoisted(() => ({
   requests: [],
-  clearOnDemandRequest: vi.fn(async () => ({})),
+  clearOnDemandRequest: vi.fn(),
 }));
 
 vi.mock('./preflightTaskCard.js', async (importActual) => ({
@@ -65,6 +65,7 @@ vi.mock('./taskSchedule.js', async (importActual) => ({
   getNextTaskType: vi.fn(async () => null),
 }));
 
+const { applyOnDemandRunResets, recordExecution, getNextTaskType } = await import('./taskSchedule.js');
 const { generateIdleReviewTask, prepareManagedAppImprovementTask } = await import('./cosTaskGenerator.js');
 
 const STATE = { config: { improvementEnabled: true, appReviewCooldownMs: 0 }, stats: {} };
@@ -76,9 +77,65 @@ beforeEach(() => {
   preflight.reporter.mockImplementation((cardId) => ({ boundTo: cardId }));
   pipeline.securityPreflight.mockResolvedValue({ skipped: true, reason: 'no-external-open-prs' });
   scheduleMocks.requests = [];
+  scheduleMocks.clearOnDemandRequest.mockImplementation(async (id) => {
+    const index = scheduleMocks.requests.findIndex(request => request.id === id);
+    return index === -1 ? null : scheduleMocks.requests.splice(index, 1)[0];
+  });
 });
 
 describe('idle review stealing a queued on-demand request', () => {
+  it('leaves another owner or cancelled receipt alone', async () => {
+    scheduleMocks.requests = [request()];
+    scheduleMocks.clearOnDemandRequest.mockResolvedValue(null);
+    const result = await generateIdleReviewTask(STATE);
+    expect(result).toEqual({ task: null, pendingPerpetualDispatch: null, preflightCardId: null });
+    expect(applyOnDemandRunResets).not.toHaveBeenCalled();
+    expect(recordExecution).not.toHaveBeenCalled();
+    expect(getNextTaskType).not.toHaveBeenCalled();
+    expect(pipeline.securityPreflight).not.toHaveBeenCalled();
+    expect(preflight.reporter).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1])('only idle consumer %i owns preparation and the card', async (winner) => {
+    const receipt = request({ targetPullRequest: 42 });
+    scheduleMocks.requests = [receipt];
+    const firstClaimReady = Promise.withResolvers();
+    const claimsReady = Promise.withResolvers();
+    const claims = [Promise.withResolvers(), Promise.withResolvers()];
+    const preflightEntered = Promise.withResolvers();
+    const preflightRelease = Promise.withResolvers();
+    let count = 0;
+    const queue = [receipt];
+    scheduleMocks.clearOnDemandRequest.mockImplementation(async () => {
+      const index = count++;
+      if (count === 1) firstClaimReady.resolve();
+      if (count === 2) claimsReady.resolve();
+      await claims[index].promise;
+      return queue.shift() ?? null;
+    });
+    pipeline.securityPreflight.mockImplementation(async () => {
+      preflightEntered.resolve();
+      await preflightRelease.promise;
+      return { skipped: true, reason: 'no-external-open-prs' };
+    });
+    const drains = [generateIdleReviewTask(STATE)];
+    await firstClaimReady.promise;
+    drains.push(generateIdleReviewTask(STATE));
+    await claimsReady.promise;
+    claims[winner].resolve();
+    await preflightEntered.promise;
+    claims[1 - winner].resolve();
+    expect(await drains[1 - winner]).toEqual({
+      task: null, pendingPerpetualDispatch: null, preflightCardId: null,
+    });
+    expect(applyOnDemandRunResets).toHaveBeenCalledTimes(1);
+    expect(recordExecution).toHaveBeenCalledTimes(1);
+    expect(pipeline.securityPreflight).toHaveBeenCalledTimes(1);
+    preflightRelease.resolve();
+    expect((await drains[winner]).preflightCardId).toBe('preflight-demand-1');
+    expect(progressOf()).toEqual({ boundTo: 'preflight-demand-1' });
+  });
+
   it('carries the human Run card out to the tier that rules on the task', async () => {
     scheduleMocks.requests = [request()];
     const result = await generateIdleReviewTask(STATE);

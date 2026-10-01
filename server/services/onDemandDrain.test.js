@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => ({
   reviveBlockedTask: vi.fn(async () => {}),
   loadSchedule: vi.fn(async () => ({ tasks: { 'code-quality': { enabled: true } } })),
   getOnDemandRequests: vi.fn(async () => []),
-  clearOnDemandRequest: vi.fn(async () => {}),
+  clearOnDemandRequest: vi.fn(),
   applyOnDemandRunResets: vi.fn(async () => true),
   recordExecution: vi.fn(async () => {}),
   prepareManagedAppImprovementTask: vi.fn(async () => ({ task: { id: 'gen-1', priority: 'HIGH' }, pendingPerpetualDispatch: null, skip: null })),
@@ -144,6 +144,8 @@ beforeEach(() => {
   mocks.withStateLock.mockImplementation(async (fn) => fn());
   mocks.loadSchedule.mockResolvedValue({ tasks: { 'code-quality': { enabled: true } } });
   mocks.getOnDemandRequests.mockResolvedValue([]);
+  mocks.clearOnDemandRequest.mockImplementation(async (id) =>
+    (await mocks.getOnDemandRequests()).find(request => request.id === id) ?? null);
   mocks.applyOnDemandRunResets.mockResolvedValue(true);
   mocks.getActiveApps.mockResolvedValue([APP]);
   mocks.addTask.mockResolvedValue({ id: 'persisted-1' });
@@ -606,5 +608,99 @@ describe('preflight task card', () => {
     // emitOnDemandEmpty owns the specific reason; this is the backstop close.
     expect(mocks.emitOnDemandEmpty).toHaveBeenCalledWith(expect.objectContaining({ preflightCardId: 'preflight-req-1' }));
     expect(mocks.finishPreflightDispatch).toHaveBeenCalledWith('preflight-req-1');
+  });
+});
+
+
+describe('atomic on-demand preparation ownership', () => {
+  it.each([0, 1])('prepares once when engine %i wins overlapping snapshots', async (winner) => {
+    const receipt = appRequest();
+    const queue = [receipt];
+    const firstClaimReady = Promise.withResolvers();
+    const claimsReady = Promise.withResolvers();
+    const claims = [Promise.withResolvers(), Promise.withResolvers()];
+    const preparationEntered = Promise.withResolvers();
+    const preparationRelease = Promise.withResolvers();
+    let claimCount = 0;
+    mocks.getOnDemandRequests.mockResolvedValue([receipt]);
+    mocks.clearOnDemandRequest.mockImplementation(async () => {
+      const index = claimCount++;
+      if (claimCount === 1) firstClaimReady.resolve();
+      if (claimCount === 2) claimsReady.resolve();
+      await claims[index].promise;
+      return queue.shift() ?? null;
+    });
+    mocks.prepareManagedAppImprovementTask.mockImplementation(async () => {
+      preparationEntered.resolve();
+      await preparationRelease.promise;
+      return { task: { id: 'winner-task' }, pendingPerpetualDispatch: null };
+    });
+    const engines = [generatorAdapter(), dequeueAdapter()];
+    const drains = [drainOnDemandRequests({ state: STATE }, engines[0].adapter)];
+    await firstClaimReady.promise;
+    drains.push(drainOnDemandRequests({ state: STATE }, engines[1].adapter));
+    await claimsReady.promise;
+    claims[winner].resolve();
+    await preparationEntered.promise;
+    claims[1 - winner].resolve();
+    await drains[1 - winner];
+
+    // A late loser must not close or reset a card while the winner is working.
+    expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledTimes(1);
+    expect(mocks.applyOnDemandRunResets).toHaveBeenCalledTimes(1);
+    expect(mocks.recordExecution).toHaveBeenCalledTimes(1);
+    expect(mocks.startPreflightCard).toHaveBeenCalledTimes(1);
+    expect(mocks.reportPreflightStep).toHaveBeenCalledTimes(1);
+    expect(mocks.finishPreflightCard).not.toHaveBeenCalled();
+    expect(mocks.finishPreflightDispatch).not.toHaveBeenCalled();
+
+    preparationRelease.resolve();
+    await Promise.all(drains);
+    expect(mocks.addTask).toHaveBeenCalledTimes(1);
+    expect(engines[winner].spawned).toHaveLength(1);
+    expect(engines[1 - winner].spawned).toEqual([]);
+    expect(queue).toEqual([]);
+  });
+
+  it('does not prepare install-wide work cancelled after the snapshot', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ appId: null })]);
+    mocks.clearOnDemandRequest.mockResolvedValue(null);
+    await drainOnDemandRequests({ state: STATE }, generatorAdapter().adapter);
+    expect(mocks.generateSelfImprovementTaskForType).not.toHaveBeenCalled();
+    expect(mocks.applyOnDemandRunResets).not.toHaveBeenCalled();
+    expect(mocks.recordExecution).not.toHaveBeenCalled();
+    expect(mocks.startPreflightCard).not.toHaveBeenCalled();
+    expect(mocks.finishPreflightDispatch).not.toHaveBeenCalled();
+    expect(mocks.saveState).not.toHaveBeenCalled();
+  });
+
+  it("does not fail another owner's card when a stale snapshot hits a drop gate", async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.isImprovementEnabled.mockReturnValue(false);
+    mocks.clearOnDemandRequest.mockResolvedValue(null);
+    await drainOnDemandRequests({ state: STATE }, generatorAdapter().adapter);
+    expect(mocks.startPreflightCard).not.toHaveBeenCalled();
+    expect(mocks.finishPreflightCard).not.toHaveBeenCalled();
+  });
+
+  it('dispatches the claimed receipt with its scope and overrides', async () => {
+    const claimed = appRequest({
+      targetPullRequest: { number: 42, repo: 'example/repo' }, origin: 'user',
+      providerOverride: { provider: 'example-provider', model: 'example-model' },
+      burn: { overrides: { params: { mode: 'example-mode' } } },
+    });
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.clearOnDemandRequest.mockResolvedValue(claimed);
+    await drainOnDemandRequests({ state: STATE }, generatorAdapter().adapter);
+    expect(mocks.applyOnDemandRunResets).toHaveBeenCalledWith(claimed, APP.id);
+    expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledWith('code-quality', APP, STATE,
+      expect.objectContaining({
+        targetPullRequest: claimed.targetPullRequest, providerOverride: claimed.providerOverride,
+        runOverrides: { mode: 'example-mode' },
+      }));
+    expect(mocks.addTask.mock.calls[0][0].metadata.onDemandOrigin).toBe('user');
+    expect(mocks.startPreflightCard).toHaveBeenCalledWith(expect.objectContaining({
+      targetPullRequest: claimed.targetPullRequest,
+    }));
   });
 });

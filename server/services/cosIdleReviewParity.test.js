@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   emitLog: vi.fn(),
   recordDecision: vi.fn(async () => {}),
   apps: [], requests: [], activity: {}, cards: {}, persisted: [], executions: [], perpetualDispatches: [],
-  noWork: false, budget: { exceeded: null, budget: {}, usage: {} }, preflightInputs: [], hookInputs: [], userTasks: [],
+  autoApprove: true, noWork: false, budget: { exceeded: null, budget: {}, usage: {} }, preflightInputs: [], hookInputs: [], userTasks: [],
 }));
 
 vi.mock('./cosEvents.js', () => ({
@@ -66,7 +66,11 @@ vi.mock('./taskSchedule.js', async (importActual) => ({
     mocks.requestReads++;
     return mocks.requestsAfterPriority0 && mocks.requestReads === 1 ? [] : [...mocks.requests];
   },
-  clearOnDemandRequest: async (id) => { mocks.requests = mocks.requests.filter((r) => r.id !== id); },
+  clearOnDemandRequest: async (id) => {
+    const request = mocks.requests.find((r) => r.id === id);
+    mocks.requests = mocks.requests.filter((r) => r.id !== id);
+    return request ?? null;
+  },
   applyOnDemandRunResets: async () => true,
   recordExecution: async (type, appId) => { mocks.executions.push({ type, appId }); },
   recordPerpetualDispatch: async (...args) => { mocks.perpetualDispatches.push(args); },
@@ -100,7 +104,7 @@ vi.mock('./taskTypeHooks.js', async (importActual) => ({
 }));
 vi.mock('./taskLearning.js', async (importActual) => ({
   ...(await importActual()),
-  getTaskTypeConfidence: async () => ({ autoApprove: true }),
+  getTaskTypeConfidence: async () => ({ autoApprove: mocks.autoApprove }),
 }));
 vi.mock('./cosTaskPreStepBlocks.js', async (importActual) => ({
   ...(await importActual()),
@@ -160,6 +164,7 @@ beforeEach(() => {
   mocks.executions = [];
   mocks.perpetualDispatches = [];
   mocks.noWork = false;
+  mocks.autoApprove = true;
   mocks.budget = { exceeded: null, budget: {}, usage: {} };
   mocks.preflightInputs = [];
   mocks.hookInputs = [];
@@ -237,10 +242,16 @@ describe.each(engines)('%s idle admission public boundary', (name, run) => {
   });
 
   it.each([false, true])('closes the correct stolen card after late request preparation (no-work: %s)', async (noWork) => {
-    mocks.requests = [request()];
+    mocks.requests = [{
+      ...request(), origin: 'user',
+      providerOverride: { provider: 'example-provider', model: 'example-model', effort: 'high' },
+    }];
     mocks.requestsAfterPriority0 = true;
     mocks.cards['preflight-demand-1'] = { outcome: 'waiting' };
     mocks.noWork = noWork;
+    // A manual receipt supplies consent even when the ordinary scheduled
+    // task would need approval because its learned confidence is low.
+    mocks.autoApprove = false;
     mocks.interval.perpetual = true;
     await run();
     expect(mocks.requests).toEqual([]);
@@ -249,6 +260,11 @@ describe.each(engines)('%s idle admission public boundary', (name, run) => {
       outcome: noWork ? 'nothing-to-do' : 'handed-off', taskId: readyTasks()[0]?.id ?? null,
     });
     expect(mocks.perpetualDispatches).toHaveLength(noWork ? 0 : 1);
+    if (!noWork) expect(readyTasks()[0]).toMatchObject({ autoApproved: true, approvalRequired: false });
+    if (!noWork) expect(readyTasks()[0].metadata).toMatchObject({
+      onDemand: true, onDemandOrigin: 'user',
+      provider: 'example-provider', model: 'example-model', effort: 'high',
+    });
     if (!noWork) expect(mocks.perpetualDispatches[0]).toEqual(['code-quality', 'example-app', JSON.stringify({ taskType: 'code-quality', candidates: ['example-work'] })]);
     if (noWork) expect(mocks.activity['example-app'].activeAgentId).toBeUndefined();
   });
