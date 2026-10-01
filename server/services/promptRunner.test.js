@@ -1478,6 +1478,10 @@ describe('promptRunner — retry-with-fallback', () => {
 
     expect(runner.executeApiRun).not.toHaveBeenCalled();
     expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+    // No retry suppressed the original event, so it remains the sole owner.
+    expect(autoFixer.noteFallbackStarted).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
+    expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
   });
 
   it('rethrows when toolkit/providerStatus is not initialized (no retry path possible)', async () => {
@@ -1948,6 +1952,12 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
     expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'good-model' });
     expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledTimes(1);
+    expect(autoFixer.noteFallbackFailed).toHaveBeenCalledTimes(2);
+    // The replacement must exist before suppression is released; finally must
+    // not escalate again after this explicit terminal operation.
+    expect(autoFixer.escalateProviderFailure.mock.invocationCallOrder[0])
+      .toBeLessThan(autoFixer.noteFallbackFailed.mock.invocationCallOrder[0]);
   });
 
   it('skips Tier 1 for a CLI provider whose model flag is baked into args (override ignored)', async () => {
@@ -2098,11 +2108,17 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
       onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
     });
 
-    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' })).rejects.toThrow();
+    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' })).rejects.toThrow('provider registry corrupt');
 
     expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
       context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
     }));
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledTimes(1);
+    expect(autoFixer.noteFallbackFailed.mock.calls).toEqual([
+      [{ provider: 'Primary API', model: 'primary-model' }],
+      [{ provider: 'Primary API', model: 'good-model' }],
+    ]);
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
   });
 
   it('does NOT engage Tier 1 for a category-less failure even when the provider lists alternatives', async () => {
