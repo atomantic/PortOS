@@ -85,6 +85,15 @@ const launchMusicCases = [
   ['service readiness guard removed', launchMusicCase.diff.replace(/^(\+For the service method only:.*)$/m, line => line.replace('If none is ready, report the setup requirement and stop.', 'If none is ready, continue anyway with the unready engine.')), 'fix-first'],
 ]
 
+// Complete production + interaction-test diff from the overturned JSX finding.
+const summaryDisclosureCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-summary-disclosure.json', import.meta.url), 'utf8'))
+const summaryDisclosureCases = [
+  ['nested summary and separately disclosed transcript', summaryDisclosureCase.diff, 'ship'],
+  ['summary visible while collapsed', summaryDisclosureCase.diff.replace('       {expanded && (', '       {true && ('), 'fix-first'],
+  ['duplicate transcript visible after Show', summaryDisclosureCase.diff.replace('+          {(!taskSummary || transcriptExpanded) && <>', '+          {true && <>'), 'fix-first'],
+  ['interaction tests without production changes', summaryDisclosureCase.diff.split(/(?=^diff --git )/m).find(part => part.startsWith('diff --git a/client/src/components/cos/tabs/AgentCard.test.jsx')), 'rethink'],
+]
+
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
 // callers (agentCliSpawning / agentCompletionCleanup) — kept trivial so the
 // test exercises the resolver's own model-map assembly, not validation.js.
@@ -1107,6 +1116,48 @@ describe('codeReview helpers', () => {
       expect(result.ok, result.error).toBe(true)
       if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
       else expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+    }, 190_000)
+
+    it('sends the nested JSX disclosure calibration and its narrow exclusions with the full PR evidence', async () => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        const rubric = messages[0].content
+        expect(rubric).toContain('conditions IN THE ACTUAL DIFF')
+        expect(rubric).toContain('inherits that enclosing guard')
+        expect(rubric).toContain('these examples are not claims that those conditions are present')
+        expect(rubric).toContain('does NOT need a second expanded check')
+        expect(rubric).toContain('initialized to false')
+        expect(rubric).toContain('may repeat only after explicitly opening the full transcript')
+        expect(rubric).toContain('positive tests cannot override a broken production guard')
+        expect(rubric).toContain('test-only diff lacks the production evidence')
+        expect(rubric).toContain('explicitly forbids summary repetition even after opening the full transcript')
+        expect(rubric).toContain('not proof that tests ran or passed')
+        expect(messages[1].content).toContain(summaryDisclosureCase.objective)
+        expect(messages[1].content).toContain(summaryDisclosureCase.diff.trim())
+        return completion(shipVerdict)
+      })
+      // Transport contract only. Real judgement (including negative controls)
+      // is exercised by the opt-in local-model regression below.
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...summaryDisclosureCase }))
+        .toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    // Real judgement regression: no mocked oracle; also reject deliberately broken
+    // guards even though the original positive interaction assertions remain.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(summaryDisclosureCases)('judges summary disclosure with a real local model: %s', async (name, diff, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective: summaryDisclosureCase.objective, diff, timeoutMs: 180_000,
+      })
+      console.log(`🔍 Summary disclosure evaluation ${name}: ${result.verdict}; ${result.evidence || result.error}`)
+      expect(result.ok, result.error).toBe(true)
+      if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
+      else {
+        expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+        expect(result.missing.length).toBeGreaterThan(0)
+      }
     }, 190_000)
 
     // A primary ship must not override contradictory surviving code.
