@@ -18,6 +18,10 @@ const localSettingsSchema = z.object({
   mode: z.enum(['api', 'cli', 'tui']).nullable().default(null),
   model: z.string().max(256).nullable().default(null),
   effort: z.enum(EFFORT_LEVELS).nullable().default(null),
+  // 'pinned' (default): the selected route must run the work; a fallback or
+  // swapped route is an error. 'allowed': substitution is an explicit decision
+  // that the effective-route record carries.
+  substitution: z.enum(['pinned', 'allowed']).default('pinned'),
 }).strict();
 
 export const codeAnimationProjectSchema = z.object({

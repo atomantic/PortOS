@@ -5,12 +5,49 @@ import { applyModelAccess } from '../../lib/aiToolkit/internal/modelAccess.js';
 import { harnessForProvider, providerRouteMode } from '../../lib/providerHarnesses.js';
 import { effortLevelsForProvider, hasEffortFlag, isConfiguredDefaultModel, antigravityBaseModels } from '../../lib/providerModels.js';
 import { isCompositeProviderId } from '../../lib/providerRef.js';
+import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
+import { isVisionCapableCodexTuiProvider } from '../../lib/codex.js';
+import { ServerError } from '../../lib/errorHandler.js';
+
+const substitutionOf = requested => requested?.substitution === 'allowed' ? 'allowed' : 'pinned';
+
+/** Pure route capability map: what the selected route can honestly do. No tool or provider probe. */
+export function routeCapabilities(provider, mode) {
+  const accepted = mode === 'api' || isVisionCapableCliProvider(provider) || isVisionCapableCodexTuiProvider(provider);
+  return {
+    packageImportExport: true,
+    // API text may carry structured, validated package files without shell/tools.
+    textPackageOutput: Boolean(mode),
+    // The route can receive images, but no render/inspection adapter is wired yet.
+    imageInputAccepted: Boolean(accepted),
+    imageInspection: false,
+    visualReview: false,
+    research: false,
+    toolsDeclared: mode === 'api' ? [] : null,
+  };
+}
+
+/**
+ * Compare the route that actually ran with the pinned route. Pinned mode throws on
+ * any substitution; an opted-in substitution is returned as a recorded decision.
+ */
+export function recordEffectiveRoute(resolved, requested, runResult) {
+  const ran = runResult?.fallbackProvider || runResult?.provider || null;
+  const effective = { providerId: ran?.id ?? resolved.providerId, model: runResult?.model ?? resolved.model, effort: resolved.effort };
+  const substituted = effective.providerId !== resolved.providerId || effective.model !== resolved.model || Boolean(runResult?.usedFallback);
+  const policy = substitutionOf(requested);
+  if (substituted && policy === 'pinned') {
+    throw new ServerError('The pinned authoring route was substituted; refusing to record it as the requested route.', { status: 409, code: 'AUTHORING_ROUTE_SUBSTITUTED' });
+  }
+  return { effective, substituted, substitution: policy, decision: substituted ? { optedIn: true, from: resolved.providerId, to: effective.providerId } : null };
+}
 
 export async function preflightProductionProject(id) {
   const project = await getProductionProject(id);
   const requested = project.localSettings;
   const problems = [];
   const result = { requested, resolved: null, effective: null, executed: false, problems,
+    substitution: substitutionOf(requested), allowFallback: substitutionOf(requested) === 'allowed',
     capabilities: { packageImportExport: true, authoringDispatch: false, renderTools: false, imageInspection: false, research: false },
     notes: ['Settings preview only. Authoring, rendering, visual inspection and research adapters are not connected; use package export/import.'],
   };
@@ -34,6 +71,7 @@ export async function preflightProductionProject(id) {
   const connectionId = provider.serviceId ?? null;
   const effortLevels = mode === 'api' ? [] : effortLevelsForProvider(provider, model) || [];
   const effort = requested.effort || provider.effort || null;
+  result.capabilities = { ...result.capabilities, ...routeCapabilities(provider, mode) };
   result.resolved = { providerId: provider.id, harness, connectionId, mode, model, effort: null };
   if (!mode || !harness) problems.push('The selected route has no recognized authoring harness or mode.');
   if (requested.mode && requested.mode !== mode) problems.push('The saved execution mode no longer matches the selected route.');
