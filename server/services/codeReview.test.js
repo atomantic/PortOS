@@ -1123,10 +1123,14 @@ describe('codeReview helpers', () => {
         const { messages } = JSON.parse(init.body)
         const rubric = messages[0].content
         expect(rubric).toContain('conditions IN THE ACTUAL DIFF')
+        expect(rubric).not.toContain('old launch-video failure')
+        expect(rubric).toContain('independently trace each requested outcome')
+        expect(rubric).toContain('does something other than what was asked')
         expect(rubric).toContain('inherits that enclosing guard')
         expect(rubric).toContain('these examples are not claims that those conditions are present')
         expect(rubric).toContain('does NOT need a second expanded check')
         expect(rubric).toContain('initialized to false')
+        expect(rubric).toContain('button cannot hide a branch that uses true')
         expect(rubric).toContain('may repeat only after explicitly opening the full transcript')
         expect(rubric).toContain('positive tests cannot override a broken production guard')
         expect(rubric).toContain('test-only diff lacks the production evidence')
@@ -1143,6 +1147,20 @@ describe('codeReview helpers', () => {
       expect(global.fetch).toHaveBeenCalledTimes(1)
     })
 
+    it('keeps the full rubric for summary disclosure on cards outside the completed-agent shape', async () => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        expect(messages[0].content).toContain('old launch-video failure')
+        expect(messages[0].content).toContain('retained runtime process entry is incomplete')
+        return completion({ verdict: 'rethink', missing: ['requested dashboard behavior'], unrequested: [], evidence: 'No matching implementation.' })
+      })
+      expect(await runLocalGoalFidelityReview({
+        backend: 'ollama', model: 'example-model',
+        objective: 'Keep the dashboard card summary hidden until Show and put its transcript behind a separate disclosure.',
+        diff: summaryDisclosureCase.diff,
+      })).toMatchObject({ ok: true, verdict: 'rethink', missing: ['requested dashboard behavior'] })
+    })
+
     // Real judgement regression: no mocked oracle; also reject deliberately broken
     // guards even though the original positive interaction assertions remain.
     it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(summaryDisclosureCases)('judges summary disclosure with a real local model: %s', async (name, diff, expected) => {
@@ -1150,6 +1168,7 @@ describe('codeReview helpers', () => {
       const result = await runLocalGoalFidelityReview({
         backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
         objective: summaryDisclosureCase.objective, diff, timeoutMs: 180_000,
+        effort: process.env.GOAL_FIDELITY_EVAL_EFFORT || null,
       })
       console.log(`🔍 Summary disclosure evaluation ${name}: ${result.verdict}; ${result.evidence || result.error}`)
       expect(result.ok, result.error).toBe(true)
