@@ -336,12 +336,13 @@ describe('music video production run (#9066)', () => {
     mediaJobEvents.emit('failed', job);
     await settle();
     const steps = theRun().steps.filter((s) => s.sceneId === 'mvs-a');
-    expect(steps.map((s) => s.status)).toEqual(['failed', 'queued']);
-    // One retry for the failed slot, not one per duplicate event.
-    expect(dispatch.mock.calls.filter(([a]) => a.scene.sceneId === 'mvs-a')).toHaveLength(2);
+    expect(steps.map((s) => s.status)).toEqual(['failed']);
+    // Duplicate failure events cannot authorize another paid operation.
+    expect(dispatch.mock.calls.filter(([a]) => a.scene.sceneId === 'mvs-a')).toHaveLength(1);
+    expect(theRun().status).toBe('blocked');
   });
 
-  it('halts a slot that keeps failing, and a resume retries it', async () => {
+  it('pauses after a paid failure and retries only on explicit Resume, including a second failure', async () => {
     seedProject();
     await start();
     const fail = (id) => {
@@ -351,13 +352,52 @@ describe('music video production run (#9066)', () => {
     };
     fail('job-1');
     await settle();
-    fail('job-3');
-    await settle();
-    expect(theRun()).toMatchObject({ status: 'blocked', stopReason: expect.stringMatching(/"A" failed to generate its frame 2 times/) });
-    const before = dispatch.mock.calls.length;
+    expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 2 } });
+    expect(dispatch).toHaveBeenCalledTimes(2);
     await service.resumeProduction('mv-example', theRun().id);
     await settle();
-    expect(dispatch.mock.calls.slice(before).map(([a]) => a.scene.sceneId)).toEqual(['mvs-a']);
+    expect(dispatch.mock.calls.slice(2).map(([a]) => a.scene.sceneId)).toEqual(['mvs-a']);
+    fail('job-3');
+    await settle();
+    expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 3 } });
+    expect(dispatch).toHaveBeenCalledTimes(3);
+  });
+
+  it('persists terminal refusal across Resume and incidental edits, but admits repaired inputs', async () => {
+    seedProject();
+    dispatch.mockRejectedValueOnce(Object.assign(new Error('Unsupported request'), { status: 422, code: 'VIDEO_MODE_UNSUPPORTED' }));
+    await start();
+    const refused = theRun().steps[0];
+    expect(refused).toMatchObject({ status: 'refused', retryBlocked: true, errorCode: 'VIDEO_MODE_UNSUPPORTED' });
+    expect(theRun().usage.generations).toBe(0);
+    expect(() => reserveProductionStep(current(), theRun().id, {
+      kind: 'frame', sceneId: 'mvs-a', revisionId: 'mvr-new', route: refused.route, processId: theRun().processId,
+    })).toThrow();
+    store.get('mv-example').scenes[0].label = 'Renamed';
+    store.get('mv-example').scenes[0].takes.push({ id: 'take-example', status: 'rejected' });
+    for (let i = 0; i < 2; i += 1) {
+      await service.resumeProduction('mv-example', theRun().id);
+      await settle();
+    }
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 0 } });
+    store.get('mv-example').scenes[0].framePrompt = 'a repaired frame';
+    await service.resumeProduction('mv-example', theRun().id);
+    await settle();
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    expect(theRun().usage.generations).toBe(2);
+  });
+
+  it('allows explicit Resume after a transient submission failure without spending on the refusal', async () => {
+    seedProject();
+    dispatch.mockRejectedValueOnce(Object.assign(new Error('Provider temporarily unavailable'), { status: 503 }));
+    await start();
+    expect(theRun().steps[0]).not.toHaveProperty('retryBlocked');
+    expect(theRun().usage.generations).toBe(0);
+    await service.resumeProduction('mv-example', theRun().id);
+    await settle();
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    expect(theRun().usage.generations).toBe(2);
   });
 
   it('coalesces concurrent advances so each slot is dispatched once', async () => {
@@ -801,6 +841,8 @@ it('charges a selected performance retry by its actual padded provider duration 
   try {
     await start({ pool: [{ kind: 'video', mode: 'fal' }], authoring: AUTHORING, limits: { ...LIMITS, spendCapUsd: 1.7 } });
     const job = jobs[0]; job.status = 'failed'; mediaJobEvents.emit('failed', job); await settle();
+    expect(theRun().status).toBe('blocked');
+    await service.resumeProduction('mv-example', theRun().id); await settle();
     const clips = theRun().steps.filter((step) => step.kind === 'clip');
     expect(clips).toHaveLength(2);
     expect(clips.map((step) => step.costUsd)).toEqual([0.808, 0.808]);

@@ -62,8 +62,6 @@ const PRODUCTION_STATUSES = Object.freeze([
 const RESUMABLE = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
 const LIVE_STEP = new Set(['reserved', 'queued']);
 const LIVE_JOB = new Set(['queued', 'running']);
-// A scene slot whose generation failed this many times needs a director.
-const MAX_SLOT_FAILURES = 2;
 // A reserved step whose job never showed up in the queue after this long did
 // not reach it (enqueue persists synchronously before returning).
 const RESERVATION_LEASE_MS = 60_000;
@@ -287,6 +285,37 @@ const productionSceneBasis = (project, sceneId) => canonicalSnapshotChecksum({
   videoSettings: project.videoSettings || null,
 });
 
+// A retry is a new provider operation only when its actual inputs changed.
+// Take history, review timestamps and UI labels must not clear a terminal refusal.
+const productionRetryBasis = (project, sceneId, kind) => {
+  const scene = (project.scenes || []).find((entry) => entry.sceneId === sceneId) || {};
+  return canonicalSnapshotChecksum({
+    kind,
+    framePrompt: scene.framePrompt ?? null,
+    prompt: scene.prompt ?? null,
+    direction: scene.direction ?? null,
+    shotMode: scene.shotMode ?? null,
+    startSec: scene.startSec ?? null,
+    endSec: scene.endSec ?? null,
+    ...(kind === 'clip' ? { referenceImageId: scene.referenceImageId ?? null } : {}),
+    concept: project.concept ?? null,
+    treatment: project.treatment ?? null,
+    sectionIndex: scene.sectionIndex ?? null,
+    visualSpec: project.visualSpec ?? null,
+    castAndSets: project.castAndSets?.direction?.songMap ?? null,
+    lyricCues: kind === 'clip' ? project.lyricCues ?? null : null,
+    phrases: kind === 'clip' ? project.phrases ?? null : null,
+    audioAnalysis: kind === 'clip' ? project.audioAnalysis ?? null : null,
+    styleReferences: project.styleReferences ?? null,
+    videoSettings: project.videoSettings ?? null,
+  });
+};
+
+const terminalRefusal = (project, run, sceneId, kind, route = null) =>
+  run.steps.find((step) => step.sceneId === sceneId && step.kind === kind && step.retryBlocked
+    && step.retryBasis === productionRetryBasis(project, sceneId, kind)
+    && (!route || routeKey(step.route) === routeKey(route)));
+
 /** All code-first work stays tied to the process and approved plan that reserved it. */
 export function assertProductionActive(project, runId, processId) {
   const run = findProductionRun(project, runId);
@@ -393,12 +422,12 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
       if (stepKind === 'clip' && !scene.referenceImageId) { waiting = true; continue; }
       const steps = slotSteps(run, scene.sceneId, stepKind);
       if (steps.some((s) => LIVE_STEP.has(s.status)) || liveSlotJob(jobs, project.id, scene.sceneId, stepKind)) { waiting = true; continue; }
-      // Failures since the last Start/Resume: a resume retries the slot, and a
-      // job cancelled by Stop is not a failure of the route.
-      const failures = steps.filter((s) => s.status === 'failed' && (s.settledAt || '') >= (run.resumedAt || '')).length;
-      if (failures >= MAX_SLOT_FAILURES) {
-        return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" failed to generate its ${stepKind} ${failures} times — generate it by hand, or resume to try again` };
-      }
+      const refused = terminalRefusal(project, run, scene.sceneId, stepKind);
+      if (refused) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" has a terminal ${stepKind} refusal (${refused.errorCode}). Change its inputs or start a new run with another supported route; Resume will not repeat it.` };
+      // A paid failure is not evidence that the same operation will work next
+      // time. Pause before another charge; explicit Resume permits a transient retry.
+      const failed = steps.find((s) => s.status === 'failed' && !(run.retryAcknowledged || []).includes(s.key));
+      if (failed) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" failed to generate its ${stepKind}. Inspect the failure and repair its inputs, or resume explicitly to retry.` };
       return { type: 'dispatch', kind: stepKind, sceneId: scene.sceneId };
     }
   }
@@ -460,6 +489,7 @@ export function reserveProductionStep(project, runId, {
       const medium = project.treatment?.shotDirections?.find((d) => d.sceneId === sceneId)?.medium;
       if ((kind === 'clip' && medium !== 'generated-footage') || (kind === 'frame' && !['still', 'generated-footage'].includes(medium))) throw productionError(409, 'PRODUCTION_MEDIUM_CONFLICT', 'This shot does not permit the requested generation');
     }
+    if (terminalRefusal(project, run, sceneId, kind, route)) throw productionError(409, 'PRODUCTION_TERMINAL_REFUSAL', 'This route already refused these inputs; repair them or start a run with a supported route');
     const existing = slotSteps(run, sceneId, kind, revisionId);
     if (existing.some((s) => LIVE_STEP.has(s.status))) {
       throw productionError(409, 'PRODUCTION_STEP_IN_FLIGHT', 'This scene is already generating for the production run', { sceneId });
@@ -487,6 +517,7 @@ export function reserveProductionStep(project, runId, {
       route: { kind: route.kind, mode: route.mode, model: route.model || null },
       rationale: trimTo(rationale, MAX_ERROR_LEN) || '',
       costUsd,
+      ...(['frame', 'clip'].includes(kind) ? { retryBasis: productionRetryBasis(project, sceneId, kind) } : {}),
       ...(kind === 'clip' && scene?.direction?.actionContract ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene) } } : {}),
       ...(plateRepairBasis ? { plateRepairBasis } : {}),
       ...(run.authoring && !author ? { submissionBasis: productionSceneBasis(project, sceneId) } : {}),
@@ -519,7 +550,7 @@ const refund = (run, step) => ({
  * refused — a charge whose job reached the queue stays spent.
  * Returns `{ project, run, step, changed }`.
  */
-export function settleProductionStep(project, runId, stepKey, { status, jobId = null, error = null }, now = new Date().toISOString()) {
+export function settleProductionStep(project, runId, stepKey, { status, jobId = null, error = null, errorCode = null, retryBlocked = false }, now = new Date().toISOString()) {
   const run = findProductionRun(project, runId);
   const step = run.steps.find((s) => s.key === stepKey);
   if (!step) return { project, run, step: null, changed: false };
@@ -532,6 +563,8 @@ export function settleProductionStep(project, runId, stepKey, { status, jobId = 
     status,
     jobId: jobId || step.jobId,
     error: error ? trimTo(String(error), MAX_ERROR_LEN) : step.error,
+    ...(errorCode ? { errorCode: trimTo(String(errorCode), 100) } : {}),
+    ...(status === 'refused' && retryBlocked ? { retryBlocked: true } : {}),
     settledAt: status === 'queued' ? null : now,
   };
   const out = mutateRun(project, runId, (r) => ({
@@ -657,6 +690,7 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       limits: nextLimits,
       processId,
       resumedAt: now,
+      retryAcknowledged: run.steps.filter((step) => step.status === 'failed').map((step) => step.key),
       stopReason: null,
       error: null,
       ...(run.finalRender?.status === 'failed' || (run.finalRender && run.processId !== processId) ? { finalRender: null } : {}),
