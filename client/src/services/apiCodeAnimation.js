@@ -65,6 +65,8 @@ export const preflightCodeAnimationProject = (id, options) => request(`/code-ani
 
 // Contained production execution (#9388): capability report, operator tool
 // paths, and the on-demand adversarial containment check.
+export const startCodeAnimationStageRun = (id, input, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/stage-runs`, { method: 'POST', body: JSON.stringify(input ?? {}), ...options });
+export const cancelCodeAnimationStageRun = (id, runId, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/stage-runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST', ...options });
 export const getCodeAnimationExecution = (options) => request('/code-animation/execution', options);
 export const updateCodeAnimationExecutionTools = (tools, options) => request('/code-animation/execution/tools', { method: 'PUT', body: JSON.stringify(tools), ...options });
 export const probeCodeAnimationExecution = (options) => request('/code-animation/execution/probe', { method: 'POST', ...options });

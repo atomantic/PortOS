@@ -1,7 +1,7 @@
 /**
  * Bounded Code Animation production stages (#9389):
  *
- *   style-frame → pilot → inspect → (repair → …) → final render
+ *   style-frame → pilot → [review] → inspect → (repair → …) → final render
  *
  * A run starts only from an explicit user request, works on immutable stored
  * revisions, and measures real renders in the HTML-composition sandbox before
@@ -12,6 +12,7 @@
  * marks a stranded run interrupted without calling a provider.
  */
 import { randomUUID } from 'crypto';
+import { join } from 'path';
 import { createCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
 import { codeAnimationStageRunSchema } from '../../lib/codeAnimationProjects.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -164,7 +165,69 @@ async function pilotStage(ctx, revision, style) {
   }, { renders: true });
 }
 
-function inspectStage(ctx, revision, style, pilot) {
+const reviewPrompt = ({ manifest, artifacts }) => [
+  'You review still frames of a generated browser animation against its brief. Judge style fit and composition only; do not suggest code.',
+  `Brief: ${manifest.brief.concept}`,
+  `Style guide: ${manifest.styleGuide || 'unspecified'}`,
+  `Frames, in order, are at seconds: ${artifacts.map(item => item.atSeconds).join(', ')}.`,
+  'Reply with JSON only: {"findings":[{"detail":"<one sentence>","atSeconds":<number|null>}]}. An empty list means the frames fit the brief.',
+].join('\n');
+
+/** The explicit vision route: the project's own saved authoring settings, images attached, no fallback unless the user allowed it. */
+async function reviewViaAuthoringRoute({ project, manifest, artifacts, signal, timeoutMs }) {
+  const [{ preflightProductionProject, _recordEffectiveRoute }, { runPromptThroughProvider }, { getProviderById }] = await Promise.all([
+    import('./preflight.js'), import('../promptRunner.js'), import('../providers.js'),
+  ]);
+  const preflight = await preflightProductionProject(project.id);
+  if (!preflight.resolved || preflight.problems.length) {
+    throw new ServerError(`The authoring route is not ready: ${preflight.problems.join(' ') || 'select a provider'}`, { status: 409, code: 'CODE_ANIMATION_AUTHORING_UNAVAILABLE' });
+  }
+  if (!preflight.capabilities.imageInputAccepted) {
+    throw new ServerError('The authoring route cannot receive images, so it cannot review frames.', { status: 409, code: 'CODE_ANIMATION_REVIEW_UNSUPPORTED' });
+  }
+  const provider = await getProviderById(preflight.resolved.providerId);
+  const prompt = reviewPrompt({ manifest, artifacts });
+  const { stopRun } = await import('../runner.js');
+  let providerRunId = null;
+  const stopProvider = () => { if (providerRunId) stopRun(providerRunId).catch(() => { /* best-effort cancel */ }); };
+  signal?.addEventListener('abort', stopProvider, { once: true });
+  const result = await runPromptThroughProvider({
+    provider, model: preflight.resolved.model, effort: preflight.resolved.effort || undefined, prompt,
+    ...(timeoutMs ? { timeout: timeoutMs } : {}),
+    onRunCreated: id => { providerRunId = id; if (signal?.aborted) stopProvider(); },
+    screenshots: artifacts.map(item => join(PATHS.data, item.relativePath)),
+    source: 'code-animation-review', cwd: PATHS.data, allowFallback: preflight.allowFallback, toolFree: true,
+  }).finally(() => signal?.removeEventListener('abort', stopProvider));
+  const route = _recordEffectiveRoute(preflight.resolved, project.localSettings, result);
+  const parsed = parseReviewFindings(result.text);
+  if (!parsed) throw new ServerError('The reviewer response was not valid JSON findings', { status: 422, code: 'CODE_ANIMATION_REVIEW_INVALID' });
+  return { findings: parsed, tokens: Math.ceil((prompt.length + result.text.length) / 4), reviewer: { providerId: route.effective.providerId, model: route.effective.model }, effective: route };
+}
+
+/** Pull `{findings:[…]}` out of a reply that may be fenced or wrapped in prose; null when it carries none. */
+function parseReviewFindings(text) {
+  const match = String(text ?? '').match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  let value;
+  try { value = JSON.parse(match[0]); } catch { return null; }
+  if (!Array.isArray(value?.findings)) return null;
+  return value.findings.filter(item => typeof item?.detail === 'string' && item.detail.trim()).slice(0, 10)
+    .map(item => ({ detail: item.detail.trim().slice(0, 500), atSeconds: Number.isFinite(item.atSeconds) ? item.atSeconds : null }));
+}
+
+async function reviewStage(ctx, revision, style) {
+  const prior = reusable(ctx, 'review', revision);
+  if (prior) { ctx.state.stages.push({ ...prior, reusedFrom: ctx.resumedFrom }); return prior; }
+  if (!style.artifacts?.length) return null;
+  return runStage(ctx, 'review', revision, async ({ signal }) => {
+    const out = await ctx.deps.review({ project: ctx.project, manifest: revision.manifest, artifacts: style.artifacts, signal, timeoutMs: remainingMs(ctx).ms });
+    ctx.state.spent.tokens += out.tokens || 0;
+    if (out.effective) ctx.state.effective = out.effective;
+    return { reviewer: out.reviewer, reviewFindings: out.findings, evaluatedStageRunId: style.stageRunId };
+  });
+}
+
+function inspectStage(ctx, revision, style, pilot, review = null) {
   return runStage(ctx, 'inspect', revision, async () => {
     // Each piece of evidence names the source it measured; a mismatch is stale.
     const evidence = { sourceHash: style.sourceHash === pilot.sourceHash ? style.sourceHash : null, styleStageRunId: style.stageRunId, pilotStageRunId: pilot.stageRunId };
@@ -172,7 +235,7 @@ function inspectStage(ctx, revision, style, pilot) {
     if (style.filmError) {
       analysis = { findings: [{ kind: 'film-error', severity: 'error', detail: `The film did not run: ${style.filmError}`, measured: { error: style.filmError } }], verified: [], unverified: [{ dimension: 'visual-motion', reason: 'The film did not render.' }] };
     } else {
-      analysis = analyzeEvidence({ manifest: revision.manifest, pilot, contract: pilot.contract });
+      analysis = analyzeEvidence({ manifest: revision.manifest, pilot, contract: pilot.contract, review });
       // The final render must be accepted by the same contract the renderer enforces; find that now, not at the end.
       const accepted = htmlCompositionContractSchema.safeParse(pilot.contract);
       if (!accepted.success) {
@@ -181,7 +244,8 @@ function inspectStage(ctx, revision, style, pilot) {
       }
     }
     const capturedAt = iso();
-    const findings = analysis.findings.map(finding => ({ ...finding, sourceHash: revision.sourceHash, revisionId: revision.id, evidenceStageRunIds: [style.stageRunId, pilot.stageRunId], capturedAt }));
+    const advisory = (review?.reviewFindings || []).map(item => ({ kind: 'visual-review', severity: 'warning', detail: item.detail, atSeconds: item.atSeconds, measured: { reviewer: review.reviewer } }));
+    const findings = [...analysis.findings, ...advisory].map(finding => ({ ...finding, sourceHash: revision.sourceHash, revisionId: revision.id, evidenceStageRunIds: [style.stageRunId, pilot.stageRunId], capturedAt }));
     const verdict = evaluateVerdict({ evidence, sourceHash: revision.sourceHash, findings, unverified: analysis.unverified });
     return { evidence, findings, verified: analysis.verified, verdict };
   });
@@ -277,7 +341,8 @@ async function execute(ctx, start) {
     revision = await stageRevision(ctx, revision);
     const style = await styleFrameStage(ctx, revision);
     const pilot = await pilotStage(ctx, revision, style);
-    const inspected = await inspectStage(ctx, revision, style, pilot);
+    const review = ctx.state.visualReview ? await reviewStage(ctx, revision, style) : null;
+    const inspected = await inspectStage(ctx, revision, style, pilot, review);
     ctx.state.findings = inspected.findings;
     ctx.state.verdict = { ...inspected.verdict, revisionId: revision.id, sourceHash: revision.sourceHash };
     if (inspected.verdict.status === 'pass') return finalStage(ctx, revision, inspected);
@@ -308,7 +373,7 @@ async function finish(ctx, run) {
   return status;
 }
 
-const defaultDeps = { sample: sampleFilm, render: renderViaMediaQueue, repair: repairViaAuthoringRoute };
+const defaultDeps = { sample: sampleFilm, render: renderViaMediaQueue, repair: repairViaAuthoringRoute, review: reviewViaAuthoringRoute };
 
 /**
  * Start a user-requested production run. Resolves with the persisted run once
@@ -338,6 +403,7 @@ export async function startProductionStageRun(projectId, input, deps = {}) {
     kind: STAGE_RUN_KIND, sourceRevisionId: revision.id, currentRevisionId: revision.id, sourceHash: revision.sourceHash,
     budgets: project.budgets, requested: project.localSettings, effective: null, reservedBytes: 0,
     spent: { iterations: priorSpent?.iterations ?? 0, tokens: priorSpent?.tokens ?? 0, renderMs: priorSpent?.renderMs ?? 0, diskBytes: 0, elapsedMs: 0, priorElapsedMs: priorSpent?.elapsedMs ?? 0 },
+    visualReview: request.visualReview ?? prior?.data.visualReview ?? false,
     stages: [], findings: [], verdict: null, output: null, repairs: prior?.data.repairs ?? [],
     resumedFrom: prior?.id ?? null, stopReason: null, resumable: false, executed: true,
   };

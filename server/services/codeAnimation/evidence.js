@@ -34,7 +34,8 @@ function frozenSpans(samples) {
  * samples. `pilot.samples` is `[{ t, renderHash, mean, deviation }]` where mean
  * and deviation are null when the film canvas could not be read back.
  */
-export function analyzeEvidence({ manifest, pilot, contract }) {
+/** `review` is the reviewer stage record when a visual reviewer pass ran; otherwise semantic-visual stays unverified. */
+export function analyzeEvidence({ manifest, pilot, contract, review = null }) {
   const findings = [];
   const { durationSeconds, width, height, fps } = manifest.format;
   const add = (kind, severity, detail, extra = {}) => findings.push({ kind, severity, detail, ...extra });
@@ -78,7 +79,8 @@ export function analyzeEvidence({ manifest, pilot, contract }) {
   if (unreadable) unverified.push({ dimension: 'blank-frame', reason: 'The film canvas could not be read back, so blankness was not measured.' });
   if (manifest.audio.kind === 'silence') verified.push('audio');
   else unverified.push({ dimension: 'audio', reason: 'Temporal audio and sound sync are not measured by this stage.' });
-  unverified.push({ dimension: 'semantic-visual', reason: 'No visual reviewer is wired; style fit and composition quality are not judged.' });
+  if (review) verified.push('semantic-visual');
+  else unverified.push({ dimension: 'semantic-visual', reason: 'No visual reviewer pass ran; style fit and composition quality are not judged.' });
   return { findings, verified, unverified };
 }
 
