@@ -110,6 +110,6 @@ describe('audio timing preview and Apply', () => {
 
   it('keeps receipt-bearing records off older peers', () => {
     expect(compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, { ...PORTOS_SCHEMA_VERSIONS, musicVideoProjects: 16 }).ahead)
-      .toContainEqual({ category: 'musicVideoProjects', senderV: 17, receiverV: 16 });
+      .toContainEqual({ category: 'musicVideoProjects', senderV: PORTOS_SCHEMA_VERSIONS.musicVideoProjects, receiverV: 16 });
   });
 });
