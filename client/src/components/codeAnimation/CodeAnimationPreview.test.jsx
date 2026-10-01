@@ -3,11 +3,13 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({ uploadGalleryVideo: vi.fn(), exportCodeAnimation: vi.fn(), cancelCodeAnimationExport: vi.fn() }));
+vi.mock('../../services/api', () => ({ uploadGalleryVideo: vi.fn(), exportCodeAnimation: vi.fn(), cancelCodeAnimationExport: vi.fn(), getCodeAnimationPackage: vi.fn() }));
+vi.mock('../../lib/downloadBlob', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../../hooks/useSseProgress', () => ({ useSseProgress: vi.fn(() => ({ latest: null })) }));
 
 import CodeAnimationPreview, { prepareAnimationHtml } from './CodeAnimationPreview';
-import { exportCodeAnimation } from '../../services/api';
+import { exportCodeAnimation, getCodeAnimationPackage } from '../../services/api';
+import { downloadBlob } from '../../lib/downloadBlob';
 import { useSseProgress } from '../../hooks/useSseProgress';
 
 const MESSAGES = { ready: 'ca:ready', record: 'ca:record', recorded: 'ca:recorded', progress: 'ca:progress', error: 'ca:error' };
@@ -54,6 +56,17 @@ describe('CodeAnimationPreview', () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it('downloads the saved portable package through the public API', async () => {
+    const user = userEvent.setup();
+    const pkg = { schemaVersion: 1, revisionHash: 'example-digest', files: [] };
+    getCodeAnimationPackage.mockResolvedValue(pkg);
+    renderPreview({ jobId: 'job-1' });
+    await user.click(screen.getByRole('button', { name: 'Download package' }));
+    expect(getCodeAnimationPackage).toHaveBeenCalledWith('job-1', { silent: true });
+    expect(downloadBlob).toHaveBeenCalledWith(JSON.stringify(pkg, null, 2), 'lantern.code-animation.json', 'application/json');
+    expect(screen.getByRole('button', { name: 'Download package' })).toBeEnabled();
+  });
 
   it('runs the page in a scripts-only sandbox and records through the postMessage handshake', async () => {
     const user = userEvent.setup();
