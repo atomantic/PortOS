@@ -88,10 +88,10 @@ beforeEach(() => {
     PGHOST: 'inherited.example.invalid', PGPORT: '1', PGUSER: 'inherited', PGDATABASE: 'inherited',
     PORTOS_NATIVE_PGPORT: '2', PGPORT_DOCKER: '3' });
 });
-afterEach(() => {
+afterEach(async () => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
-  for (const pid of cutover?.surrogatePids() ?? []) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+  await cutover?.stopSurrogates();
   context.root = undefined;
   rmSync(root, { recursive: true, force: true });
 });
