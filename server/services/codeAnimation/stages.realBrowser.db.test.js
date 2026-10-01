@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { _cleanupTestBrowser, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -70,7 +70,7 @@ let projectId;
 describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const profile = join(lazyTempDataRoot('portos-code-animation-stages-'), 'chrome-test-profile');
-    proc = spawn(chrome, ['--headless=new', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
     try {
       const ws = await _waitForTestChrome(proc);
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
@@ -97,9 +97,9 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
     const { done } = await startProductionStageRun(projectId, {}, {
       repair, render: ({ directory }) => renderComposition({ directory, jobId: 'stages-acceptance' }),
     });
-    expect(await done).toBe('completed');
-
+    const status = await done;
     const [{ data }] = (await getProductionHistory(projectId, { limit: 1, offset: 0 })).items;
+    expect(status, JSON.stringify(data.findings)).toBe('completed');
     const inspections = data.stages.filter(stage => stage.key === 'inspect');
     expect(inspections[0].findings.map(finding => finding.kind)).toContain('frozen-film');
     expect(inspections[0].verdict.status).toBe('fail');
