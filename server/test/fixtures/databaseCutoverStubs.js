@@ -70,7 +70,9 @@ if (process.argv.includes('--owner-bound')) {
   process.stdin.resume();
 }
 try {
+  trace('handshake import started');
   const { awaitDatabaseCutoverRelease } = await import(${JSON.stringify(handshakeUrl)});
+  trace('handshake imported');
   const released = await awaitDatabaseCutoverRelease({ pollMs: 20, releaseTimeoutMs: 20000 });
   trace('handshake returned released=' + released.released);
   await import(${JSON.stringify(bootFenceUrl)});
@@ -133,6 +135,7 @@ export function launchSurrogateServer(root, dir, endpoint, onOwnedChild) {
   const args = [join(dir, 'server-surrogate.mjs'), ...(onOwnedChild ? ['--owner-bound'] : [])];
   const child = spawn(process.execPath, args, { env, stdio: [onOwnedChild ? 'pipe' : 'ignore', 'ignore', stderr], detached: true });
   closeSync(stderr);
+  appendFileSync(join(dir, 'surrogate-stderr.log'), new Date().toISOString() + ' launched surrogate ' + child.pid + '\n');
   child.once('error', err => console.error('Cutover surrogate launch failed: ' + (err.code ?? 'error')));
   onOwnedChild?.(child);
   child.stdin?.unref();
