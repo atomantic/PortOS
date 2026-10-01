@@ -175,6 +175,16 @@ describe('dependency override parity across manifests (#2848)', () => {
   // (issue #5658). MANIFESTS is a hand-written list; this derives the roster from
   // the same `discoverWorkspaces()` the install-script allowlist uses, so a fifth
   // workspace added later fails here instead of silently inheriting no governance.
+  it.each(['package.json', 'server/package.json'])('%s patches the get-uri FTP consumer (#9444)', rel => {
+    expect(readOverrides(rel)['get-uri']).toEqual({ 'basic-ftp': '6.2.1' });
+    const resolved = Object.entries(readLockPackages(lockfileFor(rel)))
+      .filter(([path]) => packageNameFromLockPath(path) === 'basic-ftp');
+    expect(resolved.length).toBeGreaterThan(0);
+    expect(resolved.map(([, metadata]) => metadata.version)).toEqual(
+      resolved.map(() => '6.2.1')
+    );
+  });
+
   it('governs every workspace manifest that ships its own lockfile', () => {
     const tracked = trackedLockfiles();
     const ungoverned = discoverWorkspaces()
