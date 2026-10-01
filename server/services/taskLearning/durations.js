@@ -15,11 +15,8 @@ import {
   executionKeyPrefixOf
 } from './store.js';
 
-// Minimum completions before an execution-scoped bucket (issue #8001) is trusted
-// over the broader task-type average. Higher than the task-type bar (2) on
-// purpose: this dimension is far more granular, so one or two samples of a
-// specific provider/model/effort say less than a rich task-type history does.
-const MIN_EXECUTION_SAMPLES = 3;
+import { MIN_EXECUTION_SAMPLES } from '../../lib/executionDurationKey.js';
+
 const MIN_TASK_TYPE_SAMPLES = 2;
 const MIN_OVERALL_SAMPLES = 3;
 

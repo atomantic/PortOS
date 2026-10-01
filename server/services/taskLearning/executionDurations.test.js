@@ -24,6 +24,8 @@ vi.mock('./store.js', async (importActual) => {
 import { recordTaskCompletion } from './metrics.js';
 import { getTaskDurationEstimate, getAllTaskDurations } from './durations.js';
 import { loadLearningData, saveLearningData, executionDurationKey } from './store.js';
+import { executionKeyPrefixOf } from '../../lib/executionDurationKey.js';
+import { executionDurationKey as clientExecutionDurationKey, estimateCosDuration } from '../../../client/src/lib/cosDurationEstimate.js';
 
 const emptyData = () => ({
   version: 2,
@@ -69,6 +71,24 @@ async function record(agents) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+// Pins the persisted wire format through both entrypoints, including old history.
+describe('execution-duration persisted key compatibility', () => {
+  it.each([
+    ['high', 'self-improve:release-check|claude|opus|high'],
+    [undefined, 'self-improve:release-check|claude|opus|default']
+  ])('keeps server and browser keys stable for effort %s', async (effort, expectedKey) => {
+    const identity = { taskType: 'self-improve:release-check', providerId: 'claude', model: 'opus', effort };
+    expect(executionDurationKey(identity)).toBe(expectedKey);
+    expect(clientExecutionDurationKey(identity)).toBe(expectedKey);
+
+    const data = await record(Array.from({ length: 3 }, () => agentOn({ ...identity, effort: effort ?? null, duration: 60_000 })));
+    expect(Object.keys(data.byTaskTypeExecution)).toEqual([expectedKey]);
+    const durations = await getAllTaskDurations();
+    expect(estimateCosDuration({ durations, task: TASK, agentMetadata: identity }))
+      .toMatchObject({ basis: 'execution', estimatedMs: 60_000, basedOn: 3 });
+  });
 });
 
 describe('recordTaskCompletion — execution-scoped duration buckets', () => {
@@ -219,6 +239,8 @@ describe('getAllTaskDurations — reserved keys', () => {
     const out = await getAllTaskDurations();
     expect(Object.keys(out).filter((k) => !k.startsWith('_')), 'only real task types are top-level')
       .toEqual(['self-improve:release-check']);
+    expect(executionKeyPrefixOf(lowKey)).toBe('self-improve:release-check|ollama|local-coder');
+    expect(clientExecutionDurationKey({ taskType: 'self-improve:release-check', providerId: 'ollama', model: 'local-coder', effort: 'low' })).toBe(lowKey);
     expect(out._byExecution[lowKey]).toMatchObject({ avgDurationMs: 400_000, completed: 2 });
     expect(out._byExecutionProviderModel['self-improve:release-check|ollama|local-coder'])
       .toMatchObject({ avgDurationMs: 500_000, completed: 4 });

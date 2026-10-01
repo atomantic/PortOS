@@ -39,6 +39,7 @@ export * from './cronFields.js';
 export * from './cronValidation.js';
 export * from './cosAgentListProjection.js';
 export * from './cosSpawnWindow.js';
+export * from './executionDurationKey.js';
 export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
 // The generation-key spec creativeCommissionValidation.js builds its Zod schema
