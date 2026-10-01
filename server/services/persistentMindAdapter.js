@@ -149,7 +149,7 @@ const compactToolResult = (toolResult, cap) => {
  * @param {number} maxChars
  * @returns {Array<object>}
  */
-export function compactToolResultsToFit(results, maxChars) {
+function compactToolResultsToFit(results, maxChars) {
   if (JSON.stringify(results).length <= maxChars) return results;
   for (const cap of TOOL_RESULT_COMPACTION_CAPS) {
     const compacted = results.map((toolResult) => compactToolResult(toolResult, cap));
@@ -166,7 +166,7 @@ export function compactToolResultsToFit(results, maxChars) {
  *
  * @returns {Promise<{ contextWindow: number, outputReserveTokens: number, maxPromptChars: number, contextMaxChars: number }|null>}
  */
-export async function resolvePersistentMindPromptBudget({ provider, model }) {
+async function resolvePersistentMindPromptBudget({ provider, model }) {
   const local = await resolveLocalPromptBudget({ provider, model, outputReserveTokens: PERSISTENT_MIND_OUTPUT_RESERVE_TOKENS });
   if (!local || local.maxPromptTokens <= 0) return null;
   const maxPromptChars = Math.floor(local.maxPromptTokens * LOCAL_PROMPT_TOKENIZER_MARGIN) * CHARS_PER_TOKEN;

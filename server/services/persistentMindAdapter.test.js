@@ -75,7 +75,7 @@ vi.mock('./cosToolRegistry.js', () => ({
   isCosTaskToolName: (name) => name === 'cos.create-task' || name === 'cos_create_task',
 }));
 
-const { createPersistentMindTurnAdapter, persistentMindHarnessInfo, persistentMindResponseSchema, compactToolResultsToFit, resolvePersistentMindPromptBudget } = await import('./persistentMindAdapter.js');
+const { createPersistentMindTurnAdapter, persistentMindHarnessInfo, persistentMindResponseSchema} = await import('./persistentMindAdapter.js');
 
 const profile = { provider: { id: 'example-api', type: 'api' }, model: 'example-model', effort: 'high' };
 
@@ -879,23 +879,12 @@ describe('local-window prompt fitting', () => {
   const LOCAL_16K = { contextWindow: 16_384, outputReserveTokens: 2_048, maxPromptTokens: 14_336 };
   const LIMIT_16K = Math.floor(14_336 * 0.9) * 4;
 
-  it('sizes the prompt and recalled-context budgets from the local window', async () => {
-    mock.resolveLocalPromptBudget.mockResolvedValue(LOCAL_16K);
-    await expect(resolvePersistentMindPromptBudget(profile)).resolves.toEqual({
-      contextWindow: 16_384,
-      outputReserveTokens: 2_048,
-      maxPromptChars: LIMIT_16K,
-      contextMaxChars: Math.floor(LIMIT_16K * 0.25),
-    });
-    expect(mock.resolveLocalPromptBudget).toHaveBeenCalledWith(expect.objectContaining({ outputReserveTokens: 8192 }));
-    mock.resolveLocalPromptBudget.mockResolvedValue(null);
-    await expect(resolvePersistentMindPromptBudget(profile)).resolves.toBeNull();
-  });
-
   it('bounds the recalled context only for a local window', async () => {
     expect((await createPersistentMindTurnAdapter().prepare({ profile })).contextMaxChars).toBeUndefined();
     mock.resolveLocalPromptBudget.mockResolvedValue(LOCAL_16K);
     expect((await createPersistentMindTurnAdapter().prepare({ profile })).contextMaxChars).toBe(Math.floor(LIMIT_16K * 0.25));
+    // Sized with the mind's declared reserve, which the runner shrinks locally.
+    expect(mock.resolveLocalPromptBudget).toHaveBeenCalledWith(expect.objectContaining({ outputReserveTokens: 8192 }));
   });
 
   it('keeps every round of a tool-heavy wake under the local limit instead of growing past it', async () => {
@@ -944,27 +933,40 @@ describe('local-window prompt fitting', () => {
   });
 });
 
-describe('compactToolResultsToFit', () => {
-  const results = [
-    { requestId: 'r1', name: 'catalog.search', state: 'completed', result: { blob: 'x'.repeat(3_000) } },
-    { requestId: 'r2', name: 'catalog.search', state: 'failed', error: 'e'.repeat(450) },
-  ];
+describe('local-window tool result compaction', () => {
+  const runTwoRounds = async (contextChars) => {
+    mock.resolveLocalPromptBudget.mockResolvedValue({ contextWindow: 16_384, outputReserveTokens: 2_048, maxPromptTokens: 14_336 });
+    mock.root.config.persistentMindCapabilities = { readPortos: true };
+    mock.executeToolCall.mockImplementation(async ({ call }) => ({ state: 'completed', result: { call: call.requestId, blob: 'x'.repeat(3_800) } }));
+    mock.runPrompt
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        thinkingSummary: 'Looking.',
+        toolCalls: [1, 2, 3].map((n) => ({ requestId: `r-${n}`, name: 'catalog.search', arguments: { query: `q${n}` } })),
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ thinkingSummary: 'Done.', message: 'Finished.' }) });
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: `compact-${contextChars}`, wake: { kind: 'self' }, context: { text: 'C'.repeat(contextChars) }, recordCapabilityEvent: vi.fn(async () => true) });
+    return mock.runPrompt.mock.calls[1][0].prompt;
+  };
 
-  it('returns results unchanged when they already fit', () => {
-    expect(compactToolResultsToFit(results, 10_000)).toBe(results);
+  it('keeps tool results verbatim while they fit', async () => {
+    const prompt = await runTwoRounds(1_000);
+    expect(prompt).toContain(`"blob":"${'x'.repeat(3_800)}"`);
+    expect(prompt).not.toMatch(/"truncated":true|"compacted":true/);
   });
 
-  it('shrinks result bodies to previews before dropping them', () => {
-    const compacted = compactToolResultsToFit(results, 2_000);
-    expect(JSON.stringify(compacted).length).toBeLessThanOrEqual(2_000);
-    expect(compacted[0]).toMatchObject({ requestId: 'r1', state: 'completed', result: { truncated: true } });
-    expect(compacted[1].requestId).toBe('r2');
+  it('shrinks result bodies to previews before dropping them', async () => {
+    const prompt = await runTwoRounds(36_000);
+    expect(prompt).toContain('"truncated":true');
+    expect(prompt).not.toContain('"compacted":true');
+    expect(prompt).not.toContain('x'.repeat(3_800));
   });
 
-  it('falls back to per-call stubs that still name what ran', () => {
-    expect(compactToolResultsToFit(results, 150)).toEqual([
-      { requestId: 'r1', name: 'catalog.search', state: 'completed', compacted: true },
-      { requestId: 'r2', name: 'catalog.search', state: 'failed', compacted: true },
-    ]);
+  // Sized so the base prompt leaves room for stubs but not previews; if the
+  // response contract grows, lower the context here.
+  it('falls back to per-call stubs that still name what ran', async () => {
+    const prompt = await runTwoRounds(47_300);
+    for (const id of ['r-1', 'r-2', 'r-3']) {
+      expect(prompt).toContain(`{"requestId":"${id}","name":"catalog.search","state":"completed","compacted":true}`);
+    }
   });
 });
