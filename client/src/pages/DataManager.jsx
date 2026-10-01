@@ -343,7 +343,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
 function BackupsSection({ backups, loading, onDelete }) {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   if (loading) return null;
-  if (!backups.length) return null;
+  if (!backups?.length) return null;
 
   return (
     <div className="mt-6">
@@ -401,7 +401,11 @@ function BackupsSection({ backups, loading, onDelete }) {
 
 export default function DataManager() {
   const [overview, setOverview] = useState(null);
-  const [backups, setBackups] = useState([]);
+  const [backups, setBackups] = useState(null);
+  const [overviewError, setOverviewError] = useState(false);
+  const [backupsError, setBackupsError] = useState(false);
+  const [overviewPending, setOverviewPending] = useState(false);
+  const [backupsPending, setBackupsPending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [expandedCat, setExpandedCat] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -415,22 +419,48 @@ export default function DataManager() {
 
   const overviewRequestRef = useRef(0);
   const overviewReadRef = useRef(null);
-  const fetchOverview = useCallback(() => {
+  const backupsRequestRef = useRef(0);
+  const fetchStorageOverview = useCallback(() => {
     const token = ++overviewRequestRef.current;
-    const read = Promise.all([
-      api.getDataOverview().catch(() => null),
-      api.getDataBackups().catch(() => [])
-    ]).then(([data, bk]) => {
+    setOverviewPending(true);
+    const read = api.getDataOverview({ silent: true }).then(data => {
       if (token !== overviewRequestRef.current) return;
       setOverview(data);
-      setBackups(bk);
-      setLoading(false);
+      setOverviewError(false);
+    }, () => {
+      if (token === overviewRequestRef.current) setOverviewError(true);
+    }).finally(() => {
+      if (token === overviewRequestRef.current) setOverviewPending(false);
     });
     overviewReadRef.current = read;
     return read.finally(() => { if (overviewReadRef.current === read) overviewReadRef.current = null; });
   }, []);
 
-  useEffect(() => { fetchOverview(); }, [fetchOverview]);
+  const fetchBackups = useCallback(() => {
+    const token = ++backupsRequestRef.current;
+    setBackupsPending(true);
+    return api.getDataBackups({ silent: true }).then(data => {
+      if (token !== backupsRequestRef.current) return;
+      setBackups(data);
+      setBackupsError(false);
+    }, () => {
+      if (token === backupsRequestRef.current) setBackupsError(true);
+    }).finally(() => {
+      if (token === backupsRequestRef.current) setBackupsPending(false);
+    });
+  }, []);
+
+  const fetchOverview = useCallback(() => Promise.all([
+    fetchStorageOverview(), fetchBackups()
+  ]).then(() => setLoading(false)), [fetchStorageOverview, fetchBackups]);
+
+  useEffect(() => {
+    fetchOverview();
+    return () => {
+      overviewRequestRef.current++;
+      backupsRequestRef.current++;
+    };
+  }, [fetchOverview]);
 
   // Detail fetches are per-row and can land out of order — expanding A then B,
   // or an archive/purge on A finishing after the user moved to B, could leave
@@ -588,7 +618,7 @@ export default function DataManager() {
   const looseBytes = Math.max(0, (overview?.totalSize || 0) - categoryBytes);
   // Older servers omit totalFileCount; the category sum then undercounts only
   // the files sitting directly in data/.
-  const totalFiles = overview?.totalFileCount !== undefined ? overview.totalFileCount
+  const totalFiles = !overview ? null : overview.totalFileCount !== undefined ? overview.totalFileCount
     : categories.some(c => c.fileCount == null) ? null : categories.reduce((sum, c) => sum + c.fileCount, 0);
   const presentKinds = DATA_KIND_ORDER.filter((k) => categories.some((c) => dataKindOf(c) === k));
   const selectedCat = categories.find((c) => c.key === expandedCat) || null;
@@ -610,11 +640,12 @@ export default function DataManager() {
         </div>
         <div className="flex items-center gap-4">
           <div className="hidden sm:block text-right">
-            <div className="text-lg font-mono font-bold text-white">{formatBytes(overview?.totalSize || 0)}</div>
+            <div className="text-lg font-mono font-bold text-white">{overview ? formatBytes(overview.totalSize) : 'Storage unavailable'}</div>
             <div className="text-xs text-gray-500">total in <code className="text-gray-400">{overview?.dataDir}/</code></div>
           </div>
           <button
-            onClick={() => { setLoading(true); fetchOverview(); }}
+            onClick={fetchOverview}
+            disabled={overviewPending || backupsPending}
             className="p-2 text-gray-400 hover:text-white hover:bg-port-card rounded transition-colors"
             title="Refresh" aria-label="Refresh"
           >
@@ -625,15 +656,27 @@ export default function DataManager() {
 
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-auto p-4">
+        {[
+          { failed: overviewError, snapshot: overview, label: 'Storage overview', pending: overviewPending, retry: fetchStorageOverview },
+          { failed: backupsError, snapshot: backups, label: 'Backups', pending: backupsPending, retry: fetchBackups },
+        ].filter(resource => resource.failed).map(resource => (
+          <div key={resource.label} role="alert" className="mb-3 flex flex-wrap items-center gap-3 rounded border border-port-warning/40 bg-port-card p-3 text-sm text-port-warning">
+            <span>{resource.label} unavailable.{resource.snapshot ? ' Showing last successful snapshot; values may be stale.' : ' No successful snapshot loaded.'}</span>
+            <button onClick={resource.retry} disabled={resource.pending} className="rounded border border-port-border px-3 py-1 disabled:opacity-50">
+              {resource.pending ? 'Retrying' : 'Retry'} {resource.label.toLowerCase()}
+            </button>
+          </div>
+        ))}
+
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem] items-start">
           <div className="min-w-0 space-y-3">
             {/* Totals + kind legend */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
               <span className="text-gray-300">
-                <span className="font-mono text-white">{formatBytes(overview?.totalSize || 0)}</span>
+                <span className="font-mono text-white">{overview ? formatBytes(overview.totalSize) : 'Storage unavailable'}</span>
                 {' · '}{totalFiles == null ? 'File count unavailable' : `${formatCount(totalFiles)} files`}
-                {' · '}{formatCount(categories.length, { fallback: '0' })} categories
-                {' · '}{formatCount(backups.length, { fallback: '0' })} backups
+                {' · '}{overview ? `${formatCount(categories.length)} categories` : 'Category count unavailable'}
+                {' · '}{backups ? `${formatCount(backups.length)} backups` : 'Backup count unavailable'}
               </span>
               <span className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:ml-auto">
                 {presentKinds.map((k) => (
@@ -646,13 +689,13 @@ export default function DataManager() {
             </div>
 
             {/* Disk-usage map — click a tile to select it and nest its entries */}
-            <DataTreemap
+            {overview && <DataTreemap
               categories={categories}
               looseBytes={looseBytes}
               selectedKey={expandedCat}
               detail={detail}
               onSelect={handleExpand}
-            />
+            />}
 
             {/* Category list — the action surface for the selection */}
             <div className="space-y-2">
@@ -688,14 +731,14 @@ export default function DataManager() {
           </div>
 
           <div className="min-w-0 space-y-4 lg:sticky lg:top-0">
-            <DataSelectionPanel
+            {overview && <DataSelectionPanel
               overview={overview}
               totalFiles={totalFiles}
               selected={selectedCat}
               detail={detail}
               onSelect={selectCategory}
               onShowActions={showSelectedActions}
-            />
+            />}
             <TombstoneGcSection />
           </div>
         </div>
