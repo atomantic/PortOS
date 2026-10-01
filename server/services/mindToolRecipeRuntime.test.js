@@ -26,7 +26,7 @@ vi.mock('./persistentMindContext.js', () => ({
 vi.mock('./persistentMindVisibility.js', () => ({ readPersistentMindVisibility: vi.fn(async () => ({})), buildPersistentMindVisibilityPrompt: () => '' }));
 vi.mock('./persistentMindUserActions.js', () => ({ readPersistentMindUserActionsPrompt: vi.fn(async () => '') }));
 vi.mock('./persistentMindCallCapability.js', () => ({ buildPersistentMindCallCapabilityPrompt: () => '', executePersistentMindCallRequest: vi.fn(async () => null) }));
-vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: (...args) => mock.runPrompt(...args), assertVisionRunUsedImages: (_, provider) => provider }));
+vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: (...args) => mock.runPrompt(...args), assertVisionRunUsedImages: (_, provider) => provider, resolveLocalPromptBudget: async () => null }));
 vi.mock('./runner.js', () => ({ stopRun: vi.fn() }));
 vi.mock('./mindToolRecipes.js', async () => {
   const { validateMindToolRecipe } = await import('../lib/mindToolRecipes.js');
