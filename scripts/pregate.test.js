@@ -370,6 +370,8 @@ describe('the gate end to end', () => {
     try {
       git('init', '-q', '-b', 'main');
       git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+      git('config', 'user.name', 'Example Contributor');
+      git('config', 'user.email', 'contributor@example.com');
       for (const path of [
         'scripts/pregate.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js',
@@ -383,7 +385,7 @@ describe('the gate end to end', () => {
       writeFileSync(join(root, 'package.json'), '{"type":"module"}\n');
       writeFileSync(join(root, 'conflict.txt'), 'base\n');
       git('add', 'conflict.txt');
-      git('-c', 'user.name=Example Contributor', '-c', 'user.email=contributor@example.com', 'commit', '-qm', 'base');
+      git('commit', '-qm', 'base');
       const base = git('rev-parse', 'HEAD');
       git('checkout', '-qb', 'other');
       writeFileSync(join(root, 'conflict.txt'), 'other\n');
