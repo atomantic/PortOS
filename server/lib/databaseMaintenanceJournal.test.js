@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+import { copyEcosystemConfig } from '../test/fixtures/ecosystemConfigCopy.js';
 
 // Pass-through fs whose readFileSync can run one hook before or after it: the
 // only way to land a concurrent fence move deterministically between read()'s
@@ -350,7 +351,7 @@ describe('persistent database maintenance boundary', () => {
   });
 
   it('drives the operator CLI against disposable saved configuration without touching PostgreSQL', () => {
-    copyFileSync(new URL('../../ecosystem.config.cjs', import.meta.url), join(root, 'ecosystem.config.cjs'));
+    copyEcosystemConfig(root);
     const config = 'PGMODE=native\nPGPORT=6543\nPGPORT_DOCKER=6544\n';
     writeFileSync(join(root, '.env'), config);
     const cli = new URL('../../scripts/database-maintenance.mjs', import.meta.url);
@@ -391,7 +392,7 @@ describe('persistent database maintenance boundary', () => {
   });
 
   it('keeps maintenance direction when invoked by a Docker-managed process', () => {
-    copyFileSync(new URL('../../ecosystem.config.cjs', import.meta.url), join(root, 'ecosystem.config.cjs'));
+    copyEcosystemConfig(root);
     writeFileSync(join(root, '.env'), 'PGMODE=docker\nPGPORT=6543\nPGPORT_DOCKER=6544\n');
     const cli = fileURLToPath(new URL('../../scripts/database-maintenance.mjs', import.meta.url));
     const env = { ...childEnv, PORTOS_DATA_ROOT: root, PGPORT: '6544',
