@@ -173,7 +173,7 @@ describe('AutopilotPanel production run', () => {
       productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
       composition: { mode: 'document' }, audioAnalysis: { durationSec: 8 },
       scenes: [{ sceneId: 'code', startSec: 0, endSec: 8 }],
-      treatment: { shotDirections: [{ sceneId: 'code', medium: 'procedural', mediumRationale: 'Typography' }] },
+      treatment: { revision: 1, appliedRevision: 1, shotDirections: [{ sceneId: 'code', medium: 'procedural', mediumRationale: 'Typography' }] },
     }} />);
     expect(api.startMusicVideoProduction).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Start production' }));

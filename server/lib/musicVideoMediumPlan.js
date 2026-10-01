@@ -96,6 +96,9 @@ export function codeFirstProductionAssets(project) {
   const directions = new Map((project?.treatment?.shotDirections || []).map((d) => [d.sceneId, d]));
   const steps = [];
   const conflicts = plan.unresolved.filter((item) => item.blocking || item.message.startsWith('Visible performance')).map((item) => item.message);
+  if (!Number.isInteger(project.treatment?.revision) || project.treatment.appliedRevision !== project.treatment.revision) {
+    conflicts.push('Apply the current medium plan to approve it before production.');
+  }
   for (const scene of project?.scenes || []) {
     const direction = directions.get(scene.sceneId);
     const medium = direction?.medium;

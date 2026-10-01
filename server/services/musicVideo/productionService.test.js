@@ -544,7 +544,7 @@ function seedCodeFirst({ scenes, directions, percent = 0, ...patch } = {}) {
   return seedProject({ composition: { mode: 'document' },
     productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: percent },
     scenes: scenes || [{ sceneId: 'mvs-code', label: 'Code', startSec: 0, endSec: 8 }],
-    treatment: { shotDirections: directions || [{ sceneId: 'mvs-code', medium: 'procedural', mediumRationale: 'Typography' }] }, ...patch,
+    treatment: { revision: 1, appliedRevision: 1, shotDirections: directions || [{ sceneId: 'mvs-code', medium: 'procedural', mediumRationale: 'Typography' }] }, ...patch,
   });
 }
 function documentDoubles() {
@@ -631,6 +631,14 @@ describe('code-first production execution (#9301)', () => {
     expect(dispatch).not.toHaveBeenCalled(); expect(author).not.toHaveBeenCalled();
     seedCodeFirst({ directions: [{ sceneId: 'mvs-code', medium: 'existing-footage', mediumRationale: 'Imported' }] });
     await expect(start({ pool: POOL, authoring: AUTHORING })).rejects.toMatchObject({ code: 'PRODUCTION_MEDIUM_CONFLICT' });
+  });
+
+  it('requires the current plan to be applied before starting any provider work', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    store.get('mv-example').treatment.revision = 2;
+    await expect(start({ pool: [], authoring: AUTHORING })).rejects.toMatchObject({ code: 'PRODUCTION_MEDIUM_CONFLICT' });
+    expect(dispatch).not.toHaveBeenCalled(); expect(author).not.toHaveBeenCalled();
+    expect(current().productionRuns).toBeUndefined();
   });
 
   it('refuses an approved performance disguised by a legacy card layer before any provider call', async () => {
