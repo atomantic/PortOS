@@ -21,7 +21,9 @@ import { currentContainmentMechanism, runContainedWorker } from './containedWork
 
 const SETTINGS_KEY = 'codeAnimationExecution';
 const WORKSPACE_DIR = 'code-animation-workspaces';
-const UNSAFE_PATH = /["\\()\0\r\n]/;
+// Characters that could break out of a Seatbelt string literal. Backslash is
+// the Windows separator; Windows has no worker mechanism, so it only matters on POSIX.
+const UNSAFE_PATH = process.platform === 'win32' ? /["()\0\r\n]/ : /["\\()\0\r\n]/;
 
 // The browser lane reuses the HTML-composition renderer sandbox unchanged.
 const BROWSER_LANE = {
