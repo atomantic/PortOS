@@ -1,5 +1,17 @@
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 
+// These owned browsers render on explicit seek(t), not wall/display time.
+// Chromium's display scheduler must not pace a song-length offline capture.
+// Background flags match Playwright's standard Chromium launch posture.
+export function _testChromeCaptureArgs(profile) {
+  return [
+    '--headless=new', '--no-sandbox', '--no-first-run', '--disable-background-networking',
+    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding', '--disable-frame-rate-limit',
+    '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank',
+  ];
+}
+
 // Chrome writes its CDP address to stderr. Keep only a bounded tail and report
 // known failure categories: raw stderr can contain the user's profile path.
 export function _waitForTestChrome(proc, timeoutMs = 20000) {
@@ -100,4 +112,89 @@ export async function _cleanupTestBrowser({ browser, proc, cleanup }) {
     await cleanup();
   }
   if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '));
+}
+
+// Wrap the REAL encoder only in browser tests. Never print paths, page source,
+// process stderr or job IDs: a bounded numeric snapshot suffices to separate
+// steady capture from a stuck seek, screenshot, pipe write or encoder drain.
+export function _withTestCaptureDiagnostics(encode, { logIntervalMs = 15000, stallMs = 30000, getTestSignal } = {}) {
+  return async (page, contract, outputPath, options = {}) => {
+    const started = Date.now();
+    let phase = 'setup';
+    let phaseStarted = started;
+    let lastProgress = started;
+    let lastLog = started;
+    let frame = 0;
+    const frames = Math.round(contract.durationSec * contract.fps);
+    const timings = { setup: 0, seek: 0, capture: 0, encode: 0 };
+    const controller = new AbortController();
+    const signal = AbortSignal.any([options.signal, getTestSignal?.(), controller.signal].filter(Boolean));
+    const enter = next => {
+      const now = Date.now();
+      timings[phase] += now - phaseStarted;
+      phase = next;
+      phaseStarted = now;
+      lastProgress = now;
+    };
+    const snapshot = () => {
+      const now = Date.now();
+      const totals = { ...timings, [phase]: timings[phase] + now - phaseStarted };
+      return `phase=${phase} frames=${frame}/${frames} elapsedMs=${now - started} idleMs=${now - lastProgress} `
+        + Object.entries(totals).map(([name, ms]) => `${name}Ms=${ms}`).join(' ');
+    };
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (now - lastProgress >= stallMs) {
+        const error = new Error(`Test Chrome capture stalled; ${snapshot()}`);
+        console.error(`❌ ${error.message}`);
+        // The encoder's existing abort/close boundary terminates only its own
+        // ffmpeg child. Existing CDP deadlines settle pending browser commands.
+        controller.abort(error);
+        clearInterval(timer);
+      } else if (now - lastLog >= logIntervalMs) {
+        console.log(`🎞️ Test Chrome capture progress; ${snapshot()}`);
+        lastLog = now;
+      }
+    }, Math.min(1000, logIntervalMs, stallMs));
+    timer.unref?.();
+    const roundTrip = async (next, action) => {
+      signal.throwIfAborted();
+      enter(next);
+      const result = await action();
+      // A late response after the test deadline must never start another
+      // capture or launch an encoder with an already-aborted signal.
+      signal.throwIfAborted();
+      enter('encode');
+      return result;
+    };
+    const tracedPage = {
+      ...page,
+      check() { signal.throwIfAborted(); page.check(); },
+      evaluate(...args) {
+        return roundTrip(String(args[0]).startsWith('globalThis.portosComposition.seek(') ? 'seek' : 'setup', () => page.evaluate(...args));
+      },
+      send(...args) {
+        return roundTrip(args[0] === 'Page.captureScreenshot' ? 'capture' : 'setup', () => page.send(...args));
+      },
+    };
+    try {
+      const result = await encode(tracedPage, contract, outputPath, {
+        ...options,
+        signal,
+        onProgress(fraction, detail) {
+          frame = detail?.frame ?? Math.round(fraction * frames);
+          lastProgress = Date.now();
+          options.onProgress?.(fraction, detail);
+        },
+      });
+      signal.throwIfAborted();
+      console.log(`🎞️ Test Chrome capture complete; ${snapshot()}`);
+      return result;
+    } catch (error) {
+      console.error(`❌ Test Chrome capture failed; ${snapshot()}`);
+      throw error;
+    } finally {
+      clearInterval(timer);
+    }
+  };
 }

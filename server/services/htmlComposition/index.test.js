@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,7 +12,16 @@ import { loadHistory } from '../videoGen/history.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { renderComposition, cancel } from './index.js';
 import { installMotionKit } from './motionKit.js';
-import { _cleanupTestBrowser } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } from './testBrowserCleanup.js';
+
+vi.mock('./encode.js', async importOriginal => {
+  const actual = await importOriginal();
+  const { _withTestCaptureDiagnostics } = await import('./testBrowserCleanup.js');
+  return { ...actual, encodeComposition: _withTestCaptureDiagnostics(actual.encodeComposition, { getTestSignal: () => testSignal }) };
+});
+
+let testSignal;
+beforeEach(({ signal }) => { testSignal = signal; });
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -48,15 +57,8 @@ async function composition(html = fixture(), directory = `compositions/${randomU
 describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const profile = join(PATHS.data, 'chrome-test-profile');
-    proc = spawn(chrome, ['--headless=new', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
-    const ws = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Test Chrome did not start')), 20000);
-      proc.once('error', reject);
-      proc.stderr.on('data', bytes => {
-        const match = bytes.toString().match(/DevTools listening on (ws:\/\/\S+)/);
-        if (match) { clearTimeout(timer); resolve(match[1]); }
-      });
-    });
+    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
+    const ws = await _waitForTestChrome(proc);
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
     browser = await chromium.connectOverCDP(endpoint);
     browserSession = await browser.newBrowserCDPSession();
