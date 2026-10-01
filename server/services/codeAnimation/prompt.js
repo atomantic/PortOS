@@ -319,6 +319,8 @@ function promptSong(song) {
     beats: (song.beats || []).slice(0, 400),
     downbeats: (song.downbeats || []).slice(0, 200),
     featureNames: song.featureNames || [],
+    narrativeEvents: song.narrativeEvents || [],
+    reactiveSections: song.reactiveSections || [],
   };
 }
 
@@ -370,6 +372,7 @@ export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment,
     `Write original Canvas 2D section functions for a mixed-media music-video document titled ${JSON.stringify(trimTo(title, 200))}. The host owns the document, song clock, selected local media and lyric pass. Return code functions only; do not request or generate image/video assets.`,
     CODE_VIDEO_RULES.replace('- Canvas 2D only. No external assets, fonts, or network.', '- Canvas 2D only. No network, remote URLs, filesystem paths or font loading. The host binds only the listed selected project assets; draw over footage/stills without obscuring them, and draw the entire frame for card scenes.'),
     'env additionally has mediaKind (video, image or null) and visualLayer (footage, still or card). The host has already drawn the selected media at its in/out time. Do not read DOM or load assets in a section function. Use seeded arithmetic from env.frame for visual motion. Keep repeated hooks related but deliberately vary their action.',
+    'NARRATIVE CLOCK: song.narrativeEvents are resolved absolute startFrame/endFrame bindings. env.events supplies active events with progress and counter value; env.reactiveGain is bounded by the section gain/maxGain and is zero during silence. The host freezes song time, media and graphics for silence, and draws exact event text/counters/motif labels after your function. Use the narrativeFunction, motif and mediumRationale to motivate your graphic actions; do not duplicate event text or infer new onsets. Prefer code/stills/selected media for exact text and graphics. Footage is for actions that need it and must already be selected.',
     `SHARED STYLE CONTRACT:\n${JSON.stringify(sharedStyle || { palette, treatment: { brief: treatment?.brief || null, motifs: treatment?.arc?.motifs || [], styleLook: treatment?.styleLook || null }, visualSpec, styleLines })}`,
     `SONG AND LYRIC TIMING:\n${JSON.stringify(promptSong(song))}`,
     `APPROVED SCENE ASSIGNMENTS AND LOCAL ASSET IDS:\n${JSON.stringify(scenes)}`,

@@ -11,6 +11,7 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
 
 import { z } from 'zod';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
+import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
@@ -361,6 +362,31 @@ export const musicVideoCompositionOverlaySchema = z.object({
   timecodeStartSec: z.number().min(0).max(86400).optional(),
 }).strict();
 
+export const musicVideoNarrativeEventSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(120),
+  kind: z.enum(NARRATIVE_EVENT_KINDS),
+  anchor: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('time'), atSec: z.number().min(0).max(36000), offsetSec: z.number().min(-900).max(900).optional() }).strict(),
+    z.object({ kind: z.literal('onset'), band: z.enum(['low', 'mid', 'high']), index: z.number().int().min(0).max(100000), offsetSec: z.number().min(-900).max(900).optional() }).strict(),
+    z.object({ kind: z.literal('word'), cueId: z.string().min(1).max(64), wordIndex: z.number().int().min(0).max(1000), offsetSec: z.number().min(-900).max(900).optional() }).strict(),
+  ]).nullable(),
+  durationSec: z.number().positive().max(900),
+  narrativeFunction: z.string().min(1).max(1000),
+  mediumRationale: z.string().min(1).max(1000),
+  text: z.string().max(500).optional(),
+  motif: z.string().max(120).optional(),
+  before: z.string().max(120).optional(),
+  after: z.string().max(120).optional(),
+  fromValue: z.number().finite().min(-1000000).max(1000000).optional(),
+  toValue: z.number().finite().min(-1000000).max(1000000).optional(),
+}).strict();
+export const musicVideoReactiveSectionSchema = z.object({
+  sectionId: z.string().min(1).max(64),
+  gain: z.number().min(0).max(1),
+  maxGain: z.number().min(0).max(1),
+}).strict();
+
 // Replaced whole by a project PATCH (the editor sends the full manifest).
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
@@ -385,6 +411,8 @@ export const musicVideoCompositionSchema = z.object({
   document: musicVideoCompositionDocumentSchema.nullable().optional(),
   documentDraft: musicVideoCompositionDocumentSchema.nullable().optional(),
   overlay: musicVideoCompositionOverlaySchema.nullable().optional(),
+  narrativeEvents: z.array(musicVideoNarrativeEventSchema).max(200).refine((events) => new Set(events.map((event) => event.id)).size === events.length, 'event ids must be unique').optional(),
+  reactiveSections: z.array(musicVideoReactiveSectionSchema).max(40).refine((sections) => new Set(sections.map((section) => section.sectionId)).size === sections.length, 'section ids must be unique').optional(),
 }).strict();
 
 // A relative folder inside data/ to copy a composition document from.

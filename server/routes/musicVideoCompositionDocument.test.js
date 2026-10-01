@@ -76,6 +76,24 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 describe('music-video composition documents', () => {
+  it('persists validated narrative events and gain caps through the project route, and clears anchors on a song replacement', async () => {
+    const event = { id: 'counter', name: 'Count rises', kind: 'counter-change', anchor: { kind: 'time', atSec: 0.51 }, durationSec: 1,
+      narrativeFunction: 'Show progress', mediumRationale: 'Exact code counter', fromValue: 3, toValue: 8 };
+    const composition = { mode: 'document', narrativeEvents: [event], reactiveSections: [{ sectionId: 'song', gain: 1, maxGain: 0.2 }] };
+    const patched = await request(app).patch(`/api/music-video/${project.id}`).send({ composition });
+    expect(patched.status).toBe(200);
+    expect((await projects.getProject(project.id)).composition).toMatchObject(composition);
+    const invalid = await request(app).patch(`/api/music-video/${project.id}`).send({ composition: { ...composition, reactiveSections: [{ sectionId: 'song', gain: 1, maxGain: 2 }] } });
+    expect(invalid.status).toBe(400);
+    const duplicate = await request(app).patch(`/api/music-video/${project.id}`).send({ composition: { ...composition, narrativeEvents: [event, event] } });
+    expect(duplicate.status).toBe(400);
+    const replaced = await request(app).patch(`/api/music-video/${project.id}`).send({ trackId: 'track-example' });
+    expect(replaced.status).toBe(200);
+    expect(replaced.body.composition.narrativeEvents).toEqual([{ ...event, anchor: null }]);
+    const invalidRevision = await request(app).post(`/api/music-video/${project.id}/composition/document/events/revise`).send({ expectedDraft: '../../other' });
+    expect(invalidRevision.status).toBe(400);
+  });
+
   it('imports a zip (one top folder), switches the render style, lists, exports, previews and serves its files inert', async () => {
     const zip = createZip(Object.entries(FILES).map(([name, data]) => ({ name: `my-video/${name}`, data })), { compress: true });
     const created = await uploadZip(project.id, zip, 'my-video.zip');

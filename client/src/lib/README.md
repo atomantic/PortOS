@@ -301,3 +301,4 @@ grep -i "what you want to do" client/src/lib/README.md
 | `navPresentation.js` | Sidebar icon presentation and section ordering, separate from the Layout React refresh boundary. |
 
 | `musicVideoGrade.js` | Shared Music Video grade preset and grain bounds for the composition controls. |
+| `musicVideoNarrativeEvents.js` | Named narrative event kinds, absolute onset/word/frame resolution and deterministic silence/reactive state for composition documents. |

@@ -70,6 +70,68 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
   }, 30000);
   afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: () => {} }));
 
+  it('keeps event frames identical across shuffled seeks, an excerpt and a full render, and freezes silence', async () => {
+    const created = await projects.createProject({ name: 'Synthetic event proof' });
+    const base = { durationSec: 0.2, narrativeFunction: 'Mark the story turn', mediumRationale: 'Exact code graphics' };
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2, beats: [0, 0.5, 1, 1.5], downbeats: [0], sections: [{ id: 'song', label: 'Hook', startSec: 0, endSec: 2 }],
+        features: { envelopes: { fps: 2, rms: [1, 1, 1, 1], low: [1, 1, 1, 1], mid: [0, 0, 0, 0], high: [0, 0, 0, 0] }, onsets: { low: [0.51], mid: [], high: [] } } },
+      lyricCues: [{ id: 'line', text: 'UP', startSec: 0.8, words: [{ w: 'UP', startSec: 0.8 }] }],
+      composition: { mode: 'document', reactiveSections: [{ sectionId: 'song', gain: 1, maxGain: 0.2 }], narrativeEvents: [
+        { ...base, id: 'hit', name: 'Impact', kind: 'impact', text: 'TURN', anchor: { kind: 'onset', band: 'low', index: 0 } },
+        { ...base, id: 'count', name: 'Count', kind: 'counter-change', fromValue: 0, toValue: 9, anchor: { kind: 'word', cueId: 'line', wordIndex: 0 } },
+        { ...base, id: 'quiet', name: 'Quiet', kind: 'silence', durationSec: 0.4, anchor: { kind: 'time', atSec: 1 } },
+        { ...base, id: 'quiet-more', name: 'Keep quiet', kind: 'silence', durationSec: 0.2, anchor: { kind: 'time', atSec: 1.25 } },
+        { ...base, id: 'motif', name: 'Kite', kind: 'motif-transformation', before: 'Fold', after: 'Flight', anchor: { kind: 'time', atSec: 1.5 } },
+        { ...base, id: 'reveal', name: 'Reveal', kind: 'reveal', anchor: { kind: 'time', atSec: 1.8 } },
+      ] },
+      scenes: [{ sceneId: 'card', startSec: 0, endSec: 2, visualLayer: 'card', cardText: '' }],
+    } }));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    const preview = await buildDocumentPreview(project);
+    const page = await browser.newPage();
+    await page.setContent(preview.html);
+    await page.evaluate(() => window.postMessage({ type: 'portos-mv:assets', files: {} }, '*'));
+    const at = (frame) => page.evaluate(async (frame) => {
+      await window.portosComposition.seek(frame / 24);
+      return { pixels: document.getElementById('stage').toDataURL(), state: window.PORTOS_MV_EVENT_STATE(window.PORTOS_MV.song, frame / 24, 24) };
+    }, frame);
+    const hit = await at(13);
+    expect(hit.state.activeEvents[0].id).toBe('hit');
+    expect((await at(12)).state.activeEvents).toEqual([]);
+    expect(hit.pixels).not.toBe((await at(12)).pixels);
+    expect((await at(20)).state.activeEvents[0].id).toBe('count');
+    expect((await at(36)).state.activeEvents[0].id).toBe('motif');
+    expect((await at(44)).state.activeEvents[0].id).toBe('reveal');
+    const held = await at(24);
+    expect(held.state).toMatchObject({ hold: true, reactiveGain: 0, frame: 24 });
+    expect((await at(30)).pixels).toBe(held.pixels);
+    expect((await at(34)).pixels).toBe(held.pixels); // overlapping holds share one frozen frame
+    expect((await at(13)).pixels).toBe(hit.pixels);
+    expect(hit.state.reactiveGain).toBe(0.2);
+    await page.close();
+
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const master = join(PATHS.music, 'event-master.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', master]);
+    const plan = { ...(await prepareDocumentRender(project)), frame: { width: 1280, height: 720 } };
+    const full = join(PATHS.videos, 'event-full.mp4');
+    const excerpt = join(PATHS.videos, 'event-excerpt.mp4');
+    await encodeDocumentComposition({ project, plan, jobId: 'event-full', audioPath: master, outputPath: full });
+    await encodeDocumentComposition({ project, plan, jobId: 'event-excerpt', audioPath: master, outputPath: excerpt, windowStart: 13 / 24, windowEnd: 18 / 24 });
+    const pixels = (path) => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 26 });
+    const fullPixels = pixels(full); const excerptPixels = pixels(excerpt); const frameBytes = 64 * 36 * 3;
+    expect(excerptPixels.length).toBe(frameBytes * 5);
+    for (let frame = 0; frame < 5; frame++) {
+      const expected = fullPixels.subarray((frame + 13) * frameBytes, (frame + 14) * frameBytes);
+      const actual = excerptPixels.subarray(frame * frameBytes, (frame + 1) * frameBytes);
+      const difference = actual.reduce((sum, value, i) => sum + Math.abs(value - expected[i]), 0) / frameBytes;
+      expect(difference, `event frame ${frame + 13}`).toBeLessThan(5); // lossy encoder tolerance
+    }
+  }, 120000);
+
   it('draws the selected take at SONG time in an excerpt, identically on every render, with the master muxed', async () => {
     // A 3s clip: red, then green, then blue — each second a solid colour.
     await mkdir(PATHS.videos, { recursive: true });

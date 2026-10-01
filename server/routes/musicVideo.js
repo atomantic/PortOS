@@ -140,7 +140,7 @@ import {
   resolveDocumentFile,
 } from '../services/musicVideo/compositionDocument.js';
 import { buildDocumentPreview } from '../services/musicVideo/documentPreview.js';
-import { acceptMixedMediaDocument, generateMixedMediaDocument, readMixedMediaCandidate, regenerateMixedMediaSection } from '../services/musicVideo/documentGeneration.js';
+import { acceptMixedMediaDocument, generateMixedMediaDocument, readMixedMediaCandidate, regenerateMixedMediaSection, reviseMixedMediaEvents } from '../services/musicVideo/documentGeneration.js';
 import { isZipUpload } from '../lib/zipStream.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
@@ -576,6 +576,11 @@ router.post('/:id/composition/document/generate', asyncHandler(async (req, res) 
 
 router.get('/:id/composition/document/candidate', asyncHandler(async (req, res) => {
   res.json(await readMixedMediaCandidate(req.params.id));
+}));
+
+router.post('/:id/composition/document/events/revise', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoMixedMediaRegenerateSchema, req.body || {});
+  res.status(201).json(await reviseMixedMediaEvents(req.params.id, body));
 }));
 
 router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {

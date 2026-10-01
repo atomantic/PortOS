@@ -818,3 +818,4 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `musicVideoPlateEvidence.js` | Asset-bound authored-shot plate requirements, current evidence and selected-image admission. |
 | `codeAnimationProjects.js` | Machine-local Production project, patch and independent budget schemas; package imports grant no execution authority. |
+| `musicVideoNarrativeEvents.js` | Named narrative event kinds, absolute onset/word/frame resolution and deterministic silence/reactive state for composition documents. |

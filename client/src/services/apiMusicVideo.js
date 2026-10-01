@@ -380,6 +380,8 @@ export const getMusicVideoCompositionPreview = (id, { draft = false, ...options 
 export const generateMusicVideoMixedMediaDocument = (id, body, options = {}) =>
   request(`${compositionDocumentPath(id)}/generate`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 export const getMusicVideoMixedMediaCandidate = (id, options = {}) => request(`${compositionDocumentPath(id)}/candidate`, options);
+export const reviseMusicVideoMixedMediaEvents = (id, body, options = {}) =>
+  request(`${compositionDocumentPath(id)}/events/revise`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const regenerateMusicVideoMixedMediaSection = (id, sectionId, body, options = {}) =>
   request(`${compositionDocumentPath(id)}/sections/${encodeURIComponent(sectionId)}/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const acceptMusicVideoMixedMediaDocument = (id, directory, options = {}) =>

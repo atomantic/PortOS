@@ -37,6 +37,7 @@ import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
+import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
 
 export const DOCUMENT_RENDER_FPS = 24;
 // The frame each project aspect renders at (the composition browser's sizes).
@@ -180,7 +181,13 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         } : null,
       };
     });
-  const lyrics = buildSongDocument(project).lyrics;
+  const songDocument = buildSongDocument(project);
+  const lyrics = songDocument.lyrics;
+  const narrative = resolveNarrativeEvents(project, songDocument.sections, clock.fps);
+  if (narrative.unresolved.length) throw new ServerError(`Rebind narrative events: ${narrative.unresolved.join(', ')}`, { status: 422, code: 'NARRATIVE_EVENT_UNRESOLVED' });
+  if ((project.composition?.reactiveSections || []).some((entry) => !songDocument.sections.some((section) => section.id === entry.sectionId))) {
+    throw new ServerError('Rebind reactive gain caps to current composition sections', { status: 422, code: 'NARRATIVE_SECTION_UNRESOLVED' });
+  }
   const composition = project?.composition || {};
   return {
     version: 1,
@@ -193,6 +200,10 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
       downbeats: song.downbeats,
       sections: song.sections,
       words: song.words || [],
+      narrativeEvents: narrative.events,
+      narrativeSections: songDocument.sections,
+      reactiveSections: project.composition?.reactiveSections || [],
+      features: analysis.features || null,
     },
     lyrics,
     lyricMarkers: Array.isArray(project?.lyricMarkers) ? project.lyricMarkers : [],
@@ -237,7 +248,7 @@ async function stageDocumentData(compositionDir, data, media) {
       throw error;
     });
   }
-  await writeFile(join(compositionDir, 'portos-mv.js'), `window.PORTOS_MV = ${scriptJson(data)};\n`);
+  await writeFile(join(compositionDir, 'portos-mv.js'), `window.PORTOS_MV = ${scriptJson(data)};\nwindow.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};\n`);
 }
 
 /**

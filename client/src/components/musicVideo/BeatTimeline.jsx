@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildBeatGridPoints, computeDragSpan, computeSceneSpans, shouldMarkBeatAligned } from '../../lib/beatGrid.js';
 import { formatTimecode } from '../../utils/formatters.js';
+import { resolveNarrativeEvents } from '../../lib/musicVideoNarrativeEvents.js';
 
 // Beat-quantized timeline arranger for a music-video project's scene board
 // (#1854). Renders a beat-grid overlay (section bands, beat/downbeat ticks)
@@ -34,7 +35,20 @@ function lyricSpans(cues) {
   });
 }
 
-export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, onCommit }) {
+export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrativeEvents = [], onSeek, onCommit }) {
+  const narrative = useMemo(() => resolveNarrativeEvents({ audioAnalysis, lyricCues, composition: { narrativeEvents } }, []), [audioAnalysis, lyricCues, narrativeEvents]);
+  const eventLane = useMemo(() => {
+    const ends = [];
+    const events = narrative.events.map((event) => {
+      const left = event.startSec * PX_PER_SEC;
+      const width = Math.max(44, (event.endSec - event.startSec) * PX_PER_SEC);
+      let row = ends.findIndex((end) => end + 4 <= left);
+      if (row < 0) row = ends.length;
+      ends[row] = left + width;
+      return { ...event, left, width, row };
+    });
+    return { events, rows: ends.length };
+  }, [narrative]);
   const gridPoints = useMemo(() => buildBeatGridPoints(audioAnalysis), [audioAnalysis]);
   const baseSpans = useMemo(
     () => computeSceneSpans(scenes, audioAnalysis?.durationSec),
@@ -200,7 +214,7 @@ export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, onCommi
       </div>
 
       <div ref={scrollRef} className="overflow-x-auto border border-port-border rounded-lg bg-port-bg">
-        <div className={`relative ${cueSpans.length > 0 ? 'h-44' : 'h-36'}`} style={{ width: `${widthPx}px`, touchAction: 'none' }}>
+        <div className="relative" style={{ width: `${widthPx}px`, height: eventLane.rows ? 179 + eventLane.rows * 26 : cueSpans.length ? 176 : 144, touchAction: 'none' }}>
           {(audioAnalysis.sections || []).map((section, i) => (
             <div key={`sec-${i}`}
               className="absolute top-0 h-6 border-r border-port-border/60 overflow-hidden"
@@ -266,8 +280,17 @@ export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, onCommi
               {cue.text}
             </div>
           ))}
+          {eventLane.events.map((event) => <button key={event.id} type="button"
+            className="absolute h-5 overflow-hidden rounded border border-port-accent bg-port-card px-1 text-left text-[10px] text-port-text"
+            style={{ left: event.left, top: 175 + event.row * 26, width: event.width }}
+            title={`${event.kind}: ${event.narrativeFunction} · ${event.mediumRationale}`}
+            aria-label={`Seek event ${event.name} at frame ${event.startFrame}`} onClick={() => onSeek?.(event.startSec)}>
+            {event.name} · {event.kind}
+          </button>)}
         </div>
       </div>
+      {narrative.events.length > 0 && <p className="text-xs text-port-text-muted">Narrative event lane · click an event to seek its resolved song frame.</p>}
+      {narrative.unresolved.length > 0 && <p role="status" className="text-xs text-port-warning">Rebind {narrative.unresolved.length} unresolved narrative events in Compose.</p>}
     </div>
   );
 }

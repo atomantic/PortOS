@@ -666,7 +666,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // a submitted suffix after restart. Absent repair metadata stays legacy.
   // v17 = piecewise audio timing receipts and historical source/timing snapshots.
   // Optional on legacy records; no backfill. Older peers cannot apply receipts safely.
-  musicVideoProjects: 17,
+  // v18 = named narrative event anchors and bounded section reactivity. Older
+  // composition normalizers drop these fields on edit. Absent remains legacy;
+  // no stored row rewrite is needed. Document manifests remain wire-local.
+  musicVideoProjects: 18,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

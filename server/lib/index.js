@@ -802,3 +802,4 @@ export * from './musicVideoDependencies.js';
 
 export * from './musicVideoPlateEvidence.js';
 export * from './codeAnimationProjects.js';
+export * from './musicVideoNarrativeEvents.js';

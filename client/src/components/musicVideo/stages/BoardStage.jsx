@@ -36,7 +36,8 @@ export default function BoardStage({ board }) {
       <AudioTimingPanel key={project.id} project={project} tracks={board.tracks} onApplied={board.replaceProject} disabled={locked || board.renderBound} />
 
       {project.audioAnalysis && scenes.length > 0 && (
-        <BeatTimeline audioAnalysis={project.audioAnalysis} scenes={scenes} lyricCues={project.lyricCues} onCommit={board.commitSceneTiming} />
+        <BeatTimeline audioAnalysis={project.audioAnalysis} scenes={scenes} lyricCues={project.lyricCues} narrativeEvents={project.composition?.narrativeEvents}
+          onSeek={(startSec) => board.seekToScene({ startSec })} onCommit={board.commitSceneTiming} />
       )}
 
       <div className="flex items-center justify-between">

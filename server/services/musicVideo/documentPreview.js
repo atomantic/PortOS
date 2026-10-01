@@ -20,6 +20,7 @@
  */
 
 import { readFile } from 'fs/promises';
+import { narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
 import { extname } from 'path';
 import { loadHistory } from '../videoGen/history.js';
 import { readDocumentFiles, documentMimeType } from './compositionDocument.js';
@@ -171,7 +172,7 @@ export async function buildDocumentPreview(project, { draft = false } = {}) {
     const url = rel ? await dataUrl(rel) : null;
     if (url) html = html.split(match[0]).join(match[0].replace(match[1], () => `"${url}"`));
   }
-  const head = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}"><script>${BOOTSTRAP}</script><script>window.PORTOS_MV = ${scriptJson(data)};</script>`;
+  const head = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}"><script>${BOOTSTRAP}</script><script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
   const at = html.match(/<head[^>]*>/i);
   html = at ? `${html.slice(0, at.index + at[0].length)}${head}${html.slice(at.index + at[0].length)}` : `${head}${html}`;
 
