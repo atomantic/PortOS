@@ -23,6 +23,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { applyGetUriFtpPatch } from './lib/getUriFtpPatch.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -80,6 +81,26 @@ export const TRUSTED_REBUILDS = {
 };
 
 /**
+ * Apply PortOS's install-time dependency patches to one workspace's installed
+ * tree (get-uri's FTP adapter, #9462 — see scripts/lib/getUriFtpPatch.js). Rides
+ * on this module because every managed install path already calls it after
+ * `npm install` and `ignore-scripts=true` rules out a postinstall hook. Never
+ * fatal: the FTP fallback is a compatibility fix, not a boot requirement, and a
+ * get-uri release this patch does not recognize is reported rather than edited.
+ */
+export function patchInstalledDependencies(dir) {
+  try {
+    const status = applyGetUriFtpPatch(join(dir, 'node_modules'));
+    if (status === 'patched') console.log(`🩹 Patched get-uri FTP LIST date fallback in ${dir}`);
+    if (status === 'unrecognized') {
+      console.warn(`⚠️  get-uri in ${dir} is not the release the FTP LIST date patch targets — left unpatched (#9462)`);
+    }
+  } catch (err) {
+    console.warn(`⚠️  get-uri FTP LIST date patch failed in ${dir}: ${err.message ?? err}`);
+  }
+}
+
+/**
  * Rebuild the trusted packages for one workspace.
  * Returns true when every fatal group succeeded.
  *
@@ -90,6 +111,7 @@ export const TRUSTED_REBUILDS = {
  * than only a shape assertion on TRUSTED_REBUILDS.
  */
 export function rebuildTrusted(dir, label, { spawn = execFileSync } = {}) {
+  patchInstalledDependencies(dir);
   const groups = TRUSTED_REBUILDS[label];
   if (!groups) return true;
   let ok = true;
@@ -139,7 +161,11 @@ export function runCli(argv, { spawn = execFileSync } = {}) {
     console.error(`❌ unknown workspace '${label}'. Known workspaces: ${workspaces.join(', ')}`);
     return 1;
   }
+  // pm2 (and with it get-uri) installs in the repo root, which no setup/update
+  // path rebuilds directly — the server step is the one hook all of them share.
+  if (label === 'server' && !dirOverride) patchInstalledDependencies(ROOT);
   if (!TRUSTED_REBUILDS[label]) {
+    patchInstalledDependencies(dirOverride ?? workspaceDir(label));
     console.log(`✅ no trusted rebuilds needed for ${label}`);
     return 0;
   }
