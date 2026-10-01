@@ -80,6 +80,33 @@ describe('publishing kit build (#9281)', () => {
     }
   });
 
+  it('keeps the original master identity when a new render finishes during a kit build', async () => {
+    const { id } = await projects.createProject({ name: 'Example Master Identity' });
+    await mkdir(PATHS.videos, { recursive: true });
+    await writeFile(join(PATHS.videos, 'original-master.mp4'), 'placeholder; encoding is injected');
+    await saveHistory([{ id: 'original-render', filename: 'original-master.mp4', durationSec: 36 }]);
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: 'original-render' } }));
+    let releaseEncode;
+    const pendingEncode = new Promise(resolve => { releaseEncode = resolve; });
+    const probe = vi.spyOn(ffmpegService, 'findFfmpeg').mockResolvedValue('example-ffmpeg');
+    const encode = vi.spyOn(ffmpegService, 'runFfmpegProcess')
+      .mockResolvedValue({ ok: true }).mockImplementationOnce(() => pendingEncode);
+    try {
+      await kit.startPublishKitBuild(id);
+      await vi.waitFor(() => expect(encode).toHaveBeenCalledTimes(1));
+      await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: 'new-render' } }));
+      releaseEncode({ ok: true });
+      await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy());
+      const project = await projects.getProject(id);
+      expect(project.renderHistoryId).toBe('new-render');
+      expect(project.publishKit.master).toEqual({ filename: 'original-master.mp4', renderHistoryId: 'original-render' });
+    } finally {
+      releaseEncode({ ok: true });
+      probe.mockRestore();
+      encode.mockRestore();
+    }
+  });
+
   it.skipIf(!ffmpeg)('turns the final render into encodes, thumbnails, captions and chapters, and frees a rebuilt kit\'s old files', { timeout: 120000 }, async () => {
     const id = await renderedProject();
     await kit.startPublishKitBuild(id);

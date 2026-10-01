@@ -153,7 +153,7 @@ async function beginPublishKitBuild(projectId, jobId) {
       return { project: { ...current, publishKit: {
         ...kit,
         builtAt: new Date().toISOString(),
-        master: { filename: entry.filename, renderHistoryId: current.renderHistoryId },
+        master: { filename: entry.filename, renderHistoryId: project.renderHistoryId },
         exports: encodes.map(({ kind, label, filename, window }) => ({ kind, label, filename, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}) })),
         thumbnails,
         thumbnail: thumbnails.includes(kit.thumbnail) ? kit.thumbnail : (thumbnails[0] || null),
