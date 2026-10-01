@@ -116,7 +116,23 @@ afterAll(() => {
   cleanupDataRoot();
 });
 
-const waitFor = (emitter, event) => new Promise((resolve) => emitter.once(event, resolve));
+// Resolves on `event`; rejects with the stage name and reason if the socket
+// fails the handshake (connect_error) or drops (disconnect) while we wait, so a
+// transport failure under suite load surfaces as a named stage instead of an
+// opaque 30s test timeout (#8484). Waiters for those events themselves opt out.
+const waitFor = (emitter, event) => new Promise((resolve, reject) => {
+  const cleanup = () => {
+    emitter.off(event, onEvent);
+    emitter.off('connect_error', onConnectError);
+    emitter.off('disconnect', onDisconnect);
+  };
+  const onEvent = (value) => { cleanup(); resolve(value); };
+  const onConnectError = (err) => { cleanup(); reject(new Error(`awaiting "${event}": connect_error ${err?.data?.code || err?.message}`)); };
+  const onDisconnect = (reason) => { cleanup(); reject(new Error(`awaiting "${event}": socket disconnected (${reason})`)); };
+  emitter.on(event, onEvent);
+  if (event !== 'connect_error') emitter.on('connect_error', onConnectError);
+  if (event !== 'disconnect') emitter.on('disconnect', onDisconnect);
+});
 
 describe('peer socket relay stays connected through cos:subscribe on a password-gated peer (#8386)', () => {
   beforeEach(async () => {
