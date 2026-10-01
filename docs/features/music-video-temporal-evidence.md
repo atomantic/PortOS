@@ -71,3 +71,26 @@ Analyzer identity/version, shot/source provenance, measured offsets/confidence
 and spans persist in existing auto-review records. Excerpts snapshot performance
 provenance when rendering begins, so later board edits cannot relabel evidence.
 The project sync schema is version-gated; older takes need no data migration.
+
+## Repair a measured performance suffix
+
+After stopping or finishing a review/production run, the Board evidence inspector
+can offer **Repair from here** for the latest measured take. It shows the song-time
+boundary, remaining audio interval and estimated next spend before submitting.
+The boundary must lie in a real word gap inside an accepted prefix; every remaining
+span must have a measured offset above 0.12 seconds. Incomplete evidence, missing
+word timings, changed audio, unsupported providers and suffixes outside the
+provider's limits stay review-needed. There is no backward audio padding and no
+whole-take fallback. Authored code/document compositions and timed action contracts
+need their own edit review before this continuation route is available.
+
+Repair keeps the original clip as an accepted-prefix scene with explicit edit
+points, captures its last accepted frame, and creates a contiguous suffix scene.
+The checkpoint retains the original take, source interval, boundary, reference
+frame time and generated continuation provenance. Resume submits only that suffix
+through the normal revision/media queue. Its durable reservation permits one paid
+generation; duplicate clicks, cancellation and ambiguous restarts cannot submit it
+again. A synchronous enqueue failure with no durable job refunds the reservation.
+Once the suffix take lands, Resume renders the revised draft using both original
+prefix footage and the continuation. Retrying the draft render generates no video.
+Existing active run budgets cannot be bypassed by opening a manual repair.

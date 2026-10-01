@@ -314,7 +314,8 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
     // supply an on-beat cut. Beat alignment describes the cut, not ownership
     // of its timing. Section provenance is cleared when the audio changes.
     const planned = Number.isInteger(scene?.sectionIndex) && scene.sectionIndex >= 0;
-    if ((scene?.beatAligned || planned) && sceneHasAuthoredSpan(scene)) {
+    // A measured word-gap repair owns its edit boundary independently of beats.
+    if ((scene?.beatAligned || planned || selectedPerformanceInstruction(scene)?.repair) && sceneHasAuthoredSpan(scene)) {
       // inSec stays 0 here deliberately: this only ever trims how much of the
       // clip plays, never which frames — there is no in-point/out-point
       // distinction. A legacy planned scene commonly spans much longer than

@@ -194,22 +194,17 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     shotInstruction: performance.shotInstruction,
   } : null;
 
+  let repairReserved = false;
   const enqueue = (params) => withStagedRollback(
     async () => {
+      if (repairReserved) {
+        const { releasePerformanceRepairSubmission } = await import('../musicVideo/revisionService.js');
+        await releasePerformanceRepairSubmission(body.musicVideo.projectId, body.musicVideo.revisionId);
+      }
       if (performance) await unlink(performance.audioFilePath).catch(() => {});
       await cleanupStaged();
     },
     async () => {
-      // Selective section revision (#9011): checked as the LAST step before the
-      // actual queue write (staging, FableLoom compilation and the performance-
-      // shot audio slice above can all take real time), so a revision closed
-      // mid-submission is caught as close to the cancel/kickoff race as this
-      // request can get. A no-op when the tag carries no revisionId; deferred
-      // import since only this rare path needs the revision service's closure.
-      if (body.musicVideo?.revisionId) {
-        const { assertRevisionOpen } = await import('../musicVideo/revisionService.js');
-        await assertRevisionOpen(body.musicVideo.projectId, body.musicVideo.revisionId, { sceneId: body.musicVideo.sceneId, kind: 'video' });
-      }
       if (body.musicVideo?.productionRunId) {
         const { assertProductionSubmission } = await import('../musicVideo/productionService.js');
         await assertProductionSubmission(body.musicVideo.projectId, body.musicVideo.productionRunId,
@@ -223,11 +218,11 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
         assertShotActionContract(scene);
         params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });
+        const interval = performance?.shotInstruction?.songInterval;
+        if (interval && (interval.startSec !== scene?.startSec || interval.endSec !== scene?.endSec)) {
+          throw new ServerError('The shot timing changed while its performance audio was prepared — submit again', { status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });
+        }
         if (scene?.direction?.actionContract != null) {
-          const interval = performance?.shotInstruction?.songInterval;
-          if (interval && (interval.startSec !== scene.startSec || interval.endSec !== scene.endSec)) {
-            throw new ServerError('The shot timing changed while its performance audio was prepared — submit again', { status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });
-          }
           const requestedSec = performance?.shotInstruction?.audioWindow?.durationSec ?? params.duration
             ?? (Number.isFinite(params.numFrames) ? (params.numFrames - 1) / (params.fps || 24) : null);
           const offsetSec = performance?.shotInstruction?.edit?.inSec || 0;
@@ -243,6 +238,17 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         const { captureTakeDependencies } = await import('../../lib/musicVideoDependencies.js');
         const { basename } = await import('path');
         if (scene) params.musicVideoDependencies = captureTakeDependencies(scene, prepared.sourceImagePath ? basename(prepared.sourceImagePath) : null);
+      }
+      // Selective section revision (#9011): checked as the LAST step before the
+      // actual queue write (staging, FableLoom compilation and the performance-
+      // shot audio slice above can all take real time), so a revision closed
+      // mid-submission is caught as close to the cancel/kickoff race as this
+      // request can get. A no-op when the tag carries no revisionId; deferred
+      // import since only this rare path needs the revision service's closure.
+      if (body.musicVideo?.revisionId) {
+        const { assertRevisionOpen } = await import('../musicVideo/revisionService.js');
+        await assertRevisionOpen(body.musicVideo.projectId, body.musicVideo.revisionId, { sceneId: body.musicVideo.sceneId, kind: 'video' });
+        repairReserved = Boolean(performance?.shotInstruction?.repair);
       }
       return enqueueJob({ kind: 'video', params });
     },

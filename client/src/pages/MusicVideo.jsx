@@ -830,6 +830,8 @@ export default function MusicVideo() {
     onAddScene: handleAddScene,
     onDeleteScene: handleDeleteScene,
     onSplitScene: handleSplitScene,
+    onRepairPerformance: revisions.repairPerformance,
+    repairBusy: revisions.busy,
     onRenderStyle: (mode) => {
       const composition = compositionDraft(selected, { mode });
       editProjectLocal({ composition });

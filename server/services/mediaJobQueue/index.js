@@ -1257,6 +1257,10 @@ async function runJobLifecycle(job, markDispatched) {
       const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
       await assertVideoAttemptDispatch(job.params.videoProduction.projectId, job.params.videoProduction.attemptId, { jobId: job.id });
     }
+    if (job.params?.shotInstruction?.repair && job.params?.musicVideo) {
+      const { assertPerformanceRepairDispatch } = await import('../musicVideo/revisionService.js');
+      await assertPerformanceRepairDispatch(job.params.musicVideo);
+    }
     if (!mod) throw new Error(`Unknown job kind: ${job.kind}`);
     // A cancel that arrived while this job was still queued lives on the
     // persisted marker, not on any in-memory adapter state. Re-stamp it for

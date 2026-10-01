@@ -437,3 +437,56 @@ export const falTakeRequestFields = (take) => (take.performance
     ...(take.seconds != null ? { falDuration: take.seconds } : {}),
     ...(take.resolution ? { falResolution: take.resolution } : {}),
   });
+
+/** A repair needs measured complete coverage and a genuine pause between words.
+ * Returned times distinguish song, excerpt and provider-clip timebases.
+ * No padding: accepted audio must never be sent for generation again.
+ */
+export function planPerformanceRepair({ scene, temporal, excerptStartSec, backend, videoSettings = {} }) {
+  const no = (message) => ({ ok: false, message });
+  const instruction = selectedPerformanceInstruction(scene);
+  const capability = performanceCapability(backend);
+  if (!capability) return no(performanceBlockedReason(backend));
+  if (!instruction || instruction.songInterval?.startSec !== scene.startSec || instruction.songInterval?.endSec !== scene.endSec) return no('Review needed: the selected take no longer matches this shot');
+  if (scene.direction?.actionContract || scene.performanceRepair) return no('Review needed: edit the shot contract or review the existing continuation before repairing again');
+  if (temporal?.status !== 'verified' || !temporal.analyzer || temporal.takeId !== scene.videoHistoryId || !Number.isFinite(excerptStartSec)) return no('Review needed: complete measured temporal evidence is required');
+  const spans = Array.isArray(temporal.spans) ? temporal.spans : [];
+  if (!spans.length || spans.length > 256) return no('Review needed: temporal coverage is missing or unbounded');
+  let cursor = scene.startSec;
+  let failedAt = null;
+  for (const span of spans) {
+    const start = span.startSec + excerptStartSec;
+    const end = span.endSec + excerptStartSec;
+    if (span.status !== 'verified' || !Number.isFinite(span.offsetSec) || !Number.isFinite(span.confidence) || !(span.confidence >= 0.8 && span.confidence <= 1)
+      || !Number.isFinite(end) || end <= start || Math.abs(start - cursor) > 0.001 || end > scene.endSec + 0.001) return no('Review needed: temporal coverage is incomplete or inconclusive');
+    const failed = Math.abs(span.offsetSec) > 0.12;
+    if (failed && failedAt === null) failedAt = start;
+    if (!failed && failedAt !== null) return no('Review needed: the failure is not confined to a suffix');
+    cursor = end;
+  }
+  if (Math.abs(cursor - scene.endSec) > 0.001 || failedAt === null || failedAt <= scene.startSec) return no('Review needed: no accepted prefix and failed suffix were measured');
+  const windowStart = instruction.audioWindow?.startSec;
+  if (!Number.isFinite(windowStart) || Math.abs(windowStart + instruction.edit.inSec - scene.startSec) > 0.001
+    || Math.abs(windowStart + instruction.edit.outSec - scene.endSec) > 0.001) return no('Review needed: the source audio timebase is missing');
+  const cues = (instruction.cues || []).filter((cue) => cue.endSec + windowStart > scene.startSec && cue.startSec + windowStart < scene.endSec);
+  if (!cues.length || cues.some((cue) => !cue.words?.length)) return no('Review needed: word timings are required to choose a safe boundary');
+  const words = cues.flatMap((cue) => cue.words).slice().sort((a, b) => a.startSec - b.startSec);
+  if (words.some((word) => !Number.isFinite(word.startSec) || !Number.isFinite(word.endSec) || word.endSec <= word.startSec)) return no('Review needed: word timings are invalid');
+  let boundarySec = null;
+  for (let i = 1; i < words.length; i += 1) {
+    const left = words[i - 1].endSec + windowStart;
+    const right = words[i].startSec + windowStart;
+    const boundary = round6((left + right) / 2);
+    // A gap is not safe if another overlapping word crosses it.
+    if (right - left < 0.02 || words.some((word) => word.startSec + windowStart < boundary && word.endSec + windowStart > boundary)) continue;
+    const suffixSec = scene.endSec - boundary;
+    if (boundary - scene.startSec >= 0.4 && boundary <= failedAt && suffixSec >= capability.minAudioSec + PERFORMANCE_WINDOW_MARGIN_SEC
+      && suffixSec <= capability.maxAudioSec - PERFORMANCE_WINDOW_MARGIN_SEC) boundarySec = boundary;
+  }
+  if (boundarySec === null) return no('Review needed: no word gap leaves a supported suffix window; choose another reviewed shot boundary');
+  const suffix = { ...scene, startSec: boundarySec };
+  const take = falSceneTake({ scene: suffix, videoSettings, songDurationSec: instruction.audio?.songDurationSec });
+  return { ok: true, boundarySec, endSec: scene.endSec, suffixSec: round6(scene.endSec - boundarySec),
+    referenceClipSec: round6(instruction.edit.inSec + boundarySec - scene.startSec),
+    costUsd: take?.costUsd ?? null, sourceAssetId: scene.videoHistoryId };
+}

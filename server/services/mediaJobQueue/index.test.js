@@ -85,6 +85,8 @@ const stubs = {
   cancelComposition: vi.fn(),
 };
 
+vi.mock('../musicVideo/revisionService.js', () => ({ assertPerformanceRepairDispatch: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('../creativeDirector/videoExecution.js', () => ({
   assertVideoAttemptDispatch: vi.fn().mockResolvedValue(undefined),
   settleVideoAttempt: vi.fn().mockResolvedValue(undefined),
@@ -792,6 +794,17 @@ describe('mediaJobQueue', () => {
 
     videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
+  it('refuses a canceled suffix repair at provider dispatch without paying again', async () => {
+    const { assertPerformanceRepairDispatch } = await import('../musicVideo/revisionService.js');
+    assertPerformanceRepairDispatch.mockRejectedValueOnce(new Error('This repair revision is canceled'));
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      prompt: 'Example continuation', musicVideo: { projectId: 'example-project', sceneId: 'example-suffix', revisionId: 'example-revision' },
+      shotInstruction: { repair: { role: 'continuation' } },
+    } });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
   });
 
   it('cancels during dispatch validation without invoking the provider and cleans staged uploads', async () => {

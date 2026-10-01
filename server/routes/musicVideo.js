@@ -48,6 +48,7 @@ import {
   musicVideoExcerptNoteUpdateSchema,
   musicVideoDependencyRepairSchema,
   musicVideoRevisionStartSchema,
+  musicVideoPerformanceRepairSchema,
   musicVideoRevisionReleaseSchema,
   musicVideoAutoReviewStartSchema,
   musicVideoAutoReviewResumeSchema,
@@ -729,6 +730,12 @@ router.patch('/:id/excerpt/:excerptId/notes/:noteId', asyncHandler(async (req, r
 
 router.delete('/:id/excerpt/:excerptId/notes/:noteId', asyncHandler(async (req, res) => {
   res.json(await deleteReviewNote(req.params.id, req.params.excerptId, req.params.noteId));
+}));
+
+router.post('/:id/scenes/:sceneId/performance-repair', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoPerformanceRepairSchema, req.body || {});
+  const { startPerformanceRepair } = await import('../services/musicVideo/performanceRepair.js');
+  res.status(201).json(await startPerformanceRepair(req.params.id, req.params.sceneId, input));
 }));
 
 // --- Selective section revision (#8987) ---
