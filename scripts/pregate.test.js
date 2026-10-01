@@ -26,6 +26,7 @@ import {
   downgradeFullPlan,
   parseArgs,
   UNCOVERED_SUITES,
+  unmergedIndexPaths,
 } from './pregate.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -271,6 +272,18 @@ describe('parseArgs', () => {
   });
 });
 
+describe('unmergedIndexPaths', () => {
+  it('returns each repo-relative path from NUL-delimited index stages', () => {
+    expect(unmergedIndexPaths([
+      '100644 abc 1\tconflict name.md',
+      '100644 def 2\tconflict name.md',
+      '100644 ghi 3\tother.md',
+      '',
+    ].join('\0')))
+      .toEqual(['conflict name.md', 'other.md']);
+  });
+});
+
 describe('UNCOVERED_SUITES', () => {
   /**
    * The gate reports these by reading `plan[key]`. A rename in ci-test-plan.js
@@ -346,5 +359,58 @@ describe('the gate end to end', () => {
     // empty diff instead would report a green gate that checked nothing —
     // exactly the false green this whole script exists to prevent.
     expect(run).toThrow(/Cannot resolve a merge base/);
+  });
+
+  it('refuses an actual unresolved merge before planning or running checks', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-pregate-conflict-'));
+    const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    const run = () => spawnSync(process.execPath, [join(root, 'scripts', 'pregate.js'), '--plan-only', '--base', 'HEAD'], {
+      cwd: root, encoding: 'utf8',
+    });
+    try {
+      git('init', '-q', '-b', 'main');
+      git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+      for (const path of [
+        'scripts/pregate.js', 'scripts/scan-diff-hidden-content.js',
+        'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js',
+        'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js',
+        'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
+        'server/lib/textUtils.js',
+      ]) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        copyFileSync(join(REPO_ROOT, path), join(root, path));
+      }
+      writeFileSync(join(root, 'package.json'), '{"type":"module"}\n');
+      writeFileSync(join(root, 'conflict.txt'), 'base\n');
+      git('add', 'conflict.txt');
+      git('-c', 'user.name=Example Contributor', '-c', 'user.email=contributor@example.com', 'commit', '-qm', 'base');
+      const base = git('rev-parse', 'HEAD');
+      git('checkout', '-qb', 'other');
+      writeFileSync(join(root, 'conflict.txt'), 'other\n');
+      git('commit', '-qam', 'other change');
+      git('checkout', '-q', 'main');
+      writeFileSync(join(root, 'conflict.txt'), 'main\n');
+      git('commit', '-qam', 'main change');
+      const merge = spawnSync('git', ['merge', 'other'], { cwd: root, encoding: 'utf8' });
+      expect(merge.status).not.toBe(0);
+      writeFileSync(join(root, 'staged.txt'), 'staged\n');
+      git('add', 'staged.txt');
+      writeFileSync(join(root, 'ordinary.txt'), 'unstaged\n');
+      git('add', 'ordinary.txt');
+      writeFileSync(join(root, 'ordinary.txt'), 'staged and unstaged\n');
+      writeFileSync(join(root, 'untracked.txt'), 'untracked\n');
+
+      const result = run();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('unresolved Git conflicts:');
+      expect(result.stderr).toContain('  conflict.txt');
+      expect(result.stdout).not.toContain('Planning against');
+      expect(result.stdout).not.toContain('Pregate passed');
+      expect(git('--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'))
+        .toContain('staged.txt');
+      expect(git('rev-parse', 'HEAD')).not.toBe(base);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
