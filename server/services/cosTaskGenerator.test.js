@@ -304,22 +304,6 @@ describe('both on-demand engines delegate to the shared drain', () => {
       ).not.toMatch(/for \(const request of onDemandRequests\)/);
     });
   }
-
-  it('the shared drain reads the app registry once per cycle with the failure sentinel', () => {
-    // #3294's fix, now in the one place both engines run. `null` = the read
-    // FAILED (defer); `[]` = a real empty registry (clear as unknown-app). The
-    // read sits OUTSIDE the loop, so a 3-request cycle can't miss getActiveApps'
-    // 2s cache at a boundary. Behavior is pinned in onDemandDrain.test.js.
-    expect(DRAIN_SRC).toMatch(/const apps = onDemandRequests\.length > 0 \? await getActiveApps\(\)\.catch\(\(\) => null\) : \[\];/);
-    expect(DRAIN_SRC, 'a [] fallback is the #6618 defect — it clears the request as unknown-app')
-      .not.toMatch(/getActiveApps\(\)\.catch\(\(\) => \[\]\)/);
-    expect(DRAIN_SRC, 'a full project must leave its request queued before preparation')
-      .toMatch(/projectCapacityExhausted\(targetApp\?\.id \?\? request\.appId \?\? null\)[\s\S]*?continue;/);
-    const readIdx = DRAIN_SRC.indexOf('await getActiveApps()');
-    const loopIdx = DRAIN_SRC.indexOf('for (const request of onDemandRequests)');
-    expect(readIdx).toBeGreaterThan(-1);
-    expect(loopIdx).toBeGreaterThan(readIdx);
-  });
 });
 
 describe('applyOnDemandConsent', () => {
