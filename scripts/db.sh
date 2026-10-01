@@ -30,6 +30,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PGUSER="${PGUSER:-portos}"
 PGDATABASE="${PGDATABASE:-portos}"
 PGPASSWORD="${PGPASSWORD:-portos}"
+SELECTED_PGHOST="${PGHOST:-}"
 PGHOST="${PGHOST:-localhost}"
 # The maintenance coordinator names its install's dump directory explicitly
 # (its data root can differ from this checkout); otherwise use this checkout.
@@ -70,8 +71,9 @@ get_port() {
   fi
 }
 
-# Whether the caller named a port. setup-native provisions exactly that
-# endpoint; only an unnamed port falls back to local service discovery.
+# Whether the caller named a host or port. setup-native provisions exactly that
+# endpoint (an unnamed half keeps its default); only a fully unnamed endpoint
+# falls back to local service discovery.
 SELECTED_PGPORT="${PGPORT:-}"
 PGPORT=$(get_port)
 EXPLICIT_ENDPOINT=false
@@ -469,8 +471,8 @@ cmd_setup_native() {
   # Step 2: Ensure PostgreSQL is running. A caller-selected endpoint
   # (PGHOST/PGPORT) is provisioned as-is: discovery must never redirect SQL
   # (role/password changes, schema) to a different cluster than the one chosen.
-  if [ -n "$SELECTED_PGPORT" ]; then
-    PGPORT="$SELECTED_PGPORT"
+  if [ -n "$SELECTED_PGPORT" ] || [ -n "$SELECTED_PGHOST" ]; then
+    PGPORT="${SELECTED_PGPORT:-5432}"
     if pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
       log "PostgreSQL already running at $PGHOST:$PGPORT"
     elif [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then

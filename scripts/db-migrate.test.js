@@ -291,4 +291,13 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(psqlCalls()).toEqual([]);
     expect(readFileSync(envFile, 'utf8')).toBe('PGMODE=docker\n');
   });
+
+  it('keeps a host-only selection on the default port instead of discovering another cluster', () => {
+    const result = run(['setup-native'], 'ok', { PGHOST: 'db.example.invalid', READY_PORTS: '5432' });
+    expect(result.status).toBe(0);
+    expect(psqlCalls().every(call => call.includes('-h db.example.invalid -p 5432 '))).toBe(true);
+    const down = run(['setup-native'], 'ok', { PGHOST: 'db.example.invalid', READY_PORTS: '5433' });
+    expect(down.status).not.toBe(0);
+    expect(psqlCalls().every(call => !call.includes('-p 5433 '))).toBe(true);
+  });
 });
