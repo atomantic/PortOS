@@ -16,6 +16,19 @@ import { ServerError } from '../../../lib/errorHandler.js';
 
 export const PUBLISH_STEP_TIMEOUT_MS = 60_000;
 
+let browserTail = Promise.resolve();
+
+/**
+ * Run `fn` after every earlier PortOS Browser operation settles. Typing goes to
+ * whichever tab has focus, so every driver of the shared browser — a publish
+ * draft or an autonomous Suno song — queues here, not on a private tail.
+ */
+export function serializeBrowserOperation(fn) {
+  const run = browserTail.then(fn, fn);
+  browserTail = run.catch(() => {});
+  return run;
+}
+
 /** Connect to the running PortOS Browser (launching it when it is stopped). */
 export async function connectPortosBrowser() {
   const { getHealthStatus, launchBrowser } = await import('../../browserService.js');

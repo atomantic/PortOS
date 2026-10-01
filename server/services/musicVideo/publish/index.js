@@ -22,7 +22,7 @@ import { PATHS, ensureDir } from '../../../lib/fileUtils.js';
 import { safeUnder } from '../../../lib/ffmpeg.js';
 import { getProject, mutateProjectRecord } from '../projects.js';
 import { buildPublishPayload } from './payloads.js';
-import { connectPortosBrowser } from './browser.js';
+import { connectPortosBrowser, serializeBrowserOperation as serialize } from './browser.js';
 import { assertAccount, assertPlatformEnabled, getPublishPlatforms, normalizePost } from './platforms.js';
 import { youtubeAdapter, shortsAdapter } from './youtube.js';
 import { tiktokAdapter } from './tiktok.js';
@@ -38,14 +38,6 @@ export const PUBLISH_ADAPTERS = Object.freeze({
 });
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const drafts = new Map();
-let browserTail = Promise.resolve();
-
-/** Run `fn` after every earlier browser operation settles (typing needs the focused tab). */
-function serialize(fn) {
-  const run = browserTail.then(fn, fn);
-  browserTail = run.catch(() => {});
-  return run;
-}
 
 const draftError = (message) => new ServerError(message, { status: 409, code: 'PUBLISH_DRAFT_MISSING' });
 

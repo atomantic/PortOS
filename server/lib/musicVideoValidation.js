@@ -21,6 +21,14 @@ import {
   MUSIC_VIDEO_AUTOMATION_TOOL_IDS,
   MUSIC_VIDEO_CHECKIN_MODES,
 } from './musicVideoAutomation.js';
+import {
+  AUTONOMOUS_CHECKPOINT_IDS,
+  AUTONOMOUS_LIMIT_BOUNDS,
+  AUTONOMOUS_NAME_MAX,
+  AUTONOMOUS_ORIGINS,
+  AUTONOMOUS_PROMPT_MAX,
+  AUTONOMOUS_SONG_SOURCES,
+} from './musicVideoAutonomous.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 
@@ -720,6 +728,44 @@ export const musicVideoProductionStartSchema = z.object({
 export const musicVideoProductionResumeSchema = z.object({
   limits: musicVideoProductionLimitsSchema.partial().optional(),
   acceptBasis: z.boolean().optional(),
+}).strict();
+
+// ---- Fully-autonomous run: one prompt → lyrics → Suno song → video --------------
+// The alternate entry point: no track, style or board is picked up front. Tool
+// ids are the same catalog the autopilot brief uses; `checkpoints` names the
+// stages that park for approval (none = fully unattended).
+export const musicVideoAutonomousStartSchema = z.object({
+  prompt: z.string().trim().min(1).max(AUTONOMOUS_PROMPT_MAX),
+  name: z.string().trim().min(1).max(AUTONOMOUS_NAME_MAX).optional(),
+  songSource: z.enum(AUTONOMOUS_SONG_SOURCES).optional(),
+  instrumental: z.boolean().optional(),
+  guidance: z.string().max(4000).optional(),
+  tools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),
+  // Per-tool model pin, e.g. { 'image:local': 'flux-dev' }; absent = the install default.
+  models: z.partialRecord(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS), z.string().trim().min(1).max(200)).optional(),
+  budgetUsd: z.number().min(0).max(MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD).nullable().optional(),
+  limits: z.object({
+    maxGenerations: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.max).optional(),
+    maxReviewAttempts: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.max).optional(),
+  }).strict().optional(),
+  checkpoints: z.array(z.enum(AUTONOMOUS_CHECKPOINT_IDS)).max(AUTONOMOUS_CHECKPOINT_IDS.length).optional(),
+  // The LLM that writes the brief and lyrics (blank = the install's active provider).
+  providerId: z.string().trim().min(1).max(200).nullable().optional(),
+  model: z.string().trim().min(1).max(200).nullable().optional(),
+  // The separate code-authoring provider a code-rendered video needs.
+  authoring: z.object({ providerId: z.string().min(1).max(200), model: z.string().min(1).max(200) }).strict().optional(),
+  origin: z.object({
+    kind: z.enum(AUTONOMOUS_ORIGINS).optional(),
+    ideaId: z.string().max(80).nullable().optional(),
+    ideaTitle: z.string().max(200).nullable().optional(),
+  }).strict().optional(),
+}).strict();
+
+// Resume a parked/failed run, or approve the checkpoint it is waiting on.
+export const musicVideoAutonomousResumeSchema = z.object({
+  // Replace the stage output the director edited at a checkpoint.
+  lyrics: z.string().max(20000).optional(),
+  style: z.string().max(AUTONOMOUS_PROMPT_MAX).optional(),
 }).strict();
 
 // A generation kickoff that failed before reaching the queue (#9011) — names
