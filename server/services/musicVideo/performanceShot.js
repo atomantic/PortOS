@@ -52,7 +52,7 @@ import {
 import { getProject } from './projects.js';
 import { assertVocalStemTimebase, resolveVocalStemPath } from './vocalStem.js';
 
-export const SHOT_INSTRUCTION_VERSION = 1;
+export const SHOT_INSTRUCTION_VERSION = 2;
 
 const hashFile = (path) => new Promise((resolve, reject) => {
   const hash = createHash('sha256');
@@ -266,7 +266,9 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   // An optional vocal stem conditions the provider in place of the mix. It
   // is re-checked here because the file could have been replaced on disk or
   // arrived from a peer since it was attached.
-  const stemPath = resolveVocalStemPath(project);
+  const conditioningSource = project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
+  const stemPath = conditioningSource === 'master' ? null : resolveVocalStemPath(project);
+  if (conditioningSource !== 'master' && !stemPath) throw refuse('Attach the selected singer stem before rendering', 'MUSIC_VIDEO_VOCAL_STEM_MISSING');
   if (stemPath) assertVocalStemTimebase(await probeVideoDuration(stemPath), songDurationSec);
 
   const audioSha256 = await hashFile(masterPath);
@@ -303,6 +305,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     version: SHOT_INSTRUCTION_VERSION,
     shotMode: 'performance',
     createdAt: new Date().toISOString(),
+    speaker: scene.performanceSpeaker || null,
     audio: {
       source: project.trackId ? 'track' : 'upload',
       sha256: audioSha256,
@@ -312,7 +315,11 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
       // master's timebase. `sha256` above stays the master's, so a take
       // is stale only when the song changes, not when a stem is swapped —
       // and then only when `windowFingerprint` says this window changed.
-      conditioning: { source: stemPath ? 'vocal-stem' : 'master', sha256: conditioningSha256 },
+      conditioning: {
+        source: conditioningSource, sha256: conditioningSha256, filename: basename(stemPath || masterPath),
+        selection: project.performanceConditioningSource ? 'user' : 'legacy-default',
+        voiceIsolation: 'unverified',
+      },
     },
     songInterval: { startSec: scene.startSec, endSec: scene.endSec },
     audioWindow: { startSec: plan.windowStartSec, endSec: plan.windowEndSec, durationSec: plan.windowSec },

@@ -49,7 +49,7 @@ const AUTO_REVIEW_LIMIT_BOUNDS = Object.freeze({
 const AUTO_REVIEW_STATUSES = Object.freeze(['running', 'stopped', 'limit-reached', 'passed', 'needs-human', 'failed', 'canceled']);
 const RESUMABLE = new Set(['running', 'stopped', 'limit-reached']);
 const ACTIVE = new Set(['running', 'stopped', 'limit-reached']);
-export const AUTO_REVIEW_CHECKS = Object.freeze(['composition', 'continuity', 'motion', 'audioSync']);
+export const AUTO_REVIEW_CHECKS = Object.freeze(['composition', 'continuity', 'motion', 'audioSync', 'lipSync']);
 // Draft renders are free, but a window that fails to render every time must
 // not loop forever: this many failed renders of one attempt fail the run.
 const MAX_RENDER_FAILURES = 2;

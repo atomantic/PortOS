@@ -655,7 +655,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // footage. Absent policy remains legacy; no existing record needs rewriting.
   // v13 = authored/applied shot action contracts; older treatment writers drop intent.
   // Additive optional metadata on existing project records; no backfill is needed.
-  musicVideoProjects: 13,
+  // v14 = selected conditioning source/speaker and separate temporal lip-sync
+  // evidence (#9347). Older peers can drop source intent and pass equal-length
+  // misaligned output, so reject ahead transfers. Absent fields stay legacy.
+  musicVideoProjects: 14,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

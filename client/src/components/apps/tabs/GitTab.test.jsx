@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
 vi.mock('react-router', () => ({
@@ -134,10 +134,13 @@ describe('GitTab modal accessibility (issue #1090)', () => {
 
   it('closes the diff dialog on Escape', async () => {
     render(<GitTab appId="x" appName="App" repoPath="/repo" />);
-    fireEvent.click(await screen.findByText('View Diff'));
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    const viewDiff = await screen.findByText('View Diff');
+    // Opening awaits the diff request; flush that state change and Modal's
+    // passive Escape registration before sending the next user interaction.
+    await act(async () => { fireEvent.click(viewDiff); });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
 
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(document.activeElement, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 

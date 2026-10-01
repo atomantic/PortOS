@@ -49,7 +49,7 @@ describe('POST /:id/scenes/:sceneId/split', () => {
   it('splits an over-long performance shot at the lyric pauses, keeping the original id, takes and neighbours', async () => {
     const before = await projects.addProjectScene(project.id, { label: 'Intro', startSec: 0, endSec: 30 });
     const shot = await projects.addProjectScene(project.id, {
-      label: 'Verse', prompt: 'singer at the mic', startSec: 30, endSec: 86, shotMode: 'performance', loop: false,
+      label: 'Verse', prompt: 'singer at the mic', startSec: 30, endSec: 86, shotMode: 'performance', performanceSpeaker: 'Example Singer', loop: false,
     });
     const after = await projects.addProjectScene(project.id, { label: 'Outro', startSec: 86, endSec: 100 });
     await projects.updateScene(project.id, shot.sceneId, { referenceImageId: 'singer.png', videoHistoryId: 'clip-whole-verse' });
@@ -64,7 +64,7 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     expect(pieces[0].sceneId).toBe(shot.sceneId);
     expect(pieces.map((p) => p.label)).toEqual(['Verse · 1/3', 'Verse · 2/3', 'Verse · 3/3']);
     expect(pieces.map((p) => p.lyricText)).toEqual(['first line', 'second line', 'third line']);
-    expect(pieces[1]).toMatchObject({ shotMode: 'performance', prompt: 'singer at the mic', loop: false, referenceImageId: 'singer.png', videoHistoryId: null });
+    expect(pieces[1]).toMatchObject({ shotMode: 'performance', performanceSpeaker: 'Example Singer', prompt: 'singer at the mic', loop: false, referenceImageId: 'singer.png', videoHistoryId: null });
     expect(pieces[1].takes.map((t) => [t.kind, t.assetId])).toEqual([['image', 'singer.png']]);
 
     const stored = await projects.getProject(project.id);

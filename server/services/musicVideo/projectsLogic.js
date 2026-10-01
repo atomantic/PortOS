@@ -114,6 +114,7 @@ export function buildProjectRecord(input, { id, now }) {
     updatedAt: now,
     trackId,
     uploadedAudioFilename,
+    ...(input.performanceConditioningSource ? { performanceConditioningSource: input.performanceConditioningSource } : {}),
     concept,
     // #8965 — the reusable visual specification (moodboard/reference assets,
     // palette, typography, camera rules). Null until the director sets one.
@@ -364,6 +365,7 @@ export function applyProjectPatch(project, patch) {
     // A vocal stem is a bounce of the OLD song; conditioning a performance on
     // it against the new master would sing the wrong words (#8977).
     ...(project.vocalStemFilename ? { vocalStemFilename: null } : {}),
+    performanceConditioningSource: 'master',
     ...mergedPatch,
     ...statusPatch,
     audioAnalysis: null,
@@ -422,6 +424,7 @@ function buildScene(input, { order }) {
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
     shotMode: input.shotMode ?? 'cutaway',
+    ...(input.performanceSpeaker ? { performanceSpeaker: input.performanceSpeaker } : {}),
     referenceImageId: null,
     videoHistoryId: null,
     // #8965 — immutable candidate takes; the two slot fields above are the
@@ -602,6 +605,7 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
         visualIntent: scene.visualIntent ?? null,
         visualLayer: scene.visualLayer ?? 'footage',
         shotMode: scene.shotMode ?? 'cutaway',
+        performanceSpeaker: scene.performanceSpeaker ?? null,
         ...timing,
       }),
     }, { order: 0 });
