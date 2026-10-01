@@ -1174,7 +1174,8 @@ describe('AgentCard truncated task description', () => {
 // agent wrote in its own sentinel summary is followable from the card. The
 // pattern lives in lib/issueRefs.test.js — this pins the WIRING, the half that
 // silently regresses when a prop is dropped in a refactor.
-it('links a task-summary issue reference at the tracker the run was stamped with', () => {
+it('links a task-summary issue reference at the tracker the run was stamped with', async () => {
+  api.getCosAgent.mockResolvedValue({ ...agent, output: [] });
   render(
     <MemoryRouter>
       <AgentCard
@@ -1187,6 +1188,7 @@ it('links a task-summary issue reference at the tracker the run was stamped with
       />
     </MemoryRouter>
   );
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
   expect(screen.getByRole('link', { name: '#7640' }))
     .toHaveAttribute('href', 'https://github.com/atomantic/PortOS/issues/7640');
 });
@@ -1204,9 +1206,9 @@ it('loads process stats only after opening an active agent with no output', asyn
 it('loads a clipped summary only when the reader asks for the detail', async () => {
   api.getCosAgent.mockResolvedValue({ ...agent, metadata: { ...agent.metadata, taskSummary: 'The full summary with its conclusion.' }, output: [] });
   render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: { ...agent.metadata, taskSummary: 'The preview', taskSummaryTruncated: true } }} completed /></MemoryRouter>);
-  expect(screen.getByText('The preview')).toBeInTheDocument();
+  expect(screen.queryByText('The preview')).not.toBeInTheDocument();
   expect(api.getCosAgent).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole('button', { name: 'Load full summary' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
   expect(await screen.findByText('The full summary with its conclusion.')).toBeInTheDocument();
   expect(screen.queryByText('Summary preview.')).not.toBeInTheDocument();
 });
@@ -1270,4 +1272,21 @@ it('drops an outstanding stats response when collapsed and reads afresh on reope
   api.getCosAgentStats.mockRejectedValueOnce(new Error('Temporary failure'));
   await act(async () => socket.receive('cos:agent:updated', { id: agent.id }));
   expect(screen.getByText('11.1%')).toBeInTheDocument();
+});
+
+
+it.each([false, true])('keeps a completed summary behind Show and its duplicate transcript behind a separate disclosure (remote=%s)', async (remote) => {
+  const summary = 'Completed the example task.';
+  const record = { ...agent, metadata: { ...agent.metadata, taskSummary: summary }, output: [{ type: 'stdout', line: summary }] };
+  api.getCosAgent.mockResolvedValue(record);
+  render(<MemoryRouter><AgentCard agent={record} completed remote={remote} /></MemoryRouter>);
+  expect(screen.queryByText(summary)).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  expect(await screen.findByText(summary)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
+  expect(screen.getAllByText(summary)).toHaveLength(2);
+  await userEvent.click(screen.getByRole('button', { name: 'Hide full transcript' }));
+  expect(screen.getAllByText(summary)).toHaveLength(1);
+  await userEvent.click(screen.getByRole('button', { name: 'Hide', exact: true }));
+  expect(screen.queryByText(summary)).not.toBeInTheDocument();
 });

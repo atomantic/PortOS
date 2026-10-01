@@ -403,6 +403,7 @@ function GoalFidelityFollowUp({ followUp }) {
 
 export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, onRelaunch, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName, initiallyExpanded = false }) {
   const [expanded, setExpanded] = useState(initiallyExpanded);
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [now, setNow] = useState(Date.now());
   // Every surface of this card that renders the agent's own prose resolves a
   // bare `#7640` against the run's tracker through the one resolver.
@@ -621,6 +622,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
       ? (fullOutput?.lines || agent.output || [])
       : (liveOutput || agent.output || [])
   ), [inactive, fullOutput, liveOutput, agent.output]);
+  const taskSummary = completed && (fullMetadata?.taskSummary ?? agent.metadata?.taskSummary);
   const lastOutput = output.length > 0 ? output[output.length - 1]?.line : null;
 
   // Why this run has NO "Open Shell" link. Scoped to the one case where the user
@@ -1162,31 +1164,6 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           <InvestigateFindingsButton key={agent.id} agent={agent} />
         )}
 
-        {completed && (agent.metadata?.taskSummary || agent.metadata?.malwareScan?.reportUrl) && (
-          <div className="mt-2 bg-port-bg/50 border border-port-border/50 rounded p-2.5">
-            <div className="text-[11px] text-gray-500 mb-1 flex items-center gap-1">
-              <Sparkles size={10} aria-hidden="true" className="text-emerald-400" />
-              Task Summary
-            </div>
-            {agent.metadata?.taskSummary && <MarkdownOutput content={fullMetadata?.taskSummary ?? agent.metadata.taskSummary} linkifyText={linkifyIssues} />}
-            {agent.metadata?.taskSummaryTruncated && !fullMetadata?.taskSummary && (
-              <p className="mt-1 text-xs text-port-text-muted">
-                Summary preview. {!remote && <button type="button" className="text-port-accent hover:underline" disabled={loadingOutput}
-                  onClick={() => { setFullOutput(null); setExpanded(true); }}>Load full summary</button>}
-              </p>
-            )}
-            {agent.metadata?.malwareScan?.reportUrl && (
-              <a
-                href={api.normalizeBrainScanReportPath(agent.metadata.malwareScan.reportUrl)}
-                className={`mt-2 inline-flex items-center gap-1 text-xs hover:underline ${agent.metadata.malwareScan.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'}`}
-              >
-                {agent.metadata.malwareScan.verdict === 'DANGEROUS' ? <Skull size={13} /> : <ExternalLink size={13} />}
-                View scan report{agent.metadata.malwareScan.verdict ? ` (${agent.metadata.malwareScan.verdict})` : ''}
-              </a>
-            )}
-          </div>
-        )}
-
         {/* Feedback section - shown for completed, manually-run, non-system local
             agents. A handoff has no result to rate — the continuation run asks for
             the rating that covers this work — so it is excluded UNLESS a rating is
@@ -1295,89 +1272,122 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
       {/* Expanded output view */}
       {expanded && (
         <div className="border-t border-port-border bg-port-bg/50 p-3 min-w-0 overflow-y-auto max-h-dvh-cap [--dvh-cap:60dvh]">
-          {/* Pipeline stage tabs */}
-          {pipelineStages && (
-            <div className="flex items-center gap-1 mb-2 overflow-x-auto">
-              {pipelineStages.map((stage) => {
-                const isActive = activeStageTab === stage.index;
-                return (
-                  <button
-                    key={stage.index}
-                    onClick={() => setActiveStageTab(stage.index)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded whitespace-nowrap transition-colors ${
-                      isActive
-                        ? 'bg-purple-500/20 text-purple-400'
-                        : 'text-gray-500 hover:text-gray-300 hover:bg-port-border/30'
-                    }`}
-                  >
-                    {stage.completed && (
-                      <span className={stage.success ? 'text-port-success' : 'text-port-error'}>
-                        {stage.success ? '●' : '✕'}
-                      </span>
-                    )}
-                    {stage.isCurrent && !stage.completed && (
-                      <span className="text-port-accent animate-pulse">●</span>
-                    )}
-                    {!stage.isCurrent && !stage.completed && (
-                      <span className="text-gray-600">○</span>
-                    )}
-                    {stage.name}
-                  </button>
-                );
-              })}
+          {completed && (taskSummary || agent.metadata?.malwareScan?.reportUrl) && (
+            <div className="mt-2 bg-port-bg/50 border border-port-border/50 rounded p-2.5">
+              <div className="text-[11px] text-gray-500 mb-1 flex items-center gap-1">
+                <Sparkles size={10} aria-hidden="true" className="text-emerald-400" />
+                Task Summary
+              </div>
+              {taskSummary && <MarkdownOutput content={taskSummary} linkifyText={linkifyIssues} />}
+              {agent.metadata?.taskSummaryTruncated && !fullMetadata?.taskSummary && (
+                <p className="mt-1 text-xs text-port-text-muted">
+                  Summary preview. {!remote && <button type="button" className="text-port-accent hover:underline" disabled={loadingOutput}
+                    onClick={() => { setFullOutput(null); setExpanded(true); }}>Load full summary</button>}
+                </p>
+              )}
+              {agent.metadata?.malwareScan?.reportUrl && (
+                <a
+                  href={api.normalizeBrainScanReportPath(agent.metadata.malwareScan.reportUrl)}
+                  className={`mt-2 inline-flex items-center gap-1 text-xs hover:underline ${agent.metadata.malwareScan.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'}`}
+                >
+                  {agent.metadata.malwareScan.verdict === 'DANGEROUS' ? <Skull size={13} /> : <ExternalLink size={13} />}
+                  View scan report{agent.metadata.malwareScan.verdict ? ` (${agent.metadata.malwareScan.verdict})` : ''}
+                </a>
+              )}
             </div>
           )}
-          {/* Output content: show stage-specific output for pipeline agents */}
-          {(() => {
-            // For pipeline agents viewing a prior stage
-            const activeStage = pipelineStages?.[activeStageTab];
-            if (activeStage && !activeStage.isCurrent && activeStage.agentId) {
-              const stageOut = stageOutputs[activeStage.agentId];
-              if (loadingStageId === activeStage.agentId) {
+
+          {taskSummary && (
+            <button type="button" className="mt-2 text-xs text-port-accent hover:underline"
+              aria-expanded={transcriptExpanded} onClick={() => setTranscriptExpanded(value => !value)}>
+              {transcriptExpanded ? 'Hide full transcript' : 'Show full transcript'}
+            </button>
+          )}
+          {(!taskSummary || transcriptExpanded) && <>
+            {/* Pipeline stage tabs */}
+            {pipelineStages && (
+              <div className="flex items-center gap-1 mb-2 overflow-x-auto">
+                {pipelineStages.map((stage) => {
+                  const isActive = activeStageTab === stage.index;
+                  return (
+                    <button
+                      key={stage.index}
+                      onClick={() => setActiveStageTab(stage.index)}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded whitespace-nowrap transition-colors ${
+                        isActive
+                          ? 'bg-purple-500/20 text-purple-400'
+                          : 'text-gray-500 hover:text-gray-300 hover:bg-port-border/30'
+                      }`}
+                    >
+                      {stage.completed && (
+                        <span className={stage.success ? 'text-port-success' : 'text-port-error'}>
+                          {stage.success ? '●' : '✕'}
+                        </span>
+                      )}
+                      {stage.isCurrent && !stage.completed && (
+                        <span className="text-port-accent animate-pulse">●</span>
+                      )}
+                      {!stage.isCurrent && !stage.completed && (
+                        <span className="text-gray-600">○</span>
+                      )}
+                      {stage.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {/* Output content: show stage-specific output for pipeline agents */}
+            {(() => {
+              // For pipeline agents viewing a prior stage
+              const activeStage = pipelineStages?.[activeStageTab];
+              if (activeStage && !activeStage.isCurrent && activeStage.agentId) {
+                const stageOut = stageOutputs[activeStage.agentId];
+                if (loadingStageId === activeStage.agentId) {
+                  return (
+                    <div className="flex items-center gap-2 text-gray-500 text-sm">
+                      <Loader2 size={14} aria-hidden="true" className="animate-spin" />
+                      Loading stage output...
+                    </div>
+                  );
+                }
+                // A truncated transcript whose tail window yielded no renderable
+                // lines still has to say so — falling through to "No output
+                // captured" would call a multi-MB log empty.
+                if (stageOut?.lines.length > 0 || stageOut?.truncated) {
+                  return (
+                    <>
+                      <TranscriptTruncationNotice transcript={stageOut} />
+                      {stageOut.lines.length > 0 && <OutputBlocks key={activeStage.agentId} output={stageOut.lines} linkifyText={linkifyIssues} />}
+                    </>
+                  );
+                }
+                return <div className="text-gray-500 text-sm">No output captured for this stage</div>;
+              }
+              // For pipeline agents viewing a future stage (not yet run)
+              if (activeStage && !activeStage.isCurrent && !activeStage.agentId) {
+                return <div className="text-gray-500 text-sm">This stage has not run yet</div>;
+              }
+              // Current stage or non-pipeline agent: existing behavior
+              if (loadingOutput) {
                 return (
                   <div className="flex items-center gap-2 text-gray-500 text-sm">
                     <Loader2 size={14} aria-hidden="true" className="animate-spin" />
-                    Loading stage output...
+                    Loading full output...
                   </div>
                 );
               }
-              // A truncated transcript whose tail window yielded no renderable
-              // lines still has to say so — falling through to "No output
-              // captured" would call a multi-MB log empty.
-              if (stageOut?.lines.length > 0 || stageOut?.truncated) {
+              const truncated = inactive && fullOutput?.truncated;
+              if (output.length > 0 || truncated) {
                 return (
                   <>
-                    <TranscriptTruncationNotice transcript={stageOut} />
-                    {stageOut.lines.length > 0 && <OutputBlocks key={activeStage.agentId} output={stageOut.lines} linkifyText={linkifyIssues} />}
+                    {truncated && <TranscriptTruncationNotice transcript={fullOutput} />}
+                    {output.length > 0 && <OutputBlocks output={output} linkifyText={linkifyIssues} />}
                   </>
                 );
               }
-              return <div className="text-gray-500 text-sm">No output captured for this stage</div>;
-            }
-            // For pipeline agents viewing a future stage (not yet run)
-            if (activeStage && !activeStage.isCurrent && !activeStage.agentId) {
-              return <div className="text-gray-500 text-sm">This stage has not run yet</div>;
-            }
-            // Current stage or non-pipeline agent: existing behavior
-            if (loadingOutput) {
-              return (
-                <div className="flex items-center gap-2 text-gray-500 text-sm">
-                  <Loader2 size={14} aria-hidden="true" className="animate-spin" />
-                  Loading full output...
-                </div>
-              );
-            }
-            const truncated = inactive && fullOutput?.truncated;
-            if (output.length > 0 || truncated) {
-              return (
-                <>
-                  {truncated && <TranscriptTruncationNotice transcript={fullOutput} />}
-                  {output.length > 0 && <OutputBlocks output={output} linkifyText={linkifyIssues} />}
-                </>
-              );
-            }
-            return <div className="text-gray-500 text-sm">No output captured</div>;
-          })()}
+              return <div className="text-gray-500 text-sm">No output captured</div>;
+            })()}
+          </>}
         </div>
       )}
       <Modal
