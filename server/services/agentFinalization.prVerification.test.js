@@ -26,14 +26,19 @@ vi.mock('../lib/execGit.js', () => ({
 }));
 
 const findPullRequestForBranchMock = vi.fn();
+const getPullRequestStateMock = vi.fn();
 vi.mock('./github.js', () => ({
   findPullRequestForBranch: (...args) => findPullRequestForBranchMock(...args),
+  // The landed-elsewhere stand-down verifies a summary-named PR is merged.
+  getPullRequestState: (...args) => getPullRequestStateMock(...args),
   ensureForgeReachable: vi.fn(async () => ({ ok: true, status: 'ok' })),
 }));
 
 const findMergeRequestForBranchMock = vi.fn();
+const getMergeRequestStateMock = vi.fn();
 vi.mock('./gitlab.js', () => ({
   findMergeRequestForBranch: (...args) => findMergeRequestForBranchMock(...args),
+  getMergeRequestState: (...args) => getMergeRequestStateMock(...args),
 }));
 
 const resolveForgeForRepoMock = vi.fn(async () => ({ cli: 'gh' }));
@@ -98,7 +103,12 @@ vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () 
 // ledger, and so the boundary assertions below can read the envelope (#4540).
 const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
-vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null) }));
+vi.mock('./agentSummaryExtraction.js', () => ({
+  extractSimplifySummaries: vi.fn(() => null),
+  // The landed-elsewhere check reads the run's own completion summary; the
+  // default mock yields none, so a test opts in by setting `summaryText`.
+  extractFinalSummary: vi.fn(() => summaryText),
+}));
 
 import {
   verifyPrClaim,
@@ -115,6 +125,9 @@ import {
  * answers, and feeding a branch name to the counter reads as "unknown".
  */
 const git = { branch: 'claim/issue-1', ahead: 3, hasOriginRef: true };
+// The completion summary `extractFinalSummary` is mocked to return — set by a
+// test exercising the landed-elsewhere stand-down, null otherwise.
+let summaryText = null;
 const ok = (stdout) => ({ stdout, stderr: '', exitCode: 0 });
 const routeGit = (args) => {
   if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return ok(`${git.branch}\n`);
@@ -136,11 +149,16 @@ const prTask = () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  summaryText = null;
   Object.assign(git, { branch: 'claim/issue-1', ahead: 3, hasOriginRef: true });
   execGitMock.mockImplementation(async (args) => routeGit(args));
   getDefaultBranchMock.mockResolvedValue('main');
   findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7', body: 'Closes #1' });
   findMergeRequestForBranchMock.mockResolvedValue({ status: 'found', number: 12, url: 'https://example.com/mr/12', body: 'Closes #1' });
+  // Default: a summary-named change request confirms as merged. A fail-safe
+  // test overrides this with OPEN / unavailable / a throw.
+  getPullRequestStateMock.mockResolvedValue({ status: 'known', state: 'MERGED', detail: null });
+  getMergeRequestStateMock.mockResolvedValue({ status: 'known', state: 'MERGED', detail: null });
   resolveForgeForRepoMock.mockResolvedValue({ cli: 'gh' });
 });
 
@@ -287,6 +305,97 @@ describe('verifyPrClaim (#3358)', () => {
     expect(getDefaultBranchMock).not.toHaveBeenCalled();
   });
 
+  // ─── The parallel-claim stand-down (task-mupxru13) ──────────────────────
+  // A swarm claim merged the issue's PR first; the resume briefing tells this
+  // run "if a PR is already merged, the work is done — report that and stop."
+  // The run commits, pushes, opens no duplicate PR, and reports success. The
+  // branch holds commits and the forge holds no PR for it, which used to read
+  // as pr-missing — a non-actionable failure that auto-retried into the same
+  // conclusion three times. The stand-down is honored only when the forge
+  // CONFIRMS a change request the summary names is merged.
+
+  it('passes when the summary declares landed work and the forge confirms the named PR is merged', async () => {
+    onBranch('claim/issue-1');
+    git.ahead = 3;
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    const summary = 'The work for this task already landed via PR #879 — this run stood down rather than opening a duplicate.';
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true, agentSummary: summary });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.branch).toBe('claim/issue-1');
+    expect(verdict.category).toBeUndefined();
+    expect(verdict.advisory).toMatch(/pull request #879/i);
+    expect(getPullRequestStateMock).toHaveBeenCalledWith('879', { cwd: '/w', env: null });
+  });
+
+  it('keeps pr-missing when the summary declares nothing — the miss stands', async () => {
+    onBranch('claim/issue-1');
+    git.ahead = 3;
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true, agentSummary: 'Investigated the task; the branch holds my commits but I could not open a PR.' });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.category).toBe(PR_MISSING_CATEGORY);
+    expect(getPullRequestStateMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps pr-missing when the summary names no change request — nothing can be verified', async () => {
+    onBranch('claim/issue-1');
+    git.ahead = 3;
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true, agentSummary: 'The work was already merged by a parallel claim, so I stood down.' });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.category).toBe(PR_MISSING_CATEGORY);
+    expect(getPullRequestStateMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an OPEN change request', { status: 'known', state: 'OPEN', detail: null }],
+    ['an unavailable forge', { status: 'unavailable', state: null, detail: 'connect: refused' }],
+  ])('keeps pr-missing when the named PR verifies as %s — the agent\'s word alone never excuses a miss', async (_label, state) => {
+    onBranch('claim/issue-1');
+    git.ahead = 3;
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    getPullRequestStateMock.mockResolvedValue(state);
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true, agentSummary: 'The work already landed via PR #879 — standing down.' });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.category).toBe(PR_MISSING_CATEGORY);
+  });
+
+  it('keeps pr-missing when the state probe itself throws', async () => {
+    onBranch('claim/issue-1');
+    git.ahead = 3;
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    getPullRequestStateMock.mockRejectedValue(new Error('gh exploded'));
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true, agentSummary: 'The work already landed via PR #879 — standing down.' });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.category).toBe(PR_MISSING_CATEGORY);
+  });
+
+  it('accepts the first MERGED reference the summary names on a GitLab repo, via glab', async () => {
+    onBranch('claim/issue-1');
+    git.ahead = 3;
+    resolveForgeForRepoMock.mockResolvedValue({ cli: 'glab' });
+    findMergeRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    getMergeRequestStateMock
+      .mockResolvedValueOnce({ status: 'known', state: 'OPEN', detail: null })
+      .mockResolvedValueOnce({ status: 'known', state: 'MERGED', detail: null });
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true, agentSummary: 'The work already landed via MR #12 and MR #15 — standing down.' });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.advisory).toMatch(/merge request #15/i);
+    expect(getMergeRequestStateMock).toHaveBeenCalledWith('12', '/w');
+    expect(getMergeRequestStateMock).toHaveBeenCalledWith('15', '/w');
+    expect(getPullRequestStateMock).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the summary on the empty-branch path — that proof needs no corroboration', async () => {
+    onBranch('cos/sys-1/agent-1');
+    git.ahead = 0;
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true, agentSummary: 'Nothing to do; the work already landed via PR #879.' });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.branchProvenEmpty).toBe(true);
+    expect(getPullRequestStateMock).not.toHaveBeenCalled();
+  });
+
   it('fails with forge-unreachable — NOT pr-missing — when we could not ask', async () => {
     onBranch('claim/issue-1');
     findPullRequestForBranchMock.mockResolvedValue({
@@ -391,6 +500,38 @@ describe('finalizeAgent — a PR-shaped run with no PR is not a success (#3358)'
     expect(completeAgentMock).toHaveBeenCalledWith('agent-1', expect.objectContaining({ success: true }));
     expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
     expect(resolveFailedTaskUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('records "completed" for a parallel-claim stand-down whose landed work the forge confirms', async () => {
+    // task-mupxru13: the resume briefing tells a retry "if a PR is already
+    // merged, the work is done — report that and stop." Three runs did exactly
+    // that, and each was failed as pr-missing (non-actionable → auto-retry →
+    // same conclusion). The stand-down must complete the run.
+    onBranch('claim/issue-1');
+    git.ahead = 3;
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    summaryText = 'The work for this task already landed via PR #879 — this run stood down rather than opening a duplicate.';
+    await finalize();
+
+    expect(completeAgentMock).toHaveBeenCalledWith('agent-1', expect.objectContaining({ success: true }));
+    expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
+    expect(resolveFailedTaskUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('still fails a stand-down whose named PR the forge cannot confirm merged', async () => {
+    // The fail-safe polarity: the declaration alone is not evidence. A summary
+    // naming an OPEN (or unreachable) change request leaves the miss standing.
+    onBranch('claim/issue-1');
+    git.ahead = 3;
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    getPullRequestStateMock.mockResolvedValue({ status: 'known', state: 'OPEN', detail: null });
+    summaryText = 'The work already landed via PR #879 — standing down.';
+    await finalize();
+
+    const [, result] = completeAgentMock.mock.calls[0];
+    expect(result.success).toBe(false);
+    expect(result.completionReason).toBe(PR_MISSING_CATEGORY);
+    expect(updateTaskMock).not.toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
   });
 
   it.each(['autonomousJob', 'isInvestigation'])('proves a marked no-op %s even when cleanup owns PR creation', async (marker) => {
@@ -767,6 +908,18 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
       completionReason: PR_MISSING_CATEGORY,
       cleanupEvidence: { ok: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, message: anyMessage, commitsAhead: null, inconclusive: true },
       ledger: { verified: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, branchProvenEmpty: false },
+    },
+    {
+      name: 'work-landed-elsewhere — a verified parallel-claim stand-down completes, records verified, and carries its advisory to cleanup',
+      arrange: () => {
+        onBranch('claim/issue-1');
+        git.ahead = 3;
+        findPullRequestForBranchMock.mockResolvedValue(noPr);
+        summaryText = 'The work already landed via PR #879 — this run stood down rather than opening a duplicate.';
+      },
+      success: true,
+      cleanupEvidence: { ok: true, branch: 'claim/issue-1', advisory: expect.stringMatching(/pull request #879/i) },
+      ledger: { verified: true, branch: 'claim/issue-1', category: null, branchProvenEmpty: false },
     },
     {
       name: 'empty-branch — a PROVEN empty branch completes, and cleanup must not open a PR for it',

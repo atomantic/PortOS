@@ -1,6 +1,6 @@
 import { spawn } from '../lib/childProcess.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { withGlabJson } from '../lib/glabArgs.js';
+import { GLAB_JSON_ARGS, withGlabJson } from '../lib/glabArgs.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
 // Mirrors execGh's DEFAULT_EXEC_GH_TIMEOUT_MS. `glab` hits the network, so a
@@ -124,4 +124,32 @@ export async function findMergeRequestForBranch(branch, cwd) {
   const mr = rows[0];
   if (!mr) return { status: 'none', number: null, url: null, detail: null };
   return { status: 'found', number: mr.iid ?? null, url: mr.web_url || null, body: typeof mr.description === 'string' ? mr.description : null, detail: mr.state || null };
+}
+
+/**
+ * Read ONE merge request's state by iid — the GitLab mirror of
+ * `github.js#getPullRequestState`, with the same two-not-three-answers
+ * discipline: `known` is a real forge answer, `unavailable` means we could not
+ * ask (glab failed, not installed, or answered exit-0 without JSON), and a
+ * caller must never read `unavailable` as "not merged".
+ *
+ * `glab mr view <iid>` answers a single OBJECT (not a list), so this goes
+ * through `execGlab` + `safeJSONParse` rather than `execGlabJson`, whose
+ * array-only salvage would misread it. `--output json` is the one correct
+ * spelling (lib/glabArgs.js).
+ *
+ * @param {number|string} mrIid - the project-local MR iid
+ * @param {string} cwd - repo root glab resolves the project from
+ * @returns {Promise<{ status: 'known'|'unavailable', state: string|null, detail: string|null }>}
+ *   `state` is upper-cased (`MERGED` / `OPENED` / `CLOSED`) when status is `known`.
+ */
+export async function getMergeRequestState(mrIid, cwd) {
+  if (!mrIid || !cwd) return { status: 'unavailable', state: null, detail: 'no MR reference or repo path' };
+  const raw = await execGlab(['mr', 'view', String(mrIid), ...GLAB_JSON_ARGS], cwd).catch(() => null);
+  if (raw === null) return { status: 'unavailable', state: null, detail: 'glab call failed' };
+  const parsed = safeJSONParse(raw, null);
+  const state = typeof parsed?.state === 'string' && parsed.state.trim() ? parsed.state.toUpperCase() : null;
+  // A zero-exit glab that emitted nothing parseable told us nothing.
+  if (!state) return { status: 'unavailable', state: null, detail: 'glab returned unparseable output' };
+  return { status: 'known', state, detail: null };
 }

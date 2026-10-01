@@ -184,10 +184,16 @@ async function worktreeCleanupContext(agentId, options) {
 
 async function probeWorktreePr(context, success) {
   if (!context.isWorktree || context.discardWorktree || context.prCreation !== PR_CREATION.IF_MISSING) return null;
-  const { worktreePath, worktreeBranch } = context;
+  const { worktreePath, worktreeBranch, agentOutput } = context;
   if (success) {
     const { verifyPrClaim } = await import('./agentFinalization.js');
-    return verifyPrClaim({ workspacePath: worktreePath, success: true, prExpected: true })
+    // `agentOutput` (the run's output buffer) rides along so the probe can
+    // recognize the parallel-claim stand-down the same way finalize did —
+    // without it, cleanup would re-ask the forge, see "no PR", and open a
+    // DUPLICATE of the change request the summary says already landed.
+    const { extractFinalSummary } = await import('./agentSummaryExtraction.js');
+    const agentSummary = extractFinalSummary(agentOutput);
+    return verifyPrClaim({ workspacePath: worktreePath, success: true, prExpected: true, agentSummary })
       .catch(err => ({ ok: false, category: 'forge-unreachable', message: err.message }));
   }
   const { findPullRequestForBranch } = await import('./github.js');

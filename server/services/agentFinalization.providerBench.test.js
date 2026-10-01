@@ -83,7 +83,7 @@ vi.mock('./taskTypeHooks.js', () => ({
   getTaskOutputPayloadPredicate: vi.fn(async () => null),
 }));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
-vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null) }));
+vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null), extractFinalSummary: vi.fn(() => null) }));
 
 import { finalizeAgent } from './agentFinalization.js';
 // The real detector and the real cooldown table supply the analysis shape and

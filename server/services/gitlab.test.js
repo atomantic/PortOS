@@ -16,7 +16,7 @@ vi.mock('../lib/childProcess.js', () => ({
   execFile: () => { throw new Error('execFile is not used by gitlab.js'); },
 }));
 
-const { findMergeRequestForBranch, execGlabJson } = await import('./gitlab.js');
+const { findMergeRequestForBranch, getMergeRequestState, execGlabJson } = await import('./gitlab.js');
 
 /** A fake `glab` child that writes `stdout` then exits with `code`. */
 const glabChild = ({ code = 0, stdout = '' } = {}) => {
@@ -71,6 +71,50 @@ describe('findMergeRequestForBranch (#3358)', () => {
   it('never spawns without a branch or a repo path', async () => {
     await expect(findMergeRequestForBranch('', '/repo')).resolves.toMatchObject({ status: 'unavailable' });
     await expect(findMergeRequestForBranch('b', '')).resolves.toMatchObject({ status: 'unavailable' });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('getMergeRequestState — the landed-elsewhere stand-down probe', () => {
+  // The parallel-claim stand-down (task-mupxru13) honors an agent's "the work
+  // already landed via MR #N" report only when the forge CONFIRMS the named MR
+  // is merged. Same two-answers discipline as the GitHub mirror
+  // (`getPullRequestState`): `unavailable` means we could not ask and must
+  // never read as "not merged".
+  it('reports `known` with the upper-cased state', async () => {
+    spawnMock.mockImplementationOnce(() => glabChild({ stdout: '{"state":"merged"}' }));
+    await expect(getMergeRequestState(12, '/repo'))
+      .resolves.toEqual({ status: 'known', state: 'MERGED', detail: null });
+  });
+
+  it('views the MR by iid with the JSON output flag, inside the repo', async () => {
+    await getMergeRequestState(12, '/repo');
+    const [, args, opts] = spawnMock.mock.calls[0];
+    expect(args).toEqual(['mr', 'view', '12', '--output', 'json']);
+    expect(opts.cwd).toBe('/repo');
+  });
+
+  it('reports `unavailable` — never a state — when glab fails', async () => {
+    spawnMock.mockImplementationOnce(() => glabChild({ code: 1 }));
+    await expect(getMergeRequestState(12, '/repo'))
+      .resolves.toEqual({ status: 'unavailable', state: null, detail: 'glab call failed' });
+  });
+
+  it('reports `unavailable` when a zero-exit glab emits unparseable output', async () => {
+    spawnMock.mockImplementationOnce(() => glabChild({ stdout: 'not json' }));
+    await expect(getMergeRequestState(12, '/repo'))
+      .resolves.toEqual({ status: 'unavailable', state: null, detail: 'glab returned unparseable output' });
+  });
+
+  it('reports `unavailable` for a JSON object with no state field', async () => {
+    spawnMock.mockImplementationOnce(() => glabChild({ stdout: '{"message":"404 Not Found"}' }));
+    await expect(getMergeRequestState(12, '/repo'))
+      .resolves.toEqual({ status: 'unavailable', state: null, detail: 'glab returned unparseable output' });
+  });
+
+  it('never spawns without an MR reference or a repo path', async () => {
+    await expect(getMergeRequestState('', '/repo')).resolves.toMatchObject({ status: 'unavailable' });
+    await expect(getMergeRequestState(12, '')).resolves.toMatchObject({ status: 'unavailable' });
     expect(spawnMock).not.toHaveBeenCalled();
   });
 });
