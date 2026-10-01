@@ -131,6 +131,24 @@ describe('runCliProviderPrompt', () => {
     }
   });
 
+  // #9409: a vendor with no enforced reviewer recipe (agy) falls back to its ordinary argv.
+  it.skipIf(process.platform === 'win32')('strips blanket permission grants from the ordinary review fallback but keeps pins', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'review-cli-fallback-'));
+    const command = join(dir, 'agy');
+    await writeFile(command, '#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on("end", () => process.stdout.write(JSON.stringify({ args: process.argv.slice(2) })));\nif (!process.stdin.readable) process.stdout.write(JSON.stringify({ args: process.argv.slice(2) }));', { mode: 0o755 });
+    const result = await runCliProviderPrompt({
+      provider: { ...cli('example-agy'), command, args: ['--dangerously-skip-permissions', '--yolo'] },
+      model: 'pinned-model', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate', codeReview: true,
+    }).finally(() => rm(dir, { recursive: true, force: true }));
+    const argv = result.text || '';
+    expect(result.error).toBeUndefined();
+    expect(argv).not.toMatch(/skip-permissions|yolo/);
+    expect(argv).toContain('pinned-model');
+  });
+
   it.skipIf(process.platform === 'win32')('enforces the shared no-tool argv and environment on an actual child', async () => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
