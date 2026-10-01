@@ -52,7 +52,7 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
-import { closeStolenIdleReviewCard, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { admitIdleReviewTask, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
@@ -1074,29 +1074,17 @@ async function spawnPriority36FeatureAgents(ctx) {
  * Autonomous — gated by the CoS auto-run domain.
  */
 async function spawnPriority4IdleReview(ctx) {
-  const { state, hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
-
-  if (isIdleTierEligible({
-    spawned: tasksToSpawn.length,
-    hasPendingUserTasks,
-    idleReviewEnabled: state.config.idleReviewEnabled,
-    autonomyMode: cosAutonomyMode
-  })) {
-    const freshCosTasks = await getCosTasks();
-    const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
-    if (pendingSystemTasks === 0) {
-      const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateIdleReviewTask(state);
-      const admitted = idleTask && canSpawnTask(idleTask, autonomousSlotCeiling);
-      if (admitted) {
-        await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
-        tasksToSpawn.push(idleTask);
-        trackSpawn(idleTask);
-      }
-      // This tier may have STOLEN a human's on-demand request. Closing its card is
-      // the tier's job because only here is the admission decision final.
-      await closeStolenIdleReviewCard(preflightCardId, admitted ? idleTask : null);
-    }
-  }
+  return admitIdleReviewTask({
+    state: ctx.state,
+    alreadySpawned: ctx.tasksToSpawn.length,
+    hasPendingUserTasks: ctx.hasPendingUserTasks,
+    cosAutonomyMode: ctx.cosAutonomyMode,
+    autonomousSlotCeiling: ctx.autonomousSlotCeiling,
+  }, {
+    canSpawn: ctx.canSpawnTask,
+    emitSpawn: (task) => ctx.tasksToSpawn.push(task),
+    trackSpawn: ctx.trackSpawn,
+  });
 }
 
 /**
@@ -1335,16 +1323,17 @@ export async function evaluateTasks(options) {
  * 2. App reviews for managed apps
  *
  * @param {Object} state - Current CoS state
- * @returns {Object|null} Generated task or null if nothing to do
+ * @param {Object} options - Completion exclusion and optional app eligibility
+ * @returns {Object} Task plus deferred dispatch/card handoff, or a null task
  */
-export async function generateIdleReviewTask(state, { ignoreTaskId = null } = {}) {
+export async function generateIdleReviewTask(state, { ignoreTaskId = null, isAppEligible = () => true } = {}) {
   if (!isImprovementEnabled(state)) {
     emitLog('debug', 'Improvement tasks are disabled');
     return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
   }
 
-  // Get all active (non-archived) managed apps (including PortOS)
-  const apps = await getActiveApps().catch(() => []);
+  // Exclude full projects before selection commits cooldown/request state.
+  const apps = (await getActiveApps().catch(() => [])).filter(isAppEligible);
 
   if (apps.length > 0) {
     // Find next app eligible for review (not on cooldown, oldest review first)
