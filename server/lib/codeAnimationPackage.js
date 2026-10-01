@@ -29,7 +29,7 @@ const settingsSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).nullable(),
 }).strict();
 
-const manifestSchema = z.object({
+export const codeAnimationManifestSchema = z.object({
   title: text(200),
   brief: z.object({ concept: text(6000), cast: text(4000), onScreenText: text(4000) }).strict(),
   styleGuide: text(16000),
@@ -80,7 +80,7 @@ const revisionHashOf = ({ schemaVersion, manifest, files }) => digest(canonicalS
 
 const shapeSchema = z.object({
   schemaVersion: z.literal(1),
-  manifest: manifestSchema,
+  manifest: codeAnimationManifestSchema,
   files: z.array(fileSchema).min(1).max(L.files),
   revisionHash: hashSchema,
 }).strict();
