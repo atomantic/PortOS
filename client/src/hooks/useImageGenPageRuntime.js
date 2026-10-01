@@ -353,7 +353,7 @@ export function useImageGenPageRuntime() {
 
   const handleGenerate = async (event) => {
     event?.preventDefault?.();
-    if (form.remix.pending) return;
+    if (form.remix.pending || derived.loraHandoffBlocked) return;
     if (derived.editImageMissing || derived.cloudNeedsPrompt) return;
     if (derived.localBackendPending || (!remoteTargetActive && derived.notConnected)) return;
     if (remoteTargetActive) {

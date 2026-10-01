@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { universeStylePreset } from '../lib/universeStylePreset';
-import { RUNNER_FAMILIES, loraCompatKey, usesDiffusersRunner } from '../lib/runnerFamilies';
+import { RUNNER_FAMILIES, loraCompatKey, loraCompatKeysMatch, loraFamilyOf, usesDiffusersRunner } from '../lib/runnerFamilies';
 import {
   IMAGE_GEN_MODE,
   LOCAL_IMAGEGEN_DEFAULT_MODEL,
@@ -16,12 +17,14 @@ import {
 } from '../lib/imageGenBackends';
 import { clampImageDimensions } from '../lib/imageGenResolutions';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
+import { isHardwareCompatible } from '../utils/systemCapabilities';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import useMounted from './useMounted';
 import toast from '../components/ui/Toast';
 import {
   getGalleryImages,
+  getImageGenStatus,
   getSettings,
   listImageModels,
   listLorasFull,
@@ -56,6 +59,11 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   const [availableLoras, setAvailableLoras] = useState([]);
   const [lorasLoaded, setLorasLoaded] = useState(false);
   const [lorasLoadFailed, setLorasLoadFailed] = useState(false);
+  const [settingsLoadFailed, setSettingsLoadFailed] = useState(false);
+  const loraFilenameFromUrl = searchParams.get('lora');
+  const loraLookupSequenceRef = useRef(0);
+  const [loraHandoff, setLoraHandoff] = useState(() => loraFilenameFromUrl
+    ? { filename: loraFilenameFromUrl, status: 'pending' } : null);
   const [remixHandoff, setRemixHandoff] = useState(null);
   const remixLookupSequenceRef = useRef(0);
   const remixHandoffPending = remixHandoff?.status === 'loading' || remixHandoff?.status === 'restoring';
@@ -103,6 +111,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   }, []);
 
   const reloadBackends = useCallback(() => getSettings().then((settings) => {
+    setSettingsLoadFailed(false);
     const backends = deriveAvailableBackends(settings);
     const perMode = {
       external: resolveCleanersFromConfig(settings?.imageGen?.external, IMAGE_GEN_MODE.EXTERNAL),
@@ -134,6 +143,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     setCleanC2PA(c2[next] === true);
     setDenoise(dn[next] === true);
   }).catch(() => {
+    setSettingsLoadFailed(true);
     setSavedLocalModelId('');
   }), [configureBackends]);
 
@@ -192,24 +202,77 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   }, [models, savedLocalModelId, modelId]);
 
   useEffect(() => {
-    const fromUrl = searchParams.get('lora');
-    if (!fromUrl || !availableLoras.length) return;
-    const match = availableLoras.find((lora) => lora.filename === fromUrl);
-    if (!match) return;
-    setSelectedLoras((previous) => previous.find((selected) => selected.filename === fromUrl) ? previous : [...previous, {
-      filename: match.filename,
-      name: match.name,
-      scale: typeof match.recommendedScale === 'number' ? match.recommendedScale : 1.0,
-    }]);
-    if (match.triggerWords?.length) {
-      setPrompt((current) => appendTriggerWords(current, match.triggerWords));
+    if (!loraFilenameFromUrl) return;
+    setLoraHandoff((current) => current?.filename === loraFilenameFromUrl
+      ? current : { filename: loraFilenameFromUrl, status: 'pending' });
+  }, [loraFilenameFromUrl]);
+
+  useEffect(() => {
+    const sequence = ++loraLookupSequenceRef.current;
+    if (loraHandoff?.status !== 'pending') return;
+    // Settings must finish before switching: a late saved cloud default must
+    // never overwrite this explicit, session-only Test intent.
+    if (savedLocalModelId === null || !modelsLoaded || !lorasLoaded) return;
+    const fail = (error) => {
+      if (mountedRef.current && sequence === loraLookupSequenceRef.current) setLoraHandoff({ ...loraHandoff, status: 'error', error });
+    };
+    if (settingsLoadFailed || modelsLoadFailed || lorasLoadFailed) {
+      fail('Could not load the LoRA test settings or catalogs. Reload this page to retry.');
+      return;
     }
+    const match = availableLoras.find((lora) => lora.filename === loraHandoff.filename);
+    if (!match) {
+      fail(`This LoRA is no longer installed. Install it from ${getNavPageForPath('/models/loras')?.breadcrumb || 'the LoRAs page'}, then try Test again.`);
+      return;
+    }
+    if (!availableBackends.some((entry) => entry.id === IMAGE_GEN_MODE.LOCAL)) {
+      fail('LoRA Test needs a local image backend. Configure one in Settings → Media, then try Test again.');
+      return;
+    }
+    const compatible = models.filter((model) => model.enabled !== false
+      && isHardwareCompatible(model.hardwareCompatibility)
+      && loraCompatKeysMatch(loraFamilyOf(match), loraCompatKey(model)));
+    // Preserve a compatible current model, then prefer the install pin.
+    const candidates = [...compatible].sort((a, b) => {
+      const rank = (model) => model.id === modelId ? 0 : model.id === savedLocalModelId ? 1 : 2;
+      return rank(a) - rank(b);
+    });
+    const resolve = async () => {
+      for (const model of candidates) {
+        const probe = await getImageGenStatus(IMAGE_GEN_MODE.LOCAL, model.id).catch(() => null);
+        if (!mountedRef.current || sequence !== loraLookupSequenceRef.current) return;
+        if (imageGenReadiness(probe) !== 'ready') continue;
+        setModelId(model.id);
+        switchMode(IMAGE_GEN_MODE.LOCAL);
+        setOptionsOpen(true);
+        setSelectedLoras([{
+          filename: match.filename,
+          name: match.name,
+          scale: typeof match.recommendedScale === 'number' ? match.recommendedScale : 1.0,
+        }]);
+        setPrompt((current) => appendTriggerWords(current, match.triggerWords || []));
+        setLoraHandoff({ filename: match.filename, status: 'resolved' });
+        setSearchParams((previous) => {
+          const next = new URLSearchParams(previous);
+          next.delete('lora');
+          return next;
+        }, { replace: true });
+        return;
+      }
+      fail('No compatible local image runtime is ready for this LoRA. Set up a matching model in Settings → Media, then try Test again.');
+    };
+    resolve();
+  }, [loraHandoff, savedLocalModelId, modelsLoaded, lorasLoaded, settingsLoadFailed,
+    modelsLoadFailed, lorasLoadFailed, availableLoras, availableBackends, models, modelId, switchMode, setSearchParams, mountedRef]);
+
+  const dismissLoraHandoff = useCallback(() => {
+    setLoraHandoff(null);
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous);
       next.delete('lora');
       return next;
     }, { replace: true });
-  }, [searchParams, availableLoras]);
+  }, [setSearchParams]);
 
   useEffect(() => {
     const initFile = searchParams.get('initImageFile');
@@ -453,6 +516,15 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     : `${cloudModeLabel} text-to-image needs a prompt`;
   const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
   const currentCompatKey = loraCompatKey(currentModel);
+  const testLora = availableLoras.find((lora) => lora.filename === loraHandoff?.filename);
+  const loraHandoffPending = loraHandoff?.status === 'pending'
+    || (!!loraFilenameFromUrl && loraFilenameFromUrl !== loraHandoff?.filename);
+  const loraHandoffError = loraHandoff?.error || (loraHandoff?.status === 'resolved' && (
+    !isLocalMode || remoteTargetActive || !currentModel || !testLora
+    || !loraCompatKeysMatch(loraFamilyOf(testLora), currentCompatKey)
+    || !selectedLoras.some((lora) => lora.filename === testLora.filename)
+  ) ? 'LoRA Test needs the selected adapter and a compatible local model. Restore that selection or cancel this test.' : null);
+  const loraHandoffBlocked = loraHandoffPending || !!loraHandoffError;
   const needsHfTokenGate = isLocalMode && !!currentModel?.requiresHfToken && !isFlux2Model;
   const statusReadiness = imageGenReadiness(status);
   const statusReady = statusReadiness === 'ready';
@@ -653,6 +725,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       handleGallerySelect,
     },
     derived: {
+      loraHandoffBlocked,
       currentModel,
       isFlux2Model,
       sharesFlux2Venv,
@@ -688,6 +761,11 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       ensureI2iCapableMode,
       setGalleryInitImage,
       restoreActiveJob,
+    },
+    loraTest: {
+      pending: loraHandoffPending,
+      error: loraHandoffError,
+      dismiss: dismissLoraHandoff,
     },
     remix: {
       state: remixHandoff,
