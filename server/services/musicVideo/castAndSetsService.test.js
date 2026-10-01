@@ -8,7 +8,7 @@
  * what a note touched.
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll, onTestFinished } from 'vitest';
 import express from 'express';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -24,6 +24,7 @@ const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js')
 const projects = await import('./projects.js');
 const service = await import('./castAndSetsService.js');
 const production = await import('./production.js');
+const { musicVideoEvents } = await import('./events.js');
 
 const app = express();
 app.use(express.json());
@@ -95,12 +96,32 @@ async function land(projectId, keys = null) {
 
 /** Land every image as it is queued until the stage reaches `status`. */
 async function runTo(projectId, status) {
-  for (let i = 0; i < 40; i += 1) {
-    await new Promise((r) => setTimeout(r, 10));
-    await land(projectId);
-    if ((await current(projectId)).castAndSets?.status === status) return;
+  let changes = 0;
+  let wake;
+  const changed = (event) => {
+    if (event.projectId !== projectId) return;
+    changes += 1;
+    wake?.();
+  };
+  const cleanup = () => musicVideoEvents.off('cast-and-sets', changed);
+  musicVideoEvents.on('cast-and-sets', changed);
+  onTestFinished(cleanup);
+  try {
+    // Subscribe before reading so a persisted transition between the read and
+    // the wait is retained. The test's existing timeout bounds a stuck stage.
+    for (;;) {
+      const observed = changes;
+      await land(projectId);
+      const stage = (await current(projectId)).castAndSets;
+      if (stage?.status === status) return;
+      if (stage?.status === 'failed') throw new Error(stage.stopReason || stage.error || 'The stage failed');
+      if (changes !== observed) continue;
+      await new Promise((resolve) => { wake = resolve; });
+      wake = null;
+    }
+  } finally {
+    cleanup();
   }
-  throw new Error(`the stage never reached ${status}`);
 }
 
 async function seed(overrides = {}) {
