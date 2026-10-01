@@ -2752,8 +2752,8 @@ describe('runBackup lifecycle', () => {
   // rsync/pg_dump are stubbed, so backup work completes via real async I/O
   // rather than on a fixed number of microtasks. Poll instead of guessing.
   async function waitFor(predicate, label) {
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + 5000;
+    while (performance.now() < deadline) {
       if (await predicate()) return;
       await new Promise((r) => setTimeout(r, 5));
     }
@@ -2805,6 +2805,73 @@ describe('runBackup lifecycle', () => {
     if (prevMemoryBackend === undefined) delete process.env.MEMORY_BACKEND;
     else process.env.MEMORY_BACKEND = prevMemoryBackend;
     rmSync(destRoot, { recursive: true, force: true });
+  });
+
+  it.each(['completed', 'failed', 'interrupted', 'reservation', 'directory race'])('preserves a colliding %s snapshot while a new run fails', async (state) => {
+    const fsp = await actualFs();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-02T03:04:05Z'));
+    try {
+      const oldId = '2026-01-02T03-04-05';
+      const root = joinPath(destRoot, 'snapshots', machineHost);
+      const oldDir = joinPath(root, oldId);
+      const guard = joinPath(root, `.${oldId}.in-progress`);
+      await fsp.mkdir(root, { recursive: true });
+      if (state === 'reservation') {
+        await fsp.writeFile(guard, 'other reservation');
+      } else if (state === 'directory race') {
+        vi.spyOn(fs, 'mkdir').mockImplementation(async (path, ...args) => {
+          if (path === oldDir) {
+            await fsp.mkdir(oldDir);
+            await fsp.writeFile(joinPath(oldDir, 'portos-db.sql'), 'old dump');
+          }
+          return fsp.mkdir(path, ...args);
+        });
+      } else {
+        await fsp.mkdir(oldDir);
+        await fsp.writeFile(joinPath(oldDir, 'portos-db.sql'), 'old dump');
+        if (state === 'failed') await fsp.writeFile(joinPath(oldDir, '.failed'), 'old failure');
+        if (state === 'interrupted') await fsp.writeFile(guard, 'other reservation');
+      }
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = runBackup(destRoot).catch(error => error);
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      const newDir = spawn.mock.calls[0][1].at(-1).replace(/\/data$/, '');
+      expect(basename(newDir)).not.toBe(oldId);
+      await expect(fsp.access(joinPath(root, `.${basename(newDir)}.in-progress`))).resolves.toBeUndefined();
+      proc.emit('close', 1);
+      expect(await pending).toBeInstanceOf(Error);
+      if (state !== 'reservation') expect(await fsp.readFile(joinPath(oldDir, 'portos-db.sql'), 'utf8')).toBe('old dump');
+      if (state === 'failed') expect(await fsp.readFile(joinPath(oldDir, '.failed'), 'utf8')).toBe('old failure');
+      if (state === 'interrupted' || state === 'reservation') expect(await fsp.readFile(guard, 'utf8')).toBe('other reservation');
+      else await expect(fsp.access(guard)).rejects.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('allocates distinct completed snapshots within the same second', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-02T03:04:05Z'));
+    try {
+      const ids = [];
+      for (let i = 0; i < 2; i += 1) {
+        const proc = fakeProc();
+        spawn.mockReturnValue(proc);
+        const pending = runBackup(destRoot);
+        await waitFor(() => spawn.mock.calls.length === i + 1, 'rsync spawn');
+        proc.emit('close', 0);
+        ids.push((await pending).snapshotId);
+      }
+      expect(new Set(ids).size).toBe(2);
+      const { listSnapshots } = await import('./backup.js');
+      const snapshots = await listSnapshots(destRoot);
+      expect(snapshots.map(snapshot => snapshot.id).sort()).toEqual(ids.sort());
+      expect(snapshots.every(snapshot => !snapshot.incomplete && !snapshot.failed)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([0, 1])('invalidates scheduled backups only after readable lifecycle transitions (exit %s)', async (exitCode) => {

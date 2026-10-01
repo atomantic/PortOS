@@ -9,7 +9,8 @@
 import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { access, lstat, mkdtemp, readdir, rm, stat, unlink, writeFile } from 'fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, rm, stat, unlink, writeFile } from 'fs/promises';
+import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { hostname, tmpdir } from 'os';
 import { basename, join, resolve, relative, isAbsolute } from 'path';
@@ -575,20 +576,43 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       error.cause = cause;
       throw error;
     });
-    snapshotId = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
+    const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
     const snapshotsRoot = join(destPath, 'snapshots', MACHINE_HOST);
-    snapshotDir = join(snapshotsRoot, snapshotId);
-    parentMarker = parentMarkerPath(snapshotDir, snapshotId);
+    await ensureDir(snapshotsRoot);
+    // Own the durable guard before exposing a directory. Never adopt an
+    // existing tree, even when its timestamp matches this run's clock.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const candidateId = attempt === 0 ? timestamp : `${timestamp}-${randomUUID()}`;
+      const candidateDir = join(snapshotsRoot, candidateId);
+      const candidateMarker = parentMarkerPath(candidateDir, candidateId);
+      const exists = await lstat(candidateDir).then(() => true, err => {
+        if (err.code === 'ENOENT') return false;
+        throw err;
+      });
+      if (exists) continue;
+      const reserved = await writeFile(candidateMarker, '', { flag: 'wx' }).then(() => true, err => {
+        if (err.code === 'EEXIST') return false;
+        throw err;
+      });
+      if (!reserved) continue;
+      const created = await mkdir(candidateDir).then(() => true, async err => {
+        // Only our exclusive reservation can be released here. The directory
+        // may belong to a competing writer and must remain untouched.
+        await unlink(candidateMarker);
+        if (err.code === 'EEXIST') return false;
+        throw err;
+      });
+      if (!created) continue;
+      snapshotId = candidateId;
+      snapshotDir = candidateDir;
+      parentMarker = candidateMarker;
+      break;
+    }
+    if (!snapshotDir) throw new Error('Unable to reserve a fresh backup snapshot');
     const dataDestDir = join(snapshotDir, 'data');
 
     console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
     if (io) io.emit('backup:started', { snapshotId });
-
-    // Establish the durable parent marker before exposing the snapshot
-    // directory. A crash during directory setup therefore cannot leave a
-    // snapshot that consumers mistake for a completed backup after restart.
-    await ensureDir(snapshotsRoot);
-    await writeFile(parentMarker, '');
     await ensureDir(dataDestDir);
     activeSnapshotId = snapshotId;
     await writeFile(markerPath(snapshotDir), '');
