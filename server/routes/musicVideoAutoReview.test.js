@@ -10,6 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
+import { createHash } from 'crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
@@ -401,13 +402,16 @@ it('cloning an active draft cannot give recovery ownership of the source render'
 describe('temporal performance evidence (#9347)', () => {
   const performanceProject = async () => {
     const p = await project();
-    await projects.updateScene(p.id, 's1', { shotMode: 'performance', performanceSpeaker: 'Example Singer' });
-    await projects.updateProject(p.id, { performanceConditioningSource: 'clean-singer-stem' });
+    const master = 'synthetic unchanged song';
+    mkdirSync(join(ROOT(), 'music'), { recursive: true });
+    writeFileSync(join(ROOT(), 'music', 'example-song.wav'), master);
+    await projects.updateScene(p.id, 's1', { shotMode: 'performance', performanceSpeaker: 'Example Singer', startSec: 0, endSec: 10 });
+    await projects.updateProject(p.id, { performanceConditioningSource: 'clean-singer-stem', uploadedAudioFilename: 'example-song.wav' });
     await projects.mutateProjectRecord(p.id, (current) => ({ project: {
       ...current, scenes: current.scenes.map((s) => s.sceneId !== 's1' ? s : { ...s, takes: [{
         kind: 'video', assetId: 'clip-1', shotInstruction: {
-          version: 2, shotMode: 'performance', speaker: 'Example Singer', edit: { inSec: 1, outSec: 6 },
-          audio: { conditioning: { source: 'clean-singer-stem', filename: 'singer.wav', sha256: 'a'.repeat(64), selection: 'user', voiceIsolation: 'unverified' } },
+          version: 2, shotMode: 'performance', speaker: 'Example Singer', edit: { inSec: 1, outSec: 6 }, songInterval: { startSec: 0, endSec: 10 },
+          audio: { sha256: createHash('sha256').update(master).digest('hex'), conditioning: { source: 'clean-singer-stem', filename: 'singer.wav', sha256: 'a'.repeat(64), selection: 'user', voiceIsolation: 'unverified' } },
         },
       }] }),
     } }));
@@ -469,7 +473,18 @@ describe('temporal performance evidence (#9347)', () => {
     expect(h.temporalCalls[1].options.env).not.toHaveProperty('PORTOS_API_TOKEN');
   });
 
-  it('complete confident temporal evidence survives reload and passes independently of parity', async () => {
+  it('complete confident temporal evidence passes when its rendered dependencies remain current', async () => {
+    const p = await performanceProject();
+    h.temporalInstalled = true;
+    h.temporalResult = { spans: [{ startSec: 0, endSec: 5, status: 'verified', offsetSec: 0.02, confidence: 0.95 }] };
+    h.verdicts.push(PASS);
+    await start(p.id, { maxAttempts: 1, maxGenerations: 0 });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('passed'));
+    expect(run(saved).attempts[0].review).toMatchObject({ verdict: 'pass', dependencyState: { status: 'current' }, checks: { lipSync: 'pass', audioSync: 'pass' } });
+  });
+
+  it('keeps temporal evidence on its original take after an encoding-time edit without approving the changed board', async () => {
     const p = await performanceProject();
     h.temporalInstalled = true;
     h.temporalResult = { spans: [{ startSec: 0, endSec: 5, status: 'verified', offsetSec: 0.02, confidence: 0.95 }] };
@@ -479,7 +494,8 @@ describe('temporal performance evidence (#9347)', () => {
     // Editing the board while its older take is encoding cannot relabel the output.
     await projects.updateScene(p.id, 's1', { shotMode: 'cutaway', performanceSpeaker: 'Another Singer', videoHistoryId: 'another-take' });
     await finishDraft(p.id, 1);
-    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('passed'));
+    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('needs-human'));
+    expect(run(saved).attempts[0].review).toMatchObject({ verdict: 'inconclusive', dependencyState: { status: 'stale' } });
     expect(run(saved).attempts[0].review.evidence.temporal.shots[0]).toMatchObject({ speaker: 'Example Singer', conditioning: { selection: 'user', voiceIsolation: 'unverified' } });
     const reloaded = (await request(app).get(base(p.id))).body;
     expect(reloaded.performanceConditioningSource).toBe('clean-singer-stem');

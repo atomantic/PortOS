@@ -100,6 +100,17 @@ describe('public dependency save / repair / review workflow', () => {
     expect(raced.run.attempts[0].review.verdict).toBe('inconclusive');
   });
 
+  it('invalidates rendered evidence after a speaker-intent edit while retaining both clips', async () => {
+    await request(app).patch(`${base()}/scenes/a`).send({ shotMode: 'performance', performanceSpeaker: 'Example Singer' });
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, excerpts: current.excerpts.map((excerpt) => excerpt.id === 'excerpt-a'
+      ? { ...excerpt, dependencies: captureMusicVideoEvidence(current, { startSec: 0, endSec: 5 }) } : excerpt) } }));
+    await request(app).patch(`${base()}/scenes/a`).send({ performanceSpeaker: 'Example Duet Partner' });
+    const changed = await fresh();
+    expect(changed.excerpts[0].dependencyState.status).toBe('stale');
+    expect(changed.excerpts[1].dependencyState.status).toBe('current');
+    expect(changed.scenes.map((scene) => scene.videoHistoryId)).toEqual(['clip-a', 'clip-b']);
+  });
+
   it('keeps reused take provenance current when cloning a project', async () => {
     const clone = await projects.cloneProject(project.id);
     expect(clone.scenes[0].sceneId).not.toBe('a');
