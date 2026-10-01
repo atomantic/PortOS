@@ -1146,6 +1146,8 @@ describe('codeReview helpers', () => {
         if (messages[1].content.includes('AFTER-CHANGE PRODUCTION HUNKS')) {
           const rows = JSON.parse(messages[1].content.match(/AFTER-CHANGE PRODUCTION HUNKS[^\n]*\n(`+)json\n([\s\S]*)\n\1$/)[2])
           expect(rows).toHaveLength(4)
+          expect(rows.flatMap(row => row.renderPredicates)).toContainEqual({ render: 'taskSummary', enclosingAndPredicates: ['expanded', 'taskSummary', 'taskSummary'] })
+          expect(rows.flatMap(row => row.renderPredicates)).toContainEqual({ render: 'transcript', enclosingAndPredicates: ['expanded', '!taskSummary || transcriptExpanded', 'output.length > 0'] })
           expect(new Set(rows.map(row => row.hunk)).size).toBe(4)
           expect(rows.every(row => row.file === 'client/src/components/cos/tabs/AgentCard.jsx')).toBe(true)
           expect(messages[1].content).toContain('{expanded && (')
@@ -1175,6 +1177,22 @@ describe('codeReview helpers', () => {
         objective: 'Keep the dashboard card summary hidden until Show and put its transcript behind a separate disclosure.',
         diff: summaryDisclosureCase.diff,
       })).toMatchObject({ ok: true, verdict: 'rethink', missing: ['requested dashboard behavior'] })
+    })
+
+    it.each([
+      ['outer summary guard', summaryDisclosureCases[1][1], 'taskSummary', ['true', 'taskSummary', 'taskSummary']],
+      ['transcript guard', summaryDisclosureCases[2][1], 'transcript', ['expanded', 'true', 'output.length > 0']],
+    ])('exposes the actual parsed %s contradiction despite positive tests', async (_name, diff, render, enclosingAndPredicates) => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        if (messages[1].content.includes('AFTER-CHANGE PRODUCTION HUNKS')) {
+          const rows = JSON.parse(messages[1].content.match(/AFTER-CHANGE PRODUCTION HUNKS[^\n]*\n(`+)json\n([\s\S]*)\n\1$/)[2])
+          expect(rows.flatMap(row => row.renderPredicates)).toContainEqual({ render, enclosingAndPredicates })
+        }
+        return completion(shipVerdict)
+      })
+      await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...summaryDisclosureCase, diff })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
     })
 
     it('keeps a primary rejection when the disclosure production pass finds compatible guards', async () => {

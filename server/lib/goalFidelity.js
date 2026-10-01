@@ -22,6 +22,7 @@
 
 import { LOCAL_LLM_REVIEWERS, normalizeReviewerEffort, normalizeReviewerModel } from './reviewerConfig.js';
 import { taskContextBlock } from './cosTaskPrompt.js';
+import { parseExpression } from '@babel/parser';
 
 import { isTruthyMeta } from './metadataFlags.js';
 /**
@@ -378,7 +379,8 @@ export function productionAfterChangeHunks(diff) {
   let lines = [];
   const flush = () => {
     if (file && hunk && lines.length && !/(?:\.(?:test|spec)\.[^/]+$|(?:^|\/)(?:tests?|__tests__)\/)/.test(file)) {
-      rows.push({ file, hunk, source: lines.join('\n') });
+      const source = lines.join('\n');
+      rows.push({ file, hunk, source, renderPredicates: /\.[jt]sx$/.test(file) ? jsxRenderPredicates(source) : [] });
     }
     lines = [];
   };
@@ -395,4 +397,55 @@ export function productionAfterChangeHunks(diff) {
   }
   flush();
   return rows;
+}
+
+// Parse only complete JSX expression containers within ONE hunk. A fragment
+// wrapper supplies syntax, never unseen application nesting. Incomplete or
+// unsupported fragments produce no trace; the reviewer still gets raw source.
+function jsxRenderPredicates(source) {
+  const traces = [];
+  let consumed = 0;
+  let attempts = 0;
+  for (const start of source.matchAll(/^[ \t]*\{[^\n]*&&\s*\(?[ \t]*$/gm)) {
+    if (start.index < consumed) continue;
+    let parsed = false;
+    const remainder = source.slice(start.index);
+    for (const end of remainder.matchAll(/^[ \t]*(?:\)|<\/>)?\}[ \t]*$/gm)) {
+      if (++attempts > 32) break;
+      const length = end.index + end[0].length;
+      const fragment = `<>${remainder.slice(0, length)}</>`;
+      let ast;
+      try { ast = parseExpression(fragment, { plugins: ['jsx'] }); }
+      catch { continue; }
+      const walk = (node, predicates = []) => {
+        if (!node || typeof node !== 'object') return;
+        if (node.type === 'LogicalExpression' && node.operator === '&&') {
+          walk(node.left, predicates);
+          walk(node.right, [...predicates, fragment.slice(node.left.start, node.left.end)]);
+          return;
+        }
+        if (node.type === 'JSXElement') {
+          const name = node.openingElement.name;
+          const summary = name.type === 'JSXIdentifier' && name.name === 'MarkdownOutput'
+            && node.openingElement.attributes.some(attribute => attribute.name?.name === 'content'
+              && attribute.value?.expression?.type === 'Identifier'
+              && attribute.value.expression.name === 'taskSummary');
+          if (summary || (name.type === 'JSXIdentifier' && name.name === 'OutputBlocks')) {
+            traces.push({ render: summary ? 'taskSummary' : 'transcript', enclosingAndPredicates: predicates });
+          }
+        }
+        for (const value of Object.values(node)) {
+          if (Array.isArray(value)) value.forEach(child => { if (child?.type) walk(child, predicates); });
+          else if (value?.type) walk(value, predicates);
+        }
+      };
+      walk(ast);
+      parsed = true;
+      consumed = start.index + length;
+      break;
+    }
+    // A partial outer expression must not turn a nested child into a root.
+    if (!parsed) break;
+  }
+  return traces.filter((trace, index) => traces.findIndex(other => JSON.stringify(other) === JSON.stringify(trace)) === index);
 }

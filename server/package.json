@@ -21,6 +21,7 @@
     "test:db:ci": "vitest run --config vitest.config.db.js --bail=1 --reporter=default --reporter=github-actions"
   },
   "dependencies": {
+    "@babel/parser": "8.0.6",
     "@cantoo/pdf-lib": "2.11.1",
     "@googleapis/calendar": "20.0.1",
     "@googleapis/gmail": "22.0.1",
@@ -40,7 +41,6 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@babel/parser": "8.0.6",
     "@vitest/coverage-v8": "5.0.2",
     "vitest": "5.0.2"
   },
