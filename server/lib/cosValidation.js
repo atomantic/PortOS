@@ -51,6 +51,8 @@ import {
   resolveReviewUsernames,
 } from './reviewerConfig.js';
 
+export { scheduleExecutionFieldsSchema } from './scheduleExecutionFieldsValidation.js';
+
 export { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
 // Transitional shim: the reviewer vocabulary lives in reviewerConfig.js but is
 // still reachable from every existing `cosValidation.js` / `validation.js` import.

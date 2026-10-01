@@ -166,6 +166,30 @@ describe('CoS Schedule Routes', () => {
   });
 
   describe('PUT /api/cos/schedule/task/:taskType', () => {
+    it('rejects malformed execution fields before writing any schedule settings', async () => {
+      for (const field of ['prompt', 'providerId', 'model']) {
+        for (const value of [{ text: 'Example prompt' }, ['example'], true, 42]) {
+          const response = await request(app).put('/api/cos/schedule/task/documentation').send({ [field]: value });
+          expect(response.status).toBe(400);
+          expect(response.body.code).toBe('VALIDATION_ERROR');
+        }
+      }
+      expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+    });
+
+    it('preserves valid execution fields, picker clears, and omitted values', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({});
+      for (const fields of [
+        { prompt: '  Example custom prompt  ', providerId: 'example-provider', model: 'example-model' },
+        { prompt: null, providerId: null, model: null },
+        { prompt: '', providerId: '', model: '' },
+        { enabled: true },
+      ]) {
+        expect((await request(app).put('/api/cos/schedule/task/documentation').send(fields)).status).toBe(200);
+        expect(taskSchedule.updateTaskInterval).toHaveBeenLastCalledWith('documentation', fields);
+      }
+    });
+
     it('should update interval for task type', async () => {
       taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'daily' });
 
