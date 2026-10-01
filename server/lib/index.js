@@ -153,6 +153,7 @@ export * from './castIntegrityPrompt.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';
+export * from './sheetPointers.js';
 export * from './universeBibleCompleteness.js';
 export * from './universeBibleLimits.js';
 export * from './universeMarkdown.js';

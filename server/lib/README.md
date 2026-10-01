@@ -810,3 +810,4 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `imageLimits.js` | MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS — browser-safe image generation caps shared with validation. |
 
 | `musicVideoActionContract.js` | Versioned shot intent shape/timing validation and clip-relative frame/motion prompt compilation, shared by treatment and the board. |
+| `sheetPointers.js` | Browser-safe persisted character-sheet layout: `LEGACY_SHEET_VARIANT_ID`, `readSheetPointer`, `listSheetPointers`, identity-preserving `applySheetPointerToCharacter`, and default-variant browser adapter `applySheetPointer`. |

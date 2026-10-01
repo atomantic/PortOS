@@ -1,3 +1,4 @@
+import { listSheetPointers } from '../../lib/sheetPointers.js';
 /**
  * FableLoom scene editor — the side panel for the selected node: title/prose,
  * ending flag + label, the intent-transition list, scene image prompt and
@@ -52,10 +53,7 @@ const REQUIRED_IDENTITY_ROLES = ['neutral', 'profile', 'full-body'];
 
 const characterReferenceInfo = (character) => {
   const imageRefs = Array.isArray(character?.imageRefs) ? character.imageRefs.filter(Boolean) : [];
-  const sheetRefs = [
-    character?.referenceSheetImageRef,
-    ...Object.values(character?.referenceSheets || {}),
-  ].filter(Boolean);
+  const sheetRefs = listSheetPointers(character).map(({ filename }) => filename);
   const approvedRoles = new Set(
     (Array.isArray(character?.identityPack?.assets) ? character.identityPack.assets : [])
       .filter((asset) => asset?.approved === true)
