@@ -1,3 +1,4 @@
+import GradePanel from '../GradePanel.jsx';
 import TypographyPanel from '../TypographyPanel.jsx';
 import CodeVideoPanel from '../CodeVideoPanel.jsx';
 import DocumentCompositionPanel from '../DocumentCompositionPanel.jsx';
@@ -18,6 +19,7 @@ export default function ComposeStage({ board }) {
           <span className="text-xs text-port-text-muted" aria-hidden="true">Render style</span>
           <RenderStyleSelect project={project} onRenderStyle={board.onRenderStyle} />
         </div>
+        <GradePanel project={project} onSave={board.saveCompositionGrade} />
         <TypographyPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
         {mode === 'code' && (
           <CodeVideoPanel project={project} audioUrl={audioUrl} onProject={board.replaceProject} />

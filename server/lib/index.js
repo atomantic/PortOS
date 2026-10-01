@@ -795,3 +795,4 @@ export * from './musicVideoMediumPlan.js';
 export * from './imageLimits.js';
 
 export * from './musicVideoActionContract.js';
+export * from './musicVideoGrade.js';

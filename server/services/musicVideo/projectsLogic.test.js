@@ -73,6 +73,7 @@ describe('cloneProjectRecord', () => {
       ...baseProject(),
       status: 'complete',
       renderHistoryId: 'final-1',
+      composition: { mode: 'composed', grade: { preset: 'neutral', sections: [{ sceneId: 'scene-old', preset: 'teal-night' }] } },
       audioAnalysis: {
         bpm: 120, beats: [0], downbeats: [0],
         sections: [{ label: 'S', startSec: 0, endSec: 5 }],
@@ -109,6 +110,8 @@ describe('cloneProjectRecord', () => {
       videoHistoryId: 'clip-1',
     });
     expect(clone.scenes[0].sceneId).not.toBe('scene-old');
+    expect(clone.composition.grade.sections).toEqual([{ sceneId: clone.scenes[0].sceneId, preset: 'teal-night' }]);
+    expect(source.composition.grade.sections[0].sceneId).toBe('scene-old');
     expect(source.scenes[0].sceneId).toBe('scene-old');
     // A pre-#8965 scene's selections become takes on the clone, so the new
     // version's candidate list is never missing what it already shows.

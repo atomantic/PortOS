@@ -120,6 +120,7 @@ export default function MusicVideo() {
   const [arranging, setArranging] = useState(false);
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
   const [styleReferencesPending, setStyleReferencesPending] = useState(false);
+  const [compositionSavePending, setCompositionSavePending] = useState(0);
   useEffect(() => { setStyleReferencesPending(false); }, [selectedId]);
   const [planning, setPlanning] = useState(false);
   const [cloning, setCloning] = useState(false);
@@ -519,11 +520,17 @@ export default function MusicVideo() {
   // older snapshot of the list overwrite a newer one.
   const timedTextSaveChain = useRef(Promise.resolve());
   const editProjectLocal = (patch) => patchProject(selected.id, patch);
-  const saveProjectFields = (patch) => {
+  const saveProjectFields = (patch, { applyComposition = false } = {}) => {
     const projectId = selected.id;
+    setCompositionSavePending((count) => count + 1);
     timedTextSaveChain.current = timedTextSaveChain.current
       .then(() => updateMusicVideoProject(projectId, patch, { silent: true }))
-      .catch((err) => toast.error(err?.message || 'Failed to save changes'));
+      .then((saved) => {
+        if (applyComposition) patchProject(projectId, { composition: saved.composition });
+      })
+      .catch((err) => toast.error(err?.message || 'Failed to save changes'))
+      .finally(() => setCompositionSavePending((count) => count - 1));
+    return timedTextSaveChain.current;
   };
   const handleImportLyrics = (body, onDone) => {
     const projectId = selected.id;
@@ -743,7 +750,7 @@ export default function MusicVideo() {
     analyzing,
   }) : null;
   const runNextAction = () => {
-    if (!selected || !nextAction || nextAction.disabled) return;
+    if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
     if (nextAction.kind === 'goto') { goToStage(nextAction.stage, nextAction.anchor); return; }
     switch (nextAction.id) {
       case 'kickoff': handleKickoff(); break;
@@ -762,7 +769,7 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
-    locked: creativeSetupPending || styleReferencesPending,
+    locked: creativeSetupPending || styleReferencesPending || compositionSavePending > 0,
     busy: { analyzing, planning, arranging, cloning },
     tracks,
     trackName,
@@ -798,6 +805,7 @@ export default function MusicVideo() {
     replaceProject,
     editProjectLocal,
     saveProjectFields,
+    saveCompositionGrade: (patch) => saveProjectFields(patch, { applyComposition: true }),
     saveVisualSpec,
     saveAutomation,
     saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
@@ -988,7 +996,7 @@ export default function MusicVideo() {
             stage={activeStage}
             onStageChange={(stage) => goToStage(stage)}
             progress={progress}
-            nextAction={nextAction}
+            nextAction={compositionSavePending > 0 && nextAction ? { ...nextAction, disabled: true, reason: 'Saving composition…' } : nextAction}
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
             dock={resolvePreviewSource(selected) ? (

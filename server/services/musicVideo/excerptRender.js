@@ -414,7 +414,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     };
 
     if (!composition) {
-      const { args } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed });
+      const { args } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null });
       startEncode(args);
       return { jobId, excerptId };
     }
@@ -433,7 +433,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     }).then((overlays) => {
       signal.throwIfAborted();
       job.overlayAbort = null;
-      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped }, soundBed });
+      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null });
       startEncode(layered.args, 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;

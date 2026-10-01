@@ -228,6 +228,28 @@ project's video backend has a source-audio lip-sync lane (fal.ai today).
 The treatment's proof checklist treats readable text and audio alignment as
 judgeable only in the final render.
 
+## Music-video render grades
+
+In **Compose → Render grade**, explicitly choose Neutral, Teal night, Golden
+hour, or Monochrome, with an optional per-section override and bounded grain.
+The selection is stored in `composition.grade`; clones remap section overrides
+to their new scene IDs. Neutral is the default and a true filter bypass. A
+neutral section override disables the default look for that section; resetting
+to neutral clears every override. Grades affect composed and document exports,
+not plain footage or code-rendered mode. The live document preview is ungraded;
+render an excerpt to judge the selected look.
+
+Both encoders use the same bounded RGB curves and deterministic, song-time
+frame-addressed grain. Composed footage is graded before typography, and
+excerpt trimming happens after grading. Document captures receive the same
+filter before encoding, with the excerpt offset and document frame rate, so
+section changes and grain stay on the song clock. Black/white endpoints are
+preserved to keep document lettering readable. Source assets are unchanged;
+selecting a grade does not infer a look from references or invoke a provider.
+Saving the selection gates rendering until the server has accepted it.
+
+See the [synthetic visual validation and remaining acceptance](validation/9302-music-video-grade.md).
+
 ## Music-video composition documents
 
 A Music Video project can own its whole edit as a composition document: set

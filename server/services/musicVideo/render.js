@@ -1,3 +1,4 @@
+import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
  *
@@ -419,7 +420,7 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
 // overlap the window, clipped to it and re-based to the excerpt's own timeline
 // (0 = `startSec`) so a contact sheet built from the excerpt file can sample
 // cut boundaries directly. `totalDuration` becomes the excerpt's own length.
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null } = {}) {
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
   const frameGrid = gridOption || clips.some((c) => c.layer);
   // Stills and cards have no dimensions of their own: the first footage clip
@@ -470,8 +471,10 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
   const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, inputOf[i], { canonW, canonH, fps, frames, frameGrid })}[v${i}]`);
+  const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
-  filters.push(`${plan.map((_, i) => `[v${i}]`).join('')}concat=n=${plan.length}:v=1:a=0[${cutLabel}]`);
+  filters.push(`${plan.map((_, i) => `[v${i}]`).join('')}concat=n=${plan.length}:v=1:a=0[${gradeFilter ? 'ungraded' : cutLabel}]`);
+  if (gradeFilter) filters.push(`[ungraded]${gradeFilter}[${cutLabel}]`);
   overlays.forEach((_, k) => {
     const out = k === overlays.length - 1 ? 'outv' : `cut${k + 1}`;
     filters.push(`[cut${k}][${audioIdx + 1 + k}:v]overlay=eof_action=pass:format=auto[${out}]`);
@@ -788,7 +791,7 @@ export async function renderMusicVideo(projectId, options = {}) {
     const jobId = randomUUID();
     const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
     const outputPath = join(PATHS.videos, filename);
-    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed });
+    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed, grade: composed ? project.composition?.grade : null });
     // #8984: a composed project lays its timed text cues over the cut, and a
     // title card's text (#8985) joins them over its own section. No renderable
     // cue (plain mode, or nothing timed) skips the overlay capture entirely.
@@ -970,7 +973,7 @@ export async function renderMusicVideo(projectId, options = {}) {
       signal.throwIfAborted();
       // Capture is over: from here a cancel kills the encode (job.process).
       job.overlayAbort = null;
-      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, soundBed });
+      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, soundBed, grade: project.composition?.grade });
       startEncode(layered.args, 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;

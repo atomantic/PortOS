@@ -212,6 +212,7 @@ describe('projectsFile federation (#1770)', () => {
 
     await file.updateProject(p.id, { composition: {
       mode: 'composed',
+      grade: { preset: 'teal-night', grain: 0.012, sections: [{ sceneId: 'chorus', preset: 'golden-hour' }] },
       textCues: [
         { text: ' Hook line ', startSec: 1, endSec: 3, template: 'rise', placement: 'center', emphasis: 'hero' },
         { text: 'Tail', startSec: 4, endSec: 2 },
@@ -223,6 +224,7 @@ describe('projectsFile federation (#1770)', () => {
     expect(saved.composition).toEqual({
       version: 1,
       mode: 'composed',
+      grade: { preset: 'teal-night', grain: 0.012, sections: [{ sceneId: 'chorus', preset: 'golden-hour' }] },
       textCues: [
         { id: expect.stringMatching(/^mtc-/), text: 'Hook line', startSec: 1, endSec: 3, template: 'rise', placement: 'center', emphasis: 'hero' },
         { id: expect.stringMatching(/^mtc-/), text: 'Tail', startSec: 4, endSec: null, template: 'fade', placement: 'lower', emphasis: 'subtitle' },

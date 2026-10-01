@@ -61,6 +61,19 @@ describe('buildMusicVideoFfmpegArgs', () => {
     expect(r2.totalDuration).toBe(10); // audio (10) < video (20)
   });
 
+  it('grades the song before typography and excerpt trimming, with neutral output unchanged', () => {
+    const clips = [clip({ sceneId: 'a' })];
+    const plain = buildMusicVideoFfmpegArgs(clips, '/a.wav', '/o.mp4');
+    expect(buildMusicVideoFfmpegArgs(clips, '/a.wav', '/o.mp4', { grade: { preset: 'neutral' } }).args).toEqual(plain.args);
+    const result = buildMusicVideoFfmpegArgs(clips, '/a.wav', '/o.mp4', {
+      grade: { preset: 'teal-night' }, overlays: [{ path: '/overlay.mov', startSec: 0 }], excerpt: { startSec: 1, endSec: 2 },
+    });
+    const graph = result.args[result.args.indexOf('-filter_complex') + 1];
+    expect(graph.indexOf('geq=')).toBeLessThan(graph.indexOf('overlay='));
+    expect(graph.indexOf('overlay=')).toBeLessThan(graph.indexOf('[outv]trim='));
+    expect(graph).toContain("enable='gte(t,0)*lt(t,2)'");
+  });
+
   it('throws on empty clips', () => {
     expect(() => buildMusicVideoFfmpegArgs([], '/a.wav', '/o.mp4')).toThrow(/empty clips/);
   });

@@ -1,3 +1,4 @@
+import { normalizeMusicVideoGrade } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — composition manifest + deterministic typography (#8984, part of #8966).
  *
@@ -145,6 +146,7 @@ export function normalizeComposition(input) {
   const documentRef = normalizeCompositionDocument(input.document);
   const documentDraft = normalizeCompositionDocument(input.documentDraft);
   const overlay = normalizeCompositionOverlay(input.overlay);
+  const grade = normalizeMusicVideoGrade(input.grade);
   return {
     version: COMPOSITION_VERSION,
     mode: pick(input.mode, COMPOSITION_MODES, 'concat'),
@@ -155,6 +157,7 @@ export function normalizeComposition(input) {
       ...(typeof style.accentColor === 'string' && /^#[0-9a-f]{6}$/i.test(style.accentColor) ? { accentColor: style.accentColor.toLowerCase() } : {}),
     },
     posterSec: toTime(input.posterSec),
+    ...(grade ? { grade } : {}),
     // Absent until chosen (#9290): the autopilot plan picks 'intercut' for an undecided project.
     ...(CUTTING_MODES.includes(input.cutting) ? { cutting: input.cutting } : {}),
     // Absent unless a code video was actually stored, so a composed manifest

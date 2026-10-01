@@ -7,10 +7,11 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
+import sharp from 'sharp';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 const author = vi.hoisted(() => ({ calls: 0, response: null }));
@@ -33,6 +34,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 
 const { PATHS } = await import('../../lib/paths.js');
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
+const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { encodeDocumentComposition, prepareDocumentRender } = await import('./documentRender.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
 const { generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js');
@@ -116,6 +118,86 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     expect(existsSync(join(PATHS.data, 'music-video-song-renders', 'job-firstmp4'))).toBe(false);
     await rm(first.outputPath, { force: true });
     await rm(second.outputPath, { force: true });
+  }, 120000);
+
+  it('matches bounded grades across real composed/document ramps and song-time excerpts', async () => {
+    // Synthetic reference: horizontal RGB/grey ramps plus hard black/white
+    // endpoints. No install data, provider calls, or network images.
+    const width = 1280;
+    const height = 720;
+    const fps = 12;
+    const bytes = Buffer.alloc(width * height * 3);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const v = Math.round(255 * x / (width - 1));
+      const band = Math.floor(y / 180);
+      const rgb = band === 0 ? [v, v, v] : band === 1 ? [v, 72, 104] : band === 2 ? [104, v, 72] : [72, 104, v];
+      bytes.set(rgb, (y * width + x) * 3);
+    }
+    const directory = 'music-video/mv-grade/composition/doc-grade';
+    const dir = join(PATHS.data, directory);
+    await mkdir(dir, { recursive: true });
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const reference = join(dir, 'reference.png');
+    await sharp(bytes, { raw: { width, height, channels: 3 } }).png().toFile(reference);
+    await writeFile(join(dir, 'index.html'), `<!doctype html><style>html,body{margin:0}img{width:${width}px;height:${height}px;display:block}</style>
+      <img id="reference" src="reference.png"><script>window.portosComposition={durationSec:2,fps:${fps},width:${width},height:${height},seek:async()=>{await document.getElementById('reference').decode()}};</script>`);
+    const master = join(PATHS.music, 'grade.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', master]);
+    const source = join(PATHS.videos, 'grade-source.mkv');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-loop', '1', '-i', reference, '-t', '1', '-r', String(fps), '-c:v', 'ffv1', '-pix_fmt', 'yuv420p', source]);
+    const scenes = [{ sceneId: 'a', startSec: 0, endSec: 1 }, { sceneId: 'b', startSec: 1, endSec: 1.5 }, { sceneId: 'c', startSec: 1.5, endSec: 2 }];
+    const grade = { preset: 'teal-night', grain: 0.03, sections: [{ sceneId: 'b', preset: 'golden-hour' }, { sceneId: 'c', preset: 'monochrome' }] };
+    const project = { id: 'mv-grade', name: 'Synthetic grade reference', scenes,
+      audioAnalysis: { durationSec: 2, sections: [] }, composition: { mode: 'document', grade, document: { directory } } };
+    const plan = await prepareDocumentRender(project);
+    const document = join(PATHS.videos, 'grade-document.mp4');
+    await encodeDocumentComposition({ project, plan, jobId: 'grade-document', audioPath: master, outputPath: document });
+    const clips = scenes.map((scene) => ({ sceneId: scene.sceneId, videoPath: source, inSec: 0, outSec: scene.endSec - scene.startSec, width, height, fps }));
+    const composed = join(PATHS.videos, 'grade-composed.mp4');
+    const composedArgs = buildMusicVideoFfmpegArgs(clips, master, composed, { grade, frameGrid: true }).args;
+    execFileSync(ffmpeg, ['-v', 'error', ...composedArgs], { stdio: 'pipe' });
+    const decode = (path, filters = []) => execFileSync(ffmpeg, ['-v', 'error', '-i', path, ...filters, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 28 });
+    const frameSize = width * height * 3;
+    const documentRgb = decode(document);
+    const composedRgb = decode(composed);
+    expect(documentRgb.length).toBe(frameSize * fps * 2);
+    expect(composedRgb.length).toBe(documentRgb.length);
+    const mae = (a, b) => a.reduce((sum, v, i) => sum + Math.abs(v - b[i]), 0) / a.length;
+    // Browser RGB and video YUV420 differ by conversion/subsampling and H.264
+    // quantization; palette parity is bounded rather than falsely byte-exact.
+    expect(mae(documentRgb, composedRgb)).toBeLessThan(5);
+    const excerpt = join(PATHS.videos, 'grade-excerpt.mp4');
+    await encodeDocumentComposition({ project, plan, jobId: 'grade-excerpt', audioPath: master, outputPath: excerpt, windowStart: 0.5, windowEnd: 1.5 });
+    const excerptRgb = decode(excerpt);
+    expect(mae(excerptRgb, documentRgb.subarray(6 * frameSize, 18 * frameSize))).toBeLessThan(2);
+    const repeat = join(PATHS.videos, 'grade-repeat.mp4');
+    await encodeDocumentComposition({ project, plan, jobId: 'grade-repeat', audioPath: master, outputPath: repeat, windowStart: 0.5, windowEnd: 1.5 });
+    expect(decode(repeat).equals(excerptRgb)).toBe(true);
+    const composedExcerpt = join(PATHS.videos, 'grade-composed-excerpt.mp4');
+    execFileSync(ffmpeg, ['-v', 'error', ...buildMusicVideoFfmpegArgs(clips, master, composedExcerpt, {
+      grade, frameGrid: true, excerpt: { startSec: 0.5, endSec: 1.5 },
+    }).args], { stdio: 'pipe' });
+    expect(mae(decode(composedExcerpt), composedRgb.subarray(6 * frameSize, 18 * frameSize))).toBeLessThan(2);
+    const pixel = (rgb, frame, x, y) => [...rgb.subarray(frame * frameSize + (y * width + x) * 3, frame * frameSize + (y * width + x) * 3 + 3)];
+    const cool = pixel(documentRgb, 6, 640, 90);
+    const warm = pixel(documentRgb, 12, 640, 90);
+    const monochrome = pixel(documentRgb, 20, 640, 270);
+    expect(Math.max(...monochrome) - Math.min(...monochrome)).toBeLessThan(4);
+    expect(cool[2]).toBeGreaterThan(cool[0] + 15);
+    expect(warm[0]).toBeGreaterThan(warm[2] + 15);
+    expect(Math.max(...pixel(documentRgb, 6, 0, 90))).toBeLessThan(5);
+    expect(Math.min(...pixel(documentRgb, 6, width - 1, 90))).toBeGreaterThan(248);
+    // Optional local proof export: only synthetic fixtures, never live records.
+    if (process.env.PORTOS_GRADE_PROOF_DIR) {
+      const proof = process.env.PORTOS_GRADE_PROOF_DIR;
+      await mkdir(proof, { recursive: true });
+      await copyFile(reference, join(proof, 'reference.png'));
+      for (const [label, path] of [['document', document], ['composed', composed], ['excerpt', excerpt]]) {
+        execFileSync(ffmpeg, ['-v', 'error', '-y', '-i', path, '-vf', "select='eq(n,6)+eq(n,12)+eq(n,20)',scale=480:270,tile=3x1", '-frames:v', '1', join(proof, `${label}.png`)]);
+      }
+      await writeFile(join(proof, 'metrics.json'), JSON.stringify({ paletteMeanAbsoluteError: mae(documentRgb, composedRgb), excerptMeanAbsoluteError: mae(excerptRgb, documentRgb.subarray(6 * frameSize, 18 * frameSize)), repeatIdentical: true }, null, 2));
+    }
   }, 120000);
 
   it('renders a generated 30-second card/still/clip document with the selected performance in-point', async () => {
