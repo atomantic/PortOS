@@ -34,7 +34,6 @@ import {
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import QueueInvestigationButton from '../components/ui/QueueInvestigationButton';
-import PageSkeleton from '../components/ui/PageSkeleton';
 import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import Drawer from '../components/Drawer';
@@ -152,6 +151,7 @@ export default function Review() {
   const [items, setItems] = useState([]);
   const [briefing, setBriefing] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [itemsError, setItemsError] = useState(false);
   const [newTodo, setNewTodo] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState('pending');
@@ -172,11 +172,18 @@ export default function Review() {
   // double-tap can't double-resolve while the request is pending.
   const [resolvingQueueIds, setResolvingQueueIds] = useState(() => new Set());
 
-  const fetchItems = useCallback(async () => {
+  const fetchItems = useCallback(() => {
     const params = filter === 'all' ? {} : { status: filter };
-    const data = await api.getReviewItems(params).catch(() => []);
-    setItems(data);
-    setLoading(false);
+    setLoading(true);
+    setItemsError(false);
+    return api.getReviewItems(params, { silent: true }).then(data => {
+      setItems(data);
+      setLoading(false);
+    }).catch(() => {
+      setItems([]);
+      setItemsError(true);
+      setLoading(false);
+    });
   }, [filter]);
 
   const fetchCounts = useCallback(() => {
@@ -354,8 +361,7 @@ export default function Review() {
   // Derived review state. Memoized because this page subscribes to
   // review:item:created/updated/deleted socket events and re-renders on each —
   // without memoization every one of these filter/sort passes over `items` reruns
-  // on unrelated re-renders (typing, hover state). Hooks must run before the
-  // loading early-return, so they live here above it.
+  // on unrelated re-renders (typing, hover state).
   // Keep the detailed list aligned with the active status tab while socket
   // events update the cached items from every status.
   const visibleItems = useMemo(() => {
@@ -393,18 +399,6 @@ export default function Review() {
       if (priority !== 0) return priority;
       return new Date(b.createdAt) - new Date(a.createdAt);
     }), [pendingItems]);
-
-  if (loading) {
-    return <PageSkeleton
-        label="Loading Actions"
-        header="bar"
-        padded
-        fullHeight
-        titleWidthClass="w-40"
-        cards={4}
-        sidebar={false}
-      />;
-  }
 
   // Cheap derivations off the memoized `pendingItems`/`actionableItems` — plain
   // consts, not memos: the action list is an O(8) slice with no consumer that
@@ -591,6 +585,15 @@ export default function Review() {
           </section>
         )}
 
+        {showLegacyReviewSurface && loading && (
+          <p role="status" className="text-sm text-port-text-muted">Loading stored review items…</p>
+        )}
+        {showLegacyReviewSurface && itemsError && (
+          <p role="alert" className="text-sm text-port-warning">
+            Stored review items are unavailable. <button onClick={fetchItems} className="underline">Retry</button>
+          </p>
+        )}
+
         {/* Daily Briefing remains available as compatibility/history context. */}
         {showLegacyReviewSurface && briefing && briefing.source !== 'none' && (
           <section
@@ -662,7 +665,7 @@ export default function Review() {
         })}
         </div>}
 
-        {showLegacyReviewSurface && visibleItems.length === 0 && (
+        {showLegacyReviewSurface && !loading && !itemsError && visibleItems.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             <ClipboardList size={48} className="mx-auto mb-3 opacity-30" />
             <p className="text-lg">No review items in this view</p>
