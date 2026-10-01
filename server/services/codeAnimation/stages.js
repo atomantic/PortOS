@@ -202,7 +202,7 @@ const repairPrompt = ({ manifest, files, entryPath, findings }) => [
  * settings, run one prompt, and reject a substituted route unless the user
  * allowed it. Only reached from a user-started run.
  */
-export async function repairViaAuthoringRoute({ project, manifest, files, entryPath, findings }) {
+async function repairViaAuthoringRoute({ project, manifest, files, entryPath, findings }) {
   const [{ preflightProductionProject, _recordEffectiveRoute }, { runPromptThroughProvider }, { getProviderById }, { extractAnimationHtml }] = await Promise.all([
     import('./preflight.js'), import('../promptRunner.js'), import('../providers.js'), import('./prompt.js'),
   ]);
