@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
@@ -14,6 +14,7 @@ vi.mock('../../services/apiCodeAnimation', () => ({
   startCodeAnimationStageRun: vi.fn(), cancelCodeAnimationStageRun: vi.fn(),
 }));
 import * as api from '../../services/apiCodeAnimation';
+import socket from '../../services/socket';
 import ProductionProjects from './ProductionProjects';
 
 const project = {
@@ -122,7 +123,7 @@ describe('Production project rendered interactions', () => {
     const stopped = { id: 'run-stopped', status: 'canceled', createdAt: '2026-01-01T00:00:00Z', data: runData({ resumable: true, stopReason: 'canceled' }) };
     api.listCodeAnimationProjectHistory.mockResolvedValue(page([stopped]));
     api.preflightCodeAnimationProject.mockResolvedValue({ problems: [], capabilities: { imageInputAccepted: true } });
-    api.startCodeAnimationStageRun.mockResolvedValue({ id: 'run-new' });
+    api.startCodeAnimationStageRun.mockResolvedValue({ id: 'run-new', status: 'running', ...runData() });
     renderPage();
     expect(await screen.findByText(/Unverified: semantic-visual/)).toBeInTheDocument();
     expect(screen.getByText('Verified: audio')).toBeInTheDocument();
@@ -135,6 +136,15 @@ describe('Production project rendered interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Start run' }));
     await waitFor(() => expect(api.startCodeAnimationStageRun).toHaveBeenCalledWith(project.id, { visualReview: true }, { silent: true }));
 
+    expect(screen.getByRole('button', { name: 'Resume run' })).toBeDisabled();
+    api.cancelCodeAnimationStageRun.mockResolvedValue({ id: 'run-new', canceling: true });
+    await user.click(screen.getByRole('button', { name: 'Cancel run' }));
+    expect(api.cancelCodeAnimationStageRun).toHaveBeenCalledWith(project.id, 'run-new', { silent: true });
+    api.listCodeAnimationProjectHistory.mockResolvedValue(page([{ id: 'run-new', status: 'canceled', data: runData() }, stopped]));
+    await act(async () => {
+      for (const [event, handler] of socket.on.mock.calls) if (event === 'code-animation:changed') handler({ id: project.id });
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume run' })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: 'Resume run' }));
     await waitFor(() => expect(api.startCodeAnimationStageRun).toHaveBeenCalledWith(project.id, { resumeFromRunId: 'run-stopped' }, { silent: true }));
     expect(screen.queryByText(/Package import/)).toBeNull();
