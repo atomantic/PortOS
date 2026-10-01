@@ -1,3 +1,4 @@
+import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
 import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
 import toast from '../components/ui/Toast';
@@ -120,12 +121,12 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // and no lettering in the generated pixels. Same order as the server's
   // handoff manifest (handoff.js composePrompt).
   const buildFramePrompt = (scene) =>
-    [(scene.framePrompt?.trim() || scene.prompt?.trim() || ''), style, direction, scene.direction?.frameClause?.trim()].filter(Boolean).join(', ');
+    [[(scene.framePrompt?.trim() || scene.prompt?.trim() || ''), style, direction, scene.direction?.frameClause?.trim()].filter(Boolean).join(', '), shotActionPrompt(project, scene, { frame: true })].filter(Boolean).join('\n');
   // The i2v prompt for a scene's clip: its shot prompt (or the frame prompt as a
   // fallback) suffixed the same way. The reference frame already fixes the
   // look; this prompt guides the motion.
   const buildShotPrompt = (scene) =>
-    [(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim(), MOTION_CONTINUITY_CLAUSE].filter(Boolean).join(', ');
+    [[(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim(), MOTION_CONTINUITY_CLAUSE].filter(Boolean).join(', '), shotActionPrompt(project, scene)].filter(Boolean).join('\n');
 
   /**
    * Render a still reference frame for one scene from its frame prompt. The
@@ -149,6 +150,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    */
   const generateFrame = (scene, { revisionId } = {}) => {
     const conditioning = conditioningReferences(project, scene);
+    const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
+    if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
     const prompt = buildFramePrompt(scene);
     if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
@@ -222,6 +225,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    */
   const generateSceneVideo = (scene, { revisionId } = {}) => {
     if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
+    const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
+    if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
     const basePrompt = buildShotPrompt(scene);
     if (!basePrompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
     const { settings, audioReactiveSelected, detectedAudioReactiveLora, videoBlockedReason } = videoSettings;

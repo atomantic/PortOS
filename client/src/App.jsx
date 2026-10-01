@@ -606,6 +606,8 @@ export default function App() {
           <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
           <Route path="code-animation" element={<CodeAnimation />} />
           <Route path="code-animation/:jobId" element={<CodeAnimation />} />
+          <Route path="code-animation/production" element={<CodeAnimation />} />
+          <Route path="code-animation/production/:projectId" element={<CodeAnimation />} />
           <Route path="mood-boards" element={<MoodBoards />} />
           <Route path="mood-boards/:id" element={<MoodBoardDetail />} />
           <Route path="decks" element={<Decks />} />

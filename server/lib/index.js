@@ -19,6 +19,7 @@
 export * from './appPromptPlaceholders.js';
 export * from './appDeployFlags.js';
 export * from './apiContractSchemas.js';
+export * from './codeAnimationPackage.js';
 export * from './autonomousJobTask.js';
 export * from './asyncApiSpec.js';
 export * from './avatarVariants.js';
@@ -39,6 +40,7 @@ export * from './cronFields.js';
 export * from './cronValidation.js';
 export * from './cosAgentListProjection.js';
 export * from './cosSpawnWindow.js';
+export * from './executionDurationKey.js';
 export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
 // The generation-key spec creativeCommissionValidation.js builds its Zod schema
@@ -152,6 +154,7 @@ export * from './castIntegrityPrompt.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';
+export * from './sheetPointers.js';
 export * from './universeBibleCompleteness.js';
 export * from './universeBibleLimits.js';
 export * from './universeMarkdown.js';
@@ -464,6 +467,8 @@ export * from './taskTargetBranch.js';
 export * from './claimContinuation.js';
 export * from './scheduledTaskTypes.js';
 export * from './scheduleRunOrder.js';
+export * from './taskReadinessReasons.js';
+export * from './taskReadinessSchema.js';
 export * from './taskTargetScope.js';
 export * from './taxonomyTally.js';
 export * from './worktreeOwnership.js';
@@ -471,6 +476,7 @@ export * from './xmlEntities.js';
 
 // === Curated static data ===
 export * from './curatedGenomeMarkers.js';
+export * as songCraftParts from './songCraftParts.js';
 export * from './songCraftRef.js';
 
 // === Domain utilities ===
@@ -577,6 +583,7 @@ export * from './renderTargets.js';
 export * from './renderTiming.js';
 export * from './generationModes.js';
 export * from './imageGenCapabilities.js';
+export * from './falImageModels.js';
 export * from './imageRuntimeRemedies.js';
 export * from './renderModeLadder.js';
 export * from './spriteVocabulary.js';
@@ -783,3 +790,16 @@ export * from './defaultRequestBody.js';
 export * from './musicVideoConditioning.js';
 export * from './musicVideoAspect.js';
 export * from './musicVideoMotion.js';
+
+export * from './musicVideoMediumPlan.js';
+
+// Flat: validation re-exports these same bindings.
+export * from './imageLimits.js';
+
+export * from './musicVideoActionContract.js';
+export * from './musicVideoGrade.js';
+export * from './musicVideoDependencies.js';
+
+export * from './musicVideoPlateEvidence.js';
+export * from './codeAnimationProjects.js';
+export * from './musicVideoNarrativeEvents.js';

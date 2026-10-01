@@ -178,6 +178,29 @@ describe('AI Toolkit runner service', () => {
     });
   });
 
+  it('refuses a stopped caller after API readiness without fetching and settles its run as canceled', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    let release;
+    const waiting = new Promise((resolve) => { release = resolve; });
+    let active = true;
+    const ensureProviderReady = vi.fn(async () => { await waiting; return { success: true }; });
+    const onRunFailed = vi.fn();
+    const onRunCanceled = vi.fn();
+    const onComplete = vi.fn();
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady, onRunFailed, onRunCanceled } });
+    const execution = runner.executeApiRun({ runId: 'run-admission', provider: { id: 'local', endpoint: 'http://localhost:11434/v1' },
+      prompt: 'hello', beforeExecute: () => { if (!active) throw new Error('Production stopped'); }, onComplete });
+    await vi.waitFor(() => expect(ensureProviderReady).toHaveBeenCalled());
+    active = false; release(); await execution;
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await runner.isRunActive('run-admission')).toBe(false);
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ canceled: true, success: false }));
+    expect(onRunCanceled).toHaveBeenCalledOnce(); expect(onRunFailed).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(join(dataDir, 'runs', 'run-admission', 'metadata.json'), 'utf8'))).toMatchObject({ canceled: true, errorCategory: 'canceled' });
+  });
+
   it('classifies an injected missing-key prerequisite as an authentication failure', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
@@ -611,6 +634,7 @@ describe('AI Toolkit runner service', () => {
     const completed = new Promise((resolve) => { done = resolve; });
     await runner.executeApiRun({
       runId: 'run-timeout',
+      absoluteTimeoutMs: 1000, // a true stall still outranks a later caller cap
       provider: runReady(),
       model: null,
       prompt: 'hi',
@@ -638,6 +662,7 @@ describe('AI Toolkit runner service', () => {
     // bench candidate; one that outran the absolute cap while producing is not,
     // so the host's classifier must be able to tell them apart without prose.
     expect(metadata.timeoutBound).toBe('stall');
+    expect(metadata.timeoutOrigin).toBeUndefined();
     expect(metadata.error).toMatch(/no stream progress/i);
   });
 
@@ -1392,7 +1417,7 @@ describe('AI Toolkit runner service', () => {
   // stream open across the timeout bounds without sleeping. Rejects on abort
   // the way a real reader does, so a timer that wins the race still unwinds
   // `processStream` instead of leaving it parked on a read forever.
-  const clockDrivenReader = ({ intervalMs, frames = Infinity, signal }) => {
+  const clockDrivenReader = ({ intervalMs, frames = Infinity, signal, delta = { content: 'tok' } }) => {
     const encoder = new TextEncoder();
     let sent = 0;
     return {
@@ -1406,7 +1431,7 @@ describe('AI Toolkit runner service', () => {
           sent += 1;
           resolve({
             done: false,
-            value: encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'tok' } }] })}\n`),
+            value: encoder.encode(`data: ${JSON.stringify({ choices: [{ delta }] })}\n`),
           });
         }, intervalMs);
       }),
@@ -1501,18 +1526,29 @@ describe('AI Toolkit runner service', () => {
     tempDirs.push(dataDir);
     vi.useFakeTimers();
     const request = vi.fn(async (_url, opts) => ({ ok: true,
-      body: { getReader: () => clockDrivenReader({ intervalMs: 1000, signal: opts.signal }) } }));
+      body: { getReader: () => clockDrivenReader({ intervalMs: 1000, signal: opts.signal, delta: { reasoning_content: 'thinking' } }) } }));
     vi.stubGlobal('fetch', request);
-    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    const failed = vi.fn();
+    const completeSpy = vi.fn(value => complete(value));
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed: failed } });
     let complete;
     const completed = new Promise(resolve => { complete = resolve; });
     await runner.executeApiRun({ runId: 'run-budget', provider: runReady(), model: null, prompt: 'hi',
       workspacePath: process.cwd(), screenshots: [], timeout: 120000, absoluteTimeoutMs: 5000, maxTokens: 8192,
-      onComplete: complete });
+      onComplete: completeSpy });
     expect(JSON.parse(request.mock.calls[0][1].body).max_tokens).toBe(8192);
     await vi.advanceTimersByTimeAsync(5000);
-    expect(await completed).toMatchObject({ success: false, timeoutBound: 'absolute' });
+    const metadata = await completed;
+    expect(metadata).toMatchObject({ success: false, timeoutBound: 'absolute', timeoutOrigin: 'caller-budget',
+      runtimeBudgetMs: 5000, errorCategory: 'runtime-budget-exhausted',
+      errorAnalysis: { category: 'runtime-budget-exhausted' }, hadReasoning: true, usedReasoningAsFallback: true });
+    expect(metadata.canceled).not.toBe(true);
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(await readFile(join(dataDir, 'runs/run-budget/output.txt'), 'utf8')).toContain('thinking');
     expect(await runner.isRunActive('run-budget')).toBe(false);
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(completeSpy).toHaveBeenCalledTimes(1);
   });
 
   // `Math.max` against the default cap: an install that deliberately raised

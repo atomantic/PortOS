@@ -154,7 +154,7 @@ const PTY_ROWS = 50;
  *   it reports itself, not a provider incident for the autofixer to escalate.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun({ runId, provider, prompt, screenshots = [], workspacePath, onData, onComplete, onReady, timeout, idleMs, label, guard = false, reportFailure = true }) {
+export async function executeTuiRun({ runId, provider, prompt, screenshots = [], workspacePath, onData, onComplete, onReady, timeout, idleMs, label, guard = false, reportFailure = true, beforeExecute }) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -299,6 +299,14 @@ ${prompt}`;
   }
 
   let ptyProcess;
+  if (beforeExecute) {
+    try { await beforeExecute(); }
+    catch (error) {
+      await finalizeRunRecord({ runId, output: '', exitCode: 1, success: false, error: error.message, startTime: Date.now(),
+        extras: { canceled: true, completionReason: 'canceled' }, identity: runIdentity });
+      throw error;
+    }
+  }
   try {
     ptyProcess = ptySpawn(spawnCommand, spawnArgs, {
       name: 'xterm-256color',

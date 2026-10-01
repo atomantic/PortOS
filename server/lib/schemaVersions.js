@@ -650,7 +650,26 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v11 = phrase-alignment confidence (`lyricCues[].matched`). Older peers
   // drop it on edits or retain stale confidence after audio changes. Existing
   // records need no rewrite: absent means alignment has not measured it.
-  musicVideoProjects: 11,
+  // v12 = code-first production policy and pinned per-shot medium plans.
+  // Older treatment writers drop these fields and can reinterpret them as
+  // footage. Absent policy remains legacy; no existing record needs rewriting.
+  // v13 = authored/applied shot action contracts; older treatment writers drop intent.
+  // Additive optional metadata on existing project records; no backfill is needed.
+  // v14 = selected conditioning source/speaker and separate temporal lip-sync
+  // evidence (#9347). Older peers can drop source intent and pass equal-length
+  // misaligned output, so reject ahead transfers. Absent fields stay legacy.
+  // v15 = versioned take and review dependency evidence. Older peers would
+  // reuse stale passes or render clips derived from a replaced plate. Legacy
+  // evidence remains unknown; no historical verdict is retroactively blessed.
+  // v16 = accepted-prefix continuation edit points and one-generation repair
+  // reservations. Older peers could regenerate accepted footage or duplicate
+  // a submitted suffix after restart. Absent repair metadata stays legacy.
+  // v17 = piecewise audio timing receipts and historical source/timing snapshots.
+  // Optional on legacy records; no backfill. Older peers cannot apply receipts safely.
+  // v18 = named narrative event anchors and bounded section reactivity. Older
+  // composition normalizers drop these fields on edit. Absent remains legacy;
+  // no stored row rewrite is needed. Document manifests remain wire-local.
+  musicVideoProjects: 18,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

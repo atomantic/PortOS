@@ -15,6 +15,7 @@
  */
 
 import { Router } from 'express';
+import { logsQuerySchema, pm2ProcessNameSchema, validateRequest } from '../../lib/validation.js';
 import { join, extname } from 'path';
 import { tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import * as appsService from '../../services/apps.js';
@@ -286,15 +287,18 @@ router.get('/:id/status', loadApp, asyncHandler(async (req, res) => {
 // GET /api/apps/:id/logs - Get logs
 router.get('/:id/logs', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  const lines = parseInt(req.query.lines, 10) || 100;
-  const processName = req.query.process || app.pm2ProcessNames?.[0];
+  const { lines } = validateRequest(logsQuerySchema.pick({ lines: true }), req.query);
+  const processName = req.query.process ?? app.pm2ProcessNames?.[0];
 
-  if (!processName) {
+  if (processName === undefined) {
     throw new ServerError('No process name specified', { status: 400, code: 'MISSING_PROCESS' });
   }
 
-  const logs = await pm2Service.getLogs(processName, lines, app.pm2Home)
-    .catch(err => `Error retrieving logs: ${err.message}`);
+  if (!pm2ProcessNameSchema.safeParse(processName).success || !app.pm2ProcessNames?.includes(processName)) {
+    throw new ServerError('Invalid process name for this app', { status: 400, code: 'INVALID_PROCESS_NAME' });
+  }
+
+  const logs = await pm2Service.getLogs(processName, lines, app.pm2Home);
 
   res.json({ processName, lines, logs });
 }));

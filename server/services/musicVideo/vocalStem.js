@@ -90,7 +90,7 @@ export async function attachVocalStem(projectId, { tempPath, originalName }) {
       await unlink(join(PATHS.music, filename)).catch(() => {});
       throw new ServerError('The project\'s song changed while the vocal stem was uploading. Upload it again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
     }
-    return updateProject(projectId, { vocalStemFilename: filename });
+    return updateProject(projectId, { vocalStemFilename: filename, performanceConditioningSource: 'vocal-stem' });
   } finally {
     await unlink(tempPath).catch(() => {});
   }
@@ -103,5 +103,5 @@ export async function attachVocalStem(projectId, { tempPath, originalName }) {
 export async function detachVocalStem(projectId) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  return updateProject(projectId, { vocalStemFilename: null });
+  return updateProject(projectId, { vocalStemFilename: null, performanceConditioningSource: 'master' });
 }

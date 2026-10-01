@@ -18,6 +18,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { STALL_NUDGE_IDLE_MS, STALL_NUDGE_TEXT } from '../../lib/tuiHandshake.js';
 
 vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn() }));
 
@@ -65,6 +66,7 @@ function makeController({
     write: vi.fn(),
     paste: vi.fn(() => ({ /* a live submit-Enter interval handle */ })),
     kill: vi.fn(),
+    resolveErrorAnalysis: vi.fn(async ({ immediateFallbackAnalysis }) => immediateFallbackAnalysis),
   };
   const controller = createTuiSessionController({
     agentId: 'agent-8021',
@@ -112,9 +114,9 @@ function makeController({
     },
     finalization: {
       finalizeAgent: seams.finalizeAgent,
-      finalizeRunCommon: () => ({ outcome: 'completed', finalSuccess: true, finalError: null, terminatedByUser: false }),
+      finalizeRunCommon: ({ success, error }) => ({ outcome: success ? 'completed' : 'failed', finalSuccess: success, finalError: error, terminatedByUser: false }),
       shouldAbandonRun: () => false,
-      resolveErrorAnalysis: vi.fn().mockResolvedValue(null),
+      resolveErrorAnalysis: seams.resolveErrorAnalysis,
       runCompletionCleanup: seams.runCompletionCleanup,
     },
     probeMergeGatePr: async () => prProbe,
@@ -253,5 +255,88 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
 
     expect(write).not.toHaveBeenCalledWith('session-abcdef12', '/low-priority\r');
     expect(finalizeAgent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Codex terminal model-access rejection (#9319)', () => {
+  const rejection = '\n■ Unexpected status 400 Bad Request: ' + JSON.stringify({
+    error: {
+      message: "The 'example-model' model is not supported when using Codex with a ChatGPT account.",
+      type: 'invalid_request_error', param: null, code: null,
+    },
+  }) + '\n';
+  const ended = '─ Worked for 1s ─────────────────\n';
+  const composer = '› Ask Codex to do anything\n  ? for shortcuts\n';
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const submitted = async (options) => {
+    const subject = makeController(options);
+    subject.controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    subject.controller.markCommandInjected();
+    await subject.controller.handleData(composer);
+    await vi.advanceTimersByTimeAsync(3000);
+    await subject.controller.handleData('do the work\n');
+    await vi.advanceTimersByTimeAsync(4000);
+    subject.write.mockClear();
+    return subject;
+  };
+
+  it('settles a chunked structured rejection, finalizes once, and tears down without continuing', async () => {
+    const { controller, paste, write, finalizeAgent, resolveErrorAnalysis, kill, closers } = await submitted();
+    // A first-request rejection has no work separator: Codex's terminal ■
+    // error cell itself is emitted only after on_error finalizes the turn.
+    const details = ', url: https://example.com/responses, cf-ray: example-ray, request id: example-request\n';
+    for (const chunk of [rejection.slice(0, 90), rejection.slice(90).trimEnd(), details, composer]) {
+      await controller.handleData(chunk);
+    }
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(finalizeAgent).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(resolveErrorAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+      immediateFallbackAnalysis: expect.objectContaining({ category: 'model-not-supported', actionable: true, origin: 'provider' }),
+    }));
+    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      success: false, exitCode: 1, completionReason: 'model-access-rejected',
+      errorAnalysis: expect.objectContaining({ category: 'model-not-supported' }),
+    }));
+    expect(paste).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(controller.isTerminal()).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(closers[0]).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledTimes(1);
+    await controller.handleExit({ exitCode: 1 });
+    await controller.handleData(rejection + ended + composer);
+    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS * 2);
+    expect(finalizeAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['no terminal error-turn gutter', rejection.replace('■ ', '') + composer],
+    ['no fresh empty composer', rejection + ended],
+    ['stale composer from before the error', composer + rejection],
+    ['transient HTTP failure', rejection.replace('400 Bad Request', '500 Internal Server Error') + ended + composer],
+    ['quoted prose', '> ' + rejection.trimStart() + ended + composer],
+    ['productive tool output after a fixture', rejection + ended + composer + '• Running tests (1s • esc to interrupt)\n'],
+    ['recovered assistant output', rejection + ended + composer + 'The tests passed; committing the fix.\n'],
+  ])('preserves ordinary continuation for %s', async (_name, output) => {
+    const { controller, paste, finalizeAgent } = await submitted();
+    await controller.handleData(output);
+    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS + 10000);
+    expect(finalizeAgent).not.toHaveBeenCalled();
+    expect(paste).toHaveBeenCalledWith(STALL_NUDGE_TEXT, expect.any(Object));
+    await controller.handleExit({ exitCode: 0 });
+  });
+
+  it('discards a corroborated fixture when productive output resumes in a later chunk', async () => {
+    const { controller, finalizeAgent } = await submitted();
+    await controller.handleData(rejection + ended + composer);
+    await vi.advanceTimersByTimeAsync(2000);
+    await controller.handleData('• Working (2s • esc to interrupt)\n');
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(finalizeAgent).not.toHaveBeenCalled();
+    await controller.handleExit({ exitCode: 0 });
   });
 });

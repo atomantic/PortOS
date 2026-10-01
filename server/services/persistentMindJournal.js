@@ -14,6 +14,7 @@
  */
 
 import { join } from 'path';
+import { isRuntimeBudgetError } from '../lib/aiToolkit/errorDetection.js';
 import { PATHS, atomicWrite, readJSONFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { parseLLMJSON } from '../lib/llmText.js';
@@ -169,6 +170,7 @@ export async function extractPersistentMindJournal({
   const first = await Promise.resolve()
     .then(() => extract({ prompt }))
     .then((text) => ({ attempted: true, text }), (error) => ({ attempted: !isCallDenial(error), error }));
+  if (isRuntimeBudgetError(first.error)) throw first.error;
   if (!first.attempted) return { attempted: false, ok: false, applied: [], rejected: [] };
   if (first.error) {
     return { attempted: true, ok: false, applied: [], rejected: [], error: String(first.error?.message || first.error).slice(0, 300) };
@@ -179,6 +181,7 @@ export async function extractPersistentMindJournal({
     const repair = await Promise.resolve()
       .then(() => extract({ prompt: buildPersistentMindJournalRepairPrompt({ prompt, response: first.text, error: parsed.error }) }))
       .then((text) => ({ text }), (error) => ({ error }));
+    if (isRuntimeBudgetError(repair.error)) throw repair.error;
     if (repair.error) {
       return { attempted: true, ok: false, applied: [], rejected: [], error: String(repair.error?.message || repair.error).slice(0, 300) };
     }

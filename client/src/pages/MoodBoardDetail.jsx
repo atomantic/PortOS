@@ -434,7 +434,7 @@ function MoodBoardEditor({ id }) {
           maxLength={2048}
           placeholder="https://www.pinterest.com/user/board/"
           onChange={(e) => setPinUrl(e.target.value)}
-          className="flex-1 min-w-[180px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+          className="flex-[1_1_12rem] min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
         />
         <button
           type="button"
@@ -458,7 +458,7 @@ function MoodBoardEditor({ id }) {
   );
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4">
+    <div className="@container/board min-w-0 max-w-7xl mx-auto space-y-4">
       <button
         type="button"
         onClick={() => navigate('/mood-boards')}
@@ -469,8 +469,8 @@ function MoodBoardEditor({ id }) {
 
       {/* Board metadata — one compact row on desktop */}
       <div className="bg-port-card border border-port-border rounded-md p-3">
-        <div className="flex flex-col md:flex-row md:items-end gap-3">
-          <div className="md:w-72 shrink-0">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-0 flex-[1_1_16rem]">
             <label htmlFor="board-name" className="block text-xs text-gray-400 mb-1">Name</label>
             <input
               id="board-name"
@@ -481,7 +481,7 @@ function MoodBoardEditor({ id }) {
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
             />
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="min-w-0 flex-[2_1_20rem]">
             <label htmlFor="board-description" className="block text-xs text-gray-400 mb-1">Description</label>
             <textarea
               id="board-description"
@@ -507,8 +507,8 @@ function MoodBoardEditor({ id }) {
 
       <MoodBoardCollagePanel board={board} onBoardChange={setBoard} />
 
-      {/* Desktop 2-column layout: items on left, add forms on right column */}
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_400px] gap-6 items-start">
+      {/* Use board width, including space lost to the app sidebar. */}
+      <div className="grid grid-cols-1 @4xl/board:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
         {/* Left column: Mood board items */}
         <section aria-label="Mood board items" className="min-w-0 space-y-3">
           <div className="flex items-center justify-between">
@@ -520,7 +520,7 @@ function MoodBoardEditor({ id }) {
               No items yet. Pin an image or note to get started.
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,14rem),1fr))] gap-3">
               {items.map((item) => {
                 const src = moodBoardItemSrc(item);
                 const videoSrc = moodBoardItemVideoSrc(item);
@@ -530,7 +530,7 @@ function MoodBoardEditor({ id }) {
                 const promptText = moodBoardItemPrompt(item);
                 const displayText = promptText || item.caption || '';
                 return (
-                  <div key={item.id} className="bg-port-card border border-port-border rounded-md overflow-hidden flex flex-col">
+                  <div key={item.id} className="min-w-0 bg-port-card border border-port-border rounded-md overflow-hidden flex flex-col">
                     <div className="relative w-full aspect-square bg-port-bg">
                       {item.type === 'video' && videoSrc ? (
                         playingItemId === item.id ? (
@@ -628,8 +628,8 @@ function MoodBoardEditor({ id }) {
                         </div>
                       )}
                     </div>
-                    <div className="p-2 flex flex-col gap-1">
-                      <div className="flex items-center justify-between gap-1">
+                    <div className="min-w-0 p-3 flex flex-col gap-2">
+                      <div className="min-w-0 flex flex-wrap items-center justify-between gap-1">
                         <span className="text-[10px] font-medium text-gray-400 flex items-center gap-1">
                           {isAnalyzed ? (
                             <span className="text-port-accent flex items-center gap-0.5">
@@ -664,57 +664,56 @@ function MoodBoardEditor({ id }) {
                           const next = e.target.value.trim();
                           if (next !== displayText) handleUpdateItemText(item, next);
                         }}
-                        className="w-full bg-transparent border-0 border-b border-transparent focus:border-port-border text-xs text-gray-300 px-0 py-0.5 outline-none"
+                        className="min-w-0 w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-gray-300 focus:border-port-accent outline-none"
                       />
-                      <div className="flex items-center justify-between">
-                        {item.source ? (
-                          <span className="text-[10px] text-gray-500 truncate" title={item.source}>{item.source}</span>
-                        ) : <span />}
-                        <div className="flex items-center gap-1">
-                          {videoSrc ? (
-                            <span className="inline-flex items-center gap-1">
-                              <input
-                                type="number"
-                                min={1}
-                                max={24}
-                                value={frameCount}
-                                aria-label="Frames to extract"
-                                onChange={(e) => setFrameCount(Math.max(1, Math.min(24, Math.floor(Number(e.target.value)) || 1)))}
-                                className="w-10 bg-port-bg border border-port-border rounded px-1 py-0.5 text-white text-[11px] outline-none focus:border-port-accent"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleExtractFrames(item.id)}
-                                disabled={extractingItemId === item.id}
-                                title={`Extract ${frameCount} frame${frameCount === 1 ? '' : 's'} and add to board`}
-                                aria-label="Extract frames to board"
-                                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white disabled:opacity-50 transition-colors"
-                              >
-                                <Clapperboard className={`w-3.5 h-3.5 ${extractingItemId === item.id ? 'animate-pulse' : ''}`} aria-hidden="true" />
-                              </button>
-                            </span>
-                          ) : null}
-                          {analysisSource ? (
+                      {item.source ? (
+                        <span className="min-w-0 text-[10px] text-gray-500 truncate" title={item.source}>{item.source}</span>
+                      ) : null}
+                      <div className="flex flex-wrap items-center justify-end gap-1">
+                        {/* Keep the frame count with its extraction action when wrapping. */}
+                        {videoSrc ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 mr-auto">
+                            <input
+                              type="number"
+                              min={1}
+                              max={24}
+                              value={frameCount}
+                              aria-label="Frames to extract"
+                              onChange={(e) => setFrameCount(Math.max(1, Math.min(24, Math.floor(Number(e.target.value)) || 1)))}
+                              className="w-14 min-h-[44px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs outline-none focus:border-port-accent"
+                            />
                             <button
                               type="button"
-                              onClick={() => setAnalyzeItemId(item.id)}
-                              title={item.analysis ? 'View prompt from media' : 'Prompt from media'}
-                              aria-label={item.analysis ? 'View prompt from media' : 'Prompt from media'}
-                              className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 transition-colors ${item.analysis ? 'text-port-accent hover:text-port-accent/80' : 'text-gray-500 hover:text-white'}`}
+                              onClick={() => handleExtractFrames(item.id)}
+                              disabled={extractingItemId === item.id}
+                              title={`Extract ${frameCount} frame${frameCount === 1 ? '' : 's'} and add to board`}
+                              aria-label="Extract frames to board"
+                              className="min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center p-1 text-gray-500 hover:text-white disabled:opacity-50 transition-colors"
                             >
-                              <ScanEye className="w-3.5 h-3.5" aria-hidden="true" />
+                              <Clapperboard className={`w-3.5 h-3.5 ${extractingItemId === item.id ? 'animate-pulse' : ''}`} aria-hidden="true" />
                             </button>
-                          ) : null}
+                          </span>
+                        ) : null}
+                        {analysisSource ? (
                           <button
                             type="button"
-                            onClick={() => setConfirmingItemId(item.id)}
-                            title="Remove item"
-                            aria-label="Remove item"
-                            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
+                            onClick={() => setAnalyzeItemId(item.id)}
+                            title={item.analysis ? 'View prompt from media' : 'Prompt from media'}
+                            aria-label={item.analysis ? 'View prompt from media' : 'Prompt from media'}
+                            className={`min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center p-1 transition-colors ${item.analysis ? 'text-port-accent hover:text-port-accent/80' : 'text-gray-500 hover:text-white'}`}
                           >
-                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            <ScanEye className="w-3.5 h-3.5" aria-hidden="true" />
                           </button>
-                        </div>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => setConfirmingItemId(item.id)}
+                          title="Remove item"
+                          aria-label="Remove item"
+                          className="min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
                       </div>
                       {confirmingItemId === item.id ? (
                         <InlineConfirmRow
@@ -733,7 +732,7 @@ function MoodBoardEditor({ id }) {
         </section>
 
         {/* Right column: Add forms */}
-        <aside aria-label="Add to mood board" className="w-full space-y-6">
+        <aside aria-label="Add to mood board" className="@container/add-form min-w-0 w-full space-y-6">
           {/* Add item */}
           <div className="bg-port-card border border-port-border rounded-md p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -755,7 +754,7 @@ function MoodBoardEditor({ id }) {
                 ariaLabel="Item type"
               />
               {/* Gallery pins (#4188) — pick or upload, added to the board immediately. */}
-              <div className="flex items-center gap-2 sm:ml-auto">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setImagePickerOpen(true)}
@@ -800,7 +799,7 @@ function MoodBoardEditor({ id }) {
                   />
                 </div>
               )}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 @sm/add-form:grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="item-caption" className="block text-xs text-gray-400 mb-1">Caption (optional)</label>
                   <input
@@ -913,7 +912,7 @@ function MoodBoardEditor({ id }) {
             </div>
             <div>
               <label htmlFor="x-post-url" className="block text-xs text-gray-400 mb-1">Post URL</label>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <input
                   id="x-post-url"
                   type="text"
@@ -921,7 +920,7 @@ function MoodBoardEditor({ id }) {
                   maxLength={2048}
                   placeholder="https://x.com/user/status/1234567890"
                   onChange={(e) => setXPostUrl(e.target.value)}
-                  className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+                  className="flex-[1_1_12rem] min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
                 />
                 <button
                   type="button"

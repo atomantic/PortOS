@@ -20,6 +20,7 @@
  */
 
 import { readFile } from 'fs/promises';
+import { narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
 import { extname } from 'path';
 import { loadHistory } from '../videoGen/history.js';
 import { readDocumentFiles, documentMimeType } from './compositionDocument.js';
@@ -112,14 +113,15 @@ const BOOTSTRAP = `(() => {
  * The preview page and the assets to post into it:
  * `{ html, assets: [{ key, url, bytes }], width, height, fps, durationSec }`.
  */
-export async function buildDocumentPreview(project) {
+export async function buildDocumentPreview(project, { draft = false } = {}) {
   const files = await readDocumentFiles(project);
   const songDurationSec = documentSongDuration(project) || 0;
   const clock = documentRenderClock(songDurationSec);
   const frame = DOCUMENT_FRAME_SIZES[documentAspect(project)];
   const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
-  const media = await resolveSceneMedia(project, { history });
-  const data = buildDocumentData(project, { media, frame, clock, songDurationSec });
+  const media = await resolveSceneMedia(project, { history, strictLayers: project.composition?.document?.source?.kind === 'generated' });
+  const data = buildDocumentData(project, { media, frame, clock, songDurationSec,
+    generated: project.composition?.document?.source?.kind === 'generated' });
 
   let inlined = 0;
   const inlinedKeys = new Set();
@@ -170,7 +172,7 @@ export async function buildDocumentPreview(project) {
     const url = rel ? await dataUrl(rel) : null;
     if (url) html = html.split(match[0]).join(match[0].replace(match[1], () => `"${url}"`));
   }
-  const head = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}"><script>${BOOTSTRAP}</script><script>window.PORTOS_MV = ${scriptJson(data)};</script>`;
+  const head = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}"><script>${BOOTSTRAP}</script><script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
   const at = html.match(/<head[^>]*>/i);
   html = at ? `${html.slice(0, at.index + at[0].length)}${head}${html.slice(at.index + at[0].length)}` : `${head}${html}`;
 
@@ -183,7 +185,7 @@ export async function buildDocumentPreview(project) {
   }
   for (const [rel, file] of files) {
     if (inlinedKeys.has(rel) || !BRIDGED.has(extname(rel).toLowerCase())) continue;
-    assets.push({ key: rel, url: `/api/music-video/${encodeURIComponent(project.id)}/composition/document/file?path=${encodeURIComponent(rel)}`, bytes: file.size });
+    assets.push({ key: rel, url: `/api/music-video/${encodeURIComponent(project.id)}/composition/document/file?path=${encodeURIComponent(rel)}${draft ? '&draft=1' : ''}`, bytes: file.size });
   }
   return { html, assets, width: frame.width, height: frame.height, fps: clock.fps, durationSec: clock.durationSec };
 }

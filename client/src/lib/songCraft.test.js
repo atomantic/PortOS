@@ -13,7 +13,21 @@ import {
   harmonyPartOrder,
 } from './songCraft.js';
 
+import * as promptVocabulary from '../../../server/lib/songCraftRef.js';
+
 describe('songCraft reference data', () => {
+  // Catches one-sided edits to prompt/picker ids, order, or shared semantics.
+  it('matches AI prompt vocabulary in order and every shared field', () => {
+    for (const [name, picker] of Object.entries({ RHYTHM_SHAPES, VOICE_LAYERS, HARMONY_PARTS })) {
+      const prompt = promptVocabulary[name];
+      const sharedFields = [...new Set(prompt.flatMap((part) => Object.keys(part)))];
+      const projection = picker.map((part) => Object.fromEntries(sharedFields.map((field) => [field, part[field]])));
+      expect(projection, name).toEqual(prompt);
+    }
+    expect(DIRGE_RHYTHM_SHAPES.map((part) => part.id)).toEqual(promptVocabulary.DIRGE_RHYTHM_SHAPES.map((part) => part.id));
+    expect(DERIVABLE_HARMONY_PARTS.map((part) => part.id)).toEqual(promptVocabulary.DERIVABLE_HARMONY_PARTS.map((part) => part.id));
+  });
+
   it('every rhythm shape carries id, label, bpm band, feel, count and a boolean dirge flag', () => {
     const ids = new Set();
     for (const s of RHYTHM_SHAPES) {

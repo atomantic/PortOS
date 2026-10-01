@@ -36,6 +36,7 @@ import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { ALWAYS_RUN_TESTS } from './ci-test-plan.js';
+import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -126,6 +127,17 @@ const gitPaths = (args, cwd = REPO_ROOT) => execFileSync('git', args, { cwd, enc
   .split('\0')
   .filter(Boolean);
 
+/** Unmerged index paths, including every conflict stage and unusual path name. */
+export function unmergedIndexPaths(output) {
+  const paths = [];
+  for (const entry of output.split('\0').filter(Boolean)) {
+    // `git ls-files -u -z` emits `<mode> <object> <stage>\t<path>\0`.
+    const separator = entry.indexOf('\t');
+    if (separator !== -1) paths.push(entry.slice(separator + 1));
+  }
+  return [...new Set(paths)].sort();
+}
+
 /** Paths represented by NUL-delimited `git status --porcelain=v1` output. */
 export function statusPaths(output) {
   const entries = output.split('\0').filter(Boolean);
@@ -174,6 +186,19 @@ export function parseArgs(argv) {
 }
 
 function main() {
+  assertNodeVersion();
+
+  const unmerged = spawnSync('git', ['ls-files', '-u', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' });
+  if (unmerged.status !== 0) {
+    console.error(`❌ Cannot inspect the Git index for unresolved conflicts: ${unmerged.stderr || 'git ls-files failed'}`);
+    process.exit(2);
+  }
+  const conflictPaths = unmergedIndexPaths(unmerged.stdout);
+  if (conflictPaths.length > 0) {
+    console.error(`❌ Cannot run pregate with unresolved Git conflicts:\n${conflictPaths.map((path) => `  ${path}`).join('\n')}`);
+    process.exit(1);
+  }
+
   const options = parseArgs(process.argv.slice(2));
   const baseRef = options.base || defaultBaseRef();
 

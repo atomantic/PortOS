@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { _cleanupTestBrowser } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
 
 const state = vi.hoisted(() => ({ html: '' }));
 let endpoint;
@@ -79,16 +79,19 @@ describe.skipIf(!chrome || !ffmpeg || !ffprobe)('Code Animation frame-exact expo
   beforeAll(async () => {
     const profile = join(lazyTempDataRoot('portos-code-animation-export-'), 'chrome-test-profile');
     proc = spawn(chrome, ['--headless=new', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
-    const ws = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Test Chrome did not start')), 20000);
-      proc.once('error', reject);
-      proc.stderr.on('data', bytes => {
-        const match = bytes.toString().match(/DevTools listening on (ws:\/\/\S+)/);
-        if (match) { clearTimeout(timer); resolve(match[1]); }
-      });
-    });
-    endpoint = new URL(ws).origin.replace('ws:', 'http:');
-    browser = await chromium.connectOverCDP(endpoint);
+    try {
+      const ws = await _waitForTestChrome(proc);
+      endpoint = new URL(ws).origin.replace('ws:', 'http:');
+      browser = await chromium.connectOverCDP(endpoint);
+    } catch (error) {
+      try {
+        await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
+        proc = undefined;
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], `${error.message}; cleanup: ${cleanupError.message}`);
+      }
+      throw error;
+    }
   }, 30000);
 
   afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));

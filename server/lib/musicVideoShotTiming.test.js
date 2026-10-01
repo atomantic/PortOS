@@ -84,3 +84,37 @@ describe('shotSplitLimit', () => {
     expect(shotSplitLimit({ shotMode: 'cutaway', visualLayer: 'still' }, 'grok')).toBeNull();
   });
 });
+
+// Each failure variant is a distinct admission regression: evidence, word
+// gap, provider minimum, or timebase mismatch must never resubmit a prefix.
+describe('accepted-prefix repair planning', () => {
+  const scene = { shotMode: 'performance', sceneId: 'example', videoHistoryId: 'clip', startSec: 10, endSec: 24,
+    takes: [{ kind: 'video', assetId: 'clip', shotInstruction: { shotMode: 'performance',
+      songInterval: { startSec: 10, endSec: 24 }, audio: { songDurationSec: 30 }, audioWindow: { startSec: 8 },
+      edit: { inSec: 2, outSec: 16 }, cues: [{ startSec: 2, endSec: 16, words: [
+        { startSec: 2, endSec: 5.8 }, { startSec: 6.2, endSec: 16 },
+      ] }] } }] };
+  const temporal = { status: 'verified', takeId: 'clip', analyzer: { id: 'synthetic' }, spans: [
+    { startSec: 2, endSec: 6, status: 'verified', offsetSec: 0.01, confidence: 0.95 },
+    { startSec: 6, endSec: 16, status: 'verified', offsetSec: 0.3, confidence: 0.95 },
+  ] };
+  it('maps excerpt evidence and clip-relative words to the exact source suffix and reference frame', async () => {
+    const { planPerformanceRepair } = await import('./musicVideoShotTiming.js');
+    expect(planPerformanceRepair({ scene, temporal, excerptStartSec: 8, backend: 'fal' }))
+      .toMatchObject({ ok: true, boundarySec: 14, endSec: 24, suffixSec: 10, referenceClipSec: 6, costUsd: 1.6 });
+  });
+  it('rejects inconclusive/partial evidence, unsafe word gaps, short suffixes and unsupported routes', async () => {
+    const { planPerformanceRepair } = await import('./musicVideoShotTiming.js');
+    const plan = (overrides = {}) => planPerformanceRepair({ scene, temporal, excerptStartSec: 8, backend: 'fal', ...overrides });
+    expect(plan({ temporal: { ...temporal, status: 'unverified' } }).ok).toBe(false);
+    expect(plan({ temporal: { ...temporal, spans: [{ ...temporal.spans[0], confidence: null }, temporal.spans[1]] } }).ok).toBe(false);
+    expect(plan({ excerptStartSec: 8.1 }).ok).toBe(false);
+    expect(plan({ backend: 'grok' }).ok).toBe(false);
+    const unsafe = structuredClone(scene);
+    unsafe.takes[0].shotInstruction.cues[0].words[0].endSec = 6.3;
+    expect(plan({ scene: unsafe }).ok).toBe(false);
+    const short = structuredClone(scene);
+    short.takes[0].shotInstruction.cues[0].words = [{ startSec: 2, endSec: 12 }, { startSec: 12.2, endSec: 16 }];
+    expect(plan({ scene: short }).ok).toBe(false);
+  });
+});

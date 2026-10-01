@@ -1,3 +1,5 @@
+import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
+export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
@@ -11,6 +13,7 @@ import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } fro
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { MAX_PLAN_TIER_LENGTH } from './subscriptionPlanTiers.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
+import { FAL_IMAGE_MODEL_IDS } from './falImageModels.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
   grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter, csvIdsParam,
@@ -78,14 +81,6 @@ export const gitDeleteBranchBodySchema = z.object({
 });
 
 
-// gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
-// pixels. Mirror the ceiling for every image-gen route. Local mflux can
-// render up to 3840 in principle but is impractically slow past ~2048 — the
-// UI's `compatible: ['codex']` filter on the 4K presets keeps those out of
-// the local picker. Shared so the cap and refinement message stay identical
-// across schemas.
-export const MAX_IMAGE_EDGE = 3840;
-export const MAX_IMAGE_PIXELS = 8_294_400;
 export const imageEdgeSchema = z.number().int().min(64).max(MAX_IMAGE_EDGE).optional();
 export const refineImagePixelCap = (d) =>
   !(d.width && d.height) || d.width * d.height <= MAX_IMAGE_PIXELS;
@@ -123,6 +118,10 @@ export {
 // *_PORT env vars (coinbaseIpc, geminiIpc, etc.) survive validation alongside
 // the well-known labels (api, ui, devUi, cdp, health).
 export const processListQuerySchema = z.object({ appId: z.string().min(1).optional() });
+
+// Reject option-shaped names before PM2 interprets positional arguments.
+export const pm2ProcessNameSchema = z.string().min(1).max(120)
+  .regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*$/, 'Must start with an alphanumeric character or underscore');
 
 export const logsQuerySchema = z.object({
   lines: z.coerce.number().int().min(1).max(5000).default(100),
@@ -2093,6 +2092,18 @@ export const videoGenSettingsSchema = z.object({
 export const videoModelTermsSchema = z.object({
   termsId: z.string().trim().min(1).max(128),
   accepted: z.boolean(),
+});
+
+// fal.ai Imagegen settings slice (`imageGen.fal`). The API key is NOT here —
+// it is the fal.ai credential the video backend already owns (write-only via
+// PUT /api/settings/credentials/fal). `model` must name a catalog endpoint
+// (lib/falImageModels.js): each id is a different price, so free text is
+// refused rather than persisted and discovered at render time.
+export const imageGenFalSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  model: z.preprocess((v) => (v === '' ? undefined : v), z.enum(FAL_IMAGE_MODEL_IDS).optional()),
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
 });
 
 export const imageGenAgySettingsSchema = z.object({

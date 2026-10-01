@@ -13,6 +13,7 @@ export const MUSIC_VIDEO_STAGES = [
   { id: 'produce', label: 'Produce', title: 'Produce' },
   { id: 'compose', label: 'Compose', title: 'Compose' },
   { id: 'review', label: 'Review', title: 'Review & Export' },
+  { id: 'publish', label: 'Publish', title: 'Publish' },
 ];
 
 // Stages whose tab keeps the preview player docked beside the content.
@@ -101,6 +102,8 @@ export function deriveStages(project) {
     produce: produceDone,
     compose: composeDone(project || {}, mode),
     review: !!project?.renderHistoryId,
+    // #9281/#9282: a release is published once any platform post is recorded.
+    publish: Object.keys(project?.publishKit?.posts || {}).length > 0,
   };
   const blocked = {
     'cast-sets': castStopped,
@@ -108,7 +111,7 @@ export function deriveStages(project) {
   };
   const current = liveRun
     ? 'produce'
-    : (MUSIC_VIDEO_STAGES.find((stage) => !done[stage.id])?.id || 'review');
+    : (MUSIC_VIDEO_STAGES.find((stage) => !done[stage.id])?.id || 'publish');
   const stages = MUSIC_VIDEO_STAGES.map((stage) => {
     let state = 'todo';
     if (done[stage.id] && !(stage.id === current && liveRun)) state = 'done';
@@ -175,6 +178,10 @@ export function deriveNextAction(project, {
         id: 'goto-compose', kind: 'goto', stage: 'compose',
         label: (project.composition?.mode === 'document') ? 'Attach a composition' : 'Add typography',
       };
+    case 'publish':
+      return project.publishKit?.builtAt
+        ? { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Publish the release' }
+        : { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit' };
     default:
       if (project.renderHistoryId) return { id: 'goto-final', kind: 'goto', stage: 'review', anchor: 'mv-final-video', label: 'Watch final video' };
       return {

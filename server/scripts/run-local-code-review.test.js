@@ -76,15 +76,15 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
     await rm(root, { recursive: true, force: true });
   });
   expect(results).toHaveLength(5);
-  // A generic harness has no enforced reviewer mode: it still reviews code,
-  // ordinary or claim, confined to a scratch cwd (the harness fails if it can
-  // see the caller's checkout), but public-comment screening refuses it.
-  for (const result of [results[2], results[3]]) {
-    expect(result.code, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, backend: 'provider:example-cli', findings: 'NO FINDINGS' });
+  // A generic harness can review ordinary code from scratch, but claim
+  // review and public-comment screening require an enforced reviewer mode.
+  expect(results[2].code, results[2].stderr).toBe(0);
+  expect(JSON.parse(results[2].stdout)).toMatchObject({ ok: true, backend: 'provider:example-cli', findings: 'NO FINDINGS' });
+  for (const result of [results[3], results[4]]) {
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/REVIEWER_UNSUPPORTED/);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
   }
-  expect(results[4].code).not.toBe(0);
-  expect(results[4].stderr).toMatch(/REVIEWER_UNSUPPORTED/);
   for (const [index, model] of ['review-model', 'default-model'].entries()) {
     const result = results[index];
     expect(result.code, result.stderr).toBe(0);

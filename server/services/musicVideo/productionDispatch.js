@@ -1,3 +1,4 @@
+import { currentPlateEvidence } from '../../lib/musicVideoPlateEvidence.js';
 /**
  * Music Video production run (#9066) — server-side scene generation.
  *
@@ -20,6 +21,7 @@
  * passes the revision's enqueue-time guard first, exactly as the routes do.
  */
 
+import { withMusicVideoStyle } from './styleReferences.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
@@ -41,7 +43,10 @@ async function guardRevision(tag, kind) {
 
 /** Enqueue a scene's reference frame on exactly `route`. Returns `{ jobId }`. */
 async function dispatchFrame({ project, scene, route, tag, settings }) {
-  const prompt = sceneFramePrompt(project, scene);
+  const basePrompt = sceneFramePrompt(project, scene);
+  const repairing = project.productionRuns?.find((run) => run.id === tag.productionRunId)?.steps?.find((step) => step.key === tag.productionStepKey)?.plateRepairBasis;
+  const unmet = repairing ? (scene.takes || []).flatMap((take) => currentPlateEvidence(scene, take)?.checks.filter((check) => check.status === 'fail').map((check) => `${check.requirement}: ${check.note}`) || []) : [];
+  const prompt = basePrompt && [basePrompt, unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${[...new Set(unmet)].join('\n')}` : ''].filter(Boolean).join('\n');
   if (!prompt) throw unprompted(scene, 'frame');
   const referenceImagePaths = conditioningReferences(project, scene)
     .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);
@@ -66,10 +71,13 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     ...(referenceImagePaths.length ? { referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : {}),
     musicVideo: tag,
   };
-  const params = resolved.cloud
+  const baseParams = resolved.cloud
     ? { ...resolved.cloud.jobParams, ...common }
     : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: route.model, ...common };
+  const params = await withMusicVideoStyle(project, baseParams, route.mode, route.model, settings);
   await guardRevision(tag, 'image');
+  const { assertProductionSubmission } = await import('./productionService.js');
+  await assertProductionSubmission(tag.projectId, tag.productionRunId, tag.productionStepKey, { sceneId: tag.sceneId, kind: 'image' });
   const { jobId } = await enqueueJob({ kind: 'image', params, owner: `music-video-production:${tag.productionRunId}` });
   return { jobId };
 }

@@ -24,7 +24,10 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
-  default: () => ({
+  default: (options) => options.allowDefault === false ? {
+    providers: [{ id: 'local-fixture', name: 'Local fixture', models: ['fixture-model'] }], selectedProviderId: 'local-fixture', selectedModel: 'fixture-model', availableModels: ['fixture-model'],
+    setSelectedProviderId: () => {}, setSelectedModel: () => {},
+  } : ({
     providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
     setSelectedProviderId: () => {}, setSelectedModel: () => {},
   }),
@@ -154,6 +157,60 @@ function ProductionHarness({ initial }) {
 describe('AutopilotPanel production run', () => {
   beforeEach(() => { vi.clearAllMocks(); listeners.clear(); });
 
+  it('shows a zero-allowance plan and requires an approved scene plan before Start', () => {
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [],
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      audioAnalysis: { durationSec: 30 }, scenes: [], treatment: { shotDirections: [] },
+    }} />);
+    expect(screen.getByText(/generated video 0 \/ 0 seconds/)).toBeTruthy();
+    expect(screen.getByLabelText('Code-first asset preflight')).toHaveTextContent('Routes needed for selected assets: no image · no video');
+    expect(screen.getByRole('button', { name: /Start production/ })).toBeDisabled();
+  });
+
+  it('starts a code-only plan with a separate authoring model and an empty image/video pool', async () => {
+    api.startMusicVideoProduction.mockResolvedValueOnce({});
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [],
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      composition: { mode: 'document' }, audioAnalysis: { durationSec: 8 },
+      scenes: [{ sceneId: 'code', startSec: 0, endSec: 8 }],
+      treatment: { revision: 1, appliedRevision: 1, shotDirections: [{ sceneId: 'code', medium: 'procedural', mediumRationale: 'Typography' }] },
+    }} />);
+    expect(api.startMusicVideoProduction).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start production' }));
+    await waitFor(() => expect(api.startMusicVideoProduction).toHaveBeenCalled());
+    expect(api.startMusicVideoProduction.mock.calls[0][1]).toMatchObject({ pool: [], authoring: { providerId: 'local-fixture', model: 'fixture-model' } });
+  });
+
+  it('preflights selected assets without treating procedural or imported shots as generation jobs', () => {
+    const directions = [
+      { sceneId: 'code', medium: 'procedural', mediumRationale: 'Type motion' },
+      { sceneId: 'still', medium: 'still', mediumRationale: 'Poster image' },
+      { sceneId: 'imported', medium: 'existing-footage', mediumRationale: 'Existing performance' },
+      { sceneId: 'exception', medium: 'generated-footage', mediumRationale: 'One motion exception' },
+    ];
+    const scenes = [
+      { sceneId: 'code', startSec: 0, endSec: 5 },
+      { sceneId: 'still', startSec: 5, endSec: 10, referenceImageId: 'selected-image' },
+      { sceneId: 'imported', startSec: 10, endSec: 15 },
+      { sceneId: 'exception', startSec: 15, endSec: 20 },
+    ];
+    const project = { id: 'p1', productionRuns: [], productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 25 },
+      audioAnalysis: { durationSec: 20 }, scenes, treatment: { shotDirections: directions } };
+    const { rerender } = render(<ProductionHarness initial={project} />);
+    const preflight = screen.getByLabelText('Code-first asset preflight');
+    expect(preflight).toHaveTextContent('Procedural: 1 · Reused stills: 1 · Reused takes: 0 · Still jobs: 1 · Video jobs: 1');
+    expect(preflight).toHaveTextContent('Routes needed for selected assets: image · video');
+    expect(preflight).toHaveTextContent('Select an existing take for imported before production.');
+    expect(api.startMusicVideoProduction).not.toHaveBeenCalled();
+    // A selected imported take is reused; the generated exception still needs
+    // its own frame and video submission.
+    rerender(<AutopilotPanel project={{ ...project, scenes: scenes.map((scene) => scene.sceneId === 'imported'
+      ? { ...scene, videoHistoryId: 'selected-video' } : scene) }} production={IDLE_PRODUCTION}
+      onSave={vi.fn()} onKickoff={vi.fn()} kickoffBusy={false} />);
+    expect(screen.getByLabelText('Code-first asset preflight')).toHaveTextContent('Reused takes: 1 · Still jobs: 1 · Video jobs: 1');
+    expect(screen.getByLabelText('Code-first asset preflight')).not.toHaveTextContent('Select an existing take');
+  });
+
   it('starts only when the director presses Start, with the allowed pool and limits', async () => {
     api.startMusicVideoProduction.mockResolvedValue({ project: { id: 'p1', productionRuns: [run()] }, run: run() });
     render(<ProductionHarness initial={{ id: 'p1', productionRuns: [] }} />);
@@ -169,6 +226,17 @@ describe('AutopilotPanel production run', () => {
     expect(await screen.findByText('Running')).toBeTruthy();
   });
 
+  it('explains a terminal refusal without hiding the stop and recovery controls', () => {
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [run({
+      status: 'blocked', steps: [{ key: 'frame:a:base:1', kind: 'frame', route: { kind: 'image', mode: 'local' },
+        status: 'refused', error: 'Unsupported request', retryBlocked: true }],
+    })] }} />);
+    expect(screen.getByText(/unchanged inputs will not be submitted again/)).toBeTruthy();
+    expect(screen.getByText(/No new spend is reserved while blocked/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Cancel/ })).toBeTruthy();
+    expect(api.resumeMusicVideoProduction).not.toHaveBeenCalled();
+  });
+
   it('shows an interrupted run and resumes it only on request; pushed projects update it', async () => {
     api.resumeMusicVideoProduction.mockResolvedValue({ project: { id: 'p1', productionRuns: [run()] }, run: run() });
     render(<ProductionHarness initial={{ id: 'p1', productionRuns: [run({ interrupted: true })] }} />);
@@ -182,5 +250,39 @@ describe('AutopilotPanel production run', () => {
       project: { id: 'p1', productionRuns: [run({ status: 'blocked', stopReason: 'No allowed route can generate the frame' })] },
     }));
     expect(await screen.findByText(/No allowed route can generate the frame/)).toBeTruthy();
+  });
+});
+
+describe('AutopilotPanel budgeted pilot evidence (#9351)', () => {
+  beforeEach(() => { vi.clearAllMocks(); listeners.clear(); });
+
+  it('renders pushed pilot evidence, repair reasons and known versus unpriced accounting without starting work', () => {
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [run({
+      status: 'blocked', accounting: { plannedGenerations: 1200, reservedUsd: 1.25, spentUsd: 2.5, unpriced: true, reviews: 1 },
+      nextSpend: { kind: 'review', costUsd: null },
+      pilot: { scenes: [{ sceneId: 'shot-example', operation: 'performance', status: 'inconclusive', excerptId: 'excerpt-example',
+        evidence: { continuous: true, continuousFrames: 12, temporal: { status: 'unverified' } },
+        repair: { category: 'temporal-alignment', reason: 'Preview a timing edit.', expectedGenerationSpendUsd: 0 } }] },
+    })], excerpts: [{ id: 'excerpt-example', filename: 'synthetic-pilot.mp4' }] }} />);
+    expect(screen.getByLabelText('Production budget')).toHaveTextContent('Planned remaining: 1,200 asset jobs · Reserved: $1.25 · Spent: $2.50 + unpriced calls');
+    expect(screen.getByLabelText('Production budget')).toHaveTextContent('Expected next spend: unpriced');
+    expect(screen.getByLabelText('Production pilot evidence')).toHaveTextContent('Temporal alignment: unverified');
+    expect(screen.getByLabelText('Production pilot evidence')).toHaveTextContent('Repair: temporal-alignment');
+    expect(screen.getByRole('link', { name: 'Watch pilot' })).toHaveAttribute('href', '/data/videos/synthetic-pilot.mp4');
+    expect(api.startMusicVideoProduction).not.toHaveBeenCalled();
+    expect(api.resumeMusicVideoProduction).not.toHaveBeenCalled();
+  });
+
+  it('raises only explicit limits on Resume and disables an invalid budget', async () => {
+    api.resumeMusicVideoProduction.mockResolvedValueOnce({});
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [run({ status: 'limit-reached',
+      limits: { maxGenerations: 12, maxReviewAttempts: 3, spendCapUsd: 5 } })] }} />);
+    fireEvent.change(screen.getByLabelText('Max reviews'), { target: { value: '2' } });
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Max reviews'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('Spend cap (USD)'), { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(api.resumeMusicVideoProduction).toHaveBeenCalled());
+    expect(api.resumeMusicVideoProduction).toHaveBeenCalledWith('p1', 'run-1', { limits: { maxGenerations: 12, maxReviewAttempts: 5, spendCapUsd: 8 } }, { silent: true });
   });
 });

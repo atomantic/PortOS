@@ -1,0 +1,138 @@
+/**
+ * Music Video publishing (#9282) — what each platform posts, built from the
+ * project's publishing kit (#9281). Pure: project + kit + the director's
+ * per-platform options in, a payload of text and file NAMES out (the service
+ * resolves names to paths), or a 422 naming what is missing.
+ */
+import { ServerError } from '../../../lib/errorHandler.js';
+import { chaptersText } from '../publishKitText.js';
+
+const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80 };
+const DEFAULT_SUBREDDIT = 'aivideo';
+
+const missing = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+const text = (v) => (typeof v === 'string' ? v.trim() : '');
+const kitOf = (project) => (project?.publishKit && typeof project.publishKit === 'object' ? project.publishKit : {});
+
+/** The newest finished 9:16 social cut (#9280): what Shorts, TikTok and Reels upload. */
+function latestVerticalCut(project) {
+  const cuts = (project?.excerpts || []).filter((e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename);
+  return cuts.length ? cuts[cuts.length - 1] : null;
+}
+
+/** The full video's public link: the recorded YouTube post, else the one the director gave the kit. */
+const fullVideoUrl = (kit) => text(kit.posts?.youtube?.url) || text(kit.links?.youtube) || '';
+const songUrl = (kit, options) => text(options?.songUrl) || text(kit.posts?.suno?.url) || text(kit.links?.song) || '';
+
+function requireTitle(platform, title) {
+  if (!title) throw missing(`Write the ${platform} title in the release copy first`);
+  const max = TITLE_LIMITS[platform];
+  if (max && title.length > max) throw missing(`The ${platform} title is ${title.length} characters; the limit is ${max}`);
+  return title;
+}
+
+function youtubeDescription(kit) {
+  const body = text(kit.copy?.youtube?.description);
+  // YouTube makes chapters from the description's timestamps; add them unless the copy already has them.
+  const chapters = Array.isArray(kit.chapters) && kit.chapters.length && !/(^|\n)0:00\s/.test(body) ? `\n\nChapters\n${chaptersText(kit.chapters)}` : '';
+  return `${body}${chapters}`.trim();
+}
+
+// A typed "@" on Instagram opens the mention picker, which swallows the next word.
+const instagramSafe = (caption) => caption.replace(/@(\w)/g, '$1');
+
+const BUILDERS = {
+  youtube: (project, kit) => {
+    if (!kit.master?.filename) throw missing('Build the publishing kit first — it names the final render to upload');
+    return {
+      video: { dir: 'videos', name: kit.master.filename },
+      title: requireTitle('youtube', text(kit.copy?.youtube?.title)),
+      description: youtubeDescription(kit),
+      tags: (kit.copy?.youtube?.tags || []).map(text).filter(Boolean),
+      thumbnail: kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null,
+      captions: kit.captionsFilename ? { dir: 'videos', name: kit.captionsFilename } : null,
+    };
+  },
+  shorts: (project, kit) => {
+    const cut = latestVerticalCut(project);
+    if (!cut) throw missing('Render a 9:16 social cut on the Review stage first');
+    const url = fullVideoUrl(kit);
+    const description = [text(kit.copy?.shorts?.description), url && !text(kit.copy?.shorts?.description).includes(url) ? `Full video: ${url}` : ''].filter(Boolean).join('\n\n');
+    return { video: { dir: 'videos', name: cut.filename }, title: requireTitle('shorts', text(kit.copy?.shorts?.title)), description, tags: [], thumbnail: null, captions: null };
+  },
+  tiktok: (project, kit) => {
+    const cut = latestVerticalCut(project);
+    if (!cut) throw missing('Render a 9:16 social cut on the Review stage first');
+    return { video: { dir: 'videos', name: cut.filename }, caption: text(kit.copy?.tiktok?.caption), coverAtSec: Math.max(0, (cut.endSec - cut.startSec) / 2) };
+  },
+  instagram: (project, kit) => {
+    const cut = latestVerticalCut(project);
+    if (!cut) throw missing('Render a 9:16 social cut on the Review stage first');
+    return { video: { dir: 'videos', name: cut.filename }, caption: instagramSafe(text(kit.copy?.instagram?.caption)) };
+  },
+  x: (project, kit, options = {}) => {
+    const hook = text(kit.copy?.x?.hook);
+    if (!hook) throw missing('Write the X hook post in the release copy first');
+    const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
+    if (!clip) throw missing('Build the publishing kit first — the X post carries its 1080p encode');
+    const links = [
+      songUrl(kit, options) ? `The song: ${songUrl(kit, options)}` : '',
+      // X builds a post's link card from its LAST link, so the full video goes last.
+      fullVideoUrl(kit) ? `Full video: ${fullVideoUrl(kit)}` : '',
+    ].filter(Boolean).join('\n');
+    const posts = [
+      { text: hook, media: { dir: 'videos', name: clip } },
+      text(kit.copy?.x?.story) ? { text: text(kit.copy.x.story), media: options.storyImage ? { dir: 'videoThumbnails', name: options.storyImage } : null } : null,
+      text(options.prompt) ? { text: text(options.prompt), media: null } : null,
+      links ? { text: links, media: null } : null,
+    ].filter(Boolean);
+    return { posts };
+  },
+  reddit: (project, kit, options = {}) => {
+    // r/aivideo is the default (#9307): a native video post, title + flair, no
+    // body. Showcase posts to tool-support subs (r/ClaudeAI, r/SunoAI) landed poorly.
+    const subreddit = (text(options.subreddit) || DEFAULT_SUBREDDIT).replace(/^\/?r\//i, '');
+    if (!/^[A-Za-z0-9_]{2,21}$/.test(subreddit)) throw missing('Name the subreddit to post in');
+    const kind = ['self', 'link', 'video'].includes(options.kind) ? options.kind : 'video';
+    const title = requireTitle('reddit', text(kit.copy?.reddit?.title));
+    // r/SunoAI removes song posts whose title doesn't open with the genre in brackets.
+    if (subreddit.toLowerCase() === 'sunoai' && !/^\[[^\]]+\]/.test(title)) throw missing('r/SunoAI titles must start with the genre in brackets, e.g. [Electropop] Song Name');
+    // r/aivideo removes posts whose title doesn't name the video.
+    if (subreddit.toLowerCase() === 'aivideo' && project?.name && !title.toLowerCase().includes(String(project.name).toLowerCase())) {
+      throw missing(`r/aivideo titles must include the video's name ("${project.name}")`);
+    }
+    let video = null;
+    if (kind === 'video') {
+      if (!kit.master?.filename) throw missing('Build the publishing kit first — a Reddit video post uploads the final render');
+      video = { dir: 'videos', name: kit.master.filename };
+    }
+    const url = kind === 'link' ? (text(options.url) || fullVideoUrl(kit)) : '';
+    if (kind === 'link' && !url) throw missing('A Reddit link post needs the full video URL');
+    return {
+      subreddit, kind, title, body: kind === 'video' ? '' : text(kit.copy?.reddit?.body), url, video,
+      flairId: text(options.flairId) || null, flairText: text(options.flairText) || null, firstComment: text(options.firstComment) || null,
+    };
+  },
+  stackerNews: (project, kit, options = {}) => {
+    const url = fullVideoUrl(kit);
+    if (!url) throw missing('Stacker News posts link to the full video: publish to YouTube first, or add its URL to the kit');
+    const territory = text(options.territory || 'art').replace(/^~/, '');
+    if (!/^[A-Za-z0-9_]{1,32}$/.test(territory)) throw missing('Name the Stacker News territory');
+    return { territory, title: requireTitle('stackerNews', text(kit.copy?.stackerNews?.title)), url, body: text(kit.copy?.stackerNews?.body), firstComment: text(options.firstComment) || null };
+  },
+  suno: (project, kit, options = {}) => {
+    const song = songUrl(kit, options);
+    if (!/^https:\/\/(www\.)?suno\.com\/song\/[\w-]+/.test(song)) throw missing('Give the Suno song URL to publish (suno.com/song/…)');
+    const video = fullVideoUrl(kit);
+    const lead = text(kit.copy?.youtube?.description).split(/\n\s*\n/)[0] || '';
+    const caption = [lead, video ? `Music video: ${video}` : ''].filter(Boolean).join(' ').slice(0, 500);
+    return { songUrl: song, caption, cover: kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null, pin: options.pin !== false };
+  },
+};
+
+/** The payload one platform posts, or a 422 naming the first missing piece. */
+export function buildPublishPayload(platform, project, options = {}) {
+  const build = BUILDERS[platform];
+  if (!build) throw new ServerError(`Unknown publish target: ${platform}`, { status: 400, code: 'VALIDATION_ERROR' });
+  return build(project, kitOf(project), options || {});
+}

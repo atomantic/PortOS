@@ -14,7 +14,9 @@
  * already on the record, so federation was purely additive (no record migration).
  */
 
+import { remapMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
+import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   MUSIC_VIDEO_STATUSES,
@@ -52,7 +54,7 @@ export function mirrorStatus(status) {
 
 /** Return the next record with `extra` merged and `updatedAt` freshly stamped. */
 function touch(record, extra) {
-  return { ...record, ...extra, updatedAt: new Date().toISOString() };
+  return retainMusicVideoDependencies(record, { ...record, ...extra, updatedAt: new Date().toISOString() });
 }
 
 /** safeParse a scene payload, throwing a 400 ServerError with field detail on failure. */
@@ -113,10 +115,12 @@ export function buildProjectRecord(input, { id, now }) {
     updatedAt: now,
     trackId,
     uploadedAudioFilename,
+    ...(input.performanceConditioningSource ? { performanceConditioningSource: input.performanceConditioningSource } : {}),
     concept,
     // #8965 — the reusable visual specification (moodboard/reference assets,
     // palette, typography, camera rules). Null until the director sets one.
     visualSpec: input.visualSpec ? normalizeVisualSpec(input.visualSpec) : null,
+    ...(input.styleReferences ? { styleReferences: input.styleReferences } : {}),
     videoSettings: {
       backend: videoSettings.backend ?? 'local',
       modelId: videoSettings.modelId ?? null,
@@ -157,6 +161,7 @@ export function buildProjectRecord(input, { id, now }) {
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
+    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy),
     scenes: [],
     renderHistoryId: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
@@ -197,6 +202,9 @@ export function cloneProjectRecord(source, {
     // carries the whole candidate history; a clean clone starts empty.
     takes: includeGeneratedMedia ? ensureSceneTakes(scene, now) : [],
   }));
+  for (const scene of scenes) scene.takes = scene.takes.map((take) => ({ ...take,
+    ...(take.dependencies ? { dependencies: remapMusicVideoDependencies(take.dependencies, sceneIdMap) } : {}),
+  }));
   const mediaReady = includeGeneratedMedia
     && scenes.length > 0
     && scenes.every((scene) => scene.referenceImageId && scene.videoHistoryId);
@@ -212,6 +220,12 @@ export function cloneProjectRecord(source, {
     createdAt: now,
     updatedAt: now,
     scenes,
+    ...(source.composition?.grade ? { composition: {
+      ...source.composition,
+      grade: { ...source.composition.grade, sections: (source.composition.grade.sections || []).map((section) => ({
+        ...section, sceneId: sceneIdMap.get(section.sceneId) ?? section.sceneId,
+      })) },
+    } } : {}),
     // #8980 — the treatment's shot directions and proofs follow the scenes to
     // their new ids; proof evidence the clone can't back is dropped.
     treatment: source.treatment ? remapTreatmentForClone(source.treatment, sceneIdMap, {
@@ -226,12 +240,13 @@ export function cloneProjectRecord(source, {
       // A running encoder belongs only to the source project. Copying its
       // partial-file ownership would let clone recovery delete that output.
       excerpts: source.excerpts.filter((excerpt) => excerpt?.status !== 'rendering').map((excerpt) => (Array.isArray(excerpt?.sections)
-        ? { ...excerpt, sections: excerpt.sections.map((s) => ({ ...s, sceneId: sceneIdMap.get(s.sceneId) ?? s.sceneId })) }
+        ? { ...excerpt, dependencies: remapMusicVideoDependencies(excerpt.dependencies, sceneIdMap), sections: excerpt.sections.map((s) => ({ ...s, sceneId: sceneIdMap.get(s.sceneId) ?? s.sceneId })) }
         : excerpt)),
     } : {}),
     // A revision is in-progress work against the SOURCE's takes; the clone
     // starts with none (its carried-over notes can open a fresh one).
     revisions: [],
+    audioTimingRevisions: [],
     // #9102: an auto-review run is tied to the SOURCE's revisions/excerpts, so a
     // clone starts with none (terminal runs too — their links are source-scoped).
     ...(Array.isArray(source.autoReviews) ? { autoReviews: [] } : {}),
@@ -244,6 +259,7 @@ export function cloneProjectRecord(source, {
     // interrupted on the clone and can be resumed there.
     ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
     renderHistoryId: null,
+    renderDependencies: null,
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
     renderPartialFilename: null,
@@ -267,6 +283,7 @@ export function applyProjectPatch(project, patch) {
   // `visualSpec` patch merges per sub-field the same way (#8965).
   const timedPatch = {
     ...patch,
+    ...(patch.productionPolicy ? { productionPolicy: normalizeMusicVideoProductionPolicy(patch.productionPolicy, project.productionPolicy) } : {}),
     ...(patch.visualSpec ? { visualSpec: normalizeVisualSpec(patch.visualSpec, project.visualSpec) } : {}),
     // Automation brief merges per sub-field; null clears it.
     ...('automation' in patch ? {
@@ -354,6 +371,7 @@ export function applyProjectPatch(project, patch) {
     // A vocal stem is a bounce of the OLD song; conditioning a performance on
     // it against the new master would sing the wrong words (#8977).
     ...(project.vocalStemFilename ? { vocalStemFilename: null } : {}),
+    performanceConditioningSource: 'master',
     ...mergedPatch,
     ...statusPatch,
     audioAnalysis: null,
@@ -412,6 +430,7 @@ function buildScene(input, { order }) {
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
     shotMode: input.shotMode ?? 'cutaway',
+    ...(input.performanceSpeaker ? { performanceSpeaker: input.performanceSpeaker } : {}),
     referenceImageId: null,
     videoHistoryId: null,
     // #8965 — immutable candidate takes; the two slot fields above are the
@@ -592,6 +611,7 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
         visualIntent: scene.visualIntent ?? null,
         visualLayer: scene.visualLayer ?? 'footage',
         shotMode: scene.shotMode ?? 'cutaway',
+        performanceSpeaker: scene.performanceSpeaker ?? null,
         ...timing,
       }),
     }, { order: 0 });
@@ -656,8 +676,14 @@ export function mergeProjectRecord(local, remoteRaw) {
   if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
   // The composition document's files live only on this install as well
   // (compositionDocument.js), so its pointer survives a newer remote body.
-  if (local.composition?.document && remote.composition && typeof remote.composition === 'object' && !Array.isArray(remote.composition)) {
-    remote.composition = { ...remote.composition, document: local.composition.document };
+  if (local.composition?.document || local.composition?.documentDraft) {
+    const sharedComposition = remote.composition && typeof remote.composition === 'object' && !Array.isArray(remote.composition)
+      ? remote.composition : {};
+    remote.composition = {
+      ...sharedComposition,
+      ...(local.composition.document ? { document: local.composition.document } : {}),
+      ...(local.composition.documentDraft ? { documentDraft: local.composition.documentDraft } : {}),
+    };
   }
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && Object.hasOwn(local.videoSettings, 'backend')) {

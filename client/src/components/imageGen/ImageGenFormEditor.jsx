@@ -5,6 +5,7 @@ import PromptEnhancer from '../media/PromptEnhancer';
 import PromptFromMedia from '../media/PromptFromMedia';
 import RemoteMediaTargetPicker from '../federatedMedia/RemoteMediaTargetPicker';
 import { FormField } from '../ui/FormField';
+import Banner from '../ui/Banner';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import HfTokenBanner from './HfTokenBanner';
 import ImageGenControls from './ImageGenControls';
@@ -12,7 +13,9 @@ import InitImagePicker from './InitImagePicker';
 import LoraPicker from './LoraPicker';
 import ReferenceImagePicker from './ReferenceImagePicker';
 import { appendTriggerWords } from '../../lib/loraTriggers';
-import { AGY_IMAGEGEN_DEFAULT_MODEL, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import {
+  AGY_IMAGEGEN_DEFAULT_MODEL, FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE, falImageFamily,
+} from '../../lib/imageGenBackends';
 
 const ERROR_HEADINGS = {
   gated_repo: 'Model access required',
@@ -29,13 +32,16 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
     derived,
     actions,
     remix,
+    loraTest,
   } = form;
   const {
     effectiveMode,
     isLocalMode,
     isAgyMode,
+    isFalMode,
     remoteTarget,
     effectiveAgyModel,
+    effectiveFalModel,
   } = backend;
   const {
     generating,
@@ -71,14 +77,14 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
       >
         <button
           type="submit"
-          disabled={remix.pending || (derived.remoteTargetActive
+          disabled={derived.loraHandoffBlocked || remix.pending || (derived.remoteTargetActive
             ? derived.remoteBlocked !== null
             : (derived.localBackendPending || derived.notConnected || derived.editImageMissing || derived.cloudNeedsPrompt))}
-          title={remix.pending
+          title={loraTest.pending ? 'Preparing this LoRA test…' : loraTest.error || (remix.pending
             ? 'Restoring this image’s settings…'
             : derived.localBackendPending
               ? 'Checking the image backend…'
-              : derived.remoteBlocked || (derived.editImageMissing ? 'This image-edit model needs a source image — open Options and upload one first' : derived.cloudNeedsPrompt ? derived.cloudPromptHint : undefined)}
+              : derived.remoteBlocked || (derived.editImageMissing ? 'This image-edit model needs a source image — open Options and upload one first' : derived.cloudNeedsPrompt ? derived.cloudPromptHint : undefined))}
           className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
@@ -124,6 +130,15 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
           </span>
         )}
       </div>
+
+      {(loraTest.pending || loraTest.error) && (
+        <Banner tone={loraTest.error ? 'error' : 'info'}>
+          <p>{loraTest.error || 'Preparing this LoRA test…'}</p>
+          <button type="button" onClick={loraTest.dismiss} className="underline min-h-[44px]">
+            Cancel LoRA test
+          </button>
+        </Banner>
+      )}
 
       <details
         open={fields.optionsOpen}
@@ -215,11 +230,13 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             modelStatus={isLocalMode ? modelDownload.getStatus(fields.modelId) : null}
             onModelDownload={isLocalMode ? modelDownload.start : undefined}
             onModelDownloadCancel={modelDownload.cancel}
-            cloudModels={isAgyMode ? backend.agy.models : []}
-            cloudModel={effectiveAgyModel}
-            onCloudModelChange={fields.setAgyModel}
-            cloudModelLabel="Agent model"
-            cloudModelDefaultLabel={settings.savedAgyModel || AGY_IMAGEGEN_DEFAULT_MODEL}
+            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : []}
+            cloudModel={isFalMode ? effectiveFalModel : effectiveAgyModel}
+            onCloudModelChange={isFalMode ? fields.setFalModel : fields.setAgyModel}
+            cloudModelLabel={isFalMode ? 'fal.ai model' : 'Agent model'}
+            cloudModelDefaultLabel={isFalMode
+              ? falImageFamily(settings.savedFalModel || FAL_IMAGE_DEFAULT_MODEL)?.label || FAL_IMAGE_DEFAULT_MODEL
+              : settings.savedAgyModel || AGY_IMAGEGEN_DEFAULT_MODEL}
           />
           {isAgyMode && backend.agy.error && (
             <p role="status" className="text-xs text-port-warning">

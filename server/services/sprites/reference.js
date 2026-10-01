@@ -378,179 +378,172 @@ export function startReferenceGeneration(recordId, body, upload = null) {
   return manifestWriteTail(recordId, () => startReferenceGenerationImpl(recordId, body, upload));
 }
 
-async function startReferenceGenerationImpl(recordId, body, upload = null) {
-  const record = await requireTrack(recordId);
-  const directional = kindSupportsTrack(record.kind, WALK_TRACK, getEffectiveAnimationTracks());
-  const manifest = (await loadManifest(recordId)) || seedManifest(recordId, { directional });
-  const target = body.target;
-  if (!directional && target !== 'main') {
-    throw new ServerError('Ambient references use one main identity root; they have no turnaround or directional anchors', { status: 400, code: 'INVALID_TARGET' });
-  }
-  // Once either identity artifact is locked — the sheet on a turnaround-first
-  // record, the main on a legacy one — the manifest's key is canonical (set at
-  // that lock, possibly auto-selected); a later record-level repin must not
-  // fork subsequent renders onto a different background than the frozen set.
-  const genKey = manifest.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
-  const settings = await getSettings();
-  // Render-target ladder (#3231): the page's explicit body.mode wins, then
-  // the sprite record's persisted pin (Phase 3), then the sprite-reference
-  // pin in settings.renderDefaults, then the install default — the shared
-  // `imageModeCandidates` order (lib/renderModeLadder.js, #6815). The pins go
-  // through pickUsableMode so each disabled rung falls to the NEXT rung
-  // (matching resolveRenderTargetConfig's per-rung gating) instead of a
-  // disabled record pin swallowing the target pin; resolveQueueImageMode
-  // keeps the historical gate for an explicit body.mode.
-  const spritePin = recordRenderPin(record);
-  const mode = resolveQueueImageMode(
-    body.mode || pickUsableMode(settings, imageModeCandidates(settings, RENDER_TARGET.SPRITE_REFERENCE, record)),
-    settings,
-  );
+function normalizeCorrectionPrompt(body) {
+  return typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
+}
 
+function hasSeedInput(body, upload, { allowCandidate = false, allowDesignPrompt = true } = {}) {
+  return Boolean(
+    (allowDesignPrompt && typeof body.designPrompt === 'string' && body.designPrompt.trim())
+    || upload || body.initImageGalleryFile || body.initImageSpriteId
+    || (allowCandidate && body.initImageCandidate)
+  );
+}
+
+async function planTurnaroundRender({ recordId, record, manifest, body, upload, designPrompt, genKey }) {
+  const turnaroundLocked = manifest.turnaround?.locked === true;
+  const correctionPrompt = normalizeCorrectionPrompt(body);
+  let initImagePath;
+  let initImageStrength = Number.isFinite(body.initImageStrength) ? body.initImageStrength : undefined;
+  let designReferencePath;
+  if (turnaroundLocked) {
+    throw new ServerError('Turnaround sheet is locked — unlock the turnaround before regenerating it', { status: 409, code: 'REFERENCE_LOCKED' });
+  }
+  // The sheet establishes the character's look, so it needs SOME input: a
+  // prompt, an uploaded image, a gallery pick, another sprite's reference —
+  // or, on a legacy record, the locked main this backfill expands.
+  if (!hasSeedInput(body, upload, { allowCandidate: true })
+      && !manifest.mainReference.locked) {
+    throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
+  }
+  const anchorId = TURNAROUND_ID;
+  const prompt = buildTurnaroundPrompt({
+    name: record.name,
+    designPrompt: designPrompt || manifest.designPrompt,
+    chromaKey: genKey,
+    correctionPrompt: body.correctionPrompt,
+  });
+  if (body.initImageCandidate) {
+    initImagePath = await requireTurnaroundCandidatePath(recordId, body.initImageCandidate);
+    designReferencePath = body.initImageCandidate;
+  } else {
+    ({ initImagePath, designReferencePath } = await resolveSeedSource(recordId, body, upload));
+  }
+  // Legacy backfill: no explicit seed, but a frozen main exists — expand the
+  // one view we already have into the full sheet rather than inventing a new
+  // character from text.
+  if (!initImagePath && manifest.mainReference.locked) {
+    initImagePath = await requireLockedArtifactPath(recordId, manifest.mainReference.path, {
+      message: 'Locked main reference file is missing on disk', code: 'MAIN_REFERENCE_MISSING',
+    });
+    designReferencePath = manifest.mainReference.path;
+  }
+  if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
+  if (designPrompt) manifest.designPrompt = designPrompt;
+  // The sheet is the first render, so this save may be persisting a manifest
+  // that was only just seeded — it runs unconditionally. The later branches
+  // require locked predecessors, so their manifest is already on disk and
+  // only needs writing back when the design prompt actually changed.
+  await saveManifest(recordId, manifest);
+  return { anchorId, direction: undefined, prompt, initImagePath, initImageStrength, designReferencePath, correctionPrompt };
+}
+
+async function planMainRender({ recordId, record, manifest, body, upload, designPrompt, genKey, directional }) {
+  const turnaroundLocked = manifest.turnaround?.locked === true;
+  const correctionPrompt = normalizeCorrectionPrompt(body);
   let prompt;
   let initImagePath;
   let initImageStrength = Number.isFinite(body.initImageStrength) ? body.initImageStrength : undefined;
   let anchorId;
   let direction;
   let designReferencePath;
-  let correctionPrompt;
-
-  const turnaroundLocked = manifest.turnaround?.locked === true;
-  const designPrompt = typeof body.designPrompt === 'string' ? body.designPrompt.trim() : '';
-
-  if (target === TURNAROUND_ID) {
-    if (turnaroundLocked) {
-      throw new ServerError('Turnaround sheet is locked — unlock the turnaround before regenerating it', { status: 409, code: 'REFERENCE_LOCKED' });
-    }
-    // The sheet establishes the character's look, so it needs SOME input: a
-    // prompt, an uploaded image, a gallery pick, another sprite's reference —
-    // or, on a legacy record, the locked main this backfill expands.
-    if (!designPrompt && !upload && !body.initImageGalleryFile && !body.initImageSpriteId
-        && !body.initImageCandidate
-        && !manifest.mainReference.locked) {
+  if (manifest.mainReference.locked) {
+    throw new ServerError('Main reference is locked — unlock the turnaround to rebuild its dependent reference chain', { status: 409, code: 'REFERENCE_LOCKED' });
+  }
+  // A place/object ambient loop has one identity root, not a turnaround or
+  // directional anchors. Its main is generated directly and later becomes
+  // both its idle cell and image-to-video source.
+  if (!directional) {
+    if (!hasSeedInput(body, upload)) {
       throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
     }
-    anchorId = TURNAROUND_ID;
-    prompt = buildTurnaroundPrompt({
+    anchorId = 'main';
+    direction = 'south';
+    // A place/object main takes BOTH inputs (#3134): `designPrompt` replaces
+    // the design outright, `correctionPrompt` keeps it and fixes one thing
+    // about the last render. They compose — the user can do either or both.
+    prompt = buildAmbientReferencePrompt({
+      name: record.name, kind: record.kind, designPrompt, chromaKey: genKey, correctionPrompt,
+    });
+    ({ initImagePath, designReferencePath } = await resolveSeedSource(recordId, body, upload));
+    if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
+    if (designPrompt) manifest.designPrompt = designPrompt;
+    await saveManifest(recordId, manifest);
+  } else {
+    // The main is always the sheet's front view: a manifest that reaches here
+    // with no locked sheet was either seeded turnaround-first or upgraded to it
+    // on read (upgradeManifestShape), and the only manifests that skip that
+    // upgrade have a locked main — which threw REFERENCE_LOCKED just above.
+    if (!turnaroundLocked) {
+      throw new ServerError('Lock the turnaround sheet before deriving the main reference', { status: 409, code: 'TURNAROUND_NOT_LOCKED' });
+    }
+    anchorId = anchorIdForDirection('south');
+    direction = 'south';
+    // Same optional re-roll note the anchors take (#3134) — the main derives
+    // from the sheet, so a bad front view can be described instead of only
+    // re-rolled blind.
+    prompt = buildMainReferencePrompt({
       name: record.name,
       designPrompt: designPrompt || manifest.designPrompt,
       chromaKey: genKey,
-      correctionPrompt: body.correctionPrompt,
+      correctionPrompt,
+      fromTurnaround: true,
     });
-    correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
-    if (body.initImageCandidate) {
-      initImagePath = await requireTurnaroundCandidatePath(recordId, body.initImageCandidate);
-      designReferencePath = body.initImageCandidate;
-    } else {
-      ({ initImagePath, designReferencePath } = await resolveSeedSource(recordId, body, upload));
+    // The sheet IS the seed here, so a caller-supplied one has nowhere to go.
+    // Reject rather than silently dropping it.
+    if (hasSeedInput(body, upload, { allowDesignPrompt: false })) {
+      throw new ServerError('The main reference derives from the locked turnaround sheet — seed a new design through the sheet, not the main', { status: 400, code: 'SEED_NOT_APPLICABLE' });
     }
-    // Legacy backfill: no explicit seed, but a frozen main exists — expand the
-    // one view we already have into the full sheet rather than inventing a new
-    // character from text.
-    if (!initImagePath && manifest.mainReference.locked) {
-      initImagePath = await requireLockedArtifactPath(recordId, manifest.mainReference.path, {
-        message: 'Locked main reference file is missing on disk', code: 'MAIN_REFERENCE_MISSING',
-      });
-      designReferencePath = manifest.mainReference.path;
-    }
-    if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
-    if (designPrompt) manifest.designPrompt = designPrompt;
-    // The sheet is the first render, so this save may be persisting a manifest
-    // that was only just seeded — it runs unconditionally. The later branches
-    // require locked predecessors, so their manifest is already on disk and
-    // only needs writing back when the design prompt actually changed.
-    await saveManifest(recordId, manifest);
-  } else if (target === 'main') {
-    if (manifest.mainReference.locked) {
-      throw new ServerError('Main reference is locked — unlock the turnaround to rebuild its dependent reference chain', { status: 409, code: 'REFERENCE_LOCKED' });
-    }
-    // A place/object ambient loop has one identity root, not a turnaround or
-    // directional anchors. Its main is generated directly and later becomes
-    // both its idle cell and image-to-video source.
-    if (!directional) {
-      if (!designPrompt && !upload && !body.initImageGalleryFile && !body.initImageSpriteId) {
-        throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
-      }
-      anchorId = 'main';
-      direction = 'south';
-      // A place/object main takes BOTH inputs (#3134): `designPrompt` replaces
-      // the design outright, `correctionPrompt` keeps it and fixes one thing
-      // about the last render. They compose — the user can do either or both.
-      correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
-      prompt = buildAmbientReferencePrompt({
-        name: record.name, kind: record.kind, designPrompt, chromaKey: genKey, correctionPrompt,
-      });
-      ({ initImagePath, designReferencePath } = await resolveSeedSource(recordId, body, upload));
-      if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
-      if (designPrompt) manifest.designPrompt = designPrompt;
-      await saveManifest(recordId, manifest);
-    } else {
-      // The main is always the sheet's front view: a manifest that reaches here
-      // with no locked sheet was either seeded turnaround-first or upgraded to it
-      // on read (upgradeManifestShape), and the only manifests that skip that
-      // upgrade have a locked main — which threw REFERENCE_LOCKED just above.
-      if (!turnaroundLocked) {
-        throw new ServerError('Lock the turnaround sheet before deriving the main reference', { status: 409, code: 'TURNAROUND_NOT_LOCKED' });
-      }
-      anchorId = anchorIdForDirection('south');
-      direction = 'south';
-      // Same optional re-roll note the anchors take (#3134) — the main derives
-      // from the sheet, so a bad front view can be described instead of only
-      // re-rolled blind.
-      correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
-      prompt = buildMainReferencePrompt({
-        name: record.name,
-        designPrompt: designPrompt || manifest.designPrompt,
-        chromaKey: genKey,
-        correctionPrompt,
-        fromTurnaround: true,
-      });
-      // The sheet IS the seed here, so a caller-supplied one has nowhere to go.
-      // Reject rather than silently dropping it.
-      if (upload || body.initImageGalleryFile || body.initImageSpriteId) {
-        throw new ServerError('The main reference derives from the locked turnaround sheet — seed a new design through the sheet, not the main', { status: 400, code: 'SEED_NOT_APPLICABLE' });
-      }
-      initImagePath = await requireLockedTurnaroundPath(recordId, manifest);
-      initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
-      // Nothing else in this branch mutates the manifest, so skip the write —
-      // and its per-record serialization — on the common no-prompt re-roll.
-      if (designPrompt) {
-        manifest.designPrompt = designPrompt;
-        await saveManifest(recordId, manifest);
-      }
-    }
-  } else {
-    if (!ANCHOR_DIRECTIONS.includes(target)) {
-      throw new ServerError(`Unknown reference target: ${target}`, { status: 400, code: 'INVALID_TARGET' });
-    }
-    // The whole point of the sheet: an anchor drawn from a single front view
-    // has to invent the side it is facing, which is how a hip bag ends up on
-    // the character's back. Required on every record — a legacy one backfills.
-    if (!turnaroundLocked) {
-      throw new ServerError('Lock the turnaround sheet before deriving directional anchors', { status: 409, code: 'TURNAROUND_NOT_LOCKED' });
-    }
-    if (!manifest.mainReference.locked) {
-      throw new ServerError('Lock the main reference before deriving directional anchors', { status: 409, code: 'MAIN_NOT_LOCKED' });
-    }
-    direction = target;
-    anchorId = anchorIdForDirection(direction);
-    const anchor = findAnchor(manifest, anchorId);
-    if (anchor?.status === 'locked') {
-      throw new ServerError(`Anchor ${anchorId} is locked — unlock the anchor before regenerating it`, { status: 409, code: 'REFERENCE_LOCKED' });
-    }
-    // Optional user correction re-appended on every re-roll — diverges the
-    // render from the previous candidate rather than reproducing its mistakes.
-    correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
-    prompt = buildAnchorPrompt({
-      name: record.name, direction, chromaKey: genKey, correctionPrompt, fromTurnaround: true,
-    });
     initImagePath = await requireLockedTurnaroundPath(recordId, manifest);
     initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
-    // Known limitation shared with every i2i surface (proof-as-base, refine):
-    // the WINDOWS local runner (imagine_win.py) has no i2i and drops the
-    // init image — anchors there degrade to text-to-image, like all other
-    // pipeline i2i renders on that platform. Cloud modes are unaffected.
+    // Nothing else in this branch mutates the manifest, so skip the write —
+    // and its per-record serialization — on the common no-prompt re-roll.
+    if (designPrompt) {
+      manifest.designPrompt = designPrompt;
+      await saveManifest(recordId, manifest);
+    }
   }
+  return { anchorId, direction, prompt, initImagePath, initImageStrength, designReferencePath, correctionPrompt };
+}
 
+async function planAnchorRender({ recordId, record, manifest, body, genKey }) {
+  const target = body.target;
+  const turnaroundLocked = manifest.turnaround?.locked === true;
+  const correctionPrompt = normalizeCorrectionPrompt(body);
+  let initImageStrength = Number.isFinite(body.initImageStrength) ? body.initImageStrength : undefined;
+  if (!ANCHOR_DIRECTIONS.includes(target)) {
+    throw new ServerError(`Unknown reference target: ${target}`, { status: 400, code: 'INVALID_TARGET' });
+  }
+  // The whole point of the sheet: an anchor drawn from a single front view
+  // has to invent the side it is facing, which is how a hip bag ends up on
+  // the character's back. Required on every record — a legacy one backfills.
+  if (!turnaroundLocked) {
+    throw new ServerError('Lock the turnaround sheet before deriving directional anchors', { status: 409, code: 'TURNAROUND_NOT_LOCKED' });
+  }
+  if (!manifest.mainReference.locked) {
+    throw new ServerError('Lock the main reference before deriving directional anchors', { status: 409, code: 'MAIN_NOT_LOCKED' });
+  }
+  const direction = target;
+  const anchorId = anchorIdForDirection(direction);
+  const anchor = findAnchor(manifest, anchorId);
+  if (anchor?.status === 'locked') {
+    throw new ServerError(`Anchor ${anchorId} is locked — unlock the anchor before regenerating it`, { status: 409, code: 'REFERENCE_LOCKED' });
+  }
+  // Optional user correction re-appended on every re-roll — diverges the
+  // render from the previous candidate rather than reproducing its mistakes.
+  const prompt = buildAnchorPrompt({
+    name: record.name, direction, chromaKey: genKey, correctionPrompt, fromTurnaround: true,
+  });
+  const initImagePath = await requireLockedTurnaroundPath(recordId, manifest);
+  initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
+  // Known limitation shared with every i2i surface (proof-as-base, refine):
+  // the WINDOWS local runner (imagine_win.py) has no i2i and drops the
+  // init image — anchors there degrade to text-to-image, like all other
+  // pipeline i2i renders on that platform. Cloud modes are unaffected.
+  return { anchorId, direction, prompt, initImagePath, initImageStrength, designReferencePath: undefined, correctionPrompt };
+}
+
+function resolveReferenceRenderRoute(settings, body, mode, spritePin) {
   // No edit-capability fallback here: every queueable backend accepts an input
   // image (local `--image-path`, codex `referenced_image_paths`, grok
   // `image_edit.image`, agy `ImagePaths` — see EDIT_INCAPABLE_IMAGE_MODES), so
@@ -585,11 +578,54 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL',
     });
   }
-  const effectiveModel = mode === IMAGE_GEN_MODE.CODEX || mode === IMAGE_GEN_MODE.AGY
+  const effectiveModel = cloud?.supportsModelOverride
     ? cloud.modelId
     : mode === IMAGE_GEN_MODE.LOCAL
       ? selectedLocalModel.id
       : null;
+  return { cleanC2PA, denoise, cloud, cloudJobParams, effectiveModel };
+}
+
+const REFERENCE_PLANNERS = {
+  __proto__: null,
+  [TURNAROUND_ID]: planTurnaroundRender,
+  main: planMainRender,
+};
+
+async function startReferenceGenerationImpl(recordId, body, upload = null) {
+  const record = await requireTrack(recordId);
+  const directional = kindSupportsTrack(record.kind, WALK_TRACK, getEffectiveAnimationTracks());
+  const manifest = (await loadManifest(recordId)) || seedManifest(recordId, { directional });
+  const target = body.target;
+  if (!directional && target !== 'main') {
+    throw new ServerError('Ambient references use one main identity root; they have no turnaround or directional anchors', { status: 400, code: 'INVALID_TARGET' });
+  }
+  // Once either identity artifact is locked — the sheet on a turnaround-first
+  // record, the main on a legacy one — the manifest's key is canonical (set at
+  // that lock, possibly auto-selected); a later record-level repin must not
+  // fork subsequent renders onto a different background than the frozen set.
+  const genKey = manifest.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
+  const settings = await getSettings();
+  // Render-target ladder (#3231): the page's explicit body.mode wins, then
+  // the sprite record's persisted pin (Phase 3), then the sprite-reference
+  // pin in settings.renderDefaults, then the install default — the shared
+  // `imageModeCandidates` order (lib/renderModeLadder.js, #6815). The pins go
+  // through pickUsableMode so each disabled rung falls to the NEXT rung
+  // (matching resolveRenderTargetConfig's per-rung gating) instead of a
+  // disabled record pin swallowing the target pin; resolveQueueImageMode
+  // keeps the historical gate for an explicit body.mode.
+  const spritePin = recordRenderPin(record);
+  const mode = resolveQueueImageMode(
+    body.mode || pickUsableMode(settings, imageModeCandidates(settings, RENDER_TARGET.SPRITE_REFERENCE, record)),
+    settings,
+  );
+
+  const designPrompt = typeof body.designPrompt === 'string' ? body.designPrompt.trim() : '';
+  const planner = REFERENCE_PLANNERS[target] ?? planAnchorRender;
+  const {
+    anchorId, direction, prompt, initImagePath, initImageStrength, designReferencePath, correctionPrompt,
+  } = await planner({ recordId, record, manifest, body, upload, designPrompt, genKey, directional });
+  const { cleanC2PA, denoise, cloud, cloudJobParams, effectiveModel } = resolveReferenceRenderRoute(settings, body, mode, spritePin);
   const baseParams = {
     prompt,
     // Codex ImageGen otherwise selects an arbitrary native aspect ratio. The

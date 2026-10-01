@@ -18,7 +18,7 @@ import { buildCodeTimeline, buildSongDocument, codeFrameSize, paletteFromProject
 // so unit tests of the footage renderer can keep a partial ffmpeg mock.
 const AAC_MUX_ARGS = Object.freeze(['-c:a', 'aac', '-b:a', '192k']);
 
-export function _muxExactArgs(videoPath, audioPath, outputPath, durationSec, audioStartSec = 0) {
+export function _muxExactArgs(videoPath, audioPath, outputPath, durationSec, audioStartSec = 0, fade = '') {
   const args = ['-hide_banner', '-loglevel', 'error', '-i', videoPath];
   if (audioStartSec > 0) args.push('-ss', String(audioStartSec));
   args.push(
@@ -26,7 +26,7 @@ export function _muxExactArgs(videoPath, audioPath, outputPath, durationSec, aud
     '-map', '0:v:0', '-map', '1:a:0',
     '-t', String(durationSec),
     '-c:v', 'copy',
-    '-af', `atrim=duration=${durationSec},apad=whole_dur=${durationSec},asetpts=PTS-STARTPTS`,
+    '-af', `atrim=duration=${durationSec},apad=whole_dur=${durationSec},asetpts=PTS-STARTPTS${fade}`,
     ...AAC_MUX_ARGS,
     '-movflags', '+faststart',
     '-y', outputPath,
@@ -72,9 +72,9 @@ export function prepareCodeRender(project, { windowStart = null, windowEnd = nul
 }
 
 export async function encodeCodeComposition({
-  html, song, width, height, fps, durationSec, audioPath, outputPath, directory, signal, onProgress, audioStartSec = 0,
+  html, song, width, height, fps, durationSec, audioPath, outputPath, directory, signal, onProgress, audioStartSec = 0, fade = false,
 }) {
-  const { findFfmpeg, runFfmpegProcess } = await import('../../lib/ffmpeg.js');
+  const { findFfmpeg, runFfmpegProcess, edgeFadeFilter } = await import('../../lib/ffmpeg.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition } = await import('../htmlComposition/encode.js');
   const ffmpeg = await findFfmpeg();
@@ -92,7 +92,7 @@ export async function encodeCodeComposition({
     });
     signal?.throwIfAborted();
     const mux = await runFfmpegProcess({
-      bin: ffmpeg, signal, args: _muxExactArgs(silent, audioPath, outputPath, durationSec, audioStartSec),
+      bin: ffmpeg, signal, args: _muxExactArgs(silent, audioPath, outputPath, durationSec, audioStartSec, fade ? edgeFadeFilter(durationSec) : ''),
     });
     if (!mux.ok) {
       if (signal?.aborted || /cancelled/.test(mux.reason || '')) {

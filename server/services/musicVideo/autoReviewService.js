@@ -22,11 +22,15 @@
  * so an event arriving mid-step can never start a second review.
  */
 
+import { isPerformanceScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { analyzeTemporalPerformance } from './temporalPerformance.js';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { promisify } from 'util';
 import { ServerError } from '../../lib/errorHandler.js';
+import { isFreeProvider } from '../../lib/modelPricing.js';
+import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
 import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
@@ -35,11 +39,12 @@ import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { startExcerptRender } from './excerptRender.js';
-import { cancelRevision, resumeRevision } from './revisionService.js';
+import { cancelRevision, getDependencyImpact, resumeRevision } from './revisionService.js';
 import { projectExcerpts } from './excerpt.js';
 import { projectRevisions, releaseRevisionClaim, revisionSectionStates, startRevisionOnProject } from './revision.js';
 import {
   attachAttemptExcerpt,
+  deferAttemptReview,
   attachAttemptRevision,
   beginAttemptReview,
   beginNextAttempt,
@@ -121,20 +126,36 @@ async function analyzeContinuousExcerpt(excerptPath, spanSec, sections) {
   };
 }
 
-async function callReviewer(run, prompt, screenshots) {
+async function callReviewer(run, prompt, screenshots, projectId) {
   const { resolveProviderAndModel, runPromptThroughProvider, assertVisionRunUsedImages } = await import('../promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel(run.reviewer);
   if (!provider) throw new Error('No AI provider is configured');
   if (provider.enabled === false) throw new Error(`Provider "${provider.name || provider.id}" is disabled`);
   const used = { providerId: provider.id, model: selectedModel || null };
+  let beforeExecute;
+  if (run.productionRunId) {
+    if (!isToolFreeOneShotProvider(provider)) throw new Error('Production review requires a tool-free provider');
+    if ((run.reviewer.providerId && provider.id !== run.reviewer.providerId)
+      || (run.reviewer.model && selectedModel !== run.reviewer.model)) throw new Error('The selected production reviewer is unavailable');
+    const { assertProductionContinuation, chargeProductionReview } = await import('./productionService.js');
+    let charge = null;
+    beforeExecute = async () => {
+      await assertProductionContinuation(projectId, run.productionRunId);
+      if (!charge) charge = chargeProductionReview(projectId, run.productionRunId, { reviewRunId: run.id, attemptN: run.attempts.at(-1).n,
+        costUsd: isFreeProvider(provider) ? 0 : null });
+      await charge;
+    };
+    await assertProductionContinuation(projectId, run.productionRunId);
+  }
   if (provider.type !== 'api') {
     if (!isVisionCapableCliProvider(provider)) throw new Error(`Provider "${provider.name || provider.id}" cannot read images`);
     const { describeImagesFromPaths } = await import('../visionCli.js');
-    const result = await describeImagesFromPaths({ provider, imagePaths: screenshots, prompt, model: selectedModel, timeout: provider.timeout || REVIEW_TIMEOUT_MS });
+    const result = await describeImagesFromPaths({ provider, imagePaths: screenshots, prompt, model: selectedModel, timeout: provider.timeout || REVIEW_TIMEOUT_MS, ...(beforeExecute ? { beforeExecute } : {}) });
     return { text: result.text, used };
   }
   const result = await runPromptThroughProvider({
     provider, model: selectedModel, prompt, screenshots, source: 'music-video-auto-review', timeout: provider.timeout || REVIEW_TIMEOUT_MS,
+    ...(beforeExecute ? { beforeExecute, allowFallback: false } : {}),
   });
   assertVisionRunUsedImages(result, provider);
   return { text: result.text, used: { ...used, model: result.model || used.model } };
@@ -177,20 +198,34 @@ async function reviewDraft(project, run, excerpt) {
   const planned = planStripTimes(spanSec, sections, { hasContactSheet: hasSheet });
   const { sheets: strip, captured: frameTimes } = await extractStripSheets(excerptPath, `mvar-${short(run.id)}-a${attemptN}`, planned).catch(() => ({ sheets: [], captured: [] }));
   const screenshots = [...(hasSheet ? [sheet] : []), ...strip];
-  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length };
+  const shots = sections.flatMap((section) => {
+    const scene = project.scenes?.find((s) => s.sceneId === section.sceneId);
+    const instruction = selectedPerformanceInstruction(scene);
+    const performance = 'performance' in section ? section.performance : (isPerformanceScene(scene)
+      ? { takeId: scene.videoHistoryId, speaker: instruction?.speaker || null, conditioning: instruction?.audio?.conditioning || null } : null);
+    return performance ? [{ sceneId: section.sceneId, ...performance, startSec: section.startSec, endSec: section.endSec }] : [];
+  });
+  const temporal = !sections.length && project.scenes?.some(isPerformanceScene)
+    ? { version: 1, status: 'unverified', analyzer: null, reason: 'The draft has no performance-section provenance', shots: [] }
+    : await analyzeTemporalPerformance({ excerptPath, shots });
+  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length, temporal, excerptStartSec: excerpt.startSec };
 
   let parsed = null;
   let reviewerError = null;
+  let providerErrorCode = null;
   let used = { providerId: run.reviewer.providerId, model: run.reviewer.model };
   if (screenshots.length) {
-    const prompt = buildAutoReviewPrompt({ spanSec, sections, frameTimes, hasContactSheet: hasSheet, tiled: true, concept: project.concept });
+    const shotIntents = (project.scenes || []).filter((scene) => scene.direction?.actionContract != null && scene.startSec < excerpt.endSec && scene.endSec > excerpt.startSec)
+      .map((scene) => ({ sceneId: scene.sceneId, sceneStartSec: scene.startSec - excerpt.startSec, actionContract: scene.direction.actionContract }));
+    const prompt = buildAutoReviewPrompt({ spanSec, sections, frameTimes, hasContactSheet: hasSheet, tiled: true, concept: project.concept, shotIntents });
     try {
-      const reply = await callReviewer(run, prompt, screenshots);
+      const reply = await callReviewer(run, prompt, screenshots, project.id);
       used = reply.used;
       parsed = parseAutoReviewResponse(reply.text);
       if (!parsed) reviewerError = 'The reviewer returned no usable verdict';
     } catch (err) {
       reviewerError = err.message;
+      providerErrorCode = err.code || null;
       console.warn(`⚠️ Music Video auto-review ${short(run.id)} reviewer call failed: ${err.message}`);
     }
   } else {
@@ -202,6 +237,7 @@ async function reviewDraft(project, run, excerpt) {
     ...review,
     reason: review.verdict === 'inconclusive' && reviewerError ? `${reviewerError} — watch this draft yourself` : review.reason,
     reviewer: used,
+    ...(providerErrorCode ? { providerErrorCode } : {}),
   };
 }
 
@@ -211,6 +247,11 @@ async function takeSteps(projectId, runId) {
   for (let i = 0; i < MAX_STEPS_PER_ADVANCE; i += 1) {
     const project = await requireProject(projectId);
     const run = findRun(project, runId);
+    if (run.productionRunId) {
+      const { assertProductionContinuation } = await import('./productionService.js');
+      const permitted = await assertProductionContinuation(projectId, run.productionRunId).then(() => true, () => false);
+      if (!permitted) return { project, run, action: { type: 'idle', interrupted: true } };
+    }
     const step = nextAutoReviewStep(project, run);
 
     if (step.type === 'idle' || step.type === 'wait') return { project, run, action: step };
@@ -224,7 +265,13 @@ async function takeSteps(projectId, runId) {
       // Draft renders are free; a refusal (another draft rendering, a shot
       // that doesn't cover its span…) pauses the run so the director can fix
       // it and resume, rather than failing the whole checkpoint.
-      const render = await startExcerptRender(projectId, { startSec: run.startSec, endSec: run.endSec }).catch((err) => ({ error: err }));
+      const render = await startExcerptRender(projectId, { startSec: run.startSec, endSec: run.endSec }, {
+        ...(run.productionPilotSceneId ? { pilotSceneId: run.productionPilotSceneId } : {}),
+        ...(run.productionRunId ? { verifyCurrent: async () => {
+          const { assertProductionContinuation } = await import('./productionService.js');
+          await assertProductionContinuation(projectId, run.productionRunId);
+        } } : {}),
+      }).catch((err) => ({ error: err }));
       if (render.error) {
         const out = await halt(projectId, runId, { status: 'stopped', reason: `The draft could not render: ${render.error.message}` });
         return { ...out, action: { type: 'idle' } };
@@ -238,13 +285,25 @@ async function takeSteps(projectId, runId) {
       const begun = await mutateProjectRecord(projectId, (current) => beginAttemptReview(current, runId));
       publish(projectId, begun.project, begun.run, { type: 'reviewing', excerptId: step.excerptId });
       const excerpt = projectExcerpts(project).find((e) => e.id === step.excerptId);
-      const review = await reviewDraft(project, run, excerpt);
+      let review = await reviewDraft(project, run, excerpt);
+      if (['PRODUCTION_REVIEW_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED', 'PRODUCTION_COST_UNKNOWN', 'PRODUCTION_NOT_RUNNING', 'PRODUCTION_BASIS_CHANGED'].includes(review.providerErrorCode)) {
+        const out = await mutateProjectRecord(projectId, (current) => deferAttemptReview(current, runId,
+          { code: review.providerErrorCode, message: review.reason }));
+        return { ...out, action: { type: 'idle' } };
+      }
+      const impact = await getDependencyImpact(projectId);
+      if (impact.shots.some((shot) => {
+        const scene = project.scenes.find((entry) => entry.sceneId === shot.sceneId);
+        return scene && scene.startSec < excerpt.endSec && scene.endSec > excerpt.startSec;
+      })) review = { ...review, verdict: 'inconclusive', reason: 'A derived clip or its sung window changed — repair and review a fresh draft' };
       const out = await mutateProjectRecord(projectId, (current) => recordAttemptReview(current, runId, review));
       const log = review.verdict === 'inconclusive' ? console.warn : console.log;
       log(`🔎 Music Video auto-review ${short(runId)} attempt ${run.attempts.length}: ${review.verdict} (${review.findings.length} finding${review.findings.length === 1 ? '' : 's'})`);
       if (out.run.status !== 'running') return { ...out, action: { type: 'idle' } };
       continue;
     }
+
+    if (step.type === 'revise-document') return { project, run, action: { type: 'revise-document', excerptId: step.excerptId } };
 
     if (step.type === 'revise') {
       const opened = await mutateProjectRecord(projectId, (current) => {
@@ -342,7 +401,17 @@ function advanceInBackground(projectId, runId) {
 
 /** Start a run (explicit director request with limits). Returns `{ project, run }`. */
 export async function startAutoReview(projectId, input) {
-  const out = await mutateProjectRecord(projectId, (current) => startAutoReviewOnProject(current, input));
+  const production = input.productionRunId ? await import('./production.js') : null;
+  const owner = production ? await (await import('./productionService.js')).assertProductionContinuation(projectId, input.productionRunId) : null;
+  const out = await mutateProjectRecord(projectId, (current) => {
+    if (owner) production.assertProductionActive(current, owner.id, owner.processId);
+    const started = startAutoReviewOnProject(current, input);
+    if (!owner) return started;
+    const attached = input.productionPilotSceneId
+      ? production.attachProductionPilotReview(started.project, owner.id, input.productionPilotSceneId, started.run.id)
+      : production.attachProductionReview(started.project, owner.id, started.run.id);
+    return { ...started, project: attached.project };
+  });
   console.log(`🎬 Music Video auto-review ${short(out.run.id)} started: [${out.run.startSec}, ${out.run.endSec}]s, ≤${out.run.limits.maxAttempts} reviews, ≤${out.run.limits.maxGenerations} generations`);
   advanceInBackground(projectId, out.run.id);
   return out;

@@ -14,3 +14,42 @@ export function vitestCiPool({ maxWorkers = 4 } = {}) {
   if (!process.env.CI) return {};
   return { maxWorkers };
 }
+
+// Keep these public Chrome/ffmpeg contracts in the full/CI runner, but give
+// their captures a quiet group after parallel unit work (#9394).
+export const EXCLUSIVE_CAPTURE_TESTS = [
+  'services/htmlComposition/index.test.js',
+  'services/musicVideo/documentRender.browser.test.js',
+];
+
+export function vitestCaptureProjects(test) {
+  const { include, exclude, ...shared } = test;
+  // Vite concatenates inherited include arrays: extending the broad root
+  // glob would also run EVERY unit file in the capture project. Copy shared
+  // worker settings explicitly and leave run-wide ownership at the root.
+  delete shared.coverage;
+  delete shared.globalSetup;
+  return [
+    {
+      extends: false,
+      test: {
+        ...shared,
+        name: 'parallel',
+        include,
+        exclude: [...exclude, ...EXCLUSIVE_CAPTURE_TESTS],
+        sequence: { groupOrder: 0 },
+      },
+    },
+    {
+      extends: false,
+      test: {
+        ...shared,
+        name: 'capture',
+        include: EXCLUSIVE_CAPTURE_TESTS,
+        exclude,
+        fileParallelism: false,
+        sequence: { groupOrder: 1 },
+      },
+    },
+  ];
+}

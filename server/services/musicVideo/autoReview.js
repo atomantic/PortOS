@@ -33,6 +33,7 @@
  * it verbatim and has no route that acts on it, so no schema bump is needed.
  */
 
+import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -49,7 +50,7 @@ const AUTO_REVIEW_LIMIT_BOUNDS = Object.freeze({
 const AUTO_REVIEW_STATUSES = Object.freeze(['running', 'stopped', 'limit-reached', 'passed', 'needs-human', 'failed', 'canceled']);
 const RESUMABLE = new Set(['running', 'stopped', 'limit-reached']);
 const ACTIVE = new Set(['running', 'stopped', 'limit-reached']);
-export const AUTO_REVIEW_CHECKS = Object.freeze(['composition', 'continuity', 'motion', 'audioSync']);
+export const AUTO_REVIEW_CHECKS = Object.freeze(['composition', 'continuity', 'motion', 'audioSync', 'lipSync']);
 // Draft renders are free, but a window that fails to render every time must
 // not loop forever: this many failed renders of one attempt fail the run.
 const MAX_RENDER_FAILURES = 2;
@@ -122,7 +123,7 @@ const touchRun = (run, patch, now) => ({ ...run, ...patch, updatedAt: now });
  * Start a run over `[startSec, endSec)`. Refuses while another run is live or
  * a manual revision is open (the run needs the revision slot for its own).
  */
-export function startAutoReviewOnProject(project, { startSec, endSec, limits, reviewer = {}, productionRunId = null }, now = new Date().toISOString()) {
+export function startAutoReviewOnProject(project, { startSec, endSec, limits, reviewer = {}, productionRunId = null, documentRevisions = false, productionPilotSceneId = null }, now = new Date().toISOString()) {
   const live = activeAutoReview(project);
   if (live) throw autoReviewError(409, 'AUTO_REVIEW_IN_PROGRESS', 'Finish, cancel or resume the existing auto-review run first', { runId: live.id });
   const openRevision = projectRevisions(project).find((r) => r.status === 'open' || r.status === 'rendering');
@@ -142,7 +143,8 @@ export function startAutoReviewOnProject(project, { startSec, endSec, limits, re
     // #9066: a production run that handed this run its draft dispatches the
     // run's revised sections server-side (productionService.js), so the board
     // must not also submit them.
-    ...(isNonBlankStr(productionRunId) ? { productionRunId } : {}),
+    ...(isNonBlankStr(productionRunId) ? { productionRunId, ...(documentRevisions ? { documentRevisions: true } : {}),
+      ...(productionPilotSceneId ? { productionPilotSceneId } : {}) } : {}),
     attempts: [{ n: 1, excerptId: null, renderFailures: 0, reviewStartedAt: null, review: null, revisionId: null }],
     stopReason: null,
     error: null,
@@ -183,10 +185,18 @@ export function nextAutoReviewStep(project, run) {
     }
     return { type: 'review', excerptId: attempt.excerptId };
   }
+  if (!attempt.revisionId && musicVideoDependencyChanges(project, attempt.review.dependencies).length) {
+    return { type: 'halt', status: 'needs-human', reason: 'The reviewed dependencies changed or were not recorded — rebuild and review the draft again' };
+  }
   // A review recorded while the run was paused keeps its verdict for resume.
   if (attempt.review.verdict === 'pass') return { type: 'halt', status: 'passed', reason: null };
   if (attempt.review.verdict !== 'revise') {
     return { type: 'halt', status: 'needs-human', reason: attempt.review.reason || 'The review could not verify every check — watch this draft yourself' };
+  }
+  if (run.productionPilotSceneId) return { type: 'halt', status: 'needs-human', reason: 'The pilot failed. Choose a targeted repair before repeating generation.' };
+  if (run.documentRevisions) {
+    if (run.usage.reviews >= run.limits.maxAttempts) return { type: 'halt', status: 'limit-reached', reason: 'The review limit was reached before another document revision could be reviewed' };
+    return { type: 'revise-document', excerptId: attempt.excerptId };
   }
   if (!attempt.revisionId) return { type: 'revise', excerptId: attempt.excerptId };
   const revision = projectRevisions(project).find((r) => r.id === attempt.revisionId);
@@ -250,6 +260,16 @@ export function beginAttemptReview(project, runId, now = new Date().toISOString(
   }, now);
 }
 
+/** Production admission refused before provider execution: retain the draft, not a verdict. */
+export function deferAttemptReview(project, runId, error, now = new Date().toISOString()) {
+  return mutateRun(project, runId, (run) => ({
+    usage: { ...run.usage, reviews: Math.max(0, run.usage.reviews - 1) },
+    ...withAttempt(run, { reviewStartedAt: null }),
+    ...(run.status === 'running' ? { status: ['PRODUCTION_REVIEW_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(error.code) ? 'limit-reached' : 'stopped',
+      stopReason: error.message } : {}),
+  }), now);
+}
+
 const cleanFinding = (f, spanSec) => {
   if (!f || typeof f !== 'object' || !isNonBlankStr(f.note)) return null;
   // Clamped INSIDE the half-open excerpt, so a finding at (or past) its end
@@ -262,6 +282,7 @@ const cleanFinding = (f, spanSec) => {
     severity: f.severity === 'minor' ? 'minor' : 'blocking',
     check: AUTO_REVIEW_CHECKS.includes(f.check) ? f.check : null,
     source: f.source === 'analysis' ? 'analysis' : 'reviewer',
+    ...(['plate', 'prompt-action', 'composition'].includes(f.failureCategory) ? { failureCategory: f.failureCategory } : {}),
   };
 };
 
@@ -279,20 +300,22 @@ export function recordAttemptReview(project, runId, review, now = new Date().toI
   const excerpt = projectExcerpts(project).find((e) => e.id === attempt.excerptId);
   const spanSec = excerpt ? excerpt.endSec - excerpt.startSec : 0;
   const findings = (Array.isArray(review.findings) ? review.findings : []).map((f) => cleanFinding(f, spanSec)).filter(Boolean).slice(0, MAX_FINDINGS);
-  const stored = { ...review, findings, reviewedAt: now };
+  const stale = musicVideoDependencyChanges(project, excerpt?.dependencies).length > 0;
+  const result = stale ? { ...review, verdict: 'inconclusive', reason: 'The draft dependencies changed or were not recorded — rebuild and review it again' } : review;
+  const stored = { ...result, dependencies: excerpt?.dependencies || null, findings, reviewedAt: now };
   let next = project;
   // A review that returns after the run was paused is still recorded (it was
   // paid for, and resume continues from it); one that returns after a cancel
   // is recorded but files nothing and moves no status.
-  if (review.verdict === 'revise' && excerpt && RESUMABLE.has(run.status)) {
+  if (result.verdict === 'revise' && excerpt && RESUMABLE.has(run.status)) {
     for (const finding of findings.filter((f) => f.severity === 'blocking')) {
       next = addExcerptNote(next, excerpt.id, { atSec: finding.atSec, note: `${NOTE_PREFIX} ${finding.note}`, verdict: 'flagged' }, now).project;
     }
   }
-  const terminal = run.status !== 'running' ? {} : review.verdict === 'pass'
+  const terminal = run.status !== 'running' ? {} : result.verdict === 'pass'
     ? { status: 'passed', stopReason: null }
-    : review.verdict === 'inconclusive'
-      ? { status: 'needs-human', stopReason: review.reason || 'The review could not verify every check — a director must watch this draft' }
+    : result.verdict === 'inconclusive'
+      ? { status: 'needs-human', stopReason: result.reason || 'The review could not verify every check — a director must watch this draft' }
       : {};
   const updated = touchRun(run, { ...terminal, ...withAttempt(run, { review: stored }) }, now);
   return { project: replaceRun(next, updated), run: updated };

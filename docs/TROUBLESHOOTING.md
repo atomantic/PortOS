@@ -2,6 +2,30 @@
 
 Common issues and solutions when running PortOS.
 
+## Codex rejects a model with a ChatGPT account
+
+**Symptom**: `The 'example-model' model is not supported when using Codex with a ChatGPT account.`
+
+This is a model-access rejection, not evidence that login failed. Run
+`codex login status` in the same environment as PortOS to confirm the active
+authentication method. PortOS lets Codex own its credentials and token refresh.
+
+To pin which login method PortOS uses, set **Codex authentication** on the Codex provider
+(AI Providers → edit): *ChatGPT subscription* or *API key*. It passes
+`-c forced_login_method=...` to Codex; leave it on the default to let Codex decide.
+
+Choose a supported model in the task or provider settings, or clear the task's
+model override to use its configured default (check that default too). PortOS's
+shipped model catalog can include models unavailable to your account; refreshing
+the catalog alone does not prove entitlement. A quiet-session continuation cannot
+fix an unsupported model selection.
+
+ChatGPT subscription access and API-key access are separate authentication and
+billing modes. Do not re-login or replace credentials merely to fix this message.
+If API billing is intended, configure it explicitly using the
+[official Codex authentication instructions](https://learn.chatgpt.com/docs/auth).
+Never paste credential files or tokens into an issue.
+
 ## Startup Issues
 
 ### Start Here: `npm run doctor`

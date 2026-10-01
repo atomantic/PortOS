@@ -16,7 +16,7 @@ export const MEDIA_TOOLS = [
   {
     name: 'image_generate',
     description:
-      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend. Pass `provider` to override per-call: "local", "external", "codex", "grok", or text-to-image-only "agy". Cloud CLI providers must be enabled in Settings. Returns the saved file path.',
+      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend. Pass `provider` to override per-call: "local", "external", "codex", "grok", "agy", or the metered (paid per image) "fal". Cloud providers must be enabled in Settings. Returns the saved file path.',
     parameters: {
       type: 'object',
       properties: {
@@ -61,7 +61,8 @@ export const MEDIA_TOOLS = [
         if (!s?.imageGen?.[requestedMode]?.enabled) {
           const label = requestedMode === imageGen.IMAGE_GEN_MODE.CODEX
             ? 'Codex'
-            : requestedMode === imageGen.IMAGE_GEN_MODE.GROK ? 'Grok' : 'Agy';
+            : requestedMode === imageGen.IMAGE_GEN_MODE.GROK ? 'Grok'
+              : requestedMode === imageGen.IMAGE_GEN_MODE.FAL ? 'fal.ai' : 'Agy';
           return { ok: false, summary: `${label} Imagegen is disabled — enable it in Settings → Image Gen first.` };
         }
       }

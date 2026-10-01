@@ -47,6 +47,42 @@ const trimModelId = (value) => (typeof value === 'string' && value.trim()
   ? value.trim().slice(0, 64)
   : null);
 
+const recordedFileChecksumIssue = ({ label, filename, sha256 }, installedByFilename) => {
+  if (!isNonBlankStr(filename)) return `Recorded character ${label} has no filename.`;
+  if (!isNonBlankStr(sha256)) {
+    return `Recorded character ${label} "${filename}" has no checksum to verify exact inputs.`;
+  }
+  const installedFile = installedByFilename.find((file) => file?.filename === filename);
+  if (!installedFile) return `Recorded character ${label} "${filename}" is not installed locally.`;
+  if (!isNonBlankStr(installedFile.sha256)) {
+    return `Installed character ${label} "${filename}" has no checksum to verify exact inputs.`;
+  }
+  if (installedFile.sha256 !== sha256) {
+    return `Recorded character ${label} "${filename}" checksum mismatch (expected ${sha256}, found ${installedFile.sha256}).`;
+  }
+  return null;
+};
+
+const exactVoiceProfileIssues = ({ characterId, universeId, recordedVersion, recordedEngine, recordedModelRev, profile }) => {
+  const issues = [];
+  if (profile.binding?.characterId && profile.binding.characterId !== characterId) {
+    issues.push(`Recorded voice profile "${profile.id}" is bound to a different character.`);
+  }
+  if (universeId && profile.binding?.universeId && profile.binding.universeId !== universeId) {
+    issues.push(`Recorded voice profile "${profile.id}" belongs to a different Universe.`);
+  }
+  if (!Number.isFinite(recordedVersion) || profile.version !== recordedVersion) {
+    issues.push(`Recorded voice profile "${profile.id}" version mismatch (recorded v${recordedVersion ?? 'unknown'}, current local v${profile.version ?? 'unknown'}).`);
+  }
+  if (!isNonBlankStr(recordedEngine) || !isNonBlankStr(profile.engine) || profile.engine !== recordedEngine) {
+    issues.push(`Recorded voice profile "${profile.id}" engine mismatch (recorded ${recordedEngine || 'unknown'}, current local ${profile.engine || 'unknown'}).`);
+  }
+  if (!isNonBlankStr(recordedModelRev) || !isNonBlankStr(profile.modelRevision) || profile.modelRevision !== recordedModelRev) {
+    issues.push(`Recorded voice profile "${profile.id}" model revision mismatch (recorded ${recordedModelRev || 'unknown'}, current local ${profile.modelRevision || 'unknown'}).`);
+  }
+  return issues;
+};
+
 /**
  * Normalize the optional provider/model preferences on a loom render pin.
  * Image and video model ids are local-model selections; cloud backends use
@@ -432,22 +468,8 @@ export function verifyExactInputProvenance(recordedProvenance, {
       errors.push('Recorded visual conditioning has no adapter manifest.');
     } else {
       for (const adapter of recordedProvenance.adapters) {
-        if (!isNonBlankStr(adapter?.filename)) {
-          errors.push('Recorded visual conditioning contains an adapter with no filename.');
-          continue;
-        }
-        if (!isNonBlankStr(adapter.sha256)) {
-          errors.push(`Recorded character adapter "${adapter.filename}" has no checksum to verify exact inputs.`);
-          continue;
-        }
-        const matchedLora = installedLoras.find((lora) => lora?.filename === adapter.filename);
-        if (!matchedLora) {
-          errors.push(`Recorded character adapter "${adapter.filename}" is not installed locally.`);
-        } else if (!isNonBlankStr(matchedLora.sha256)) {
-          errors.push(`Installed character adapter "${adapter.filename}" has no checksum to verify exact inputs.`);
-        } else if (matchedLora.sha256 !== adapter.sha256) {
-          errors.push(`Recorded character adapter "${adapter.filename}" checksum mismatch (expected ${adapter.sha256}, found ${matchedLora.sha256}).`);
-        }
+        const issue = recordedFileChecksumIssue({ ...adapter, label: 'adapter' }, installedLoras);
+        if (issue) errors.push(issue);
       }
     }
     if (!Array.isArray(recordedProvenance.omitted)) {
@@ -476,22 +498,8 @@ export function verifyExactInputProvenance(recordedProvenance, {
 
     // Check LoRA matching
     if (char.lora) {
-      const recordedFilename = char.lora.filename;
-      if (!isNonBlankStr(recordedFilename)) {
-        errors.push(`Recorded character LoRA binding for "${charId}" has no filename.`);
-      } else {
-        const recordedSha = char.lora.sha256;
-        const matchedLora = installedLoras.find((l) => l.filename === recordedFilename);
-        if (!matchedLora) {
-          errors.push(`Recorded character LoRA "${recordedFilename}" is not installed locally.`);
-        } else if (!isNonBlankStr(recordedSha)) {
-          errors.push(`Recorded character LoRA "${recordedFilename}" has no checksum to verify.`);
-        } else if (!isNonBlankStr(matchedLora.sha256)) {
-          errors.push(`Installed character LoRA "${recordedFilename}" has no checksum to verify exact inputs.`);
-        } else if (matchedLora.sha256 !== recordedSha) {
-          errors.push(`Recorded character LoRA "${recordedFilename}" checksum mismatch (expected ${recordedSha}, found ${matchedLora.sha256}).`);
-        }
-      }
+      const issue = recordedFileChecksumIssue({ ...char.lora, label: 'LoRA' }, installedLoras);
+      if (issue) errors.push(issue);
     }
 
     // Check Voice Profile matching
@@ -510,23 +518,14 @@ export function verifyExactInputProvenance(recordedProvenance, {
         errors.push(`Recorded voice profile "${recordedProfileId}" is not installed locally.`);
         continue;
       }
-      if (matchedProfile.binding?.characterId && matchedProfile.binding.characterId !== charId) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" is bound to a different character.`);
-      }
-      if (recordedProvenance.universeId
-        && matchedProfile.binding?.universeId
-        && matchedProfile.binding.universeId !== recordedProvenance.universeId) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" belongs to a different Universe.`);
-      }
-      if (!Number.isFinite(recordedVersion) || matchedProfile.version !== recordedVersion) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" version mismatch (recorded v${recordedVersion ?? 'unknown'}, current local v${matchedProfile.version ?? 'unknown'}).`);
-      }
-      if (!isNonBlankStr(recordedEngine) || !isNonBlankStr(matchedProfile.engine) || matchedProfile.engine !== recordedEngine) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" engine mismatch (recorded ${recordedEngine || 'unknown'}, current local ${matchedProfile.engine || 'unknown'}).`);
-      }
-      if (!isNonBlankStr(recordedModelRev) || !isNonBlankStr(matchedProfile.modelRevision) || matchedProfile.modelRevision !== recordedModelRev) {
-        errors.push(`Recorded voice profile "${recordedProfileId}" model revision mismatch (recorded ${recordedModelRev || 'unknown'}, current local ${matchedProfile.modelRevision || 'unknown'}).`);
-      }
+      errors.push(...exactVoiceProfileIssues({
+        characterId: charId,
+        universeId: recordedProvenance.universeId,
+        recordedVersion,
+        recordedEngine,
+        recordedModelRev,
+        profile: matchedProfile,
+      }));
     }
   }
 

@@ -17,6 +17,7 @@
  * the SAME project while one is already in flight.
  */
 
+import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
@@ -30,7 +31,7 @@ import { safeUnder } from '../../lib/ffmpeg.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { assertCurrentPerformanceTakes } from './performanceShot.js';
-import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
+import { assertCurrentClipDependencies, planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
 import { renderableCues, sectionCardCues } from './composition.js';
@@ -38,7 +39,10 @@ import { renderTypographyOverlays, removeCompositionScratch } from './compositio
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
 import { markRevisionRendering, settleRevisionRender } from './revision.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
+import { musicVideoAspect, musicVideoAtAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoEvents } from './events.js';
+import { pilotDependencies, productionPilotRenderProject } from './productionPilot.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 
 const jobs = new Map();
 const projectExcerptRenders = new Map();
@@ -87,10 +91,10 @@ const SEEKED_EXCERPTS = Object.freeze({
       const full = prepareCodeRender(project);
       return { full, totalSec: full.durationSec, songSections: full.song.sections.map((s) => ({ sceneId: s.sceneId || s.id, startSec: s.startSec, endSec: s.endSec })) };
     },
-    encode: async ({ project, projectId, jobId, audioPath, outputPath, signal, onProgress, startSec, endSec }) => {
+    encode: async ({ project, projectId, jobId, audioPath, outputPath, signal, onProgress, startSec, endSec, fade }) => {
       const plan = prepareCodeRender(project, { windowStart: startSec, windowEnd: endSec });
       await encodeCodeComposition({
-        ...plan, audioPath, audioStartSec: startSec, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress,
+        ...plan, audioPath, audioStartSec: startSec, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress, fade,
       });
       return { width: plan.width, height: plan.height, fps: plan.fps, boundaryTimes: plan.sectionTimes };
     },
@@ -106,18 +110,24 @@ const SEEKED_EXCERPTS = Object.freeze({
         .map((s) => ({ sceneId: s.sceneId, startSec: s.startSec, endSec: s.endSec }));
       return { plan, totalSec: plan.durationSec, songSections };
     },
-    encode: ({ prepared, project, jobId, audioPath, soundBed, outputPath, signal, onProgress, startSec, endSec }) => encodeDocumentComposition({
-      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec,
+    encode: ({ prepared, project, jobId, audioPath, soundBed, outputPath, signal, onProgress, startSec, endSec, fade }) => encodeDocumentComposition({
+      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec, fade,
     }),
   },
 });
 
-async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revisionId, handOff, renderer }) {
+async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSec, revisionId, handOff, renderer, aspect = null, fade = false }) {
+  // A social cut renders the same composition at another frame (#9280): the
+  // re-framed view drives planning, staging and capture; the record keeps its own aspect.
+  const project = musicVideoAtAspect(stored, aspect);
   const prepared = await renderer.prepare(project);
   // Same order as a full render: a missing master throws before the
   // excerpt is marked rendering.
   const audioPath = await resolveMasterAudioPath(project);
-  if (renderer.performanceTakes) await assertCurrentPerformanceTakes(project, audioPath);
+  if (renderer.performanceTakes) {
+    assertCurrentClipDependencies(project);
+    await assertCurrentPerformanceTakes(project, audioPath);
+  }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
   if (!(startSec >= 0) || !(endSec > startSec) || endSec > prepared.totalSec + 1e-6) {
     throw new ServerError(
@@ -139,7 +149,7 @@ async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revis
     }));
   const renderingOn = await ensureInstanceId();
   const { excerpt } = await mutateProjectRecord(projectId, (current) => {
-    const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, partialFilename: filename, renderingOn });
+    const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: project, dependencies: captureMusicVideoEvidence(project, { sceneIds: sections.map((section) => section.sceneId), startSec, endSec: endClamped }), partialFilename: filename, renderingOn, aspect: musicVideoAspect(project), fade });
     return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
   });
   const excerptId = excerpt.id;
@@ -165,7 +175,7 @@ async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revis
     return persisted;
   };
   Promise.resolve().then(() => renderer.encode({
-    prepared, project, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped,
+    prepared, project, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade,
     onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
   })).then(async (encoded) => {
     job.overlayAbort = null;
@@ -180,7 +190,7 @@ async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revis
       console.warn(`⚠️ Music-video ${renderer.label} excerpt contact sheet failed [${jobId.slice(4, 12)}]: ${err.message}`);
       contactSheetFilename = null;
     }
-    const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null });
+    const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null, width: encoded.width ?? null, height: encoded.height ?? null });
     if (!persisted) {
       await unlink(outputPath).catch(() => {});
       broadcastSse(job, { type: 'error', error: 'The excerpt rendered, but saving the result failed — reload the project and try again' });
@@ -202,9 +212,16 @@ async function launchSeekedExcerpt({ projectId, project, startSec, endSec, revis
   return { jobId, excerptId };
 }
 
-export async function startExcerptRender(projectId, { startSec, endSec }, { revisionId = null } = {}) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+export async function startExcerptRender(projectId, { startSec, endSec, aspect = null, fade = false }, { revisionId = null, pilotSceneId = null, verifyCurrent = null } = {}) {
+  const stored = await getProject(projectId);
+  if (!stored) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  await verifyCurrent?.(stored);
+  const project = pilotSceneId ? productionPilotRenderProject(stored, pilotSceneId) : stored;
+  const pilotEvidence = pilotSceneId ? pilotDependencies(stored, pilotSceneId) : null;
+  if (pilotSceneId) {
+    const scene = stored.scenes.find((s) => s.sceneId === pilotSceneId);
+    if (startSec !== scene.startSec || endSec !== scene.endSec) throw new ServerError('The pilot must review its exact song window', { status: 422, code: 'INVALID_EXCERPT_RANGE' });
+  }
 
   const existingJob = projectExcerptRenders.get(projectId);
   if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
@@ -219,7 +236,14 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     const seeked = SEEKED_EXCERPTS[project.composition?.mode];
     if (seeked) {
       return await launchSeekedExcerpt({
-        projectId, project, startSec, endSec, revisionId, handOff: () => { handedOff = true; }, renderer: seeked,
+        projectId, project, startSec, endSec, revisionId, handOff: () => { handedOff = true; }, renderer: seeked, aspect, fade,
+      });
+    }
+    // A footage (ffmpeg) render has no frame of its own to re-lay-out: cropping
+    // the 16:9 cut would slice through its type and cards (#9280).
+    if ((aspect && aspect !== musicVideoAspect(project)) || fade) {
+      throw new ServerError('Social cuts (another aspect, faded edges) need a composition-document or code-rendered project', {
+        status: 422, code: 'EXCERPT_ASPECT_UNSUPPORTED',
       });
     }
     const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
@@ -230,7 +254,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     // dims/fps/sections/cues in ABSOLUTE song time — the coordinate space
     // `startSec`/`endSec` and `excerptBoundaryTimes` are given in.
     const probe = buildMusicVideoFfmpegArgs(clips, audioPath, join(PATHS.videos, 'probe.mp4'), { audioDurationSec, frameGrid: composed });
-    if (!(startSec >= 0) || !(endSec > startSec) || endSec > probe.totalDuration + 1e-6) {
+    if (!(startSec >= 0) || !(endSec > startSec) || endSec > probe.totalDuration + (pilotSceneId ? 1 / probe.fps : 1e-6)) {
       throw new ServerError(
         `The excerpt range must fall within the project's ${probe.totalDuration.toFixed(2)}s render`,
         { status: 422, code: 'INVALID_EXCERPT_RANGE', context: { totalDuration: probe.totalDuration } },
@@ -253,8 +277,10 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     // and the mark names this instance so a synced peer's boot recovery can't
     // demote it (#9010).
     const renderingOn = await ensureInstanceId();
+    await verifyCurrent?.(await getProject(projectId));
     const { excerpt } = await mutateProjectRecord(projectId, (current) => {
-      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, partialFilename: filename, renderingOn });
+      if (pilotEvidence && musicVideoDependencyChanges(current, pilotEvidence).length) throw new ServerError('The selected pilot changed before rendering', { status: 409, code: 'COMPOSITION_DRAFT_STALE' });
+      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: stored, dependencies: pilotEvidence || captureMusicVideoEvidence(project, { sceneIds: sections.map((section) => section.sceneId), startSec, endSec: endClamped }), partialFilename: filename, renderingOn });
       return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
     });
     const excerptId = excerpt.id;
@@ -403,7 +429,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     };
 
     if (!composition) {
-      const { args } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed });
+      const { args } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null });
       startEncode(args);
       return { jobId, excerptId };
     }
@@ -422,7 +448,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     }).then((overlays) => {
       signal.throwIfAborted();
       job.overlayAbort = null;
-      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped }, soundBed });
+      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null });
       startEncode(layered.args, 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;

@@ -7,10 +7,12 @@ const toSec = (value) => (value === '' ? null : Number(value));
 const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
 // Mirrors the server's composition enums (server/lib/musicVideoValidation.js).
-const TEMPLATES = [['fade', 'Fade'], ['rise', 'Rise'], ['typewriter', 'Typewriter'], ['pop', 'Pop']];
+const TEMPLATES = [['fade', 'Fade'], ['rise', 'Rise'], ['typewriter', 'Typewriter'], ['pop', 'Pop'], ['build', 'Word build']];
 const PLACEMENTS = [['lower', 'Lower'], ['center', 'Center'], ['upper', 'Upper']];
 const EMPHASES = [['subtitle', 'Subtitle'], ['hero', 'Hero']];
 const FONTS = [['sans', 'Sans'], ['serif', 'Serif'], ['mono', 'Mono']];
+// #9290: one cut per planned shot, or intercut on energy and sung words.
+const CUTTING = [['scene', 'One cut per shot'], ['intercut', 'Intercut on the song']];
 
 /**
  * Composition manifest editor (#8984): switch the final render between plain
@@ -50,6 +52,12 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
           <label htmlFor="mv-typo-mode" className="block text-port-text-muted mb-0.5">Render style</label>
           <select id="mv-typo-mode" value={composition.mode} onChange={(e) => replace({ mode: e.target.value })} className={inputCls}>
             {RENDER_STYLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="mv-typo-cutting" className="block text-port-text-muted mb-0.5" title="Intercut re-cuts each shot on the song's energy and sung words, reusing cutaway footage — no extra generation.">Cutting</label>
+          <select id="mv-typo-cutting" value={composition.cutting || 'scene'} onChange={(e) => replace({ cutting: e.target.value })} className={inputCls}>
+            {CUTTING.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </div>
         <div>

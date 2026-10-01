@@ -63,6 +63,7 @@ const stubs = {
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageCodex: vi.fn(async () => ({ jobId: 'whatever' })),
+  generateImageFal: vi.fn(async () => ({ jobId: 'whatever' })),
   generateAudio: vi.fn(async () => ({ jobId: 'whatever' })),
   generateAudioRemote: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageRemote: vi.fn(async () => ({ jobId: 'whatever' })),
@@ -84,6 +85,8 @@ const stubs = {
   renderComposition: vi.fn(async () => ({})),
   cancelComposition: vi.fn(),
 };
+
+vi.mock('../musicVideo/revisionService.js', () => ({ assertPerformanceRepairDispatch: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('../creativeDirector/videoExecution.js', () => ({
   assertVideoAttemptDispatch: vi.fn().mockResolvedValue(undefined),
@@ -123,6 +126,11 @@ vi.mock('../imageGen/local.js', () => ({
 
 vi.mock('../imageGen/codex.js', () => ({
   generateImage: (...args) => stubs.generateImageCodex(...args),
+  cancel: (...args) => stubs.cancelImageCodex(...args),
+}));
+
+vi.mock('../imageGen/fal.js', () => ({
+  generateImage: (...args) => stubs.generateImageFal(...args),
   cancel: (...args) => stubs.cancelImageCodex(...args),
 }));
 
@@ -792,6 +800,17 @@ describe('mediaJobQueue', () => {
 
     videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
+  it('refuses a canceled suffix repair at provider dispatch without paying again', async () => {
+    const { assertPerformanceRepairDispatch } = await import('../musicVideo/revisionService.js');
+    assertPerformanceRepairDispatch.mockRejectedValueOnce(new Error('This repair revision is canceled'));
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      prompt: 'Example continuation', musicVideo: { projectId: 'example-project', sceneId: 'example-suffix', revisionId: 'example-revision' },
+      shotInstruction: { repair: { role: 'continuation' } },
+    } });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
   });
 
   it('cancels during dispatch validation without invoking the provider and cleans staged uploads', async () => {
@@ -1614,6 +1633,35 @@ describe('Codex lane', () => {
       () =>
         mediaJobQueue.getJob(videoJob.jobId).status !== 'running' &&
         mediaJobQueue.getJob(codexJob.jobId).status !== 'running',
+    );
+  });
+
+  it('dispatches a fal.ai image job to imageGen/fal.js on the cloud lane, beside a running GPU job', async () => {
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    stubs.generateImageFal.mockImplementation(() => new Promise(() => {}));
+
+    const videoJob = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'video' } });
+    const falJob = await mediaJobQueue.enqueueJob({
+      kind: 'image',
+      params: { prompt: 'fal plate', mode: 'fal', model: 'fal-ai/nano-banana-pro' },
+    });
+    // The GPU slot is taken by the video job, so the fal job can only have
+    // started if it was classified onto the cloud lane.
+    await waitFor(
+      () => stubs.generateVideo.mock.calls.length === 1 && stubs.generateImageFal.mock.calls.length === 1,
+    );
+    expect(stubs.generateImageFal).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: falJob.jobId, mode: 'fal', model: 'fal-ai/nano-banana-pro' }),
+    );
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    expect(stubs.generateImageCodex).not.toHaveBeenCalled();
+
+    videoGenEvents.emit('failed', { generationId: videoJob.jobId, error: 'cleanup' });
+    imageGenEvents.emit('failed', { generationId: falJob.jobId, error: 'cleanup' });
+    await waitFor(
+      () =>
+        mediaJobQueue.getJob(videoJob.jobId).status !== 'running' &&
+        mediaJobQueue.getJob(falJob.jobId).status !== 'running',
     );
   });
 

@@ -11,11 +11,12 @@ export const currentRevision = (project) => {
 
 // A rejected section's live state, from the board's own record + spinners
 // (the server re-derives the authoritative state on every resume).
-function sectionState(section, scene, spinning) {
+function sectionState(section, scene, spinning, repair) {
   if (section.verdict !== 'rejected') return { label: 'Kept', tone: 'text-port-success' };
   if (!scene) return { label: 'Scene removed', tone: 'text-port-text-muted' };
   if (scene[SLOT[section.kind]]) return { label: 'New take ready', tone: 'text-port-success' };
   if (spinning) return { label: 'Generating…', tone: 'text-port-warning' };
+  if (repair?.submitted) return { label: 'Reserved repair — review if interrupted', tone: 'text-port-warning' };
   return { label: 'Needs a new take', tone: 'text-port-error' };
 }
 
@@ -62,7 +63,7 @@ export default function RevisionPanel({ project, busy, genScenes = {}, genVideoS
         {sections.map((section) => {
           const entry = byId.get(section.sceneId);
           const spinning = section.kind === 'image' ? genScenes[section.sceneId] : genVideoScenes[section.sceneId];
-          const state = sectionState(section, entry?.scene, spinning);
+          const state = sectionState(section, entry?.scene, spinning, revision.repair);
           return (
             <li key={section.sceneId} className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 flex-1">{entry ? `Scene ${entry.number}` : section.sceneId} <span className="text-port-text-muted">({section.layer})</span></span>

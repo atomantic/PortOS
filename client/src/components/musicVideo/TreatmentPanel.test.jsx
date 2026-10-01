@@ -202,3 +202,41 @@ describe('TreatmentPanel edits and compile', () => {
     ]);
   });
 });
+
+it('shows union totals and explicit exceptions before Apply, and pins a director-selected medium', async () => {
+  const planned = {
+    ...PROJECT,
+    productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 20 },
+    audioAnalysis: { durationSec: 100, sections: [] },
+    scenes: [
+      { ...PROJECT.scenes[0], startSec: 0, endSec: 15 },
+      { ...PROJECT.scenes[1], startSec: 10, endSec: 20 },
+    ],
+    treatment: {
+      ...TREATMENT,
+      shotDirections: ['s1', 's2'].map((sceneId) => ({
+        sceneId, medium: 'generated-footage', mediumRationale: 'Visible payoff', mediumPinned: false,
+        mode: 'cutaway', route: 'generated', typographyRole: 'none', negativeSpace: 'none',
+      })),
+    },
+  };
+  api.updateMusicVideoTreatment.mockImplementation(async (_id, patch) => ({
+    treatment: {
+      ...planned.treatment, revision: 4,
+      shotDirections: planned.treatment.shotDirections.map((d) => d.sceneId === 's1' ? { ...d, ...patch.shotDirections[0] } : d),
+    },
+  }));
+  render(<Harness initial={planned} />);
+  expect(screen.getByText(/generated video 20 \/ 20 seconds/)).toBeTruthy();
+  expect(screen.getByText('Generated-footage exceptions')).toBeTruthy();
+  expect(screen.getByText(/Planning only: Apply saves direction/)).toBeTruthy();
+  expect(api.applyMusicVideoTreatment).not.toHaveBeenCalled();
+  fireEvent.change(screen.getAllByLabelText('Planned medium')[0], { target: { value: 'still' } });
+  await waitFor(() => expect(api.updateMusicVideoTreatment).toHaveBeenCalledWith(
+    'mv-1',
+    { baseRevision: 3, shotDirections: [{ sceneId: 's1', medium: 'still', mediumPinned: true }] },
+    { silent: true },
+  ));
+  await waitFor(() => expect(screen.getAllByLabelText('Keep medium on recompile')[0].checked).toBe(true));
+  expect(screen.getByText(/generated video 10 \/ 20 seconds/)).toBeTruthy();
+});

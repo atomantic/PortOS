@@ -16,7 +16,7 @@ import { normalizeComposition } from './composition.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { buildCodeTimeline, buildSongDocument, paletteFromProject } from './codeTimeline.js';
 
-async function styleLinesFor(project) {
+export async function styleLinesFor(project) {
   const universeId = project.concept?.universeId;
   if (!universeId) return [];
   try {
@@ -42,7 +42,7 @@ function acceptSources(parsed, ids) {
   return accepted;
 }
 
-async function runModel({ providerId, model, prompt }) {
+export async function runModel({ providerId, model, prompt, source = 'music-video-code', beforeSubmit = null }) {
   const { assertProvider, resolveProviderAndModel, runPromptThroughProvider } = await import('../promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to write the code video', code: 'PROVIDER_UNAVAILABLE', status: 400 });
@@ -51,8 +51,9 @@ async function runModel({ providerId, model, prompt }) {
     provider,
     model: selectedModel || undefined,
     prompt,
-    source: 'music-video-code',
+    source,
     cwd: PATHS.data,
+    ...(beforeSubmit ? { allowFallback: false, toolFree: true, beforeExecute: beforeSubmit } : {}),
   });
   return { text, providerId: provider.id, model: selectedModel || null };
 }

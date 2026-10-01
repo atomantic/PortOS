@@ -120,6 +120,13 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
     expect(manifest).toContainEqual({ filename: 'track-1.wav', kind: 'music', sha256: sha(bytes) });
   });
 
+  it('retains the historical source audio after a timing revision', async () => {
+    const bytes = Buffer.from('historical-audio');
+    writeMusic('previous.wav', bytes);
+    const manifest = await buildMusicVideoAssetManifest({ scenes: [], audioTimingRevisions: [{ before: { audioFilename: 'previous.wav' } }] });
+    expect(manifest).toContainEqual({ filename: 'previous.wav', kind: 'music', sha256: sha(bytes) });
+  });
+
   it('skips a missing/deleted track without throwing', async () => {
     vi.mocked(getTrack).mockResolvedValue(null);
     const manifest = await buildMusicVideoAssetManifest({
@@ -176,12 +183,13 @@ describe('buildMusicVideoAssetManifest — scene takes + visual spec (#8965)', (
   });
 
   it('ships every take and moodboard reference a peer may select, not only the selected slot', async () => {
-    for (const name of ['selected.png', 'candidate.png', 'mood.png']) writeImage(name, Buffer.from(name));
+    for (const name of ['selected.png', 'candidate.png', 'mood.png', 'style.png']) writeImage(name, Buffer.from(name));
     writeVideo('clip-a.mp4', Buffer.from('a'));
     writeVideo('clip-b.mp4', Buffer.from('b'));
     const manifest = await buildMusicVideoAssetManifest({
       trackId: null,
       uploadedAudioFilename: null,
+      styleReferences: [{ imageId: 'style.png', caption: 'silver grain' }, { imageId: '../escape.png' }],
       visualSpec: { references: [{ id: 'r1', imageId: 'mood.png' }, { id: 'r2', imageId: '../escape.png' }] },
       scenes: [{
         sceneId: 's1',
@@ -197,7 +205,7 @@ describe('buildMusicVideoAssetManifest — scene takes + visual spec (#8965)', (
     });
     const keys = manifest.map((m) => `${m.kind}:${m.filename}`).sort();
     expect(keys).toEqual([
-      'image:candidate.png', 'image:mood.png', 'image:selected.png',
+      'image:candidate.png', 'image:mood.png', 'image:selected.png', 'image:style.png',
       'video:clip-a.mp4', 'video:clip-b.mp4',
     ]);
   });

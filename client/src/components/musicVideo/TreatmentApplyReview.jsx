@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import MediumPlanSummary from './MediumPlanSummary.jsx';
 import { ClipboardCheck, AlertTriangle } from 'lucide-react';
 
 const PROMPT_LABELS = {
@@ -58,6 +59,7 @@ export default function TreatmentApplyReview({ project, api }) {
 
       {preview && (
         <div className="space-y-2 rounded border border-port-border p-2 text-xs">
+          {preview.mediumPlan && <MediumPlanSummary project={project} plan={preview.mediumPlan} />}
           {preview.stale.length > 0 && (
             <ul className="space-y-1">
               {preview.stale.map((s) => (

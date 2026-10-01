@@ -49,6 +49,7 @@ function ProofRow({ project, proof, onReview }) {
         <span className="font-medium">{KIND_LABELS[proof.kind] || proof.kind}</span>
         <span className="text-port-text-muted">{proof.sceneIds.map((id) => scenes.get(id)?.label || 'deleted scene').join(' → ')}</span>
       </div>
+      {proof.evidence?.dependencyState && proof.evidence.dependencyState.status !== 'current' && <p className="text-port-warning">Historical verdict — {proof.evidence.dependencyState.reasons.join('; ')}. Review current evidence again.</p>}
       <p>{proof.artifact}</p>
       {proof.risk && <p className="text-port-text-muted">Risk: {proof.risk}</p>}
       {proof.route && <p className="text-port-text-muted">Route: {proof.route}</p>}

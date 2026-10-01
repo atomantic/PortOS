@@ -9,6 +9,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | Doc | Covers |
 |-----|--------|
 | [HTML_COMPOSITIONS.md](./HTML_COMPOSITIONS.md) | Seekable HTML scenes rendered offline to MP4 through hidden managed-browser targets |
+| [CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md) | Versioned portable Code Animation source/brief packages and non-executing validation |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
 | [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |
 | [API.md](./API.md) | REST endpoints, complete route-domain index, Socket.IO events |
@@ -29,6 +30,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [MODEL_ACCESS.md](./MODEL_ACCESS.md) | Scoping a provider to the models your plan entitles you to — free tiers, allow/deny globs, gateway inheritance |
 | [MODEL-COMPARISON.md](./MODEL-COMPARISON.md) | Sourced provider/model/effort comparisons, cost estimates and CoS research refresh |
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
+| [features/music-video-temporal-evidence.md](./features/music-video-temporal-evidence.md) | Performance source provenance, synchronized playback and optional local temporal analyzer protocol |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
 | [CLI_REVIEW_OUTCOMES.md](./CLI_REVIEW_OUTCOMES.md) | Reviewer tiers, provider pins and bounded, authenticated CLI health reports |
@@ -63,6 +65,8 @@ Create: [writers-room](./features/writers-room.md) · [fableloom](./features/fab
 Comms & voice: [beeper](./features/beeper.md) · [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md) ([Jev feasibility](./research/2026-09-30-jev-voice-feasibility.md))
 
 ## Point-in-time records
+
+- [Music Video render-grade validation](validation/9302-music-video-grade.md) — synthetic encoder parity, visual references, and remaining generated-shot acceptance.
 
 - **[plans/](./plans/README.md)** — dated design plans (`YYYY-MM-DD-<slug>.md`), archived on approval before implementation. Historical records, not living docs. See [provider connections and harnesses](./plans/2026-09-06-provider-connections-and-harnesses.md) for stable executable routes, migration and management flows.
 - **decisions/** — ADRs (`YYYY-MM-DD-<slug>.md`), e.g. the [Postgres-as-primary-datastore decision](./decisions/2026-06-07-postgres-as-primary-datastore.md) and what may cross the federation layer ([user-controlled federation](./decisions/2026-09-19-user-controlled-federation.md), [Privacy Center storage](./decisions/2026-08-08-privacy-records-machine-local.md), [federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md), [conditioning crosses to an allowlisted peer](./decisions/2026-08-22-federated-media-input-assets.md), [AI usage metrics federate on by default](./decisions/2026-09-01-federated-usage-metrics.md), [Eidoverse guest chat](./decisions/2026-09-05-eidoverse-guest-chat.md), [numeric PortOS quality federation](./decisions/2026-09-10-portos-quality-federation.md), [federated Eidoverse foundations](./decisions/2026-09-18-federated-eidoverse-foundations.md)), why H3 [ships the draft-decode gates without an asset](./decisions/2026-08-30-h3-draft-decoder-asset.md), and why closed-set decisions run on a [local entailment model that abstains](./decisions/2026-09-18-local-jev-decision-service.md).

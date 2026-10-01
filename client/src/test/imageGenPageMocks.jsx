@@ -100,6 +100,7 @@ export const state = {
   locationSearch: '',
   initImagePickerProps: null,
   loraPickerProps: null,
+  loraPickerFactory: null,
   resolutionFieldProps: null,
   /** `GET /api/instances` peers — a media-provider peer makes the target picker appear. */
   peers: [],
@@ -153,6 +154,7 @@ export function resetImageGenMockState() {
   state.locationSearch = '';
   state.initImagePickerProps = null;
   state.loraPickerProps = null;
+  state.loraPickerFactory = null;
   state.resolutionFieldProps = null;
   state.peers = [];
   state.getImageGenStatus.mockReset().mockImplementation(defaultStatus);
@@ -293,7 +295,8 @@ vi.mock('../components/imageGen/Flux2InstallModal', () => ({ default: () => null
 vi.mock('../components/imageGen/LoraPicker', () => ({
   default: (props) => {
     state.loraPickerProps = props;
-    return null;
+    const Factory = state.loraPickerFactory;
+    return Factory ? <Factory {...props} /> : null;
   },
 }));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));

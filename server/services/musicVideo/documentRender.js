@@ -1,3 +1,4 @@
+import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render a project's composition document over the song.
  *
@@ -31,11 +32,12 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
+import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
 
 export const DOCUMENT_RENDER_FPS = 24;
 // The frame each project aspect renders at (the composition browser's sizes).
@@ -99,15 +101,17 @@ export function documentRenderClock(songDurationSec, fps = DOCUMENT_RENDER_FPS) 
  * `history` is the video history list; `probe(path)` measures a clip the
  * history did not (hosted renders record no geometry).
  */
-export async function resolveSceneMedia(project, { history = [], probe = async () => null } = {}) {
+export async function resolveSceneMedia(project, { history = [], probe = async () => null, strictLayers = false } = {}) {
   const byId = new Map((Array.isArray(history) ? history : []).map((entry) => [entry.id, entry]));
   const out = new Map();
   const { safeUnder } = await import('../../lib/ffmpeg.js');
   for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
     if (!scene?.sceneId) continue;
+    const layer = documentSceneVisualLayer(project, scene, { generated: strictLayers });
+    if (strictLayers && layer === 'card') continue;
     const entry = scene.videoHistoryId ? byId.get(scene.videoHistoryId) : null;
     const videoPath = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
-    if (videoPath && existsSync(videoPath)) {
+    if ((!strictLayers || layer === 'footage') && videoPath && existsSync(videoPath)) {
       const measured = entry.numFrames && entry.fps && entry.width && entry.height ? entry : { ...entry, ...((await probe(videoPath)) || {}) };
       const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
       const edit = selectedPerformanceInstruction(scene)?.edit ?? null;
@@ -124,7 +128,7 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       });
       continue;
     }
-    const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
+    const imagePath = (!strictLayers || layer === 'still') && scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
     if (imagePath && existsSync(imagePath)) {
       const ext = (/\.([a-z0-9]{2,5})$/i.exec(scene.referenceImageId)?.[1] || 'png').toLowerCase();
       out.set(scene.sceneId, { kind: 'image', path: imagePath, ext: ext === 'jpeg' ? 'jpg' : ext, inSec: null, outSec: null, fps: null, width: null, height: null });
@@ -146,7 +150,7 @@ function sceneDirection(project, sceneId) {
  * The `window.PORTOS_MV` payload (pure). `media` is resolveSceneMedia's map;
  * `frame` is `{ width, height }`; `clock` is documentRenderClock's result.
  */
-export function buildDocumentData(project, { media = new Map(), frame, clock, songDurationSec }) {
+export function buildDocumentData(project, { media = new Map(), frame, clock, songDurationSec, generated = false }) {
   const song = musicVideoSongDocument(project);
   const analysis = project?.audioAnalysis || {};
   const scenes = (Array.isArray(project?.scenes) ? project.scenes : [])
@@ -164,7 +168,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         startSec: start,
         endSec: start != null && end != null && end > start ? end : null,
         shotMode: scene.shotMode === 'performance' ? 'performance' : 'cutaway',
-        visualLayer: sceneVisualLayer(scene, { layered: true }),
+        visualLayer: documentSceneVisualLayer(project, scene, { generated }),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         cardText: typeof scene.cardText === 'string' ? scene.cardText : null,
         cardColor: typeof scene.cardColor === 'string' ? scene.cardColor : null,
@@ -177,7 +181,13 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         } : null,
       };
     });
-  const lyrics = buildSongDocument(project).lyrics;
+  const songDocument = buildSongDocument(project);
+  const lyrics = songDocument.lyrics;
+  const narrative = resolveNarrativeEvents(project, songDocument.sections, clock.fps);
+  if (narrative.unresolved.length) throw new ServerError(`Rebind narrative events: ${narrative.unresolved.join(', ')}`, { status: 422, code: 'NARRATIVE_EVENT_UNRESOLVED' });
+  if ((project.composition?.reactiveSections || []).some((entry) => !songDocument.sections.some((section) => section.id === entry.sectionId))) {
+    throw new ServerError('Rebind reactive gain caps to current composition sections', { status: 422, code: 'NARRATIVE_SECTION_UNRESOLVED' });
+  }
   const composition = project?.composition || {};
   return {
     version: 1,
@@ -190,6 +200,10 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
       downbeats: song.downbeats,
       sections: song.sections,
       words: song.words || [],
+      narrativeEvents: narrative.events,
+      narrativeSections: songDocument.sections,
+      reactiveSections: project.composition?.reactiveSections || [],
+      features: analysis.features || null,
     },
     lyrics,
     lyricMarkers: Array.isArray(project?.lyricMarkers) ? project.lyricMarkers : [],
@@ -234,7 +248,7 @@ async function stageDocumentData(compositionDir, data, media) {
       throw error;
     });
   }
-  await writeFile(join(compositionDir, 'portos-mv.js'), `window.PORTOS_MV = ${scriptJson(data)};\n`);
+  await writeFile(join(compositionDir, 'portos-mv.js'), `window.PORTOS_MV = ${scriptJson(data)};\nwindow.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};\n`);
 }
 
 /**
@@ -270,12 +284,12 @@ function documentBoundaryTimes(data, window) {
 
 // Mux the silent picture with the master song (and the optional bed), both
 // cut to the window on SONG time.
-function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationSec, songDurationSec, soundBed = null, buildBed, audioNorm }) {
+function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationSec, songDurationSec, soundBed = null, buildBed, audioNorm, fade = '' }) {
   if (!soundBed?.path) {
     const args = ['-hide_banner', '-loglevel', 'error', '-i', videoPath];
     if (startSec > 0) args.push('-ss', String(startSec));
     args.push('-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-t', String(durationSec), '-c:v', 'copy',
-      '-af', `atrim=duration=${durationSec},apad=whole_dur=${durationSec},asetpts=PTS-STARTPTS`,
+      '-af', `atrim=duration=${durationSec},apad=whole_dur=${durationSec},asetpts=PTS-STARTPTS${fade}`,
       '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', outputPath);
     return args;
   }
@@ -284,7 +298,7 @@ function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationS
     firstInputIdx: 2, mainLabel: '[master]', outLabel: '[mixa]',
   });
   const filters = [`[1:a]${audioNorm}[master]`, ...bed.filters,
-    `[mixa]atrim=start=${startSec}:end=${startSec + durationSec},asetpts=PTS-STARTPTS,apad=whole_dur=${durationSec}[outa]`];
+    `[mixa]atrim=start=${startSec}:end=${startSec + durationSec},asetpts=PTS-STARTPTS,apad=whole_dur=${durationSec}${fade}[outa]`];
   return ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-i', audioPath, ...bed.inputs,
     '-filter_complex', filters.join(';'), '-map', '0:v:0', '-map', '[outa]', '-t', String(durationSec), '-c:v', 'copy',
     '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', outputPath];
@@ -295,9 +309,9 @@ function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationS
  * Resolves `{ width, height, fps, durationSec, startSec, boundaryTimes }`.
  */
 export async function encodeDocumentComposition({
-  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null,
+  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null, fade = false,
 }) {
-  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry, edgeFadeFilter } = await import('../../lib/ffmpeg.js');
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition } = await import('../htmlComposition/encode.js');
@@ -306,8 +320,9 @@ export async function encodeDocumentComposition({
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
   const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
-  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry });
-  const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec });
+  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, strictLayers: project.composition?.document?.source?.kind === 'generated' });
+  const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec,
+    generated: project.composition?.document?.source?.kind === 'generated' });
   const silent = `${outputPath}.silent.mp4`;
   let staged;
   let page;
@@ -342,6 +357,7 @@ export async function encodeDocumentComposition({
     const target = documentTargetFrame({ ...parsed.data, motionBlur: 1 }, project);
     const window = documentRenderWindow(target, { windowStart, windowEnd });
     await encodeComposition(page, { ...target, durationSec: window.durationSec }, silent, {
+      videoFilter: musicVideoGradeFilter(project.composition?.grade, data.scenes, { fps: target.fps, offsetSec: window.startSec }),
       signal, offsetSec: window.startSec, onProgress: (fraction) => onProgress?.(fraction * 0.95),
     });
     page.check();
@@ -352,7 +368,7 @@ export async function encodeDocumentComposition({
       bin: ffmpeg, signal,
       args: documentMuxArgs(silent, audioPath, outputPath, {
         startSec: window.startSec, durationSec: window.durationSec, songDurationSec: plan.songDurationSec,
-        soundBed, buildBed: buildAudioBedMix, audioNorm: AUDIO_NORM,
+        soundBed, buildBed: buildAudioBedMix, audioNorm: AUDIO_NORM, fade: fade ? edgeFadeFilter(window.durationSec) : '',
       }),
     });
     if (!mux.ok) {

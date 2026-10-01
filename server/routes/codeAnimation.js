@@ -9,6 +9,8 @@
  *   GET  /api/code-animation/jobs           list saved jobs for the gallery
  *   GET  /api/code-animation/generate/:id   poll a job (html once completed)
  *   POST /api/code-animation/:id/export     queue a frame-exact MP4 render → 202 media job
+ *   GET  /api/code-animation/:id/package    download a portable source package
+ *   POST /api/code-animation/packages/validate   check package data/integrity only
  */
 
 import { Router } from 'express';
@@ -27,6 +29,14 @@ import {
   startCodeAnimationGeneration,
 } from '../services/codeAnimation/index.js';
 import { startCodeAnimationExport } from '../services/codeAnimation/export.js';
+import { exportCodeAnimationPackage } from '../services/codeAnimation/package.js';
+import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../lib/codeAnimationPackage.js';
+import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema } from '../lib/codeAnimationProjects.js';
+import {
+  createProductionProject, getProductionProject, patchProductionProject,
+  listProductionProjects, getProductionHistory, importProductionPackage,
+  acceptProductionSource, exportProductionPackage, exportProductionBrief,
+} from '../services/codeAnimation/projects.js';
 import {
   CODE_ANIMATION_ASPECT_RATIOS,
   CODE_ANIMATION_LIMITS,
@@ -157,6 +167,71 @@ router.get('/generate/:id', asyncHandler(async (req, res) => {
 }));
 
 const exportParamsSchema = z.object({ id: z.string().uuid() }).strict();
+
+const projectPageSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().regex(/^(0|[1-9][0-9]{0,8})$/).optional(),
+}).strict();
+const projectPage = query => {
+  const { limit, cursor } = validateRequest(projectPageSchema, query);
+  return { limit, offset: Number(cursor || 0) };
+};
+const revisionParamsSchema = exportParamsSchema.extend({ revisionId: z.string().uuid() });
+
+router.get('/projects', asyncHandler(async (req, res) => {
+  res.json(await listProductionProjects(projectPage(req.query)));
+}));
+router.post('/projects', asyncHandler(async (req, res) => {
+  res.status(201).json(await createProductionProject(validateRequest(codeAnimationProjectSchema, req.body)));
+}));
+router.get('/projects/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await getProductionProject(id));
+}));
+router.patch('/projects/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await patchProductionProject(id, validateRequest(codeAnimationProjectPatchSchema, req.body)));
+}));
+router.get('/projects/:id/history', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await getProductionHistory(id, projectPage(req.query)));
+}));
+router.post('/projects/:id/import', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.status(201).json(await importProductionPackage(id, validateRequest(codeAnimationPackageSchema, req.body)));
+}));
+router.post('/projects/:id/accept', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  const { revisionId } = validateRequest(z.object({ revisionId: z.string().uuid() }).strict(), req.body);
+  res.json(await acceptProductionSource(id, revisionId));
+}));
+router.get('/projects/:id/brief', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.attachment(`code-animation-brief-${id}.json`);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.json(await exportProductionBrief(id));
+}));
+router.get('/projects/:id/revisions/:revisionId/package', asyncHandler(async (req, res) => {
+  const { id, revisionId } = validateRequest(revisionParamsSchema, req.params);
+  res.attachment(`code-animation-source-${revisionId}.json`);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.json(await exportProductionPackage(id, revisionId));
+}));
+
+// External harness handoff is data-only. Validation grants no execution and
+// neither stages imported files nor changes a saved/accepted animation.
+router.post('/packages/validate', (req, res) => {
+  const pkg = validateRequest(codeAnimationPackageSchema, req.body);
+  res.json(summarizeCodeAnimationPackage(pkg));
+});
+
+router.get('/:id/package', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  const pkg = await exportCodeAnimationPackage(id);
+  res.attachment(`code-animation-${id}.json`);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.json(pkg);
+}));
 
 // Frame-exact export: the stored HTML renders through the HTML-composition
 // pipeline (seek each frame, H.264 MP4, Media History) on the media queue.

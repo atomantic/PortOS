@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock3, Copy, FileCode2, Globe, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
+import ProductionProjects from '../components/codeAnimation/ProductionProjects';
 import UniverseMoodBoardPicker, { BOARD_FOLLOW_UNIVERSE, BOARD_NONE, useStyleSourceLists } from '../components/media/UniverseMoodBoardPicker';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import useProviderModels from '../hooks/useProviderModels';
@@ -262,7 +263,7 @@ async function uploadOrToast(file) {
   });
 }
 
-export default function CodeAnimation() {
+function FastCodeAnimation() {
   const [searchParams] = useSearchParams();
   const routeParams = useParams();
   const navigate = useNavigate();
@@ -863,4 +864,18 @@ export default function CodeAnimation() {
       />
     </div>
   );
+}
+
+
+// Route-mounted lanes keep inactive galleries and provider calls idle.
+export default function CodeAnimation() {
+  const { pathname } = useLocation();
+  const production = pathname.startsWith('/code-animation/production');
+  return <div className="space-y-4">
+    <nav aria-label="Animation mode" className="flex flex-wrap gap-2">
+      <Link to="/code-animation" className={buttonSecondary} aria-current={!production ? 'page' : undefined}>Fast HTML</Link>
+      <Link to="/code-animation/production" className={buttonSecondary} aria-current={production ? 'page' : undefined}>Production</Link>
+    </nav>
+    {production ? <ProductionProjects /> : <FastCodeAnimation />}
+  </div>;
 }

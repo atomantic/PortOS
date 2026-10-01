@@ -6,8 +6,10 @@ vi.mock('./databaseWriterRegistry.js', () => ({ reserveDatabaseWriter: () => ({
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
+import { EventEmitter } from 'events';
 import { basename, join } from 'path';
 import { execFile, spawn } from './childProcess.js';
+import * as childProcess from './childProcess.js';
 import { promisify } from 'util';
 import { pathToFileURL } from 'url';
 import { pinPlatform } from './testHelper.js';
@@ -179,6 +181,33 @@ describe('spawnDetached', () => {
   // Leave room beyond the 30s PID deadline for the handle's bounded error or
   // close event to reach the test, especially on a loaded Windows runner.
   }, 45_000);
+
+  it('preserves sanitized launcher failure evidence when cleanup removes its control directory', async () => {
+    const controlDir = await tmpControlDir();
+    const restorePlatform = pinPlatform('win32');
+    const launcher = new EventEmitter();
+    launcher.unref = () => {};
+    const spawnMock = vi.spyOn(childProcess, 'spawn').mockImplementationOnce(() => {
+      setImmediate(() => launcher.emit('error', Object.assign(
+        new Error('private launcher command and credential text'), { code: 'ENOENT' },
+      )));
+      return launcher;
+    });
+    try {
+      const handle = await spawnDetached('example-command', [], {
+        controlDir, cleanup: true, pollMs: 5, pidTimeoutMs: 1000,
+      });
+      const error = await onClose(handle).catch((err) => err);
+      expect(error.message).toContain('launcher=ENOENT');
+      expect(error.message).toContain('supervisor-stage=unavailable');
+      expect(error.message).not.toContain('private');
+      expect(handle.pid).toBeNull();
+      expect(await waitUntil(async () => !(await stat(controlDir).catch(() => null)))).toBe(true);
+    } finally {
+      spawnMock.mockRestore();
+      restorePlatform();
+    }
+  });
 
   it('propagates a non-zero exit code', async () => {
     const controlDir = await tmpControlDir();

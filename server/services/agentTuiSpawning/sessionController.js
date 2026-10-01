@@ -41,6 +41,7 @@ import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDe
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
 import { isClaudeCommand } from '../../lib/providerModels.js';
+import { createCodexModelRejectionGate } from './codexModelRejection.js';
 import {
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
@@ -632,6 +633,7 @@ export function createTuiSessionController({
   // not `spawnCommand` — a credential-bootstrap wrap makes the latter the
   // bootstrap CLI.
   const isCodexSession = isCodexCommand(tuiConfig.command);
+  const codexModelRejectionGate = isCodexSession ? createCodexModelRejectionGate() : null;
   // Latches once codex's composer placeholder paints — the positive "the input
   // box exists" signal the idle heuristic lacks. See
   // CODEX_COMPOSER_READY_PATTERN; consumed by the idle paste branch below.
@@ -1252,6 +1254,7 @@ export function createTuiSessionController({
       if (isCodexSession && !codexComposerReady && !promptSentAt && commandInjected && stripped
         && CODEX_COMPOSER_READY_PATTERN.test(stripped)) codexComposerReady = true;
       const now = Date.now();
+      if (promptSubmittedAt) codexModelRejectionGate?.observe(stripped);
       // Startup-idle detection (the promptTimer's non-inputReady branch below)
       // reads lastOutputAt/firstOutputAt to decide the TUI has gone quiet and is
       // ready for the prompt paste. Gate them on commandInjected for the same
@@ -1721,6 +1724,19 @@ export function createTuiSessionController({
       // One clock for every gate on this tick. They all measure the same silence,
       // so reading the wall four times only invites them to disagree about it.
       const now = Date.now();
+      // A completed Codex turn that rejected account model access cannot be
+      // repaired by any continuation nudge. Preserve its actionable outcome
+      // without changing the pinned model or authentication/billing mode.
+      const modelRejection = sessionPhase === 'running' && promptSubmittedAt
+        ? codexModelRejectionGate?.takeRejected(now, lastOutputAt)
+        : null;
+      if (modelRejection && !sentinelPresent()) {
+        immediateFallbackAnalysis = { ...modelRejection, affectedModel: model, configuredModel: model };
+        appendLine(`❌ ${modelRejection.message}`);
+        finish({ success: false, exitCode: 1, error: modelRejection.message, reason: 'model-access-rejected' })
+          .catch(err => emitLog('error', `TUI agent ${agentId} model-access finish failed: ${err?.message || err}`, { agentId }));
+        return;
+      }
       const expired = selfClearingGate.takeExpired(now);
       if (expired) {
         // setInterval can't await, and an unhandled rejection here would crash the

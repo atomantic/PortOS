@@ -17,7 +17,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await
   dataRoot: () => lazyTempDataRoot('portos-mv-performance-'),
 }));
 const getProject = vi.fn();
-vi.mock('./projects.js', () => ({ getProject: (...a) => getProject(...a), listProjects: vi.fn(async () => []), updateProject: vi.fn() }));
+vi.mock('./projects.js', () => ({ mutateProjectRecord: async (_id, transform) => { const result = transform(await getProject()); getProject.mockResolvedValue(result.project); return result; }, getProject: (...a) => getProject(...a), listProjects: vi.fn(async () => []), updateProject: vi.fn() }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 // A pre-#9266 take's old master is found through the linked track's renders.
 const getTrack = vi.fn(async () => null);
@@ -26,7 +26,7 @@ vi.mock('../tracks/index.js', () => ({ getTrack: (...a) => getTrack(...a) }));
 // store the fal lane writes, without loading the local runtime.
 vi.mock('../videoGen/local.js', async () => {
   const history = await import('../videoGen/history.js');
-  return { loadHistory: history.loadHistory, mutateVideoHistory: history.mutateVideoHistory };
+  return { getHistoryItem: history.getHistoryItem, loadHistory: history.loadHistory, mutateVideoHistory: history.mutateVideoHistory };
 });
 
 const { PATHS } = await import('../../lib/fileUtils.js');
@@ -76,7 +76,7 @@ const project = (sceneOver) => ({
   id: 'mv-1',
   uploadedAudioFilename: 'song.wav',
   lyricCues: [
-    { id: 'c1', text: 'hold on', startSec: 19, endSec: 20.5 },
+    { id: 'c1', text: 'hold on', startSec: 19, endSec: 20.5, words: [{ text: 'hold', startSec: 19, endSec: 20 }, { text: 'on', startSec: 20, endSec: 20.5 }] },
     { id: 'c2', text: 'later line', startSec: 40, endSec: 42 },
     { id: 'c3', text: 'untimed', startSec: null, endSec: null },
   ],
@@ -116,9 +116,9 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(si.audioWindow).toEqual({ startSec: 18.225, endSec: 23.275, durationSec: 5.05 });
     expect(si.edit).toEqual({ inSec: 1.775, outSec: 3.275, targetSec: 1.5 });
     expect(si.songInterval).toEqual({ startSec: 20, endSec: 21.5 });
-    expect(si.cues).toEqual([{ text: 'hold on', startSec: 0.775, endSec: 2.275 }]);
+    expect(si.cues).toEqual([{ text: 'hold on', startSec: 0.775, endSec: 2.275, words: [{ text: 'hold', startSec: 0.775, endSec: 1.775 }, { text: 'on', startSec: 1.775, endSec: 2.275 }] }]);
     expect(si.audio.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(si.audio.conditioning).toEqual({ source: 'master', sha256: si.audio.sha256 });
+    expect(si.audio.conditioning).toEqual({ source: 'master', sha256: si.audio.sha256, filename: 'song.wav', selection: 'legacy-default', voiceIsolation: 'unverified' });
     expect(si).toMatchObject({ referenceImageId: 'frame.png', performance: 'sings the held note', generatedCoverageSec: 5.05 });
     // The take's own resolution defaults to 1080P for a music video (fal's own
     // default is 768P) and is recorded on the immutable instruction.
@@ -253,7 +253,13 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     // Staleness still keys on the master; the stem is recorded as what the
     // provider heard.
     expect(si.audio.sha256).toBe(sha(songWav()));
-    expect(si.audio.conditioning).toEqual({ source: 'vocal-stem', sha256: sha(stem) });
+    expect(si.audio.conditioning).toEqual({ source: 'vocal-stem', sha256: sha(stem), filename: 'vocals.wav', selection: 'legacy-default', voiceIsolation: 'unverified' });
+
+    getProject.mockResolvedValue({ ...project({ performanceSpeaker: 'Example Singer' }), vocalStemFilename: 'vocals.wav', performanceConditioningSource: 'clean-singer-stem' });
+    const clean = await preparePerformanceShot(args);
+    expect(clean.shotInstruction).toMatchObject({ version: 2, speaker: 'Example Singer',
+      audio: { conditioning: { source: 'clean-singer-stem', filename: 'vocals.wav', selection: 'user', voiceIsolation: 'unverified' } } });
+    getProject.mockResolvedValue({ ...project(), vocalStemFilename: 'vocals.wav' });
 
     // A trimmed stem would put the syllables on the wrong frames.
     await writeFile(join(PATHS.music, 'vocals.wav'), songWav({ seconds: SONG_SEC - 1 }));
@@ -340,4 +346,95 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(await terminal).toMatchObject({ type: 'failed' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+});
+
+// Real sample slicing and ffmpeg render: this uniquely catches regeneration of
+// accepted audio or movement/replacement of the original prefix picture.
+describe.skipIf(!ffmpeg)('accepted-prefix continuation render (#9348)', () => {
+  it('submits only the remaining source interval and renders the original accepted frames', async () => {
+    const original = project({ startSec: 10, endSec: 24, videoHistoryId: 'accepted', referenceImageId: 'frame.png', beatAligned: true });
+    getProject.mockResolvedValue(original);
+    const full = await preparePerformanceShot({ musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: join(PATHS.images, 'frame.png'), mode: 'image' });
+    const instruction = { ...full.shotInstruction, cues: [{ startSec: 0, endSec: 14, words: [
+      { text: 'one', startSec: 0, endSec: 3.8 }, { text: 'two', startSec: 4.2, endSec: 14 },
+    ] }] };
+    original.scenes[0].takes = [{ takeId: 'accepted-take', kind: 'video', assetId: 'accepted', shotInstruction: instruction }];
+    original.videoSettings = { backend: 'fal' };
+    original.excerpts = [{ id: 'draft', status: 'complete', startSec: 8, endSec: 24, notes: [], sections: [
+      { sceneId: 'mvs-1', startSec: 10, endSec: 24, layer: 'footage', performance: { takeId: 'accepted' } },
+    ] }];
+    original.autoReviews = [{ status: 'needs-human', attempts: [{ excerptId: 'draft', review: { evidence: { excerptStartSec: 8, temporal: {
+      status: 'verified', analyzer: { id: 'synthetic' }, shots: [{ sceneId: 'mvs-1', takeId: 'accepted', spans: [
+        { startSec: 2, endSec: 6, status: 'verified', offsetSec: 0.01, confidence: 0.9 },
+        { startSec: 6, endSec: 16, status: 'verified', offsetSec: 0.3, confidence: 0.9 },
+      ] }],
+    } } } }] }];
+    const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+    const dependencies = captureMusicVideoEvidence(original, { startSec: 8, endSec: 24 });
+    original.excerpts[0].dependencies = dependencies;
+    original.autoReviews[0].attempts[0].review.dependencies = dependencies;
+    const acceptedPath = join(PATHS.videos, 'accepted.mp4');
+    await mkdir(PATHS.videos, { recursive: true });
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=64x64:r=24:d=14', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', acceptedPath]);
+    const { mutateVideoHistory } = await import('../videoGen/history.js');
+    await mutateVideoHistory((items) => [{ id: 'accepted', filename: 'accepted.mp4', numFrames: 336, fps: 24, width: 64, height: 64 }, ...items.filter((i) => i.id !== 'accepted')]);
+    const { startPerformanceRepair } = await import('./performanceRepair.js');
+    const repair = await startPerformanceRepair('mv-1', 'mvs-1', { excerptId: 'draft', sourceAssetId: 'accepted', boundarySec: 14 });
+    const [prefix, suffix] = repair.project.scenes;
+    getProject.mockResolvedValue(repair.project);
+    const prepared = await preparePerformanceShot({ musicVideo: { projectId: 'mv-1', sceneId: suffix.sceneId, revisionId: repair.revision.id },
+      backend: 'fal', sourceImagePath: join(PATHS.images, suffix.referenceImageId), mode: 'image' });
+    expect(prepared.shotInstruction.audioWindow).toEqual({ startSec: 14, endSec: 24, durationSec: 10 });
+    expect(prepared.shotInstruction.edit).toEqual({ inSec: 0, outSec: 10, targetSec: 10 });
+    expect(prepared.shotInstruction.repair).toMatchObject({ sourceAssetId: 'accepted', sourceTakeId: 'accepted-take', role: 'continuation' });
+    const sliced = pcm(await readFile(prepared.audioFilePath));
+    expect(sliced.length / 2).toBe(10 * RATE);
+    expect(sliced.readInt16LE((20 - 14) * RATE * 2)).toBe(30000);
+    // A source edit to a short interval cannot make preparation pad backwards
+    // across the accepted prefix or choose a different source frame.
+    await expect(preparePerformanceShot({ musicVideo: { projectId: 'mv-1', sceneId: suffix.sceneId }, backend: 'fal', sourceImagePath: join(PATHS.images, suffix.referenceImageId) }))
+      .rejects.toMatchObject({ code: 'PERFORMANCE_REPAIR_REVISION_REQUIRED' });
+
+    const suffixPath = join(PATHS.videos, 'suffix.mp4');
+    await mkdir(PATHS.videos, { recursive: true });
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'color=blue:s=64x64:r=24:d=10', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', suffixPath]);
+    await mkdir(PATHS.images, { recursive: true });
+    const delivered = await readFile(suffixPath);
+    const posts = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, options) => {
+      if (options?.method === 'POST') { posts.push(JSON.parse(options.body)); return jsonResponse({ request_id: 'suffix-request', status_url: 'https://queue.fal.run/suffix-s', response_url: 'https://queue.fal.run/suffix-r' }); }
+      if (url === 'https://queue.fal.run/suffix-s') return jsonResponse({ status: 'COMPLETED' });
+      if (url === 'https://queue.fal.run/suffix-r') return jsonResponse({ video: { url: 'https://cdn.example.com/suffix.mp4' } });
+      if (url === 'https://cdn.example.com/suffix.mp4') return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(delivered).buffer };
+      throw new Error('Unexpected synthetic provider request');
+    }));
+    const generated = await fal.generateVideo({ apiKey: 'test-key', modelId: prepared.modelId, resolution: prepared.resolution,
+      sourceImagePath: join(PATHS.images, suffix.referenceImageId), audioFilePath: prepared.audioFilePath,
+      lipSync: { enableTranscription: prepared.enableTranscription }, shotInstruction: prepared.shotInstruction });
+    expect(await waitForTerminal(generated.jobId)).toMatchObject({ type: 'completed' });
+    expect(posts).toHaveLength(1);
+    expect(Buffer.from(posts[0].audio_url.replace(/^data:audio\/wav;base64,/, ''), 'base64')).toEqual(await readFile(prepared.audioFilePath));
+    const landed = appendSceneTakes(repair.project, suffix.sceneId, [{ kind: 'video', assetId: generated.jobId, shotInstruction: prepared.shotInstruction }]).project;
+    const clips = beatSnapClips(await resolveSceneClips(landed), [], { scenes: landed.scenes });
+    expect(clips[0]).toMatchObject({ videoPath: acceptedPath, inSec: 0, outSec: 4, duration: 4, loop: false });
+    expect(clips[1]).toMatchObject({ inSec: 0, outSec: 10, duration: 10 });
+    expect(await findStalePerformanceTakes(landed, join(PATHS.music, 'song.wav'))).toEqual([]);
+    const encode = (selected, filename) => {
+      const { args } = buildMusicVideoFfmpegArgs(selected, join(PATHS.music, 'song.wav'), filename);
+      execFileSync(ffmpeg, ['-v', 'error', ...args.filter((a, i) => a !== '-progress' && args[i - 1] !== '-progress')]);
+    };
+    const baseline = join(PATHS.videos, 'prefix-baseline.mp4');
+    const output = join(PATHS.videos, 'repaired.mp4');
+    encode([clips[0]], baseline);
+    encode(clips, output);
+    const pixels = (path) => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-t', '4', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 4 * 1024 * 1024 });
+    // H.264 quantization depends on following frames; compare the unchanged
+    // source selection and allow only normal codec rounding in rendered pixels.
+    const before = pixels(baseline), after = pixels(output);
+    expect(after.length).toBe(before.length);
+    let error = 0;
+    for (let i = 0; i < before.length; i++) error += Math.abs(before[i] - after[i]);
+    expect(error / before.length).toBeLessThan(2);
+    expect(prefix.videoHistoryId).toBe('accepted');
+  }, 60_000);
 });

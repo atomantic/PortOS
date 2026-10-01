@@ -199,7 +199,7 @@ describe('renderCharacterNarrativeContext (#6416)', () => {
     // reason over the whole bible still opt out.
     expect(renderCharacterNarrativeContext([{ ...gated, spoiler: false, revealIssue: 4 }], { respectRevealGates: true }))
       .toContain('reveal-gated');
-    expect(renderCharacterNarrativeContext([gated])).toContain('Needing anyone');
+    expect(renderCharacterNarrativeContext([gated], { respectRevealGates: false })).toContain('Needing anyone');
   });
 
   it('compacts a runaway field instead of letting one character own the prompt', () => {
@@ -310,8 +310,17 @@ describe('the single reveal gate on the descriptive canon block (#6426)', () => 
     expect(ungated).toContain('LEAK-background');
   });
 
-  it('stays off by default so author-side planning still reasons over the whole bible', () => {
-    expect(renderCanonForPrompt(world())).toContain('LEAK-background');
+  it('withholds gated canon by default in all three prompt renderers', () => {
+    const canon = world({ lie: 'LEAK-lie' });
+    for (const output of [
+      renderCanonForPrompt(canon),
+      renderCharacterNarrativeContext(canon.characters),
+      renderStoryCanonDigest(canon),
+    ]) {
+      expect(output).toContain('reveal-gated');
+      expect(output).not.toMatch(/LEAK-/);
+    }
+    expect(renderCanonForPrompt(canon, { respectRevealGates: false })).toContain('LEAK-background');
   });
 
   it('gates places and objects through the same projection', () => {

@@ -601,6 +601,35 @@ describe('ImageGenTab — Grok CLI section (#2859)', () => {
   });
 });
 
+describe('ImageGenTab — fal.ai section', () => {
+  it('points at the shared fal.ai key when none is configured', async () => {
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /fal\.ai/i }));
+    expect(await screen.findByText(/No fal\.ai API key — set it under the Defaults tab/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Open Defaults/i }));
+    expect(screen.getByRole('tab', { name: /Defaults/i }).getAttribute('aria-selected')).toBe('true');
+    expect(document.getElementById('fal-api-key')).toBeTruthy();
+  });
+
+  it('saves the enable toggle and a catalog model under imageGen.fal, and adds a backend tile', async () => {
+    getCredentialInventory.mockResolvedValue({
+      headline: '', credentials: [{ id: 'fal', label: 'fal.ai', configured: true, source: 'settings', editable: true }],
+    });
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /fal\.ai/i }));
+    expect(await screen.findByText(/fal\.ai API key configured/i)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(/Enable fal\.ai Imagegen/i));
+    fireEvent.change(screen.getByLabelText(/Default model/i), { target: { value: 'fal-ai/bytedance/seedream/v5/lite/text-to-image' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    expect(updateSettings.mock.calls[0][0].imageGen.fal).toEqual(expect.objectContaining({
+      enabled: true, model: 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
+    }));
+    fireEvent.click(screen.getByRole('tab', { name: /Backend/i }));
+    expect(screen.getByText(/Hosted image and reference-edit models through fal\.ai/i)).toBeTruthy();
+  });
+});
+
 // The packages panel above the card only ever probes the mflux interpreter, so
 // on its own it told a machine whose selected default renders through the
 // shared torch venv that everything was installed — while the Image Gen page

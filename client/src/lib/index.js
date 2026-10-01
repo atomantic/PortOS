@@ -259,3 +259,6 @@ export * from './navPresentation.js';
 export * from './squarifyTreemap.js';
 export * from './styleSourceChoice.js';
 export * from './trackProvenance.js';
+
+export * from './musicVideoGrade.js';
+export * from './musicVideoNarrativeEvents.js';

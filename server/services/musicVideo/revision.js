@@ -27,9 +27,12 @@
  * route that acts on it, so no `musicVideoProjects` schema bump is needed.
  */
 
+import { captureTakeDependencies, musicVideoDependencyChanges, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
+import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
+import { normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { ensureSceneTakes, reviewSceneTake, TAKE_SLOT } from './takes.js';
 import { projectExcerpts } from './excerpt.js';
 
@@ -48,6 +51,21 @@ const TAKE_ATTACH_GRACE_MS = 120_000;
 
 const revisionError = (status, code, message, context) =>
   new ServerError(message, { status, code, ...(context ? { context } : {}) });
+
+const codeFirst = (project) => normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first';
+const mediumFor = (project, sceneId) => project?.treatment?.shotDirections?.find((direction) => direction.sceneId === sceneId)?.medium;
+const mediumBasis = (project) => canonicalSnapshotChecksum({
+  productionPolicy: project?.productionPolicy || null,
+  directions: project?.treatment?.shotDirections || null,
+  scenes: (project?.scenes || []).map(({ sceneId, startSec, endSec }) => ({ sceneId, startSec, endSec })),
+  durationSec: project?.audioAnalysis?.durationSec ?? null,
+});
+
+function assertCodeFirstPlan(project) {
+  const plan = summarizeMusicVideoMediumPlan(project);
+  if (plan.blocked) throw revisionError(409, 'REVISION_MEDIUM_PLAN_CONFLICT',
+    plan.unresolved.filter((item) => item.blocking).map((item) => item.message).join(' '));
+}
 
 /** The revision array on a project, tolerating a legacy record with none. */
 export const projectRevisions = (project) => (Array.isArray(project?.revisions) ? project.revisions : []);
@@ -117,6 +135,14 @@ export function startRevisionOnProject(project, excerptId, { sceneIds } = {}, no
     rejectIds = new Set(noteIdsByScene.keys());
   }
 
+  if (codeFirst(project)) {
+    assertCodeFirstPlan(project);
+    const conflicts = [...rejectIds].filter((sceneId) => !['still', 'generated-footage'].includes(mediumFor(project, sceneId)));
+    if (conflicts.length) throw revisionError(409, 'REVISION_MEDIUM_PLAN_CONFLICT',
+      'The review flagged a procedural or existing-footage section. Revise its code or selected asset, or explicitly change the medium plan before retrying.',
+      { sceneIds: conflicts });
+  }
+
   const scenesById = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const skippedSceneIds = [];
   let next = project;
@@ -128,11 +154,12 @@ export function startRevisionOnProject(project, excerptId, { sceneIds } = {}, no
     const scene = scenesById.get(section.sceneId);
     if (!scene) continue; // deleted since the draft — nothing left to keep or revise
     const rejected = rejectIds.has(section.sceneId);
-    if (section.layer === 'card') {
+    if (!codeFirst(project) && section.layer === 'card') {
       if (rejected) skippedSceneIds.push(section.sceneId);
       continue;
     }
-    const kind = section.layer === 'still' ? 'image' : 'video';
+    const kind = codeFirst(project) ? (mediumFor(project, section.sceneId) === 'still' ? 'image' : 'video')
+      : section.layer === 'still' ? 'image' : 'video';
     const assetId = isNonBlankStr(scene[TAKE_SLOT[kind]]) ? scene[TAKE_SLOT[kind]] : null;
     if (rejected && assetId) {
       // Materialize a legacy selection as a take first, so the take id the
@@ -168,6 +195,7 @@ export function startRevisionOnProject(project, excerptId, { sceneIds } = {}, no
     startSec: excerpt.startSec,
     endSec: excerpt.endSec,
     status: 'open',
+    ...(codeFirst(project) ? { mediumBasis: mediumBasis(project) } : {}),
     sections: revisionSections,
     renderExcerptId: null,
     renderAttempts: 0,
@@ -220,7 +248,8 @@ export function revisionSectionStates(project, revision, jobs = [], nowMs = Date
     if (section.verdict !== 'rejected') return { ...section, state: 'kept' };
     const scene = scenesById.get(section.sceneId);
     if (!scene) return { ...section, state: 'removed' };
-    if (isNonBlankStr(scene[TAKE_SLOT[section.kind]])) return { ...section, state: 'ready' };
+    const selected = (scene.takes || []).find((take) => take.kind === section.kind && take.assetId === scene[TAKE_SLOT[section.kind]]);
+    if (isNonBlankStr(scene[TAKE_SLOT[section.kind]]) && !musicVideoTakeChanges(project, scene, selected).length) return { ...section, state: 'ready' };
     const takes = Array.isArray(scene.takes) ? scene.takes : [];
     const pending = jobs.some((job) => job?.kind === section.kind && tagMatches(job, project.id, section.sceneId, revision) && (
       job.status === 'queued' || job.status === 'running'
@@ -230,7 +259,7 @@ export function revisionSectionStates(project, revision, jobs = [], nowMs = Date
         && within(job.completedAt, TAKE_ATTACH_GRACE_MS, nowMs) && !takes.some((t) => t.jobId === job.id))
     ));
     const claimed = within(section.claimedAt, GENERATION_CLAIM_LEASE_MS, nowMs);
-    return { ...section, state: pending || claimed ? 'generating' : 'needs-generation' };
+    return { ...section, state: pending || claimed ? 'generating' : revision.repair?.submitted ? 'review-needed' : 'needs-generation' };
   });
 }
 
@@ -263,7 +292,14 @@ export function revisionGenerationJobs(project, revision, jobs = []) {
  */
 export function claimRevisionGeneration(project, revisionId, jobs = [], nowMs = Date.now()) {
   const revision = resumableRevision(project, revisionId);
+  if (revision.type === 'dependencies' && revision.sections.some((section) => musicVideoDependencyChanges(project, section.dependencies).length)) {
+    throw revisionError(409, 'DEPENDENCY_REPAIR_CHANGED', 'The repair inputs changed — cancel and preview the affected dependencies again');
+  }
   const states = revisionSectionStates(project, revision, jobs, nowMs);
+  if (revision.type === 'dependencies' && states.some((section) => section.state === 'needs-generation'
+    && project.scenes.find((scene) => scene.sceneId === section.sceneId)?.videoHistoryId)) {
+    throw revisionError(409, 'DEPENDENCY_REPAIR_STALE_SELECTION', 'Clear the selected stale clip or select a current replacement before resuming');
+  }
   const ref = ({ sceneId, kind }) => ({ sceneId, kind });
   const needsGeneration = states.filter((s) => s.state === 'needs-generation').map(ref);
   const generating = states.filter((s) => s.state === 'generating').map(ref);
@@ -334,9 +370,39 @@ export function cancelRevisionOnProject(project, revisionId, now = new Date().to
  * there is nothing left to hand this generation's output to. No-op when the
  * project itself is gone (the route's own lookup reports that separately).
  */
-export function assertRevisionOpenForGeneration(project, revisionId) {
+export function assertRevisionOpenForGeneration(project, revisionId, { sceneId = null, kind = null } = {}) {
   if (!project) return null;
-  return resumableRevision(project, revisionId);
+  const revision = resumableRevision(project, revisionId);
+  if (revision.type === 'dependencies') {
+    const section = revision.sections.find((entry) => entry.sceneId === sceneId && entry.kind === kind);
+    const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
+    if (scene?.[TAKE_SLOT[kind]]) throw revisionError(409, 'REVISION_SECTION_SELECTED', 'This repair section already has a selected clip — clear or review it before submitting again');
+    if (!section || musicVideoDependencyChanges(project, section.dependencies).length) {
+      throw revisionError(409, 'DEPENDENCY_REPAIR_CHANGED', 'This generation does not match the previewed repair inputs');
+    }
+  }
+  if (revision.repair) {
+    const scene = project.scenes?.find((s) => s.sceneId === sceneId);
+    const prefix = project.scenes?.find((s) => s.sceneId === revision.repair.sourceSceneId);
+    if (kind !== 'video' || sceneId !== revision.repair.suffixSceneId || scene?.performanceRepair?.revisionId !== revisionId
+      || prefix?.videoHistoryId !== revision.repair.sourceAssetId || prefix?.endSec !== revision.repair.boundarySec
+      || scene?.startSec !== revision.repair.boundarySec || scene?.endSec !== revision.repair.sourceInterval.endSec) {
+      throw revisionError(409, 'PERFORMANCE_REPAIR_STALE', 'This generation no longer matches the accepted prefix and repair interval');
+    }
+  }
+  if (revision.mediumBasis || codeFirst(project)) {
+    if (!revision.mediumBasis || revision.mediumBasis !== mediumBasis(project)) {
+      throw revisionError(409, 'REVISION_MEDIUM_PLAN_CHANGED', 'The medium plan or allowance changed since this revision opened');
+    }
+    assertCodeFirstPlan(project);
+    const section = revision.sections.find((entry) => entry.sceneId === sceneId && entry.verdict === 'rejected');
+    const medium = mediumFor(project, sceneId);
+    if (!section || section.kind !== kind || (kind === 'video' && medium !== 'generated-footage')
+      || (kind === 'image' && medium !== 'still')) {
+      throw revisionError(409, 'REVISION_MEDIUM_PLAN_CONFLICT', 'This generation request does not match the approved medium for the rejected section');
+    }
+  }
+  return revision;
 }
 
 /**
@@ -352,8 +418,49 @@ export function releaseRevisionClaim(project, revisionId, sceneId, now = new Dat
   const revision = resumableRevision(project, revisionId);
   const next = {
     ...revision,
-    sections: revision.sections.map((s) => (s.sceneId === sceneId && s.verdict === 'rejected' ? { ...s, claimedAt: null } : s)),
+    sections: revision.sections.map((s) => (s.sceneId === sceneId && s.verdict === 'rejected' ? { ...s, claimedAt: null, submissionClaimedAt: null } : s)),
     updatedAt: now,
   };
   return { project: replaceRevision(project, next), revision: next };
+}
+
+/** Start a previewed dependency repair under the existing serialized checkpoint. */
+export function startDependencyRepairOnProject(project, impact, { basis }, now = new Date().toISOString()) {
+  const active = projectRevisions(project).find(isActive);
+  if (active?.dependencyBasis === basis) return { project, revision: active, skippedSceneIds: [] };
+  if (active) throw revisionError(409, 'REVISION_IN_PROGRESS', 'Finish or cancel the open revision before repairing dependencies');
+  if (basis !== impact.basis) throw revisionError(409, 'DEPENDENCY_PREVIEW_CHANGED', 'Assets changed after the repair preview — review the impact again');
+  if (!impact.shots.length && !impact.evidence.length) throw revisionError(422, 'NOTHING_TO_REVISE', 'All recorded dependencies are current');
+  if (codeFirst(project)) {
+    assertCodeFirstPlan(project);
+    if (impact.shots.some((shot) => mediumFor(project, shot.sceneId) !== 'generated-footage')) {
+      throw revisionError(409, 'REVISION_MEDIUM_PLAN_CONFLICT', 'Select replacement footage for the affected existing-media shot; its approved medium does not permit generation');
+    }
+  }
+  let next = project;
+  const sections = [];
+  for (const shot of impact.shots) {
+    const scene = next.scenes.find((entry) => entry.sceneId === shot.sceneId);
+    const withTakes = { ...scene, takes: ensureSceneTakes(scene, now) };
+    next = { ...next, scenes: next.scenes.map((entry) => entry.sceneId === scene.sceneId ? withTakes : entry) };
+    const take = withTakes.takes.find((entry) => entry.kind === 'video' && entry.assetId === scene.videoHistoryId);
+    if (take) next = reviewSceneTake(next, scene.sceneId, take.takeId, { status: 'rejected' }).project;
+    sections.push({ sceneId: scene.sceneId, layer: 'footage', kind: 'video', verdict: 'rejected',
+      rejectedAssetId: shot.assetId, reasons: shot.reasons,
+      // A repair cannot silently continue against another newly selected plate.
+      dependencies: captureTakeDependencies(scene), noteIds: [] });
+  }
+  const ranges = [
+    ...impact.shots.map((shot) => project.scenes.find((scene) => scene.sceneId === shot.sceneId)),
+    ...impact.evidence.filter((entry) => entry.kind === 'excerpt'),
+  ].filter((entry) => typeof entry.startSec === 'number' && typeof entry.endSec === 'number' && entry.endSec > entry.startSec);
+  const startSec = ranges.length ? Math.min(...ranges.map((range) => range.startSec)) : 0;
+  const endSec = ranges.length ? Math.max(...ranges.map((range) => range.endSec)) : project.audioAnalysis?.durationSec;
+  if (!(endSec > startSec)) throw revisionError(422, 'DEPENDENCY_REPAIR_UNTIMED', 'Time the affected shots or analyze the song before repairing');
+  const revision = { id: `mvr-${randomUUID()}`, type: 'dependencies', dependencyBasis: basis,
+    excerptId: null, startSec, endSec, sections, status: 'open', renderExcerptId: null,
+    renderAttempts: 0, error: null, createdAt: now, updatedAt: now,
+    ...(codeFirst(project) ? { mediumBasis: mediumBasis(project) } : {}),
+  };
+  return { project: { ...next, revisions: pruneRevisions([...projectRevisions(next), revision]), updatedAt: now }, revision, skippedSceneIds: [] };
 }

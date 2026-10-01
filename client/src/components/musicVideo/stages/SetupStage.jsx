@@ -1,3 +1,4 @@
+import StyleReferencesPanel from '../StyleReferencesPanel.jsx';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
 import CreativeSetupPanel from '../CreativeSetupPanel.jsx';
 import TrackPanel from '../TrackPanel.jsx';
@@ -25,6 +26,8 @@ export default function SetupStage({ board }) {
         onPendingChange={board.setCreativeSetupPending}
         onSave={board.saveCreativeSetup}
       />
+      <StyleReferencesPanel key={`moodboard-${project.id}`} project={project}
+        onSave={board.saveStyleReferences} onPendingChange={board.setStyleReferencesPending} />
       <fieldset disabled={locked} className="min-w-0">
         <div id="mv-track" className="space-y-2 rounded-lg border border-port-border bg-port-card p-3">
           <TrackPanel

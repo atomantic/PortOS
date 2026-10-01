@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 const api = vi.hoisted(() => ({
   getCosJobs: vi.fn(),
@@ -316,6 +317,7 @@ describe('CustomTasksSection trigger outcomes', () => {
   });
 
   it('blocks an ad-hoc run that leaves a required card field blank', async () => {
+    const user = userEvent.setup();
     api.getCosJobs.mockResolvedValue({
       jobs: [{
         ...task,
@@ -328,10 +330,15 @@ describe('CustomTasksSection trigger outcomes', () => {
     render(<CustomTasksSection appId="app-1" appName="Example App" />);
     await screen.findByText('Example Task');
 
-    fireEvent.change(screen.getByLabelText('Subject *'), { target: { value: '   ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    const subject = screen.getByLabelText('Subject *');
+    expect(subject).toHaveValue('Saved subject');
+    await user.clear(subject);
+    await user.type(subject, '   ');
+    await waitFor(() => expect(subject).toHaveValue('   '));
+    await user.click(screen.getByRole('button', { name: 'Run now' }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Fill in Subject'));
+    expect(subject).toHaveValue('   ');
     expect(api.triggerCosJob).not.toHaveBeenCalled();
   });
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import {
+  FAL_IMAGE_MODEL_IDS,
   IMAGE_GEN_MODE,
   isCloudCliMode,
   modeLabel,
@@ -58,6 +59,7 @@ function useImageGenBackendRuntime() {
   const isCloudMode = isCloudCliMode(effectiveMode);
   const cloudModeLabel = modeLabel(effectiveMode);
   const isAgyMode = effectiveMode === IMAGE_GEN_MODE.AGY;
+  const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
   const remoteTarget = useFederatedMediaTarget('image');
   const remoteTargetActive = effectiveMode !== IMAGE_GEN_MODE.GROK && remoteTarget.isRemote;
   const localBackendPending = statusLoading && !remoteTargetActive;
@@ -100,6 +102,7 @@ function useImageGenBackendRuntime() {
     isCloudMode,
     cloudModeLabel,
     isAgyMode,
+    isFalMode,
     remoteTarget,
     remoteTargetActive,
     localBackendPending,
@@ -147,6 +150,9 @@ export function useImageGenPageRuntime() {
   const { fields, derived, images, actions } = form;
   const { effectiveMode, isCloudMode, remoteTargetActive } = backend;
   const effectiveAgyModel = backend.agy.models.includes(fields.agyModel) ? fields.agyModel : '';
+  // Only a catalog id is ever sent — the server refuses anything else.
+  const effectiveFalModel = FAL_IMAGE_MODEL_IDS.includes(fields.falModel) ? fields.falModel : '';
+  const effectiveCloudModel = backend.isAgyMode ? effectiveAgyModel : backend.isFalMode ? effectiveFalModel : '';
 
   useEffect(() => {
     if (!effectiveMode) return;
@@ -261,7 +267,7 @@ export function useImageGenPageRuntime() {
       width,
       height,
       mode: effectiveMode,
-      ...(effectiveAgyModel ? { cloudModel: effectiveAgyModel } : {}),
+      ...(effectiveCloudModel ? { cloudModel: effectiveCloudModel } : {}),
       cleanC2PA: fields.cleanC2PA,
       denoise: fields.denoise,
     } : {
@@ -353,7 +359,7 @@ export function useImageGenPageRuntime() {
 
   const handleGenerate = async (event) => {
     event?.preventDefault?.();
-    if (form.remix.pending) return;
+    if (form.remix.pending || derived.loraHandoffBlocked) return;
     if (derived.editImageMissing || derived.cloudNeedsPrompt) return;
     if (derived.localBackendPending || (!remoteTargetActive && derived.notConnected)) return;
     if (remoteTargetActive) {
@@ -480,7 +486,7 @@ export function useImageGenPageRuntime() {
 
   return {
     form,
-    backend: { ...backend, effectiveAgyModel },
+    backend: { ...backend, effectiveAgyModel, effectiveFalModel },
     generation: {
       handleGenerate,
       handleCancel,

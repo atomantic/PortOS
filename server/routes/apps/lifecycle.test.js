@@ -496,6 +496,30 @@ describe('Apps Lifecycle Routes', () => {
   });
 
   describe('GET /api/apps/:id/logs', () => {
+    it.each(['--force', '-1', '.hidden', 'other-app', '', 'x'.repeat(121)])('rejects unsafe or foreign process %s before PM2 reads', async (processName) => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', pm2ProcessNames: ['test-app', 'test-worker'] });
+      const response = await request(app).get(`/api/apps/app-001/logs?process=${processName}`);
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INVALID_PROCESS_NAME');
+      expect(pm2Service.getLogs).not.toHaveBeenCalled();
+    });
+
+    it('allows selecting another process owned by the same app', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', pm2ProcessNames: ['test-app', '_worker'] });
+      pm2Service.getLogs.mockResolvedValue('worker log');
+      const response = await request(app).get('/api/apps/app-001/logs?process=_worker');
+      expect(response.status).toBe(200);
+      expect(pm2Service.getLogs).toHaveBeenCalledWith('_worker', 100, undefined);
+    });
+
+    it.each(['5000000', '-5'])('rejects out-of-range lines=%s before PM2 reads', async (lines) => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', pm2ProcessNames: ['test-app'] });
+      const response = await request(app).get(`/api/apps/app-001/logs?lines=${lines}`);
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(pm2Service.getLogs).not.toHaveBeenCalled();
+    });
+
     it('should return logs for app process', async () => {
       const mockApp = {
         id: 'app-001',
@@ -511,6 +535,24 @@ describe('Apps Lifecycle Routes', () => {
       expect(response.body.processName).toBe('test-app');
       expect(response.body.lines).toBe(50);
       expect(response.body.logs).toBe('Log line 1\nLog line 2');
+    });
+
+    it('returns the error envelope when the app process log read fails', async () => {
+      appsService.getAppById.mockResolvedValue({
+        id: 'app-001',
+        pm2ProcessNames: ['test-app'],
+      });
+      pm2Service.getLogs.mockRejectedValueOnce(new Error('PM2 log read failed'));
+
+      const response = await request(app).get('/api/apps/app-001/logs');
+
+      expect(response.status).toBe(500);
+      expect(response.body).toMatchObject({
+        error: 'PM2 log read failed',
+        code: 'INTERNAL_ERROR',
+        timestamp: expect.any(Number),
+      });
+      expect(response.body).not.toHaveProperty('logs');
     });
 
     it('should return 404 if app not found', async () => {

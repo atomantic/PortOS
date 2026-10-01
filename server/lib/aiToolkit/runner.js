@@ -471,7 +471,7 @@ export function createRunnerService(config = {}) {
       // child process via registerExternalRun, so stopRun/isRunActive/deleteRun
       // still account for it.
       if (cliRunnerOverride) return cliRunnerOverride(opts);
-      const { runId, provider, prompt, workspacePath, onData, onComplete, timeout } = opts;
+      const { runId, provider, prompt, workspacePath, onData, onComplete, timeout, beforeExecute } = opts;
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -507,6 +507,18 @@ export function createRunnerService(config = {}) {
       // provider-configured PATH override is honored.
       const resolvedCommand = resolveWindowsExecutable(provider.command, undefined, childEnv) || provider.command;
       const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
+      if (beforeExecute) {
+        try { await beforeExecute(); }
+        catch {
+          const metadata = { ...safeJsonParse(await readFile(metadataPath, 'utf8').catch(() => '{}')),
+            endTime: new Date().toISOString(), duration: Date.now() - startTime,
+            success: false, canceled: true, completionReason: 'canceled', error: 'CLI run canceled', errorCategory: ERROR_CATEGORIES.CANCELED };
+          await atomicWrite(metadataPath, metadata);
+          safeSettle(() => hooks.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
+          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+          return runId;
+        }
+      }
       const childProcess = spawn(spawnCommand, spawnArgs, {
         cwd: workspacePath,
         env: childEnv,
@@ -656,7 +668,7 @@ export function createRunnerService(config = {}) {
       return runId;
     },
 
-    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens }) {
+    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens, beforeExecute }) {
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -694,6 +706,7 @@ export function createRunnerService(config = {}) {
         lifecycle,
         stallTimeout,
         absoluteTimeout,
+        callerRuntimeBudget: absoluteTimeout < apiRunAbsoluteTimeoutMs(stallTimeout),
         outputPath,
         metadataPath,
         getOutput: () => output,
@@ -744,6 +757,17 @@ export function createRunnerService(config = {}) {
       const ready = endpointGuard.allowed
         ? await ensureProviderReady(provider).catch((err) => ({ success: false, error: err.message }))
         : { success: false, error: `Endpoint blocked: ${endpointGuard.reason}` };
+      if (controller.signal.aborted) {
+        await finalizer.finalize({ type: 'canceled' });
+        return runId;
+      }
+      if (ready.success && beforeExecute) {
+        try { await beforeExecute(); }
+        catch {
+          await finalizer.finalize({ type: 'canceled' });
+          return runId;
+        }
+      }
       const response = !endpointGuard.allowed
         ? { ok: false, error: `Endpoint blocked: ${endpointGuard.reason}`, status: 0 }
         : ready.success
@@ -769,7 +793,9 @@ export function createRunnerService(config = {}) {
             })
           }), {
             signal: controller.signal,
-            allowReplay: isReplaySafeLocalRequest(provider),
+            // A caller-owned budget/admission hook accounts for one invocation;
+            // do not silently replay a possibly processed local generation.
+            allowReplay: !beforeExecute && isReplaySafeLocalRequest(provider),
           }).catch(err => ({ ok: false, error: describeTransportError(err), status: 0 }))
         : { ok: false, error: ready.error || 'Provider readiness check failed', status: 0 };
 

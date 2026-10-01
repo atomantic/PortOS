@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   getMusicVideoCompositionPreview: vi.fn(),
@@ -21,6 +21,30 @@ beforeEach(() => {
 });
 
 describe('CompositionPreviewPlayer', () => {
+  it.each([false, true])('loads available preview media and reports missing assets when a fetch fails (%s)', async (missing) => {
+    const assets = [{ key: 'scene-a', url: '/preview/scene-a' }, { key: 'scene-b', url: '/preview/scene-b' }];
+    const blob = new Blob(['example media'], { type: 'image/png' });
+    let finishPreview;
+    api.getMusicVideoCompositionPreview.mockImplementation(() => new Promise((resolve) => { finishPreview = resolve; }));
+    api.fetchMusicVideoPreviewAsset.mockImplementation((url) => missing && url === assets[1].url
+      ? Promise.reject(new Error('Example unavailable asset')) : Promise.resolve(blob));
+    render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
+    await act(async () => {
+      finishPreview({ html: '<!doctype html><p>preview</p>', assets, fps: 24, durationSec: 10 });
+    });
+    const frame = screen.getByTitle('Composition document preview');
+    const post = vi.spyOn(frame.contentWindow, 'postMessage');
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { type: 'portos-mv:loaded' } }));
+    });
+    await waitFor(() => expect(post).toHaveBeenCalledWith({
+      type: 'portos-mv:assets', files: missing ? { 'scene-a': blob } : { 'scene-a': blob, 'scene-b': blob },
+    }, '*'));
+    if (missing) expect(screen.getByText('Some preview media could not be loaded')).toBeInTheDocument();
+    else expect(screen.queryByText('Some preview media could not be loaded')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Loading preview media/)).not.toBeInTheDocument();
+  });
+
   it('runs the document in an opaque-origin sandbox and renders nothing without one', async () => {
     const { container, rerender } = render(<CompositionPreviewPlayer project={{ ...project, composition: { mode: 'document' } }} audioUrl={null} />);
     expect(container).toBeEmptyDOMElement();
@@ -45,5 +69,14 @@ describe('CompositionPreviewPlayer', () => {
     // Past the end clamps to the last frame instead of leaving the timeline.
     rerender(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" seekRequest={{ t: 99, n: 3 }} />);
     await waitFor(() => expect(screen.getByText(/^9\.9\ds \/ 10\.0s$/)).toBeTruthy());
+  });
+
+  it('gives simultaneous active and candidate previews distinct scrubbers', async () => {
+    const both = { ...project, composition: { ...project.composition,
+      documentDraft: { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-candidate' } } };
+    render(<><CompositionPreviewPlayer project={both} audioUrl={null} /><CompositionPreviewPlayer project={both} audioUrl={null} draft /></>);
+    await screen.findByTitle('Composition candidate preview');
+    expect(screen.getByLabelText('Scrub the composition preview').id).toBe('mv-doc-scrub');
+    expect(screen.getByLabelText('Scrub the composition candidate').id).toBe('mv-doc-draft-scrub');
   });
 });

@@ -1,3 +1,4 @@
+import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -9,6 +10,9 @@
  */
 
 import { z } from 'zod';
+import { shotActionContractProblem } from './musicVideoActionContract.js';
+import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
+import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
@@ -176,6 +180,11 @@ export const musicVideoVisualReferenceSchema = z.object({
   use: z.enum(MUSIC_VIDEO_REFERENCE_USES).optional(),
 }).strict();
 
+export const musicVideoStyleReferencesSchema = z.array(z.object({
+  imageId: galleryImageName,
+  caption: z.string().trim().max(500).optional(),
+}).strict()).max(8);
+
 // The project's reusable visual specification. A patch merges per sub-field
 // (like `concept`), and `references` / `palette` replace their list whole.
 export const musicVideoVisualSpecSchema = z.object({
@@ -211,6 +220,8 @@ export const musicVideoTakeInputSchema = z.object({
   source: z.enum(['generated', 'imported']).optional(),
   provider: providerSlug.optional(),
   originalName: z.string().max(255).optional(),
+  sourceImageId: galleryImageName.optional(),
+  inputAssets: z.array(z.object({ role: z.enum(['crop', 'mask']), assetId: galleryImageName, revision: z.number().int().min(1).max(1000000) }).strict()).max(4).optional(),
   use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
 }).strict().superRefine((take, ctx) => {
   const check = take.kind === 'image' ? galleryImageName : videoHistoryIdSchema;
@@ -271,9 +282,11 @@ export const musicVideoLyricsAlignSchema = z.object({
 // folder under data/music-video/<projectId>/composition/) seeked over the
 // song; see services/musicVideo/compositionDocument.js and documentRender.js.
 export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document'];
+// #9290: 'scene' cuts once per planned shot; 'intercut' re-cuts on section energy and sung words.
+export const MUSIC_VIDEO_CUTTING_MODES = ['scene', 'intercut'];
 // Shipped starting points a project can copy into its document folder.
 export const MUSIC_VIDEO_DOCUMENT_TEMPLATES = ['layered'];
-export const MUSIC_VIDEO_DOCUMENT_SOURCES = ['zip', 'directory', 'template'];
+export const MUSIC_VIDEO_DOCUMENT_SOURCES = ['zip', 'directory', 'template', 'generated'];
 // One immutable document version: data/music-video/<projectId>/composition/<versionId>.
 export const MUSIC_VIDEO_DOCUMENT_DIRECTORY = /^music-video\/[A-Za-z0-9_-]{1,100}\/composition\/[A-Za-z0-9_-]{1,100}$/;
 // One section function. Reject the calls that would make a frame depend on
@@ -284,7 +297,8 @@ export const isDeterministicCodeSource = (source) => typeof source === 'string'
   && source.length > 0
   && source.length <= MUSIC_VIDEO_CODE_SOURCE_MAX
   && !MUSIC_VIDEO_CODE_NONDETERMINISTIC.test(source);
-export const MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES = ['fade', 'rise', 'typewriter', 'pop'];
+// 'build' (#9291) lays a line down word by word on its sung onsets, the newest word in the accent color.
+export const MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES = ['fade', 'rise', 'typewriter', 'pop', 'build'];
 export const MUSIC_VIDEO_TYPOGRAPHY_PLACEMENTS = ['upper', 'center', 'lower'];
 export const MUSIC_VIDEO_TYPOGRAPHY_EMPHASES = ['subtitle', 'hero'];
 export const MUSIC_VIDEO_TYPOGRAPHY_FONTS = ['sans', 'serif', 'mono'];
@@ -297,6 +311,8 @@ export const musicVideoTextCueSchema = z.object({
   template: z.enum(MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES).optional(),
   placement: z.enum(MUSIC_VIDEO_TYPOGRAPHY_PLACEMENTS).optional(),
   emphasis: z.enum(MUSIC_VIDEO_TYPOGRAPHY_EMPHASES).optional(),
+  // Sung word onsets for the 'build' template (#9291).
+  words: z.array(z.object({ w: z.string().min(1).max(60), atSec: z.number().min(0).max(36000) }).strict()).max(80).optional(),
 }).strict();
 
 const codeSectionSource = z.string().min(1).max(MUSIC_VIDEO_CODE_SOURCE_MAX)
@@ -346,19 +362,57 @@ export const musicVideoCompositionOverlaySchema = z.object({
   timecodeStartSec: z.number().min(0).max(86400).optional(),
 }).strict();
 
+export const musicVideoNarrativeEventSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(120),
+  kind: z.enum(NARRATIVE_EVENT_KINDS),
+  anchor: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('time'), atSec: z.number().min(0).max(36000), offsetSec: z.number().min(-900).max(900).optional() }).strict(),
+    z.object({ kind: z.literal('onset'), band: z.enum(['low', 'mid', 'high']), index: z.number().int().min(0).max(100000), offsetSec: z.number().min(-900).max(900).optional() }).strict(),
+    z.object({ kind: z.literal('word'), cueId: z.string().min(1).max(64), wordIndex: z.number().int().min(0).max(1000), offsetSec: z.number().min(-900).max(900).optional() }).strict(),
+  ]).nullable(),
+  durationSec: z.number().positive().max(900),
+  narrativeFunction: z.string().min(1).max(1000),
+  mediumRationale: z.string().min(1).max(1000),
+  text: z.string().max(500).optional(),
+  motif: z.string().max(120).optional(),
+  before: z.string().max(120).optional(),
+  after: z.string().max(120).optional(),
+  fromValue: z.number().finite().min(-1000000).max(1000000).optional(),
+  toValue: z.number().finite().min(-1000000).max(1000000).optional(),
+}).strict();
+export const musicVideoReactiveSectionSchema = z.object({
+  sectionId: z.string().min(1).max(64),
+  gain: z.number().min(0).max(1),
+  maxGain: z.number().min(0).max(1),
+}).strict();
+
 // Replaced whole by a project PATCH (the editor sends the full manifest).
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
   mode: z.enum(MUSIC_VIDEO_COMPOSITION_MODES).optional(),
+  cutting: z.enum(MUSIC_VIDEO_CUTTING_MODES).optional(),
+  grade: z.object({
+    preset: z.enum(MUSIC_VIDEO_GRADE_PRESETS).optional(),
+    grain: z.number().min(0).max(MUSIC_VIDEO_GRADE_MAX_GRAIN).optional(),
+    sections: z.array(z.object({
+      sceneId: z.string().min(1).max(120),
+      preset: z.enum(MUSIC_VIDEO_GRADE_PRESETS),
+    }).strict()).max(1000).optional(),
+  }).strict().nullable().optional(),
   textCues: z.array(musicVideoTextCueSchema).max(1000).optional(),
   style: z.object({
     color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').optional(),
     font: z.enum(MUSIC_VIDEO_TYPOGRAPHY_FONTS).optional(),
+    accentColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'accentColor is #rrggbb').optional(),
   }).strict().optional(),
   posterSec: timedSec,
   codeVideo: musicVideoCodeVideoSchema.nullable().optional(),
   document: musicVideoCompositionDocumentSchema.nullable().optional(),
+  documentDraft: musicVideoCompositionDocumentSchema.nullable().optional(),
   overlay: musicVideoCompositionOverlaySchema.nullable().optional(),
+  narrativeEvents: z.array(musicVideoNarrativeEventSchema).max(200).refine((events) => new Set(events.map((event) => event.id)).size === events.length, 'event ids must be unique').optional(),
+  reactiveSections: z.array(musicVideoReactiveSectionSchema).max(40).refine((sections) => new Set(sections.map((section) => section.sectionId)).size === sections.length, 'section ids must be unique').optional(),
 }).strict();
 
 // A relative folder inside data/ to copy a composition document from.
@@ -369,6 +423,15 @@ export const musicVideoDocumentDirectoryImportSchema = z.object({
 
 export const musicVideoDocumentFileQuerySchema = z.object({
   path: z.string().min(1).max(512),
+  draft: z.literal('1').optional(),
+}).strict();
+
+export const musicVideoDocumentDraftQuerySchema = z.object({ draft: z.literal('1').optional() }).strict();
+export const musicVideoDocumentCandidateSchema = z.object({
+  directory: z.string().regex(MUSIC_VIDEO_DOCUMENT_DIRECTORY),
+}).strict();
+export const musicVideoMixedMediaRegenerateSchema = musicVideoCodeGenerateSchema.extend({
+  expectedDraft: z.string().regex(MUSIC_VIDEO_DOCUMENT_DIRECTORY),
 }).strict();
 
 export const musicVideoDocumentTemplateSchema = z.object({
@@ -420,6 +483,7 @@ export const musicVideoTreatmentBriefSchema = z.object({
   emotion: z.string().max(500).optional(),
   premise: z.string().max(2000).optional(),
   hookObjective: z.string().max(1000).optional(),
+  graphicLanguage: z.string().max(1000).optional(),
   mustHave: z.string().max(2000).optional(),
   avoid: z.string().max(2000).optional(),
   referenceNotes: z.array(musicVideoTreatmentReferenceNoteSchema).max(20).optional(),
@@ -435,8 +499,19 @@ export const musicVideoTreatmentMotifSchema = z.object({
   rationale: treatmentText(1000),
 }).strict();
 
+export const musicVideoProductionPolicySchema = z.object({
+  strategy: z.enum(['legacy', 'code-first']).optional(),
+  maxGeneratedVideoPercent: z.number().min(0).max(100).optional(),
+}).strict();
+
+export const musicVideoActionContractSchema = z.custom((value) => value != null && !shotActionContractProblem(value), { message: 'Invalid shot action contract' });
+
 export const musicVideoShotDirectionPatchSchema = z.object({
   sceneId: z.string().min(1).max(64),
+  actionContract: musicVideoActionContractSchema.nullable().optional(),
+  medium: z.enum(MUSIC_VIDEO_MEDIA).optional(),
+  mediumRationale: treatmentText(1000),
+  mediumPinned: z.boolean().optional(),
   mode: z.enum(MUSIC_VIDEO_TREATMENT_SHOT_MODES).optional(),
   route: z.enum(MUSIC_VIDEO_SHOT_ROUTES).optional(),
   focalSubject: treatmentText(500),
@@ -512,7 +587,65 @@ export const MUSIC_VIDEO_EXCERPT_NOTE_VERDICTS = ['flagged', 'approved'];
 export const musicVideoExcerptRequestSchema = z.object({
   startSec: z.number().min(0).max(36000),
   endSec: z.number().min(0).max(36000),
+  // #9280: a social cut renders at another frame and fades its audio edges.
+  aspect: z.enum(['16:9', '9:16', '1:1']).optional(),
+  fade: z.boolean().optional(),
 }).strict().refine((r) => r.endSec > r.startSec, { message: 'endSec must be greater than startSec' });
+
+// #9280: hook-window suggestions for social cuts.
+export const musicVideoSocialCutsQuerySchema = z.object({
+  count: z.coerce.number().int().min(1).max(10).optional(),
+  minSec: z.coerce.number().min(3).max(120).optional(),
+  maxSec: z.coerce.number().min(5).max(180).optional(),
+}).strict().refine((q) => q.minSec == null || q.maxSec == null || q.maxSec >= q.minSec, { message: 'maxSec must be at least minSec' });
+
+// #9281: publishing kit — per-platform copy edits, the copy draft request, the chosen thumbnail.
+const kitText = (max) => z.string().max(max);
+export const musicVideoPublishCopyPatchSchema = z.object({
+  youtube: z.object({ title: kitText(100), description: kitText(5000), tags: z.array(kitText(60)).max(30) }).partial().strict().optional(),
+  shorts: z.object({ title: kitText(100), description: kitText(5000) }).partial().strict().optional(),
+  x: z.object({ hook: kitText(280), story: kitText(25000) }).partial().strict().optional(),
+  tiktok: z.object({ caption: kitText(2200) }).partial().strict().optional(),
+  instagram: z.object({ caption: kitText(2200) }).partial().strict().optional(),
+  reddit: z.object({ title: kitText(300), body: kitText(40000) }).partial().strict().optional(),
+  stackerNews: z.object({ title: kitText(80), body: kitText(40000) }).partial().strict().optional(),
+  notes: kitText(8000).optional(),
+}).strict();
+export const musicVideoPublishCopyDraftSchema = z.object({
+  providerId: z.string().max(200).nullable().optional(),
+  model: z.string().max(200).nullable().optional(),
+  notes: kitText(8000).optional(),
+  links: z.object({ youtube: z.string().url().max(500), song: z.string().url().max(500) }).partial().strict().optional(),
+}).strict();
+export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
+
+// #9282: posting to a platform through the PortOS Browser. One strict options
+// object covers every target; each target's payload builder reads only its own.
+export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno']);
+export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
+const publishUrl = z.string().url().max(500);
+// #9287: which platforms the director posts to (opt-in), the account for each,
+// and a post's link, reception and notes.
+const publishPlatformEntry = z.object({ enabled: z.boolean(), account: z.string().max(100).nullable() }).partial().strict();
+export const musicVideoPublishPlatformsPatchSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS.map((t) => [t, publishPlatformEntry.optional()]))).strict();
+export const musicVideoPublishPostSchema = z.object({
+  url: publishUrl.nullable(),
+  reception: z.enum(['good', 'mixed', 'poor']).nullable(),
+  notes: z.string().max(2000).nullable(),
+}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, reception or notes is required' });
+export const musicVideoPublishPrepareSchema = z.object({
+  subreddit: z.string().max(40),
+  kind: z.enum(['self', 'link', 'video']),
+  url: publishUrl,
+  flairId: z.string().max(100),
+  flairText: z.string().max(64),
+  firstComment: kitText(10000),
+  territory: z.string().max(40),
+  songUrl: publishUrl,
+  pin: z.boolean(),
+  prompt: kitText(25000),
+  storyImage: z.string().min(1).max(300),
+}).partial().strict();
 
 export const musicVideoExcerptNoteSchema = z.object({
   atSec: z.number().min(0).max(36000),
@@ -530,6 +663,8 @@ export const musicVideoExcerptNoteUpdateSchema = z.object({
 // Reject the flagged sections of a reviewed draft excerpt and regenerate only
 // those. `sceneIds` names the sections explicitly; omitted, every section
 // holding a `flagged` note is revised. See services/musicVideo/revision.js.
+export const musicVideoDependencyRepairSchema = z.object({ basis: z.string().min(1).max(128) }).strict();
+
 export const musicVideoRevisionStartSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(200)).min(1).max(500).optional(),
 }).strict();
@@ -574,8 +709,9 @@ export const musicVideoProductionLimitsSchema = z.object({
 
 export const musicVideoProductionStartSchema = z.object({
   directive: z.string().max(4000).optional(),
-  pool: z.array(musicVideoProductionRouteSchema).min(1).max(12),
+  pool: z.array(musicVideoProductionRouteSchema).max(12),
   limits: musicVideoProductionLimitsSchema,
+  authoring: z.object({ providerId: z.string().min(1).max(200), model: z.string().min(1).max(200) }).strict().optional(),
   providerId: z.string().min(1).max(200).nullable().optional(),
   model: z.string().min(1).max(200).nullable().optional(),
 }).strict();
@@ -680,6 +816,7 @@ export const musicVideoCastAndSetsRegenerateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
+  productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
   // The source audio: either a music-library track or an uploaded file basename
@@ -687,8 +824,10 @@ export const musicVideoProjectCreateSchema = z.object({
   // be created empty and have the track set later via PATCH.
   trackId: z.string().max(64).nullable().optional(),
   uploadedAudioFilename: z.string().max(256).nullable().optional(),
+  performanceConditioningSource: z.enum(['master', 'vocal-stem', 'clean-singer-stem']).nullable().optional(),
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
+  styleReferences: musicVideoStyleReferencesSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
   lyricCues: lyricCueList.optional(),
@@ -700,13 +839,16 @@ export const musicVideoProjectCreateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
+  productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200).optional(),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
   status: z.enum(MUSIC_VIDEO_STATUSES).optional(),
   trackId: z.string().max(64).nullable().optional(),
   uploadedAudioFilename: z.string().max(256).nullable().optional(),
+  performanceConditioningSource: z.enum(['master', 'vocal-stem', 'clean-singer-stem']).nullable().optional(),
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
+  styleReferences: musicVideoStyleReferencesSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
@@ -749,6 +891,7 @@ export const musicVideoSceneCreateSchema = z.object({
   // recording (only a verified source-audio provider can render it); absent or
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  performanceSpeaker: z.string().trim().max(120).nullable().optional(),
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
@@ -778,6 +921,7 @@ export const musicVideoSceneUpdateSchema = z.object({
   // recording (only a verified source-audio provider can render it); absent or
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
 }).strict();
@@ -891,3 +1035,23 @@ export const musicVideoAudioAnalysisSchema = z.object({
     endSec: z.number().min(0),
   }).nullable().optional(),
 }).strict();
+
+export const musicVideoPerformanceRepairSchema = z.object({
+  excerptId: z.string().min(1).max(200),
+  sourceAssetId: z.string().min(1).max(200),
+  boundarySec: z.number().finite().min(0).max(36000),
+}).strict();
+
+
+// Preserved intervals have equal duration: insertions/deletions are gaps, never stretch.
+export const musicVideoAudioTimingPreviewSchema = z.object({
+  targetTrackId: z.string().min(1).max(128),
+  intervals: z.array(z.object({
+    oldStartSec: z.number().finite().min(0).max(36000),
+    oldEndSec: z.number().finite().min(0).max(36000),
+    newStartSec: z.number().finite().min(0).max(36000),
+  }).strict()).min(1).max(200),
+}).strict();
+export const musicVideoAudioTimingApplySchema = musicVideoAudioTimingPreviewSchema.extend({
+  basis: z.string().regex(/^[a-f0-9]{32}$/),
+});

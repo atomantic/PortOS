@@ -134,7 +134,6 @@ export function buildModelComparisonComposite(observations, inventory) {
         if (sameModelEvidence.length) quality = derived(median(sameModelEvidence.map(metric => metric.value)), sameModelEvidence,
           'Same-model configuration baseline; the published evaluation does not establish this requested effort. Low confidence, research required.');
       }
-      if (quality && /gguf|mlx|:\d+b|quantized/i.test(entry.model)) quality = derived(quality.value, [quality], 'Public base-model reference for a local build; quantization and runtime differences have not been measured.');
       const familyRows = familyAnchors.get(familyKey(modelSlug(entry.model))) || [];
       const baseline = (field, candidates) => {
         const values = candidates.filter(row => row[field] && (field === 'quality' || row[field].value > 0));
@@ -147,7 +146,14 @@ export function buildModelComparisonComposite(observations, inventory) {
         const sameEffort = familyRows.filter(row => effortKey(row.effort) === effort);
         quality = baseline('quality', sameEffort.length ? sameEffort : familyRows);
       }
+      if (quality && (provider.localInference || /gguf|mlx|:\d+b|quantized/i.test(entry.model))) {
+        quality = derived(quality.value, [quality], 'Public base-model reference for a local build; quantization and runtime differences have not been measured. ' + quality.method);
+      }
+      const localCost = () => ({ value: 0, estimated: false, sources: [],
+        method: 'Local inference: $0 API charges. Hardware, electricity and runtime opportunity costs are excluded; throughput is not a dollar price.',
+      });
       const price = field => {
+        if (provider.localInference) return localCost();
         // Exact endpoint/tier first; otherwise show an explicitly labeled API reference.
         const route = row => /^OpenRouter routed model (.+); standard pricing tier$/.exec(row.configuration || '')?.[1];
         const standardTier = row => !/above \d|minimum \d|long.context|batch|:free/i.test(row.configuration || '');
@@ -163,12 +169,12 @@ export function buildModelComparisonComposite(observations, inventory) {
       };
       if (incomparableReason) quality = null;
       const input = price('inputPerMillion'), output = price('outputPerMillion');
-      const blended = input && output ? { ...derived((3 * input.value + output.value) / 4, [input, output], '3:1 uncached input/output token mix; USD per 1M total tokens. API reference, not subscription or local operating cost.'), estimated: input.estimated || output.estimated } : null;
+      const blended = input && output ? { ...derived((3 * input.value + output.value) / 4, [input, output], provider.localInference ? input.method : '3:1 uncached input/output token mix; USD per 1M total tokens. API reference, not subscription or local operating cost.'), estimated: input.estimated || output.estimated } : null;
       const taskRow = latest(modelRows.filter(row => effortKey(row.effort) === effort && row.benchmark === COMPARISON_ANCHOR), 'costPerTask');
       rows.push({ id: `${provider.id}:${entry.model}:${effort}`, providerId: provider.id, provider: provider.name,
         model: entry.model, comparisonModel: modelSlug(entry.model), modelKey: `${provider.id}:${entry.model}`, effort, quality, incomparableReason,
         inputPerMillion: input, outputPerMillion: output, blendedPerMillion: blended,
-        costPerTask: incomparableReason ? null : evidenceMetric(taskRow, 'costPerTask', `${COMPARISON_ANCHOR} task cost; API reference`, false),
+        costPerTask: incomparableReason ? null : provider.localInference ? localCost() : evidenceMetric(taskRow, 'costPerTask', `${COMPARISON_ANCHOR} task cost; API reference`, false),
         needsResearch: !quality || quality.estimated || !input || !output || input.estimated || output.estimated,
       });
     }

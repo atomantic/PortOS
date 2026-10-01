@@ -11,11 +11,13 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createHash } from 'crypto';
 import sharp from 'sharp';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { writeCandidatePng, placeCandidate as placeCandidateFixture, expectCarriesCorrection } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-reference-test-'));
+const manifestWrites = [];
 const localImageModels = [
   { id: 'dev', hardwareCompatibility: { state: 'available' } },
   { id: 'flux-dev-4bit', hardwareCompatibility: { state: 'available' } },
@@ -33,7 +35,13 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
     sprites: join(TEST_ROOT, 'sprites'),
     images: join(TEST_ROOT, 'images'),
   });
-  return actual;
+  return {
+    ...actual,
+    atomicWrite: async (path, ...args) => {
+      if (path.endsWith('-reference-set-v1.json')) manifestWrites.push(path);
+      return actual.atomicWrite(path, ...args);
+    },
+  };
 });
 
 const enqueueJob = vi.fn(() => ({ jobId: 'job-1234567890', position: 0, status: 'queued' }));
@@ -171,6 +179,133 @@ describe('the animation gates (#3017)', () => {
 });
 
 describe('startReferenceGeneration', () => {
+  // Pins the entire queue contract across target planners and backend routes;
+  // the payload digest detects any serialized field or prompt wording drift.
+  it('preserves queued payloads and manifest writes for every target and backend', async () => {
+    const contracts = {};
+    for (const mode of ['local', 'codex', 'agy', 'grok']) {
+      for (const target of ['turnaround', 'ambient-main', 'main', 'east']) {
+        const id = newId();
+        if (target === 'ambient-main') {
+          await records.createRecord({ kind: 'place', name: 'Hero' }, id);
+        } else {
+          await createCharacter(id);
+        }
+        if (target === 'main') await lockTurnaround(id);
+        if (target === 'east') await lockMain(id);
+        const run = async (designPrompt) => {
+          enqueueJob.mockClear();
+          manifestWrites.length = 0;
+          await startReferenceGeneration(id, {
+            target: target === 'ambient-main' ? 'main' : target,
+            mode, designPrompt, correctionPrompt: '  repair the hem  ',
+          });
+          const job = enqueueJob.mock.calls[0][0];
+          // Normalize native paths BEFORE JSON escapes Windows backslashes.
+          // Only fixture-rooted paths change; prompts and other payload bytes
+          // retain their exact snapshot contract.
+          const normalized = JSON.stringify(job, (_key, value) => {
+            if (typeof value !== 'string') return value;
+            const stable = value.startsWith(TEST_ROOT)
+              ? '<test-root>' + value.slice(TEST_ROOT.length).replaceAll('\\', '/')
+              : value;
+            return stable.replaceAll(id, '<record>');
+          });
+          return {
+            payloadSHA256: createHash('sha256').update(normalized).digest('hex'),
+            manifestWrites: manifestWrites.length,
+          };
+        };
+        contracts[mode + '/' + target] = await run('example design');
+        if (target === 'main') contracts[mode + '/main-reroll'] = await run(undefined);
+      }
+    }
+    expect(contracts).toMatchInlineSnapshot(`
+      {
+        "agy/ambient-main": {
+          "manifestWrites": 1,
+          "payloadSHA256": "618f006a1923f147257030bae9aed0e892b410dd99864c6651b66c3a6e13c0d7",
+        },
+        "agy/east": {
+          "manifestWrites": 0,
+          "payloadSHA256": "663174cc78679ce571095b2d7ff363b5d5c025173a8d49c10afc24fe3fd24bcb",
+        },
+        "agy/main": {
+          "manifestWrites": 1,
+          "payloadSHA256": "19eadde44bc1333da317b56d5817b31124e5c5985147e20bc369105fef881a74",
+        },
+        "agy/main-reroll": {
+          "manifestWrites": 0,
+          "payloadSHA256": "9582217d0025d10f254571114dfa232bec7b8cc4a2e55aad41234b3d8c53b828",
+        },
+        "agy/turnaround": {
+          "manifestWrites": 1,
+          "payloadSHA256": "d06be938985f946942bc4c5f37a8ef5a5eb9d5c010a55195ecab2530b4b22e45",
+        },
+        "codex/ambient-main": {
+          "manifestWrites": 1,
+          "payloadSHA256": "1a3056e9172577fb5fc052d701753a657682a40c33106841fe720a18acd6ab16",
+        },
+        "codex/east": {
+          "manifestWrites": 0,
+          "payloadSHA256": "1c4b040e9ef9687cfbbf3e879addd15e0a71a905a3b5cc8ae68f10f1a1e145da",
+        },
+        "codex/main": {
+          "manifestWrites": 1,
+          "payloadSHA256": "a7836b97b8c12d00cbc57abd1934d0d31b0009f1c662c06d99603a5d27f30a6e",
+        },
+        "codex/main-reroll": {
+          "manifestWrites": 0,
+          "payloadSHA256": "c852aac43df1f7cb288081e1c3df3e74a56226ffd64f669149dd92bf499e2633",
+        },
+        "codex/turnaround": {
+          "manifestWrites": 1,
+          "payloadSHA256": "2191d6e8863245b323ba4ba3bc88b22f7d902449e37f77a1f4906e9ff1f5ac47",
+        },
+        "grok/ambient-main": {
+          "manifestWrites": 1,
+          "payloadSHA256": "696eb01070645ad71b91654275004782ec12e94a53d9404dd6fef633cbe86a9d",
+        },
+        "grok/east": {
+          "manifestWrites": 0,
+          "payloadSHA256": "7b022a6ac38c48e984b04e9dc2fdf6228a2690a7c0296b107be72afe4b539089",
+        },
+        "grok/main": {
+          "manifestWrites": 1,
+          "payloadSHA256": "180dc044dd6c4ca6396181bd2ef23f9bccb23e374170369fd2dd072e6d44e7e2",
+        },
+        "grok/main-reroll": {
+          "manifestWrites": 0,
+          "payloadSHA256": "7547bf855275eb89e35830b2fa88d10672ab8a478b54d393434ca1499380fbc4",
+        },
+        "grok/turnaround": {
+          "manifestWrites": 1,
+          "payloadSHA256": "8da78c2e920e50bfc161c3e7f236bed531581ac5005220818a69f15e94aeafd7",
+        },
+        "local/ambient-main": {
+          "manifestWrites": 1,
+          "payloadSHA256": "3655b224dc8e5b084b0a3a97410394badf0c411838470d3c191b9f7ef499a508",
+        },
+        "local/east": {
+          "manifestWrites": 0,
+          "payloadSHA256": "01c6c651ce1dbe0108044ec268aa4aa75cc364faa14d9c366c266d067e5bc037",
+        },
+        "local/main": {
+          "manifestWrites": 1,
+          "payloadSHA256": "652c79b1af5ced63055aed1ca002730b30e889e76ddaace9086fc82d5a798a39",
+        },
+        "local/main-reroll": {
+          "manifestWrites": 0,
+          "payloadSHA256": "4c828a15f8eca717a498f90b2a0469e3ca2a5eb9c18019805c947a9c6037e7d8",
+        },
+        "local/turnaround": {
+          "manifestWrites": 1,
+          "payloadSHA256": "02aa273d1b41b9a29809e5e62ead21587be57aaca11fc04a8b57e31b42e40afe",
+        },
+      }
+    `);
+  });
+
   it('404s an unknown record and queues a props main reference for the ambient workflow', async () => {
     await expect(startReferenceGeneration('nope', { target: 'main', designPrompt: 'x' }))
       .rejects.toMatchObject({ code: 'NOT_FOUND' });

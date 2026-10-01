@@ -13,7 +13,7 @@ const STATUS_TONES = {
   'needs-human': 'text-port-warning', failed: 'text-port-error', canceled: 'text-port-text-muted',
 };
 const CHECK_TONES = { pass: 'bg-port-success/20 text-port-success', fail: 'bg-port-error/20 text-port-error', unverified: 'bg-port-border text-port-text-muted' };
-const CHECK_LABELS = { composition: 'Composition', continuity: 'Continuity', motion: 'Motion', audioSync: 'Audio sync (stream parity)' };
+const CHECK_LABELS = { composition: 'Composition', continuity: 'Continuity', motion: 'Motion', audioSync: 'Stream-duration parity', lipSync: 'Temporal lip-sync' };
 const ACTION_LABELS = {
   wait: (a) => (a.on === 'generation' ? 'Waiting for the revised sections to generate…' : 'Rendering the draft…'),
   reviewing: () => 'Reviewing the draft (frames + continuous excerpt)…',
@@ -54,16 +54,22 @@ function AttemptRow({ attempt }) {
         {review ? <span className="uppercase text-[10px] text-port-text-muted">{review.verdict}</span> : <span className="text-port-text-muted">not reviewed yet</span>}
         {review && Object.entries(CHECK_LABELS).map(([key, label]) => (
           <span key={key} className={`px-1.5 py-0.5 rounded text-[10px] ${CHECK_TONES[review.checks?.[key]] || CHECK_TONES.unverified}`}>
-            {label}: {review.checks?.[key] || 'unverified'}
+            {label}: {key === 'lipSync' && review.evidence?.temporal?.status === 'not-applicable' ? 'not applicable' : review.checks?.[key] || 'unverified'}
           </span>
         ))}
       </div>
+      {review?.dependencyState && review.dependencyState.status !== 'current' && <p className="text-port-warning">Historical review — {review.dependencyState.reasons.join('; ')}. This pass cannot be reused.</p>}
       {review?.evidence && (
         <p className="text-[10px] text-port-text-muted">
           Evidence: {review.evidence.boundaryFrames ? 'cut/cue sheet + ' : ''}{review.evidence.continuousFrames || 0} continuous frames
           {review.evidence.continuous ? ' + continuous-excerpt analysis' : ` — continuous analysis unavailable (${review.evidence.continuousError || 'not run'})`}
         </p>
       )}
+      {review?.evidence?.temporal && <p className="text-[10px] text-port-text-muted">
+        Temporal evidence: {review.evidence.temporal.status}
+        {review.evidence.temporal.analyzer && ` · ${review.evidence.temporal.analyzer.id} ${review.evidence.temporal.analyzer.version}`}
+        {review.evidence.temporal.reason && ` — ${review.evidence.temporal.reason}`}
+      </p>}
       {review?.summary && <p className="text-port-text-muted">{review.summary}</p>}
       {review?.findings?.length > 0 && (
         <ul className="space-y-0.5">
@@ -151,6 +157,7 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
           </div>
         </div>
       )}
+      {run?.documentRevisions && <p className="text-port-text-muted">Code-first review revises failed document sections through the production authoring budget. Selected assets and the generated-video allowance stay fixed; changing the medium requires your plan edit.</p>}
       {run && (
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center justify-between gap-2">

@@ -88,3 +88,17 @@ describe('creative setup', () => {
     expect(screen.getByLabelText('Universe').value).toBe('u2');
   });
 });
+
+it('defaults code-first to zero, offers 20% selective footage, and saves the explicit allowance', async () => {
+  const onSave = open();
+  fireEvent.change(screen.getByLabelText('Production strategy'), { target: { value: 'code-first' } });
+  const allowance = screen.getByLabelText('Maximum generated video (% of final song time)');
+  expect(allowance.value).toBe('0');
+  fireEvent.click(screen.getByLabelText('Allow selective generated footage'));
+  expect(allowance.value).toBe('20');
+  fireEvent.change(allowance, { target: { value: '12.5' } });
+  fireEvent.click(screen.getByText('Save creative setup'));
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+    productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 12.5 },
+  })));
+});

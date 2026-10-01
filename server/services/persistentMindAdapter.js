@@ -331,7 +331,7 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
     effort,
     prompt,
     source: 'cos-persistent-mind',
-    ...(timeoutMs ? { timeout: timeoutMs, absoluteTimeoutMs: timeoutMs, maxTokens: 8192, outputReserveTokens: 8192 } : {}),
+    ...(timeoutMs ? { absoluteTimeoutMs: timeoutMs, maxTokens: 8192, outputReserveTokens: 8192 } : {}),
     allowFallback: false,
     screenshots,
     responseSchema,

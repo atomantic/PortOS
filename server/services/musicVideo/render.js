@@ -1,3 +1,4 @@
+import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
  *
@@ -42,10 +43,13 @@ import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from '.
 import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch, renderSongComposition } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
+import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
+import { intercutClips } from './intercut.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -310,7 +314,8 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
     // supply an on-beat cut. Beat alignment describes the cut, not ownership
     // of its timing. Section provenance is cleared when the audio changes.
     const planned = Number.isInteger(scene?.sectionIndex) && scene.sectionIndex >= 0;
-    if ((scene?.beatAligned || planned) && sceneHasAuthoredSpan(scene)) {
+    // A measured word-gap repair owns its edit boundary independently of beats.
+    if ((scene?.beatAligned || planned || selectedPerformanceInstruction(scene)?.repair) && sceneHasAuthoredSpan(scene)) {
       // inSec stays 0 here deliberately: this only ever trims how much of the
       // clip plays, never which frames — there is no in-point/out-point
       // distinction. A legacy planned scene commonly spans much longer than
@@ -363,7 +368,12 @@ const evenPx = (n) => Math.max(2, Math.round(n / 2) * 2);
 // card is a solid colour the typography layer writes its text over. On the
 // frame grid every section is cut to an exact frame count.
 function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
-  const trim = frameGrid ? `trim=end_frame=${frames}` : `trim=start=${c.inSec}:end=${c.outSec}`;
+  // On the frame grid a footage in-point (a performance edit, an intercut
+  // piece #9290) is a start frame; stills and cards always start at 0.
+  const startFrame = !c.layer && c.inSec > 0 ? Math.round(c.inSec * fps) : 0;
+  const trim = frameGrid
+    ? (startFrame > 0 ? `trim=start_frame=${startFrame}:end_frame=${startFrame + frames}` : `trim=end_frame=${frames}`)
+    : `trim=start=${c.inSec}:end=${c.outSec}`;
   if (c.layer === 'card') {
     return `color=c=0x${c.cardColor.slice(1)}:s=${canonW}x${canonH}:r=${fps},setsar=1,format=yuv420p,${trim},setpts=PTS-STARTPTS`;
   }
@@ -412,7 +422,7 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
 // overlap the window, clipped to it and re-based to the excerpt's own timeline
 // (0 = `startSec`) so a contact sheet built from the excerpt file can sample
 // cut boundaries directly. `totalDuration` becomes the excerpt's own length.
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null } = {}) {
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
   const frameGrid = gridOption || clips.some((c) => c.layer);
   // Stills and cards have no dimensions of their own: the first footage clip
@@ -463,8 +473,10 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
   const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, inputOf[i], { canonW, canonH, fps, frames, frameGrid })}[v${i}]`);
+  const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
-  filters.push(`${plan.map((_, i) => `[v${i}]`).join('')}concat=n=${plan.length}:v=1:a=0[${cutLabel}]`);
+  filters.push(`${plan.map((_, i) => `[v${i}]`).join('')}concat=n=${plan.length}:v=1:a=0[${gradeFilter ? 'ungraded' : cutLabel}]`);
+  if (gradeFilter) filters.push(`[ungraded]${gradeFilter}[${cutLabel}]`);
   overlays.forEach((_, k) => {
     const out = k === overlays.length - 1 ? 'outv' : `cut${k + 1}`;
     filters.push(`[cut${k}][${audioIdx + 1 + k}:v]overlay=eof_action=pass:format=auto[${out}]`);
@@ -562,7 +574,15 @@ export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 2
 // every scene's clip, and refuse a render whose shots don't cover their
 // authored span. Both callers build on the exact same resolved clip list, so
 // an excerpt frame matches what a full render would produce at that song time.
+export function assertCurrentClipDependencies(project) {
+  const stale = (project.scenes || []).filter((scene) => scene.videoHistoryId && scene.visualLayer !== 'still' && scene.visualLayer !== 'card')
+    .filter((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)).length);
+  if (stale.length) throw new ServerError('Selected clips were derived from changed plates — preview and repair their dependencies before rendering',
+    { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
+}
+
 export async function planMusicVideoRender(project) {
+  assertCurrentClipDependencies(project);
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
@@ -576,17 +596,31 @@ export async function planMusicVideoRender(project) {
   const rawClips = await resolveSceneClips(project, { layered: composed });
   const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
   const beats = project.audioAnalysis?.beats;
-  const clips = beatSnapClips(rawClips, beats, { scenes: project.scenes });
+  const snapped = beatSnapClips(rawClips, beats, { scenes: project.scenes });
   // #8964: a new (non-looping) shot must never silently repeat footage to
   // fill its span. Refuse the render and name the shots that need a trim,
   // a continuation, a replacement clip, or an explicit loop.
-  const shortfalls = findCoverageShortfalls(clips);
+  const shortfalls = findCoverageShortfalls(snapped);
   if (shortfalls.length > 0) {
     throw new ServerError(
       `${shortfalls.length} shot${shortfalls.length === 1 ? ' is' : 's are'} longer than ${shortfalls.length === 1 ? 'its' : 'their'} source clip — trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
       { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
     );
   }
+  // #9290: an intercut project re-cuts the covered shots on the song's energy
+  // and sung words, reusing cutaway footage — no extra generation.
+  const clips = project.composition?.cutting === 'intercut'
+    ? intercutClips(snapped, {
+      scenes: project.scenes,
+      sections: project.audioAnalysis?.sections,
+      beats,
+      bpm: project.audioAnalysis?.bpm,
+      words: (project.lyricCues || []).flatMap((cue) => (Array.isArray(cue?.words) ? cue.words : [])),
+      lyricCues: project.lyricCues,
+      graphicCards: composed,
+      accentColor: project.composition?.style?.accentColor,
+    })
+    : snapped;
   const soundBed = await resolveSoundBedPath(project);
   return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed };
 }
@@ -646,16 +680,20 @@ const SEEKED_RENDERERS = Object.freeze({
 /** The seeked renderer for a project's render mode, or null for footage modes. */
 export const seekedRendererFor = (project) => SEEKED_RENDERERS[project?.composition?.mode] || null;
 
-async function renderSeekedMode(projectId, project, handOff, renderer) {
+async function renderSeekedMode(projectId, project, handOff, renderer, options = {}) {
   const plan = await renderer.prepare(project);
   // Resolve the master before any rendering mark. A missing track throws here
   // and the caller releases the pending slot without leaving a job running.
   const audioPath = await resolveMasterAudioPath(project);
-  if (renderer.performanceTakes) await assertCurrentPerformanceTakes(project, audioPath);
+  if (renderer.performanceTakes) {
+    assertCurrentClipDependencies(project);
+    await assertCurrentPerformanceTakes(project, audioPath);
+  }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
   const renderingOn = await ensureInstanceId();
+  if (options.verifyCurrent) options.verifyCurrent(await getProject(projectId));
   const jobId = randomUUID();
   const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
   const outputPath = join(PATHS.videos, filename);
@@ -678,12 +716,17 @@ async function renderSeekedMode(projectId, project, handOff, renderer) {
     await updateProject(projectId, settledRender(patch.status, patch.extra || {})).catch((err) => {
       console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
     });
+    if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null });
     closeJobAfterDelay(jobs, jobId);
   };
-  Promise.resolve().then(() => renderer.encode({
-    plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
-    onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
-  })).then(async (encoded) => {
+  Promise.resolve().then(async () => {
+    if (options.verifyCurrent) options.verifyCurrent(await getProject(projectId));
+    if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
+    return renderer.encode({
+      plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
+      onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
+    });
+  }).then(async (encoded) => {
     job.overlayAbort = null;
     job.status = 'complete';
     let proof = null;
@@ -711,7 +754,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer) {
       createdAt: new Date().toISOString(),
       musicVideoProjectId: projectId,
     });
-    await finish({ status: 'complete', extra: { renderHistoryId: jobId } });
+    await finish({ status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) } });
     console.log(`✅ ${renderer.label[0].toUpperCase()}${renderer.label.slice(1)} music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}`, proof: proof ? `/data/video-thumbnails/${proof}` : null } });
   }).catch(async (err) => {
@@ -750,7 +793,7 @@ export async function renderMusicVideo(projectId, options = {}) {
   try {
     const seeked = seekedRendererFor(project);
     if (seeked) {
-      return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked);
+      return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked, options);
     }
     const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);
@@ -761,11 +804,11 @@ export async function renderMusicVideo(projectId, options = {}) {
     const jobId = randomUUID();
     const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
     const outputPath = join(PATHS.videos, filename);
-    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed });
+    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed, grade: composed ? project.composition?.grade : null });
     // #8984: a composed project lays its timed text cues over the cut, and a
     // title card's text (#8985) joins them over its own section. No renderable
     // cue (plain mode, or nothing timed) skips the overlay capture entirely.
-    const cues = [...renderableCues(project.composition, totalDuration), ...sectionCardCues(clips, sections, totalDuration)]
+    const cues = [...renderableCues(project.composition, totalDuration), ...sectionCardCues(clips, sections, totalDuration, project.treatment?.brief?.graphicLanguage)]
       .sort((a, b) => a.startSec - b.startSec);
     const composition = cues.length > 0 ? project.composition : null;
 
@@ -903,7 +946,7 @@ export async function renderMusicVideo(projectId, options = {}) {
               musicVideoProjectId: projectId,
             };
             await appendToVideoHistory(meta);
-            await updateProject(projectId, settledRender('complete', { renderHistoryId: jobId })).catch((updateErr) => {
+            await updateProject(projectId, settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) })).catch((updateErr) => {
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→complete write failed: ${updateErr.message}`);
             });
             console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
@@ -937,13 +980,13 @@ export async function renderMusicVideo(projectId, options = {}) {
     job.overlayAbort = new AbortController();
     const { signal } = job.overlayAbort;
     renderTypographyOverlays({
-      jobId, cues, style: composition.style, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
+      jobId, cues, style: { ...composition.style, graphicLanguage: project.treatment?.brief?.graphicLanguage }, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then((overlays) => {
       signal.throwIfAborted();
       // Capture is over: from here a cancel kills the encode (job.process).
       job.overlayAbort = null;
-      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, soundBed });
+      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, soundBed, grade: project.composition?.grade });
       startEncode(layered.args, 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;

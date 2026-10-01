@@ -1,3 +1,5 @@
+import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
+import { musicVideoStyleBasis, musicVideoStylePrompt } from '../../lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 /**
  * Music Video — treatment compiler (#8980).
@@ -34,6 +36,7 @@ import {
 import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { validSections } from './shotPlan.js';
 import { normalizeBrief } from './treatment.js';
+import { MUSIC_VIDEO_MEDIA, normalizeMusicVideoProductionPolicy, planMusicVideoMedia } from '../../lib/musicVideoMediumPlan.js';
 
 // Beyond this many mapped shots the AI prompt would blow its budget; the
 // deterministic draft still covers every shot.
@@ -225,7 +228,7 @@ function riskOf(direction, beat) {
 }
 
 /** The bounded proof checklist: the riskiest shot, plus one short transition/text sequence. */
-function draftProofs(directions, scenes, beatsById, gaps) {
+function draftProofs(directions, scenes, beatsById, gaps, codeFirst = false) {
   if (directions.length === 0) return [];
   const sceneById = new Map(scenes.map((s) => [s.sceneId, s]));
   const labelOf = (id) => sceneById.get(id)?.label || sceneById.get(id)?.sectionLabel || id;
@@ -242,9 +245,11 @@ function draftProofs(directions, scenes, beatsById, gaps) {
   const riskShot = {
     kind: 'risk-shot',
     sceneIds: [best.d.sceneId],
-    artifact: `Reference frame and generated clip for "${labelOf(best.d.sceneId)}", reviewed in the final render.`,
+    artifact: codeFirst
+      ? `Final-render proof of "${labelOf(best.d.sceneId)}" using its planned ${best.d.medium} medium after authoring and asset preparation.`
+      : `Reference frame and generated clip for "${labelOf(best.d.sceneId)}", reviewed in the final render.`,
     risk: best.risk.reasons.join('; ') || 'the highest-energy shot in the song',
-    route: best.d.mode === 'performance' && lipSyncGap
+    route: codeFirst ? `${best.d.medium} — planned only; verify against an actual final render` : best.d.mode === 'performance' && lipSyncGap
       ? `${best.d.route} — performance framed as non-sync (wide, silhouette, hands, backs); cut away on sung lines if mouth motion reads wrong`
       : best.d.route === 'code-2d' ? 'code-2d — a code-rendered title card or moved still in a composed render' : best.d.route,
     checks,
@@ -268,7 +273,7 @@ function draftProofs(directions, scenes, beatsById, gaps) {
     sceneIds: [pair.a.sceneId, pair.b.sceneId],
     artifact: `The cut from "${labelOf(pair.a.sceneId)}" to "${labelOf(pair.b.sceneId)}"${pair.withText ? ' with its composited text cue' : ''}, reviewed in the final render.`,
     risk: 'A cut and its text timing are only judged correctly against the song.',
-    route: pair.withText ? 'composed render: typography layer over the generated clips' : 'plain cut in the final render',
+    route: codeFirst ? 'Review the planned medium transition in the final render' : pair.withText ? 'composed render: typography layer over the generated clips' : 'plain cut in the final render',
     checks: seqChecks,
     passCriteria: seqChecks.map((c) => PASS_CRITERIA[c]),
     status: 'proposed',
@@ -278,6 +283,11 @@ function draftProofs(directions, scenes, beatsById, gaps) {
 /** What the treatment asks for that this install cannot do (yet). */
 function deriveCapabilityGaps(project, brief, directions) {
   const gaps = [];
+  const codeFirst = normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'code-first';
+  if (codeFirst) gaps.push({
+    id: 'medium-planning',
+    detail: 'This treatment plans media only. Apply saves direction without selecting a renderer or generating assets; procedural document authoring and production enforcement are separate capabilities.',
+  });
   // Source-audio lip-sync exists only on a verified lane (#8977, fal.ai today);
   // judged against the project's pinned video backend at compile time.
   const backend = project.videoSettings?.backend || null;
@@ -289,7 +299,7 @@ function deriveCapabilityGaps(project, brief, directions) {
   if (motionRefs) {
     gaps.push({ id: 'rotoscope', detail: 'Motion-reference media is scaffolding only: turning footage into hand-drawn or vector animation is not automated, and it is never selected into the timeline automatically.' });
   }
-  if (directions.some((d) => d.route === 'code-2d')) {
+  if (!codeFirst && directions.some((d) => d.route === 'code-2d')) {
     // #8985 supplies title cards and moved stills — but only a composed render
     // draws them, and richer 2D animation is not available.
     const composed = project.composition?.mode === 'composed';
@@ -302,9 +312,11 @@ function deriveCapabilityGaps(project, brief, directions) {
 }
 
 function finalize(project, brief, arc, directions, scenes) {
+  directions = planMusicVideoMedia(project, directions);
   const gaps = deriveCapabilityGaps(project, brief, directions);
   const beatsById = new Map(arc.beats.map((b) => [b.id, b]));
-  return { arc, shotDirections: directions, proofs: draftProofs(directions, scenes, beatsById, gaps), capabilityGaps: gaps };
+  return { graphicLanguage: brief.graphicLanguage || 'Bold lyric keywords, pictograms and counters on one-beat graphic cards.',
+    arc, shotDirections: directions, proofs: draftProofs(directions, scenes, beatsById, gaps, normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'code-first'), capabilityGaps: gaps };
 }
 
 /**
@@ -355,13 +367,16 @@ export function buildTreatmentPrompt(project, draft) {
   const hasLyrics = draft.arc.lyricInterpretation !== null;
   const scenesById = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const beatsById = new Map(draft.arc.beats.map((b) => [b.id, b]));
+  const policy = normalizeMusicVideoProductionPolicy(project.productionPolicy);
   const briefLines = [
+    `Production strategy: ${policy.strategy}; generated-video allowance: ${policy.maxGeneratedVideoPercent}% of final song seconds (union of overlapping intervals, not provider clip lengths).`,
     brief.audience && `Audience: ${quote(brief.audience)}`,
     brief.destination && `Destination: ${quote(brief.destination)}`,
     brief.aspectRatio && `Aspect ratio: ${brief.aspectRatio}`,
     brief.emotion && `Desired emotion: ${quote(brief.emotion)}`,
     brief.premise && `Narrative premise: ${quote(brief.premise, 600)}`,
     brief.hookObjective && `Opening hook objective: ${quote(brief.hookObjective)}`,
+    brief.graphicLanguage && `Graphic language: ${quote(brief.graphicLanguage)}`,
     brief.mustHave && `Must have: ${quote(brief.mustHave, 400)}`,
     brief.avoid && `Avoid: ${quote(brief.avoid, 400)}`,
     musicVideoCreativeContext(concept),
@@ -370,6 +385,8 @@ export function buildTreatmentPrompt(project, draft) {
     spec.palette?.length && `Palette: ${spec.palette.join(' ')}`,
     spec.cameraRules && `Camera rules: ${quote(spec.cameraRules)}`,
   ].filter(Boolean);
+  const styleLook = musicVideoStylePrompt(project);
+  if (styleLook) briefLines.push(styleLook);
   const refs = (spec.references || []).map((r) => `- ${r.role || 'mood'} reference${r.label ? ` "${quote(r.label, 80)}"` : ''} (use: ${r.use || 'reference'})${r.note ? ` — ${quote(r.note, 120)}` : ''}`);
   const notes = brief.referenceNotes.map((n) => `- ${n.note ? quote(n.note, 300) : '(no note)'}${n.url ? ` [source: ${quote(n.url, 200)}]` : ''}`);
   const beatLines = draft.arc.beats.map((b) => `sectionIndex ${b.sectionIndexes[0]}: "${b.label}" ${b.startSec.toFixed(1)}–${b.endSec.toFixed(1)}s, energy ${b.energy}, role ${b.role.toUpperCase()}`);
@@ -377,6 +394,7 @@ export function buildTreatmentPrompt(project, draft) {
     const scene = scenesById.get(d.sceneId) || {};
     const beat = beatsById.get(d.beatId);
     const parts = [`${i}. ${beat?.role || 'build'} / "${beat?.label || ''}" ${(scene.endSec - scene.startSec).toFixed(1)}s`];
+    parts.push(`planned medium: ${d.medium}; ${d.mediumPinned ? 'director-pinned, retain it' : 'may propose a revision'}; rationale: ${quote(d.mediumRationale)}`);
     parts.push(scene.lyricText ? `lyrics: "${quote(scene.lyricText)}"` : 'instrumental');
     if (scene.visualIntent) parts.push(`director intent: ${quote(scene.visualIntent)}`);
     if (scene.prompt || scene.framePrompt) parts.push(`current prompt: ${quote(scene.framePrompt || scene.prompt, 160)}`);
@@ -392,19 +410,24 @@ The planned shots (index; arc role / section; duration; the lyric lines sung dur
 ${shotLines.join('\n')}
 
 Write the treatment:
-- For each section, an "objective" (what the picture must achieve there) and a "rationale" tied to the audience, the lyrics or the emotion. Keep the roles as given.
+${project.styleReferences?.length ? '- "styleLook": one short sentence summarizing palette, lighting, lens language and grain from the moodboard captions; do not invent subjects or places.\n' : ''}- For each section, an "objective" (what the picture must achieve there) and a "rationale" tied to the audience, the lyrics or the emotion. Keep the roles as given.
 - Two or three recurring "motifs" (an image, object, color or gesture) with how each changes across the arc.
 - The balance of "performance", "cutaway" and "graphic" shots as percentages, with a rationale.
+- "graphicLanguage": a concise visual note for the graphic cards and typography (HUD, pictograms, counters), honoring any graphic direction in the brief.
 ${hasLyrics ? '- "lyricInterpretation": what the lyrics mean and how the picture interprets them (not word-for-word illustration).\n' : '- The song is instrumental: set "lyricInterpretation" to null and invent no lyrics.\n'}- For EACH shot: "mode" (performance|cutaway|graphic), "route" (generated|supplied-asset|code-2d — code-2d becomes a code-rendered title card for a sung line or a moved still; prefer it where a video model cannot hold the requirement), "focalSubject", "framing", "negativeSpace" (none|upper|center|lower — the region kept clean for the separately composited text), "typographyRole" (none|subtitle|hero; must be none on instrumental shots), "emphasis", "transitionIn", "transitionOut", "rationale", and a "framePrompt" (the opening still) and "prompt" (the motion) for the image/video model.
+- For EACH shot also supply "medium" (procedural|still|existing-footage|generated-footage) and "mediumRationale". Medium is independent of performance/cutaway intent. Retain director pins. Tie the medium to the shared motifs, their evolution across repeated sections, and entry/exit transitions.
+- For code-first, prefer procedural or still. Existing footage must be selected already; generated footage is an explicit exception within the allowance. At zero allowance never assign generated footage: report unmet performance intent rather than quietly generating it. This is planning, not a claim that procedural rendering is ready.
 - Never ask the image or video model to render the lyrics or any text: typography is composited separately into the reserved region.
 ${lipSync ? `- Performance shots are lip-synced to the song on ${lipSync.label} (each shot a ${lipSync.minAudioSec}–${lipSync.maxAudioSec}s song window); use them for sung lines where a visible singer matters.` : '- This project\'s video backend cannot lip-sync: no shot can rely on a singer synced to the song.'}
 
+For shots with concrete dramatic action, also propose an optional actionContract: { "version": 1, "purpose": "story purpose", "startEmotion": "", "endEmotion": "", "activeSpeaker": "subject name", "actions": [{ "startSec": 0, "endSec": 1, "subject": "subject name", "description": "visible action" }], "reactions": [], "cameraConstraints": [], "continuityRequirements": [], "acceptanceCriteria": [] }. Times are relative to the shot start, increase, and fit its duration. Never invent measured evidence.
+
 Respond with ONLY a JSON object (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
-{ "rationale": "<why this arc serves the brief>", "lyricInterpretation": ${hasLyrics ? '"<interpretation>"' : 'null'},
+{ "rationale": "<why this arc serves the brief>", "graphicLanguage": "<graphic direction>", "lyricInterpretation": ${hasLyrics ? '"<interpretation>"' : 'null'},
   "beats": [{ "sectionIndex": 0, "objective": "<objective>", "rationale": "<rationale>" }],
   "motifs": [{ "name": "<motif>", "description": "<what it is>", "evolution": "<how it changes>", "rationale": "<why>" }],
   "balance": { "performance": 40, "cutaway": 45, "graphic": 15, "rationale": "<why>" },
-  "shots": [{ "index": 0, "mode": "<mode>", "route": "<route>", "focalSubject": "<subject>", "framing": "<framing>", "negativeSpace": "<region>", "typographyRole": "<role>", "emphasis": "<emphasis>", "transitionIn": "<entry>", "transitionOut": "<exit>", "rationale": "<why>", "framePrompt": "<still>", "prompt": "<motion>" }] }`;
+  "shots": [{ "index": 0, "medium": "<medium>", "mediumRationale": "<why this medium serves the motif and transition>", "mode": "<mode>", "route": "<route>", "focalSubject": "<subject>", "framing": "<framing>", "negativeSpace": "<region>", "typographyRole": "<role>", "emphasis": "<emphasis>", "transitionIn": "<entry>", "transitionOut": "<exit>", "rationale": "<why>", "framePrompt": "<still>", "prompt": "<motion>" }] }`;
 }
 
 const isPlaceholder = (s) => typeof s === 'string' && /^\s*<.+>\s*$/.test(s);
@@ -472,6 +495,9 @@ export function mergeAiTreatment(project, draft, parsed) {
     if (!Number.isInteger(idx) || !directions[idx]) continue;
     const d = directions[idx];
     const sung = isNonBlankStr(scenesById.get(d.sceneId)?.lyricText);
+    if (MUSIC_VIDEO_MEDIA.includes(entry.medium)) d.medium = entry.medium;
+    const mediumRationale = strField(entry.mediumRationale, 1000);
+    if (mediumRationale !== undefined) d.mediumRationale = mediumRationale;
     if (SHOT_MODES.includes(entry.mode)) d.mode = entry.mode;
     if (SHOT_ROUTES.includes(entry.route)) d.route = entry.route;
     if (TYPOGRAPHY_ROLES.includes(entry.typographyRole)) d.typographyRole = sung ? entry.typographyRole : 'none';
@@ -480,6 +506,7 @@ export function mergeAiTreatment(project, draft, parsed) {
       const value = strField(entry[field], max);
       if (value !== undefined) d[field] = value;
     }
+    if (entry.actionContract != null && !shotActionContractProblem(entry.actionContract, scenesById.get(d.sceneId))) d.actionContract = structuredClone(entry.actionContract);
     const framePrompt = strField(entry.framePrompt, 2000);
     const prompt = strField(entry.prompt, 2000);
     if (framePrompt !== undefined) d.suggestedFramePrompt = framePrompt;
@@ -489,5 +516,8 @@ export function mergeAiTreatment(project, draft, parsed) {
     if (d.typographyRole !== 'none' && d.negativeSpace === 'none') d.negativeSpace = d.typographyRole === 'hero' ? 'upper' : 'lower';
   }
   const scenes = directions.map((d) => scenesById.get(d.sceneId)).filter(Boolean);
-  return finalize(project, brief, arc, directions, scenes);
+  const graphicLanguage = brief.graphicLanguage || strField(parsed.graphicLanguage, 1000) || draft.graphicLanguage;
+  return { ...finalize(project, brief, arc, directions, scenes), graphicLanguage,
+    ...(project.styleReferences?.length ? { styleLook: strField(parsed.styleLook, 1000) ?? '', styleReferencesBasis: musicVideoStyleBasis(project) } : {}),
+  };
 }

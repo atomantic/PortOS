@@ -22,5 +22,16 @@ export const MUSIC_VIDEO_FRAME_GEN_SIZES = Object.freeze({
   '1:1': Object.freeze({ width: 1024, height: 1024 }),
 });
 
+/**
+ * The project framed at another aspect for ONE render (a 9:16 social cut of a
+ * 16:9 video), leaving the stored record untouched. Every renderer reads the
+ * aspect through `musicVideoAspect`, so re-framing the brief is enough.
+ */
+export function musicVideoAtAspect(project, aspect) {
+  if (!MUSIC_VIDEO_ASPECTS.includes(aspect) || aspect === musicVideoAspect(project)) return project;
+  const treatment = project?.treatment || {};
+  return { ...project, treatment: { ...treatment, brief: { ...(treatment.brief || {}), aspectRatio: aspect } } };
+}
+
 /** `{ width, height }` to request a project's reference frames at. */
 export const musicVideoFrameGenSize = (project) => ({ ...MUSIC_VIDEO_FRAME_GEN_SIZES[musicVideoAspect(project)] });

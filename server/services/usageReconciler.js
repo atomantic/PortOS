@@ -335,6 +335,203 @@ export const agyEstimatedBuckets = (parsed) => ({
   cacheWriteTokens: 0
 });
 
+const TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+
+function addBuckets(target, source) {
+  for (const field of TOKEN_FIELDS) target[field] = (target[field] || 0) + (source[field] || 0);
+  return target;
+}
+
+function subtractBuckets(absolute, billed) {
+  return Object.fromEntries(TOKEN_FIELDS.map(field => [field, Math.max(0, (absolute[field] || 0) - (billed?.[field] || 0))]));
+}
+
+function maxBuckets(billed, absolute) {
+  return Object.fromEntries(TOKEN_FIELDS.map(field => [field, Math.max(billed?.[field] || 0, absolute[field] || 0)]));
+}
+
+async function readClaudeSessions({ home, workspacePath, from, to, fold, reserveFrom, excludeFor }) {
+  // The project directory name is the slugified cwd — an exact lookup, with
+  // no directory scan and no chance of picking up another repo's sessions.
+  const projectDir = join(home, '.claude', 'projects', claudeProjectSlug(workspacePath));
+  for (const file of await listDir(projectDir)) {
+    if (!file.endsWith('.jsonl')) continue;
+    const path = join(projectDir, file);
+    const text = await tryReadFile(path);
+    if (!text) continue;
+    const parsed = parseClaudeTranscript(text, { from, to, exclude: excludeFor(path) });
+    reserveFrom(path, parsed);
+    fold(parsed);
+  }
+}
+
+async function readGrokSessions({ home, workspacePath, from, to, fold, reserveFrom, excludeFor, claim }) {
+  // `~/.grok/sessions/<encodeURIComponent(cwd)>/<session-id>/`. Decoding the
+  // folder name is an exact cwd lookup with no summary read, so an unrelated
+  // repo's sessions are never opened.
+  const sessionsRoot = join(home, '.grok', 'sessions');
+  for (const dirName of await listDir(sessionsRoot)) {
+    if (!cwdMatches(decodeGrokSessionDir(dirName), workspacePath)) continue;
+    const cwdDir = join(sessionsRoot, dirName);
+    for (const sessionId of await listSubdirs(cwdDir)) {
+      const sessionDir = join(cwdDir, sessionId);
+      const updatesPath = join(sessionDir, 'updates.jsonl');
+      const updatesText = await tryReadFile(updatesPath);
+      // Sentinel, not truthiness: `turns > 0` means the session DID record
+      // billed turns, so it is measured even when this run's window share is
+      // zero. Falling through to the chars/4 estimate there would bill the
+      // same session twice, once per shape.
+      const parsed = updatesText
+        ? parseGrokTurns(updatesText, { from, to, exclude: excludeFor(updatesPath) })
+        : null;
+      if (parsed?.turns) {
+        reserveFrom(updatesPath, parsed);
+        fold(parsed, 'measured');
+        continue;
+      }
+
+      // No `turn_completed` at all — a run killed or interrupted mid-turn.
+      // chat_history.jsonl carries no timestamps, so the session is placed by
+      // summary.json and billed whole or not at all; the session-level claim
+      // is what stops two overlapping runs from each taking it.
+      // Read-only transcript input: no write-back to the summary file.
+      const summary = await readJSONFile(join(sessionDir, 'summary.json'), null);
+      if (!summary) continue;
+      const startedMs = Date.parse(summary.created_at || '');
+      const endedMs = Date.parse(summary.last_active_at || summary.updated_at || summary.created_at || '');
+      if (!windowOverlaps(startedMs, endedMs, from, to)) continue;
+      const chatPath = join(sessionDir, 'chat_history.jsonl');
+      const chatText = await tryReadFile(chatPath);
+      if (!chatText) continue;
+      const claimKey = `${chatPath}:session`;
+      if (claimedMessages.has(claimKey)) continue;
+      const chat = parseGrokChatHistory(chatText);
+      const estimated = {
+        messages: chat.messages,
+        tokensIn: estimateTokensFromChars(chat.charsIn),
+        tokensOut: estimateTokensFromChars(chat.charsOut),
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0
+      };
+      if (totalTranscriptTokens(estimated) === 0) continue;
+      claim(claimKey);
+      const named = chat.model || summary.current_model_id || null;
+      const modelKey = named ?? UNKNOWN_MODEL;
+      fold({ ...estimated, models: named ? [named] : [], byModel: { [modelKey]: { ...estimated } } }, 'estimate');
+    }
+  }
+}
+
+async function readAgySessions({ home, workspacePath, from, to, fold, reserveFrom, excludeFor }) {
+  // Antigravity writes no token counts anywhere, so every row it produces is
+  // an honest chars/4 estimate. `history.jsonl` is the only cwd-keyed index;
+  // the brain transcript it points at carries the per-step timestamps that
+  // place the work inside a run's window.
+  const root = join(home, '.gemini', 'antigravity-cli');
+  const historyText = await tryReadFile(join(root, 'history.jsonl'));
+  for (const conversation of historyText ? parseAgyHistory(historyText) : []) {
+    if (!cwdMatches(conversation.workspace, workspacePath)) continue;
+    const transcriptPath = join(root, 'brain', conversation.conversationId, '.system_generated', 'logs', 'transcript.jsonl');
+    const text = await tryReadFile(transcriptPath);
+    if (!text) continue;
+    const parsed = parseAgyTranscript(text, { from, to, exclude: excludeFor(transcriptPath) });
+    const estimated = agyEstimatedBuckets(parsed);
+    if (totalTranscriptTokens(estimated) === 0) continue;
+    reserveFrom(transcriptPath, parsed);
+    // No model is named anywhere in the transcript — the UNKNOWN_MODEL bucket
+    // lets the caller attribute it to the provider's own configured model.
+    fold({ ...estimated, models: [], byModel: { [UNKNOWN_MODEL]: { ...estimated } } }, 'estimate');
+  }
+}
+
+async function readKimiSessions({ home, workspacePath, from, to, fold, reserveFrom, excludeFor }) {
+  // `~/.kimi-code/session_index.jsonl` is a single GLOBAL, append-only index
+  // of every session ever created on this machine — filter by exact `workDir`
+  // rather than trying to decode `sessions/wd_<basename>_<hash>/`, whose hash
+  // suffix is undocumented.
+  const indexText = await tryReadFile(join(home, '.kimi-code', 'session_index.jsonl'));
+  for (const session of indexText ? parseKimiSessionIndex(indexText) : []) {
+    if (!cwdMatches(session.workDir, workspacePath)) continue;
+    // Real usage lives per-AGENT, not per-session: a subagent's own spend is
+    // in its own `agents/<subAgentId>/wire.jsonl`, never the parent's (see the
+    // Kimi section of `providerTranscriptUsage.js`) — sum every agent dir.
+    const agentsRoot = join(session.sessionDir, 'agents');
+    for (const agentId of await listSubdirs(agentsRoot)) {
+      const wirePath = join(agentsRoot, agentId, 'wire.jsonl');
+      const text = await tryReadFile(wirePath);
+      if (!text) continue;
+      const parsed = parseKimiWireLog(text, { from, to, exclude: excludeFor(wirePath) });
+      reserveFrom(wirePath, parsed);
+      fold(parsed);
+    }
+  }
+}
+
+async function readCodexSessions({ home, workspacePath, from, to, fold, codexReserved }) {
+  const sessionsRoot = join(home, '.codex', 'sessions');
+  for (const dir of codexDateDirs(sessionsRoot, from ?? Date.now(), to ?? from ?? Date.now())) {
+    for (const file of await listDir(dir)) {
+      if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue;
+      const path = join(dir, file);
+      const text = await tryReadFile(path);
+      if (!text) continue;
+      // A Codex rollout bills as a cumulative DELTA, so a timestamp claim is
+      // not enough: a rollout that GROWS between two overlapping runs presents
+      // a later snapshot under a different key, and its delta (measured from a
+      // baseline before both runs) re-includes what the first run already
+      // billed. Track the highest cumulative boundary billed per file and
+      // re-parse from there, so each run charges only the genuinely new part.
+      // Read the rollout's cumulative position AS OF THIS RUN'S WINDOW END —
+      // absolute (no lower bound) so the watermark arithmetic below is a plain
+      // subtraction, but capped at `to` so a run only ever bills through its
+      // own end. Both halves are load-bearing:
+      //   - Absolute (no `from`): a windowed parse already nets out the earlier
+      //     snapshot as its baseline, so subtracting the watermark from it would
+      //     double-subtract (measured: a later run billed 50, not 150). It also
+      //     keeps the math immune to several snapshots sharing one epoch ms,
+      //     which is why the timestamp boundary this replaced was unsound.
+      //   - Capped at `to`: without it, an EARLY run reading the file after it
+      //     grew would bill growth generated after its own window and advance
+      //     the watermark past it, leaving the run that actually produced those
+      //     tokens with nothing (measured: early run billed 250, late run 0).
+      const absolute = parseCodexRollout(text, { to });
+      if (!cwdMatches(absolute.cwd, workspacePath)) continue;
+      // Require the run's own window to overlap this rollout at all, so a
+      // rollout from an unrelated period isn't attributed to this run.
+      if (totalTranscriptTokens(parseCodexRollout(text, { from, to })) === 0) continue;
+
+      const billed = codexHighWater.get(path);
+      const net = { ...absolute, ...subtractBuckets(absolute, billed) };
+      if (totalTranscriptTokens(net) === 0) continue;
+
+      // Advance the mark to the absolute position just read, before the next
+      // `await` — for the same reason the Claude claim reserves per file: two
+      // overlapping runs must not both act on the pre-update value. `Math.max`
+      // guards a rollout that was truncated/rewritten smaller, so the mark
+      // never moves backwards and re-bills what it already charged.
+      codexHighWater.set(path, maxBuckets(billed, absolute));
+      codexReserved.push([path, billed]);
+      // Mirror the net into `byModel` — callers bill from the per-model records,
+      // so leaving them at absolute totals would re-charge the billed portion.
+      // Codex reports one model per rollout, so the whole net is that model's.
+      const modelKey = Object.keys(absolute.byModel || {})[0];
+      fold(modelKey
+        ? { ...net, byModel: { [modelKey]: addBuckets({}, net) } }
+        : net);
+    }
+  }
+}
+
+// A null prototype keeps every unknown family (including Object property names)
+// on the historical Codex fallback.
+const FAMILY_READERS = Object.assign(Object.create(null), {
+  claude: readClaudeSessions,
+  grok: readGrokSessions,
+  agy: readAgySessions,
+  kimi: readKimiSessions,
+  codex: readCodexSessions
+});
+
 /**
  * Sum every transcript that overlaps a run's window in its working directory.
  * Returns null when no transcript could be attributed (so the caller keeps its
@@ -367,11 +564,7 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
     family,
     sessions: 0,
     model: null,
-    messages: 0,
-    tokensIn: 0,
-    tokensOut: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0
+    ...addBuckets({}, {})
   };
   const modelCounts = new Map();
   // Per-model token buckets across every folded session, so a run that switched
@@ -389,29 +582,24 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
     if (!parsed || totalTranscriptTokens(parsed) === 0) return;
     sourcesSeen.add(source);
     totals.sessions += 1;
-    totals.messages += parsed.messages || 0;
-    totals.tokensIn += parsed.tokensIn || 0;
-    totals.tokensOut += parsed.tokensOut || 0;
-    totals.cacheReadTokens += parsed.cacheReadTokens || 0;
-    totals.cacheWriteTokens += parsed.cacheWriteTokens || 0;
+    addBuckets(totals, parsed);
     for (const model of parsed.models?.length ? parsed.models : [parsed.model]) {
       if (model) modelCounts.set(model, (modelCounts.get(model) || 0) + 1);
     }
     for (const [model, bucket] of Object.entries(parsed.byModel || {})) {
       if (!byModel.has(model)) {
-        byModel.set(model, { messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+        byModel.set(model, {});
       }
-      const target = byModel.get(model);
-      target.messages += bucket.messages || 0;
-      target.tokensIn += bucket.tokensIn || 0;
-      target.tokensOut += bucket.tokensOut || 0;
-      target.cacheReadTokens += bucket.cacheReadTokens || 0;
-      target.cacheWriteTokens += bucket.cacheWriteTokens || 0;
+      addBuckets(byModel.get(model), bucket);
     }
   };
 
   // Keys reserved by THIS call, so a failed/empty read can release them.
   const reserved = [];
+  const claim = (claimKey) => {
+    claimedMessages.add(claimKey);
+    reserved.push(claimKey);
+  };
   // Codex high-water marks advanced by this call, as [path, previousValue], so
   // an empty read restores the prior boundary instead of stranding it.
   const codexReserved = [];
@@ -433,8 +621,7 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
   const reserveFrom = (fileKey, parsed) => {
     for (const key of parsed.countedKeys || []) {
       const claimKey = `${fileKey}:${key}`;
-      claimedMessages.add(claimKey);
-      reserved.push(claimKey);
+      claim(claimKey);
     }
   };
   // Nothing was attributable after all — release so a later run can claim it.
@@ -446,190 +633,8 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
     }
   };
 
-  if (family === 'claude') {
-    // The project directory name is the slugified cwd — an exact lookup, with
-    // no directory scan and no chance of picking up another repo's sessions.
-    const projectDir = join(home, '.claude', 'projects', claudeProjectSlug(workspacePath));
-    for (const file of await listDir(projectDir)) {
-      if (!file.endsWith('.jsonl')) continue;
-      const path = join(projectDir, file);
-      const text = await tryReadFile(path);
-      if (!text) continue;
-      const parsed = parseClaudeTranscript(text, { from, to, exclude: excludeFor(path) });
-      reserveFrom(path, parsed);
-      fold(parsed);
-    }
-  } else if (family === 'grok') {
-    // `~/.grok/sessions/<encodeURIComponent(cwd)>/<session-id>/`. Decoding the
-    // folder name is an exact cwd lookup with no summary read, so an unrelated
-    // repo's sessions are never opened.
-    const sessionsRoot = join(home, '.grok', 'sessions');
-    for (const dirName of await listDir(sessionsRoot)) {
-      if (!cwdMatches(decodeGrokSessionDir(dirName), workspacePath)) continue;
-      const cwdDir = join(sessionsRoot, dirName);
-      for (const sessionId of await listSubdirs(cwdDir)) {
-        const sessionDir = join(cwdDir, sessionId);
-        const updatesPath = join(sessionDir, 'updates.jsonl');
-        const updatesText = await tryReadFile(updatesPath);
-        // Sentinel, not truthiness: `turns > 0` means the session DID record
-        // billed turns, so it is measured even when this run's window share is
-        // zero. Falling through to the chars/4 estimate there would bill the
-        // same session twice, once per shape.
-        const parsed = updatesText
-          ? parseGrokTurns(updatesText, { from, to, exclude: excludeFor(updatesPath) })
-          : null;
-        if (parsed?.turns) {
-          reserveFrom(updatesPath, parsed);
-          fold(parsed, 'measured');
-          continue;
-        }
-
-        // No `turn_completed` at all — a run killed or interrupted mid-turn.
-        // chat_history.jsonl carries no timestamps, so the session is placed by
-        // summary.json and billed whole or not at all; the session-level claim
-        // is what stops two overlapping runs from each taking it.
-        // Read-only transcript input: no write-back to the summary file.
-        const summary = await readJSONFile(join(sessionDir, 'summary.json'), null);
-        if (!summary) continue;
-        const startedMs = Date.parse(summary.created_at || '');
-        const endedMs = Date.parse(summary.last_active_at || summary.updated_at || summary.created_at || '');
-        if (!windowOverlaps(startedMs, endedMs, from, to)) continue;
-        const chatPath = join(sessionDir, 'chat_history.jsonl');
-        const chatText = await tryReadFile(chatPath);
-        if (!chatText) continue;
-        const claimKey = `${chatPath}:session`;
-        if (claimedMessages.has(claimKey)) continue;
-        const chat = parseGrokChatHistory(chatText);
-        const estimated = {
-          messages: chat.messages,
-          tokensIn: estimateTokensFromChars(chat.charsIn),
-          tokensOut: estimateTokensFromChars(chat.charsOut),
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0
-        };
-        if (totalTranscriptTokens(estimated) === 0) continue;
-        claimedMessages.add(claimKey);
-        reserved.push(claimKey);
-        const named = chat.model || summary.current_model_id || null;
-        const modelKey = named ?? UNKNOWN_MODEL;
-        fold({ ...estimated, models: named ? [named] : [], byModel: { [modelKey]: { ...estimated } } }, 'estimate');
-      }
-    }
-  } else if (family === 'agy') {
-    // Antigravity writes no token counts anywhere, so every row it produces is
-    // an honest chars/4 estimate. `history.jsonl` is the only cwd-keyed index;
-    // the brain transcript it points at carries the per-step timestamps that
-    // place the work inside a run's window.
-    const root = join(home, '.gemini', 'antigravity-cli');
-    const historyText = await tryReadFile(join(root, 'history.jsonl'));
-    for (const conversation of historyText ? parseAgyHistory(historyText) : []) {
-      if (!cwdMatches(conversation.workspace, workspacePath)) continue;
-      const transcriptPath = join(root, 'brain', conversation.conversationId, '.system_generated', 'logs', 'transcript.jsonl');
-      const text = await tryReadFile(transcriptPath);
-      if (!text) continue;
-      const parsed = parseAgyTranscript(text, { from, to, exclude: excludeFor(transcriptPath) });
-      const estimated = agyEstimatedBuckets(parsed);
-      if (totalTranscriptTokens(estimated) === 0) continue;
-      reserveFrom(transcriptPath, parsed);
-      // No model is named anywhere in the transcript — the UNKNOWN_MODEL bucket
-      // lets the caller attribute it to the provider's own configured model.
-      fold({ ...estimated, models: [], byModel: { [UNKNOWN_MODEL]: { ...estimated } } }, 'estimate');
-    }
-  } else if (family === 'kimi') {
-    // `~/.kimi-code/session_index.jsonl` is a single GLOBAL, append-only index
-    // of every session ever created on this machine — filter by exact `workDir`
-    // rather than trying to decode `sessions/wd_<basename>_<hash>/`, whose hash
-    // suffix is undocumented.
-    const indexText = await tryReadFile(join(home, '.kimi-code', 'session_index.jsonl'));
-    for (const session of indexText ? parseKimiSessionIndex(indexText) : []) {
-      if (!cwdMatches(session.workDir, workspacePath)) continue;
-      // Real usage lives per-AGENT, not per-session: a subagent's own spend is
-      // in its own `agents/<subAgentId>/wire.jsonl`, never the parent's (see the
-      // Kimi section of `providerTranscriptUsage.js`) — sum every agent dir.
-      const agentsRoot = join(session.sessionDir, 'agents');
-      for (const agentId of await listSubdirs(agentsRoot)) {
-        const wirePath = join(agentsRoot, agentId, 'wire.jsonl');
-        const text = await tryReadFile(wirePath);
-        if (!text) continue;
-        const parsed = parseKimiWireLog(text, { from, to, exclude: excludeFor(wirePath) });
-        reserveFrom(wirePath, parsed);
-        fold(parsed);
-      }
-    }
-  } else {
-    const sessionsRoot = join(home, '.codex', 'sessions');
-    for (const dir of codexDateDirs(sessionsRoot, from ?? Date.now(), to ?? from ?? Date.now())) {
-      for (const file of await listDir(dir)) {
-        if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue;
-        const path = join(dir, file);
-        const text = await tryReadFile(path);
-        if (!text) continue;
-        // A Codex rollout bills as a cumulative DELTA, so a timestamp claim is
-        // not enough: a rollout that GROWS between two overlapping runs presents
-        // a later snapshot under a different key, and its delta (measured from a
-        // baseline before both runs) re-includes what the first run already
-        // billed. Track the highest cumulative boundary billed per file and
-        // re-parse from there, so each run charges only the genuinely new part.
-        // Read the rollout's cumulative position AS OF THIS RUN'S WINDOW END —
-        // absolute (no lower bound) so the watermark arithmetic below is a plain
-        // subtraction, but capped at `to` so a run only ever bills through its
-        // own end. Both halves are load-bearing:
-        //   - Absolute (no `from`): a windowed parse already nets out the earlier
-        //     snapshot as its baseline, so subtracting the watermark from it would
-        //     double-subtract (measured: a later run billed 50, not 150). It also
-        //     keeps the math immune to several snapshots sharing one epoch ms,
-        //     which is why the timestamp boundary this replaced was unsound.
-        //   - Capped at `to`: without it, an EARLY run reading the file after it
-        //     grew would bill growth generated after its own window and advance
-        //     the watermark past it, leaving the run that actually produced those
-        //     tokens with nothing (measured: early run billed 250, late run 0).
-        const absolute = parseCodexRollout(text, { to });
-        if (!cwdMatches(absolute.cwd, workspacePath)) continue;
-        // Require the run's own window to overlap this rollout at all, so a
-        // rollout from an unrelated period isn't attributed to this run.
-        if (totalTranscriptTokens(parseCodexRollout(text, { from, to })) === 0) continue;
-
-        const billed = codexHighWater.get(path);
-        const delta = (field) => Math.max(0, (absolute[field] || 0) - (billed?.[field] || 0));
-        const net = {
-          ...absolute,
-          messages: delta('messages'),
-          tokensIn: delta('tokensIn'),
-          tokensOut: delta('tokensOut'),
-          cacheReadTokens: delta('cacheReadTokens'),
-          cacheWriteTokens: delta('cacheWriteTokens')
-        };
-        if (totalTranscriptTokens(net) === 0) continue;
-
-        // Advance the mark to the absolute position just read, before the next
-        // `await` — for the same reason the Claude claim reserves per file: two
-        // overlapping runs must not both act on the pre-update value. `Math.max`
-        // guards a rollout that was truncated/rewritten smaller, so the mark
-        // never moves backwards and re-bills what it already charged.
-        codexHighWater.set(path, {
-          messages: Math.max(billed?.messages || 0, absolute.messages || 0),
-          tokensIn: Math.max(billed?.tokensIn || 0, absolute.tokensIn || 0),
-          tokensOut: Math.max(billed?.tokensOut || 0, absolute.tokensOut || 0),
-          cacheReadTokens: Math.max(billed?.cacheReadTokens || 0, absolute.cacheReadTokens || 0),
-          cacheWriteTokens: Math.max(billed?.cacheWriteTokens || 0, absolute.cacheWriteTokens || 0)
-        });
-        codexReserved.push([path, billed]);
-        // Mirror the net into `byModel` — callers bill from the per-model records,
-        // so leaving them at absolute totals would re-charge the billed portion.
-        // Codex reports one model per rollout, so the whole net is that model's.
-        const modelKey = Object.keys(absolute.byModel || {})[0];
-        fold(modelKey
-          ? { ...net, byModel: { [modelKey]: {
-              messages: net.messages,
-              tokensIn: net.tokensIn,
-              tokensOut: net.tokensOut,
-              cacheReadTokens: net.cacheReadTokens,
-              cacheWriteTokens: net.cacheWriteTokens
-            } } }
-          : net);
-      }
-    }
-  }
+  const scan = { home, workspacePath, from, to, fold, reserveFrom, excludeFor, claim, codexReserved };
+  await (FAMILY_READERS[family] ?? FAMILY_READERS.codex)(scan);
 
   if (totals.sessions === 0) {
     releaseReserved();

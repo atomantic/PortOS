@@ -77,6 +77,7 @@ export function ensureCodexTuiArgs(args, provider = null) {
   if (provider?.ignoreUserConfig === true && !args.includes('--ignore-user-config')) {
     prefix.push('--ignore-user-config');
   }
+  prefix.push(...buildCodexAuthModeArgs(provider, args));
   prefix.push(...buildCodexStartupArgs(args));
   // The local backing, on the same posture-flag step both TUI spawn paths
   // share — an interactive `codex-ollama` session without it silently reaches
@@ -97,6 +98,26 @@ export function ensureCodexTuiArgs(args, provider = null) {
  * @param {string[]} [existingArgs]
  * @returns {string[]}
  */
+export const CODEX_AUTH_MODES = Object.freeze(['chatgpt', 'api']);
+
+/**
+ * `["-c", "forced_login_method=\"<mode>\""]` when the provider pins Codex to
+ * one authentication method, else `[]` (Codex picks from its own login state).
+ *
+ * ChatGPT-subscription access and API-key access are separate auth and billing
+ * modes, and some models are only available to one of them. Skipped when the
+ * argv already sets the key, so a hand-typed `-c forced_login_method=…` wins.
+ * @param {object|null|undefined} provider
+ * @param {string[]} [existingArgs]
+ * @returns {string[]}
+ */
+export function buildCodexAuthModeArgs(provider, existingArgs = []) {
+  const mode = provider?.codexAuthMode;
+  if (!CODEX_AUTH_MODES.includes(mode)) return [];
+  if (existingArgs.some((arg) => typeof arg === 'string' && arg.includes('forced_login_method'))) return [];
+  return ['-c', `forced_login_method="${mode}"`];
+}
+
 export function buildCodexOssArgs(provider, existingArgs = []) {
   const localProvider = codexOssLocalProvider(provider);
   if (!localProvider) return [];

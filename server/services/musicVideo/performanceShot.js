@@ -1,3 +1,4 @@
+import { assertShotActionContract } from '../../lib/musicVideoActionContract.js';
 /**
  * Music Video performance shots (#8977) — the submission-boundary half.
  *
@@ -51,7 +52,7 @@ import {
 import { getProject } from './projects.js';
 import { assertVocalStemTimebase, resolveVocalStemPath } from './vocalStem.js';
 
-export const SHOT_INSTRUCTION_VERSION = 1;
+export const SHOT_INSTRUCTION_VERSION = 2;
 
 const hashFile = (path) => new Promise((resolve, reject) => {
   const hash = createHash('sha256');
@@ -239,7 +240,14 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   const scene = project?.scenes?.find((s) => s.sceneId === musicVideo.sceneId);
   // An unknown project/scene is not a performance shot; the render proceeds as
   // before and the completion hook refuses to attach it to a deleted scene.
+  assertShotActionContract(scene);
   if (!isPerformanceScene(scene)) return null;
+  if (scene.performanceRepair) {
+    const { assertRevisionOpenForGeneration } = await import('./revision.js');
+    if (musicVideo.revisionId !== scene.performanceRepair.revisionId) throw refuse('A continuation must use its reserved repair revision', 'PERFORMANCE_REPAIR_REVISION_REQUIRED', 409);
+    assertRevisionOpenForGeneration(project, musicVideo.revisionId, { sceneId: scene.sceneId, kind: 'video' });
+    if (!sourceImagePath || basename(sourceImagePath) !== scene.referenceImageId) throw refuse('Use the accepted boundary frame for this continuation', 'PERFORMANCE_REPAIR_STALE', 409);
+  }
 
   const capability = performanceCapability(backend);
   if (!capability) throw refuse(performanceBlockedReason(backend), 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
@@ -253,10 +261,14 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   // submission (the common case) never needs.
   const { resolveMasterAudioPath } = await import('./render.js');
   const masterPath = await resolveMasterAudioPath(project);
+  if (scene.performanceRepair) await assertCurrentPerformanceTakes(project, masterPath);
   const songDurationSec = await probeVideoDuration(masterPath);
   if (songDurationSec == null) throw refuse('Could not read the song duration for this performance shot', 'MUSIC_VIDEO_AUDIO_UNREADABLE');
   const plan = planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec, capability });
   if (!plan.ok) throw refuse(plan.message, plan.code);
+  if (scene.performanceRepair && (plan.windowStartSec !== scene.startSec || plan.windowEndSec !== scene.endSec)) {
+    throw refuse('Review needed: this provider cannot continue only the remaining audio interval', 'PERFORMANCE_REPAIR_REVIEW_NEEDED', 409);
+  }
   const offered = getFalVideoModel(capability.modelId)?.resolution?.options || capability.resolutions || [];
   const pick = (value) => (typeof value === 'string' ? offered.find((o) => o.toLowerCase() === value.trim().toLowerCase()) : null);
   const takeResolution = pick(resolution) || pick(project.videoSettings?.falLipSyncResolution) || capability.defaultResolution;
@@ -264,7 +276,9 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   // An optional vocal stem conditions the provider in place of the mix. It
   // is re-checked here because the file could have been replaced on disk or
   // arrived from a peer since it was attached.
-  const stemPath = resolveVocalStemPath(project);
+  const conditioningSource = project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
+  const stemPath = conditioningSource === 'master' ? null : resolveVocalStemPath(project);
+  if (conditioningSource !== 'master' && !stemPath) throw refuse('Attach the selected singer stem before rendering', 'MUSIC_VIDEO_VOCAL_STEM_MISSING');
   if (stemPath) assertVocalStemTimebase(await probeVideoDuration(stemPath), songDurationSec);
 
   const audioSha256 = await hashFile(masterPath);
@@ -299,8 +313,10 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   const transcription = capability.transcription === true && project.videoSettings?.falLipSyncTranscription !== false;
   const shotInstruction = {
     version: SHOT_INSTRUCTION_VERSION,
+    ...(scene.performanceRepair ? { repair: { ...scene.performanceRepair, role: 'continuation' } } : {}),
     shotMode: 'performance',
     createdAt: new Date().toISOString(),
+    speaker: scene.performanceSpeaker || null,
     audio: {
       source: project.trackId ? 'track' : 'upload',
       sha256: audioSha256,
@@ -310,7 +326,11 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
       // master's timebase. `sha256` above stays the master's, so a take
       // is stale only when the song changes, not when a stem is swapped —
       // and then only when `windowFingerprint` says this window changed.
-      conditioning: { source: stemPath ? 'vocal-stem' : 'master', sha256: conditioningSha256 },
+      conditioning: {
+        source: conditioningSource, sha256: conditioningSha256, filename: basename(stemPath || masterPath),
+        selection: project.performanceConditioningSource ? 'user' : 'legacy-default',
+        voiceIsolation: 'unverified',
+      },
     },
     songInterval: { startSec: scene.startSec, endSec: scene.endSec },
     audioWindow: { startSec: plan.windowStartSec, endSec: plan.windowEndSec, durationSec: plan.windowSec },

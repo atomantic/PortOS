@@ -8,11 +8,35 @@ import {
   mergeOutcomeObjective,
   mergeOutcomeReview,
   normalizeGoalFidelityVerdict,
+  productionAfterChangeHunks,
   resolveGoalFidelityConfig,
   taskObjective,
 } from './goalFidelity.js';
 
 describe('taskObjective', () => {
+  it('frames the premature agent-summary complaint as a repair while preserving the report', () => {
+    const description = 'Completed-agent cards leak summaries before Show, and opening them duplicates the summary.';
+    const objective = taskObjective({ description });
+    expect(objective).toContain('Repair the current summary-disclosure defects reported below.');
+    expect(objective).toContain(description);
+    expect(objective.length).toBeLessThanOrEqual(MAX_OBJECTIVE_CHARS);
+  });
+
+  it.each([
+    'Intentionally show summaries on completed-agent cards even before Show.',
+    'Document why completed-agent cards leak summaries before Show.',
+    'Dashboard cards leak summaries before Show.',
+    'Completed-agent cards leak summaries before Show.',
+  ])('preserves requests outside that repair-report shape: %s', description => {
+    expect(taskObjective({ description })).toBe(description);
+  });
+
+  it('keeps the report unchanged when additional task context supplies its intent', () => {
+    const description = 'Completed-agent cards leak summaries before Show.';
+    expect(taskObjective({ description, metadata: { prompt: 'Keep the existing preview; document its behavior.' } }))
+      .toBe(`${description}\n\nKeep the existing preview; document its behavior.`);
+  });
+
   it('composes the description with the task prompt block', () => {
     expect(taskObjective({
       description: 'Add a retry to the uploader',
@@ -177,5 +201,22 @@ describe('mergeOutcomeReview', () => {
   // turning either into a finding would hold runs that did nothing wrong.
   it.each(['OPEN', 'CLOSED', null])('establishes nothing from state %s', prState => {
     expect(mergeOutcomeReview({ number: 7653, prState })).toBeNull();
+  });
+});
+
+
+describe('productionAfterChangeHunks', () => {
+  it('does not invent a summary root or join an outer JSX condition across a hunk gap', () => {
+    const diff = [
+      'diff --git a/Card.jsx b/Card.jsx', '--- a/Card.jsx', '+++ b/Card.jsx',
+      '@@ -1,6 +1,6 @@',
+      ' {expanded && (', '   <div>', '     {taskSummary && (',
+      '+      <MarkdownOutput content={taskSummary} />', '     )}',
+      '@@ -20,2 +20,2 @@', '   </div>', ' )}',
+    ].join('\n');
+    const rows = productionAfterChangeHunks(diff);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].source).toContain('<MarkdownOutput');
+    expect(rows.every(row => row.renderPredicates.length === 0)).toBe(true);
   });
 });

@@ -4,6 +4,7 @@ import useFieldDraft from '../../hooks/useFieldDraft.js';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
+import MediumPlanSummary from './MediumPlanSummary.jsx';
 import TreatmentShotList from './TreatmentShotList.jsx';
 import TreatmentProofs from './TreatmentProofs.jsx';
 import TreatmentApplyReview from './TreatmentApplyReview.jsx';
@@ -115,6 +116,8 @@ export default function TreatmentPanel({ project, treatment: api }) {
             placeholder="What the viewer should feel" onCommit={(v) => saveBrief({ emotion: v })} />
           <BriefField id={idFor('hook')} label="Opening hook objective" value={brief.hookObjective} maxLength={1000}
             placeholder="What the first seconds must achieve" onCommit={(v) => saveBrief({ hookObjective: v })} />
+          <BriefField id={idFor('graphic-language')} label="Graphic language" value={brief.graphicLanguage} maxLength={1000} multiline
+            placeholder="HUD, pictograms, counters, and card typography" onCommit={(v) => saveBrief({ graphicLanguage: v })} />
           <BriefField id={idFor('premise')} label="Narrative premise" value={brief.premise} maxLength={2000} multiline
             placeholder="A story, or a visual arc without a literal plot" onCommit={(v) => saveBrief({ premise: v })} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -237,6 +240,7 @@ export default function TreatmentPanel({ project, treatment: api }) {
                 {arc.balance.rationale && <p className="text-port-text-muted">{arc.balance.rationale}</p>}
               </div>
             </div>
+            <MediumPlanSummary project={project} />
             <TreatmentShotList project={project} treatment={t} onSave={api.save} />
             <TreatmentProofs project={project} treatment={t} onReview={api.reviewProof} />
             <TreatmentApplyReview project={project} api={api} />

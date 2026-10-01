@@ -26,6 +26,7 @@ const {
   buildCliVisionInvocation,
   prepareCliVisionRun,
   describeImageViaCli,
+  describeImagesFromPaths,
 } = await import('./visionCli.js');
 const { resolveWindowsExecutable, prepareWindowsSafeSpawn } = await import('../lib/bufferedSpawn.js');
 
@@ -36,6 +37,17 @@ const { resolveWindowsExecutable, prepareWindowsSafeSpawn } = await import('../l
 const EXPECT_GROUP = process.platform !== 'win32';
 
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from('fake-png').toString('base64')}`;
+
+it('refuses stopped production after vision attachments are staged without spawning', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vision-admission-'));
+  try {
+    const path = join(dir, 'frame.png'); await writeFile(path, 'fake-png');
+    const spawnImpl = vi.fn();
+    await expect(describeImagesFromPaths({ provider: { id: 'codex', command: 'codex', args: [] }, imagePaths: [path], prompt: 'review',
+      spawnImpl, beforeExecute: () => { throw new Error('Production stopped'); } })).rejects.toThrow('Production stopped');
+    expect(spawnImpl).not.toHaveBeenCalled();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 
 describe('decodeImageDataUrl', () => {
   it('decodes the base64 payload to bytes', () => {

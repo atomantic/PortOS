@@ -373,6 +373,14 @@ describe('executeTuiRun', () => {
   });
 
   describe('input validation', () => {
+    it('settles a caller admission refusal before spawning the prepared TUI', async () => {
+      await expect(executeTuiRun({ runId: 'run-admission', provider: { id: 'example-tui', type: 'tui', command: 'codex', args: [] },
+        prompt: 'hello', workspacePath: TEST_WORKSPACE, beforeExecute: () => { throw new Error('Production stopped'); } }))
+        .rejects.toThrow('Production stopped');
+      expect(ptySpawnMock).not.toHaveBeenCalled();
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ extras: { canceled: true, completionReason: 'canceled' } }));
+    });
+
     it('throws when provider is missing', async () => {
       await expect(executeTuiRun({ runId: 'run-x', provider: null, prompt: 'prompt', workspacePath: '/tmp' }))
         .rejects.toThrow(/provider is required/);

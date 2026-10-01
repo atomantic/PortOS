@@ -194,6 +194,7 @@ function getGenModuleForJob(job) {
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../imageGen/grok.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.AGY) return import('../imageGen/agy.js');
+  if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.FAL) return import('../imageGen/fal.js');
   if (job.kind === 'image') return import('../imageGen/local.js');
   return Promise.resolve(null);
 }
@@ -1256,6 +1257,10 @@ async function runJobLifecycle(job, markDispatched) {
     if (job.params?.videoProduction) {
       const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
       await assertVideoAttemptDispatch(job.params.videoProduction.projectId, job.params.videoProduction.attemptId, { jobId: job.id });
+    }
+    if (job.params?.shotInstruction?.repair && job.params?.musicVideo) {
+      const { assertPerformanceRepairDispatch } = await import('../musicVideo/revisionService.js');
+      await assertPerformanceRepairDispatch(job.params.musicVideo);
     }
     if (!mod) throw new Error(`Unknown job kind: ${job.kind}`);
     // A cancel that arrived while this job was still queued lives on the

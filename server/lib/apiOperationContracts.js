@@ -11,7 +11,7 @@ import { cosToolCallSchema } from './cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agentContextValidation.js';
 import {
   gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema, gitDeleteBranchBodySchema,
-  gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema,
+  logsQuerySchema, pm2ProcessNameSchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema,
 } from './validation.js';
 
 const jsonBody = (schema, required = true) => ({
@@ -31,6 +31,36 @@ const gitWriteOperation = (summary, schema) => ({
 });
 
 export const API_OPERATION_CONTRACTS = Object.freeze({
+  '/api/logs/{processName}': {
+    get: {
+      summary: 'Read or follow one PM2 process log',
+      parameters: [
+        { name: 'processName', in: 'path', required: true, schema: zodToOpenApiSchema(pm2ProcessNameSchema) },
+        ...Object.entries(logsQuerySchema.shape).map(([name, schema]) => ({
+          name, in: 'query', required: false, schema: zodToOpenApiSchema(schema),
+        })),
+      ],
+      responses: {
+        200: { description: 'Process log tail or server-sent log stream' },
+        400: { description: 'Invalid process name or query', 'x-portos-error-codes': ['INVALID_PROCESS_NAME', 'VALIDATION_ERROR'] },
+      },
+    },
+  },
+  '/api/apps/{id}/logs': {
+    get: {
+      summary: 'Read logs for a process owned by this app',
+      parameters: [
+        { name: 'process', in: 'query', required: false, schema: zodToOpenApiSchema(pm2ProcessNameSchema), description: 'Must belong to the app; defaults to its first PM2 process.' },
+        { name: 'lines', in: 'query', required: false, schema: { type: 'integer', default: 100 } },
+      ],
+      responses: {
+        200: { description: 'App process log tail' },
+        400: { description: 'Missing, invalid, or foreign process', 'x-portos-error-codes': ['MISSING_PROCESS', 'INVALID_PROCESS_NAME'] },
+        404: { description: 'App not found' },
+      },
+    },
+  },
+
   '/api/git/status': gitWriteOperation('Read git status for a path', gitPathBodySchema),
   '/api/git/diff': gitWriteOperation('Read the working-tree or staged diff', gitDiffBodySchema),
   '/api/git/commits': gitWriteOperation('List recent commits', gitCommitsBodySchema),

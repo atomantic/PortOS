@@ -259,6 +259,25 @@ describe('readMeasuredUsage', () => {
     expect(result).toMatchObject({ sessions: 1, tokensIn: 600, cacheReadTokens: 2400, tokensOut: 250 });
   });
 
+  it('falls back to Codex for an unknown family that names an Object property', async () => {
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-1.jsonl', codexRollout({
+      timestamp: '2026-07-01T10:05:00.000Z', input: 3000, cached: 2400, output: 250
+    }));
+
+    const result = await readMeasuredUsage({
+      workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      family: 'constructor',
+      home
+    });
+
+    expect(result).toMatchObject({
+      family: 'constructor', source: 'measured', sessions: 1,
+      tokensIn: 600, cacheReadTokens: 2400, tokensOut: 250
+    });
+  });
+
   it('skips a codex rollout from a different cwd', async () => {
     await writeCodexRollout(['2026', '07', '01'], 'rollout-1.jsonl', codexRollout({
       cwd: '/work/other', timestamp: '2026-07-01T10:05:00.000Z', input: 3000, cached: 2400, output: 250

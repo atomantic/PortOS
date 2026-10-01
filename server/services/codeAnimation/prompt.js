@@ -277,7 +277,7 @@ export function buildCodeAnimationPrompt({
   sections.push(`SOUND:\n${audioSection({ audio, soundtrack, durationSeconds })}`);
   sections.push(`FORMAT: ${format.aspectRatio} at ${width}×${height}px, ${fps}fps, ${durationSeconds}s. ${RENDERER_GUIDANCE[renderer] || RENDERER_GUIDANCE.auto}`);
   sections.push(DIRECTION);
-  sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio }));
+  sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio || soundtrack === 'procedural' }));
   sections.push(SELF_REVIEW);
   sections.push(`OUTPUT: Return ONLY the finished HTML document in a single \`\`\`html fenced code block, starting with <!DOCTYPE html>. No explanation before or after it.${delivery === 'cli' ? ' Do not create or edit any files — print the document as your final answer.' : ''}`);
   return sections.join('\n\n');
@@ -318,6 +318,9 @@ function promptSong(song) {
     lyrics: (song.lyrics || []).slice(0, 400),
     beats: (song.beats || []).slice(0, 400),
     downbeats: (song.downbeats || []).slice(0, 200),
+    featureNames: song.featureNames || [],
+    narrativeEvents: song.narrativeEvents || [],
+    reactiveSections: song.reactiveSections || [],
   };
 }
 
@@ -360,4 +363,21 @@ export function extractCodeSections(text) {
     } catch { /* the next fence may be the document */ }
   }
   return [];
+}
+
+/** Author only bounded drawing functions; the host owns the page and media. */
+export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment, visualSpec, scenes, styleLines = [], onlySectionId = null, sharedStyle = null }) {
+  const sections = (song.sections || []).filter((section) => !onlySectionId || section.id === onlySectionId);
+  return [
+    `Write original Canvas 2D section functions for a mixed-media music-video document titled ${JSON.stringify(trimTo(title, 200))}. The host owns the document, song clock, selected local media and lyric pass. Return code functions only; do not request or generate image/video assets.`,
+    CODE_VIDEO_RULES.replace('- Canvas 2D only. No external assets, fonts, or network.', '- Canvas 2D only. No network, remote URLs, filesystem paths or font loading. The host binds only the listed selected project assets; draw over footage/stills without obscuring them, and draw the entire frame for card scenes.'),
+    'env additionally has mediaKind (video, image or null) and visualLayer (footage, still or card). The host has already drawn the selected media at its in/out time. Do not read DOM or load assets in a section function. Use seeded arithmetic from env.frame for visual motion. Keep repeated hooks related but deliberately vary their action.',
+    'NARRATIVE CLOCK: song.narrativeEvents are resolved absolute startFrame/endFrame bindings. env.events supplies active events with progress and counter value; env.reactiveGain is bounded by the section gain/maxGain and is zero during silence. The host freezes song time, media and graphics for silence, and draws exact event text/counters/motif labels after your function. Use the narrativeFunction, motif and mediumRationale to motivate your graphic actions; do not duplicate event text or infer new onsets. Prefer code/stills/selected media for exact text and graphics. Footage is for actions that need it and must already be selected.',
+    `SHARED STYLE CONTRACT:\n${JSON.stringify(sharedStyle || { palette, treatment: { brief: treatment?.brief || null, motifs: treatment?.arc?.motifs || [], styleLook: treatment?.styleLook || null }, visualSpec, styleLines })}`,
+    `SONG AND LYRIC TIMING:\n${JSON.stringify(promptSong(song))}`,
+    `APPROVED SCENE ASSIGNMENTS AND LOCAL ASSET IDS:\n${JSON.stringify(scenes)}`,
+    `SECTIONS TO AUTHOR:\n${JSON.stringify(sections)}`,
+    onlySectionId ? `Revise only section ${JSON.stringify(onlySectionId)}. Preserve the shared style contract and other sections.` : 'Return one function for each listed section id. Describe a specific visual action for each scene and a distinct entry/exit transition in its function.',
+    'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML, no assets, no explanation.',
+  ].filter(Boolean).join('\n\n');
 }

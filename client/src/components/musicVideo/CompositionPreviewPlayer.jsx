@@ -23,8 +23,9 @@ const lyricAt = (cues, t) => {
  * while the transport stays usable; the iframe stays mounted so the loaded
  * media and playhead survive.
  */
-export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false }) {
-  const doc = project.composition?.document || null;
+export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false }) {
+  const doc = (draft ? project.composition?.documentDraft : project.composition?.document) || null;
+  const scrubId = draft ? 'mv-doc-draft-scrub' : 'mv-doc-scrub';
   const [preview, setPreview] = useState(null);
   const [previewError, setPreviewError] = useState('');
   const [status, setStatus] = useState('');
@@ -43,11 +44,11 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     setPreviewError('');
     seekState.current = { inFlight: false, pending: null, ready: false };
     if (!refresh) return () => { active = false; };
-    getMusicVideoCompositionPreview(project.id, { silent: true })
+    getMusicVideoCompositionPreview(project.id, { silent: true, draft })
       .then((next) => { if (active) setPreview(next); })
       .catch((err) => { if (active) setPreviewError(err?.message || 'Could not build the preview'); });
     return () => { active = false; };
-  }, [project.id, refresh]);
+  }, [project.id, refresh, draft]);
 
   const postSeek = useCallback((time) => {
     const frame = iframeRef.current?.contentWindow;
@@ -68,15 +69,17 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
       if (message.type === 'portos-mv:loaded') {
         const files = {};
         let loaded = 0;
+        let missingMedia = false;
         for (const asset of preview.assets || []) {
           if (!active) return;
           setStatus(`Loading preview media ${loaded + 1}/${preview.assets.length}…`);
           const blob = blobCache.current.get(asset.url) || await fetchMusicVideoPreviewAsset(asset.url).catch(() => null);
           if (blob) { blobCache.current.set(asset.url, blob); files[asset.key] = blob; }
+          else missingMedia = true;
           loaded += 1;
         }
         if (!active) return;
-        setStatus(loaded === (preview.assets || []).length ? '' : 'Some preview media could not be loaded');
+        setStatus(missingMedia ? 'Some preview media could not be loaded' : '');
         iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:assets', files }, '*');
         state.ready = true;
         postSeek(t);
@@ -145,7 +148,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
       <div className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-lg:hidden' : ''}`}
         style={{ aspectRatio: aspect, maxHeight: '70vh', maxWidth: '100%' }}>
         {preview?.html ? (
-          <iframe ref={iframeRef} title="Composition document preview" sandbox="allow-scripts" srcDoc={preview.html} className="h-full w-full" />
+          <iframe ref={iframeRef} title={draft ? 'Composition candidate preview' : 'Composition document preview'} sandbox="allow-scripts" srcDoc={preview.html} className="h-full w-full" />
         ) : (
           <p className="p-3 text-xs text-port-text-muted">{previewError ? '' : 'Building the preview…'}</p>
         )}
@@ -154,8 +157,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview || !audioUrl}>
           {playing ? <Pause size={14} /> : <Play size={14} />} {playing ? 'Pause' : 'Play'}
         </button>
-        <label htmlFor="mv-doc-scrub" className="sr-only">Scrub the composition preview</label>
-        <input id="mv-doc-scrub" type="range" min={0} max={duration || 0} step={1 / fps} value={Math.min(t, duration || 0)}
+        <label htmlFor={scrubId} className="sr-only">{draft ? 'Scrub the composition candidate' : 'Scrub the composition preview'}</label>
+        <input id={scrubId} type="range" min={0} max={duration || 0} step={1 / fps} value={Math.min(t, duration || 0)}
           onChange={(e) => { audioRef.current?.pause(); setPlaying(false); seek(Number(e.target.value)); }}
           className="min-w-0 flex-1" />
         <span className="text-xs text-port-text-muted tabular-nums">{t.toFixed(2)}s / {duration.toFixed(1)}s</span>

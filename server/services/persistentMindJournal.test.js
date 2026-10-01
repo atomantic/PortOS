@@ -98,6 +98,15 @@ describe('journal extraction refuses what it cannot ground', () => {
     expect(existsSync(JOURNAL)).toBe(false);
   });
 
+  it('propagates a runtime hold from the repair call without journal writes', async () => {
+    const held = Object.assign(new Error('Maintainer runtime budget exhausted'), { code: 'RUN_RUNTIME_BUDGET_EXHAUSTED' });
+    const { extract } = answering('not json', held);
+    await expect(extractPersistentMindJournal({ mindId: MIND, events: [event(12, 'Example event')],
+      range: RANGE, extract })).rejects.toBe(held);
+    expect(extract).toHaveBeenCalledTimes(2);
+    expect(await readPersistentMindJournal()).toEqual([]);
+  });
+
   it('leaves the range unextracted when the transport never reached a provider', async () => {
     const denial = Object.assign(new Error('budget exhausted'), { persistentMindCallDenied: true });
     const { extract } = answering(denial);

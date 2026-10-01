@@ -1,4 +1,5 @@
 import ModelSelect from '../ModelSelect';
+import FalModelSelect from './FalModelSelect';
 import {
   IMAGE_GEN_MODE, RENDER_TARGET_BACKEND_AUTO, localModelSelectOptions, modeLabel,
   supportsCloudModelOverride,
@@ -6,7 +7,7 @@ import {
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useLocalImageModels from '../../hooks/useLocalImageModels';
 
-const DEFAULT_MODES = [IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY];
+const DEFAULT_MODES = [IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL];
 const FIELD = 'w-full max-w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
 // Per-record render pin editor (#3231 Phase 3) — one row pinning a record's
@@ -22,7 +23,9 @@ const FIELD = 'w-full max-w-full bg-port-bg border border-port-border rounded-lg
 // pin resolves to) rather than passed down, so every surface hosting this row
 // gets the same picker without threading two props through — a text box would
 // only invite a typo the render 400s on. Nothing is fetched until a local pin
-// is actually selected. Grok, which accepts no model override, gets neither.
+// is actually selected. A fal.ai pin takes a select over the curated fal
+// catalog for the same reason. Grok, which accepts no model override, gets
+// neither.
 //
 // `onChange` always receives BOTH keys (`{ imageMode, imageModelId }`), with
 // null for "no pin" — key-present-with-null is the intentional clear per the
@@ -68,6 +71,15 @@ export default function RecordRenderPinRow({
           installDefault={installDefault}
           value={imageModelId}
           onChange={(modelId) => onChange({ imageMode: pinnedMode, imageModelId: modelId })}
+        />
+      ) : pinnedMode === IMAGE_GEN_MODE.FAL ? (
+        <FalModelSelect
+          id={`${idPrefix}-model`}
+          ariaLabel={`${label} model`}
+          value={imageModelId || ''}
+          defaultLabel="Default (Settings)"
+          onChange={(modelId) => onChange({ imageMode: pinnedMode, imageModelId: modelId })}
+          className={`${FIELD} sm:w-52`}
         />
       ) : supportsCloudModelOverride(pinnedMode) ? (
         <input

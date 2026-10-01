@@ -1,3 +1,4 @@
+import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers } from '../lib/sheetPointers.js';
 /**
  * CatalogIngredient — detail/editor for a single catalog ingredient. Loaded
  * via /catalog/:type/:id; the type from the loaded record is the source of
@@ -830,15 +831,12 @@ function StatListEditor({ field, value, onChange }) {
 // path. The link targets the universe's `#canon` section (the anchor the
 // Universe Builder hash-scroll resolves).
 function ReferenceSheetPanel({ payload, universeRef }) {
-  const sheets = payload?.referenceSheets && typeof payload.referenceSheets === 'object'
-    ? Object.entries(payload.referenceSheets).filter(([, v]) => typeof v === 'string' && v)
-    : [];
-  const legacy = typeof payload?.referenceSheetImageRef === 'string' ? payload.referenceSheetImageRef : '';
-  // De-dup: the legacy 'standard' pointer often duplicates a referenceSheets entry.
-  const variants = [
-    ...(legacy ? [['standard', legacy]] : []),
-    ...sheets.filter(([, v]) => v !== legacy),
-  ];
+  const legacy = readSheetPointer(payload, LEGACY_SHEET_VARIANT_ID);
+  // De-dup: the legacy pointer can duplicate a named variant's filename.
+  const variants = listSheetPointers(payload)
+    .filter(({ filename }, index) => typeof filename === 'string'
+      && (index === 0 && legacy || filename !== legacy))
+    .map(({ variant, filename }) => [variant, filename]);
   const hasSheet = variants.length > 0;
 
   // Deep-link to the universe's canon section (`id="canon"`, the one anchor the

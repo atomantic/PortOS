@@ -212,14 +212,15 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // AI_PROVIDER_EXECUTION_FAILED) and (b) the client shows a calm "model
       // declined, trying a fallback" notice instead of a red error toast. The
       // fallback retry itself is driven by promptRunner.js.
+      const isBudget = metadata.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED;
       const isRefusal = metadata.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL;
       errorEvents.emit('error', {
-        code: isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED' : 'AI_PROVIDER_EXECUTION_FAILED',
-        message: isRefusal
+        code: isBudget ? 'AI_RUNTIME_BUDGET_EXHAUSTED' : (isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED' : 'AI_PROVIDER_EXECUTION_FAILED'),
+        message: isBudget ? errorMessage : isRefusal
           ? `${metadata.providerName} declined this prompt on content/safety grounds — trying a fallback model if one is configured.`
           : `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
-        severity: isRefusal ? 'warning' : 'error',
-        canAutoFix: !isRefusal,
+        severity: isBudget || isRefusal ? 'warning' : 'error',
+        canAutoFix: !isBudget && !isRefusal,
         timestamp: Date.now(),
         context: {
           runId: metadata.id,
@@ -232,6 +233,9 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
           workspaceName: metadata.workspaceName,
           errorDetails: errorMessage,
           errorAnalysis: metadata.errorAnalysis,
+          timeoutBound: metadata.timeoutBound,
+          timeoutOrigin: metadata.timeoutOrigin,
+          runtimeBudgetMs: metadata.runtimeBudgetMs,
           // Note: promptPreview and outputTail intentionally omitted to avoid leaking sensitive data
         }
       });

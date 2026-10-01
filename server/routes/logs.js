@@ -6,25 +6,9 @@ import { spawnPm2 } from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { openSseStream } from '../lib/sseDownload.js';
 import { createLineReader } from '../lib/streamLines.js';
-import { validateRequest, logsQuerySchema } from '../lib/validation.js';
+import { validateRequest, logsQuerySchema, pm2ProcessNameSchema } from '../lib/validation.js';
 
 const router = Router();
-
-/**
- * Validate PM2 process name to prevent command injection
- * PM2 names can contain alphanumeric, hyphens, underscores, and dots
- */
-function validateProcessName(name) {
-  if (typeof name !== 'string' || !name) {
-    return null;
-  }
-  // Only allow safe characters for PM2 process names
-  // Reject any shell metacharacters
-  if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
-    return null;
-  }
-  return name;
-}
 
 // GET /api/logs/processes - List all PM2 processes for log selection
 router.get('/processes', asyncHandler(async (req, res) => {
@@ -38,18 +22,18 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   const { lines, follow } = validateRequest(logsQuerySchema, req.query);
   const followBool = follow === 'true';
 
-  // Security: Validate process name to prevent command injection
-  const safeProcessName = validateProcessName(processName);
-  if (!safeProcessName) {
+  // Reject CLI options as well as unsupported process-name characters.
+  const parsedName = pm2ProcessNameSchema.safeParse(processName);
+  if (!parsedName.success) {
     throw new ServerError('Invalid process name', { status: 400, code: 'INVALID_PROCESS_NAME' });
   }
 
+  const safeProcessName = parsedName.data;
   const pm2Home = await resolvePm2HomeForProcess(safeProcessName);
 
   if (!followBool) {
     // Static log fetch
-    const logs = await pm2Service.getLogs(safeProcessName, lines, pm2Home)
-      .catch(err => `Error: ${err.message}`);
+    const logs = await pm2Service.getLogs(safeProcessName, lines, pm2Home);
     return res.json({ processName: safeProcessName, lines, logs });
   }
 
@@ -114,8 +98,7 @@ router.get('/app/:appId', asyncHandler(async (req, res) => {
   const results = {};
 
   for (const processName of app.pm2ProcessNames || []) {
-    results[processName] = await pm2Service.getLogs(processName, lines, app.pm2Home)
-      .catch(err => `Error: ${err.message}`);
+    results[processName] = await pm2Service.getLogs(processName, lines, app.pm2Home);
   }
 
   res.json({ app: app.name, processes: results });

@@ -989,6 +989,56 @@ CREATE TABLE IF NOT EXISTS code_animation_jobs (
 CREATE INDEX IF NOT EXISTS idx_code_animation_jobs_created ON code_animation_jobs (created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_code_animation_jobs_status_created ON code_animation_jobs (status, created_at DESC);
 
+-- Code Animation Production projects, immutable source revisions and run history.
+CREATE TABLE IF NOT EXISTS code_animation_projects (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  data JSONB NOT NULL,
+  accepted_revision_id TEXT,
+  candidate_revision_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_code_animation_projects_created ON code_animation_projects (created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS code_animation_project_revisions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES code_animation_projects(id) ON DELETE CASCADE,
+  package_hash TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  total_bytes BIGINT NOT NULL,
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (project_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_code_animation_project_revisions_project ON code_animation_project_revisions (project_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS code_animation_project_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES code_animation_projects(id) ON DELETE CASCADE,
+  revision_id TEXT,
+  status VARCHAR(16) NOT NULL,
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ,
+  FOREIGN KEY (project_id, revision_id) REFERENCES code_animation_project_revisions(project_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_code_animation_project_runs_project ON code_animation_project_runs (project_id, created_at DESC, id DESC);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'code_animation_projects_accepted_fk' AND conrelid = 'code_animation_projects'::regclass) THEN
+    ALTER TABLE code_animation_projects ADD CONSTRAINT code_animation_projects_accepted_fk
+      FOREIGN KEY (id, accepted_revision_id) REFERENCES code_animation_project_revisions(project_id, id) DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'code_animation_projects_candidate_fk' AND conrelid = 'code_animation_projects'::regclass) THEN
+    ALTER TABLE code_animation_projects ADD CONSTRAINT code_animation_projects_candidate_fk
+      FOREIGN KEY (id, candidate_revision_id) REFERENCES code_animation_project_revisions(project_id, id) DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
+
 -- Catalog user-defined types (Phase 4 lead-in, issue #1001). One row per
 -- user-defined ingredient type — the registry that defines catalog row
 -- semantics, moved out of data/settings.json (`catalogUserTypes`) so type

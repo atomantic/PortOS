@@ -37,7 +37,7 @@ import { isCompositeProviderId } from '../lib/providerRef.js';
 // both subtrees in every one of them.
 import { ServerError } from '../lib/errorHandler.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
-import { analyzeError, ERROR_CATEGORIES, isRunCanceledError } from '../lib/aiToolkit/errorDetection.js';
+import { analyzeError, ERROR_CATEGORIES, isRunCanceledError, isRuntimeBudgetError } from '../lib/aiToolkit/errorDetection.js';
 import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
@@ -587,6 +587,10 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   TUI run has been registered as an attachable shell session.
  * @param {(runId:string)=>void} [args.onRunSettled] — called when that concrete
  *   attempt resolves or rejects. Observational; callback errors are ignored.
+ * @param {(meta:object)=>Promise<void>} [args.beforeExecute] — enforced caller
+ *   admission immediately before provider dispatch, after concurrency/readiness
+ *   and attachment preparation. A rejection cancels this attempt without
+ *   retrying, benching the provider, or investigating a provider failure.
  * @param {string[]} [args.screenshots] — image paths for a vision/multimodal
  *   call (relative to the runner's screenshots dir, or absolute). API providers
  *   base64-encode each into `image_url` blocks. Codex and Claude Code CLI
@@ -731,10 +735,9 @@ export async function runPromptThroughProvider(rawArgs) {
     }
   }
 
-  // An explicit Stop or host shutdown is a lifecycle outcome, not a failed AI
-  // attempt. Do not enter any correction/fallback tier, mark the provider
-  // unavailable, or escalate an investigation task.
-  if (isRunCanceledError(firstError)) {
+  // Stops and caller spending ceilings carry no provider-health verdict.
+  // Neither enters correction/fallback, benching, or fault investigation.
+  if (isRunCanceledError(firstError) || isRuntimeBudgetError(firstError)) {
     throw stripFallbackContext(firstError);
   }
 
@@ -872,6 +875,14 @@ export async function runPromptThroughProvider(rawArgs) {
       }
     };
 
+    const stopOnRuntimeBudget = async (error) => {
+      if (!isRuntimeBudgetError(error)) return;
+      // A caller cap can also end a correction/fallback already in flight.
+      // Resolve suppression without investigating or starting another tier.
+      for (const entry of suppressed.values()) await resolveHandled(entry.key);
+      throw stripFallbackContext(error);
+    };
+
     // Explicitly escalate the primary failure to a Tier-4 investigation task —
     // used only on a give-up where every attempted key's incidental task was
     // suppressed, so nothing else would surface the unrecovered failure. Honors
@@ -934,6 +945,7 @@ export async function runPromptThroughProvider(rawArgs) {
               runId: undefined, // fresh run so the failed primary's record stays intact
             });
           } catch (tier1Error) {
+            await stopOnRuntimeBudget(tier1Error);
             // The corrected retry failed. If it reached the execution layer, its
             // onRunFailed queued a task keyed on the EFFECTIVE provider/model
             // (createRun may have proactively swapped) — record and suppress that
@@ -991,6 +1003,7 @@ export async function runPromptThroughProvider(rawArgs) {
               runId: undefined, // fresh run so the failed primary's record stays intact
             });
           } catch (tier2Error) {
+            await stopOnRuntimeBudget(tier2Error);
             // Same bookkeeping as Tier 1's failed corrected retry: a retry that
             // reached the execution layer queued its own task keyed on the
             // EFFECTIVE provider/model — record + suppress it so a slow Tier-3
@@ -1070,6 +1083,7 @@ export async function runPromptThroughProvider(rawArgs) {
           runId: undefined, // fresh runId so the failed primary's record stays intact
         });
       } catch (fallbackError) {
+        await stopOnRuntimeBudget(fallbackError);
         // ── Tier 4 — escalate ──: every deterministic tier failed. If the
         // fallback reached the execution layer, its OWN onRunFailed already
         // queued an investigation task (its key was never suppressed), so just
@@ -1387,6 +1401,7 @@ async function executeProviderRunOnce({
   onRunCreated,
   onRunReady,
   onRunSettled,
+  beforeExecute,
   timeout: timeoutOverride,
   absoluteTimeoutMs,
   maxTokens,
@@ -1555,6 +1570,16 @@ async function executeProviderRunOnce({
     let text = '';
     let settled = false;
     let apiTimeoutHandle = null;
+    let dispatchRefusal = null;
+    const admitDispatch = typeof beforeExecute === 'function' ? async () => {
+      try {
+        await beforeExecute({ runId, provider: effectiveProvider, model: effectiveModel });
+      } catch (error) {
+        dispatchRefusal = error instanceof Error ? error : new Error(String(error));
+        dispatchRefusal.canceled = true;
+        throw dispatchRefusal;
+      }
+    } : undefined;
 
     const safeResolve = (value) => { if (!settled) { settled = true; if (apiTimeoutHandle) clearTimeout(apiTimeoutHandle); resolve(value); } };
     const safeReject = (err) => {
@@ -1587,6 +1612,7 @@ async function executeProviderRunOnce({
     // explicit `success === false`. Per-site drift was the bug.
     const labelByType = { cli: 'CLI', api: 'API', tui: 'TUI' };
     const onComplete = (result) => {
+      if (dispatchRefusal) { safeReject(dispatchRefusal); return; }
       if (result?.error || result?.success === false) {
         const err = new Error(result?.error || `${labelByType[effectiveProvider.type] || effectiveProvider.type} execution failed`);
         if (result?.canceled === true) {
@@ -1595,6 +1621,13 @@ async function executeProviderRunOnce({
         }
         if (result?.errorAnalysis && typeof result.errorAnalysis === 'object') {
           err.errorAnalysis = result.errorAnalysis;
+        }
+        for (const key of ['timeoutBound', 'timeoutOrigin', 'runtimeBudgetMs']) {
+          if (result?.[key] !== undefined) err[key] = result[key];
+        }
+        if (isRuntimeBudgetError(result)) {
+          err.code = 'RUN_RUNTIME_BUDGET_EXHAUSTED';
+          err.runId = runId;
         }
         safeReject(err);
       } else {
@@ -1658,7 +1691,7 @@ async function executeProviderRunOnce({
     }
 
     if (effectiveProvider.type === PROVIDER_TYPES.CLI) {
-      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots, onData, onComplete, timeout: effectiveTimeout, toolFree }).catch(safeReject);
+      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots, onData, onComplete, timeout: effectiveTimeout, toolFree, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.API) {
       // API runs take model as a first-class arg — no clone needed. The
       // toolkit's executeApiRun now owns the primary wall-clock timeout (it
@@ -1693,12 +1726,12 @@ async function executeProviderRunOnce({
       // a per-call override (e.g. the importer's long stage timeout) governs the
       // ceiling instead of the runner's provider/default fallback — same
       // caller-override precedence CLI/TUI runs already get.
-      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens }).catch(safeReject);
+      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.
       import('./tuiPromptRunner.js')
-        .then(({ executeTuiRun }) => executeTuiRun({ runId, provider: providerForRun, prompt, screenshots, workspacePath: effectiveCwd, onData, onComplete, onReady: onRunReady, timeout: effectiveTimeout, label: source }))
+        .then(({ executeTuiRun }) => executeTuiRun({ runId, provider: providerForRun, prompt, screenshots, workspacePath: effectiveCwd, onData, onComplete, onReady: onRunReady, timeout: effectiveTimeout, label: source, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }))
         .catch(safeReject);
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));

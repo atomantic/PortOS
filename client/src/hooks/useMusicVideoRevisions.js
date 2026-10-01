@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
 import {
+  startMusicVideoDependencyRepair,
   startMusicVideoRevision,
+  repairMusicVideoPerformance,
   resumeMusicVideoRevision,
   cancelMusicVideoRevision,
   releaseMusicVideoRevisionSection,
@@ -85,6 +87,10 @@ export default function useMusicVideoRevisions({ project, replaceProject, sceneM
         toast.info('Every revised section has a new take — rendering the revised draft');
         return res;
       }
+      if (res.revision?.sections?.some((section) => section.state === 'review-needed')) {
+        toast.info('Repair needs review — its reserved generation has no usable take; it will not submit again');
+        return res;
+      }
       const submitted = await generateSections(res.project, res.needsGeneration || [], revisionId);
       const waiting = (res.generating || []).length;
       const parts = [
@@ -107,6 +113,10 @@ export default function useMusicVideoRevisions({ project, replaceProject, sceneM
   const revise = (excerptId, sceneIds) => startRevision(excerptId, sceneIds)
     .then((res) => (res?.revision ? resume(res.revision.id) : null));
 
+  const repairPerformance = (sceneId, input) => run(() => repairMusicVideoPerformance(projectId, sceneId, input, { silent: true })
+    .then((res) => { replaceProject(res.project); return res; }))
+    .then((res) => res?.revision ? resume(res.revision.id) : null);
+
   const cancel = (revisionId) => run(() => cancelMusicVideoRevision(projectId, revisionId, { silent: true })
     .then((res) => {
       replaceProject(res.project);
@@ -115,7 +125,12 @@ export default function useMusicVideoRevisions({ project, replaceProject, sceneM
       return res;
     }));
 
+  const repair = (basis) => run(() => startMusicVideoDependencyRepair(projectId, basis, { silent: true }).then((res) => {
+    replaceProject(res.project);
+    return res;
+  })).then((res) => res?.revision ? resume(res.revision.id) : null);
+
   // Also used by an opt-in auto-review run (#8988), which hands its revised
   // sections to the open board over the `music-video:auto-review` event.
-  return { busy, revise, resume, cancel, submitSections: generateSections };
+  return { busy, repair, repairPerformance, revise, resume, cancel, submitSections: generateSections };
 }

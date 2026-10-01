@@ -88,10 +88,10 @@ beforeEach(() => {
     PGHOST: 'inherited.example.invalid', PGPORT: '1', PGUSER: 'inherited', PGDATABASE: 'inherited',
     PORTOS_NATIVE_PGPORT: '2', PGPORT_DOCKER: '3' });
 });
-afterEach(() => {
+afterEach(async () => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
-  for (const pid of cutover?.surrogatePids() ?? []) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+  await cutover?.stopSurrogates();
   context.root = undefined;
   rmSync(root, { recursive: true, force: true });
 });
@@ -112,7 +112,14 @@ function successor() {
   journal.reserveCoordinatorWorker(operation.id, token);
 }
 
-const run = () => runDatabaseCutover(operation.id, token, fast);
+const run = async () => {
+  try {
+    return await runDatabaseCutover(operation.id, token, fast);
+  } catch (err) {
+    err.message += `\n--- cutover evidence ---\n${await evidence()}`;
+    throw err;
+  }
+};
 const savedMode = () => /^PGMODE=(\S+)/m.exec(readFileSync(join(root, '.env'), 'utf8'))?.[1];
 const serverEvents = () => stubs.events().filter(line => line.startsWith('server '));
 // Bounded, synthetic-only failure evidence, read BEFORE afterEach removes the
@@ -121,14 +128,25 @@ const serverEvents = () => stubs.events().filter(line => line.startsWith('server
 // server's liveness, and the tail of their timestamped stderr trace — enough
 // to tell a refused boot from one still waiting (or never started).
 const bounded = read => { try { return read(); } catch (err) { return 'unreadable (' + (err.code ?? 'error') + ')'; } };
-function evidence() {
+async function evidence() {
+  // A signal-0 probe cannot distinguish a booting process from one suspended
+  // before its first line. Keep only fixture-owned identities, never commands
+  // or the rest of the host's process table.
+  const processes = await snapshotProcesses().catch(() => null);
+  const surrogates = (cutover?.surrogatePids() ?? []).slice(-20).map(pid => {
+    const row = processes?.find(value => value.pid === pid);
+    return { pid, alive: alive(pid), state: processes === null ? 'unavailable' : row?.state ?? 'gone',
+      startedAt: row?.startedAt ?? null,
+      targetProof: processes === null ? 'unavailable'
+        : row ? bounded(() => journal.readTargetProof(operation.id, pid, row.startedAt) !== null) : 'process-gone' };
+  });
   const log = join(stubs.dir, 'surrogate-stderr.log');
   return [
-    `events: ${JSON.stringify(stubs.events())}`,
+    `events (last 80): ${JSON.stringify(stubs.events().slice(-80))}`,
     `fenced: ${bounded(() => journal.isFenced())}; stage: ${bounded(() => journal.read()?.stage ?? 'none')}`,
     `coordinator: ${bounded(() => JSON.stringify(journal.coordinatorStatus(operation.id)))}`,
     `authority for this operation: ${bounded(() => createDatabaseAuthority(join(root, 'data')).read()?.operationId === operation.id)}`,
-    `surrogates: ${JSON.stringify((cutover?.surrogatePids() ?? []).map(pid => ({ pid, alive: alive(pid) })))}`,
+    `surrogates: ${JSON.stringify(surrogates)}`,
     `surrogate stderr: ${existsSync(log) ? readFileSync(log, 'utf8').slice(-3_000) : ''}`,
   ].join('\n');
 }
@@ -137,7 +155,7 @@ async function waitWithEvidence(assertion) {
   try {
     await vi.waitFor(assertion, { timeout: 15_000, interval: 20 });
   } catch (err) {
-    err.message += `\n--- cutover evidence ---\n${evidence()}`;
+    err.message += `\n--- cutover evidence ---\n${await evidence()}`;
     throw err;
   }
 }
@@ -181,7 +199,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     begin();
     if (fault === 'wrong pool') cutover.overrideRestartPool(native);
     else cutover.setHealth('unhealthy');
-    await expect(run()).rejects.toThrow(/did not prove the target backend/);
+    await expect(run()).rejects.toThrow(/did not prove the target backend[\s\S]*--- cutover evidence ---[\s\S]*events \(last 80\)[\s\S]*coordinator:[\s\S]*surrogate stderr:/);
     await waitForEvent('server refused DATABASE_MAINTENANCE');
     // Mode is committed forward, but PM2 `online`/saved mode is not success.
     expect(journal.read()).toEqual({ ...operation, stage: 'verifying' });
@@ -200,6 +218,35 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     expect(stubs.invocations('pg_dump')).toHaveLength(1);
     expect(stubs.invocations('psql')).toHaveLength(1);
     expect(journal.read()).toBeNull();
+  }, 60_000);
+
+  it('diagnoses a suspended server before startup, stays fenced, then recovers the same operation', async () => {
+    begin();
+    const restart = context.restart.getMockImplementation();
+    context.restart.mockImplementation(async (...args) => {
+      const result = await restart(...args);
+      if (args[0] === 'portos-server') {
+        // Delay the actual process, not a mock handshake or a longer deadline.
+        process.kill(rows.find(row => row.name === 'portos-server').pid, 'SIGSTOP');
+      }
+      return result;
+    });
+    await expect(run()).rejects.toThrow(/did not prove the target backend[\s\S]*"state":"T[^"]*"[\s\S]*"targetProof":false/);
+    expect(journal.read().stage).toBe('verifying');
+    expect(() => journal.assertAdmission()).toThrow();
+    expect(context.restart).not.toHaveBeenCalledWith('portos-cos');
+
+    // The already-started incarnation publishes its own proof after the
+    // operator unblocks startup; recovery must neither restart nor re-import.
+    const pid = rows.find(row => row.name === 'portos-server').pid;
+    process.kill(pid, 'SIGCONT');
+    await waitForProof(pid);
+    successor();
+    expect(await run()).toMatchObject({ stage: 'released', restartVerified: true });
+    await waitForEvent(`server booted ${docker.port}`);
+    expect(context.restart.mock.calls.filter(([name]) => name === 'portos-server')).toHaveLength(1);
+    expect(stubs.invocations('pg_dump')).toHaveLength(1);
+    expect(stubs.invocations('psql')).toHaveLength(1);
   }, 60_000);
 
   it.each(['before', 'after', 'reverted'])('recovers a mode commit interrupted %s the .env write without guessing or reversing', async (point) => {

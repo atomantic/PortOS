@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers, applySheetPointerToCharacter } from './sheetPointers.js';
 import { normalizeSlugline } from './scenePrompt.js';
 import { PATHS, resolveImageRef } from './fileUtils.js';
 import { isPlainObject, isEmptyScalar } from './objects.js';
@@ -24,6 +25,8 @@ import {
   RELATIONSHIP_LINK_TYPES,
 } from './characterFramework.js';
 import { sanitizeCharacterEvolution } from './characterEvolution.js';
+
+export { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers, applySheetPointerToCharacter };
 
 // Re-export so callers (writers-room domain files) can import a single
 // canonical normalizer when they need to match places by slugline.
@@ -508,12 +511,6 @@ export function preserveLegacyObjectFields(remoteObjects, localObjects, senderUn
   );
 }
 
-// The legacy 'standard' variant lives in `character.referenceSheetImageRef`;
-// every other variant lives in `character.referenceSheets[<id>]`. Exported so
-// every reader/writer of either slot uses the same constant — the alternative
-// is a magic string repeated in ~14 places.
-export const LEGACY_SHEET_VARIANT_ID = 'standard';
-
 // Variant-id rules for `referenceSheets` map keys: short kebab-case identifier,
 // no path separators, no dot-prefix. Cap of 48 chars matches the route schema.
 // The legacy id is rejected because it must stay in the legacy field, not in
@@ -521,34 +518,6 @@ export const LEGACY_SHEET_VARIANT_ID = 'standard';
 const VARIANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 function isValidVariantId(id) {
   return typeof id === 'string' && VARIANT_ID_RE.test(id) && id !== LEGACY_SHEET_VARIANT_ID;
-}
-
-/** Read the persisted reference-sheet filename for a variant. Returns the
- *  string filename or null. The single read-side helper every consumer
- *  (client + server) should use so storage-shape changes stay local. */
-export function readSheetPointer(character, variant) {
-  if (!character) return null;
-  if (variant === LEGACY_SHEET_VARIANT_ID) return character.referenceSheetImageRef || null;
-  const sheets = character.referenceSheets;
-  if (!isPlainObject(sheets)) return null;
-  return sheets[variant] || null;
-}
-
-/** Enumerate every reference-sheet pointer a character holds — yields one
- *  `{ variant, filename }` per non-empty slot. The single iteration-side
- *  helper for prune / purge / exporter / asset-collector. */
-export function listSheetPointers(character) {
-  if (!character) return [];
-  const out = [];
-  if (character.referenceSheetImageRef) {
-    out.push({ variant: LEGACY_SHEET_VARIANT_ID, filename: character.referenceSheetImageRef });
-  }
-  if (isPlainObject(character.referenceSheets)) {
-    for (const [variant, filename] of Object.entries(character.referenceSheets)) {
-      if (filename) out.push({ variant, filename });
-    }
-  }
-  return out;
 }
 
 /** Merge `prev`'s server-stamped sheet pointers into `patchChar`, keeping
@@ -585,30 +554,6 @@ export function mergePreservedSheetPointers(prev, patchChar, resolveExists) {
   }
 
   return out;
-}
-
-/** Apply (or clear, when `filename` is null) a variant's pointer on a
- *  character, returning a NEW character object — OR the same reference when
- *  the slot already holds the target value, so callers downstream of an
- *  `updateUniverse` mutator (and React subscribers on the client mirror)
- *  can short-circuit no-op writes/renders. Writes the legacy variant to
- *  `referenceSheetImageRef`; every other variant lands in / leaves from
- *  `referenceSheets[variant]`. */
-export function applySheetPointerToCharacter(character, variant, filename) {
-  if (!character) return character;
-  if (variant === LEGACY_SHEET_VARIANT_ID) {
-    const next = filename || null;
-    if ((character.referenceSheetImageRef || null) === next) return character;
-    return { ...character, referenceSheetImageRef: next };
-  }
-  const existing = isPlainObject(character.referenceSheets) ? character.referenceSheets : {};
-  if (filename) {
-    if (existing[variant] === filename) return character;
-    return { ...character, referenceSheets: { ...existing, [variant]: filename } };
-  }
-  if (!(variant in existing)) return character;
-  const { [variant]: _dropped, ...rest } = existing;
-  return { ...character, referenceSheets: rest };
 }
 
 /**

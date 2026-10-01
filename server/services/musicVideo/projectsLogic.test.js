@@ -73,6 +73,7 @@ describe('cloneProjectRecord', () => {
       ...baseProject(),
       status: 'complete',
       renderHistoryId: 'final-1',
+      composition: { mode: 'composed', grade: { preset: 'neutral', sections: [{ sceneId: 'scene-old', preset: 'teal-night' }] } },
       audioAnalysis: {
         bpm: 120, beats: [0], downbeats: [0],
         sections: [{ label: 'S', startSec: 0, endSec: 5 }],
@@ -109,6 +110,8 @@ describe('cloneProjectRecord', () => {
       videoHistoryId: 'clip-1',
     });
     expect(clone.scenes[0].sceneId).not.toBe('scene-old');
+    expect(clone.composition.grade.sections).toEqual([{ sceneId: clone.scenes[0].sceneId, preset: 'teal-night' }]);
+    expect(source.composition.grade.sections[0].sceneId).toBe('scene-old');
     expect(source.scenes[0].sceneId).toBe('scene-old');
     // A pre-#8965 scene's selections become takes on the clone, so the new
     // version's candidate list is never missing what it already shows.
@@ -741,4 +744,23 @@ describe('composition document (render style `document`)', () => {
     expect(next.name).toBe('remote edit');
     expect(next.composition.document).toEqual(pointer);
   });
+
+  it('keeps local document pointers when a newer peer has no composition', () => {
+    const draft = { ...pointer, directory: 'music-video/mv-1/composition/doc-draft', source: { kind: 'generated', name: 'Mixed-media composition' } };
+    const local = { ...withDocument(), composition: { ...withDocument().composition, documentDraft: draft } };
+    const remote = { ...local, updatedAt: '2026-01-05T00:00:00Z', composition: null };
+    const { next } = mergeProjectRecord(local, remote);
+    expect(next.composition.document).toEqual(pointer);
+    expect(next.composition.documentDraft).toEqual(draft);
+    expect(next.composition.mode).toBeUndefined();
+  });
+});
+
+it('preserves optional project moodboard uploads through create, patch and clone', () => {
+  const styleReferences = [{ imageId: 'style.png', caption: 'silver grain' }];
+  const project = buildProjectRecord({ name: 'Example', styleReferences }, { id: 'mv-example', now: '2026-01-01' });
+  expect(project.styleReferences).toEqual(styleReferences);
+  expect(applyProjectPatch(project, { name: 'Updated' }).styleReferences).toEqual(styleReferences);
+  expect(cloneProjectRecord(project, { id: 'mv-clone', now: '2026-01-02' }).styleReferences).toEqual(styleReferences);
+  expect(applyProjectPatch(project, { styleReferences: [] }).styleReferences).toEqual([]);
 });

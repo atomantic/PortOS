@@ -1725,7 +1725,7 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
  */
 describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)', () => {
   it('the idle-review chain threads ignoreTaskId end to end', () => {
-    expect(GEN_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null \} = \{\}\)/);
+    expect(GEN_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null, isAppEligible = \(\) => true \} = \{\}\)/);
     expect(GEN_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId })');
     expect(GEN_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null \} = \{\}\)/);
     expect(GEN_SRC).toMatch(/prepareManagedAppImprovementTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
@@ -1734,7 +1734,7 @@ describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)',
   it('cos.js passes the completing task id into the dequeue that follows the refill', () => {
     expect(COS_SRC).toContain('dequeueNextTask({ ignoreTaskId: agent?.taskId })');
     expect(COS_SRC).toMatch(/async function dequeueNextTask\(\{ ignoreTaskId = null \} = \{\}\)/);
-    expect(COS_SRC).toContain('generateIdleReviewTask(state, { ignoreTaskId })');
+    expect(COS_SRC).toContain('ignoreTaskId: ctx.ignoreTaskId');
   });
 });
 
@@ -2028,7 +2028,8 @@ describe('buildClaimWorkTask reviewer pin', () => {
     const { prompt } = await buildClaimWorkTask(app, { reviewers: ['provider:example-reviewer'] });
     expect(prompt).toContain('kind: "claim-review"');
     expect(prompt).toContain('toolFree: true');
-    expect(prompt).toContain('Provider CLIs run in an isolated scratch directory with the diff inlined');
+    expect(prompt).toContain('Provider CLIs run in an isolated scratch directory with the diff inlined, under an enforced no-tool or read-only vendor profile');
+    expect(prompt).toContain('a CLI without one is unavailable before launch');
     expect(prompt).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
     expect(prompt).toContain('an optional inconclusive result remains non-blocking');
   });

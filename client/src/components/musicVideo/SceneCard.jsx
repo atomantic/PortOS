@@ -1,7 +1,12 @@
+import PlateComparison from './PlateComparison.jsx';
+import ShotActionInspector from './ShotActionInspector.jsx';
+import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
+import PerformanceEvidence from './PerformanceEvidence.jsx';
+import { planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
@@ -66,7 +71,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek,
+  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
@@ -83,8 +88,10 @@ export default function SceneCard({
     : null;
   // Source-clip length, read from the inline player's metadata and keyed to
   // the clip it was measured from so a regenerated clip is re-measured.
+  const [speakerDirty, setSpeakerDirty] = useState(false);
+  const [speakerSaving, setSpeakerSaving] = useState(false);
   const [clipMeta, setClipMeta] = useState(null);
-  const clipSec = clipMeta?.id === scene.videoHistoryId ? clipMeta.sec : null;
+  const clipSec = clipMeta && clipMeta.id === scene.videoHistoryId ? clipMeta.sec : null;
   // Pre-#8964 scenes have no `loop` key and keep the legacy loop-to-fill render.
   const loops = scene.loop !== false;
   const spanSec = scene.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
@@ -114,6 +121,9 @@ export default function SceneCard({
   const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
   const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
+  const instruction = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
+  const repairPlan = planPerformanceRepair({ scene, temporal: performanceReview?.shot,
+    excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   return (
     <details className="group min-w-0 rounded-lg border border-port-border bg-port-card">
@@ -169,12 +179,14 @@ export default function SceneCard({
             {/* Applied treatment direction (#8980) — appended to both generated prompts. */}
             {scene.direction && (
               <p className="break-words" title={scene.direction.frameClause}>
-                Direction: {scene.direction.mode}{scene.direction.focalSubject ? ` · ${scene.direction.focalSubject}` : ''}
+                Direction: {scene.direction.mode}{scene.direction.medium ? ` · planned ${MUSIC_VIDEO_MEDIUM_LABELS[scene.direction.medium] || scene.direction.medium}${scene.direction.mediumPinned ? ' (pinned)' : ''}` : ''}{scene.direction.focalSubject ? ` · ${scene.direction.focalSubject}` : ''}
                 {scene.direction.typographyRole !== 'none' ? ` · ${scene.direction.typographyRole} text, ${scene.direction.negativeSpace} region kept clear` : ' · no text'}
               </p>
             )}
           </div>
         )}
+        <ShotActionInspector contract={scene.direction?.actionContract} scene={scene} />
+        <PlateComparison scene={scene} />
         <div className="flex flex-wrap gap-2 items-center text-xs">
           {SCENE_TIME_FIELDS.map(([labelText, key]) => {
             const toValue = (v) => (v === '' ? null : Number(v));
@@ -209,6 +221,20 @@ export default function SceneCard({
             </>
           )}
         </div>
+        {performance && (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label htmlFor={fieldId('speaker')}>Speaker / singer</label>
+            <input id={fieldId('speaker')} value={scene.performanceSpeaker || ''} maxLength={120}
+              onChange={(e) => { setSpeakerDirty(true); onEditLocal(scene.sceneId, { performanceSpeaker: e.target.value }); }}
+              onBlur={(e) => {
+                setSpeakerSaving(true);
+                Promise.resolve(onSave(scene.sceneId, { performanceSpeaker: e.target.value || null }))
+                  .then((saved) => setSpeakerDirty(saved === false), () => setSpeakerDirty(true))
+                  .finally(() => setSpeakerSaving(false));
+              }}
+              className="bg-port-bg border border-port-border rounded px-2 py-1" placeholder="Intended singer" />
+          </div>
+        )}
         <div className="flex flex-wrap gap-2 items-center text-xs">
           <label htmlFor={fieldId('layer')}>Layer</label>
           <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
@@ -345,7 +371,15 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} />
         {/* Scene clip — i2v video generated from the reference frame (Phase 1) */}
         <div className="flex items-center gap-2 flex-wrap">
-          {scene.videoHistoryId && (
+          {scene.videoHistoryId && performance && (
+            <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}
+              temporal={performanceReview?.shot} excerptStartSec={performanceReview?.excerptStartSec || 0}
+              repair={repairPlan} repairBusy={repairBusy || settingsSaving || generatingVideo || takeBusy}
+              onRepair={onRepairPerformance ? () => onRepairPerformance(scene.sceneId, {
+                excerptId: performanceReview.excerptId, sourceAssetId: repairPlan.sourceAssetId, boundarySec: repairPlan.boundarySec,
+              }) : null} />
+          )}
+          {scene.videoHistoryId && !performance && (
             <div className="relative w-40 shrink-0">
               <video
                 ref={clipPlayerRef}
@@ -379,7 +413,7 @@ export default function SceneCard({
             </div>
           )}
           <button onClick={() => onGenerateVideo(scene)}
-            disabled={settingsSaving || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason || !!performanceBlocked}
+            disabled={settingsSaving || (performance && (speakerDirty || speakerSaving)) || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason || !!performanceBlocked}
             className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
             title={videoBlockedReason || performanceBlocked
               || (!scene.referenceImageId ? 'Generate a reference frame first'

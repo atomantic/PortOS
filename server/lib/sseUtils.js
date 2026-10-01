@@ -118,8 +118,8 @@ export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, ex
   }, delay);
 };
 
-// Shared "this job died" finalizer for the six media-generation backends
-// (imageGen/{agy,codex,grok}.js, videoGen/{grok,fal,reactor}.js). Each used to
+// Shared "this job died" finalizer for the media-generation backends
+// (imageGen/{agy,codex,grok,fal}.js, videoGen/{grok,fal,reactor}.js). Each used to
 // carry a private ~10-line `finalizeError` doing the same eight things —
 // idempotency guard, clear the active-slot map, stamp `job.status = 'error'`,
 // drop from `activeJobs`, log, broadcast an SSE error frame, emit `failed`,

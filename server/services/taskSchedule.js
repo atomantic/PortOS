@@ -20,6 +20,7 @@
  */
 
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
+import { TASK_READINESS_REASON } from '../lib/taskReadinessReasons.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
 import { DAY, safeDate } from '../lib/fileUtils.js';
@@ -854,7 +855,7 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
 
 async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain, schedule: injected = null }) {
   if (appId && requiresInstallWideTarget(taskType)) {
-    return { shouldRun: false, reason: 'requires-install-wide-target' };
+    return { shouldRun: false, reason: TASK_READINESS_REASON.REQUIRES_INSTALL_WIDE_TARGET };
   }
   // `loadSchedule` is an uncached disk read plus a merge over every shipped
   // task default, and a caller building ONE status payload asks this question
@@ -865,14 +866,14 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
   const interval = schedule.tasks[taskType];
 
   if (!interval || !interval.enabled) {
-    return { shouldRun: false, reason: 'disabled' };
+    return { shouldRun: false, reason: TASK_READINESS_REASON.DISABLED };
   }
   if (!(await featureEnabled(interval))) {
-    return { shouldRun: false, reason: 'feature-disabled', feature: interval.feature };
+    return { shouldRun: false, reason: TASK_READINESS_REASON.FEATURE_DISABLED, feature: interval.feature };
   }
 
   // The maintainer role owns recurring cadence; this card is its manual door.
-  if (taskType === 'development-watchdog') return { shouldRun: false, reason: 'on-demand-only' };
+  if (taskType === 'development-watchdog') return { shouldRun: false, reason: TASK_READINESS_REASON.ON_DEMAND_ONLY };
 
   // Fetch timezone once for reuse across weekday and cron checks
   const timezone = await getUserTimezone();
@@ -881,14 +882,14 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
   if (interval.weekdaysOnly) {
     const { dayOfWeek } = getLocalParts(new Date(), timezone);
     if (dayOfWeek === 0 || dayOfWeek === 6) {
-      return { shouldRun: false, reason: 'weekday-only' };
+      return { shouldRun: false, reason: TASK_READINESS_REASON.WEEKDAY_ONLY };
     }
   }
 
   if (appId) {
     const enabledForApp = await isTaskTypeEnabledForApp(appId, taskType);
     if (!enabledForApp) {
-      return { shouldRun: false, reason: 'disabled-for-app' };
+      return { shouldRun: false, reason: TASK_READINESS_REASON.DISABLED_FOR_APP };
     }
   }
 
@@ -926,7 +927,7 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
   if (appExecution.failureParkedAt) {
     return {
       shouldRun: false,
-      reason: 'failure-parked',
+      reason: TASK_READINESS_REASON.FAILURE_PARKED,
       failureParkedAt: appExecution.failureParkedAt,
       failureParkReason: appExecution.failureParkReason || null,
       consecutiveFailures: Number(appExecution.consecutiveFailures) || 0
@@ -948,13 +949,13 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
     if (parkUntil && now < parkUntil) {
       return {
         shouldRun: false,
-        reason: 'perpetual-parked',
+        reason: TASK_READINESS_REASON.PERPETUAL_PARKED,
         nextRunAt: new Date(parkUntil).toISOString(),
         parkReason: appExecution.parkReason || null,
         parkActionableCount: appExecution.parkActionableCount ?? null
       };
     }
-    return parkUntil ? { shouldRun: true, reason: 'perpetual-recheck' } : null;
+    return parkUntil ? { shouldRun: true, reason: TASK_READINESS_REASON.PERPETUAL_RECHECK } : null;
   };
 
   switch (effectiveType) {
@@ -964,8 +965,8 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
       // Missing autoStart preserves existing automatic drains across upgrades.
       // Manual drains only refill after their own successful completion.
       result = isPerpetual && (interval.autoStart !== false || continuingPerpetualDrain)
-        ? (perpetualParkResult() || { shouldRun: true, reason: 'perpetual-drain' })
-        : { shouldRun: false, reason: 'on-demand-only' };
+        ? (perpetualParkResult() || { shouldRun: true, reason: TASK_READINESS_REASON.PERPETUAL_DRAIN })
+        : { shouldRun: false, reason: TASK_READINESS_REASON.ON_DEMAND_ONLY };
       break;
 
     case INTERVAL_TYPES.CRON: {
@@ -976,7 +977,7 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
         const parked = perpetualParkResult();
         if (parked) { result = parked; break; }
         if (continuingPerpetualDrain) {
-          result = { shouldRun: true, reason: 'perpetual-drain' };
+          result = { shouldRun: true, reason: TASK_READINESS_REASON.PERPETUAL_DRAIN };
           break;
         }
         // Unparked: the cron evaluation below decides whether to INITIATE a
@@ -986,7 +987,7 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
       // Cron expression: per-app override (stored as the interval string) or global config
       const cronExpr = effectiveCron;
       if (!isCronExpression(cronExpr)) {
-        result = { shouldRun: false, reason: 'invalid-cron' };
+        result = { shouldRun: false, reason: TASK_READINESS_REASON.INVALID_CRON, cronExpression: cronExpr };
         break;
       }
 
@@ -998,13 +999,13 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
       const fromDate = new Date(Math.max(lastRun || 0, minuteStart - 1));
       const nextRun = parseCronToNextRun(cronExpr, fromDate, timezone);
       if (!nextRun) {
-        result = { shouldRun: false, reason: 'invalid-cron', cronExpression: cronExpr };
+        result = { shouldRun: false, reason: TASK_READINESS_REASON.INVALID_CRON, cronExpression: cronExpr };
         break;
       }
       if (now >= nextRun.getTime()) {
-        result = { shouldRun: true, reason: 'cron-due', cronExpression: cronExpr, nextRunAt: nextRun.toISOString() };
+        result = { shouldRun: true, reason: TASK_READINESS_REASON.CRON_DUE, cronExpression: cronExpr, nextRunAt: nextRun.toISOString() };
       } else {
-        result = { shouldRun: false, reason: 'cron-cooldown', cronExpression: cronExpr,
+        result = { shouldRun: false, reason: TASK_READINESS_REASON.CRON_COOLDOWN, cronExpression: cronExpr,
           nextRunAt: nextRun.toISOString() };
       }
       break;
@@ -1012,7 +1013,7 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
 
     default:
       // Unreachable once normalized — an unreadable cadence must never auto-run.
-      result = { shouldRun: false, reason: 'on-demand-only' };
+      result = { shouldRun: false, reason: TASK_READINESS_REASON.ON_DEMAND_ONLY };
   }
 
   // Escalating failure backoff (#2616): a type with recent consecutive failures
@@ -1029,7 +1030,7 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
       if (sinceFailure < backoffMs) {
         result = {
           shouldRun: false,
-          reason: 'failure-cooldown',
+          reason: TASK_READINESS_REASON.FAILURE_COOLDOWN,
           consecutiveFailures,
           failureBackoffMs: backoffMs,
           nextRunIn: backoffMs - sinceFailure,
@@ -1045,7 +1046,7 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
   if (result.shouldRun && interval.runAfter?.length > 0) {
     const depCheck = await checkRunAfterDeps(schedule, taskType, appId, featureEnabled);
     if (!depCheck.satisfied) {
-      return { shouldRun: false, reason: 'waiting-on-dependencies', pendingDeps: depCheck.pending };
+      return { shouldRun: false, reason: TASK_READINESS_REASON.WAITING_ON_DEPENDENCIES, pendingDeps: depCheck.pending };
     }
   }
 

@@ -182,6 +182,47 @@ export const cancelMusicVideoRender = (jobId, options = {}) =>
 export const renderMusicVideoExcerpt = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/excerpt`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// #9280: the song windows most likely to work as a vertical social cut —
+// { suggestions: [{ startSec, endSec, score, label, reasons }] }.
+export const getMusicVideoSocialCuts = (id, { count, minSec, maxSec } = {}, options = {}) => {
+  const params = new URLSearchParams();
+  if (count != null) params.set('count', String(count));
+  if (minSec != null) params.set('minSec', String(minSec));
+  if (maxSec != null) params.set('maxSec', String(maxSec));
+  const qs = params.toString();
+  return request(`/music-video/${encodeURIComponent(id)}/social-cuts${qs ? `?${qs}` : ''}`, options);
+};
+// ---- Publishing kit (#9281) ----
+// Build: platform encodes, thumbnails, captions and chapters from the final
+// render → { jobId } (progress over its own SSE URL). Copy: one provider draft,
+// then per-field edits; both resolve to { project }.
+export const buildMusicVideoPublishKit = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/build`, { method: 'POST', ...options });
+export const musicVideoPublishKitEventsUrl = (jobId) => `/api/music-video/publish-kit/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoPublishKit = (jobId, options = {}) =>
+  request(`/music-video/publish-kit/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+export const draftMusicVideoPublishCopy = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const updateMusicVideoPublishCopy = (id, patch, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'PATCH', body: JSON.stringify(patch || {}), ...options });
+export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/thumbnail`, { method: 'PUT', body: JSON.stringify({ filename }), ...options });
+// ---- Posting (#9282) ----
+// Prepare fills the platform's post in the PortOS Browser → { draftId, target,
+// summary, screenshot }; submit posts that live draft → { project, post }.
+export const prepareMusicVideoPublishDraft = (id, target, options = {}, reqOptions = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/${encodeURIComponent(target)}/prepare`, { method: 'POST', body: JSON.stringify(options || {}), ...reqOptions });
+export const submitMusicVideoPublishDraft = (id, draftId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/drafts/${encodeURIComponent(draftId)}/submit`, { method: 'POST', ...options });
+export const discardMusicVideoPublishDraft = (id, draftId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE', ...options });
+// Where the director posts (#9287): { platforms, history } and platform toggles;
+// a post's link, reception and notes → { project, post }.
+export const getMusicVideoPublishPlatforms = (options = {}) => request('/music-video/publish/platforms', options);
+export const updateMusicVideoPublishPlatforms = (patch, options = {}) =>
+  request('/music-video/publish/platforms', { method: 'PUT', body: JSON.stringify(patch || {}), ...options });
+export const recordMusicVideoPublishPost = (id, target, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/posts/${encodeURIComponent(target)}`, { method: 'PUT', body: JSON.stringify(body || {}), ...options });
 export const musicVideoExcerptRenderEventsUrl = (jobId) =>
   `/api/music-video/excerpt/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoExcerptRender = (jobId, options = {}) =>
@@ -335,7 +376,18 @@ export const startMusicVideoCompositionTemplate = (id, template = 'layered', opt
   request(`${compositionDocumentPath(id)}/template`, { method: 'POST', body: JSON.stringify({ template }), ...options });
 export const getMusicVideoCompositionExport = (id, options = {}) =>
   request(`${compositionDocumentPath(id)}/export`, { responseType: 'arraybuffer', ...options });
-export const getMusicVideoCompositionPreview = (id, options = {}) => request(`${compositionDocumentPath(id)}/preview`, options);
+export const getMusicVideoCompositionPreview = (id, { draft = false, ...options } = {}) => request(`${compositionDocumentPath(id)}/preview${draft ? '?draft=1' : ''}`, options);
+export const generateMusicVideoMixedMediaDocument = (id, body, options = {}) =>
+  request(`${compositionDocumentPath(id)}/generate`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const getMusicVideoMixedMediaCandidate = (id, options = {}) => request(`${compositionDocumentPath(id)}/candidate`, options);
+export const reviseMusicVideoMixedMediaEvents = (id, body, options = {}) =>
+  request(`${compositionDocumentPath(id)}/events/revise`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const regenerateMusicVideoMixedMediaSection = (id, sectionId, body, options = {}) =>
+  request(`${compositionDocumentPath(id)}/sections/${encodeURIComponent(sectionId)}/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const acceptMusicVideoMixedMediaDocument = (id, directory, options = {}) =>
+  request(`${compositionDocumentPath(id)}/accept`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
+export const discardMusicVideoMixedMediaDocument = (id, directory, options = {}) =>
+  request(`${compositionDocumentPath(id)}/candidate`, { method: 'DELETE', body: JSON.stringify({ directory }), ...options });
 export const detachMusicVideoCompositionDocument = (id, options = {}) =>
   request(compositionDocumentPath(id), { method: 'DELETE', ...options });
 // One preview asset (a scene take under /data, or a document file) as a Blob the
@@ -345,3 +397,21 @@ export async function fetchMusicVideoPreviewAsset(url) {
   if (!response.ok) throw new Error(`Could not load preview media (${response.status})`);
   return response.blob();
 }
+
+
+export const getMusicVideoDependencyImpact = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dependency-impact`, options);
+export const startMusicVideoDependencyRepair = (id, basis, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/dependency-repairs`, { method: 'POST', body: JSON.stringify({ basis }), ...options });
+
+export const repairMusicVideoPerformance = (id, sceneId, input, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/performance-repair`, {
+    method: 'POST', body: JSON.stringify(input), ...options,
+  });
+
+export const previewMusicVideoAudioTiming = (id, data, options = {}) => request(`/music-video/${encodeURIComponent(id)}/audio-timing/preview`, {
+  method: 'POST', body: JSON.stringify(data), ...options,
+});
+export const applyMusicVideoAudioTiming = (id, data, options = {}) => request(`/music-video/${encodeURIComponent(id)}/audio-timing/apply`, {
+  method: 'POST', body: JSON.stringify(data), ...options,
+});

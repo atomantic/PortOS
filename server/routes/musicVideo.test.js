@@ -732,3 +732,16 @@ describe('musicVideo routes', () => {
     });
   });
 });
+
+it('validates a project moodboard as up to eight bounded gallery images', async () => {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/music-video', musicVideoRoutes);
+  const styleReferences = Array.from({ length: 8 }, (_, i) => ({ imageId: `style-${i}.png`, caption: 'silver grain' }));
+  const saved = await request(app).patch('/api/music-video/mv-1').send({ styleReferences });
+  expect(saved.status).toBe(200);
+  expect(saved.body.styleReferences).toEqual(styleReferences);
+  for (const refs of [[...styleReferences, styleReferences[0]], [{ imageId: '../escape.png' }], [{ imageId: 'style.png', caption: 'a'.repeat(501) }]]) {
+    expect((await request(app).patch('/api/music-video/mv-1').send({ styleReferences: refs })).status).toBe(400);
+  }
+});

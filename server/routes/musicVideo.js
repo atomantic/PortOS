@@ -14,6 +14,8 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
+  musicVideoAudioTimingPreviewSchema,
+  musicVideoAudioTimingApplySchema,
   musicVideoProjectCreateSchema,
   musicVideoProjectCloneSchema,
   musicVideoProjectUpdateSchema,
@@ -35,10 +37,20 @@ import {
   musicVideoTreatmentApplySchema,
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
+  musicVideoSocialCutsQuerySchema,
+  musicVideoPublishCopyPatchSchema,
+  musicVideoPublishCopyDraftSchema,
+  musicVideoPublishThumbnailSchema,
+  musicVideoPublishTargetSchema,
+  musicVideoPublishPrepareSchema,
+  musicVideoPublishPlatformsPatchSchema,
+  musicVideoPublishPostSchema,
   musicVideoCodeGenerateSchema,
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
+  musicVideoDependencyRepairSchema,
   musicVideoRevisionStartSchema,
+  musicVideoPerformanceRepairSchema,
   musicVideoRevisionReleaseSchema,
   musicVideoAutoReviewStartSchema,
   musicVideoAutoReviewResumeSchema,
@@ -54,6 +66,9 @@ import {
   musicVideoDocumentDirectoryImportSchema,
   musicVideoDocumentFileQuerySchema,
   musicVideoDocumentTemplateSchema,
+  musicVideoDocumentDraftQuerySchema,
+  musicVideoDocumentCandidateSchema,
+  musicVideoMixedMediaRegenerateSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -96,7 +111,13 @@ import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
+import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
+import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
+import { preparePublishDraft, submitPublishDraft, discardPublishDraft, recordPublishPost } from '../services/musicVideo/publish/index.js';
+import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import {
+  getDependencyImpact,
+  startDependencyRepair,
   startRevision, resumeRevision, cancelRevision, releaseRevisionSection,
 } from '../services/musicVideo/revisionService.js';
 import {
@@ -109,6 +130,7 @@ import { planProject } from '../services/musicVideo/planner.js';
 import {
   DOCUMENT_ZIP_MAX_BYTES,
   detachDocument,
+  discardGeneratedDocument,
   documentMimeType,
   exportDocumentZip,
   importDocumentDirectory,
@@ -118,6 +140,7 @@ import {
   resolveDocumentFile,
 } from '../services/musicVideo/compositionDocument.js';
 import { buildDocumentPreview } from '../services/musicVideo/documentPreview.js';
+import { acceptMixedMediaDocument, generateMixedMediaDocument, readMixedMediaCandidate, regenerateMixedMediaSection, reviseMixedMediaEvents } from '../services/musicVideo/documentGeneration.js';
 import { isZipUpload } from '../lib/zipStream.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
@@ -197,6 +220,18 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(projectUpdateSchema, req.body);
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
+}));
+
+// Preview is read-only; Apply rechecks audio and the serialized project basis.
+router.post('/:id/audio-timing/preview', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoAudioTimingPreviewSchema, req.body);
+  const { previewAudioTiming } = await import('../services/musicVideo/audioTiming.js');
+  res.json(await previewAudioTiming(req.params.id, input));
+}));
+router.post('/:id/audio-timing/apply', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoAudioTimingApplySchema, req.body);
+  const { applyAudioTiming } = await import('../services/musicVideo/audioTiming.js');
+  res.json(await applyAudioTiming(req.params.id, input));
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
@@ -534,6 +569,35 @@ router.post('/:id/composition/document/template', asyncHandler(async (req, res) 
   res.status(201).json(await importDocumentTemplate(req.params.id, template));
 }));
 
+router.post('/:id/composition/document/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
+  res.status(201).json(await generateMixedMediaDocument(req.params.id, body));
+}));
+
+router.get('/:id/composition/document/candidate', asyncHandler(async (req, res) => {
+  res.json(await readMixedMediaCandidate(req.params.id));
+}));
+
+router.post('/:id/composition/document/events/revise', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoMixedMediaRegenerateSchema, req.body || {});
+  res.status(201).json(await reviseMixedMediaEvents(req.params.id, body));
+}));
+
+router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoMixedMediaRegenerateSchema, req.body || {});
+  res.status(201).json(await regenerateMixedMediaSection(req.params.id, req.params.sectionId, body));
+}));
+
+router.post('/:id/composition/document/accept', asyncHandler(async (req, res) => {
+  const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
+  res.json(await acceptMixedMediaDocument(req.params.id, directory));
+}));
+
+router.delete('/:id/composition/document/candidate', asyncHandler(async (req, res) => {
+  const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
+  res.json(await discardGeneratedDocument(req.params.id, directory));
+}));
+
 router.get('/:id/composition/document/export', asyncHandler(async (req, res) => {
   const { zip, filename } = await exportDocumentZip(await requireProject(req.params.id));
   res.set('Content-Type', 'application/zip');
@@ -542,15 +606,22 @@ router.get('/:id/composition/document/export', asyncHandler(async (req, res) => 
 }));
 
 router.get('/:id/composition/document/preview', asyncHandler(async (req, res) => {
-  res.json(await buildDocumentPreview(await requireProject(req.params.id)));
+  const { draft } = validateRequest(musicVideoDocumentDraftQuerySchema, req.query || {});
+  const project = await requireProject(req.params.id);
+  const pointer = draft ? project.composition?.documentDraft : project.composition?.document;
+  if (draft && !pointer) throw new ServerError('No composition candidate to preview', { status: 404, code: 'NOT_FOUND' });
+  res.json(await buildDocumentPreview(draft ? { ...project, composition: { ...project.composition, document: pointer } } : project, { draft: Boolean(draft) }));
 }));
 
 // One document file, for the preview's asset bridge (fetched by the PortOS
 // page, never loaded by the sandboxed preview itself). Served inert: a
 // sandbox CSP, no sniffing, same-origin only.
 router.get('/:id/composition/document/file', asyncHandler(async (req, res) => {
-  const { path } = validateRequest(musicVideoDocumentFileQuerySchema, req.query || {});
-  const abs = await resolveDocumentFile(await requireProject(req.params.id), path);
+  const { path, draft } = validateRequest(musicVideoDocumentFileQuerySchema, req.query || {});
+  const project = await requireProject(req.params.id);
+  const pointer = draft ? project.composition?.documentDraft : project.composition?.document;
+  if (draft && !pointer) throw new ServerError('No composition candidate to preview', { status: 404, code: 'NOT_FOUND' });
+  const abs = await resolveDocumentFile(draft ? { ...project, composition: { ...project.composition, document: pointer } } : project, path);
   res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
@@ -571,8 +642,84 @@ router.delete('/:id/composition/document', asyncHandler(async (req, res) => {
 // full render above) on its OWN job map, so an excerpt draft and a full render
 // can run at once without contending for the same mutex.
 router.post('/:id/excerpt', asyncHandler(async (req, res) => {
-  const { startSec, endSec } = validateRequest(musicVideoExcerptRequestSchema, req.body);
-  res.json(await startExcerptRender(req.params.id, { startSec, endSec }));
+  const { startSec, endSec, aspect, fade } = validateRequest(musicVideoExcerptRequestSchema, req.body);
+  res.json(await startExcerptRender(req.params.id, { startSec, endSec, aspect, fade }));
+}));
+
+// --- Publishing kit (#9281) ---
+// Platform encodes, thumbnails, captions and chapters from the final render
+// (an SSE job), plus per-platform copy: one user-triggered draft, then edits.
+router.post('/:id/publish-kit/build', asyncHandler(async (req, res) => {
+  res.json(await startPublishKitBuild(req.params.id));
+}));
+
+router.get('/publish-kit/:jobId/events', (req, res) => {
+  const ok = attachPublishKitSseClient(req.params.jobId, res);
+  if (!ok) throw new ServerError('Publishing kit job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+
+router.post('/publish-kit/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelPublishKitBuild(req.params.jobId) });
+});
+
+router.post('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoPublishCopyDraftSchema, req.body || {});
+  const { project } = await draftPublishKitCopy(req.params.id, input);
+  res.json({ project });
+}));
+
+router.patch('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
+  const patch = validateRequest(musicVideoPublishCopyPatchSchema, req.body || {});
+  const { project } = await updatePublishKitCopy(req.params.id, patch);
+  res.json({ project });
+}));
+
+router.put('/:id/publish-kit/thumbnail', asyncHandler(async (req, res) => {
+  const { filename } = validateRequest(musicVideoPublishThumbnailSchema, req.body || {});
+  const { project } = await selectPublishKitThumbnail(req.params.id, filename);
+  res.json({ project });
+}));
+
+// --- Posting (#9282) ---
+// Fill a platform's post in the PortOS Browser and return a screenshot; post
+// only on a second, explicit request naming that live draft.
+// #9287: where the director posts (opt-in, optional account per platform),
+// with every platform's post history and ratings across projects.
+router.get('/publish/platforms', asyncHandler(async (req, res) => {
+  const [platforms, history] = await Promise.all([getPublishPlatforms(), publishHistory()]);
+  res.json({ platforms, history });
+}));
+
+router.put('/publish/platforms', asyncHandler(async (req, res) => {
+  const patch = validateRequest(musicVideoPublishPlatformsPatchSchema, req.body || {});
+  res.json({ platforms: await updatePublishPlatforms(patch) });
+}));
+
+// Record a post made by hand, or rate one: its link, reception and notes.
+router.put('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
+  const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
+  const input = validateRequest(musicVideoPublishPostSchema, req.body || {});
+  res.json(await recordPublishPost(req.params.id, target, input));
+}));
+
+router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {
+  const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
+  const options = validateRequest(musicVideoPublishPrepareSchema, req.body || {});
+  res.json(await preparePublishDraft(req.params.id, target, options));
+}));
+
+router.post('/:id/publish/drafts/:draftId/submit', asyncHandler(async (req, res) => {
+  res.json(await submitPublishDraft(req.params.id, req.params.draftId));
+}));
+
+router.delete('/:id/publish/drafts/:draftId', asyncHandler(async (req, res) => {
+  res.json({ ok: await discardPublishDraft(req.params.id, req.params.draftId) });
+}));
+
+// #9280: the song windows most likely to work as a vertical social cut.
+router.get('/:id/social-cuts', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoSocialCutsQuerySchema, req.query);
+  res.json({ suggestions: suggestSocialCuts(await requireProject(req.params.id), options) });
 }));
 
 router.get('/excerpt/:jobId/events', (req, res) => {
@@ -604,6 +751,12 @@ router.delete('/:id/excerpt/:excerptId/notes/:noteId', asyncHandler(async (req, 
   res.json(await deleteReviewNote(req.params.id, req.params.excerptId, req.params.noteId));
 }));
 
+router.post('/:id/scenes/:sceneId/performance-repair', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoPerformanceRepairSchema, req.body || {});
+  const { startPerformanceRepair } = await import('../services/musicVideo/performanceRepair.js');
+  res.status(201).json(await startPerformanceRepair(req.params.id, req.params.sceneId, input));
+}));
+
 // --- Selective section revision (#8987) ---
 // Reject the flagged sections of a reviewed draft (their selected takes clear)
 // while every other section keeps its selection. Resume continues from the
@@ -611,6 +764,15 @@ router.delete('/:id/excerpt/:excerptId/notes/:noteId', asyncHandler(async (req, 
 // `needsGeneration` for the board to generate; once all hold one, the draft
 // window re-renders. A section holding a take is never asked to generate again,
 // so a render retry never re-submits paid generation.
+router.get('/:id/dependency-impact', asyncHandler(async (req, res) => {
+  res.json(await getDependencyImpact(req.params.id));
+}));
+
+router.post('/:id/dependency-repairs', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoDependencyRepairSchema, req.body || {});
+  res.status(201).json(await startDependencyRepair(req.params.id, input));
+}));
+
 router.post('/:id/excerpt/:excerptId/revisions', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoRevisionStartSchema, req.body || {});
   res.status(201).json(await startRevision(req.params.id, req.params.excerptId, input));
@@ -838,12 +1000,15 @@ async function takeAssetExists(kind, assetId) {
 // Add one candidate take to a scene: the synchronous image lane's inline
 // render, or an asset the director imports from the gallery.
 router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
-  const { kind, assetId, source = 'imported', provider, originalName, use } = validateRequest(musicVideoTakeInputSchema, req.body);
+  const { kind, assetId, source = 'imported', provider, originalName, use, sourceImageId, inputAssets } = validateRequest(musicVideoTakeInputSchema, req.body);
   if (!(await takeAssetExists(kind, assetId))) {
     throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
+  for (const imageId of [sourceImageId, ...(inputAssets || []).map((input) => input.assetId)].filter(Boolean)) {
+    if (!(await takeAssetExists('image', imageId))) throw new ServerError('Dependency image not found', { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+  }
   const { scene, appended } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
-    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use,
+    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets,
   }]);
   res.status(201).json({ scene, take: appended[0] });
 }));

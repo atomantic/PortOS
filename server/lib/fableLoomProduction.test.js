@@ -262,6 +262,41 @@ describe('fableLoomProduction', () => {
     expect(missingModelRevision.errors.some((error) => error.includes('model revision mismatch'))).toBe(true);
   });
 
+  it('reports checksum defects consistently for both recorded file envelopes', () => {
+    const envelopes = [
+      {
+        label: 'adapter',
+        provenance: (file) => ({
+          version: 1,
+          compilerVersion: 'visual-v1',
+          status: 'locked',
+          capability: { kind: 'image', backend: 'cloud', modelId: 'model-v1' },
+          bindings: {}, assets: [], adapters: [file], omitted: [], warnings: [],
+        }),
+      },
+      {
+        label: 'LoRA',
+        provenance: (file) => ({ version: 1, characters: [{ characterId: 'char-1', lora: file }] }),
+      },
+    ];
+    const defectCases = [
+      { recorded: { filename: 'adapter.safetensors' }, installed: [], message: 'has no checksum to verify exact inputs' },
+      { recorded: { filename: 'adapter.safetensors', sha256: 'expected' }, installed: [], message: 'is not installed locally' },
+      { recorded: { filename: 'adapter.safetensors', sha256: 'expected' }, installed: [{ filename: 'adapter.safetensors' }], message: 'has no checksum to verify exact inputs' },
+      { recorded: { filename: 'adapter.safetensors', sha256: 'expected' }, installed: [{ filename: 'adapter.safetensors', sha256: 'found' }], message: 'checksum mismatch (expected expected, found found)' },
+    ];
+
+    for (const envelope of envelopes) {
+      for (const defect of defectCases) {
+        const result = verifyExactInputProvenance(envelope.provenance(defect.recorded), {
+          localLoras: defect.installed,
+        });
+        expect(result.errors.some((error) => error.includes(defect.message)),
+          `${envelope.label}: ${defect.message}`).toBe(true);
+      }
+    }
+  });
+
   it('refuses exact visual reproduction when local inputs are empty, missing, or revised', () => {
     const visualProvenance = {
       version: 1,

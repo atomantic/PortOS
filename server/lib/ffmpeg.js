@@ -425,6 +425,15 @@ export const H264_ENCODE_ARGS = Object.freeze([
 ]);
 export const AAC_ENCODE_ARGS = Object.freeze(['-c:a', 'aac', '-b:a', '192k']);
 
+// A clip cut from mid-song (a social cut) starts and stops on a hard edge; a
+// short fade in and a longer fade out keep it from clicking. Returned as an
+// `-af` chain fragment (leading comma) so callers append it to their trim.
+export const edgeFadeFilter = (durationSec, { inSec = 0.08, outSec = 0.6 } = {}) => {
+  const out = Math.min(outSec, Math.max(0, durationSec / 2));
+  const fadeIn = Math.min(inSec, Math.max(0, durationSec / 2));
+  return `,afade=t=in:st=0:d=${fadeIn},afade=t=out:st=${Math.max(0, durationSec - out).toFixed(3)}:d=${out}`;
+};
+
 // BT.709 color tagging for every re-encode this module writes.
 //
 // Untagged H.264 makes each player guess a color space, and the common guess

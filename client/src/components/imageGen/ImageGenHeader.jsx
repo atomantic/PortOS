@@ -12,6 +12,7 @@ const CONNECTED_MODE_LABELS = {
   [IMAGE_GEN_MODE.CODEX]: 'codex CLI',
   [IMAGE_GEN_MODE.GROK]: 'grok CLI',
   [IMAGE_GEN_MODE.AGY]: 'agy CLI',
+  [IMAGE_GEN_MODE.FAL]: 'fal.ai',
 };
 
 export default function ImageGenHeader({ status, backends, remix, actions }) {

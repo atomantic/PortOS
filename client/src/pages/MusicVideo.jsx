@@ -29,6 +29,8 @@ import useMusicVideoDevArtifacts from '../hooks/useMusicVideoDevArtifacts.js';
 import useMusicVideoVocalSeparation from '../hooks/useMusicVideoVocalSeparation.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
+import useMusicVideoPublishKit from '../hooks/useMusicVideoPublishKit.js';
+import useMusicVideoPublishing from '../hooks/useMusicVideoPublishing.js';
 import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
 import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
 import useMusicVideoProduction from '../hooks/useMusicVideoProduction.js';
@@ -55,6 +57,7 @@ import BoardStage from '../components/musicVideo/stages/BoardStage.jsx';
 import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
 import ComposeStage from '../components/musicVideo/stages/ComposeStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
+import PublishStage from '../components/musicVideo/stages/PublishStage.jsx';
 import { compositionDraft } from '../components/musicVideo/compositionDraft.js';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
 import DevArtifactDrawer from '../components/musicVideo/DevArtifactDrawer.jsx';
@@ -83,7 +86,7 @@ function autopilotBlocker(project) {
 
 // The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
 const STAGE_VIEWS = {
-  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage,
+  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage, publish: PublishStage,
 };
 
 const STATUS_COLORS = {
@@ -116,6 +119,9 @@ export default function MusicVideo() {
   const [analyzing, setAnalyzing] = useState(false);
   const [arranging, setArranging] = useState(false);
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
+  const [styleReferencesPending, setStyleReferencesPending] = useState(false);
+  const [compositionSavePending, setCompositionSavePending] = useState(0);
+  useEffect(() => { setStyleReferencesPending(false); }, [selectedId]);
   const [planning, setPlanning] = useState(false);
   const [cloning, setCloning] = useState(false);
   const [importingLyrics, setImportingLyrics] = useState(false);
@@ -179,6 +185,10 @@ export default function MusicVideo() {
   // separate from the full-render job/mutex above so a director can preview a
   // change without waiting on (or blocking) a full render.
   const excerpts = useMusicVideoExcerpts({ project: selected, replaceProject });
+  // Publishing kit (#9281): release encodes, thumbnails, captions, chapters and copy.
+  const publishKit = useMusicVideoPublishKit({ project: selected, replaceProject });
+  // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.
+  const publishing = useMusicVideoPublishing({ project: selected, replaceProject });
   const videoSettings = useMusicVideoModelSettings({ project: selected, onProjectPatch: patchProject });
   const tempo = useMusicVideoManualTempo({ project: selected, onUpdated: replaceProject });
   const sceneMedia = useMusicVideoSceneMedia({
@@ -355,7 +365,7 @@ export default function MusicVideo() {
   // separate the vocal, align the words, then plan every shot against the
   // brief (the planner reads automation.guidance). Each step only runs when
   // its result is missing; lyric/vocal/alignment failures still plan.
-  const autopilotBlockedReason = creativeSetupPending
+  const autopilotBlockedReason = (creativeSetupPending || styleReferencesPending)
     ? 'Save or cancel the creative setup before starting autopilot.'
     : autopilotBlocker(selected);
   const kickoff = useMusicVideoKickoff({
@@ -489,8 +499,9 @@ export default function MusicVideo() {
     replaceProject({ ...selected, scenes: selected.scenes.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) });
   };
   const saveScene = (sceneId, patch) => {
-    updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
-      .catch((err) => toast.error(err?.message || 'Failed to save scene'));
+    return updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to save scene'); return false; });
   };
 
   // Project-level concept/style (issue #3168) — optimistic-local + silent-PATCH on
@@ -510,11 +521,17 @@ export default function MusicVideo() {
   // older snapshot of the list overwrite a newer one.
   const timedTextSaveChain = useRef(Promise.resolve());
   const editProjectLocal = (patch) => patchProject(selected.id, patch);
-  const saveProjectFields = (patch) => {
+  const saveProjectFields = (patch, { applyComposition = false } = {}) => {
     const projectId = selected.id;
+    setCompositionSavePending((count) => count + 1);
     timedTextSaveChain.current = timedTextSaveChain.current
       .then(() => updateMusicVideoProject(projectId, patch, { silent: true }))
-      .catch((err) => toast.error(err?.message || 'Failed to save changes'));
+      .then((saved) => {
+        if (applyComposition) patchProject(projectId, { composition: saved.composition });
+      })
+      .catch((err) => toast.error(err?.message || 'Failed to save changes'))
+      .finally(() => setCompositionSavePending((count) => count - 1));
+    return timedTextSaveChain.current;
   };
   const handleImportLyrics = (body, onDone) => {
     const projectId = selected.id;
@@ -734,7 +751,7 @@ export default function MusicVideo() {
     analyzing,
   }) : null;
   const runNextAction = () => {
-    if (!selected || !nextAction || nextAction.disabled) return;
+    if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
     if (nextAction.kind === 'goto') { goToStage(nextAction.stage, nextAction.anchor); return; }
     switch (nextAction.id) {
       case 'kickoff': handleKickoff(); break;
@@ -753,7 +770,7 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
-    locked: creativeSetupPending,
+    locked: creativeSetupPending || styleReferencesPending || compositionSavePending > 0,
     busy: { analyzing, planning, arranging, cloning },
     tracks,
     trackName,
@@ -774,6 +791,8 @@ export default function MusicVideo() {
     takes,
     treatment,
     excerpts,
+    publishKit,
+    publishing,
     revisions,
     autoReview,
     finalVideo,
@@ -787,12 +806,17 @@ export default function MusicVideo() {
     replaceProject,
     editProjectLocal,
     saveProjectFields,
+    saveCompositionGrade: (patch) => saveProjectFields(patch, { applyComposition: true }),
     saveVisualSpec,
     saveAutomation,
     saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec });
     }),
     setCreativeSetupPending,
+    setStyleReferencesPending,
+    saveStyleReferences: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
+      patchProject(project.id, { styleReferences: project.styleReferences });
+    }),
     setPickerTarget,
     onAddReference: () => setPickerTarget({ type: 'reference' }),
     onAnalyze: () => handleAnalyze(),
@@ -806,6 +830,8 @@ export default function MusicVideo() {
     onAddScene: handleAddScene,
     onDeleteScene: handleDeleteScene,
     onSplitScene: handleSplitScene,
+    onRepairPerformance: revisions.repairPerformance,
+    repairBusy: revisions.busy,
     onRenderStyle: (mode) => {
       const composition = compositionDraft(selected, { mode });
       editProjectLocal({ composition });
@@ -973,7 +999,7 @@ export default function MusicVideo() {
             stage={activeStage}
             onStageChange={(stage) => goToStage(stage)}
             progress={progress}
-            nextAction={nextAction}
+            nextAction={compositionSavePending > 0 && nextAction ? { ...nextAction, disabled: true, reason: 'Saving composition…' } : nextAction}
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
             dock={resolvePreviewSource(selected) ? (
@@ -986,7 +1012,7 @@ export default function MusicVideo() {
               />
             ) : null}
           >
-            <StageView board={board} />
+            <StageView key={selected.id} board={board} />
           </MusicVideoLayout>
         )}
       </div>

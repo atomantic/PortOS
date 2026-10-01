@@ -228,6 +228,28 @@ project's video backend has a source-audio lip-sync lane (fal.ai today).
 The treatment's proof checklist treats readable text and audio alignment as
 judgeable only in the final render.
 
+## Music-video render grades
+
+In **Compose → Render grade**, explicitly choose Neutral, Teal night, Golden
+hour, or Monochrome, with an optional per-section override and bounded grain.
+The selection is stored in `composition.grade`; clones remap section overrides
+to their new scene IDs. Neutral is the default and a true filter bypass. A
+neutral section override disables the default look for that section; resetting
+to neutral clears every override. Grades affect composed and document exports,
+not plain footage or code-rendered mode. The live document preview is ungraded;
+render an excerpt to judge the selected look.
+
+Both encoders use the same bounded RGB curves and deterministic, song-time
+frame-addressed grain. Composed footage is graded before typography, and
+excerpt trimming happens after grading. Document captures receive the same
+filter before encoding, with the excerpt offset and document frame rate, so
+section changes and grain stay on the song clock. Black/white endpoints are
+preserved to keep document lettering readable. Source assets are unchanged;
+selecting a grade does not infer a look from references or invoke a provider.
+Saving the selection gates rendering until the server has accepted it.
+
+See the [synthetic visual validation and remaining acceptance](validation/9302-music-video-grade.md).
+
 ## Music-video composition documents
 
 A Music Video project can own its whole edit as a composition document: set
@@ -266,7 +288,24 @@ snapped to the frame grid). The picture is captured silent and the master song
 (plus the optional sound-design bed) is muxed under it. The project's aspect
 ratio picks the frame; a page authored at another aspect must list that size
 in `portosComposition.formats` (its `layout({ width, height })` hook
-reframes). A `seek(t)` that rejects — for example a `<video>` that failed to
+reframes).
+
+**Social cuts (#9280).** A draft excerpt can render at another frame than the
+project's: `POST /api/music-video/:id/excerpt` takes `aspect` (`16:9`, `9:16`,
+`1:1`) and `fade` (fade-in 0.08 s and fade-out 0.6 s on the excerpt's audio).
+The render re-frames the project for that one job, so `PORTOS_MV.render` and
+`PORTOS_MV.project.aspect` report the cut's frame, and the page must declare
+that size in `formats` (or read its size from `PORTOS_MV.render`). The stored
+project keeps its own aspect, and the excerpt records `aspect`, `fade`, `width`
+and `height`. Footage (ffmpeg) projects refuse a re-framed cut
+(`EXCERPT_ASPECT_UNSUPPORTED`), because cropping their 16:9 frame slices
+through the type layers. `GET /api/music-video/:id/social-cuts?count=&minSec=&maxSec=`
+suggests hook windows: sung lines, lip-sync coverage, chorus sections,
+loudness and the title lyric, returned as non-overlapping `{ startSec, endSec,
+score, label, reasons }`. The Review stage lists them with a one-click
+"Render 9:16".
+
+A `seek(t)` that rejects — for example a `<video>` that failed to
 seek — fails the render and names the frame. A page that draws `<video>`
 frames must await `seeked` before painting; the template seeks to the middle
 of the source frame so a frame boundary can never round to the previous one.

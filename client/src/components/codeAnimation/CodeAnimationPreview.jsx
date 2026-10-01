@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, Clapperboard, Download, FileCode2, LoaderCircle, Save } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../ui/Toast';
-import { cancelCodeAnimationExport, exportCodeAnimation, uploadGalleryVideo } from '../../services/api';
+import { cancelCodeAnimationExport, exportCodeAnimation, getCodeAnimationPackage, uploadGalleryVideo } from '../../services/api';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { downloadBlob } from '../../lib/downloadBlob';
 
@@ -85,11 +85,14 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const [recordProgress, setRecordProgress] = useState(0);
   const [video, setVideo] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [packageDownloading, setPackageDownloading] = useState(false);
   const recordTimerRef = useRef(null);
   // Frame-exact export runs server-side on the media queue; its progress and
   // result stream from the composition job's SSE channel.
   const [exportJob, setExportJob] = useState(null);
+  const [exportNotes, setExportNotes] = useState([]);
   const [exportStarting, setExportStarting] = useState(false);
+  const exportRequestRef = useRef(0);
   const exportUrl = exportJob ? `/api/html-composition/${encodeURIComponent(exportJob)}/events` : null;
   const { latest: exportFrame } = useSseProgress(exportUrl, { enabled: !!exportUrl });
   const exportResult = exportFrame?.type === 'complete' ? exportFrame.result : null;
@@ -103,6 +106,9 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
 
   useEffect(() => {
     setExportJob(null);
+    setExportNotes([]);
+    setExportStarting(false);
+    return () => { exportRequestRef.current += 1; };
   }, [jobId]);
 
   useEffect(() => {
@@ -197,13 +203,16 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
 
   const handleExport = async () => {
     if (!jobId || exporting || exportStarting) return;
+    const request = ++exportRequestRef.current;
     setExportStarting(true);
     const queued = await exportCodeAnimation(jobId, { silent: true }).catch((error) => {
-      toast.error(error.message || 'Failed to start the export');
+      if (request === exportRequestRef.current) toast.error(error.message || 'Failed to start the export');
       return null;
     });
+    if (request !== exportRequestRef.current) return;
     setExportStarting(false);
     if (!queued?.jobId) return;
+    setExportNotes(queued.notes || []);
     for (const note of queued.notes || []) toast(note);
     setExportJob(queued.jobId);
   };
@@ -220,6 +229,17 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
       setVideo((current) => (current?.blob === video.blob ? { ...current, saved: true } : current));
       toast.success('Saved to Media History');
     }
+  };
+
+  const handleDownloadPackage = async () => {
+    if (!jobId || packageDownloading) return;
+    setPackageDownloading(true);
+    const pkg = await getCodeAnimationPackage(jobId, { silent: true }).catch((error) => {
+      toast.error(error.message || 'Failed to download the package');
+      return null;
+    });
+    setPackageDownloading(false);
+    if (pkg) downloadBlob(JSON.stringify(pkg, null, 2), `${fileBase}.code-animation.json`, 'application/json');
   };
 
   if (!html) return null;
@@ -309,11 +329,25 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
         >
           <FileCode2 className="h-4 w-4" /> Download HTML
         </button>
+        {jobId && (
+          <button type="button" onClick={handleDownloadPackage} disabled={packageDownloading}
+            title="Portable source and brief with integrity hashes; selected external audio is not included"
+            className={BUTTON_SECONDARY}>
+            {packageDownloading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            Download package
+          </button>
+        )}
         <span className="text-xs text-gray-500">
           {meta ? 'Animation ready' : 'Waiting for the animation to report ready…'}
           {audio.status === 'failed' ? ' · audio track failed to load' : ''}
         </span>
       </div>
+
+      {exportNotes.length > 0 && (
+        <div role="status" aria-label="Export notes" className="space-y-1 rounded-lg border border-port-border bg-port-card p-3 text-sm text-gray-400">
+          {exportNotes.map((note) => <p key={note}>{note}</p>)}
+        </div>
+      )}
 
       {exportResult?.path && (
         <div className="space-y-2 rounded-lg border border-port-border bg-port-card p-3">

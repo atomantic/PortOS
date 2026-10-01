@@ -16,7 +16,7 @@ import { createSingleFlight } from '../lib/singleFlight.js';
 import { readFileTail } from '../lib/fileUtils.js';
 import { codexHomeDir, readCodexRoutingOverride } from '../lib/codexUserConfig.js';
 import { getSettings } from './settings.js';
-import { getImageGenQuota, IMAGE_GEN_FAMILY } from './imageGenQuota.js';
+import { getImageGenQuota, IMAGE_GEN_FAMILY, isQuotaTrackedImageMode } from './imageGenQuota.js';
 import { mergeFleetQuotaCards } from '../lib/fleetQuotas.js';
 import { getFleetQuotaEntries } from './peerUsage.js';
 import { recordLocalQuotaCards } from './providerQuotaShare.js';
@@ -949,8 +949,9 @@ const fetchImageGenQuota = async () => {
     console.error(`❌ Image-gen quota card: could not read settings (${err?.message || err}) — card omitted`);
     return null;
   });
-  const enabledModes = enabledCloudImageModes(settings);
-  if (!enabledModes.length) return null; // no cloud image backend → no card
+  // Only quota-window backends — a fal.ai-only install has no quota to show.
+  const enabledModes = enabledCloudImageModes(settings).filter(isQuotaTrackedImageMode);
+  if (!enabledModes.length) return null; // no quota-tracked cloud image backend → no card
   return getImageGenQuota({ enabledModes }).catch((err) => {
     console.error(`❌ Image-gen quota card failed: ${err?.message || err}`);
     return null;

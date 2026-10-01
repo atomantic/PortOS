@@ -39,6 +39,11 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock('../lib/childProcess.js', async (importOriginal) => ({ ...(await importOriginal()), spawn: h.spawn }));
+vi.mock('../services/musicVideo/performanceShot.js', () => ({ assertCurrentPerformanceTakes: vi.fn(async () => {}) }));
+vi.mock('../services/videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), getHistoryItem: vi.fn(async () => ({ filename: 'accepted.mp4', fps: 24 })) }));
+vi.mock('../lib/ffmpeg.js', async (original) => ({ ...(await original()), findFfmpeg: vi.fn(async () => 'ffmpeg'),
+  runFfmpegProcess: vi.fn(async ({ args }) => { writeFileSync(args.at(-1), 'synthetic-boundary-frame'); return { ok: true }; }),
+}));
 vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: vi.fn(() => true), closeJobAfterDelay: vi.fn() }));
 // The draft render stamps this install's id on its in-flight mark (#9010).
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-test') }));
@@ -57,13 +62,15 @@ const CLIPS = [
 ];
 vi.mock('../services/musicVideo/render.js', async (importOriginal) => ({
   ...(await importOriginal()),
+  resolveMasterAudioPath: vi.fn(async () => '/example/song.wav'),
   planMusicVideoRender: vi.fn(async () => ({ ffmpeg: 'ffmpeg', audioPath: '/a/song.wav', composed: true, clips: CLIPS, audioDurationSec: 30 })),
 }));
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { recoverStuckMusicVideoExcerpts } = await import('../services/musicVideo/excerptRender.js');
-const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
+const { captureMusicVideoEvidence } = await import('../lib/musicVideoDependencies.js');
+const { assertRevisionOpen, assertPerformanceRepairDispatch } = await import('../services/musicVideo/revisionService.js');
 
 const app = express();
 app.use(express.json());
@@ -342,6 +349,37 @@ describe('selective section revision (#8987)', () => {
     await expect(assertRevisionOpen(project.id, revision.id)).rejects.toMatchObject({ status: 409, code: 'REVISION_CLOSED' });
   });
 
+  it('enforces code-first video share and a concurrent policy edit at the revision submission boundary', async () => {
+    const created = await projects.createProject({ name: 'Example Video' });
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: {
+      ...current,
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      audioAnalysis: { durationSec: 100 },
+      scenes: [{ sceneId: 'selected', startSec: 0, endSec: 20 }],
+      treatment: { shotDirections: [{ sceneId: 'selected', medium: 'generated-footage', mediumRationale: 'Selected payoff.' }] },
+      excerpts: [{ id: 'mve-code', status: 'complete', startSec: 0, endSec: 20,
+        sections: [{ sceneId: 'selected', startSec: 0, endSec: 20 }] }],
+    } }));
+    const path = `${base(created.id)}/excerpt/mve-code/revisions`;
+    const forbidden = await request(app).post(path).send({ sceneIds: ['selected'] });
+    expect(forbidden.status).toBe(409);
+    expect(forbidden.body.code).toBe('REVISION_MEDIUM_PLAN_CONFLICT');
+    expect(h.enqueueJob).not.toHaveBeenCalled();
+
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: {
+      ...current, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 20 },
+    } }));
+    const allowed = await request(app).post(path).send({ sceneIds: ['selected'] });
+    expect(allowed.status).toBe(201);
+    const revisionId = allowed.body.revision.id;
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: {
+      ...current, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+    } }));
+    await expect(assertRevisionOpen(created.id, revisionId, { sceneId: 'selected', kind: 'video' }))
+      .rejects.toMatchObject({ code: 'REVISION_MEDIUM_PLAN_CHANGED' });
+    expect(h.enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('refuses a second open revision, a section outside the draft, and a draft without a section map', async () => {
     const project = await reviewedProject();
     const first = await request(app).post(`${base(project.id)}/excerpt/mve-draft/revisions`).send({ sceneIds: ['s1'] });
@@ -362,5 +400,102 @@ describe('selective section revision (#8987)', () => {
     const noMap = await request(app).post(`${base(legacy.id)}/excerpt/mve-old/revisions`).send({});
     expect(noMap.status).toBe(422);
     expect(noMap.body.code).toBe('EXCERPT_SECTIONS_UNKNOWN');
+  });
+});
+
+// This regression uniquely pins accepted-prefix persistence and a durable paid
+// submission reservation through the real HTTP revision boundary and store.
+async function performanceProject() {
+  const created = await projects.createProject({ name: 'Example Performance' });
+  const instruction = { shotMode: 'performance', songInterval: { startSec: 10, endSec: 24 },
+    audio: { songDurationSec: 30 }, audioWindow: { startSec: 10, endSec: 24, durationSec: 14 },
+    edit: { inSec: 0, outSec: 14, targetSec: 14 },
+    cues: [{ startSec: 0, endSec: 14, words: [{ text: 'one', startSec: 0, endSec: 3.8 }, { text: 'two', startSec: 4.2, endSec: 14 }] }] };
+  mkdirSync(join(ROOT(), 'videos'), { recursive: true });
+  writeFileSync(join(ROOT(), 'videos', 'accepted.mp4'), 'synthetic-source');
+  await projects.updateProject(created.id, {
+    videoSettings: { backend: 'fal' },
+    scenes: [{ sceneId: 'performance', order: 0, shotMode: 'performance', startSec: 10, endSec: 24,
+      referenceImageId: 'frame.png', videoHistoryId: 'accepted', takes: [{ takeId: 'take-original', kind: 'video', assetId: 'accepted', shotInstruction: instruction }] }],
+    excerpts: [{ id: 'mve-performance', startSec: 8, endSec: 24, status: 'complete',
+      sections: [{ sceneId: 'performance', layer: 'footage', startSec: 10, endSec: 24, performance: { takeId: 'accepted' } }], notes: [] }],
+    autoReviews: [{ id: 'review-example', status: 'needs-human', attempts: [{ excerptId: 'mve-performance', review: {
+      evidence: { excerptStartSec: 8, temporal: { status: 'verified', analyzer: { id: 'synthetic', version: '1' },
+        shots: [{ sceneId: 'performance', takeId: 'accepted', spans: [
+          { startSec: 2, endSec: 6, status: 'verified', offsetSec: 0.01, confidence: 0.95 },
+          { startSec: 6, endSec: 16, status: 'verified', offsetSec: 0.3, confidence: 0.95 },
+        ] }] } } } }] }],
+  });
+  const current = await projects.getProject(created.id);
+  const dependencies = captureMusicVideoEvidence(current, { startSec: 8, endSec: 24 });
+  // Persist provenance without the derived read projection, as older rows do.
+  await projects.updateProject(created.id, {
+    excerpts: current.excerpts.map(({ dependencyState, ...excerpt }) => ({ ...excerpt, dependencies })),
+    autoReviews: current.autoReviews.map((r) => ({ ...r, attempts: r.attempts.map((a) => ({ ...a, review: { ...a.review, dependencies } })) })),
+  });
+  return projects.getProject(created.id);
+}
+const repairInput = { excerptId: 'mve-performance', sourceAssetId: 'accepted', boundarySec: 14 };
+describe('accepted-prefix performance repair (#9348)', () => {
+  it('persists only a suffix revision, preserves draft provenance, and never pays twice after a restart or cancellation', async () => {
+    const project = await performanceProject();
+    const path = `${base(project.id)}/scenes/performance/performance-repair`;
+    const [a, b] = await Promise.all([request(app).post(path).send(repairInput), request(app).post(path).send(repairInput)]);
+    expect([a.status, b.status].sort()).toEqual([201, 409]);
+    const repaired = (a.status === 201 ? a : b).body;
+    const [prefix, suffix] = repaired.project.scenes;
+    expect(prefix).toMatchObject({ videoHistoryId: 'accepted', startSec: 10, endSec: 14 });
+    expect(prefix.takes[0].shotInstruction.edit).toEqual({ inSec: 0, outSec: 4, targetSec: 4 });
+    // The historical draft/provenance stays immutable; its new stale projection
+    // correctly reflects the composition split added by this repair.
+    const withoutState = (excerpt) => { const { dependencyState, ...stored } = excerpt; return stored; };
+    expect(repaired.project.excerpts.map(withoutState)).toEqual(project.excerpts.map(withoutState));
+    expect(repaired.project.excerpts[0].dependencyState.status).toBe('stale');
+    expect(repaired.revision.repair).toMatchObject({ originalTake: project.scenes[0].takes[0], generations: 0, maxGenerations: 1 });
+    const revisionId = repaired.revision.id;
+    const resumed = await request(app).post(`${base(project.id)}/revisions/${revisionId}/resume`);
+    expect(resumed.body.needsGeneration).toEqual([{ sceneId: suffix.sceneId, kind: 'video' }]);
+    const guard = () => assertRevisionOpen(project.id, revisionId, { sceneId: suffix.sceneId, kind: 'video' });
+    const results = await Promise.allSettled([guard(), guard()]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(results.find((r) => r.status === 'rejected').reason.code).toBe('PERFORMANCE_REPAIR_SPEND_LIMIT');
+    // As on a restart, the queue knows no job, but the durable reservation
+    // survives. Even lease expiry must not create another paid request.
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      revisions: current.revisions.map((r) => ({ ...r, sections: r.sections.map((section) => ({ ...section, claimedAt: null })) })),
+    } }));
+    const restart = await request(app).post(`${base(project.id)}/revisions/${revisionId}/resume`);
+    expect(restart.body.needsGeneration).toEqual([]);
+    expect(restart.body.render).toBeNull();
+    expect(restart.body.revision.sections.find((s) => s.sceneId === suffix.sceneId).state).toBe('review-needed');
+    await request(app).post(`${base(project.id)}/revisions/${revisionId}/cancel`);
+    await expect(guard()).rejects.toMatchObject({ code: 'REVISION_CLOSED' });
+    await expect(assertPerformanceRepairDispatch({ projectId: project.id, revisionId, sceneId: suffix.sceneId })).rejects.toMatchObject({ code: 'REVISION_CLOSED' });
+    expect(h.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('refuses inconclusive evidence, stale boundaries/dependencies, and attempts to bypass an existing run budget without changing the scene', async () => {
+    const project = await performanceProject();
+    const path = `${base(project.id)}/scenes/performance/performance-repair`;
+    const stale = await request(app).post(path).send({ ...repairInput, boundarySec: 14.1 });
+    expect(stale.status).toBe(409);
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, autoReviews: current.autoReviews.map((r) => ({ ...r, status: 'limit-reached' })) } }));
+    expect((await request(app).post(path).send(repairInput)).status).toBe(409);
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, autoReviews: current.autoReviews.map((r) => ({ ...r, status: 'needs-human', attempts: r.attempts.map((a) => ({ ...a,
+      review: { ...a.review, evidence: { ...a.review.evidence, temporal: { ...a.review.evidence.temporal, status: 'unverified' } } },
+    })) })) } }));
+    expect((await request(app).post(path).send(repairInput)).status).toBe(409);
+    expect((await projects.getProject(project.id)).scenes).toEqual(project.scenes);
+    const changed = await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      scenes: current.scenes.map((scene) => ({ ...scene, loop: true })),
+      autoReviews: current.autoReviews.map((r) => ({ ...r, attempts: r.attempts.map((a) => ({ ...a,
+        review: { ...a.review, evidence: { ...a.review.evidence, temporal: { ...a.review.evidence.temporal, status: 'verified' } } },
+      })) })),
+    } }));
+    const staleDependencies = await request(app).post(path).send(repairInput);
+    expect(staleDependencies.status).toBe(409);
+    expect(staleDependencies.body.error).toContain('dependencies changed');
+    expect((await projects.getProject(project.id)).scenes).toEqual(changed.project.scenes);
+    expect(h.enqueueJob).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
 /**
  * Music Video — pre-production treatment record transforms (#8980).
  *
@@ -35,13 +36,13 @@
  * edited by hand unless they explicitly list that scene with the fingerprint
  * of the prompts they reviewed. Takes and slot selections are never touched.
  *
- * Peer sync: the treatment and `scene.direction` are additive fields on the
- * whole-record LWW project body. An older peer stores them verbatim, carries
- * them through its own edits (every mutator spreads the record), and never
- * executes them, so no `musicVideoProjects` schema bump is needed.
+ * Peer sync: musicVideoProjects v12 gates medium plans and production policy
+ * against older writers that would discard them during treatment edits.
  */
 
+import { captureMusicVideoEvidence, musicVideoDependencyChanges, musicVideoTakeChanges, remapMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { createHash, randomUUID } from 'crypto';
+import { MUSIC_VIDEO_MEDIA, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 import {
@@ -56,6 +57,7 @@ import {
 } from '../../lib/musicVideoValidation.js';
 import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { normalizeComposition } from './composition.js';
+import { hookKey, hookLines, cueWordOnsets } from './hookTypography.js';
 
 const TREATMENT_VERSION = 1;
 
@@ -107,6 +109,7 @@ export function normalizeBrief(patch, base = null, now = new Date().toISOString(
     emotion: text(merged.emotion, 500),
     premise: text(merged.premise, 2000),
     hookObjective: text(merged.hookObjective, 1000),
+    graphicLanguage: text(merged.graphicLanguage, 1000),
     mustHave: text(merged.mustHave, 2000),
     avoid: text(merged.avoid, 2000),
     referenceNotes: normalizeReferenceNotes(merged.referenceNotes, base?.referenceNotes, now),
@@ -180,6 +183,12 @@ function normalizeArc(arc) {
 function normalizeShotDirection(d) {
   return {
     sceneId: String(d.sceneId),
+    ...(d.actionContract !== undefined ? { actionContract: structuredClone(d.actionContract) } : {}),
+    ...(MUSIC_VIDEO_MEDIA.includes(d.medium) ? {
+      medium: d.medium,
+      mediumRationale: text(d.mediumRationale, 1000),
+      mediumPinned: d.mediumPinned === true,
+    } : {}),
     beatId: typeof d.beatId === 'string' && d.beatId ? d.beatId : null,
     mode: pick(d.mode, SHOT_MODES, 'cutaway'),
     route: pick(d.route, SHOT_ROUTES, 'generated'),
@@ -211,6 +220,8 @@ function normalizeEvidence(evidence) {
     imageId: isNonBlankStr(evidence.imageId) ? evidence.imageId.slice(0, 256) : null,
     note: text(evidence.note, 2000),
     reviewedAt: typeof evidence.reviewedAt === 'string' ? evidence.reviewedAt : null,
+    ...(evidence.dependencies ? { dependencies: structuredClone(evidence.dependencies) } : {}),
+    ...(evidence.dependencyState ? { dependencyState: evidence.dependencyState } : {}),
   };
 }
 
@@ -260,6 +271,7 @@ function normalizeTreatment(input, now = new Date().toISOString()) {
     revision: Number.isInteger(input.revision) && input.revision > 0 ? input.revision : 1,
     brief: normalizeBrief(input.brief, null, now),
     arc: normalizeArc(input.arc),
+    ...(typeof input.styleLook === 'string' ? { styleLook: input.styleLook.slice(0, 1000), styleReferencesBasis: input.styleReferencesBasis } : {}),
     shotDirections: normalizeShotDirections(input.shotDirections),
     proofs: normalizeProofs(input.proofs),
     capabilityGaps: normalizeGaps(input.capabilityGaps),
@@ -295,8 +307,10 @@ function assertRevision(project, baseRevision) {
 
 // ---- basis / staleness ------------------------------------------------------
 
-const BASIS_KEYS = ['audio', 'analysis', 'visualSpec', 'lyrics', 'scenes'];
+const BASIS_KEYS = ['audio', 'analysis', 'visualSpec', 'lyrics', 'scenes', 'productionPolicy', 'media'];
 const STALE_MESSAGES = {
+  media: 'Selected media or visual layers changed since this treatment was compiled.',
+  productionPolicy: 'The production policy changed since this treatment was compiled.',
   audio: 'The song changed since this treatment was compiled — recompile it.',
   analysis: 'The song was re-analyzed since this treatment was compiled.',
   visualSpec: 'The visual spec changed since this treatment was compiled.',
@@ -305,13 +319,17 @@ const STALE_MESSAGES = {
 };
 // A stale basis on these inputs blocks Apply (old direction must not overwrite
 // newer edits); scene-set changes only leave some scenes unmapped.
-const BLOCKING_STALE = new Set(['audio', 'analysis', 'visualSpec', 'lyrics']);
+const BLOCKING_STALE = new Set(['audio', 'analysis', 'visualSpec', 'lyrics', 'productionPolicy', 'media']);
 
 /** Fingerprints of every input a compile reads. */
 export function treatmentBasis(project) {
   const analysis = project?.audioAnalysis;
   const spec = project?.visualSpec;
   return {
+    productionPolicy: fingerprint(normalizeMusicVideoProductionPolicy(project?.productionPolicy)),
+    // Scene identity/timing has its own fingerprint. Omit ids here so a
+    // media-preserving clone retains its valid plan after ids are remapped.
+    media: fingerprint((project?.scenes || []).map((s) => [s.visualLayer || 'footage', s.referenceImageId || null, s.videoHistoryId || null])),
     audio: fingerprint([project?.trackId ?? null, project?.uploadedAudioFilename ?? null]),
     analysis: fingerprint(analysis
       ? [analysis.durationSec ?? null, (analysis.sections || []).map((s) => [s?.startSec ?? null, s?.endSec ?? null, s?.energy ?? null])]
@@ -319,7 +337,7 @@ export function treatmentBasis(project) {
     visualSpec: fingerprint([project?.concept || null, spec ? [
       (spec.references || []).map((r) => [r.imageId, r.role || 'mood', r.use || 'reference', r.label || '', r.note || '']),
       spec.palette || [], spec.typography || '', spec.cameraRules || '',
-    ] : null]),
+    ] : null, ...(project?.styleReferences?.length ? [project.styleReferences] : [])]),
     lyrics: fingerprint((project?.lyricCues || []).map((c) => [c.text, c.startSec ?? null, c.endSec ?? null])),
     scenes: fingerprint((project?.scenes || []).map((s) => [s.sceneId, s.startSec ?? null, s.endSec ?? null])),
   };
@@ -330,12 +348,29 @@ function treatmentStaleness(project, treatment = normalizeTreatment(project?.tre
   if (!treatment?.basis) return [];
   const current = treatmentBasis(project);
   return BASIS_KEYS
-    .filter((key) => treatment.basis[key] !== current[key])
+    .filter((key) => {
+      // Legacy Apply does not depend on a medium plan; its own render-layer
+      // edits and later take selections must not make old treatments stale.
+      if (key === 'media' && normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'legacy') return false;
+      // Old treatments predate policy; absent remains the original legacy behavior.
+      if (key === 'productionPolicy' && !treatment.basis[key]
+        && normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'legacy') return false;
+      return treatment.basis[key] !== current[key];
+    })
     .map((key) => ({ input: key, blocking: BLOCKING_STALE.has(key), message: STALE_MESSAGES[key] }));
 }
 
 function stamp(project, treatment, now) {
   return { ...project, treatment: { ...treatment, revision: treatment.revision + 1, updatedAt: now }, updatedAt: now };
+}
+
+function assertMediumAllowance(project, directions) {
+  const summary = summarizeMusicVideoMediumPlan(project, directions);
+  if (summary.strategy === 'code-first' && summary.generatedSec > summary.allowedGeneratedSec + 0.000001) {
+    throw treatmentError(422, 'GENERATED_VIDEO_ALLOWANCE_EXCEEDED',
+      'Generated footage exceeds the final-edit allowance. Adjust the medium plan or explicitly increase the allowance.',
+      { generatedSec: summary.generatedSec, allowedGeneratedSec: summary.allowedGeneratedSec });
+  }
 }
 
 // ---- edits ------------------------------------------------------------------
@@ -369,9 +404,15 @@ export function applyTreatmentPatch(project, patch, now = new Date().toISOString
     for (const edit of patch.shotDirections) {
       const idx = byScene.get(edit.sceneId);
       if (idx === undefined) throw treatmentError(404, 'NOT_FOUND', `The treatment has no direction for scene ${edit.sceneId}`);
-      next.shotDirections[idx] = normalizeShotDirection({ ...next.shotDirections[idx], ...edit });
+      const problem = shotActionContractProblem(edit.actionContract, (project.scenes || []).find((scene) => scene.sceneId === edit.sceneId));
+      if (problem) throw treatmentError(422, 'MUSIC_VIDEO_ACTION_CONTRACT_INVALID', problem);
+      next.shotDirections[idx] = normalizeShotDirection({
+        ...next.shotDirections[idx], ...edit,
+        ...((edit.medium !== undefined || edit.mediumRationale !== undefined) && edit.mediumPinned === undefined ? { mediumPinned: true } : {}),
+      });
     }
   }
+  if (patch.shotDirections) assertMediumAllowance(project, next.shotDirections);
   if (patch.rebase && next.basis) {
     const stale = treatmentStaleness(project, next);
     if (stale.some((s) => s.input === 'audio')) {
@@ -399,8 +440,13 @@ export function writeCompiledTreatment(project, { baseRevision, draft, basis, co
   const existing = normalizeTreatment(project.treatment, now);
   const next = {
     ...(existing || blankTreatment(now)),
+    brief: normalizeBrief({ graphicLanguage: draft.graphicLanguage || existing?.brief?.graphicLanguage }, existing?.brief, now),
     arc: normalizeArc(draft.arc),
-    shotDirections: normalizeShotDirections(draft.shotDirections),
+    ...(project.styleReferences?.length ? { styleLook: draft.styleLook ?? '', styleReferencesBasis: draft.styleReferencesBasis ?? null } : {}),
+    shotDirections: normalizeShotDirections(draft.shotDirections.map((direction) => {
+      const previous = existing?.shotDirections.find((entry) => entry.sceneId === direction.sceneId);
+      return previous?.actionContract !== undefined ? { ...direction, actionContract: previous.actionContract } : direction;
+    })),
     // A new compile proposes a fresh checklist: earlier verdicts reviewed
     // different shots/direction.
     proofs: normalizeProofs(draft.proofs),
@@ -409,6 +455,7 @@ export function writeCompiledTreatment(project, { baseRevision, draft, basis, co
     compiledAt: now,
     compiledWith,
   };
+  assertMediumAllowance(project, next.shotDirections);
   return stamp(project, next, now);
 }
 
@@ -467,6 +514,14 @@ export function reviewTreatmentProof(project, proofId, { baseRevision, status, e
       throw treatmentError(422, 'PROOF_EVIDENCE_NOT_FOUND', 'That image is not a frame of this proof\'s scenes');
     }
     if (status === 'passed') {
+      const selectedArtifact = isRender || (project.scenes || []).some((scene) => proof.sceneIds.includes(scene.sceneId)
+        && (recorded.videoHistoryId ? scene.videoHistoryId === recorded.videoHistoryId : scene.referenceImageId === recorded.imageId));
+      if (!selectedArtifact || (isRender && musicVideoDependencyChanges(project, project.renderDependencies).length)) {
+        throw treatmentError(409, 'PROOF_DEPENDENCIES_STALE', 'Historical or untracked artifacts cannot pass the current proof — select or rebuild and review current evidence');
+      }
+      const stale = (project.scenes || []).filter((scene) => proof.sceneIds.includes(scene.sceneId))
+        .some((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.assetId === scene.videoHistoryId && take.kind === 'video')).length);
+      if (stale) throw treatmentError(409, 'PROOF_DEPENDENCIES_STALE', 'Repair the derived clip before passing its proof');
       if (proof.checks.includes('lip-sync') && treatment.capabilityGaps.some((g) => g.id === 'lip-sync')) {
         throw treatmentError(422, 'PROOF_CAPABILITY_MISSING', 'This install has no source-audio lip-sync, so a lip-sync check cannot pass');
       }
@@ -483,6 +538,7 @@ export function reviewTreatmentProof(project, proofId, { baseRevision, status, e
       }
     }
   }
+  if (recorded) recorded.dependencies = recorded.videoHistoryId === project.renderHistoryId ? project.renderDependencies : captureMusicVideoEvidence(project, { sceneIds: proof.sceneIds, composition: recorded.videoHistoryId === project.renderHistoryId });
   treatment.proofs[idx] = { ...proof, status, evidence: recorded };
   return stamp(project, treatment, now);
 }
@@ -520,7 +576,7 @@ function composeDirectionClauses(direction, { aspectRatio = null, lipSyncUnavail
   };
 }
 
-const DIRECTION_FIELDS = ['beatId', 'mode', 'route', 'focalSubject', 'framing', 'negativeSpace', 'typographyRole', 'emphasis', 'transitionIn', 'transitionOut'];
+const DIRECTION_FIELDS = ['actionContract', 'medium', 'mediumRationale', 'mediumPinned', 'beatId', 'mode', 'route', 'focalSubject', 'framing', 'negativeSpace', 'typographyRole', 'emphasis', 'transitionIn', 'transitionOut'];
 const directionKey = (d) => fingerprint(DIRECTION_FIELDS.map((f) => d?.[f] ?? null));
 
 function sceneDirection(treatment, direction) {
@@ -591,6 +647,7 @@ const withPlannedScenes = (project, planned) => {
 function textCueCandidates(project, treatment) {
   const scenes = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const cues = (project.lyricCues || []).filter((c) => isNonBlankStr(c?.text) && isTime(c.startSec));
+  const hooks = hookLines(cues);
   const existing = new Set((project.composition?.textCues || []).map((c) => `${c.text}@${c.startSec}`));
   const out = [];
   for (const direction of treatment.shotDirections) {
@@ -607,7 +664,11 @@ function textCueCandidates(project, treatment) {
       // Clamped to the directing shot: a line that runs on must not keep its
       // text over a later shot that reserved no (or another) region for it.
       const endSec = isTime(cue.endSec) && cue.endSec > cue.startSec ? Math.min(cue.endSec, scene.endSec) : scene.endSec;
-      out.push({
+      const words = hooks.has(hookKey(cueText)) ? cueWordOnsets(cue, endSec) : [];
+      out.push(words.length ? {
+        // A hook builds word by word, big and centered (#9291).
+        text: cueText, startSec: cue.startSec, endSec, placement: 'center', emphasis: 'hero', template: 'build', words,
+      } : {
         text: cueText,
         startSec: cue.startSec,
         endSec,
@@ -632,6 +693,7 @@ export function buildApplyPreview(project) {
     throw treatmentError(409, 'TREATMENT_NOT_COMPILED', 'Compile the treatment before applying it');
   }
   const stale = treatmentStaleness(project, treatment);
+  const mediumPlan = summarizeMusicVideoMediumPlan(project, treatment.shotDirections);
   const scenesById = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const lipSyncAvailable = !!performanceCapability(project.videoSettings?.backend || null);
   const planned = [];
@@ -642,9 +704,13 @@ export function buildApplyPreview(project) {
     const scene = scenesById.get(direction.sceneId);
     if (!scene) { missingSceneIds.push(direction.sceneId); continue; }
     directed.add(scene.sceneId);
+    const problem = shotActionContractProblem(direction.actionContract, scene);
+    if (problem) throw treatmentError(422, 'MUSIC_VIDEO_ACTION_CONTRACT_INVALID', problem);
     const next = sceneDirection(treatment, direction);
     const fields = promptFieldPlans(scene, direction);
-    const renderFields = renderFieldPatch(scene, direction, { lipSyncAvailable });
+    // This slice only plans code-first execution: never reinterpret procedural
+    // direction as legacy footage/card selection or switch a render mode.
+    const renderFields = mediumPlan.strategy === 'code-first' ? {} : renderFieldPatch(scene, direction, { lipSyncAvailable });
     planned.push({ ...scene, ...renderFields });
     scenes.push({
       sceneId: scene.sceneId,
@@ -663,7 +729,8 @@ export function buildApplyPreview(project) {
   return {
     revision: treatment.revision,
     stale,
-    blocked: stale.some((s) => s.blocking),
+    mediumPlan,
+    blocked: stale.some((s) => s.blocking) || mediumPlan.blocked,
     scenes,
     missingSceneIds,
     unmappedSceneIds: (project.scenes || []).map((s) => s.sceneId).filter((id) => !directed.has(id)),
@@ -685,6 +752,10 @@ export function applyTreatmentToProject(project, { revision, overwrite = [], add
       { currentRevision: treatment.revision });
   }
   const preview = buildApplyPreview(project);
+  if (preview.mediumPlan.blocked) {
+    throw treatmentError(422, 'MEDIUM_PLAN_UNRESOLVED',
+      preview.mediumPlan.unresolved.filter((item) => item.blocking).map((item) => item.message).join(' '));
+  }
   if (preview.blocked) {
     throw treatmentError(409, 'TREATMENT_STALE',
       `${preview.stale.filter((s) => s.blocking).map((s) => s.message).join(' ')} Recompile, or keep it for the current inputs, before applying.`,
@@ -772,7 +843,7 @@ export function remapTreatmentForClone(treatment, sceneIdMap, { includeGenerated
       return {
         ...p,
         sceneIds: p.sceneIds.map(remap),
-        ...(lost ? { status: 'proposed', evidence: null } : {}),
+        ...(lost ? { status: 'proposed', evidence: null } : p.evidence ? { evidence: { ...p.evidence, dependencies: remapMusicVideoDependencies(p.evidence.dependencies, sceneIdMap) } } : {}),
       };
     }),
     // The scene-set fingerprint covers ids; keep a clean basis clean.

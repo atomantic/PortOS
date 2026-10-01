@@ -78,11 +78,25 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   reviewMusicVideoTreatmentProof: vi.fn(),
   renderMusicVideoExcerpt: vi.fn(async () => ({ jobId: 'mve-job-1', excerptId: 'mve-job-1' })),
   musicVideoExcerptRenderEventsUrl: (jobId) => `/api/music-video/excerpt/${jobId}/events`,
+  buildMusicVideoPublishKit: vi.fn(async () => ({ jobId: 'mvpk-job-1' })),
+  musicVideoPublishKitEventsUrl: (jobId) => `/api/music-video/publish-kit/${jobId}/events`,
+  cancelMusicVideoPublishKit: vi.fn(async () => ({ ok: true })),
+  draftMusicVideoPublishCopy: vi.fn(),
+  updateMusicVideoPublishCopy: vi.fn(),
+  selectMusicVideoPublishThumbnail: vi.fn(),
+  prepareMusicVideoPublishDraft: vi.fn(),
+  submitMusicVideoPublishDraft: vi.fn(),
+  discardMusicVideoPublishDraft: vi.fn(),
+  getMusicVideoPublishPlatforms: vi.fn(async () => ({ platforms: {}, history: {} })),
+  updateMusicVideoPublishPlatforms: vi.fn(),
+  recordMusicVideoPublishPost: vi.fn(),
   cancelMusicVideoExcerptRender: vi.fn(async () => ({ ok: true })),
   deleteMusicVideoExcerpt: vi.fn(),
   addMusicVideoExcerptNote: vi.fn(),
   updateMusicVideoExcerptNote: vi.fn(),
   deleteMusicVideoExcerptNote: vi.fn(),
+  getMusicVideoDependencyImpact: vi.fn(async () => ({ shots: [], evidence: [] })),
+  startMusicVideoDependencyRepair: vi.fn(),
   startMusicVideoRevision: vi.fn(),
   resumeMusicVideoRevision: vi.fn(),
   cancelMusicVideoRevision: vi.fn(),
@@ -132,7 +146,7 @@ const pushSocket = (event, payload) => act(async () => {
 });
 vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn(), listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
-vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn(), uploadGalleryImage: vi.fn() }));
+vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn(async () => ({ status: 'queued', jobId: 'example-frame-job' })), uploadGalleryImage: vi.fn() }));
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
     providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
@@ -214,6 +228,7 @@ import {
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
   startMusicVideoCastAndSets, approveMusicVideoCastAndSets, stopMusicVideoProduction,
+  getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
@@ -322,9 +337,8 @@ const renderMVWithNav = (to) => render(
 );
 
 beforeEach(() => {
-  // The dev-artifact drawer renders a real <iframe src="/api/...">; keep happy-dom
-  // from fetching it (the src attribute is still asserted, just never loaded).
-  window.happyDOM.settings.disableIframePageLoading = true;
+  // Keep the real artifact iframe and src assertions without navigating to its API URL.
+  window.happyDOM.settings.navigation.disableChildFrameNavigation = true;
   vi.clearAllMocks();
   sseState.latest = null;
   sseState.closed = false;
@@ -754,6 +768,21 @@ describe('MusicVideo project video renderer', () => {
       { silent: true },
     ));
     expect(await screen.findByLabelText('fal.ai scene clip duration')).toBeTruthy();
+  });
+
+  it('carries applied action and reaction into a manually submitted clip prompt', async () => {
+    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: '', falEnabled: true, models: [] });
+    generateVideo.mockResolvedValue({ jobId: 'intent-job' });
+    const actionContract = { version: 1, purpose: 'The listener decides to stay',
+      actions: [{ startSec: 0, endSec: 1, subject: 'Singer', description: 'Offers a hand' }],
+      reactions: [{ startSec: 1, endSec: 2, subject: 'Listener', description: 'Turns back' }] };
+    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal', falDuration: 6 },
+      scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 4, direction: { actionContract } }] }, 'board');
+    fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+    await waitFor(() => expect(generateVideo).toHaveBeenCalled());
+    const prompt = generateVideo.mock.calls.at(-1)[0].prompt;
+    expect(prompt).toContain('Action 0.000s–1.000s: Singer');
+    expect(prompt).toContain('Reaction 1.000s–2.000s: Listener');
   });
 
   it('renders a scene image-to-video through a saved fal.ai pin (#8968)', async () => {
@@ -1592,6 +1621,17 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
   });
 
+  it('plans a code-first board without starting a Cast & Sets image batch when no selected shot needs references', async () => {
+    const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [],
+      composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      automation: { tools: ['code:render'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
+    planMusicVideoProject.mockResolvedValue({ project, scenesAdded: 1, promptsSeeded: true });
+    await openProject(project, 'produce');
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
+    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalled());
+    expect(startMusicVideoCastAndSets).not.toHaveBeenCalled();
+  });
+
   it('autopilot stops at the Cast & Sets check-in in review mode, and Approve & continue plans', async () => {
     const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [], automation: { tools: ['image:codex'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
     const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
@@ -1996,6 +2036,29 @@ describe('MusicVideo stage tabs (#9243)', () => {
   );
   const selectedTab = () => screen.getByRole('tab', { selected: true });
 
+  it('uses the newly selected project making-of notes and links when drafting publication copy', async () => {
+    const first = { ...PROJECT_WITH_CLIP, publishKit: { notes: 'Example first story', links: { youtube: 'https://example.com/first' } } };
+    const second = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Example Other Project', publishKit: { notes: 'Example second story', links: { youtube: 'https://example.com/second' } } };
+    listMusicVideoProjects.mockResolvedValue([first, second]);
+    getMusicVideoPublishPlatforms.mockResolvedValueOnce({ platforms: { youtube: { enabled: true } } });
+    draftMusicVideoPublishCopy.mockResolvedValueOnce({ project: second });
+    render(<MemoryRouter initialEntries={['/music-video/mv-1/publish']}>
+      <NavTo to="/music-video/mv-other/publish" />
+      {MV_ROUTES}
+    </MemoryRouter>);
+    const notes = await screen.findByLabelText(/Making-of notes/);
+    expect(notes).toHaveValue('Example first story');
+    fireEvent.change(notes, { target: { value: 'Example unsaved first story' } });
+    fireEvent.click(screen.getByRole('button', { name: 'go-/music-video/mv-other/publish' }));
+    await screen.findByRole('heading', { level: 2, name: second.name });
+    expect(await screen.findByLabelText(/Making-of notes/)).toHaveValue('Example second story');
+    expect(screen.getByLabelText(/Full video URL/)).toHaveValue('https://example.com/second');
+    fireEvent.click(screen.getByRole('button', { name: 'Draft copy' }));
+    await waitFor(() => expect(draftMusicVideoPublishCopy).toHaveBeenCalledWith(second.id, {
+      notes: 'Example second story', links: { youtube: 'https://example.com/second' },
+    }));
+  });
+
   it('opens the stage named in the URL, falls back to the project\'s own stage for an unknown one, and the tabs navigate', async () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
     renderAt('/music-video/mv-1/produce');
@@ -2094,11 +2157,12 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await waitFor(() => expect(stopMusicVideoProduction).toHaveBeenCalledWith('mv-3', 'run-1', { silent: true }));
     });
 
-    it('takes a finished project to its final video', async () => {
+    it('takes a finished project on to its release (#9281)', async () => {
       await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'board');
-      fireEvent.click(screen.getByRole('button', { name: 'Watch final video' }));
-      await waitFor(() => expect(selectedTab()).toHaveTextContent(/^Review/));
-      expect(document.getElementById('mv-final-video')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Build the publishing kit' }));
+      await waitFor(() => expect(selectedTab()).toHaveTextContent(/^Publish/));
+      expect(screen.getByRole('region', { name: 'Release assets' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Build publishing kit/ })).not.toBeDisabled();
     });
   });
 
@@ -2149,4 +2213,29 @@ describe('MusicVideo stage tabs (#9243)', () => {
       expect(screen.queryByLabelText('Preview')).toBeNull();
     });
   });
+});
+
+it('waits for a grade save before rendering and keeps the saved look when a later save fails', async () => {
+  const project = { ...PROJECT_WITH_CLIP, composition: { mode: 'composed', textCues: [], style: { color: '#ffffff', font: 'sans' } } };
+  let finishSave;
+  updateMusicVideoProject.mockImplementationOnce((_id, patch) => new Promise((resolve) => {
+    finishSave = () => resolve({ ...project, ...patch });
+  }));
+  await openProject(project, 'compose');
+  fireEvent.change(screen.getByLabelText('Default section look'), { target: { value: 'teal-night' } });
+  await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id,
+    { composition: expect.objectContaining({ grade: expect.objectContaining({ preset: 'teal-night' }) }) }, { silent: true }));
+  expect(screen.getByLabelText('Default section look')).toBeDisabled();
+  expect(screen.getByLabelText('Default section look').value).toBe('neutral');
+  await openStage('review');
+  expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
+  expect(renderMusicVideoProject).not.toHaveBeenCalled();
+  await act(async () => { finishSave(); });
+  expect(screen.getByRole('button', { name: /^Render final$/ })).not.toBeDisabled();
+  await openStage('compose');
+  expect(screen.getByLabelText('Default section look').value).toBe('teal-night');
+  updateMusicVideoProject.mockRejectedValueOnce(new Error('Grade save unavailable'));
+  fireEvent.change(screen.getByLabelText('Default section look'), { target: { value: 'golden-hour' } });
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Grade save unavailable'));
+  expect(screen.getByLabelText('Default section look').value).toBe('teal-night');
 });

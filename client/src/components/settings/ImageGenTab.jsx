@@ -28,7 +28,8 @@ import {
   saveHfToken, clearHfToken,
   getCredentialInventory, saveCredential,
 } from '../../services/api';
-import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import FalModelSelect from '../imageGen/FalModelSelect';
+import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
@@ -75,6 +76,7 @@ export const MEDIA_TABS = [
   { id: 'codex', label: 'Codex CLI', icon: Terminal, probeMode: IMAGE_GEN_MODE.CODEX },
   { id: 'grok', label: 'Grok CLI', icon: Zap, probeMode: IMAGE_GEN_MODE.GROK },
   { id: 'agy', label: 'Agy CLI', icon: Bot, probeMode: IMAGE_GEN_MODE.AGY },
+  { id: 'fal', label: 'fal.ai', icon: Sparkles, probeMode: IMAGE_GEN_MODE.FAL },
   { id: 'tokens', label: 'Tokens', icon: Key },
   { id: 'expose', label: 'Expose', icon: Globe },
   { id: 'test', label: 'Test', icon: FlaskConical },
@@ -171,6 +173,12 @@ export function ImageGenTab() {
   const [agyEnabled, setAgyEnabled] = useState(false);
   const [agyPath, setAgyPath] = useState('');
   const [agyModel, setAgyModel] = useState('');
+  // fal.ai image backend — a metered API, gated by its own toggle like the
+  // CLIs. The API key is NOT part of this slice: it is the fal.ai credential
+  // the video backend already owns (the Defaults tab's key row).
+  const [falEnabled, setFalEnabled] = useState(false);
+  // '' = no pin → FAL_IMAGE_DEFAULT_MODEL server-side.
+  const [falModel, setFalModel] = useState('');
   // Per-provider cleaner toggles. Both run after the PNG lands and before
   // the SSE complete event so subscribers see the cleaned bytes. SynthID
   // (the gpt-image / Imagen / Gemini pixel-level watermark) is unaffected
@@ -180,8 +188,8 @@ export function ImageGenTab() {
   //     provenance chunk. Lossless — pixels untouched.
   //   - denoise   (default OFF): median(3) + sharpen pass for AI-artifact
   //     reduction. LOSSY: blurs annotation text and small details.
-  const [cleanC2PAByMode, setCleanC2PAByMode] = useState({ external: true, local: true, codex: true, grok: false, agy: false });
-  const [denoiseByMode, setDenoiseByMode] = useState({ external: false, local: false, codex: false, grok: false, agy: false });
+  const [cleanC2PAByMode, setCleanC2PAByMode] = useState({ external: true, local: true, codex: true, grok: false, agy: false, fal: false });
+  const [denoiseByMode, setDenoiseByMode] = useState({ external: false, local: false, codex: false, grok: false, agy: false, fal: false });
   const setCleanC2PAFor = (m) => (v) => setCleanC2PAByMode((p) => ({ ...p, [m]: v }));
   const setDenoiseFor = (m) => (v) => setDenoiseByMode((p) => ({ ...p, [m]: v }));
   // Raw string held while the user is typing in the parallel-limit input.
@@ -202,6 +210,7 @@ export function ImageGenTab() {
   const agyPathId = useId();
   const agyModelId = useId();
   const agyModelsListId = useId();
+  const falModelId = useId();
 
   // Snapshot of saved values so we can show the "dirty" state
   const [saved, setSaved] = useState({
@@ -209,8 +218,9 @@ export function ImageGenTab() {
     codexEnabled: false, codexPath: '', codexModel: '', codexEffort: '', codexParallelLimit: 1,
     grokEnabled: false, grokPath: '', grokAspectRatio: '',
     agyEnabled: false, agyPath: '', agyModel: '',
-    cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false },
-    denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false },
+    falEnabled: false, falModel: '',
+    cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false },
+    denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false },
     renderDefaultsJson: '{}',
     videoGenMode: '',
     localVideoModelId: '',
@@ -360,15 +370,19 @@ export function ImageGenTab() {
         const ayEnabled = ay.enabled === true;
         const ayPath = ay.agyPath || '';
         const ayModel = ay.model || '';
+        const fl = ig.fal || {};
+        const flEnabled = fl.enabled === true;
+        const flModel = fl.model || '';
         // Per-mode cleaner reads via the shared helper (mirrored from
         // server/lib/imageClean.js).
         const codexClean = resolveCleanersFromConfig(cx, IMAGE_GEN_MODE.CODEX);
         const grokClean = resolveCleanersFromConfig(gk, IMAGE_GEN_MODE.GROK);
         const agyClean = resolveCleanersFromConfig(ay, IMAGE_GEN_MODE.AGY);
+        const falClean = resolveCleanersFromConfig(fl, IMAGE_GEN_MODE.FAL);
         const localClean = resolveCleanersFromConfig(ig.local, IMAGE_GEN_MODE.LOCAL);
         const externalClean = resolveCleanersFromConfig(ig.external, IMAGE_GEN_MODE.EXTERNAL);
-        const c2 = { codex: codexClean.cleanC2PA, grok: grokClean.cleanC2PA, agy: agyClean.cleanC2PA, local: localClean.cleanC2PA, external: externalClean.cleanC2PA };
-        const dn = { codex: codexClean.denoise, grok: grokClean.denoise, agy: agyClean.denoise, local: localClean.denoise, external: externalClean.denoise };
+        const c2 = { codex: codexClean.cleanC2PA, grok: grokClean.cleanC2PA, agy: agyClean.cleanC2PA, fal: falClean.cleanC2PA, local: localClean.cleanC2PA, external: externalClean.cleanC2PA };
+        const dn = { codex: codexClean.denoise, grok: grokClean.denoise, agy: agyClean.denoise, fal: falClean.denoise, local: localClean.denoise, external: externalClean.denoise };
         setMode(m);
         setRenderDefaults(rd);
         setVideoGenMode(vgMode);
@@ -392,6 +406,8 @@ export function ImageGenTab() {
         setAgyEnabled(ayEnabled);
         setAgyPath(ayPath);
         setAgyModel(ayModel);
+        setFalEnabled(flEnabled);
+        setFalModel(flModel);
         setCleanC2PAByMode(c2);
         setDenoiseByMode(dn);
         setSaved({
@@ -400,6 +416,7 @@ export function ImageGenTab() {
           codexParallelLimit: cxParallel,
           grokEnabled: gkEnabled, grokPath: gkPath, grokAspectRatio: gkRatio,
           agyEnabled: ayEnabled, agyPath: ayPath, agyModel: ayModel,
+          falEnabled: flEnabled, falModel: flModel,
           cleanC2PAByMode: c2, denoiseByMode: dn,
           renderDefaultsJson: JSON.stringify(rd),
           videoGenMode: vgMode,
@@ -482,6 +499,7 @@ export function ImageGenTab() {
       codex: { enabled: saved.codexEnabled },
       grok: { enabled: saved.grokEnabled },
       agy: { enabled: saved.agyEnabled },
+      fal: { enabled: saved.falEnabled },
       external: { sdapiUrl: saved.sdapiUrl },
     },
   });
@@ -515,6 +533,10 @@ export function ImageGenTab() {
     || agyEnabled !== saved.agyEnabled
     || agyPath !== saved.agyPath
     || agyModel !== saved.agyModel
+    || falEnabled !== saved.falEnabled
+    || falModel !== saved.falModel
+    || cleanC2PAByMode.fal !== saved.cleanC2PAByMode.fal
+    || denoiseByMode.fal !== saved.denoiseByMode.fal
     || cleanC2PAByMode.agy !== saved.cleanC2PAByMode.agy
     || denoiseByMode.agy !== saved.denoiseByMode.agy
     || cleanC2PAByMode.grok !== saved.cleanC2PAByMode.grok
@@ -568,6 +590,10 @@ export function ImageGenTab() {
           enabled: agyEnabled, agyPath: ayPath, model: ayModel,
           cleanC2PA: cleanC2PAByMode.agy, denoise: denoiseByMode.agy,
         },
+        fal: {
+          enabled: falEnabled, model: falImageFamily(falModel) ? falModel : undefined,
+          cleanC2PA: cleanC2PAByMode.fal, denoise: denoiseByMode.fal,
+        },
         expose: { a1111: exposeA1111 },
         // Keep the legacy field populated so anything still reading
         // `imageGen.sdapiUrl` directly stays working.
@@ -602,6 +628,7 @@ export function ImageGenTab() {
         codexParallelLimit: cxParallel,
         grokEnabled, grokPath: gkPath || '', grokAspectRatio: gkRatio || '',
         agyEnabled, agyPath: ayPath || '', agyModel: ayModel || '',
+        falEnabled, falModel,
         cleanC2PAByMode, denoiseByMode,
         renderDefaultsJson: JSON.stringify(patch.renderDefaults),
         videoGenMode,
@@ -796,7 +823,7 @@ export function ImageGenTab() {
           generation with local Python runtimes, including mflux and diffusers. You can also
           expose this PortOS as an A1111-compatible endpoint for other tailnet boxes.
         </p>
-        <div className={`grid grid-cols-1 sm:grid-cols-2 ${(codexEnabled || grokEnabled || agyEnabled) ? 'lg:grid-cols-3' : ''} gap-3`}>
+        <div className={`grid grid-cols-1 sm:grid-cols-2 ${(codexEnabled || grokEnabled || agyEnabled || falEnabled) ? 'lg:grid-cols-3' : ''} gap-3`}>
           <button
             type="button"
             onClick={() => setMode(IMAGE_GEN_MODE.EXTERNAL)}
@@ -858,6 +885,19 @@ export function ImageGenTab() {
               <p className="text-xs text-gray-500 mt-1">Text-to-image through Antigravity's generate_image tool and your selected model.</p>
             </button>
           )}
+          {falEnabled && (
+            <button
+              type="button"
+              onClick={() => setMode(IMAGE_GEN_MODE.FAL)}
+              className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.FAL ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
+            >
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4" />
+                <span className="font-medium text-sm">fal.ai</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Hosted image and reference-edit models through fal.ai's API. Billed per image to your fal.ai account.</p>
+            </button>
+          )}
         </div>
       </div>
       )}
@@ -875,7 +915,7 @@ export function ImageGenTab() {
           Each surface below follows the install default backend unless pinned here. A pinned
           backend that is disabled (or unconfigured) falls back to whatever that surface would
           have used anyway — enable the backend on its own tab to make a pin take effect. A
-          model can be pinned for backends that accept one (Codex, Agy); Grok and Local pick
+          model can be pinned for backends that accept one (Codex, Agy, fal.ai); Grok and Local pick
           their models elsewhere. Surfaces that also render video get a video backend pin.
           The default local video model is set on the Local tab, and a render's explicit model
           choice takes precedence.
@@ -918,8 +958,8 @@ export function ImageGenTab() {
           {
             id: 'fal', label: 'fal.ai API key', input: falKeyInput, setInput: setFalKeyInput,
             placeholder: 'fal-key-...', envLabel: 'FAL_KEY',
-            hint: 'Enables the fal.ai queue video backend on the Video Gen page and in FableLoom. Get a key at fal.ai/dashboard/keys, or set the FAL_KEY environment variable instead.',
-            missing: 'No fal.ai key configured — the fal.ai video backend will be unavailable.',
+            hint: 'Enables the fal.ai queue video backend on the Video Gen page and in FableLoom, and the fal.ai image backend (fal.ai tab). Get a key at fal.ai/dashboard/keys, or set the FAL_KEY environment variable instead.',
+            missing: 'No fal.ai key configured — the fal.ai video and image backends will be unavailable.',
           },
           {
             id: 'reactor', label: 'reactor.inc API key', input: reactorKeyInput, setInput: setReactorKeyInput,
@@ -1024,12 +1064,22 @@ export function ImageGenTab() {
                     className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-44"
                   >
                     <option value="">Auto (install default)</option>
-                    {[IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY].map((m) => (
+                    {[IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL].map((m) => (
                       <option key={m} value={m}>{modeLabel(m)}</option>
                     ))}
                   </select>
                 </FormField>
-                {supportsCloudModelOverride(pinnedMode) ? (
+                {pinnedMode === IMAGE_GEN_MODE.FAL ? (
+                  <FormField label={`${label} model`} labelClassName="sr-only" className="contents">
+                    <FalModelSelect
+                      id={modelInputId}
+                      value={entry.imageModel || ''}
+                      onChange={(v) => setPin('imageModel', v)}
+                      defaultLabel="Model: fal.ai default"
+                      className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-52"
+                    />
+                  </FormField>
+                ) : supportsCloudModelOverride(pinnedMode) ? (
                   <FormField label={`${label} model`} labelClassName="sr-only" className="contents">
                     <input
                       id={modelInputId}
@@ -1479,6 +1529,78 @@ export function ImageGenTab() {
               denoise={denoiseByMode.agy}
               onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.AGY)}
               onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.AGY)}
+            />
+          </div>
+        )}
+      </div>
+      )}
+
+      {mediaTab === 'fal' && (
+      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
+        <div className="flex items-center gap-2 text-white">
+          <Sparkles size={18} />
+          <h2 className="text-lg font-semibold">fal.ai Imagegen</h2>
+        </div>
+        <p className="text-xs text-gray-500">
+          Render through fal.ai&rsquo;s hosted image models. Renders with reference or source images
+          go to the chosen model&rsquo;s edit endpoint, so mood-board references condition the result.
+          Every render is billed to your fal.ai account; the gallery records each image&rsquo;s estimated cost.
+        </p>
+        {/* Key presence comes from the shared credential inventory — the key
+            itself is write-only and lives on the Defaults tab with the fal.ai
+            video key it is shared with. */}
+        {credentialRows.fal == null ? (
+          <div className="text-xs text-gray-500"><BrailleSpinner text="Checking fal.ai key" /></div>
+        ) : credentialRows.fal.configured ? (
+          <div className="flex items-center gap-2 text-xs text-port-success">
+            <Check size={14} />
+            <span>fal.ai API key configured (shared with the fal.ai video backend)</span>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
+            <AlertTriangle size={14} />
+            <span>No fal.ai API key — set it under the Defaults tab (fal.ai API key, shared with Video Gen) first.</span>
+            <button type="button" onClick={() => setMediaTab('defaults')} className="text-port-accent hover:underline">
+              Open Defaults
+            </button>
+          </div>
+        )}
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={falEnabled}
+            onChange={(e) => {
+              const enabled = e.target.checked;
+              setFalEnabled(enabled);
+              if (!enabled && mode === IMAGE_GEN_MODE.FAL) {
+                setMode(pythonPath?.trim() ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
+              }
+            }}
+            className="rounded"
+          />
+          <span className="text-sm text-gray-300">Enable fal.ai Imagegen</span>
+        </label>
+        {falEnabled && (
+          <div className="space-y-3 pl-6 border-l-2 border-port-border">
+            <FormField label="Default model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+              <FalModelSelect
+                id={falModelId}
+                value={falModel}
+                onChange={(v) => setFalModel(v || '')}
+                defaultLabel={`${falImageFamily(FAL_IMAGE_DEFAULT_MODEL)?.label} (default)`}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+              />
+            </FormField>
+            <p className="text-xs text-gray-500">
+              Prices are fal.ai&rsquo;s published per-image rates (Nano Banana charges more at 4K; FLUX.2 bills
+              output plus reference megapixels). Renders can pick a different model per queue item on the
+              Image Gen page, and each surface can pin one under Defaults.
+            </p>
+            <CleanersToggles
+              cleanC2PA={cleanC2PAByMode.fal}
+              denoise={denoiseByMode.fal}
+              onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.FAL)}
+              onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.FAL)}
             />
           </div>
         )}

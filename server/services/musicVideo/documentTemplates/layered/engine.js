@@ -16,6 +16,7 @@
 (() => {
   'use strict';
   const MV = window.PORTOS_MV;
+  const GENERATED = window.PORTOS_MV_GENERATED || null;
   if (!MV || !MV.render) throw new Error('PORTOS_MV is missing — PortOS writes portos-mv.js next to index.html when it renders');
 
   // ---------- frame ----------
@@ -23,6 +24,12 @@
   let H = MV.render.height;
   const FPS = MV.render.fps || 24;
   const DURATION = MV.render.durationSec;
+  const eventSong = { ...MV.song, sections: GENERATED?.song?.sections || MV.song.narrativeSections || MV.song.sections,
+    narrativeEvents: GENERATED?.song?.narrativeEvents || MV.song.narrativeEvents,
+    reactiveSections: GENERATED?.song?.reactiveSections || MV.song.reactiveSections };
+  const eventState = (t) => window.PORTOS_MV_EVENT_STATE
+    ? window.PORTOS_MV_EVENT_STATE(eventSong, t, FPS)
+    : { t, frame: Math.floor(t * FPS + 1e-6), reactiveGain: 0, activeEvents: [], hold: false };
   const canvas = document.getElementById('stage');
   const ctx = canvas.getContext('2d');
   let U = 1; // type/HUD unit: 1 at 1080px on the short side
@@ -366,7 +373,7 @@
   // A card draws the whole scene layer: (t, localT, durationSec, scene, source).
   const CARDS = {
     // A title card from the scene's card text on its card colour.
-    title(t, lt, d, scene) {
+    title(t, lt, d, scene, source, state) {
       ctx.fillStyle = scene.cardColor || C.ink; ctx.fillRect(0, 0, W, H);
       const str = (scene.cardText || scene.label || '').toUpperCase();
       if (!str) return;
@@ -378,28 +385,67 @@
       ctx.translate(W / 2, H / 2 + px * 0.36); ctx.scale(lerp(1.2, 1, k), lerp(1.2, 1, k));
       text(str, 0, 0, F.stencil(px), C.paper, 'center');
       ctx.restore();
-      glitch(t, pulse(t, downs, 9) * 0.6);
+      glitch(t, pulse(t, downs, 9) * state.reactiveGain);
     },
   };
   const cardFor = (scene) => (scene?.visualLayer === 'card' ? CARDS.title : null);
 
+  function sectionFunction(t) {
+    const section = GENERATED?.song?.sections?.find((item) => t >= item.startSec && t < item.endSec);
+    return section ? { section, fn: GENERATED.sections?.[section.id] } : null;
+  }
+
   // ---------- frame ----------
-  function render(t, scene, source) {
+  function drawNarrativeEvents(state) {
+    for (const event of state.activeEvents) {
+      const k = event.progress;
+      const label = event.kind === 'counter-change' ? `${event.text || event.name} ${Math.round(event.value)}`
+        : event.kind === 'motif-transformation' ? `${event.motif || event.name}: ${k < 0.5 ? event.before || 'Before' : event.after || 'After'}`
+          : event.text || event.name;
+      let px = Math.round(96 * U);
+      ctx.font = F.cond(px, 700);
+      while (ctx.measureText(label).width > W * 0.8 && px > 12 * U) { px *= 0.9; ctx.font = F.cond(px, 700); }
+      ctx.save();
+      ctx.globalAlpha = event.kind === 'reveal' ? easeOut(clamp(k * 4)) : 1;
+      ctx.translate(W / 2, H / 2);
+      const scale = event.kind === 'impact' ? 1 + 0.2 * (1 - easeOut(clamp(k * 4))) : 1;
+      ctx.scale(scale, scale);
+      text(label, 0, px * 0.3, F.cond(px, 700), C.paper, 'center');
+      ctx.restore();
+    }
+  }
+
+  function render(t, scene, source, state) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
+    const authored = sectionFunction(t);
     if (scene) {
       const lt = t - scene.startSec; const d = scene.endSec - scene.startSec;
-      const card = cardFor(scene);
-      if (card) card(t, lt, d, scene, source);
+      const card = authored?.fn ? null : cardFor(scene);
+      if (card) card(t, lt, d, scene, source, state);
       else if (source) {
         const energetic = isHighEnergy(t) || scene.shotMode === 'performance';
-        const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8);
+        const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * state.reactiveGain;
         drawCover(source, seg(t, scene.startSec, scene.endSec), moveFor(scene), punch);
       }
-      if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * 0.5);
+      if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * state.reactiveGain);
+    }
+    if (authored?.fn) {
+      const inset = 0.1;
+      ctx.save();
+      try {
+        authored.fn(ctx, {
+          t, localT: t - authored.section.startSec, frame: frameOf(t), width: W, height: H,
+          song: GENERATED.song, palette: GENERATED.palette, section: authored.section,
+          safe: { x: W * inset, y: H * inset, w: W * (1 - 2 * inset), h: H * (1 - 2 * inset) },
+          karaoke: [], mediaKind: scene?.media?.kind || null, visualLayer: scene?.visualLayer || null,
+          events: state.activeEvents, reactiveGain: state.reactiveGain, hold: state.hold,
+        });
+      } finally { ctx.restore(); }
     }
     vignette(0.5);
     grain(t, 0.09);
     drawHud(t);
+    drawNarrativeEvents(state);
     const hero = HERO.find((c) => t >= c.startSec && t < c.endSec);
     if (hero) heroWords(t, hero);
     else {
@@ -424,9 +470,11 @@
     layout({ width, height }) { resize(width, height); },
     async seek(t) {
       await ready;
+      const state = eventState(t);
+      t = state.t;
       const scene = sceneAt(t);
       const source = scene && !cardFor(scene) ? await sourceFor(scene, t) : null;
-      render(t, scene, source);
+      render(t, scene, source, state);
       return true;
     },
   };

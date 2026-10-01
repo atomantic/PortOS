@@ -4,6 +4,10 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
+import { createHash } from 'crypto';
+import { canonicalStringify } from '../lib/objects.js';
+import { createCodeAnimationPackage, CODE_ANIMATION_PACKAGE_LIMITS } from '../lib/codeAnimationPackage.js';
+import { JSON_BODY_LIMIT } from '../lib/uploadLimits.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const { codeAnimationRecords, codeAnimationHtml } = vi.hoisted(() => ({
@@ -47,6 +51,9 @@ vi.mock('../services/promptRunner.js', () => ({
   resolveProviderAndModel: vi.fn(),
   assertProvider: vi.fn(),
 }));
+vi.mock('../services/mediaJobQueue/index.js', () => ({
+  enqueueJob: vi.fn(async () => ({ jobId: 'media-export', position: 1, status: 'queued' })),
+}));
 
 import { emitCodeAnimationChanged } from '../services/socket.js';
 import { PATHS } from '../lib/paths.js';
@@ -54,13 +61,14 @@ import { getUniverse } from '../services/universeBuilder/crud.js';
 import { getBoard } from '../services/moodBoard/db.js';
 import { getProviderById } from '../services/providers.js';
 import { getTrack } from '../services/tracks/index.js';
-import { listCodeAnimationJobPage, listCodeAnimationJobRecords } from '../services/codeAnimation/jobStore.js';
+import { listCodeAnimationJobPage, listCodeAnimationJobRecords, readCodeAnimationHtml, saveCodeAnimationHtml, saveCodeAnimationJobRecord } from '../services/codeAnimation/jobStore.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
+import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import routes from './codeAnimation.js';
 
 const makeApp = () => {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: JSON_BODY_LIMIT }));
   app.use('/api/code-animation', routes);
   app.use(errorMiddleware);
   return app;
@@ -113,6 +121,187 @@ beforeEach(() => {
   getUniverse.mockResolvedValue(UNIVERSE);
   getBoard.mockResolvedValue(BOARD);
   resolveProviderAndModel.mockResolvedValue({ provider: { id: 'api-1', type: 'api' }, selectedModel: 'example-model' });
+});
+
+describe('Code Animation fast-export audio notes', () => {
+  it('distinguishes omitted procedural/upload audio from intentional silence without generating sound', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const job = { id, status: 'completed', frame: { width: 1920, height: 1080, fps: 24, durationSeconds: 15 } };
+    codeAnimationHtml.set(id, '<!doctype html><html><head></head><body><canvas></canvas></body></html>');
+    const app = makeApp();
+    for (const [fields, note] of [
+      [{ input: { soundtrack: 'procedural' } }, /Procedural Web Audio.*export is silent/],
+      [{ audioUrl: '/api/uploads/example.wav' }, /Uploaded audio is not muxed.*export is silent/],
+      [{ input: { soundtrack: 'none' } }, /No soundtrack was requested.*intentionally silent/],
+      [{}, null], // Unknown legacy intent is not declared intentional silence.
+    ]) {
+      codeAnimationRecords.set(id, { ...job, ...fields });
+      const response = await request(app).post(`/api/code-animation/${id}/export`);
+      expect(response.status).toBe(202);
+      expect(response.body).toMatchObject({ jobId: 'media-export', status: 'queued' });
+      expect(response.body.notes).toEqual(note ? [expect.stringMatching(note)] : []);
+    }
+    expect(enqueueJob.mock.calls).toHaveLength(4);
+    for (const [queued] of enqueueJob.mock.calls) {
+      expect(queued).toEqual({ kind: 'html-composition', params: {
+        directory: expect.stringMatching(new RegExp(`^code-animation-exports/${id}/[0-9a-f-]{36}$`)),
+      } });
+    }
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('Code Animation portable packages', () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  const html = '<!doctype html><html><body><script>window.renderFrame = t => t;</script></body></html>\n';
+  const savedJob = () => ({
+    id, status: 'completed', title: 'Example animation', providerId: 'local-provider',
+    model: 'example-model', runId: 'local-run',
+    frame: { width: 1920, height: 1080, fps: 24, durationSeconds: 15 },
+    input: { concept: 'A brass toy takes flight', cast: 'A mechanical beetle', onScreenText: 'Takeoff',
+      styleNotes: 'Painted surfaces', renderer: 'webgl', soundtrack: 'none', universeId: 'local-universe' },
+    prompt: 'Example local path: <local-path>', attachments: [{ url: '/api/uploads/example.png' }],
+  });
+  const pkg = () => createCodeAnimationPackage({
+    title: 'Example short', brief: { concept: 'A toy takes flight', cast: '', onScreenText: '' },
+    styleGuide: '', renderer: { kind: 'blender', version: 'example-runtime-v1', engine: 'EEVEE' },
+    format: { width: 1920, height: 1080, fps: 24, durationSeconds: 15 }, seed: 42,
+    entrypoints: [{ role: 'scene', path: 'src/scene.py' }], assets: ['assets/sound.wav'],
+    shots: [{ label: 'Reveal', startSeconds: 0, endSeconds: 15 }],
+    events: [{ label: 'Impact', atSeconds: 3 }], audio: { kind: 'file', path: 'assets/sound.wav' },
+    execution: { requested: null, effective: null },
+  }, [{ path: 'src/scene.py', content: 'raise RuntimeError("must never execute")\n' },
+    { path: 'assets/sound.wav', content: Buffer.from([0, 255, 128]).toString('base64'), encoding: 'base64' }]);
+  // Simulate an external harness minting hashes, including for invalid paths or
+  // sizes, so rejection proves the declared boundary rather than a stale hash.
+  const rehash = (value) => {
+    const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+    value.files.forEach((file) => { file.sha256 = sha(Buffer.from(file.content, file.encoding === 'base64' ? 'base64' : 'utf8')); });
+    value.revisionHash = sha(canonicalStringify({ schemaVersion: value.schemaVersion, manifest: value.manifest,
+      files: value.files.map(({ path, sha256 }) => ({ path, sha256 })).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0) }));
+    return value;
+  };
+  const validate = (value) => request(makeApp()).post('/api/code-animation/packages/validate').send(value);
+
+  it('downloads exact legacy HTML with portable fields, validates it, and still reopens the job', async () => {
+    codeAnimationRecords.set(id, savedJob());
+    codeAnimationHtml.set(id, html);
+    const app = makeApp();
+    const response = await request(app).get(`/api/code-animation/${id}/package`);
+    expect(response.status).toBe(200);
+    expect(response.headers['content-disposition']).toContain(`code-animation-${id}.json`);
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.body.files).toEqual([{ path: 'index.html', encoding: 'utf8', content: html,
+      sha256: createHash('sha256').update(html).digest('hex') }]);
+    expect(response.body.manifest).toMatchObject({ title: 'Example animation', styleGuide: 'Painted surfaces',
+      brief: { concept: 'A brass toy takes flight', cast: 'A mechanical beetle', onScreenText: 'Takeoff' },
+      format: savedJob().frame, execution: { requested: null, effective: null }, seed: null });
+    expect(JSON.stringify(response.body)).not.toMatch(/local-provider|local-run|local-universe|local-path|api\/uploads/);
+    const checked = await validate(response.body);
+    expect(checked.status).toBe(200);
+    expect(checked.body).toMatchObject({ revisionHash: response.body.revisionHash, fileCount: 1, executed: false });
+    expect((await request(app).get(`/api/code-animation/generate/${id}`)).body.html).toBe(html);
+  });
+
+  it('validates Blender/binary packages without reading, writing, generating, or executing work', async () => {
+    const value = pkg();
+    const checked = await validate(value);
+    expect(checked.status).toBe(200);
+    expect(checked.body).toEqual({ schemaVersion: 1, revisionHash: value.revisionHash,
+      renderer: value.manifest.renderer, fileCount: 2, totalBytes: Buffer.byteLength(value.files[0].content) + 3, executed: false });
+    expect(readCodeAnimationHtml).not.toHaveBeenCalled();
+    expect(saveCodeAnimationHtml).not.toHaveBeenCalled();
+    expect(saveCodeAnimationJobRecord).not.toHaveBeenCalled();
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    // Object key/file ordering and equivalent transport encoding are incidental.
+    value.manifest.renderer = { engine: 'EEVEE', version: 'example-runtime-v1', kind: 'blender' };
+    value.files.reverse();
+    value.files[1].content = Buffer.from(value.files[1].content).toString('base64');
+    value.files[1].encoding = 'base64';
+    expect((await validate(value)).body.revisionHash).toBe(checked.body.revisionHash);
+    value.files[1].content = Buffer.from('changed source').toString('base64');
+    expect((await validate(value)).status).toBe(400);
+    rehash(value);
+    const changed = await validate(value);
+    expect(changed.status).toBe(200);
+    expect(changed.body.revisionHash).not.toBe(checked.body.revisionHash);
+  });
+
+  it.each(['../scene.py', '/scene.py', 'C:/scene.py', 'src\\scene.py', 'src//scene.py',
+    'src/./scene.py', 'src/%2e%2e/scene.py', 'src/scene.py.', 'src/CON.py', '.git/config'])
+  ('rejects portable path escape/ambiguity: %s', async (path) => {
+    const value = pkg();
+    value.files[0].path = path;
+    value.manifest.entrypoints[0].path = path;
+    const response = await validate(rehash(value));
+    expect(response.status).toBe(400);
+    expect(response.body.context.details.some(({ message }) => message.includes('portable relative package path'))).toBe(true);
+  });
+
+  it.each([
+    ['unknown version', (v) => { v.schemaVersion = 2; }],
+    ['installation command', (v) => { v.manifest.renderer.command = 'example executable'; }],
+    ['case collision', (v) => { v.files.push({ ...v.files[0], path: 'SRC/scene.py' }); }],
+    ['duplicate path', (v) => { v.files.push({ ...v.files[0] }); }],
+    ['file as parent', (v) => { v.files.push({ ...v.files[0], path: 'src/scene.py/child.py' }); }],
+    ['missing entrypoint', (v) => { v.manifest.entrypoints[0].path = 'missing.py'; }],
+    ['missing asset', (v) => { v.manifest.assets = ['missing.png']; }],
+    ['missing audio', (v) => { v.manifest.audio.path = 'missing.wav'; }],
+    ['backwards shot', (v) => { v.manifest.shots[0].startSeconds = 16; }],
+    ['late event', (v) => { v.manifest.events[0].atSeconds = 16; }],
+    ['noncanonical base64', (v) => { v.files[1].content += '!'; }],
+    ['invalid UTF-8 text', (v) => { v.files[0].content = '\ud800'; }],
+  ])('rejects malformed packages: %s', async (_name, mutate) => {
+    const value = pkg();
+    mutate(value);
+    expect((await validate(rehash(value))).status).toBe(400);
+  });
+
+  it('rejects a stale revision digest even when every file digest is correct', async () => {
+    const value = pkg();
+    value.manifest.seed = 43;
+    const response = await validate(value);
+    expect(response.status).toBe(400);
+    expect(response.body.context.details).toEqual([{ path: 'revisionHash', message: 'Revision digest does not match the package' }]);
+  });
+
+  it('enforces decoded per-file, aggregate, and file-count bounds with correct hashes', async () => {
+    const value = pkg();
+    value.files[0].content = 'é'.repeat(CODE_ANIMATION_PACKAGE_LIMITS.fileBytes / 2 + 1);
+    const oversized = await validate(rehash(value));
+    expect(oversized.status).toBe(400);
+    expect(oversized.body.context.details).toContainEqual({ path: 'files.0.content', message: 'File exceeds the decoded byte limit' });
+    value.files = Array.from({ length: 5 }, (_, i) => ({ ...pkg().files[0], path: `file${i}.py`,
+      content: 'a'.repeat(CODE_ANIMATION_PACKAGE_LIMITS.fileBytes) }));
+    value.manifest.entrypoints[0].path = 'file0.py';
+    value.manifest.assets = [];
+    value.manifest.audio = { kind: 'silence' };
+    const aggregate = await validate(rehash(value));
+    expect(aggregate.status).toBe(400);
+    expect(aggregate.body.context.details).toContainEqual({ path: 'files', message: 'Package exceeds the decoded byte limit' });
+    value.files = Array.from({ length: 65 }, (_, i) => ({ ...pkg().files[0], path: `file${i}.py` }));
+    expect((await validate(rehash(value))).status).toBe(400);
+  });
+
+  it('reports unavailable jobs and declares external/procedural audio without fetching it', async () => {
+    const app = makeApp();
+    expect((await request(app).get(`/api/code-animation/${id}/package`)).status).toBe(404);
+    expect((await request(app).get('/api/code-animation/not-an-id/package')).status).toBe(400);
+    codeAnimationRecords.set(id, { ...savedJob(), status: 'failed' });
+    expect((await request(app).get(`/api/code-animation/${id}/package`)).status).toBe(409);
+    expect(readCodeAnimationHtml).not.toHaveBeenCalled();
+    codeAnimationHtml.set(id, html);
+    codeAnimationRecords.set(id, { ...savedJob(), audioUrl: '/api/uploads/example.wav' });
+    expect((await request(app).get(`/api/code-animation/${id}/package`)).body.manifest.audio.kind).toBe('external');
+    codeAnimationRecords.set(id, { ...savedJob(), input: { ...savedJob().input, soundtrack: 'procedural' } });
+    expect((await request(app).get(`/api/code-animation/${id}/package`)).body.manifest.audio.kind).toBe('procedural');
+    expect(getTrack).not.toHaveBeenCalled();
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    codeAnimationHtml.set(id, 'a'.repeat(CODE_ANIMATION_PACKAGE_LIMITS.fileBytes + 1));
+    const tooLarge = await request(app).get(`/api/code-animation/${id}/package`);
+    expect(tooLarge.status).toBe(422);
+    expect(tooLarge.body.code).toBe('CODE_ANIMATION_PACKAGE_TOO_LARGE');
+  });
 });
 
 describe('GET /api/code-animation/jobs', () => {

@@ -1,4 +1,5 @@
 import { Plus } from 'lucide-react';
+import AudioTimingPanel from '../AudioTimingPanel.jsx';
 import BeatTimeline from '../BeatTimeline.jsx';
 import SceneCard from '../SceneCard.jsx';
 import { PlanActions } from '../ProjectActionGroups.jsx';
@@ -13,14 +14,30 @@ import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 export default function BoardStage({ board }) {
   const { project, locked, busy, sceneMedia, videoSettings, takes } = board;
   const scenes = project.scenes || [];
+  const performanceReviews = new Map();
+  const attempts = (project.autoReviews || []).flatMap((run) => run.attempts || []).slice().reverse();
+  for (const attempt of attempts) {
+    const temporal = attempt.review?.evidence?.temporal;
+    for (const shot of temporal?.shots || []) {
+      const key = `${shot.sceneId}:${shot.takeId}`;
+      if (!performanceReviews.has(key)) performanceReviews.set(key, {
+        shot: { ...shot, status: attempt.review.dependencyState?.status === 'current' ? temporal.status : 'unverified', lipSync: attempt.review.checks?.lipSync, analyzer: temporal.analyzer },
+        excerptStartSec: attempt.review.evidence.excerptStartSec,
+        excerptId: attempt.excerptId,
+      });
+    }
+  }
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
       <div className="rounded-lg border border-port-border bg-port-card p-3">
         <PlanActions project={project} busy={busy} onPlan={board.onPlan} onAutoArrange={board.onAutoArrange} />
       </div>
 
+      <AudioTimingPanel key={project.id} project={project} tracks={board.tracks} onApplied={board.replaceProject} disabled={locked || board.renderBound} />
+
       {project.audioAnalysis && scenes.length > 0 && (
-        <BeatTimeline audioAnalysis={project.audioAnalysis} scenes={scenes} lyricCues={project.lyricCues} onCommit={board.commitSceneTiming} />
+        <BeatTimeline audioAnalysis={project.audioAnalysis} scenes={scenes} lyricCues={project.lyricCues} narrativeEvents={project.composition?.narrativeEvents}
+          onSeek={(startSec) => board.seekToScene({ startSec })} onCommit={board.commitSceneTiming} />
       )}
 
       <div className="flex items-center justify-between">
@@ -37,6 +54,7 @@ export default function BoardStage({ board }) {
             <SceneCard
               key={scene.sceneId}
               scene={scene}
+              performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
               isLast={idx === scenes.length - 1}
               generatingFrame={sceneMedia.genScenes[scene.sceneId]}
@@ -50,6 +68,8 @@ export default function BoardStage({ board }) {
               onMove={board.moveScene}
               onDelete={board.onDeleteScene}
               onSplit={board.onSplitScene}
+              onRepairPerformance={['code', 'document'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
+              repairBusy={board.repairBusy || videoSettings.saving}
               onEditLocal={board.editSceneLocal}
               onSave={board.saveScene}
               onGenerateFrame={sceneMedia.generateFrame}

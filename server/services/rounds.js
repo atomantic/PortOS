@@ -20,6 +20,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { HARMONY_PARTS } from '../lib/songCraftRef.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { sanitizeRound as sanitizeRoundRecord } from '../lib/roundsValidation.js';
 
@@ -57,10 +58,10 @@ export const sanitizeRound = (raw) => sanitizeRoundRecord(raw, BUILTIN_ROUND_IDS
 // hymn-like root–fifth bass, two sustained inner pads, a sustained upper pad
 // that carries the F#→G leading tone on D7, and a sparse top descant that enters
 // late. Kept as a named export so SEED_ROUNDS and migration 076 share ONE source
-// (no drift). Voicing roles/ranges mirror songCraft.js HARMONY_PARTS.
-export const SEED_500_MILES_SCORE_PARTS = [
-  {
-    id: 'part-500-bass', label: 'Bass', role: 'bass',
+// (no drift). Part labels and roles come from the shared harmony vocabulary.
+const SEED_500_MILES_PART_SCORES = {
+  'bass': {
+    id: 'part-500-bass',
     score: [
       'clef: bass', 'key: G', 'time: 4/4', 'tempo: 68', '',
       '| rh [G] G2h(you) |',
@@ -73,8 +74,8 @@ export const SEED_500_MILES_SCORE_PARTS = [
       '| [G] G2w(miles) |',
     ].join('\n'),
   },
-  {
-    id: 'part-500-mid-2', label: 'Mid Harmony II', role: 'mid-harmony-2',
+  'mid-harmony-2': {
+    id: 'part-500-mid-2',
     score: [
       'clef: treble', 'key: G', 'time: 4/4', 'tempo: 68', '',
       '| rw |',
@@ -87,8 +88,8 @@ export const SEED_500_MILES_SCORE_PARTS = [
       '| [G] G3w(miles) |',
     ].join('\n'),
   },
-  {
-    id: 'part-500-mid-1', label: 'Mid Harmony I', role: 'mid-harmony-1',
+  'mid-harmony-1': {
+    id: 'part-500-mid-1',
     score: [
       'clef: treble', 'key: G', 'time: 4/4', 'tempo: 68', '',
       '| rw |',
@@ -101,8 +102,8 @@ export const SEED_500_MILES_SCORE_PARTS = [
       '| [G] D4w(miles) |',
     ].join('\n'),
   },
-  {
-    id: 'part-500-high-2', label: 'High Harmony II', role: 'high-harmony-2',
+  'high-harmony-2': {
+    id: 'part-500-high-2',
     score: [
       'clef: treble', 'key: G', 'time: 4/4', 'tempo: 68', '',
       '| rw |',
@@ -115,8 +116,8 @@ export const SEED_500_MILES_SCORE_PARTS = [
       '| [G] G4w(miles) |',
     ].join('\n'),
   },
-  {
-    id: 'part-500-high-1', label: 'High Harmony I', role: 'high-harmony-1',
+  'high-harmony-1': {
+    id: 'part-500-high-1',
     score: [
       'clef: treble', 'key: G', 'time: 4/4', 'tempo: 68', '',
       '| rw |',
@@ -129,7 +130,13 @@ export const SEED_500_MILES_SCORE_PARTS = [
       '| [G] B4w(miles) |',
     ].join('\n'),
   },
-];
+};
+
+// The worked example keeps its fixed staff set and notes as the vocabulary grows.
+export const SEED_500_MILES_SCORE_PARTS = Object.entries(SEED_500_MILES_PART_SCORES).map(([partId, score]) => {
+  const part = HARMONY_PARTS.find((p) => p.id === partId);
+  return { ...score, label: part.label, role: part.id };
+});
 
 // Reference performances for the built-in "500 Miles" — TikTok clips the user
 // pointed at as worked examples for the Reference material section. Kept as a

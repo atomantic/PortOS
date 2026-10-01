@@ -14,6 +14,8 @@ export const ERROR_CATEGORIES = {
   MODEL_NOT_FOUND: 'model-not-found',
   NETWORK_ERROR: 'network-error',
   TIMEOUT: 'timeout',
+  // An explicitly shortened caller spending cap, not provider health.
+  RUNTIME_BUDGET_EXHAUSTED: 'runtime-budget-exhausted',
   QUOTA_EXCEEDED: 'quota-exceeded',
   // A frontier model declined the prompt on content/safety grounds. NOT a
   // provider fault — the provider is healthy and other prompts still work, so
@@ -51,6 +53,12 @@ export const ERROR_CATEGORIES = {
  */
 export const isRunCanceledError = (err) => (
   !!err && (err.code === 'RUN_CANCELED' || err.canceled === true)
+);
+
+/** Structured only: old generic absolute timeouts retain provider recovery. */
+export const isRuntimeBudgetError = (err) => (
+  err?.code === 'RUN_RUNTIME_BUDGET_EXHAUSTED'
+  || err?.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED
 );
 
 // A LOCAL inference runtime that ran out of accelerator memory mid-request.
@@ -142,6 +150,16 @@ const ERROR_PATTERNS = [
     actionable: true,
     suggestedFix: 'Provider usage limit reached. Using fallback provider or wait for limit reset.',
     extractWaitTime: true
+  },
+  {
+    // Codex authenticated successfully, but the selected model is outside this
+    // ChatGPT account's access. This is request-specific, not a broken login
+    // or an exhausted subscription; other models may still run.
+    pattern: /model is not supported when using Codex with a ChatGPT account/i,
+    category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
+    requiresFallback: true,
+    actionable: true,
+    suggestedFix: 'Choose a model supported by the signed-in Codex account, or clear the model override to use the CLI default. Changing to API-key authentication uses separate API billing.'
   },
   {
     pattern: /unauthorized|invalid.?api.?key|authentication|forbidden|401|403/i,

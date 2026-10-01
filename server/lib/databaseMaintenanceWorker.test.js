@@ -15,6 +15,7 @@ import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.j
 import { createDatabaseWriterRegistry } from './databaseWriterRegistry.js';
 import { STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/databaseTransferStubs.js';
 import { installCutoverStubs } from '../test/fixtures/databaseCutoverStubs.js';
+import { isProcessAlive } from '../test/processAlive.js';
 
 const cutoverFixtureUrl = new URL('../test/fixtures/databaseCutoverStubs.js', import.meta.url).href;
 
@@ -88,9 +89,14 @@ beforeEach(() => {
     NODE_OPTIONS: `--import=${installPm2Stub()}` };
   delete env.VITEST;
 });
-afterEach(() => {
+afterEach(async () => {
   for (const group of strays) { try { process.kill(-group, 'SIGKILL'); } catch { /* already gone */ } }
-  for (const pid of cutover.surrogatePids()) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+  const surrogates = cutover.surrogatePids();
+  for (const pid of surrogates) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+  // These servers deliberately outlive the coordinator. Their parent handles
+  // are gone, so teardown proves exit via the zombie-aware test probe before
+  // removing any files they could still write.
+  await vi.waitFor(() => expect(surrogates.some(isProcessAlive)).toBe(false), { timeout: 15_000, interval: 20 });
   rmSync(root, { recursive: true, force: true });
 });
 

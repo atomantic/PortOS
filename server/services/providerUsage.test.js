@@ -25,6 +25,7 @@ vi.mock('./settings.js', () => ({
 }));
 vi.mock('./imageGenQuota.js', () => ({
   IMAGE_GEN_FAMILY: 'imagegen',
+  isQuotaTrackedImageMode: (mode) => mode !== 'fal',
   getImageGenQuota: vi.fn(async ({ enabledModes }) => (enabledModes.length ? {
     family: 'imagegen', label: 'Image Gen', supported: true, burnable: false,
     limits: [], activity: [], metrics: enabledModes.map((m) => ({ key: m, label: m, value: '0 renders · 24h' })),

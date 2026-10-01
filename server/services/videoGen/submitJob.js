@@ -194,12 +194,51 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     shotInstruction: performance.shotInstruction,
   } : null;
 
+  let repairReserved = false;
   const enqueue = (params) => withStagedRollback(
     async () => {
+      if (repairReserved) {
+        const { releasePerformanceRepairSubmission } = await import('../musicVideo/revisionService.js');
+        await releasePerformanceRepairSubmission(body.musicVideo.projectId, body.musicVideo.revisionId);
+      }
       if (performance) await unlink(performance.audioFilePath).catch(() => {});
       await cleanupStaged();
     },
     async () => {
+      if (body.musicVideo?.productionRunId) {
+        const { assertProductionSubmission } = await import('../musicVideo/productionService.js');
+        await assertProductionSubmission(body.musicVideo.projectId, body.musicVideo.productionRunId,
+          body.musicVideo.productionStepKey, { sceneId: body.musicVideo.sceneId, kind: 'video' });
+      }
+      if (body.musicVideo) {
+        const [{ getProject }, { assertShotActionContract, withShotActionPrompt }] = await Promise.all([
+          import('../musicVideo/projects.js'), import('../../lib/musicVideoActionContract.js'),
+        ]);
+        const project = await getProject(body.musicVideo.projectId);
+        const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
+        assertShotActionContract(scene);
+        params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });
+        const interval = performance?.shotInstruction?.songInterval;
+        if (interval && (interval.startSec !== scene?.startSec || interval.endSec !== scene?.endSec)) {
+          throw new ServerError('The shot timing changed while its performance audio was prepared — submit again', { status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });
+        }
+        if (scene?.direction?.actionContract != null) {
+          const requestedSec = performance?.shotInstruction?.audioWindow?.durationSec ?? params.duration
+            ?? (Number.isFinite(params.numFrames) ? (params.numFrames - 1) / (params.fps || 24) : null);
+          const offsetSec = performance?.shotInstruction?.edit?.inSec || 0;
+          const lastEventSec = Math.max(0, ...['actions', 'reactions'].flatMap((key) => (scene.direction.actionContract[key] || []).map((event) => event.endSec))) + offsetSec;
+          if (Number.isFinite(requestedSec) && lastEventSec > requestedSec) {
+            throw new ServerError('Shot actions do not fit inside the requested provider clip — increase its duration', { status: 422, code: 'MUSIC_VIDEO_ACTION_CONTRACT_INVALID' });
+          }
+          params.shotInstruction = {
+            ...(params.shotInstruction || { version: 1, shotMode: scene.shotMode || 'cutaway', songInterval: { startSec: scene.startSec, endSec: scene.endSec } }),
+            actionContract: structuredClone(scene.direction.actionContract),
+          };
+        }
+        const { captureTakeDependencies } = await import('../../lib/musicVideoDependencies.js');
+        const { basename } = await import('path');
+        if (scene) params.musicVideoDependencies = captureTakeDependencies(scene, prepared.sourceImagePath ? basename(prepared.sourceImagePath) : null);
+      }
       // Selective section revision (#9011): checked as the LAST step before the
       // actual queue write (staging, FableLoom compilation and the performance-
       // shot audio slice above can all take real time), so a revision closed
@@ -209,6 +248,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       if (body.musicVideo?.revisionId) {
         const { assertRevisionOpen } = await import('../musicVideo/revisionService.js');
         await assertRevisionOpen(body.musicVideo.projectId, body.musicVideo.revisionId, { sceneId: body.musicVideo.sceneId, kind: 'video' });
+        repairReserved = Boolean(performance?.shotInstruction?.repair);
       }
       return enqueueJob({ kind: 'video', params });
     },
