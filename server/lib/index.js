@@ -102,6 +102,7 @@ export * as catalogUniverseTags from './catalogUniverseTags.js';
 export * from './canonPrompt.js';
 export * from './comicScriptParser.js';
 export * from './aspectRatio.js';
+export * as audioBeatDsp from './audioBeatDsp.js';
 export * from './audioFingerprint.js';
 export * from './composeStyledPrompt.js';
 export * from './scriptVideoCompiler.js';
