@@ -277,6 +277,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Runs the configured local or provider reviewer on a caller-supplied diff.
   'POST /api/code-review/local',
 
+  // Motion toolkit: executes the downloaded installer and writes agent skills user-wide.
+  'POST /api/html-composition/toolkit/skills/install',
+
   // Code Animation contained execution (#9388): choosing the installed tool a
   // worker runs, and the containment check that spawns sandboxed processes.
   'PUT /api/code-animation/execution/tools',
