@@ -43,7 +43,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 
 const { PATHS } = await import('../../lib/paths.js');
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { encodeDocumentComposition, prepareDocumentRender } = await import('./documentRender.js');
+const { encodeDocumentComposition, prepareDocumentRender, documentRenderClock } = await import('./documentRender.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
 const { generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js');
 const { buildDocumentPreview } = await import('./documentPreview.js');
@@ -354,7 +354,9 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
       return pixels;
     };
     const beforeProof = await previewFrames(project, [0, 10, 20]);
-    const plan = { ...(await prepareDocumentRender(project)), frame: { width: 1280, height: 720 } };
+    // The full-duration proof samples static section boundaries. A supported
+    // 12fps clock keeps all 30 seconds while halving browser capture work.
+    const plan = { ...(await prepareDocumentRender(project)), clock: documentRenderClock(30, 12), frame: { width: 1280, height: 720 } };
     const renderAt = async (time, name) => {
       const outputPath = join(PATHS.videos, name);
       await encodeDocumentComposition({ project, plan, jobId: name.replace(/\W/g, ''), audioPath: master, outputPath, windowStart: time, windowEnd: time + 1 / 24 });
