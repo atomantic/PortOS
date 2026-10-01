@@ -53,6 +53,60 @@ describe('shared external-content boundary', () => {
     expect(await runUntrustedContentAnalysis({ ...args, content: 'x'.repeat(4096) })).toMatchObject({ code: 'untrusted-content-context-too-small' });
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
+  it('sends complete wider evidence through native Ollama chat with the configured context and output budget', async () => {
+    mocks.fetch.mockResolvedValue(new Response(JSON.stringify({
+      message: { content: '{"action":"review"}' }, done: true, done_reason: 'stop',
+    })));
+    const content = 'Example evidence. '.repeat(500);
+    expect(await runUntrustedContentAnalysis({ ...args, content, provider: { ...local, numCtx: 16384 } }))
+      .toMatchObject({ ok: true, value: { action: 'review' } });
+    const [url, request] = mocks.fetch.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:11434/api/chat');
+    expect(request).toMatchObject({ method: 'POST', redirect: 'error', signal: expect.any(AbortSignal) });
+    const body = JSON.parse(request.body);
+    expect(body).toEqual({
+      model: 'example-text', stream: false, options: { num_ctx: 16384, num_predict: 4096 },
+      messages: [{ role: 'system', content: expect.any(String) }, { role: 'user', content: expect.stringContaining(content) }],
+    });
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+  it('preserves the OpenAI request body for endpoints that cannot use native Ollama chat', async () => {
+    for (const provider of [local, { ...local, endpoint: 'http://127.0.0.1:1234/v1', numCtx: 16384 }]) {
+      expect(await runUntrustedContentAnalysis({ ...args, provider })).toMatchObject({ ok: true });
+      const [url, request] = mocks.fetch.mock.calls.at(-1);
+      expect(url).toBe(`${provider.endpoint}/chat/completions`);
+      expect(JSON.parse(request.body)).toEqual({
+        model: 'example-text', stream: false,
+        max_tokens: 1024,
+        ...(provider.numCtx ? { num_ctx: 16384 } : {}),
+        messages: [{ role: 'system', content: expect.any(String) }, { role: 'user', content: expect.any(String) }],
+      });
+    }
+  });
+  it('fails closed on native redirects, oversized bodies, tools and incomplete or erroneous endings without fallback', async () => {
+    const valid = { message: { content: '{"action":"review"}' }, done: true, done_reason: 'stop' };
+    const nativeResponses = [
+      { ...valid, done_reason: 'length' },
+      { ...valid, done_reason: undefined },
+      { ...valid, done: false },
+      { ...valid, error: 'example daemon error' },
+      { ...valid, message: { ...valid.message, tool_calls: [{}] } },
+      { ...valid, message: { ...valid.message, function_call: {} } },
+      { ...valid, padding: 'x'.repeat(32_000 * 8 + 4096) },
+    ].map(body => new Response(JSON.stringify(body)));
+    const redirected = new Response(JSON.stringify(valid));
+    Object.defineProperty(redirected, 'redirected', { value: true });
+    nativeResponses.push(redirected);
+    for (const nativeResponse of nativeResponses) {
+      mocks.fetch.mockResolvedValue(nativeResponse);
+      expect(await runUntrustedContentAnalysis({ ...args, provider: { ...local, numCtx: 16384 } }))
+        .toMatchObject({ ok: false, code: 'untrusted-content-reasoner-failed' });
+    }
+    mocks.fetch.mockRejectedValue(new TypeError('Redirect rejected'));
+    expect(await runUntrustedContentAnalysis({ ...args, provider: { ...local, numCtx: 16384 } }))
+      .toMatchObject({ code: 'untrusted-content-reasoner-failed' });
+    expect(mocks.fetch).toHaveBeenCalledTimes(nativeResponses.length + 1);
+  });
   it('fails closed on corrupt policies, unsafe pins and cloud processing of private messages', async () => {
     mocks.read.mockResolvedValue({ corrupt: true, settings: {} });
     expect(await runUntrustedContentAnalysis(args)).toMatchObject({ code: 'untrusted-content-settings-unreadable' });

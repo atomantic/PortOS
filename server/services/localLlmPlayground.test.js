@@ -138,6 +138,42 @@ describe('runLocalLlmTest timeout/abort contract', () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: () => reader } });
   };
 
+  it.each([
+    { numCtx: 16384, extraBody: {} },
+    { numCtx: 4096, extraBody: { num_ctx: 16384 } },
+  ])('honors the configured or caller-overridden Ollama context on normal playground runs: %j', async ({ numCtx, extraBody }) => {
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', numCtx });
+    createRun.mockResolvedValue({ runId: 'run-1', provider: { id: 'ollama' } });
+    stubStream(makeReader([`${JSON.stringify({ message: { content: 'Done.' }, done: true, done_reason: 'stop', prompt_eval_count: 10, eval_count: 2 })}\n`]));
+    const tokens = [];
+    const result = await runLocalLlmTest({ backend: 'ollama', modelId: 'm1', prompt: 'hi', maxTokens: 32, extraBody, onToken: delta => tokens.push(delta) });
+    expect(result.error).toBeUndefined();
+    expect(result.text).toBe('Done.');
+    expect(tokens).toEqual(['Done.']);
+    const [url, request] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://localhost:11434/api/chat');
+    expect(JSON.parse(request.body)).toMatchObject({ model: 'm1', stream: true, options: { num_ctx: 16384, num_predict: 32 } });
+    expect(finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ output: 'Done.', success: true }));
+  });
+
+  it('keeps the OpenAI transport for Ollama without a context override and for other backends', async () => {
+    for (const [backend, numCtx] of [['ollama', undefined], ['lmstudio', 16384]]) {
+      const endpoint = backend === 'ollama' ? 'http://localhost:11434/v1' : 'http://localhost:1234/v1';
+      getProviderById.mockResolvedValue({ id: backend, type: 'api', endpoint, numCtx });
+      createRun.mockResolvedValue({ runId: 'run-1', provider: { id: backend } });
+      stubStream(makeReader([sse({ content: 'Done.' })]));
+      const result = await runLocalLlmTest({ backend, modelId: 'm1', prompt: 'hi', maxTokens: 32 });
+      expect(result.error).toBeUndefined();
+      const [url, request] = global.fetch.mock.calls[0];
+      expect(url).toBe(`${endpoint}/chat/completions`);
+      expect(JSON.parse(request.body)).toEqual({
+        model: 'm1', messages: [{ role: 'user', content: 'hi' }], stream: true,
+        temperature: 0.3, max_tokens: 32, stream_options: { include_usage: true },
+        ...(numCtx ? { num_ctx: numCtx } : {}),
+      });
+    }
+  });
+
   it('returns the content streamed before an abort as text and persists it on the failed run', async () => {
     stubStream(makeReader([sse({ content: 'Hello ' }), sse({ content: 'world' })], { abort: true }));
 

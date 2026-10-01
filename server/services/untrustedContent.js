@@ -15,6 +15,7 @@ import { formatUntrustedContent, isUntrustedContentProvider, resolveUntrustedCon
 // headroom for.
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
+import { ollamaNativeChatUrl } from '../lib/aiToolkit/internal/ollamaNativeChat.js';
 
 const failure = (code, message) => ({ ok: false, safe: false, code, message });
 
@@ -330,20 +331,28 @@ async function analyzeScreenedContent({ provider, model, content, prompt, source
   // This transport deliberately has no runner failure hooks, run archives,
   // model healing, agent escalation, fallback, redirect, or tool execution.
   // Otherwise attacker-controlled diagnostics could become an autofixer task.
+  const nativeUrl = ollamaNativeChatUrl(selected);
   const result = await withAbortTimeout(Math.min(Math.max(Number(selected.timeout) || 300_000, 1000), 300_000), async signal => {
-    const response = await fetch(`${selected.endpoint.replace(/\/$/, '')}/chat/completions`, {
+    const response = await fetch(nativeUrl || `${selected.endpoint.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST', redirect: 'error', signal,
       headers: { 'Content-Type': 'application/json', ...(selected.apiKey ? { Authorization: `Bearer ${selected.apiKey}` } : {}) },
       body: JSON.stringify({
         model: effectiveModel,
         messages: [{ role: 'system', content: taskPrompt }, { role: 'user', content: evidence }],
-        stream: false, max_tokens: maxTokens,
-        ...(Number(selected.numCtx) > 0 ? { num_ctx: Number(selected.numCtx) } : {}),
+        stream: false,
+        ...(nativeUrl
+          ? { options: { num_ctx: Math.floor(Number(selected.numCtx)), num_predict: maxTokens } }
+          : { max_tokens: maxTokens, ...(Number(selected.numCtx) > 0 ? { num_ctx: Number(selected.numCtx) } : {}) }),
       }),
     });
     if (!response.ok || response.redirected) return null;
     const buffer = await readBodyCapped(response, config.maxOutputChars * 8 + 4096);
     const parsed = buffer ? safeJSONParse(buffer.toString('utf8')) : null;
+    if (nativeUrl) {
+      if (parsed?.error || parsed?.done !== true || parsed.done_reason !== 'stop'
+        || parsed.message?.tool_calls?.length || parsed.message?.function_call) return null;
+      return { text: parsed.message?.content };
+    }
     if (!Array.isArray(parsed?.choices) || parsed.choices.length !== 1) return null;
     const choice = parsed.choices[0];
     if (choice.finish_reason !== 'stop' || choice.message?.tool_calls?.length || choice.message?.function_call) return null;
