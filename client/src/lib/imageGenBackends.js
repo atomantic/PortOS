@@ -6,7 +6,7 @@
  * per-mode lucide icons and the settings-driven backend derivation.
  */
 
-import { Cpu, Terminal, Cloud, Sparkles } from 'lucide-react';
+import { Cpu, Terminal, Cloud, Sparkles, Zap } from 'lucide-react';
 import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, MODE_LABELS } from './imageGenModes.js';
 
 export * from './imageGenModes.js';
@@ -16,6 +16,7 @@ const MODE_ICONS = {
   [IMAGE_GEN_MODE.CODEX]: Terminal,
   [IMAGE_GEN_MODE.GROK]: Sparkles,
   [IMAGE_GEN_MODE.AGY]: Sparkles,
+  [IMAGE_GEN_MODE.FAL]: Zap,
   [IMAGE_GEN_MODE.EXTERNAL]: Cloud,
 };
 
@@ -40,6 +41,8 @@ export function deriveAvailableBackends(settings, { excludeExternal = false } = 
     out.push({ id: IMAGE_GEN_MODE.GROK, ...metaFor(IMAGE_GEN_MODE.GROK) });
   if (ig.agy?.enabled === true)
     out.push({ id: IMAGE_GEN_MODE.AGY, ...metaFor(IMAGE_GEN_MODE.AGY) });
+  if (ig.fal?.enabled === true)
+    out.push({ id: IMAGE_GEN_MODE.FAL, ...metaFor(IMAGE_GEN_MODE.FAL) });
   if (!excludeExternal && (ig.external?.sdapiUrl || ig.sdapiUrl || '').trim())
     out.push({ id: IMAGE_GEN_MODE.EXTERNAL, ...metaFor(IMAGE_GEN_MODE.EXTERNAL) });
   return out;

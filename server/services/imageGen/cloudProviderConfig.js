@@ -9,7 +9,8 @@
  *
  * `resolveCloudProviderConfig(settings, mode)` collapses all of it into one
  * call. The per-provider knowledge lives in `CLOUD_PROVIDER_SPECS` below, so
- * adding a third cloud CLI is one spec entry instead of a sweep.
+ * adding a cloud backend is one spec entry instead of a sweep — fal.ai (a
+ * metered REST API rather than a CLI) was added exactly that way.
  *
  * Deliberately a sibling of `modes.js` rather than part of it: modes.js is the
  * no-dependency enum module both provider modules import, and this file needs
@@ -28,11 +29,19 @@ import {
   renderTargetDefaults,
   resolveRenderTargetPins,
 } from '../../lib/renderModeLadder.js';
+import { FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_IDS, isFalImageModel } from '../../lib/falImageModels.js';
 import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
   IMAGE_GEN_MODE,
 } from './modes.js';
+
+// A saved `imageGen.fal.model` outside the catalog (hand-edited settings, or a
+// model a later build retired) degrades to the shipped default rather than
+// bricking every fal render; an explicit per-render override is refused
+// instead — see `knownModels` below.
+const falModelFrom = (c, override) => override
+  || (isFalImageModel(c.model) ? c.model.trim() : FAL_IMAGE_DEFAULT_MODEL);
 
 // The pure capability half of the specs below, plus the two predicates that
 // read it, live in the dependency-free `lib/imageGenCapabilities.js` leaf so
@@ -54,6 +63,11 @@ export { isModeUsable, pickUsableMode, renderTargetDefaults };
  *  - `label`      — user-facing provider name used in every disabled message.
  *  - `modelId`    — the *effective* model id for display/metadata (codex and
  *                   agy default to their cheap tiers; grok's backend is fixed).
+ *  - `knownModels` — optional catalog for a per-render override. A
+ *                   provider whose model ids are prices (fal.ai) must not let a
+ *                   typo or a stale pin from another backend reach the wire, so
+ *                   an override it rejects is a 400 (`unknownModelCode`)
+ *                   rather than a silent fallback.
  *  - `params`     — the provider's knob bundle for a queue job / direct call.
  *                   Codex's `model` carries the effective (defaulted) id so the
  *                   queue row reports what actually renders; the provider
@@ -112,6 +126,18 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
       modelIsShippedDefault: overrideIsShippedDefault || (!override && !a.model),
     }),
   }),
+  [IMAGE_GEN_MODE.FAL]: Object.freeze({
+    ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.FAL],
+    label: 'fal.ai Imagegen',
+    errorCode: 'FAL_IMAGEGEN_DISABLED',
+    knownModels: FAL_IMAGE_MODEL_IDS,
+    unknownModelCode: 'FAL_IMAGE_MODEL_UNKNOWN',
+    modelId: falModelFrom,
+    // No key in here: the queue persists job params in plaintext, so the
+    // provider re-resolves the fal.ai key from live settings at dispatch —
+    // the same rule videoGen/fal.js follows.
+    params: (c, override) => ({ model: falModelFrom(c, override) }),
+  }),
 });
 
 /**
@@ -151,6 +177,12 @@ export function resolveCloudProviderConfig(settings, mode, overrides = {}) {
   const enabled = config.enabled === true;
   const requestedModel = typeof overrides.model === 'string' ? overrides.model.trim() : '';
   const modelOverride = spec.supportsModelOverride && requestedModel ? requestedModel : null;
+  if (modelOverride && spec.knownModels && !spec.knownModels.includes(modelOverride)) {
+    throw new ServerError(
+      `${spec.label} has no model "${modelOverride}" — choose one of: ${spec.knownModels.join(', ')}`,
+      { status: 400, code: spec.unknownModelCode },
+    );
+  }
   // Only meaningful ALONGSIDE an override: it says the id the caller handed in
   // is one this resolver itself produced from the shipped default a moment ago,
   // not a choice. Without an override the spec answers from the config as it

@@ -115,7 +115,9 @@ function modelLabel(params, renderer) {
     // provider owns, so the row must name the provider rather than fall through
     // to the local-engine badge below (grok video is caught by the mode branch
     // above, which adds its aspect ratio).
-    const cloudModel = (params.modelId || '').trim();
+    // Video jobs carry `modelId`; a fal.ai IMAGE job (same 'fal' literal)
+    // carries its catalog id in `model`.
+    const cloudModel = (params.modelId || params.model || '').trim();
     const provider = modeLabel(params.mode);
     return cloudModel ? `${provider} / ${cloudModel}` : provider;
   }

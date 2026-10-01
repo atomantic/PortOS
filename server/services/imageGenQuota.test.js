@@ -143,6 +143,8 @@ describe('isQuotaTrackedImageMode', () => {
     // Local renders on the user's own GPU — there is no remote quota to report.
     expect(isQuotaTrackedImageMode('local')).toBe(false);
     expect(isQuotaTrackedImageMode('external')).toBe(false);
+    // fal.ai is metered per image — no subscription window to report.
+    expect(isQuotaTrackedImageMode('fal')).toBe(false);
   });
 });
 

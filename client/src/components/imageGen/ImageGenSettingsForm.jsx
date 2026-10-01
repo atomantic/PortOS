@@ -59,6 +59,7 @@ export default function ImageGenSettingsForm({
   const isCodex = cfg.mode === IMAGE_GEN_MODE.CODEX;
   const isGrok = cfg.mode === IMAGE_GEN_MODE.GROK;
   const isAgy = cfg.mode === IMAGE_GEN_MODE.AGY;
+  const isFal = cfg.mode === IMAGE_GEN_MODE.FAL;
   const isLocal = cfg.mode === IMAGE_GEN_MODE.LOCAL;
   const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
   const textareaCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[60px]';
@@ -94,6 +95,12 @@ export default function ImageGenSettingsForm({
           Agy's <code className="text-gray-400">generate_image</code> picks the image model internally
           and supports text-to-image only. The model in Settings is the <em>agent</em> that drives the
           tool. Style fields apply; resolution maps to the nearest supported aspect ratio.
+        </p>
+      ) : isFal ? (
+        <p className="text-[10px] text-gray-500 mt-1">
+          fal.ai renders on the model chosen in Settings → Image Gen → fal.ai (or this surface&rsquo;s
+          render pin) and is billed per image. Reference images route to that model&rsquo;s edit
+          endpoint; resolution maps to the model&rsquo;s nearest supported size.
         </p>
       ) : null}
     </div>

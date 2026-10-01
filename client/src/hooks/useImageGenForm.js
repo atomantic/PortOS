@@ -85,6 +85,10 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   const [selectedLoras, setSelectedLoras] = useState([]);
   const [agyModel, setAgyModel] = useState('');
   const [savedAgyModel, setSavedAgyModel] = useState('');
+  // Per-render fal.ai model ('' = the Settings default) and that default, for
+  // the picker's "Settings default (…)" row.
+  const [falModel, setFalModel] = useState('');
+  const [savedFalModel, setSavedFalModel] = useState('');
   const [savedLocalModelId, setSavedLocalModelId] = useState(null);
   const [initImage, setInitImage] = useState({ source: null, file: null, name: null, previewUrl: null });
   const initImagePreviewRef = useRef(initImage.previewUrl);
@@ -119,6 +123,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       codex: resolveCleanersFromConfig(settings?.imageGen?.codex, IMAGE_GEN_MODE.CODEX),
       grok: resolveCleanersFromConfig(settings?.imageGen?.grok, IMAGE_GEN_MODE.GROK),
       agy: resolveCleanersFromConfig(settings?.imageGen?.agy, IMAGE_GEN_MODE.AGY),
+      fal: resolveCleanersFromConfig(settings?.imageGen?.fal, IMAGE_GEN_MODE.FAL),
     };
     const c2 = {
       external: perMode.external.cleanC2PA,
@@ -126,6 +131,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       codex: perMode.codex.cleanC2PA,
       grok: perMode.grok.cleanC2PA,
       agy: perMode.agy.cleanC2PA,
+      fal: perMode.fal.cleanC2PA,
     };
     const dn = {
       external: perMode.external.denoise,
@@ -133,10 +139,12 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       codex: perMode.codex.denoise,
       grok: perMode.grok.denoise,
       agy: perMode.agy.denoise,
+      fal: perMode.fal.denoise,
     };
     const saved = settings?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
     const next = configureBackends(backends, saved);
     setSavedAgyModel(settings?.imageGen?.agy?.model || '');
+    setSavedFalModel(settings?.imageGen?.fal?.model || '');
     setSavedLocalModelId(settings?.imageGen?.local?.modelId || '');
     setSavedCleanC2PAByMode(c2);
     setSavedDenoiseByMode(dn);
@@ -464,11 +472,15 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
   const isQwen21Model = currentModel?.pipelineClass === 'QwenImage21Pipeline';
   const i2iCapable = isI2iCapableMode(effectiveMode);
+  const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
   const referenceSlotCount = referenceSlotsFor(effectiveMode, {
     hasInitImage: initImage.source != null,
-    maxSlots: isLocalMode && isQwen21Model ? REFERENCE_SLOT_COUNT : 4,
+    // fal.ai's edit models take 9–14 references (a mood board is the point),
+    // so it gets every form slot; the per-model cap below still bounds it.
+    maxSlots: (isLocalMode && isQwen21Model) || isFalMode ? REFERENCE_SLOT_COUNT : 4,
     localSupportsReferences: isFlux2Model || isQwen21Model,
     localInputCap: isQwen21Model ? 10 : null,
+    cloudModelId: isFalMode ? (falModel || savedFalModel || null) : null,
   });
   const activeStylePresets = useMemo(() => [
     selectedUniverse ? universeStylePreset(selectedUniverse) : null,
@@ -693,6 +705,8 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       setSelectedLoras,
       agyModel,
       setAgyModel,
+      falModel,
+      setFalModel,
       batchCount,
       setBatchCount,
       cleanC2PA,
@@ -706,6 +720,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     },
     settings: {
       savedAgyModel,
+      savedFalModel,
       savedCleanC2PAByMode,
       savedDenoiseByMode,
       reloadBackends,

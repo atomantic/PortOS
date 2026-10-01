@@ -194,6 +194,7 @@ function getGenModuleForJob(job) {
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../imageGen/grok.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.AGY) return import('../imageGen/agy.js');
+  if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.FAL) return import('../imageGen/fal.js');
   if (job.kind === 'image') return import('../imageGen/local.js');
   return Promise.resolve(null);
 }

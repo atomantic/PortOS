@@ -34,7 +34,7 @@ export const CREDENTIALS = Object.freeze([
   }),
   Object.freeze({
     id: 'fal', label: 'fal.ai', privateStore: true,
-    unlocks: 'Video generation through fal.ai.', tier: 'metered',
+    unlocks: 'Video and image generation through fal.ai.', tier: 'metered',
     getUrl: 'https://fal.ai/dashboard/keys', envVars: Object.freeze(['FAL_KEY']),
     settingsPath: 'videoGen.fal.apiKey', configurePath: '/settings/credentials',
   }),

@@ -58,7 +58,8 @@ export default function ImageGenControls({
   // than shipping a control whose value the host would silently drop. No mode
   // check here: the host owns which backends it supplies a catalog for (see
   // supportsCloudModelOverride), so a second CLI backend is a caller change,
-  // not an edit to this shared component.
+  // not an edit to this shared component. Entries are plain ids, or
+  // `{ id, label }` rows for a catalog whose ids need a human label (fal.ai).
   cloudModels = [],
   cloudModel = '',
   onCloudModelChange,
@@ -118,7 +119,10 @@ export default function ImageGenControls({
             <option value="">
               {cloudModelDefaultLabel ? `Settings default (${cloudModelDefaultLabel})` : 'Settings default'}
             </option>
-            {cloudModels.map((id) => <option key={id} value={id}>{id}</option>)}
+            {cloudModels.map((m) => {
+              const id = typeof m === 'string' ? m : m.id;
+              return <option key={id} value={id}>{typeof m === 'string' ? m : (m.label || m.id)}</option>;
+            })}
           </select>
         </FormField>
       )}

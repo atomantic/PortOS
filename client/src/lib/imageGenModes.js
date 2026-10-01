@@ -4,7 +4,7 @@
  * parity suite (`server/lib/renderTargets.parity.test.js`) and the server CI
  * job import this module directly, where client-only packages (lucide-react)
  * are not installed. Nothing here may import React, icons, or any package —
- * the only imports allowed are the three dependency-free server leaves below,
+ * the only imports allowed are the dependency-free server leaves below,
  * the same way `Layout.jsx` reads `server/lib/navManifest.js`. Icon metadata
  * and settings-driven backend derivation stay in `imageGenBackends.js`, which
  * re-exports everything below so client consumers keep a single import site.
@@ -62,6 +62,13 @@ import {
   IMAGE_RUNTIME_READINESS,
   IMAGE_RUNTIME_REMEDY,
 } from '../../../server/lib/imageRuntimeRemedies.js';
+import {
+  FAL_IMAGE_DEFAULT_MODEL,
+  FAL_IMAGE_FAMILIES,
+  FAL_IMAGE_MODEL_IDS,
+  falImageFamily,
+  falImagePriceLabel,
+} from '../../../server/lib/falImageModels.js';
 
 export {
   // Shipped per-backend defaults, so a UI that displays "the model/effort a job
@@ -76,6 +83,14 @@ export {
   CLOUD_IMAGE_GEN_MODES,
   CODEX_IMAGEGEN_DEFAULT_EFFORT,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
+  // The curated fal.ai image catalog — the ONLY ids a fal `cloudModel` or
+  // `imageGen.fal.model` may name (the server 400s anything else), so every
+  // fal model picker is built from these rather than a free-text field.
+  FAL_IMAGE_DEFAULT_MODEL,
+  FAL_IMAGE_FAMILIES,
+  FAL_IMAGE_MODEL_IDS,
+  falImageFamily,
+  falImagePriceLabel,
   // The ratios grok's image tools accept — the Settings default-ratio picker.
   GROK_ASPECT_RATIOS,
   // Backends that support image-to-image, ordered best-first: what the i2i-only
@@ -152,7 +167,9 @@ export const RENDER_TARGET_OPTIONS = Object.freeze([
 export const isCloudVideoMode = (mode) => CLOUD_VIDEO_GEN_MODES.includes(mode);
 
 // Human-facing backend names — the pure half of imageGenBackends' per-mode
-// metadata (its icon half stays there with the lucide import).
+// metadata (its icon half stays there with the lucide import). 'fal' is one
+// entry for both media kinds: IMAGE_GEN_MODE.FAL and VIDEO_GEN_MODE.FAL are the
+// same literal.
 export const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.LOCAL]: 'Local',
   [IMAGE_GEN_MODE.CODEX]: 'Codex',
@@ -162,6 +179,15 @@ export const MODE_LABELS = Object.freeze({
   [VIDEO_GEN_MODE.FAL]: 'fal.ai',
   [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
 });
+
+// The fal.ai model picker rows — one per catalog family, keyed by its
+// text-to-image endpoint (the provider switches to the family's /edit endpoint
+// on its own whenever a render carries input images), labeled with its price
+// because each choice is a different cost per image.
+export const FAL_IMAGE_MODEL_OPTIONS = Object.freeze(FAL_IMAGE_FAMILIES.map((family) => Object.freeze({
+  id: family.textEndpoint,
+  label: `${family.label} (${falImagePriceLabel(family)}, up to ${family.maxInputImages} refs)`,
+})));
 
 // True for a cloud-CLI backend: one that picks model/steps/seed internally,
 // runs through the media queue's parallel cloud lane, and needs a prompt for
@@ -317,13 +343,16 @@ export function pickI2iMode(backends) {
  * references ride a separate runner flag from the init image). Qwen 2.1 shares
  * its ten-input cap with the init image. Unsupported models take none.
  */
-export function referenceSlotsFor(mode, { hasInitImage = false, maxSlots = 4, localSupportsReferences = false, localInputCap = null } = {}) {
+export function referenceSlotsFor(mode, {
+  hasInitImage = false, maxSlots = 4, localSupportsReferences = false, localInputCap = null, cloudModelId = null,
+} = {}) {
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     if (!localSupportsReferences) return 0;
     return Math.min(maxSlots, (localInputCap ?? Infinity) - (hasInitImage ? 1 : 0));
   }
   if (!isCloudCliMode(mode)) return 0;
-  const cap = maxInputImages(mode) ?? Infinity;
+  // `cloudModelId` refines the cap for a backend whose limit is per model (fal.ai).
+  const cap = maxInputImages(mode, cloudModelId) ?? Infinity;
   return Math.min(maxSlots, cap - (hasInitImage ? 1 : 0));
 }
 

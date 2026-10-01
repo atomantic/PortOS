@@ -11,8 +11,9 @@
  * a server-side parity suite bound three of the copies. The shipped defaults
  * and the aspect-ratio alphabets were unbound and could drift silently.
  *
- * Nothing here may import anything but `generationModes.js`: the moment this
- * file reaches a service module, the client copies come back.
+ * Nothing here may import anything but `generationModes.js` and the equally
+ * dependency-free `falImageModels.js` catalog: the moment this file reaches a
+ * service module, the client copies come back.
  *
  * The three service modules re-export their old bindings, so every existing
  * server import site is untouched — the same compatibility pattern `modes.js`
@@ -20,6 +21,7 @@
  */
 
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from './generationModes.js';
+import { FAL_IMAGE_MIN_INPUT_IMAGES, falImageFamily } from './falImageModels.js';
 
 // Backends that cannot take an input image at all (#3243). Every *queueable*
 // backend now can: local (mflux/diffusers `--image-path` + FLUX.2 references),
@@ -188,6 +190,18 @@ export const IMAGE_GEN_PROVIDER_CAPABILITIES = Object.freeze({
     // render has nothing to send.
     promptRequiredWithInputImage: true,
   }),
+  [IMAGE_GEN_MODE.FAL]: Object.freeze({
+    // The model IS the product here — each catalog family is a different
+    // price and look (lib/falImageModels.js), and a per-render override is
+    // validated against that catalog.
+    supportsModelOverride: true,
+    // The cap is per MODEL (14 / 10 / 9); `maxInputImages(mode, modelId)`
+    // below reads it from the catalog. This mode-level value is the smallest
+    // of them, for a caller that does not know which fal model will render.
+    maxInputImages: FAL_IMAGE_MIN_INPUT_IMAGES,
+    // Every catalog edit endpoint lists `prompt` as required.
+    promptRequiredWithInputImage: true,
+  }),
 });
 
 // Cloud CLIs that accept a per-render `cloudModel` override. Kept as data so a
@@ -205,8 +219,17 @@ export const supportsCloudModelOverride = (mode) => MODEL_OVERRIDE_CAPABLE_MODES
  * image tool accepts. `null` for a non-cloud mode: the local runner's ceiling
  * is the form's own slot count, and external takes none at all (it never
  * reaches the resolver — `isEditCapableMode` rejects it first).
+ *
+ * `modelId` refines the answer for a backend whose cap depends on the model
+ * (fal.ai); an unknown or absent model falls back to the mode-level value.
  */
-export const maxInputImages = (mode) => IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.maxInputImages ?? null;
+export const maxInputImages = (mode, modelId = null) => {
+  if (mode === IMAGE_GEN_MODE.FAL) {
+    const family = falImageFamily(modelId);
+    if (family) return family.maxInputImages;
+  }
+  return IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.maxInputImages ?? null;
+};
 
 /**
  * Does a cloud-CLI render need a text prompt, given whether it carries an input
