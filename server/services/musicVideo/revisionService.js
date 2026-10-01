@@ -59,9 +59,16 @@ export async function startRevision(projectId, excerptId, input = {}) {
 export async function assertRevisionOpen(projectId, revisionId, { sceneId = null, kind = null } = {}) {
   if (!revisionId) return;
   const project = await getProject(projectId);
-  assertRevisionOpenForGeneration(project, revisionId, { sceneId, kind });
-  const revision = projectRevisions(project).find((entry) => entry.id === revisionId);
-  if (!project || (!runOwningRevision(project, revisionId) && revision?.type !== 'dependencies')) return;
+  const checked = assertRevisionOpenForGeneration(project, revisionId, { sceneId, kind });
+  if (checked?.repair) {
+    return mutateProjectRecord(projectId, (current) => {
+      const revision = assertRevisionOpenForGeneration(current, revisionId, { sceneId, kind });
+      if (revision.repair.submitted) throw new ServerError('This repair already reserved its one generation — review or cancel it', { status: 409, code: 'PERFORMANCE_REPAIR_SPEND_LIMIT' });
+      const next = { ...revision, repair: { ...revision.repair, submitted: true, generations: 1 } };
+      return { project: { ...current, revisions: current.revisions.map((r) => r.id === revisionId ? next : r) } };
+    }).then(() => undefined);
+  }
+  if (!project || (!runOwningRevision(project, revisionId) && checked?.type !== 'dependencies')) return;
   const { listJobs } = await import('../mediaJobQueue/index.js');
   const jobs = [...listJobs({ kind: 'video' }), ...listJobs({ kind: 'image' })];
   await mutateProjectRecord(projectId, (current) => {
@@ -112,7 +119,7 @@ export async function resumeRevision(projectId, revisionId) {
   // Derive + claim under the record's write serialization, so two overlapping
   // resumes can never both hand the same section out for (paid) generation.
   const claim = await mutateProjectRecord(projectId, (current) => claimRevisionGeneration(current, revisionId, jobs));
-  if (claim.needsGeneration.length || claim.generating.length) return { ...claim, render: null };
+  if (claim.needsGeneration.length || claim.generating.length || claim.revision.sections.some((s) => s.state === 'review-needed')) return { ...claim, render: null };
   // Every rejected section holds a take: re-render the draft window. The
   // excerpt render links itself to the revision in its creation write (and
   // refuses one that closed or is already rendering meanwhile).
@@ -178,4 +185,27 @@ export async function startDependencyRepair(projectId, input) {
     }
     return startDependencyRepairOnProject(current, impact, input);
   });
+}
+
+/** Refund only a synchronous enqueue failure with no durable job. A restart
+ * leaves an ambiguous reservation spent until the director reviews it.
+ */
+export async function releasePerformanceRepairSubmission(projectId, revisionId) {
+  const { listJobs } = await import('../mediaJobQueue/index.js');
+  return mutateProjectRecord(projectId, (current) => {
+    const revision = projectRevisions(current).find((r) => r.id === revisionId);
+    const jobs = listJobs({ kind: 'video' });
+    if (!revision?.repair || jobs.some((job) => job.params?.musicVideo?.projectId === projectId && job.params?.musicVideo?.revisionId === revisionId)) return { project: current };
+    const next = { ...revision, repair: { ...revision.repair, submitted: false, generations: 0 } };
+    return { project: { ...current, revisions: current.revisions.map((r) => r.id === revisionId ? next : r) } };
+  });
+}
+
+/** Queue dispatch re-check: cancellation after reservation must not start a
+ * provider. This validates without charging the reservation a second time.
+ */
+export async function assertPerformanceRepairDispatch(tag) {
+  const project = await getProject(tag.projectId);
+  const revision = assertRevisionOpenForGeneration(project, tag.revisionId, { sceneId: tag.sceneId, kind: 'video' });
+  if (!revision?.repair?.submitted) throw new ServerError('The repair has no open generation reservation', { status: 409, code: 'PERFORMANCE_REPAIR_STALE' });
 }

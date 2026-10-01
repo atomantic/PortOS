@@ -661,7 +661,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v15 = versioned take and review dependency evidence. Older peers would
   // reuse stale passes or render clips derived from a replaced plate. Legacy
   // evidence remains unknown; no historical verdict is retroactively blessed.
-  musicVideoProjects: 15,
+  // v16 = accepted-prefix continuation edit points and one-generation repair
+  // reservations. Older peers could regenerate accepted footage or duplicate
+  // a submitted suffix after restart. Absent repair metadata stays legacy.
+  musicVideoProjects: 16,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

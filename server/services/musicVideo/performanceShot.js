@@ -242,6 +242,12 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   // before and the completion hook refuses to attach it to a deleted scene.
   assertShotActionContract(scene);
   if (!isPerformanceScene(scene)) return null;
+  if (scene.performanceRepair) {
+    const { assertRevisionOpenForGeneration } = await import('./revision.js');
+    if (musicVideo.revisionId !== scene.performanceRepair.revisionId) throw refuse('A continuation must use its reserved repair revision', 'PERFORMANCE_REPAIR_REVISION_REQUIRED', 409);
+    assertRevisionOpenForGeneration(project, musicVideo.revisionId, { sceneId: scene.sceneId, kind: 'video' });
+    if (!sourceImagePath || basename(sourceImagePath) !== scene.referenceImageId) throw refuse('Use the accepted boundary frame for this continuation', 'PERFORMANCE_REPAIR_STALE', 409);
+  }
 
   const capability = performanceCapability(backend);
   if (!capability) throw refuse(performanceBlockedReason(backend), 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
@@ -255,10 +261,14 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   // submission (the common case) never needs.
   const { resolveMasterAudioPath } = await import('./render.js');
   const masterPath = await resolveMasterAudioPath(project);
+  if (scene.performanceRepair) await assertCurrentPerformanceTakes(project, masterPath);
   const songDurationSec = await probeVideoDuration(masterPath);
   if (songDurationSec == null) throw refuse('Could not read the song duration for this performance shot', 'MUSIC_VIDEO_AUDIO_UNREADABLE');
   const plan = planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec, capability });
   if (!plan.ok) throw refuse(plan.message, plan.code);
+  if (scene.performanceRepair && (plan.windowStartSec !== scene.startSec || plan.windowEndSec !== scene.endSec)) {
+    throw refuse('Review needed: this provider cannot continue only the remaining audio interval', 'PERFORMANCE_REPAIR_REVIEW_NEEDED', 409);
+  }
   const offered = getFalVideoModel(capability.modelId)?.resolution?.options || capability.resolutions || [];
   const pick = (value) => (typeof value === 'string' ? offered.find((o) => o.toLowerCase() === value.trim().toLowerCase()) : null);
   const takeResolution = pick(resolution) || pick(project.videoSettings?.falLipSyncResolution) || capability.defaultResolution;
@@ -303,6 +313,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   const transcription = capability.transcription === true && project.videoSettings?.falLipSyncTranscription !== false;
   const shotInstruction = {
     version: SHOT_INSTRUCTION_VERSION,
+    ...(scene.performanceRepair ? { repair: { ...scene.performanceRepair, role: 'continuation' } } : {}),
     shotMode: 'performance',
     createdAt: new Date().toISOString(),
     speaker: scene.performanceSpeaker || null,

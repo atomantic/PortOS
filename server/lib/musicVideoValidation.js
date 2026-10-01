@@ -1007,3 +1007,9 @@ export const musicVideoAudioAnalysisSchema = z.object({
     endSec: z.number().min(0),
   }).nullable().optional(),
 }).strict();
+
+export const musicVideoPerformanceRepairSchema = z.object({
+  excerptId: z.string().min(1).max(200),
+  sourceAssetId: z.string().min(1).max(200),
+  boundarySec: z.number().finite().min(0).max(36000),
+}).strict();

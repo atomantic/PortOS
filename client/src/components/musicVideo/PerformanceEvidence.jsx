@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { formatTimecode } from '../../utils/formatters.js';
+import { formatTimecode, formatUsd } from '../../utils/formatters.js';
 
 /** One transport: muted output picture against the take's recorded source.
  * Word windows are clip-relative; temporal evidence is excerpt-relative.
  */
-export default function PerformanceEvidence({ clipSrc, instruction, temporal = null, excerptStartSec = 0 }) {
+export default function PerformanceEvidence({ clipSrc, instruction, temporal = null, excerptStartSec = 0, repair = null, onRepair, repairBusy = false }) {
   const video = useRef(null);
   const audio = useRef(null);
   const [sourceMuted, setSourceMuted] = useState(false);
@@ -64,6 +64,14 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
       </div>
       <p className="text-port-text-muted">Temporal lip-sync: {temporal?.lipSync || 'unverified'}{temporal?.analyzer ? ` · ${temporal.analyzer.id} ${temporal.analyzer.version}` : ' · review needed'}</p>
       {temporal && <p className="text-port-text-muted">Measured evidence: {temporal.status}</p>}
+      {repair && <div className="rounded border border-port-border p-2 space-y-1" aria-label="Suffix repair">
+        {repair.ok && onRepair ? <>
+          <p>Keep accepted prefix through {formatTimecode(repair.boundarySec)}. Continue only {formatTimecode(repair.boundarySec)}–{formatTimecode(repair.endSec)} (song time).</p>
+          <p>Next spend: {formatUsd(repair.costUsd)} · one generation · accepted boundary frame</p>
+          <button type="button" disabled={repairBusy} onClick={onRepair}
+            className="rounded border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">{repairBusy ? 'Repairing…' : 'Repair from here'}</button>
+        </> : <p className="text-port-warning">{repair.ok ? 'Review needed: update the authored composition edit points before continuing' : repair.message}</p>}
+      </div>}
       <ul className="space-y-1" aria-label="Temporal evidence spans">
         {spans.map((span, i) => (
           <li key={i}>

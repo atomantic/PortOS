@@ -259,7 +259,7 @@ export function revisionSectionStates(project, revision, jobs = [], nowMs = Date
         && within(job.completedAt, TAKE_ATTACH_GRACE_MS, nowMs) && !takes.some((t) => t.jobId === job.id))
     ));
     const claimed = within(section.claimedAt, GENERATION_CLAIM_LEASE_MS, nowMs);
-    return { ...section, state: pending || claimed ? 'generating' : 'needs-generation' };
+    return { ...section, state: pending || claimed ? 'generating' : revision.repair?.submitted ? 'review-needed' : 'needs-generation' };
   });
 }
 
@@ -379,6 +379,15 @@ export function assertRevisionOpenForGeneration(project, revisionId, { sceneId =
     if (scene?.[TAKE_SLOT[kind]]) throw revisionError(409, 'REVISION_SECTION_SELECTED', 'This repair section already has a selected clip — clear or review it before submitting again');
     if (!section || musicVideoDependencyChanges(project, section.dependencies).length) {
       throw revisionError(409, 'DEPENDENCY_REPAIR_CHANGED', 'This generation does not match the previewed repair inputs');
+    }
+  }
+  if (revision.repair) {
+    const scene = project.scenes?.find((s) => s.sceneId === sceneId);
+    const prefix = project.scenes?.find((s) => s.sceneId === revision.repair.sourceSceneId);
+    if (kind !== 'video' || sceneId !== revision.repair.suffixSceneId || scene?.performanceRepair?.revisionId !== revisionId
+      || prefix?.videoHistoryId !== revision.repair.sourceAssetId || prefix?.endSec !== revision.repair.boundarySec
+      || scene?.startSec !== revision.repair.boundarySec || scene?.endSec !== revision.repair.sourceInterval.endSec) {
+      throw revisionError(409, 'PERFORMANCE_REPAIR_STALE', 'This generation no longer matches the accepted prefix and repair interval');
     }
   }
   if (revision.mediumBasis || codeFirst(project)) {

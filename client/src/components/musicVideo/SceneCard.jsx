@@ -5,6 +5,7 @@ import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon,
 import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
+import { planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
@@ -69,7 +70,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null,
+  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
@@ -120,6 +121,8 @@ export default function SceneCard({
   const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
   const instruction = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
+  const repairPlan = planPerformanceRepair({ scene, temporal: performanceReview?.shot,
+    excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   return (
     <details className="group min-w-0 rounded-lg border border-port-border bg-port-card">
@@ -368,7 +371,11 @@ export default function SceneCard({
         <div className="flex items-center gap-2 flex-wrap">
           {scene.videoHistoryId && performance && (
             <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}
-              temporal={performanceReview?.shot} excerptStartSec={performanceReview?.excerptStartSec || 0} />
+              temporal={performanceReview?.shot} excerptStartSec={performanceReview?.excerptStartSec || 0}
+              repair={repairPlan} repairBusy={repairBusy || settingsSaving || generatingVideo || takeBusy}
+              onRepair={onRepairPerformance ? () => onRepairPerformance(scene.sceneId, {
+                excerptId: performanceReview.excerptId, sourceAssetId: repairPlan.sourceAssetId, boundarySec: repairPlan.boundarySec,
+              }) : null} />
           )}
           {scene.videoHistoryId && !performance && (
             <div className="relative w-40 shrink-0">

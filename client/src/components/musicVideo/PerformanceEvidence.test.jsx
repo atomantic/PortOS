@@ -45,3 +45,20 @@ describe('PerformanceEvidence', () => {
     expect(screen.getByText(/Recorded source unavailable/)).toBeTruthy();
   });
 });
+
+// This interaction verifies the spend/boundary shown before the explicit
+// submission, and that inconclusive evidence cannot expose a repair action.
+it('shows the accepted boundary and next spend, disables duplicate clicks, and requires a conclusive repair plan', () => {
+  const onRepair = vi.fn();
+  const repair = { ok: true, boundarySec: 14, endSec: 24, costUsd: 1.6 };
+  const view = render(<PerformanceEvidence clipSrc="/example.mp4" instruction={instruction} repair={repair} onRepair={onRepair} />);
+  expect(screen.getByText(/Continue only 0:14.00–0:24.00/)).toBeTruthy();
+  expect(screen.getByText(/Next spend: \$1.60/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Repair from here' }));
+  expect(onRepair).toHaveBeenCalledTimes(1);
+  view.rerender(<PerformanceEvidence instruction={instruction} repair={repair} onRepair={onRepair} repairBusy />);
+  expect(screen.getByRole('button', { name: 'Repairing…' }).disabled).toBe(true);
+  view.rerender(<PerformanceEvidence instruction={instruction} repair={{ ok: false, message: 'Review needed: evidence is inconclusive' }} onRepair={onRepair} />);
+  expect(screen.queryByRole('button', { name: 'Repair from here' })).toBeNull();
+  expect(screen.getByText(/evidence is inconclusive/)).toBeTruthy();
+});

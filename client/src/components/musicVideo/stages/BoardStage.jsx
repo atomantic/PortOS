@@ -20,8 +20,9 @@ export default function BoardStage({ board }) {
     for (const shot of temporal?.shots || []) {
       const key = `${shot.sceneId}:${shot.takeId}`;
       if (!performanceReviews.has(key)) performanceReviews.set(key, {
-        shot: { ...shot, status: temporal.status, lipSync: attempt.review.checks?.lipSync, analyzer: temporal.analyzer },
+        shot: { ...shot, status: attempt.review.dependencyState?.status === 'current' ? temporal.status : 'unverified', lipSync: attempt.review.checks?.lipSync, analyzer: temporal.analyzer },
         excerptStartSec: attempt.review.evidence.excerptStartSec,
+        excerptId: attempt.excerptId,
       });
     }
   }
@@ -63,6 +64,8 @@ export default function BoardStage({ board }) {
               onMove={board.moveScene}
               onDelete={board.onDeleteScene}
               onSplit={board.onSplitScene}
+              onRepairPerformance={['code', 'document'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
+              repairBusy={board.repairBusy || videoSettings.saving}
               onEditLocal={board.editSceneLocal}
               onSave={board.saveScene}
               onGenerateFrame={sceneMedia.generateFrame}
