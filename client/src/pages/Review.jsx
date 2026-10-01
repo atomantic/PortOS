@@ -162,6 +162,7 @@ export default function Review() {
   useEscapeKey(briefingFullscreen, () => setBriefingFullscreen(false));
   const [counts, setCounts] = useState(null);
   const countsRequestId = useRef(0);
+  const itemsRequestId = useRef(0);
 
   // Cross-domain live queue (M42 P5). Source payloads remain live projections;
   // presentation decisions are durable server-side markers keyed by the row's
@@ -173,13 +174,16 @@ export default function Review() {
   const [resolvingQueueIds, setResolvingQueueIds] = useState(() => new Set());
 
   const fetchItems = useCallback(() => {
+    const requestId = ++itemsRequestId.current;
     const params = filter === 'all' ? {} : { status: filter };
     setLoading(true);
     setItemsError(false);
     return api.getReviewItems(params, { silent: true }).then(data => {
+      if (requestId !== itemsRequestId.current) return;
       setItems(data);
       setLoading(false);
     }).catch(() => {
+      if (requestId !== itemsRequestId.current) return;
       setItems([]);
       setItemsError(true);
       setLoading(false);
@@ -202,6 +206,7 @@ export default function Review() {
     fetchItems();
     fetchCounts();
     fetchBriefing();
+    return () => { itemsRequestId.current += 1; };
   }, [fetchItems, fetchCounts, fetchBriefing]);
 
   useEffect(() => {
