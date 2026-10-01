@@ -3,8 +3,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
+vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [{ id: 'example-provider', name: 'Example agent', type: 'cli', command: 'claude', models: ['example-model'] }] }) }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../../services/apiCodeAnimation', () => ({
+  preflightCodeAnimationProject: vi.fn(),
   listCodeAnimationProjects: vi.fn(), createCodeAnimationProject: vi.fn(), getCodeAnimationProject: vi.fn(),
   updateCodeAnimationProject: vi.fn(), importCodeAnimationPackage: vi.fn(), acceptCodeAnimationSource: vi.fn(),
   getCodeAnimationProjectBrief: vi.fn(), getCodeAnimationRevisionPackage: vi.fn(), listCodeAnimationProjectHistory: vi.fn(),
@@ -22,7 +24,7 @@ const project = {
     execution: { requested: null, effective: null }, assets: [], events: [], shots: [],
   },
   budgets: { iterations: 3, timeSeconds: 123, tokens: 4321, renderSeconds: 45, diskBytes: 123456 },
-  localSettings: { model: 'example-model', mode: 'cli' },
+  localSettings: { providerId: 'example-provider', model: 'example-model', mode: 'cli', effort: 'high' },
   acceptedRevisionId: null, candidateRevisionId: '00000000-0000-4000-8000-000000000002',
 };
 const page = (items = []) => ({ items, nextCursor: null });
@@ -74,6 +76,24 @@ describe('Production project rendered interactions', () => {
     expect(await screen.findByText('example-hash')).toBeInTheDocument();
     expect(screen.getByText(/Source execution: None/)).toBeInTheDocument();
     expect(api.importCodeAnimationPackage).toHaveBeenCalledWith(project.id, source, { silent: true });
+  });
+
+  it('preserves the authoring pin across renderer edits and checks only saved settings', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText('Renderer');
+    await user.selectOptions(screen.getByLabelText('Renderer'), 'blender');
+    expect(screen.getByRole('button', { name: 'Check saved authoring settings' })).toBeDisabled();
+    api.updateCodeAnimationProject.mockImplementation(async (_id, input) => ({ ...project, ...input }));
+    await user.click(screen.getByRole('button', { name: 'Save project settings' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check saved authoring settings' })).toBeEnabled());
+    expect(api.updateCodeAnimationProject).toHaveBeenCalledWith(project.id, expect.objectContaining({ localSettings: project.localSettings, manifest: expect.objectContaining({ renderer: expect.objectContaining({ kind: 'blender' }) }) }), { silent: true });
+    api.preflightCodeAnimationProject.mockResolvedValue({ problems: ['Example unsupported effort'], resolved: null, notes: ['Settings preview only.'] });
+    await user.click(screen.getByRole('button', { name: 'Check saved authoring settings' }));
+    expect(await screen.findByText('Example unsupported effort')).toBeInTheDocument();
+    expect(screen.getByText(/Actual execution settings remain unverified/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Renderer'), 'browser');
+    expect(screen.queryByText('Example unsupported effort')).not.toBeInTheDocument();
   });
 
   it('creates an opt-in project and navigates to its durable detail URL', async () => {

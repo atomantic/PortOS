@@ -60,3 +60,5 @@ export const cancelCodeAnimationExport = (exportJobId, options) => request(`/htm
   method: 'POST',
   ...options,
 });
+
+export const preflightCodeAnimationProject = (id, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/preflight`, options);
