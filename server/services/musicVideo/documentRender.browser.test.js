@@ -119,12 +119,12 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     await rm(second.outputPath, { force: true });
   }, 120000);
 
-  it('matches bounded grades across real composed/document ramps and song-time excerpts', async () => {
+  it.each(['ramps', 'generated-shots'])('matches bounded grades across real composed/document %s and song-time excerpts', async (fixture) => {
     // render.js initializes the media registry. Import it only when this test
     // runs: a skipped browser suite never executes afterAll cleanup.
     const { buildMusicVideoFfmpegArgs } = await import('./render.js');
-    // Synthetic reference: horizontal RGB/grey ramps plus hard black/white
-    // endpoints. No install data, provider calls, or network images.
+    // Synthetic ramps and a committed, explicitly commissioned generated-shot
+    // fixture. Tests access no install data, providers, or network images.
     const width = 1280;
     const height = 720;
     const fps = 12;
@@ -141,7 +141,11 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     await mkdir(PATHS.music, { recursive: true });
     await mkdir(PATHS.videos, { recursive: true });
     const reference = join(dir, 'reference.png');
-    await sharp(bytes, { raw: { width, height, channels: 3 } }).png().toFile(reference);
+    if (fixture === 'generated-shots') {
+      await copyFile(new URL('../../../docs/validation/assets/9302/generated-reference.png', import.meta.url), reference);
+    } else {
+      await sharp(bytes, { raw: { width, height, channels: 3 } }).png().toFile(reference);
+    }
     await writeFile(join(dir, 'index.html'), `<!doctype html><style>html,body{margin:0}img{width:${width}px;height:${height}px;display:block}</style>
       <img id="reference" src="reference.png"><script>window.portosComposition={durationSec:2,fps:${fps},width:${width},height:${height},seek:async()=>{await document.getElementById('reference').decode()}};</script>`);
     const master = join(PATHS.music, 'grade.wav');
@@ -172,7 +176,12 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     const excerpt = join(PATHS.videos, 'grade-excerpt.mp4');
     await encodeDocumentComposition({ project, plan, jobId: 'grade-excerpt', audioPath: master, outputPath: excerpt, windowStart: 0.5, windowEnd: 1.5 });
     const excerptRgb = decode(excerpt);
-    expect(mae(excerptRgb, documentRgb.subarray(6 * frameSize, 18 * frameSize))).toBeLessThan(2);
+    // Independently encoded H.264 portrait textures have more prediction error
+    // than ramps. Retain the ramp's bound and use 3/255 for the new fixture;
+    // the repeated excerpt below must still be decoded byte-identical.
+    const excerptTolerance = fixture === 'ramps' ? 2 : 3;
+    const excerptError = mae(excerptRgb, documentRgb.subarray(6 * frameSize, 18 * frameSize));
+    expect(excerptError).toBeLessThan(excerptTolerance);
     const repeat = join(PATHS.videos, 'grade-repeat.mp4');
     await encodeDocumentComposition({ project, plan, jobId: 'grade-repeat', audioPath: master, outputPath: repeat, windowStart: 0.5, windowEnd: 1.5 });
     expect(decode(repeat).equals(excerptRgb)).toBe(true);
@@ -180,25 +189,41 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     execFileSync(ffmpeg, ['-v', 'error', ...buildMusicVideoFfmpegArgs(clips, master, composedExcerpt, {
       grade, frameGrid: true, excerpt: { startSec: 0.5, endSec: 1.5 },
     }).args], { stdio: 'pipe' });
-    expect(mae(decode(composedExcerpt), composedRgb.subarray(6 * frameSize, 18 * frameSize))).toBeLessThan(2);
+    const composedExcerptError = mae(decode(composedExcerpt), composedRgb.subarray(6 * frameSize, 18 * frameSize));
+    expect(composedExcerptError).toBeLessThan(excerptTolerance);
+    let neutralExcerptError = null;
+    if (fixture === 'generated-shots') {
+      const neutralProject = { ...project, composition: { ...project.composition, grade: null } };
+      const neutralFull = join(PATHS.videos, 'neutral-full.mp4');
+      const neutralExcerpt = join(PATHS.videos, 'neutral-excerpt.mp4');
+      await encodeDocumentComposition({ project: neutralProject, plan, jobId: 'neutral-full', audioPath: master, outputPath: neutralFull });
+      await encodeDocumentComposition({ project: neutralProject, plan, jobId: 'neutral-excerpt', audioPath: master, outputPath: neutralExcerpt, windowStart: 0.5, windowEnd: 1.5 });
+      neutralExcerptError = mae(decode(neutralExcerpt), decode(neutralFull).subarray(6 * frameSize, 18 * frameSize));
+      expect(neutralExcerptError).toBeLessThan(3);
+      // A codec baseline independently bounds the additional grading error,
+      // rather than letting a textured fixture excuse arbitrary divergence.
+      expect(excerptError).toBeLessThan(neutralExcerptError + 1);
+    }
     const pixel = (rgb, frame, x, y) => [...rgb.subarray(frame * frameSize + (y * width + x) * 3, frame * frameSize + (y * width + x) * 3 + 3)];
-    const cool = pixel(documentRgb, 6, 640, 90);
-    const warm = pixel(documentRgb, 12, 640, 90);
-    const monochrome = pixel(documentRgb, 20, 640, 270);
-    expect(Math.max(...monochrome) - Math.min(...monochrome)).toBeLessThan(4);
-    expect(cool[2]).toBeGreaterThan(cool[0] + 15);
-    expect(warm[0]).toBeGreaterThan(warm[2] + 15);
-    expect(Math.max(...pixel(documentRgb, 6, 0, 90))).toBeLessThan(5);
-    expect(Math.min(...pixel(documentRgb, 6, width - 1, 90))).toBeGreaterThan(248);
+    if (fixture === 'ramps') {
+      const cool = pixel(documentRgb, 6, 640, 90);
+      const warm = pixel(documentRgb, 12, 640, 90);
+      const monochrome = pixel(documentRgb, 20, 640, 270);
+      expect(Math.max(...monochrome) - Math.min(...monochrome)).toBeLessThan(4);
+      expect(cool[2]).toBeGreaterThan(cool[0] + 15);
+      expect(warm[0]).toBeGreaterThan(warm[2] + 15);
+      expect(Math.max(...pixel(documentRgb, 6, 0, 90))).toBeLessThan(5);
+      expect(Math.min(...pixel(documentRgb, 6, width - 1, 90))).toBeGreaterThan(248);
+    }
     // Optional local proof export: only synthetic fixtures, never live records.
     if (process.env.PORTOS_GRADE_PROOF_DIR) {
-      const proof = process.env.PORTOS_GRADE_PROOF_DIR;
+      const proof = join(process.env.PORTOS_GRADE_PROOF_DIR, fixture);
       await mkdir(proof, { recursive: true });
       await copyFile(reference, join(proof, 'reference.png'));
       for (const [label, path] of [['document', document], ['composed', composed], ['excerpt', excerpt]]) {
         execFileSync(ffmpeg, ['-v', 'error', '-y', '-i', path, '-vf', "select='eq(n,6)+eq(n,12)+eq(n,20)',scale=480:270,tile=3x1", '-frames:v', '1', join(proof, `${label}.png`)]);
       }
-      await writeFile(join(proof, 'metrics.json'), JSON.stringify({ paletteMeanAbsoluteError: mae(documentRgb, composedRgb), excerptMeanAbsoluteError: mae(excerptRgb, documentRgb.subarray(6 * frameSize, 18 * frameSize)), repeatIdentical: true }, null, 2));
+      await writeFile(join(proof, 'metrics.json'), JSON.stringify({ paletteMeanAbsoluteError: mae(documentRgb, composedRgb), excerptMeanAbsoluteError: excerptError, composedExcerptMeanAbsoluteError: composedExcerptError, neutralExcerptMeanAbsoluteError: neutralExcerptError, repeatIdentical: true }, null, 2));
     }
   }, 120000);
 
