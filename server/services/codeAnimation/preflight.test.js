@@ -11,7 +11,7 @@ vi.mock('../promptRunner.js', async importOriginal => ({ ...await importOriginal
 import { getProjectRecord } from './projectStore.js';
 import { getProviderById, getSelectableProviders } from '../providers.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
-import { preflightProductionProject } from './preflight.js';
+import { preflightProductionProject, _recordEffectiveRoute } from './preflight.js';
 
 const app = express();
 app.use('/api/code-animation', router);
@@ -73,5 +73,23 @@ describe('saved production authoring preflight', () => {
     expect(result.resolved).toBeNull();
     expect(result.problems).toEqual(['The selected provider is missing or disabled.']);
     expect(getProviderById).not.toHaveBeenCalled();
+  });
+});
+
+describe('pinned route and substitution provenance', () => {
+  const resolved = { providerId: 'example', model: 'example-model', effort: 'high' };
+  it('defaults to pinned, reports route capabilities and never claims visual review', async () => {
+    getSelectableProviders.mockResolvedValue({ providers: [{ ...provider, type: 'api', models: ['example-model'] }] });
+    const result = await preflightProductionProject('project');
+    expect(result).toMatchObject({ substitution: 'pinned', allowFallback: false, capabilities: { textPackageOutput: true, imageInputAccepted: true, imageInspection: false, visualReview: false, research: false } });
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+  it('refuses a silent fallback in pinned mode', () => {
+    expect(() => _recordEffectiveRoute(resolved, {}, { provider: { id: 'other' }, usedFallback: true })).toThrow(/substituted/);
+  });
+  it('records an opted-in substitution and passes an unchanged route through', () => {
+    const swapped = _recordEffectiveRoute(resolved, { substitution: 'allowed' }, { provider: { id: 'example' }, fallbackProvider: { id: 'other' }, model: 'm2', usedFallback: true });
+    expect(swapped).toMatchObject({ substituted: true, effective: { providerId: 'other', model: 'm2' }, decision: { optedIn: true, from: 'example', to: 'other' } });
+    expect(_recordEffectiveRoute(resolved, {}, { provider: { id: 'example' }, model: 'example-model' })).toMatchObject({ substituted: false, decision: null });
   });
 });
