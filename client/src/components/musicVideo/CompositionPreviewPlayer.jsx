@@ -69,15 +69,17 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
       if (message.type === 'portos-mv:loaded') {
         const files = {};
         let loaded = 0;
+        let missingMedia = false;
         for (const asset of preview.assets || []) {
           if (!active) return;
           setStatus(`Loading preview media ${loaded + 1}/${preview.assets.length}…`);
           const blob = blobCache.current.get(asset.url) || await fetchMusicVideoPreviewAsset(asset.url).catch(() => null);
           if (blob) { blobCache.current.set(asset.url, blob); files[asset.key] = blob; }
+          else missingMedia = true;
           loaded += 1;
         }
         if (!active) return;
-        setStatus(loaded === (preview.assets || []).length ? '' : 'Some preview media could not be loaded');
+        setStatus(missingMedia ? 'Some preview media could not be loaded' : '');
         iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:assets', files }, '*');
         state.ready = true;
         postSeek(t);
