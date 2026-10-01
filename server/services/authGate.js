@@ -1,9 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { isIP } from 'node:net';
 import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
-import { browserRequestRefusal, DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword } from '../../lib/portosAuthCore.js';
+import { browserRequestRefusal, isLocalConnection, extractBasicPassword } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
 import {
@@ -222,23 +221,6 @@ export const authGate = async (req, res, next) => {
   sendErrorResponse(res, new ServerError('Authentication required', {
     status: 401, code: 'AUTH_REQUIRED',
   }));
-};
-
-const isLoopbackAddress = (value) => {
-  if (typeof value !== 'string') return false;
-  const address = value.replace(/^::ffff:/i, '');
-  return address === '::1' || (isIP(address) === 4 && address.startsWith('127.'));
-};
-
-// A loopback connection, restricted further when it carries the dev proxy's
-// client-address marker: Vite proxies every browser from its own loopback
-// socket, so the marker's address is the real caller. A direct remote caller
-// cannot gain authority by forging a loopback marker — its connection address
-// is not loopback to begin with.
-const isLocalConnection = (remoteAddress, headers) => {
-  const proxyClient = headers?.[DEV_PROXY_CLIENT_ADDRESS_HEADER];
-  return isLoopbackAddress(remoteAddress)
-    && (proxyClient === undefined || isLoopbackAddress(proxyClient));
 };
 
 // Host execution needs operator authority: a peer's credential — the scoped
