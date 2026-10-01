@@ -15,7 +15,7 @@
  */
 
 import { Router } from 'express';
-import { pm2ProcessNameSchema } from '../../lib/validation.js';
+import { logsQuerySchema, pm2ProcessNameSchema, validateRequest } from '../../lib/validation.js';
 import { join, extname } from 'path';
 import { tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import * as appsService from '../../services/apps.js';
@@ -287,7 +287,7 @@ router.get('/:id/status', loadApp, asyncHandler(async (req, res) => {
 // GET /api/apps/:id/logs - Get logs
 router.get('/:id/logs', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  const lines = parseInt(req.query.lines, 10) || 100;
+  const { lines } = validateRequest(logsQuerySchema.pick({ lines: true }), req.query);
   const processName = req.query.process ?? app.pm2ProcessNames?.[0];
 
   if (processName === undefined) {

@@ -512,6 +512,14 @@ describe('Apps Lifecycle Routes', () => {
       expect(pm2Service.getLogs).toHaveBeenCalledWith('_worker', 100, undefined);
     });
 
+    it.each(['5000000', '-5'])('rejects out-of-range lines=%s before PM2 reads', async (lines) => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', pm2ProcessNames: ['test-app'] });
+      const response = await request(app).get(`/api/apps/app-001/logs?lines=${lines}`);
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(pm2Service.getLogs).not.toHaveBeenCalled();
+    });
+
     it('should return logs for app process', async () => {
       const mockApp = {
         id: 'app-001',
