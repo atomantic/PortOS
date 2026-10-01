@@ -808,3 +808,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `musicVideoMediumPlan.js` | `normalizeMusicVideoProductionPolicy`, `planMusicVideoMedia`, `summarizeMusicVideoMediumPlan`, and `codeFirstProductionAssets`: pinned shot media, union-of-intervals video allowance, and selected-asset preflight shared by planning and Board review. |
 
 | `imageLimits.js` | MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS — browser-safe image generation caps shared with validation. |
+
+| `musicVideoActionContract.js` | Versioned shot intent shape/timing validation and clip-relative frame/motion prompt compilation, shared by treatment and the board. |

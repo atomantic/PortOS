@@ -1,3 +1,4 @@
+import { assertShotActionContract } from '../../lib/musicVideoActionContract.js';
 /**
  * Music Video performance shots (#8977) — the submission-boundary half.
  *
@@ -239,6 +240,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   const scene = project?.scenes?.find((s) => s.sceneId === musicVideo.sceneId);
   // An unknown project/scene is not a performance shot; the render proceeds as
   // before and the completion hook refuses to attach it to a deleted scene.
+  assertShotActionContract(scene);
   if (!isPerformanceScene(scene)) return null;
 
   const capability = performanceCapability(backend);

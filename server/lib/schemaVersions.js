@@ -653,7 +653,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v12 = code-first production policy and pinned per-shot medium plans.
   // Older treatment writers drop these fields and can reinterpret them as
   // footage. Absent policy remains legacy; no existing record needs rewriting.
-  musicVideoProjects: 12,
+  // v13 = authored/applied shot action contracts; older treatment writers drop intent.
+  // Additive optional metadata on existing project records; no backfill is needed.
+  musicVideoProjects: 13,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

@@ -1,3 +1,4 @@
+import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
 /**
  * Music Video — pre-production treatment record transforms (#8980).
  *
@@ -181,6 +182,7 @@ function normalizeArc(arc) {
 function normalizeShotDirection(d) {
   return {
     sceneId: String(d.sceneId),
+    ...(d.actionContract !== undefined ? { actionContract: structuredClone(d.actionContract) } : {}),
     ...(MUSIC_VIDEO_MEDIA.includes(d.medium) ? {
       medium: d.medium,
       mediumRationale: text(d.mediumRationale, 1000),
@@ -399,6 +401,8 @@ export function applyTreatmentPatch(project, patch, now = new Date().toISOString
     for (const edit of patch.shotDirections) {
       const idx = byScene.get(edit.sceneId);
       if (idx === undefined) throw treatmentError(404, 'NOT_FOUND', `The treatment has no direction for scene ${edit.sceneId}`);
+      const problem = shotActionContractProblem(edit.actionContract, (project.scenes || []).find((scene) => scene.sceneId === edit.sceneId));
+      if (problem) throw treatmentError(422, 'MUSIC_VIDEO_ACTION_CONTRACT_INVALID', problem);
       next.shotDirections[idx] = normalizeShotDirection({
         ...next.shotDirections[idx], ...edit,
         ...((edit.medium !== undefined || edit.mediumRationale !== undefined) && edit.mediumPinned === undefined ? { mediumPinned: true } : {}),
@@ -436,7 +440,10 @@ export function writeCompiledTreatment(project, { baseRevision, draft, basis, co
     brief: normalizeBrief({ graphicLanguage: draft.graphicLanguage || existing?.brief?.graphicLanguage }, existing?.brief, now),
     arc: normalizeArc(draft.arc),
     ...(project.styleReferences?.length ? { styleLook: draft.styleLook ?? '', styleReferencesBasis: draft.styleReferencesBasis ?? null } : {}),
-    shotDirections: normalizeShotDirections(draft.shotDirections),
+    shotDirections: normalizeShotDirections(draft.shotDirections.map((direction) => {
+      const previous = existing?.shotDirections.find((entry) => entry.sceneId === direction.sceneId);
+      return previous?.actionContract !== undefined ? { ...direction, actionContract: previous.actionContract } : direction;
+    })),
     // A new compile proposes a fresh checklist: earlier verdicts reviewed
     // different shots/direction.
     proofs: normalizeProofs(draft.proofs),
@@ -557,7 +564,7 @@ function composeDirectionClauses(direction, { aspectRatio = null, lipSyncUnavail
   };
 }
 
-const DIRECTION_FIELDS = ['medium', 'mediumRationale', 'mediumPinned', 'beatId', 'mode', 'route', 'focalSubject', 'framing', 'negativeSpace', 'typographyRole', 'emphasis', 'transitionIn', 'transitionOut'];
+const DIRECTION_FIELDS = ['actionContract', 'medium', 'mediumRationale', 'mediumPinned', 'beatId', 'mode', 'route', 'focalSubject', 'framing', 'negativeSpace', 'typographyRole', 'emphasis', 'transitionIn', 'transitionOut'];
 const directionKey = (d) => fingerprint(DIRECTION_FIELDS.map((f) => d?.[f] ?? null));
 
 function sceneDirection(treatment, direction) {
@@ -685,6 +692,8 @@ export function buildApplyPreview(project) {
     const scene = scenesById.get(direction.sceneId);
     if (!scene) { missingSceneIds.push(direction.sceneId); continue; }
     directed.add(scene.sceneId);
+    const problem = shotActionContractProblem(direction.actionContract, scene);
+    if (problem) throw treatmentError(422, 'MUSIC_VIDEO_ACTION_CONTRACT_INVALID', problem);
     const next = sceneDirection(treatment, direction);
     const fields = promptFieldPlans(scene, direction);
     // This slice only plans code-first execution: never reinterpret procedural

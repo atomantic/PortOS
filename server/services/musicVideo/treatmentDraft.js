@@ -1,3 +1,4 @@
+import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
 import { musicVideoStyleBasis, musicVideoStylePrompt } from '../../lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 /**
@@ -419,6 +420,8 @@ ${hasLyrics ? '- "lyricInterpretation": what the lyrics mean and how the picture
 - Never ask the image or video model to render the lyrics or any text: typography is composited separately into the reserved region.
 ${lipSync ? `- Performance shots are lip-synced to the song on ${lipSync.label} (each shot a ${lipSync.minAudioSec}–${lipSync.maxAudioSec}s song window); use them for sung lines where a visible singer matters.` : '- This project\'s video backend cannot lip-sync: no shot can rely on a singer synced to the song.'}
 
+For shots with concrete dramatic action, also propose an optional actionContract: { "version": 1, "purpose": "story purpose", "startEmotion": "", "endEmotion": "", "activeSpeaker": "subject name", "actions": [{ "startSec": 0, "endSec": 1, "subject": "subject name", "description": "visible action" }], "reactions": [], "cameraConstraints": [], "continuityRequirements": [], "acceptanceCriteria": [] }. Times are relative to the shot start, increase, and fit its duration. Never invent measured evidence.
+
 Respond with ONLY a JSON object (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
 { "rationale": "<why this arc serves the brief>", "graphicLanguage": "<graphic direction>", "lyricInterpretation": ${hasLyrics ? '"<interpretation>"' : 'null'},
   "beats": [{ "sectionIndex": 0, "objective": "<objective>", "rationale": "<rationale>" }],
@@ -503,6 +506,7 @@ export function mergeAiTreatment(project, draft, parsed) {
       const value = strField(entry[field], max);
       if (value !== undefined) d[field] = value;
     }
+    if (entry.actionContract != null && !shotActionContractProblem(entry.actionContract, scenesById.get(d.sceneId))) d.actionContract = structuredClone(entry.actionContract);
     const framePrompt = strField(entry.framePrompt, 2000);
     const prompt = strField(entry.prompt, 2000);
     if (framePrompt !== undefined) d.suggestedFramePrompt = framePrompt;

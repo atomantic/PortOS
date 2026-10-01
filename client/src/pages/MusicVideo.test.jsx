@@ -767,6 +767,21 @@ describe('MusicVideo project video renderer', () => {
     expect(await screen.findByLabelText('fal.ai scene clip duration')).toBeTruthy();
   });
 
+  it('carries applied action and reaction into a manually submitted clip prompt', async () => {
+    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: '', falEnabled: true, models: [] });
+    generateVideo.mockResolvedValue({ jobId: 'intent-job' });
+    const actionContract = { version: 1, purpose: 'The listener decides to stay',
+      actions: [{ startSec: 0, endSec: 1, subject: 'Singer', description: 'Offers a hand' }],
+      reactions: [{ startSec: 1, endSec: 2, subject: 'Listener', description: 'Turns back' }] };
+    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal', falDuration: 6 },
+      scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 4, direction: { actionContract } }] }, 'board');
+    fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+    await waitFor(() => expect(generateVideo).toHaveBeenCalled());
+    const prompt = generateVideo.mock.calls.at(-1)[0].prompt;
+    expect(prompt).toContain('Action 0.000s–1.000s: Singer');
+    expect(prompt).toContain('Reaction 1.000s–2.000s: Listener');
+  });
+
   it('renders a scene image-to-video through a saved fal.ai pin (#8968)', async () => {
     getVideoGenStatus.mockResolvedValueOnce({
       connected: true,

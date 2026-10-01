@@ -681,3 +681,49 @@ describe('code-first medium planning (#9299)', () => {
     expect(invalid.status).toBe(400);
   });
 });
+
+// Regression: a two-person shot's dramatic intent used to disappear at the save/apply boundary.
+describe('structured shot intent', () => {
+  const contract = {
+    version: 1, purpose: 'The listener decides to stay', startEmotion: 'distrust', endEmotion: 'resolve', activeSpeaker: 'Singer',
+    actions: [{ startSec: 0, endSec: 0.5, subject: 'Singer', description: 'Offers an open hand' }],
+    reactions: [{ startSec: 0.75, endSec: 1.5, subject: 'Listener', description: 'Turns back and accepts' }],
+    cameraConstraints: ['Hold the two-shot'], continuityRequirements: ['Both subjects remain visible'], acceptanceCriteria: ['The listener visibly changes their decision'],
+  };
+
+  it('persists both subjects through save, recompile, apply and generation handoff; clearing remains explicit', async () => {
+    const project = await plannedProject();
+    const initial = await compile(project.id, { baseRevision: 0, useAi: false });
+    const sceneId = project.scenes[0].sceneId;
+    const saved = await patchTreatment(project.id, { baseRevision: initial.body.treatment.revision, shotDirections: [{ sceneId, actionContract: contract }] });
+    expect(saved.status).toBe(200);
+    expect((await reload(project.id)).treatment.shotDirections[0].actionContract).toEqual(contract);
+    const recompiled = await compile(project.id, { baseRevision: saved.body.treatment.revision, useAi: false });
+    expect(recompiled.body.treatment.shotDirections[0].actionContract).toEqual(contract);
+    const applied = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: recompiled.body.treatment.revision });
+    expect(applied.status).toBe(200);
+    const stored = await reload(project.id);
+    expect(stored.scenes[0].direction.actionContract).toEqual(contract);
+    const { sceneFramePrompt, sceneShotPrompt } = await import('../services/musicVideo/handoff.js');
+    expect(sceneFramePrompt(stored, stored.scenes[0])).toContain('Both subjects remain visible');
+    const prompt = sceneShotPrompt(stored, stored.scenes[0]);
+    expect(prompt).toContain('Action 0.000s–0.500s: Singer');
+    expect(prompt).toContain('Reaction 0.750s–1.500s: Listener');
+    expect(prompt).toContain('Acceptance: The listener visibly changes their decision');
+    const cleared = await patchTreatment(project.id, { baseRevision: stored.treatment.revision, shotDirections: [{ sceneId, actionContract: null }] });
+    expect(cleared.status).toBe(200);
+    expect((await reload(project.id)).treatment.shotDirections[0].actionContract).toBeNull();
+  });
+
+  it('rejects reversed or out-of-shot action times and leaves the stored revision untouched', async () => {
+    const project = await plannedProject();
+    const compiled = await compile(project.id, { baseRevision: 0, useAi: false });
+    const sceneId = project.scenes[0].sceneId;
+    const revision = compiled.body.treatment.revision;
+    for (const event of [{ startSec: 2, endSec: 1 }, { startSec: 0, endSec: 100 }]) {
+      const response = await patchTreatment(project.id, { baseRevision: revision, shotDirections: [{ sceneId, actionContract: { ...contract, actions: [{ ...contract.actions[0], ...event }] } }] });
+      expect([400, 422]).toContain(response.status);
+      expect((await reload(project.id)).treatment.revision).toBe(revision);
+    }
+  });
+});

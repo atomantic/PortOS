@@ -215,6 +215,32 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         await assertProductionSubmission(body.musicVideo.projectId, body.musicVideo.productionRunId,
           body.musicVideo.productionStepKey, { sceneId: body.musicVideo.sceneId, kind: 'video' });
       }
+      if (body.musicVideo) {
+        const [{ getProject }, { assertShotActionContract, withShotActionPrompt }] = await Promise.all([
+          import('../musicVideo/projects.js'), import('../../lib/musicVideoActionContract.js'),
+        ]);
+        const project = await getProject(body.musicVideo.projectId);
+        const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
+        assertShotActionContract(scene);
+        params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });
+        if (scene?.direction?.actionContract != null) {
+          const interval = performance?.shotInstruction?.songInterval;
+          if (interval && (interval.startSec !== scene.startSec || interval.endSec !== scene.endSec)) {
+            throw new ServerError('The shot timing changed while its performance audio was prepared — submit again', { status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });
+          }
+          const requestedSec = performance?.shotInstruction?.audioWindow?.durationSec ?? params.duration
+            ?? (Number.isFinite(params.numFrames) ? (params.numFrames - 1) / (params.fps || 24) : null);
+          const offsetSec = performance?.shotInstruction?.edit?.inSec || 0;
+          const lastEventSec = Math.max(0, ...['actions', 'reactions'].flatMap((key) => (scene.direction.actionContract[key] || []).map((event) => event.endSec))) + offsetSec;
+          if (Number.isFinite(requestedSec) && lastEventSec > requestedSec) {
+            throw new ServerError('Shot actions do not fit inside the requested provider clip — increase its duration', { status: 422, code: 'MUSIC_VIDEO_ACTION_CONTRACT_INVALID' });
+          }
+          params.shotInstruction = {
+            ...(params.shotInstruction || { version: 1, shotMode: scene.shotMode || 'cutaway', songInterval: { startSec: scene.startSec, endSec: scene.endSec } }),
+            actionContract: structuredClone(scene.direction.actionContract),
+          };
+        }
+      }
       return enqueueJob({ kind: 'video', params });
     },
   );

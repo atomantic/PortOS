@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse } from '@babel/parser';
 
 const routeFiles = (directory) => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -53,12 +54,12 @@ const unvalidatedPm2LogReads = (source) => {
 
 describe('PM2 log route validation', () => {
   it('validates the bounded lines query in every route handler that reads PM2 logs', () => {
-    const routesDirectory = new URL('.', import.meta.url);
-    const files = routeFiles(routesDirectory.pathname);
+    const routesDirectory = fileURLToPath(new URL('.', import.meta.url));
+    const files = routeFiles(routesDirectory);
     const callSites = files.flatMap((filepath) => {
       const source = readFileSync(filepath, 'utf8');
       return unvalidatedPm2LogReads(source).map(({ start }) => ({
-        file: filepath.slice(routesDirectory.pathname.length), start,
+        file: filepath.slice(routesDirectory.length), start,
       }));
     });
 

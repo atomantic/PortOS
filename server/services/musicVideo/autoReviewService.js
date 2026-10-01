@@ -190,7 +190,9 @@ async function reviewDraft(project, run, excerpt) {
   let reviewerError = null;
   let used = { providerId: run.reviewer.providerId, model: run.reviewer.model };
   if (screenshots.length) {
-    const prompt = buildAutoReviewPrompt({ spanSec, sections, frameTimes, hasContactSheet: hasSheet, tiled: true, concept: project.concept });
+    const shotIntents = (project.scenes || []).filter((scene) => scene.direction?.actionContract != null && scene.startSec < excerpt.endSec && scene.endSec > excerpt.startSec)
+      .map((scene) => ({ sceneId: scene.sceneId, sceneStartSec: scene.startSec - excerpt.startSec, actionContract: scene.direction.actionContract }));
+    const prompt = buildAutoReviewPrompt({ spanSec, sections, frameTimes, hasContactSheet: hasSheet, tiled: true, concept: project.concept, shotIntents });
     try {
       const reply = await callReviewer(run, prompt, screenshots, project.id);
       used = reply.used;

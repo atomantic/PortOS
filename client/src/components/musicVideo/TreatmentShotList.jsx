@@ -1,3 +1,4 @@
+import ShotActionInspector from './ShotActionInspector.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
 import { formatTimecode } from '../../utils/formatters.js';
@@ -86,6 +87,7 @@ export default function TreatmentShotList({ project, treatment, onSave }) {
                 <DirectionText id={idFor(d.sceneId, 'out')} label="Exit" value={d.transitionOut} maxLength={300}
                   onCommit={(transitionOut) => save(d.sceneId, { transitionOut })} />
               </div>
+              <ShotActionInspector contract={d.actionContract} scene={scene} onSave={(actionContract) => save(d.sceneId, { actionContract })} />
               {d.rationale && <p className="text-[11px] text-port-text-muted">{d.rationale}</p>}
               {d.typographyRole !== 'none' && d.negativeSpace === 'none' && (
                 <p className="text-[11px] text-port-warning">Text on this shot has no reserved region — it will sit over the subject.</p>

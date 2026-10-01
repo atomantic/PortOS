@@ -177,6 +177,10 @@ describe('opt-in automatic review/retries (#8988)', () => {
 
   it('reviews, revises only the flagged section, enforces the spend limit at enqueue, and passes the re-rendered draft', async () => {
     const p = await project();
+    await projects.updateProject(p.id, { scenes: p.scenes.map((scene) => scene.sceneId === 's1'
+      ? { ...scene, startSec: 0, endSec: 10, direction: { actionContract: { version: 1, purpose: 'The listener decides to stay',
+        reactions: [{ startSec: 6, endSec: 8, subject: 'Listener', description: 'Turns back' }], acceptanceCriteria: ['Both people remain visible'] } } }
+      : scene) });
     h.verdicts.push(FAIL_S2, PASS);
     const r = await start(p.id, { maxAttempts: 2, maxGenerations: 1 });
     expect(r.status).toBe(201);
@@ -187,6 +191,11 @@ describe('opt-in automatic review/retries (#8988)', () => {
     // revision rejected s2 only.
     let current = await settled(p.id, (x) => expect(run(x).attempts[0].revisionId).toBeTruthy());
     const attempt1 = run(current).attempts[0];
+    const reviewerPrompt = runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(reviewerPrompt).toContain('The listener decides to stay');
+    expect(reviewerPrompt).toContain('Both people remain visible');
+    expect(reviewerPrompt).toContain('"sceneStartSec":-5');
+    expect(reviewerPrompt).toContain('Still frames cannot prove completion');
     expect(attempt1.review).toMatchObject({ verdict: 'revise', checks: { composition: 'fail', audioSync: 'pass', motion: 'pass' } });
     expect(attempt1.review.evidence).toMatchObject({ continuous: true, continuousFrames: 12 });
     const draft = current.excerpts.find((e) => e.id === attempt1.excerptId);
