@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
+import { copyEcosystemConfig } from '../test/fixtures/ecosystemConfigCopy.js';
 
 vi.mock('../lib/paths.js', async importOriginal => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
@@ -56,7 +57,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   for (const [key, value] of Object.entries({ PGHOST: 'localhost', PGPORT: '5432', PORTOS_NATIVE_PGPORT: '5432', PGPORT_DOCKER: '5561', PGUSER: 'example_role', PGDATABASE: 'example_test', PGPASSWORD: 'example-only' })) vi.stubEnv(key, value);
   Object.assign(POOL_CONFIG, { host: 'localhost', port: 5432, user: 'example_role', database: 'example_test' });
-  copyFileSync(new URL('../../ecosystem.config.cjs', import.meta.url), join(PATHS.installRoot, 'ecosystem.config.cjs'));
+  copyEcosystemConfig(PATHS.installRoot);
   saveMode('native');
   getSystemActivity.mockResolvedValue(idle());
   countActiveCosAgents.mockResolvedValue(0);

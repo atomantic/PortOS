@@ -16,14 +16,17 @@
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { createRequire } from 'module';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { parseEnvFile } from './lib/envFile.js';
 
 const require = createRequire(import.meta.url);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_SOURCE = readFileSync(join(REPO_ROOT, 'ecosystem.config.cjs'), 'utf8');
+// The config require()s this dependency-free parser (#9471), so each temp copy needs it too.
+const PARSER_SOURCE = readFileSync(join(REPO_ROOT, 'scripts', 'lib', 'envFile.cjs'), 'utf8');
 
 let tmpDirs = [];
 
@@ -40,10 +43,16 @@ afterEach(() => {
  * duration of the load only.
  */
 function loadConfig(envContent, overrideEnv = {}) {
+  return loadConfigIn(envContent, overrideEnv).config;
+}
+
+function loadConfigIn(envContent, overrideEnv = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'portos-ecosystem-env-'));
   tmpDirs.push(dir);
   const configPath = join(dir, 'ecosystem.config.cjs');
   writeFileSync(configPath, CONFIG_SOURCE);
+  mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true });
+  writeFileSync(join(dir, 'scripts', 'lib', 'envFile.cjs'), PARSER_SOURCE);
   if (envContent !== null) writeFileSync(join(dir, '.env'), envContent);
 
   const savedEnv = {};
@@ -54,7 +63,7 @@ function loadConfig(envContent, overrideEnv = {}) {
   }
   try {
     delete require.cache[configPath];
-    return require(configPath);
+    return { config: require(configPath), dir };
   } finally {
     for (const key of Object.keys(savedEnv)) {
       if (savedEnv[key] === undefined) delete process.env[key];
@@ -139,5 +148,58 @@ describe('ecosystem.config.cjs PostgreSQL env', () => {
       expect(app, `expected an app named ${name}`).toBeTruthy();
       expect(app.env.PGPASSWORD).toBeUndefined();
     }
+  });
+});
+
+describe('ecosystem.config.cjs parses .env with the setup grammar (#9471)', () => {
+  const server = (config) => config.apps.find((a) => a.name === 'portos-server');
+
+  it.each([
+    ['double', (v) => `"${v}"`],
+    ['single', (v) => `'${v}'`],
+  ])('resolves %s-quoted native mode and port to the endpoint setup resolves', (_label, quote) => {
+    const env = `PGMODE=${quote('native')}\nPGPORT=${quote('5433')}\n`;
+    const { config, dir } = loadConfigIn(env, clearedPgEnv);
+    const setup = parseEnvFile(join(dir, '.env'));
+    expect(setup).toMatchObject({ PGMODE: 'native', PGPORT: '5433' });
+    expect(config.DATABASE_MODE).toBe('native');
+    expect(config.DATABASE_ENDPOINTS.native.port).toBe(5433);
+    expect(server(config).env.PGPORT).toBe(5433);
+  });
+
+  it('resolves a quoted native port under an unquoted mode to a finite endpoint', () => {
+    const config = loadConfig('PGMODE=native\nPGPORT="5433"\n', clearedPgEnv);
+    expect(config.DATABASE_ENDPOINTS.native.port).toBe(5433);
+  });
+
+  it('preserves a quoted password with spaces exactly, for server and CoS, and still lets the shell win', () => {
+    const env = 'PGPASSWORD="example secret pass"\n';
+    const { config, dir } = loadConfigIn(env, clearedPgEnv);
+    expect(parseEnvFile(join(dir, '.env')).PGPASSWORD).toBe('example secret pass');
+    expect(server(config).env.PGPASSWORD).toBe('example secret pass');
+    expect(config.apps.find((a) => a.name === 'portos-cos').env.PGPASSWORD).toBe('example secret pass');
+
+    const overridden = loadConfig(env, { ...clearedPgEnv, PGPASSWORD: 'from-shell' });
+    expect(server(overridden).env.PGPASSWORD).toBe('from-shell');
+  });
+
+  it('reads quoted user/database/host/memory settings, with whitespace around the assignment', () => {
+    const env = `PGUSER = "example user"\nPGDATABASE='example db'\nPGHOST = "db.example.com"\nPORTOS_SERVER_MAX_MEMORY = "6G"\n`;
+    const config = loadConfig(env, { ...clearedPgEnv, PORTOS_SERVER_MAX_MEMORY: undefined });
+    expect(server(config).env).toMatchObject({ PGUSER: 'example user', PGDATABASE: 'example db', PGHOST: 'db.example.com' });
+    expect(server(config).max_memory_restart).toBe('6G');
+  });
+
+  it('still keeps a quoted PGPASSWORD out of the non-DB apps', () => {
+    const { apps } = loadConfig('PGPASSWORD="example secret pass"\n', clearedPgEnv);
+    for (const name of ['portos-ui', 'portos-autofixer', 'portos-autofixer-ui', 'portos-browser']) {
+      expect(apps.find((a) => a.name === name).env.PGPASSWORD).toBeUndefined();
+    }
+  });
+
+  it('keeps the docker defaults when .env is missing', () => {
+    const config = loadConfig(null, clearedPgEnv);
+    expect(config.DATABASE_MODE).toBe('docker');
+    expect(server(config).env.PGPORT).toBe(5561);
   });
 });
