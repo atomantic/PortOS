@@ -1,4 +1,5 @@
 import { Plus } from 'lucide-react';
+import AudioTimingPanel from '../AudioTimingPanel.jsx';
 import BeatTimeline from '../BeatTimeline.jsx';
 import SceneCard from '../SceneCard.jsx';
 import { PlanActions } from '../ProjectActionGroups.jsx';
@@ -31,6 +32,8 @@ export default function BoardStage({ board }) {
       <div className="rounded-lg border border-port-border bg-port-card p-3">
         <PlanActions project={project} busy={busy} onPlan={board.onPlan} onAutoArrange={board.onAutoArrange} />
       </div>
+
+      <AudioTimingPanel key={project.id} project={project} tracks={board.tracks} onApplied={board.replaceProject} disabled={locked || board.renderBound} />
 
       {project.audioAnalysis && scenes.length > 0 && (
         <BeatTimeline audioAnalysis={project.audioAnalysis} scenes={scenes} lyricCues={project.lyricCues} onCommit={board.commitSceneTiming} />

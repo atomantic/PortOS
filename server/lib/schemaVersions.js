@@ -664,7 +664,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v16 = accepted-prefix continuation edit points and one-generation repair
   // reservations. Older peers could regenerate accepted footage or duplicate
   // a submitted suffix after restart. Absent repair metadata stays legacy.
-  musicVideoProjects: 16,
+  // v17 = piecewise audio timing receipts and historical source/timing snapshots.
+  // Optional on legacy records; no backfill. Older peers cannot apply receipts safely.
+  musicVideoProjects: 17,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

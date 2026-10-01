@@ -120,6 +120,13 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
     expect(manifest).toContainEqual({ filename: 'track-1.wav', kind: 'music', sha256: sha(bytes) });
   });
 
+  it('retains the historical source audio after a timing revision', async () => {
+    const bytes = Buffer.from('historical-audio');
+    writeMusic('previous.wav', bytes);
+    const manifest = await buildMusicVideoAssetManifest({ scenes: [], audioTimingRevisions: [{ before: { audioFilename: 'previous.wav' } }] });
+    expect(manifest).toContainEqual({ filename: 'previous.wav', kind: 'music', sha256: sha(bytes) });
+  });
+
   it('skips a missing/deleted track without throwing', async () => {
     vi.mocked(getTrack).mockResolvedValue(null);
     const manifest = await buildMusicVideoAssetManifest({

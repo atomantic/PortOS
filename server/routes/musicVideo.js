@@ -14,6 +14,8 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
+  musicVideoAudioTimingPreviewSchema,
+  musicVideoAudioTimingApplySchema,
   musicVideoProjectCreateSchema,
   musicVideoProjectCloneSchema,
   musicVideoProjectUpdateSchema,
@@ -218,6 +220,18 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(projectUpdateSchema, req.body);
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
+}));
+
+// Preview is read-only; Apply rechecks audio and the serialized project basis.
+router.post('/:id/audio-timing/preview', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoAudioTimingPreviewSchema, req.body);
+  const { previewAudioTiming } = await import('../services/musicVideo/audioTiming.js');
+  res.json(await previewAudioTiming(req.params.id, input));
+}));
+router.post('/:id/audio-timing/apply', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoAudioTimingApplySchema, req.body);
+  const { applyAudioTiming } = await import('../services/musicVideo/audioTiming.js');
+  res.json(await applyAudioTiming(req.params.id, input));
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
