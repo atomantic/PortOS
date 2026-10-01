@@ -51,6 +51,9 @@ vi.mock('../services/promptRunner.js', () => ({
   resolveProviderAndModel: vi.fn(),
   assertProvider: vi.fn(),
 }));
+vi.mock('../services/mediaJobQueue/index.js', () => ({
+  enqueueJob: vi.fn(async () => ({ jobId: 'media-export', position: 1, status: 'queued' })),
+}));
 
 import { emitCodeAnimationChanged } from '../services/socket.js';
 import { PATHS } from '../lib/paths.js';
@@ -60,6 +63,7 @@ import { getProviderById } from '../services/providers.js';
 import { getTrack } from '../services/tracks/index.js';
 import { listCodeAnimationJobPage, listCodeAnimationJobRecords, readCodeAnimationHtml, saveCodeAnimationHtml, saveCodeAnimationJobRecord } from '../services/codeAnimation/jobStore.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
+import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import routes from './codeAnimation.js';
 
 const makeApp = () => {
@@ -117,6 +121,34 @@ beforeEach(() => {
   getUniverse.mockResolvedValue(UNIVERSE);
   getBoard.mockResolvedValue(BOARD);
   resolveProviderAndModel.mockResolvedValue({ provider: { id: 'api-1', type: 'api' }, selectedModel: 'example-model' });
+});
+
+describe('Code Animation fast-export audio notes', () => {
+  it('distinguishes omitted procedural/upload audio from intentional silence without generating sound', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const job = { id, status: 'completed', frame: { width: 1920, height: 1080, fps: 24, durationSeconds: 15 } };
+    codeAnimationHtml.set(id, '<!doctype html><html><head></head><body><canvas></canvas></body></html>');
+    const app = makeApp();
+    for (const [fields, note] of [
+      [{ input: { soundtrack: 'procedural' } }, /Procedural Web Audio.*export is silent/],
+      [{ audioUrl: '/api/uploads/example.wav' }, /Uploaded audio is not muxed.*export is silent/],
+      [{ input: { soundtrack: 'none' } }, /No soundtrack was requested.*intentionally silent/],
+      [{}, null], // Unknown legacy intent is not declared intentional silence.
+    ]) {
+      codeAnimationRecords.set(id, { ...job, ...fields });
+      const response = await request(app).post(`/api/code-animation/${id}/export`);
+      expect(response.status).toBe(202);
+      expect(response.body).toMatchObject({ jobId: 'media-export', status: 'queued' });
+      expect(response.body.notes).toEqual(note ? [expect.stringMatching(note)] : []);
+    }
+    expect(enqueueJob.mock.calls).toHaveLength(4);
+    for (const [queued] of enqueueJob.mock.calls) {
+      expect(queued).toEqual({ kind: 'html-composition', params: {
+        directory: expect.stringMatching(new RegExp(`^code-animation-exports/${id}/[0-9a-f-]{36}$`)),
+      } });
+    }
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
 });
 
 describe('Code Animation portable packages', () => {

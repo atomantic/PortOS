@@ -124,6 +124,36 @@ describe('CodeAnimationPreview', () => {
 });
 
 describe('CodeAnimationPreview frame-exact export', () => {
+  it('retains sound limitations beside the completed export and clears them when switching animations', async () => {
+    const user = userEvent.setup();
+    const note = 'Procedural Web Audio is not rendered offline; the frame-exact export is silent.';
+    exportCodeAnimation.mockResolvedValue({ jobId: 'media-1', notes: [note] });
+    const { rerender } = renderPreview({ jobId: 'job-1' });
+    await user.click(screen.getByRole('button', { name: /export mp4/i }));
+    expect(screen.getByRole('status', { name: 'Export notes' })).toHaveTextContent(note);
+    useSseProgress.mockReturnValue({ latest: { type: 'complete', result: { path: '/data/videos/example.mp4' } } });
+    const preview = (jobId) => <MemoryRouter><CodeAnimationPreview html={HTML} jobId={jobId} /></MemoryRouter>;
+    rerender(preview('job-1'));
+    expect(screen.getByLabelText('Exported animation')).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Export notes' })).toHaveTextContent(note);
+    useSseProgress.mockReturnValue({ latest: null });
+    rerender(preview('job-2'));
+    expect(screen.queryByRole('status', { name: 'Export notes' })).toBeNull();
+  });
+
+  it('drops a queued export response after switching to a different animation', async () => {
+    const user = userEvent.setup();
+    let finish;
+    exportCodeAnimation.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { rerender } = renderPreview({ jobId: 'job-1' });
+    await user.click(screen.getByRole('button', { name: /export mp4/i }));
+    rerender(<MemoryRouter><CodeAnimationPreview html={HTML} jobId="job-2" /></MemoryRouter>);
+    await act(async () => finish({ jobId: 'old-export', notes: ['Old soundtrack limitation'] }));
+    expect(screen.queryByRole('status', { name: 'Export notes' })).toBeNull();
+    expect(useSseProgress).toHaveBeenLastCalledWith(null, { enabled: false });
+    expect(screen.getByRole('button', { name: /export mp4/i })).toBeEnabled();
+  });
+
   it('offers export only for a saved job, queues it, and follows the composition job stream', async () => {
     const user = userEvent.setup();
     exportCodeAnimation.mockResolvedValue({ jobId: 'media-1', notes: [] });

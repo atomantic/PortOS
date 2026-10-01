@@ -86,7 +86,10 @@ describe('buildCodeAnimationPrompt', () => {
     const procedural = buildCodeAnimationPrompt({ concept: 'x', format, soundtrack: 'procedural' });
     expect(procedural).toContain('procedural soundtrack');
     expect(procedural).toContain('Silence is a beat');
-    expect(buildCodeAnimationPrompt({ concept: 'x', format })).toContain('The animation is silent');
+    expect(procedural).toContain('MediaStreamAudioDestinationNode');
+    const silent = buildCodeAnimationPrompt({ concept: 'x', format });
+    expect(silent).toContain('The animation is silent');
+    expect(silent).not.toContain('MediaStreamAudioDestinationNode');
   });
 
   it('gives CLI agents on-disk reference paths and keeps them out of a copied prompt', () => {

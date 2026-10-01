@@ -133,6 +133,12 @@ export async function startCodeAnimationExport(id, deps = {}) {
   const musicTrack = musicTrackOf(job);
   const notes = [];
   if (job.audioUrl && !musicTrack) notes.push('Uploaded audio is not muxed; the export is silent. Attach a Music-library track to include it.');
+  if (!job.audioUrl && job.input?.soundtrack === 'procedural') {
+    notes.push('Procedural Web Audio is not rendered offline; the frame-exact export is silent. Attach a Music-library track to include audio.');
+  }
+  if (!job.audioUrl && !job.input?.audio && job.input?.soundtrack === 'none') {
+    notes.push('No soundtrack was requested; the export is intentionally silent.');
+  }
   if (durationSeconds > EXPORT_MAX_DURATION_SEC) notes.push(`The export is capped at ${EXPORT_MAX_DURATION_SEC}s; this animation runs ${durationSeconds}s.`);
   const song = musicTrack ? await beatGrid(musicTrack) : null;
   // One staging directory per export: a queued render snapshots its directory
