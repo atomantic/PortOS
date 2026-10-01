@@ -4,6 +4,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { discoverWorkspaces } from '../scripts/trusted-rebuilds.js';
+import { GET_URI_PATCH_TARGET_VERSION } from '../scripts/lib/getUriFtpPatch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -182,6 +183,18 @@ describe('dependency override parity across manifests (#2848)', () => {
     expect(resolved.length).toBeGreaterThan(0);
     expect(resolved.map(([, metadata]) => metadata.version)).toEqual(
       resolved.map(() => '6.2.1')
+    );
+  });
+
+  // scripts/lib/getUriFtpPatch.js edits get-uri's dist/ftp.js by exact anchor. A
+  // lockfile move to another get-uri would leave installs unpatched (the patcher
+  // skips a release it does not recognize), so the bump must re-verify the anchor.
+  it.each(['package.json', 'server/package.json'])('%s resolves the get-uri release the FTP LIST date patch targets (#9462)', rel => {
+    const resolved = Object.entries(readLockPackages(lockfileFor(rel)))
+      .filter(([path]) => packageNameFromLockPath(path) === 'get-uri');
+    expect(resolved.length).toBeGreaterThan(0);
+    expect(resolved.map(([, metadata]) => metadata.version)).toEqual(
+      resolved.map(() => GET_URI_PATCH_TARGET_VERSION)
     );
   });
 

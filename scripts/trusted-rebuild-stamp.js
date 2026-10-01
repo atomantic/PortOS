@@ -34,6 +34,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { patchFingerprint } from './lib/getUriFtpPatch.js';
 import { TRUSTED_REBUILDS, discoverWorkspaces, workspaceDir } from './trusted-rebuilds.js';
 
 export const STAMP_FILE = '.portos-trusted-rebuild.json';
@@ -50,6 +51,9 @@ export function expectedStamp(label, { platform = process.platform, arch = proce
   return {
     label,
     allowlist: createHash('sha256').update(JSON.stringify(TRUSTED_REBUILDS[label] ?? null)).digest('hex').slice(0, 16),
+    // Install-time dependency patches are applied by the same step that writes
+    // this mark, so a cached tree from before a patch changed must read as stale.
+    patches: patchFingerprint(),
     platform,
     arch,
     modules: String(modules),

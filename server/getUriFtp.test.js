@@ -13,7 +13,9 @@ afterEach(async () => {
   }));
 });
 
-const startFtp = async (mdtmResponse) => {
+// `unixLine` swaps MLSD for a Unix `ls -l` LIST (no MLST in FEAT), the shape a
+// legacy server without MDTM/MLSD returns. Its date is the only metadata offered.
+const startFtp = async (mdtmResponse, { unixLine } = {}) => {
   const commands = [];
   const servers = [];
   const sockets = new Set();
@@ -44,7 +46,7 @@ const startFtp = async (mdtmResponse) => {
         const verb = line.split(' ')[0];
         if (verb === 'USER') control.write('331 Password required\r\n');
         else if (verb === 'PASS') control.write('230 Logged in\r\n');
-        else if (verb === 'FEAT') control.write('211-Features\r\n UTF8\r\n MLST type*;size*;modify*;\r\n211 End\r\n');
+        else if (verb === 'FEAT') control.write(`211-Features\r\n UTF8\r\n${unixLine ? '' : ' MLST type*;size*;modify*;\r\n'}211 End\r\n`);
         else if (verb === 'MDTM') control.write(`${mdtmResponse}\r\n`);
         else if (verb === 'EPSV') {
           passiveServer = createServer();
@@ -55,9 +57,8 @@ const startFtp = async (mdtmResponse) => {
           });
         } else if (verb === 'MLSD' || verb === 'LIST' || verb === 'RETR') {
           control.write('150 Opening data connection\r\n');
-          const payload = verb !== 'RETR'
-            ? 'type=file;size=19;modify=20200101000000; example.txt\r\n'
-            : 'synthetic download\n';
+          const listing = unixLine ?? 'type=file;size=19;modify=20200101000000; example.txt';
+          const payload = verb !== 'RETR' ? `${listing}\r\n` : 'synthetic download\n';
           dataConnection.then(socket => {
             socket.end(payload, () => {
               control.write('226 Transfer complete\r\n');
@@ -100,6 +101,43 @@ describe('get-uri FTP compatibility with the security override (#9444)', () => {
     ftp.commands.length = 0;
     await expect(getUri(ftp.url, { cache: stream })).rejects.toMatchObject({ code: 'ENOTMODIFIED' });
     await ftp.sessions[1];
+    expect(ftp.commands.some(command => command.startsWith('RETR'))).toBe(false);
+  });
+
+  const unixLine = date => `-rw-r--r-- 1 owner group 19 ${date} example.txt`;
+  const utcMonthDayTime = date => `${date.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })} ${date.getUTCDate()} `
+    + `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
+  const recent = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  recent.setUTCSeconds(0, 0);
+
+  it.each([
+    ['year form (day resolution, UTC midnight)', unixLine('Jan 1 2020'), new Date('2020-01-01T00:00:00Z')],
+    ['recent time form (year inferred)', unixLine(utcMonthDayTime(recent)), recent]
+  ])('downloads an existing file when MDTM is unsupported and only a Unix LIST date exists: %s (#9462)', async (_name, line, expected) => {
+    const ftp = await startFtp('502 MDTM unsupported', { unixLine: line });
+    const stream = await getUri(ftp.url);
+    expect(await readStream(stream)).toBe('synthetic download\n');
+    expect(stream.lastModified).toEqual(expected);
+    await ftp.sessions[0];
+    expect(ftp.commands.some(command => command.startsWith('MLSD'))).toBe(false);
+    expect(ftp.commands.some(command => command.startsWith('LIST'))).toBe(true);
+    ftp.commands.length = 0;
+    await expect(getUri(ftp.url, { cache: stream })).rejects.toMatchObject({ code: 'ENOTMODIFIED' });
+    await ftp.sessions[1];
+    expect(ftp.commands.some(command => command.startsWith('RETR'))).toBe(false);
+  });
+
+  it('fails clearly, without downloading, when the Unix LIST date is not a supported format (#9462)', async () => {
+    const ftp = await startFtp('502 MDTM unsupported', { unixLine: unixLine('Okt 1 2020') });
+    await expect(getUri(ftp.url)).rejects.toMatchObject({ code: 'EFTPLISTDATE' });
+    await ftp.sessions[0];
+    expect(ftp.commands.some(command => command.startsWith('RETR'))).toBe(false);
+  });
+
+  it('reports a file absent from a Unix LIST as missing without downloading (#9462)', async () => {
+    const ftp = await startFtp('502 MDTM unsupported', { unixLine: unixLine('Jan 1 2020').replace('example.txt', 'other.txt') });
+    await expect(getUri(ftp.url)).rejects.toMatchObject({ code: 'ENOTFOUND' });
+    await ftp.sessions[0];
     expect(ftp.commands.some(command => command.startsWith('RETR'))).toBe(false);
   });
 
