@@ -17,7 +17,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await
   dataRoot: () => lazyTempDataRoot('portos-mv-performance-'),
 }));
 const getProject = vi.fn();
-vi.mock('./projects.js', () => ({ getProject: (...a) => getProject(...a), listProjects: vi.fn(async () => []), updateProject: vi.fn() }));
+vi.mock('./projects.js', () => ({ mutateProjectRecord: async (_id, transform) => { const result = transform(await getProject()); getProject.mockResolvedValue(result.project); return result; }, getProject: (...a) => getProject(...a), listProjects: vi.fn(async () => []), updateProject: vi.fn() }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 // A pre-#9266 take's old master is found through the linked track's renders.
 const getTrack = vi.fn(async () => null);
@@ -26,7 +26,7 @@ vi.mock('../tracks/index.js', () => ({ getTrack: (...a) => getTrack(...a) }));
 // store the fal lane writes, without loading the local runtime.
 vi.mock('../videoGen/local.js', async () => {
   const history = await import('../videoGen/history.js');
-  return { loadHistory: history.loadHistory, mutateVideoHistory: history.mutateVideoHistory };
+  return { getHistoryItem: history.getHistoryItem, loadHistory: history.loadHistory, mutateVideoHistory: history.mutateVideoHistory };
 });
 
 const { PATHS } = await import('../../lib/fileUtils.js');
@@ -369,12 +369,21 @@ describe.skipIf(!ffmpeg)('accepted-prefix continuation render (#9348)', () => {
         { startSec: 6, endSec: 16, status: 'verified', offsetSec: 0.3, confidence: 0.9 },
       ] }],
     } } } }] }];
-    const { startPerformanceRepairOnProject } = await import('./performanceRepair.js');
-    const repair = startPerformanceRepairOnProject(original, 'mvs-1', { excerptId: 'draft', sourceAssetId: 'accepted', boundarySec: 14 }, 'boundary.png');
+    const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+    const dependencies = captureMusicVideoEvidence(original, { startSec: 8, endSec: 24 });
+    original.excerpts[0].dependencies = dependencies;
+    original.autoReviews[0].attempts[0].review.dependencies = dependencies;
+    const acceptedPath = join(PATHS.videos, 'accepted.mp4');
+    await mkdir(PATHS.videos, { recursive: true });
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=64x64:r=24:d=14', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', acceptedPath]);
+    const { mutateVideoHistory } = await import('../videoGen/history.js');
+    await mutateVideoHistory((items) => [{ id: 'accepted', filename: 'accepted.mp4', numFrames: 336, fps: 24, width: 64, height: 64 }, ...items.filter((i) => i.id !== 'accepted')]);
+    const { startPerformanceRepair } = await import('./performanceRepair.js');
+    const repair = await startPerformanceRepair('mv-1', 'mvs-1', { excerptId: 'draft', sourceAssetId: 'accepted', boundarySec: 14 });
     const [prefix, suffix] = repair.project.scenes;
     getProject.mockResolvedValue(repair.project);
     const prepared = await preparePerformanceShot({ musicVideo: { projectId: 'mv-1', sceneId: suffix.sceneId, revisionId: repair.revision.id },
-      backend: 'fal', sourceImagePath: join(PATHS.images, 'boundary.png'), mode: 'image' });
+      backend: 'fal', sourceImagePath: join(PATHS.images, suffix.referenceImageId), mode: 'image' });
     expect(prepared.shotInstruction.audioWindow).toEqual({ startSec: 14, endSec: 24, durationSec: 10 });
     expect(prepared.shotInstruction.edit).toEqual({ inSec: 0, outSec: 10, targetSec: 10 });
     expect(prepared.shotInstruction.repair).toMatchObject({ sourceAssetId: 'accepted', sourceTakeId: 'accepted-take', role: 'continuation' });
@@ -383,16 +392,13 @@ describe.skipIf(!ffmpeg)('accepted-prefix continuation render (#9348)', () => {
     expect(sliced.readInt16LE((20 - 14) * RATE * 2)).toBe(30000);
     // A source edit to a short interval cannot make preparation pad backwards
     // across the accepted prefix or choose a different source frame.
-    await expect(preparePerformanceShot({ musicVideo: { projectId: 'mv-1', sceneId: suffix.sceneId }, backend: 'fal', sourceImagePath: join(PATHS.images, 'boundary.png') }))
+    await expect(preparePerformanceShot({ musicVideo: { projectId: 'mv-1', sceneId: suffix.sceneId }, backend: 'fal', sourceImagePath: join(PATHS.images, suffix.referenceImageId) }))
       .rejects.toMatchObject({ code: 'PERFORMANCE_REPAIR_REVISION_REQUIRED' });
 
-    const acceptedPath = join(PATHS.videos, 'accepted.mp4');
     const suffixPath = join(PATHS.videos, 'suffix.mp4');
     await mkdir(PATHS.videos, { recursive: true });
-    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=64x64:r=24:d=14', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', acceptedPath]);
     execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'color=blue:s=64x64:r=24:d=10', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', suffixPath]);
     await mkdir(PATHS.images, { recursive: true });
-    execFileSync(ffmpeg, ['-v', 'error', '-i', acceptedPath, '-ss', String(repair.revision.repair.referenceFrameSec), '-frames:v', '1', '-y', join(PATHS.images, 'boundary.png')]);
     const delivered = await readFile(suffixPath);
     const posts = [];
     vi.stubGlobal('fetch', vi.fn(async (url, options) => {
@@ -403,13 +409,11 @@ describe.skipIf(!ffmpeg)('accepted-prefix continuation render (#9348)', () => {
       throw new Error('Unexpected synthetic provider request');
     }));
     const generated = await fal.generateVideo({ apiKey: 'test-key', modelId: prepared.modelId, resolution: prepared.resolution,
-      sourceImagePath: join(PATHS.images, 'boundary.png'), audioFilePath: prepared.audioFilePath,
+      sourceImagePath: join(PATHS.images, suffix.referenceImageId), audioFilePath: prepared.audioFilePath,
       lipSync: { enableTranscription: prepared.enableTranscription }, shotInstruction: prepared.shotInstruction });
     expect(await waitForTerminal(generated.jobId)).toMatchObject({ type: 'completed' });
     expect(posts).toHaveLength(1);
     expect(Buffer.from(posts[0].audio_url.replace(/^data:audio\/wav;base64,/, ''), 'base64')).toEqual(await readFile(prepared.audioFilePath));
-    const { mutateVideoHistory } = await import('../videoGen/history.js');
-    await mutateVideoHistory((items) => [{ id: 'accepted', filename: 'accepted.mp4', numFrames: 336, fps: 24, width: 64, height: 64 }, ...items]);
     const landed = appendSceneTakes(repair.project, suffix.sceneId, [{ kind: 'video', assetId: generated.jobId, shotInstruction: prepared.shotInstruction }]).project;
     const clips = beatSnapClips(await resolveSceneClips(landed), [], { scenes: landed.scenes });
     expect(clips[0]).toMatchObject({ videoPath: acceptedPath, inSec: 0, outSec: 4, duration: 4, loop: false });

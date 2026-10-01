@@ -69,6 +69,7 @@ vi.mock('../services/musicVideo/render.js', async (importOriginal) => ({
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { recoverStuckMusicVideoExcerpts } = await import('../services/musicVideo/excerptRender.js');
+const { captureMusicVideoEvidence } = await import('../lib/musicVideoDependencies.js');
 const { assertRevisionOpen, assertPerformanceRepairDispatch } = await import('../services/musicVideo/revisionService.js');
 
 const app = express();
@@ -412,7 +413,7 @@ async function performanceProject() {
     cues: [{ startSec: 0, endSec: 14, words: [{ text: 'one', startSec: 0, endSec: 3.8 }, { text: 'two', startSec: 4.2, endSec: 14 }] }] };
   mkdirSync(join(ROOT(), 'videos'), { recursive: true });
   writeFileSync(join(ROOT(), 'videos', 'accepted.mp4'), 'synthetic-source');
-  return projects.updateProject(created.id, {
+  await projects.updateProject(created.id, {
     videoSettings: { backend: 'fal' },
     scenes: [{ sceneId: 'performance', order: 0, shotMode: 'performance', startSec: 10, endSec: 24,
       referenceImageId: 'frame.png', videoHistoryId: 'accepted', takes: [{ takeId: 'take-original', kind: 'video', assetId: 'accepted', shotInstruction: instruction }] }],
@@ -425,6 +426,14 @@ async function performanceProject() {
           { startSec: 6, endSec: 16, status: 'verified', offsetSec: 0.3, confidence: 0.95 },
         ] }] } } } }] }],
   });
+  const current = await projects.getProject(created.id);
+  const dependencies = captureMusicVideoEvidence(current, { startSec: 8, endSec: 24 });
+  // Persist provenance without the derived read projection, as older rows do.
+  await projects.updateProject(created.id, {
+    excerpts: current.excerpts.map(({ dependencyState, ...excerpt }) => ({ ...excerpt, dependencies })),
+    autoReviews: current.autoReviews.map((r) => ({ ...r, attempts: r.attempts.map((a) => ({ ...a, review: { ...a.review, dependencies } })) })),
+  });
+  return projects.getProject(created.id);
 }
 const repairInput = { excerptId: 'mve-performance', sourceAssetId: 'accepted', boundarySec: 14 };
 describe('accepted-prefix performance repair (#9348)', () => {
@@ -437,7 +446,11 @@ describe('accepted-prefix performance repair (#9348)', () => {
     const [prefix, suffix] = repaired.project.scenes;
     expect(prefix).toMatchObject({ videoHistoryId: 'accepted', startSec: 10, endSec: 14 });
     expect(prefix.takes[0].shotInstruction.edit).toEqual({ inSec: 0, outSec: 4, targetSec: 4 });
-    expect(repaired.project.excerpts).toEqual(project.excerpts);
+    // The historical draft/provenance stays immutable; its new stale projection
+    // correctly reflects the composition split added by this repair.
+    const withoutState = (excerpt) => { const { dependencyState, ...stored } = excerpt; return stored; };
+    expect(repaired.project.excerpts.map(withoutState)).toEqual(project.excerpts.map(withoutState));
+    expect(repaired.project.excerpts[0].dependencyState.status).toBe('stale');
     expect(repaired.revision.repair).toMatchObject({ originalTake: project.scenes[0].takes[0], generations: 0, maxGenerations: 1 });
     const revisionId = repaired.revision.id;
     const resumed = await request(app).post(`${base(project.id)}/revisions/${revisionId}/resume`);
@@ -461,7 +474,7 @@ describe('accepted-prefix performance repair (#9348)', () => {
     expect(h.enqueueJob).not.toHaveBeenCalled();
   });
 
-  it('refuses inconclusive evidence, stale boundaries, and attempts to bypass an existing run budget without changing the scene', async () => {
+  it('refuses inconclusive evidence, stale boundaries/dependencies, and attempts to bypass an existing run budget without changing the scene', async () => {
     const project = await performanceProject();
     const path = `${base(project.id)}/scenes/performance/performance-repair`;
     const stale = await request(app).post(path).send({ ...repairInput, boundarySec: 14.1 });
@@ -473,6 +486,16 @@ describe('accepted-prefix performance repair (#9348)', () => {
     })) })) } }));
     expect((await request(app).post(path).send(repairInput)).status).toBe(409);
     expect((await projects.getProject(project.id)).scenes).toEqual(project.scenes);
+    const changed = await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      scenes: current.scenes.map((scene) => ({ ...scene, loop: true })),
+      autoReviews: current.autoReviews.map((r) => ({ ...r, attempts: r.attempts.map((a) => ({ ...a,
+        review: { ...a.review, evidence: { ...a.review.evidence, temporal: { ...a.review.evidence.temporal, status: 'verified' } } },
+      })) })),
+    } }));
+    const staleDependencies = await request(app).post(path).send(repairInput);
+    expect(staleDependencies.status).toBe(409);
+    expect(staleDependencies.body.error).toContain('dependencies changed');
+    expect((await projects.getProject(project.id)).scenes).toEqual(changed.project.scenes);
     expect(h.enqueueJob).not.toHaveBeenCalled();
   });
 });

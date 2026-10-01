@@ -10,13 +10,21 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoStreamInfo, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
+import { musicVideoDependencyChanges, musicVideoTakeChanges, presentMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { startRevisionOnProject } from './revision.js';
 
 const refuse = (message, code = 'PERFORMANCE_REPAIR_REVIEW_NEEDED') => new ServerError(message, { status: 409, code });
-const basis = (project) => canonicalSnapshotChecksum({ trackId: project.trackId, uploadedAudioFilename: project.uploadedAudioFilename, performanceConditioningSource: project.performanceConditioningSource, vocalStemFilename: project.vocalStemFilename, scenes: project.scenes, videoSettings: project.videoSettings,
-  lyricCues: project.lyricCues, composition: project.composition, autoReviews: project.autoReviews, productionRuns: project.productionRuns, revisions: project.revisions });
+const basis = (project) => {
+  // Readers derive dependency status; older persisted rows need not store it.
+  // Compare the same projection on both sides of the frame-preparation race.
+  const current = presentMusicVideoDependencies(project);
+  return canonicalSnapshotChecksum({ trackId: current.trackId, uploadedAudioFilename: current.uploadedAudioFilename,
+    performanceConditioningSource: current.performanceConditioningSource, vocalStemFilename: current.vocalStemFilename,
+    scenes: current.scenes, videoSettings: current.videoSettings, lyricCues: current.lyricCues,
+    composition: current.composition, autoReviews: current.autoReviews, productionRuns: current.productionRuns, revisions: current.revisions });
+};
 
 function repairContext(project, sceneId, input) {
   const scene = project?.scenes?.find((s) => s.sceneId === sceneId);
@@ -29,6 +37,8 @@ function repairContext(project, sceneId, input) {
   const attempts = (project.autoReviews || []).flatMap((run) => run.attempts || []).slice().reverse();
   const attempt = attempts.find((a) => a.review?.evidence?.temporal?.shots?.some((shot) => shot.sceneId === sceneId && shot.takeId === scene.videoHistoryId));
   if (attempt?.excerptId !== input.excerptId) throw refuse('Review the latest temporal evidence before choosing a repair boundary', 'PERFORMANCE_REPAIR_STALE');
+  const take = scene.takes?.find((entry) => entry.kind === 'video' && entry.assetId === scene.videoHistoryId);
+  if (musicVideoDependencyChanges(project, attempt.review.dependencies).length || musicVideoTakeChanges(project, scene, take).length) throw refuse('Review needed: the measured take dependencies changed or were not recorded');
   const evidence = attempt?.review?.evidence;
   const temporal = evidence?.temporal;
   const shot = temporal?.shots?.find((s) => s.sceneId === sceneId && s.takeId === scene.videoHistoryId);
@@ -45,7 +55,7 @@ function repairContext(project, sceneId, input) {
 }
 
 /** Pure checkpoint transform, run under the persisted project's write lock. */
-export function startPerformanceRepairOnProject(project, sceneId, input, referenceImageId, referenceFrameSec = null) {
+function startPerformanceRepairOnProject(project, sceneId, input, referenceImageId, referenceFrameSec = null) {
   const { scene, plan, excerpt } = repairContext(project, sceneId, input);
   const originalTake = scene.takes.find((t) => t.kind === 'video' && t.assetId === scene.videoHistoryId);
   const suffixSceneId = `mvs-${randomUUID()}`;
