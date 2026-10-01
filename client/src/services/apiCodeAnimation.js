@@ -36,13 +36,6 @@ export const getCodeAnimationJob = (id, options) =>
 export const getCodeAnimationPackage = (id, options) =>
   request(`/code-animation/${encodeURIComponent(id)}/package`, options);
 
-// Checks package data/integrity only; no file staging or execution.
-export const validateCodeAnimationPackage = (pkg, options) => request('/code-animation/packages/validate', {
-  method: 'POST',
-  body: JSON.stringify(pkg),
-  ...options,
-});
-
 // Queue a frame-exact MP4 export; returns { jobId, notes }. Progress streams
 // from /api/html-composition/:jobId/events.
 export const exportCodeAnimation = (id, options) => request(`/code-animation/${encodeURIComponent(id)}/export`, {
