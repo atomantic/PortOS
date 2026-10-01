@@ -474,6 +474,7 @@ export * from './xmlEntities.js';
 
 // === Curated static data ===
 export * from './curatedGenomeMarkers.js';
+export * as songCraftParts from './songCraftParts.js';
 export * from './songCraftRef.js';
 
 // === Domain utilities ===
