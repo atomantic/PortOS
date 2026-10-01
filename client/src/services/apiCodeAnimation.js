@@ -1,17 +1,16 @@
 import { request } from './apiCore.js';
 
-const projectPath = id => `/code-animation/projects/${encodeURIComponent(id)}`;
 export const listCodeAnimationProjects = ({ cursor, signal, limit = 50 } = {}) =>
   request(`/code-animation/projects?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal, silent: true });
 export const createCodeAnimationProject = (input, options) => request('/code-animation/projects', { method: 'POST', body: JSON.stringify(input), ...options });
-export const getCodeAnimationProject = (id, options) => request(projectPath(id), options);
-export const updateCodeAnimationProject = (id, input, options) => request(projectPath(id), { method: 'PATCH', body: JSON.stringify(input), ...options });
-export const importCodeAnimationPackage = (id, pkg, options) => request(`${projectPath(id)}/import`, { method: 'POST', body: JSON.stringify(pkg), ...options });
-export const acceptCodeAnimationSource = (id, revisionId, options) => request(`${projectPath(id)}/accept`, { method: 'POST', body: JSON.stringify({ revisionId }), ...options });
-export const getCodeAnimationProjectBrief = (id, options) => request(`${projectPath(id)}/brief`, options);
-export const getCodeAnimationRevisionPackage = (id, revisionId, options) => request(`${projectPath(id)}/revisions/${encodeURIComponent(revisionId)}/package`, options);
+export const getCodeAnimationProject = (id, options) => request(`/code-animation/projects/${encodeURIComponent(id)}`, options);
+export const updateCodeAnimationProject = (id, input, options) => request(`/code-animation/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input), ...options });
+export const importCodeAnimationPackage = (id, pkg, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/import`, { method: 'POST', body: JSON.stringify(pkg), ...options });
+export const acceptCodeAnimationSource = (id, revisionId, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/accept`, { method: 'POST', body: JSON.stringify({ revisionId }), ...options });
+export const getCodeAnimationProjectBrief = (id, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/brief`, options);
+export const getCodeAnimationRevisionPackage = (id, revisionId, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}/package`, options);
 export const listCodeAnimationProjectHistory = (id, { cursor, signal, limit = 50 } = {}) =>
-  request(`${projectPath(id)}/history?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal, silent: true });
+  request(`/code-animation/projects/${encodeURIComponent(id)}/history?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal, silent: true });
 
 // Code Animation — build an LLM prompt for a procedurally coded animation film
 // styled by a universe (plus mood board, references, audio), and optionally run
