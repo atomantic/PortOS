@@ -592,6 +592,7 @@ export * from './spriteVocabulary.js';
 export * from './spriteChromaKey.js';
 export * from './spriteAnimationTracks.js';
 export * from './spriteAnimationTrackStore.js';
+export * from './postCognitiveConfig.js';
 export * from './postDrillTypes.js';
 export * from './telegramClient.js';
 export * from './telegramMessage.js';

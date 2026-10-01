@@ -55,6 +55,7 @@ import { todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone, userLocalToday as localToday } from './userTimezone.js';
 import { getStoredPostSession, listPostSessions, saveStoredPostSession } from './postRunStore.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { validateCognitivePair } from '../lib/postCognitiveConfig.js';
 
 // Re-export the shared streak helper so existing importers of
 // `computePostStreaks` from this module keep working after it moved to
@@ -335,6 +336,15 @@ export async function getPostConfig() {
 export async function updatePostConfig(updates) {
   const config = await getPostConfig();
   const merged = deepMerge(config, updates);
+  // A partial patch (one field of a pair) is judged against the merged record
+  // so it can't evade a relation with an already-stored partner. Only drill
+  // types in the patch are checked: unrelated saves never trip on legacy values.
+  const pairErrors = Object.keys(updates?.cognitive?.drillTypes || {}).flatMap(type =>
+    validateCognitivePair(type, merged.cognitive?.drillTypes?.[type])
+      .map(e => ({ path: `cognitive.drillTypes.${type}.${e.field}`, message: e.message })));
+  if (pairErrors.length) {
+    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { details: pairErrors } });
+  }
   if (updates?.reminder) {
     // Stamp WHEN the reminder's enabled/time settings last changed. Read by
     // meatspacePostReminder.js's missed-slot catch-up: a cron occurrence

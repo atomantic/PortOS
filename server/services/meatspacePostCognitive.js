@@ -27,6 +27,7 @@ export const COGNITIVE_MODULE = 'cognitive';
 // this module — issue #4901.
 export { COGNITIVE_DRILL_TYPES } from '../lib/postDrillTypes.js';
 import { COGNITIVE_DRILL_TYPES } from '../lib/postDrillTypes.js';
+import { COGNITIVE_PAIR_CONSTRAINTS } from '../lib/postCognitiveConfig.js';
 
 const NBACK_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
@@ -266,8 +267,9 @@ export function generateNBack(config = {}) {
  */
 export function generateDigitSpan(config = {}) {
   const direction = config.direction === 'backward' ? 'backward' : 'forward';
-  const startLength = clampInt(config.startLength, 3, 9, 3);
-  const maxLength = clampInt(config.maxLength, startLength, 12, 8);
+  const { low, high } = COGNITIVE_PAIR_CONSTRAINTS['digit-span'];
+  const startLength = clampInt(config.startLength, low.min, low.max, low.fallback);
+  const maxLength = clampInt(config.maxLength, Math.max(high.min, startLength), high.max, high.fallback);
   const sequences = [];
   for (let len = startLength; len <= maxLength; len++) {
     const digits = [];
@@ -384,8 +386,9 @@ export function generateMentalRotation(config = {}) {
 export function generateReactionTime(config = {}) {
   const mode = config.mode === 'choice' ? 'choice' : 'simple';
   const count = clampInt(config.count, 5, 40, 15);
-  const minDelayMs = clampInt(config.minDelayMs, 300, 5000, 1000);
-  const maxDelayMs = Math.max(minDelayMs, clampInt(config.maxDelayMs, 300, 8000, 3000));
+  const { low, high } = COGNITIVE_PAIR_CONSTRAINTS['reaction-time'];
+  const minDelayMs = clampInt(config.minDelayMs, low.min, low.max, low.fallback);
+  const maxDelayMs = Math.max(minDelayMs, clampInt(config.maxDelayMs, high.min, high.max, high.fallback));
   // `choices` is only meaningful (and only schema-valid, min 2) in choice mode —
   // simple mode omits it entirely rather than persisting an out-of-range value
   // like 1, which session submission's `choices: min(2)` schema would reject.
@@ -468,8 +471,9 @@ export function generateGoNoGo(config = {}) {
   const random = seededRandom(seed);
   const count = clampInt(config.count, 6, 60, 20);
   const noGoPct = clampInt(config.noGoPct, 5, 80, 25);
-  const stimulusMs = clampInt(config.stimulusMs, 100, 2000, 600);
-  const responseDeadlineMs = clampInt(config.responseDeadlineMs, stimulusMs, 5000, 1400);
+  const { low, high } = COGNITIVE_PAIR_CONSTRAINTS['go-no-go'];
+  const stimulusMs = clampInt(config.stimulusMs, low.min, low.max, low.fallback);
+  const responseDeadlineMs = clampInt(config.responseDeadlineMs, Math.max(high.min, stimulusMs), high.max, high.fallback);
   const lureSimilarity = config.lureSimilarity === 'high' ? 'high' : 'low';
   const noGoCount = Math.round(count * noGoPct / 100);
   const flags = shuffleWith([
