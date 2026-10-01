@@ -277,7 +277,7 @@ export function buildCodeAnimationPrompt({
   sections.push(`SOUND:\n${audioSection({ audio, soundtrack, durationSeconds })}`);
   sections.push(`FORMAT: ${format.aspectRatio} at ${width}×${height}px, ${fps}fps, ${durationSeconds}s. ${RENDERER_GUIDANCE[renderer] || RENDERER_GUIDANCE.auto}`);
   sections.push(DIRECTION);
-  sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio }));
+  sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio || soundtrack === 'procedural' }));
   sections.push(SELF_REVIEW);
   sections.push(`OUTPUT: Return ONLY the finished HTML document in a single \`\`\`html fenced code block, starting with <!DOCTYPE html>. No explanation before or after it.${delivery === 'cli' ? ' Do not create or edit any files — print the document as your final answer.' : ''}`);
   return sections.join('\n\n');
