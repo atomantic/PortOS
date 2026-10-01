@@ -2635,6 +2635,86 @@ describe('promptRunner — context gate on the requested provider', () => {
     expect(status.markUnavailable).not.toHaveBeenCalled();
   });
 
+  // #9437 made the persistent mind declare an 8,192-token reserve on every
+  // wake. On a 16K local daemon that refused a ~13.5K-token prompt that fits
+  // ("known 16384-token context is below the 21744-token request budget").
+  // A local provider plans a window-sized reserve instead, and caps generation
+  // at the same number so the answer cannot outgrow the room the gate planned.
+  describe('local output reserve', () => {
+    const localOllama = (extra = {}) => apiProvider({
+      id: 'ollama',
+      name: 'Ollama',
+      defaultModel: 'qwen3.8-27b',
+      models: ['qwen3.8-27b'],
+      endpoint: 'http://localhost:11434/v1',
+      ...extra,
+    });
+    // ~13,552 prompt tokens: fits 16K with a 2,048 reserve, not with 8,192.
+    const HELM_SIZED_PROMPT = 'x'.repeat(13_552 * 4);
+
+    it('dispatches a prompt that fits a 16K local window and caps max tokens at the local reserve', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(16_384));
+      runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+      await runPromptThroughProvider({
+        provider: localOllama(),
+        prompt: HELM_SIZED_PROMPT,
+        source: 'test',
+        outputReserveTokens: 8_192,
+        allowFallback: false,
+      });
+
+      expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
+      expect(runner.executeApiRun.mock.calls[0][0].maxTokens).toBe(2_048);
+    });
+
+    it('still refuses a local prompt that cannot fit even with the smaller reserve', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(16_384));
+
+      const rejection = await runPromptThroughProvider({
+        provider: localOllama(),
+        prompt: 'x'.repeat(15_000 * 4),
+        source: 'test',
+        outputReserveTokens: 8_192,
+        allowFallback: false,
+      }).catch((err) => err);
+
+      expect(rejection.message).toMatch(/known 16384-token context is below the 17048-token request budget/);
+      expect(runner.executeApiRun).not.toHaveBeenCalled();
+    });
+
+    it('leaves an explicit caller maxTokens alone', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(32_768));
+      runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+      await runPromptThroughProvider({
+        provider: localOllama(),
+        prompt: 'short',
+        source: 'test',
+        outputReserveTokens: 8_192,
+        maxTokens: 6_000,
+        allowFallback: false,
+      });
+
+      expect(runner.executeApiRun.mock.calls[0][0].maxTokens).toBe(6_000);
+    });
+
+    it('keeps the declared reserve for a cloud provider', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(16_384));
+
+      const rejection = await runPromptThroughProvider({
+        provider: apiProvider({ id: 'cloud-api', name: 'Cloud API', defaultModel: 'qwen3.8-27b', endpoint: 'https://api.example.com/v1' }),
+        prompt: HELM_SIZED_PROMPT,
+        source: 'test',
+        outputReserveTokens: 8_192,
+        allowFallback: false,
+      }).catch((err) => err);
+
+      expect(rejection.message).toMatch(/known 16384-token context is below the 21744-token request budget/);
+      expect(runner.executeApiRun).not.toHaveBeenCalled();
+    });
+  });
+
   it('dispatches unchanged when nothing declared a window', async () => {
     // The default mock is the no-observation answer: a daemon that is down,
     // silent about windows, or not daemon-backed at all. Unknown must keep
