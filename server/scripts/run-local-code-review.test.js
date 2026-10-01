@@ -76,11 +76,13 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
     await rm(root, { recursive: true, force: true });
   });
   expect(results).toHaveLength(5);
-  // A generic harness can review ordinary code from scratch, but claim
-  // review and public-comment screening require an enforced reviewer mode.
-  expect(results[2].code, results[2].stderr).toBe(0);
-  expect(JSON.parse(results[2].stdout)).toMatchObject({ ok: true, backend: 'provider:example-cli', findings: 'NO FINDINGS' });
-  for (const result of [results[3], results[4]]) {
+  // Ordinary and claim code reviews both use the scratch review procedure.
+  // Public-comment screening still requires an enforced reviewer mode.
+  for (const result of [results[2], results[3]]) {
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, backend: 'provider:example-cli', verdict: 'clean', findings: 'NO FINDINGS' });
+  }
+  for (const result of [results[4]]) {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/REVIEWER_UNSUPPORTED/);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
@@ -323,3 +325,55 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
     await rm(root, { recursive: true, force: true });
   }
 }, 15000);
+
+it('keeps reviewer failure health on malformed output and clears it only after a validated findings verdict', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'review-verdict-bridge-'));
+  const reviewer = 'provider:example-reviewer';
+  const health = { code: 'REVIEWER_UNSUPPORTED', reason: 'configuration', lastFailureAt: 1 };
+  let content = '## Blocking\n\n- `example.js:12`: Hardcoding `allowUnconfined: true\nNo findings.';
+  const api = createServer((request, response) => {
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ choices: [{ message: { content } }] }));
+    });
+  });
+  await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
+  try {
+    await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+    await mkdir(join(root, 'data'));
+    await writeFile(join(root, 'data/providers.json'), JSON.stringify({ activeProvider: 'example-reviewer', providers: {
+      'example-reviewer': { id: 'example-reviewer', name: 'Example Reviewer', type: 'api', enabled: true,
+        endpoint: `http://127.0.0.1:${api.address().port}/v1`, models: ['example-model'], defaultModel: 'example-model' },
+    } }));
+    await writeFile(join(root, 'data/settings.json'), JSON.stringify({ codeReview: { reviewerHealth: { [reviewer]: health } } }));
+    const runReview = () => new Promise((resolve, reject) => {
+      const env = { ...process.env, NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: root };
+      delete env.VITEST;
+      const child = spawn(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs')], {
+        cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Review bridge timed out')); }, 10000);
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      child.on('error', error => { clearTimeout(timeout); reject(error); });
+      child.on('close', code => { clearTimeout(timeout); resolve({ code, stdout, stderr }); });
+      child.stdin.end(JSON.stringify({ backend: reviewer, model: 'example-model', inheritDefaults: false, kind: 'claim-review', diff: 'example diff' }));
+    });
+    const malformed = await runReview();
+    expect(malformed.code).toBe(1);
+    expect(JSON.parse(malformed.stdout)).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW' });
+    expect(JSON.parse(malformed.stdout)).not.toHaveProperty('findings');
+    expect(JSON.parse(await readFile(join(root, 'data/settings.json'), 'utf8')).codeReview.reviewerHealth[reviewer]).toEqual(health);
+    content = JSON.stringify({ verdict: 'findings', findings: [{ severity: 'blocking', location: 'example.js:12', outcome: 'Overlapping writes lose edits.', fix: 'Serialize writes.' }] });
+    const completed = await runReview();
+    expect(completed.code, completed.stderr).toBe(0);
+    expect(JSON.parse(completed.stdout)).toMatchObject({ ok: true, verdict: 'findings' });
+    expect(JSON.parse(await readFile(join(root, 'data/settings.json'), 'utf8')).codeReview).not.toHaveProperty('reviewerHealth');
+  } finally {
+    await new Promise(resolve => api.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+}, 20000);

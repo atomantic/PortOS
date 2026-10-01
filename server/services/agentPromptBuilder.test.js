@@ -2363,7 +2363,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/gh pr diff 9 \| jq/);
       expect(prompt).toMatch(/run-local-code-review\.mjs/);
       expect(prompt).toMatch(/timeoutMs: 1800000/);
-      expect(prompt).toMatch(/jq -er '\.findings \| select\(type == "string" and length > 0\)'/);
+      expect(prompt).toContain('select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings');
       expect(prompt).toMatch(/Never treat an absent or malformed response as clean/);
     });
 

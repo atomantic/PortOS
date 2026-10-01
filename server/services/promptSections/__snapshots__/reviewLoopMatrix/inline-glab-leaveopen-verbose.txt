@@ -27,14 +27,14 @@ When the local phase satisfies the stop condition, skip the PR-side phase and re
 ```bash
 REVIEW_RESPONSE=$(mktemp)
 glab mr diff 42 | jq -Rs '{ backend: "ollama", timeoutMs: 1800000, diff: . }' | node /portos/server/scripts/run-local-code-review.mjs > "$REVIEW_RESPONSE"
-if ! jq -er '.findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "${REVIEW_RESPONSE}.findings"; then
+if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "${REVIEW_RESPONSE}.findings"; then
   echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
   exit 1 # Never treat an absent or malformed response as clean.
 else
   cat "${REVIEW_RESPONSE}.findings"
 fi
 ```
-Only a successfully extracted `.findings` value is the review text; treat it like any other reviewer's findings. This run pins settings for `ollama` → `"model": "qwen3-coder"` — add those keys to the JSON object (`jq -Rs '{ backend: "ollama", model: "…", timeoutMs: 1800000, diff: . }'`) so the review runs with them instead of the install defaults. Send ONLY the keys named above; a key with no pinned value overrides the install default with junk. **@github reviewers**: request `@example-user` as MR reviewer using the GitLab project UI or API, then inspect `glab mr view 42` for their review and address any findings; their approval gates the merge.
+Only an `ok: true` response with a validated `clean` or `findings` verdict and a successfully extracted `.findings` value is review text; treat it like any other reviewer's findings. This run pins settings for `ollama` → `"model": "qwen3-coder"` — add those keys to the JSON object (`jq -Rs '{ backend: "ollama", model: "…", timeoutMs: 1800000, diff: . }'`) so the review runs with them instead of the install defaults. Send ONLY the keys named above; a key with no pinned value overrides the install default with junk. **@github reviewers**: request `@example-user` as MR reviewer using the GitLab project UI or API, then inspect `glab mr view 42` for their review and address any findings; their approval gates the merge.
 2. Fix EVERY finding from the review in this worktree, including non-blocking findings and nits; run the project's tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push, and resolve ALL review threads from that review, including non-blocking findings and nits.
 3. Re-review with the same reviewer until it reports clean, then advance to the next reviewer in the list.
 4. When the reviewer list is exhausted (or the stop mode triggers), **leave the PR open** — do NOT merge it, and do NOT delete the branch. Its JIRA ticket is sitting in review and a human lands both together; merging here would leave the work merged and the ticket stuck in review.
