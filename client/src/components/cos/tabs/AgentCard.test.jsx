@@ -1290,3 +1290,16 @@ it.each([false, true])('keeps a completed summary behind Show and its duplicate 
   await userEvent.click(screen.getByRole('button', { name: 'Hide', exact: true }));
   expect(screen.queryByText(summary)).not.toBeInTheDocument();
 });
+
+
+it('retries a clipped summary after the expanded detail request fails', async () => {
+  api.getCosAgent.mockRejectedValueOnce(new Error('Temporary failure'))
+    .mockResolvedValueOnce({ ...agent, metadata: { ...agent.metadata, taskSummary: 'Recovered full summary.' }, output: [] });
+  render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: { ...agent.metadata, taskSummary: 'Clipped preview', taskSummaryTruncated: true } }} completed /></MemoryRouter>);
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  const retry = await screen.findByRole('button', { name: 'Load full summary' });
+  await waitFor(() => expect(retry).toBeEnabled());
+  await userEvent.click(retry);
+  expect(await screen.findByText('Recovered full summary.')).toBeInTheDocument();
+  expect(api.getCosAgent).toHaveBeenCalledTimes(2);
+});
