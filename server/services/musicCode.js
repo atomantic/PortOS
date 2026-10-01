@@ -24,9 +24,9 @@ import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } fro
 import * as tracks from './tracks/index.js';
 
 const CODE_ENGINE = 'code';
-// Strudel was the first language; Tone.js is the second (client/src/components/music/strudelFrame.js
+// Strudel was the first language; Tone.js the second; SuperCollider is rendered server-side (contained, offline; no browser frame) (client/src/components/music/strudelFrame.js
 // mounts a frame document per language, same postMessage protocol for both).
-export const MUSIC_CODE_LANGUAGES = Object.freeze(['strudel', 'tonejs']);
+export const MUSIC_CODE_LANGUAGES = Object.freeze(['strudel', 'tonejs', 'supercollider']);
 // Longest code the designer accepts, from the LLM or back from the editor.
 export const MUSIC_CODE_MAX = 20000;
 
@@ -86,7 +86,29 @@ Return ONLY the JavaScript: no prose and no markdown fence. Rules for the code:
 Compose real music: a memorable melody, a bassline that moves, harmony, and percussion that grooves unless the description asks otherwise. Stay in key, and vary the pattern over multiple bars (with scheduleRepeat callbacks or a Part with several events) so the piece develops instead of looping one bar forever.`;
 }
 
-const PROMPT_BUILDERS = { strudel: buildStrudelPrompt, tonejs: buildTonejsPrompt };
+/** The SuperCollider writing contract sent to the LLM (rendered offline by a trusted, contained runner). */
+function buildSupercolliderPrompt({ description, lyrics, guidance, current }) {
+  return `You are a composer who writes music as SuperCollider (sclang) code. The code is the whole piece: it is compiled and rendered OFFLINE by a trusted runner in a sandbox, never played live, and there is no audio model and no DAW.${
+    section('MUSIC TO WRITE', trimTo(description, MAX_DESCRIPTION) || '(none given)')
+  }${
+    section('LYRICS / THEME (mood only; nothing is sung, so instruments carry the melody)', trimTo(lyrics, MAX_LYRICS))
+  }${
+    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE))
+  }${
+    current ? section('CURRENT CODE (revise it per the request above; keep what works, change what is asked)', current) : ''
+  }
+
+Return ONLY the sclang code: no prose and no markdown fence. Rules for the code:
+- Define instruments with SynthDef(\\name, { |out=0, freq=440, amp=0.2, gate=1| ... }) using ONLY stock UGens (SinOsc, Saw, Pulse, LFTri, WhiteNoise, PinkNoise, RLPF, RHPF, LPF, HPF, EnvGen, Env, Pan2, FreeVerb, CombL, Splay, Mix, ...), and finish each with Out.ar(out, signal) in stereo.
+- Compose with Pbind/Pseq/Prand/Pwhite/Pn/Ppar patterns on those SynthDefs, using \\dur, \\degree or \\note, \\scale, \\octave and \\amp. Express timing in beats via \\dur; the runner fixes the tempo at 120 BPM.
+- The runner turns your patterns into a bounded offline score (it supplies the length, 48 kHz stereo, and the output file). Do NOT call s.boot, s.record, Server.default, Score.recordNRT, play, or write any file path.
+- NEVER use unixCmd, unixCmdGetStdOut, systemCmd, String.runInTerminal, File, Pipe, Document, thisProcess.interpreter.executeFile, load, loadRelative, include, Quarks, SoundFile, Buffer.read or any sample/URL/path loading: there is no filesystem or network access and no sample files, so they always fail.
+- Keep levels sensible (per-voice amp around 0.05-0.3) so a full mix does not clip.
+
+Compose real music: a memorable melody, a bassline that moves, harmony, and percussion from synths that grooves unless the description asks otherwise. Stay in key and vary the patterns over several bars so the piece develops instead of looping one bar.`;
+}
+
+const PROMPT_BUILDERS = { strudel: buildStrudelPrompt, tonejs: buildTonejsPrompt, supercollider: buildSupercolliderPrompt };
 
 // A reply usually arrives bare, but a fenced block (with or without prose
 // around it) is common. Take the first fence's body when there is one.
