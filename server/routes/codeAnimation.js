@@ -14,6 +14,7 @@
  */
 
 import { Router } from 'express';
+import { preflightProductionProject } from '../services/codeAnimation/preflight.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
@@ -191,6 +192,10 @@ router.get('/projects/:id', asyncHandler(async (req, res) => {
 router.patch('/projects/:id', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   res.json(await patchProductionProject(id, validateRequest(codeAnimationProjectPatchSchema, req.body)));
+}));
+router.get('/projects/:id/preflight', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await preflightProductionProject(id));
 }));
 router.get('/projects/:id/history', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);

@@ -14,6 +14,7 @@ import { downloadBlob } from '../../lib/downloadBlob';
 import { formatCount, formatBytes, timeAgo } from '../../utils/formatters';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import ProductionProjectForm from './ProductionProjectForm';
+import ProductionPreflight from './ProductionPreflight';
 
 const EVENTS = ['code-animation:changed'];
 const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm hover:border-port-accent disabled:opacity-50';
@@ -106,6 +107,7 @@ export default function ProductionProjects() {
       </section>
       {project && <section className="min-w-0 space-y-4 rounded-xl border border-port-border bg-port-card p-4">
         <h2 className="text-base font-semibold">Source and history</h2>
+        <ProductionPreflight key={JSON.stringify([project.id, project.localSettings, dirty])} project={project} disabled={busy || dirty} />
         <div className="flex flex-wrap gap-2">
           <button className={buttonClass} disabled={busy || dirty} onClick={() => download()}>Export brief</button>
           {project.acceptedRevisionId && <button className={buttonClass} disabled={busy} onClick={() => download(project.acceptedRevisionId)}>Export accepted package</button>}

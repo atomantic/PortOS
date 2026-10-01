@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import useProviderModels from '../../hooks/useProviderModels';
+import ProviderModelSelector from '../ProviderModelSelector';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm';
 const budgets = { iterations: 8, timeSeconds: 900, tokens: 128000, renderSeconds: 300, diskBytes: 512 * 1024 * 1024 };
@@ -13,8 +15,10 @@ const emptyManifest = {
 export default function ProductionProjectForm({ project, onSave, busy, onDirtyChange }) {
   const [manifest, setManifest] = useState(() => project?.manifest || emptyManifest);
   const [limits, setLimits] = useState(() => project?.budgets || budgets);
-  const [baseline, setBaseline] = useState(() => JSON.stringify({ manifest: project?.manifest || emptyManifest, budgets: project?.budgets || budgets }));
-  const dirty = JSON.stringify({ manifest, budgets: limits }) !== baseline;
+  const { providers } = useProviderModels({ allowDefault: true, withEffort: true });
+  const [localSettings, setLocalSettings] = useState(() => project?.localSettings || {});
+  const [baseline, setBaseline] = useState(() => JSON.stringify({ manifest: project?.manifest || emptyManifest, budgets: project?.budgets || budgets, localSettings: project?.localSettings || {} }));
+  const dirty = JSON.stringify({ manifest, budgets: limits, localSettings }) !== baseline;
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   const field = (name, label, value, change, type = 'text', props = {}) => (
     <div key={name} className="min-w-0">
@@ -24,11 +28,12 @@ export default function ProductionProjectForm({ project, onSave, busy, onDirtyCh
   );
   return <form className="space-y-3" onSubmit={event => {
     event.preventDefault();
-    onSave({ manifest, budgets: limits }).then(saved => {
+    onSave({ manifest, budgets: limits, localSettings }).then(saved => {
       if (saved) {
         setManifest(saved.manifest);
         setLimits(saved.budgets);
-        setBaseline(JSON.stringify({ manifest: saved.manifest, budgets: saved.budgets }));
+        setLocalSettings(saved.localSettings || {});
+        setBaseline(JSON.stringify({ manifest: saved.manifest, budgets: saved.budgets, localSettings: saved.localSettings || {} }));
       }
     });
   }}>
@@ -64,6 +69,14 @@ export default function ProductionProjectForm({ project, onSave, busy, onDirtyCh
           </select>
         </div>
       </div>
+      <h3 className="text-sm font-medium">Authoring agent</h3>
+      <ProviderModelSelector providers={providers} selectedProviderId={localSettings.providerId || ''}
+        selectedModel={localSettings.model || ''} effort={localSettings.effort || ''}
+        emptyProviderOption="Select an authoring provider" emptyModelOption="Select a model"
+        onProviderChange={providerId => setLocalSettings({ providerId: providerId || null, model: null, effort: null, mode: null, connectionId: null })}
+        onModelChange={model => setLocalSettings(previous => ({ ...previous, model: model || null }))}
+        onEffortChange={effort => setLocalSettings(previous => ({ ...previous, effort: effort || null }))} />
+      <p className="text-xs text-gray-400">Saved on this machine. Renderer selection does not change the authoring agent. Reasoning effort is independent of the budgets below.</p>
       <h3 className="text-sm font-medium">Independent budgets</h3>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {Object.entries({ iterations: 'Iterations', timeSeconds: 'Elapsed time (seconds)', tokens: 'Tokens', renderSeconds: 'Render time (seconds)', diskBytes: 'Retained source disk (bytes)' }).map(([name, label]) =>

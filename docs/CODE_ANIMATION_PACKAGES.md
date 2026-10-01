@@ -76,3 +76,19 @@ settings changes the revision hash. The leaf contract in
 `server/lib/codeAnimationPackage.js` provides the shared schema and builder.
 No package is persisted by these endpoints, so this slice needs no new store,
 seed, migration, or federation channel.
+
+## Saved authoring settings
+
+Production projects use the existing scoped provider/model/effort picker. These
+settings remain machine-local and independent of the renderer and production
+budgets. Save edits before using **Check saved authoring settings**.
+
+`GET /api/code-animation/projects/:id/preflight` reads the saved selection and
+reports missing/disabled routes, model pins, unsupported effort, and stale
+connection/mode constraints. `resolved` is a configuration preview; `effective`
+is null and `executed` is false. It neither contacts a model nor probes or grants
+tools. Catalog compatibility does not verify runtime installation, credentials,
+model access at the vendor, or render readiness. Production authoring dispatch,
+render/inspection/research adapters, fallback decisions and actual-run provenance
+remain pending under #9387 and the execution slices of #9383. Package export and
+import remain available for external authoring.
