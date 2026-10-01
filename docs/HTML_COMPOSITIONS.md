@@ -50,6 +50,11 @@ with the same tail fade, and removes the temporary file after completion or
 failure. No music model, Python runtime, downloaded samples or music-library
 write is required. Missing or invalid audio fails the job.
 
+SuperCollider is a planned optional native code-audio runtime, described in the
+[integration decision](decisions/2026-10-01-supercollider-code-audio.md). It is not
+currently installed or enabled by PortOS and cannot run through this JavaScript
+PCM contract.
+
 ## Several formats from one timeline
 
 One job can render the same composition at several aspect ratios, so a launch
