@@ -1,3 +1,4 @@
+import { startProductionOnProject, markProductionPlanned, reserveProductionStep } from './production.js';
 import { plateReviewEvidence } from './plateReview.js';
 import { plateRequirements } from '../../lib/musicVideoPlateEvidence.js';
 import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
@@ -950,6 +951,23 @@ describe('authored plate preflight', () => {
     expect(jobs).toHaveLength(0);
     expect(theRun().status).toBe('blocked');
     expect(theRun().usage.generations).toBe(1);
+  });
+
+  it('leaves interrupted plate reservations charged and calls no provider until explicit resume', async () => {
+    const project = seedProject({ scenes: [plateScene()] });
+    const started = startProductionOnProject(project, { pool: POOL, limits: LIMITS, processId: 'previous-process' });
+    const planned = markProductionPlanned(started.project, started.run.id);
+    const reserved = reserveProductionStep(planned.project, started.run.id, { kind: 'plate', sceneId: 'mvs-a', route: { kind: 'plate', mode: 'reviewer-example', model: 'vision-example' }, costUsd: 0, processId: 'previous-process' });
+    store.set(project.id, reserved.project);
+    await service.__advanceProductionForTests(project.id, started.run.id);
+    expect(reviewPlate).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    await service.resumeProduction(project.id, started.run.id);
+    await settle();
+    expect(theRun().steps[0]).toMatchObject({ kind: 'plate', status: 'failed' });
+    expect(theRun().usage.generations).toBe(3);
+    expect(reviewPlate).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls.map(([args]) => args.stepKind)).toEqual(['clip']);
   });
 
   it('honors cancellation while plate analysis is running, retaining its spend and no video job', async () => {

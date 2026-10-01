@@ -1,3 +1,5 @@
+import { plateReviewEvidence } from './plateReview.js';
+import { plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
 /**
  * Music Video file-backend round-trip (#1760). Runs against a tmpdir in the
  * normal (non-DB) suite — covers create/list/get/update/delete + the scene-board
@@ -315,4 +317,22 @@ describe('projectsFile federation (#1770)', () => {
     expect(await cj.getSyncBaseHash('musicVideoProject', 'mv-old-tomb-2')).toBeNull();
     expect((await file.listProjectIds({ includeDeleted: true })).sort()).toEqual([keep.id, 'mv-new-tomb'].sort());
   });
+});
+
+it('roundtrips asset-bound plate evidence through the real serialized project store and retains it on selection', async () => {
+  const project = await file.createProject({ name: 'Example Video' });
+  const scene = await file.addProjectScene(project.id, { startSec: 0, endSec: 4 });
+  await file.updateScene(project.id, scene.sceneId, { referenceImageId: 'example.png' });
+  await file.mutateProjectRecord(project.id, (current) => {
+    const live = { ...current.scenes[0], direction: { actionContract: { version: 1, purpose: 'Two people greet', activeSpeaker: 'Person A' } } };
+    const evidence = plateReviewEvidence(live, 'example.png', 'run-example', JSON.stringify({ checks: plateRequirements(live).map(({ id }) => ({ id, status: 'pass', note: 'Visible' })) }));
+    return { project: { ...current, scenes: [{ ...live, takes: live.takes.map((take) => ({ ...take, plateEvidence: evidence })) }] } };
+  });
+  const read = await file.getProject(project.id);
+  expect(selectedPlatePasses(read.scenes[0], 'run-example')).toBe(true);
+  expect(read.scenes[0].takes[0].plateEvidence.assetId).toBe('example.png');
+  await file.updateScene(project.id, scene.sceneId, { referenceImageId: 'changed.png' });
+  const changed = await file.getProject(project.id);
+  expect(selectedPlatePasses(changed.scenes[0], 'run-example')).toBe(false);
+  expect(changed.scenes[0].takes.find((take) => take.assetId === 'example.png').plateEvidence.verdict).toBe('pass');
 });

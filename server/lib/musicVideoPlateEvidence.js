@@ -28,7 +28,14 @@ export function plateRequirements(scene) {
 /** A selection or shot edit cannot borrow evidence from a different image or intent. */
 export function currentPlateEvidence(scene, take) {
   const evidence = take?.plateEvidence;
-  return evidence && take && evidence.assetId === take.assetId && evidence.basis === plateRequirementBasis(scene) ? evidence : null;
+  if (!evidence || !take || evidence.assetId !== take.assetId || evidence.basis !== plateRequirementBasis(scene) || !Array.isArray(evidence.checks)) return null;
+  const requirements = plateRequirements(scene);
+  if (evidence.checks.length !== requirements.length || new Set(evidence.checks.map((check) => check?.id)).size !== requirements.length
+    || requirements.some(({ id, requirement }) => !evidence.checks.some((check) => check?.id === id && check.requirement === requirement
+      && ['pass', 'fail', 'unverified'].includes(check.status) && typeof check.note === 'string' && check.note.trim()))) return null;
+  const verdict = evidence.checks.some((check) => check.status === 'unverified') ? 'unverified'
+    : evidence.checks.some((check) => check.status === 'fail') ? 'fail' : 'pass';
+  return evidence.verdict === verdict ? evidence : null;
 }
 
 export function selectedPlatePasses(scene, runId) {
