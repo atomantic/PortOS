@@ -221,6 +221,7 @@ describe('projectsFile federation (#1770)', () => {
       ],
       style: { color: '#FFCC00' },
       posterSec: 2,
+      reactiveSections: [{ sectionId: 'intro', gain: 0.5, maxGain: 0.2 }],
     } });
     const saved = await file.getProject(p.id);
     expect(saved.composition).toEqual({
@@ -233,6 +234,7 @@ describe('projectsFile federation (#1770)', () => {
       ],
       style: { color: '#ffcc00', font: 'sans' },
       posterSec: 2,
+      reactiveSections: [{ sectionId: 'intro', gain: 0.5, maxGain: 0.2 }],
     });
 
     expect((await file.cloneProject(p.id)).composition).toEqual(saved.composition);
@@ -241,6 +243,10 @@ describe('projectsFile federation (#1770)', () => {
 
     const swapped = await file.updateProject(p.id, { uploadedAudioFilename: 'other.wav' });
     expect(swapped.composition.posterSec).toBeNull();
+    // Section IDs belong to the previous song: stale gain entries cannot be
+    // rebound in the editor and would block future document authoring.
+    expect(swapped.composition.reactiveSections).toEqual([]);
+    expect((await file.getProject(p.id)).composition.reactiveSections).toEqual([]);
     expect(swapped.composition.textCues.map((c) => [c.id, c.text, c.startSec, c.endSec]))
       .toEqual(saved.composition.textCues.map((c) => [c.id, c.text, null, null]));
 
