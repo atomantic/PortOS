@@ -24,11 +24,15 @@ describe('CompositionPreviewPlayer', () => {
   it.each([false, true])('loads available preview media and reports missing assets when a fetch fails (%s)', async (missing) => {
     const assets = [{ key: 'scene-a', url: '/preview/scene-a' }, { key: 'scene-b', url: '/preview/scene-b' }];
     const blob = new Blob(['example media'], { type: 'image/png' });
-    api.getMusicVideoCompositionPreview.mockResolvedValue({ html: '<!doctype html><p>preview</p>', assets, fps: 24, durationSec: 10 });
+    let finishPreview;
+    api.getMusicVideoCompositionPreview.mockImplementation(() => new Promise((resolve) => { finishPreview = resolve; }));
     api.fetchMusicVideoPreviewAsset.mockImplementation((url) => missing && url === assets[1].url
       ? Promise.reject(new Error('Example unavailable asset')) : Promise.resolve(blob));
     render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
-    const frame = await screen.findByTitle('Composition document preview');
+    await act(async () => {
+      finishPreview({ html: '<!doctype html><p>preview</p>', assets, fps: 24, durationSec: 10 });
+    });
+    const frame = screen.getByTitle('Composition document preview');
     const post = vi.spyOn(frame.contentWindow, 'postMessage');
     await act(async () => {
       window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { type: 'portos-mv:loaded' } }));
