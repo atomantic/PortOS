@@ -23,6 +23,7 @@
  */
 
 import { isPerformanceScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -54,7 +55,7 @@ function findExcerpt(project, excerptId) {
  * project; the render job fills in `filename`/`contactSheetFilename` (or
  * `error`) once the encode finishes.
  */
-export function startExcerptOnProject(project, { startSec, endSec, sections = null, performanceProject = project, partialFilename = null, renderingOn = null, aspect = null, fade = false }, now = new Date().toISOString()) {
+export function startExcerptOnProject(project, { startSec, endSec, sections = null, performanceProject = project, partialFilename = null, renderingOn = null, aspect = null, fade = false, dependencies = null }, now = new Date().toISOString()) {
   if (!(startSec >= 0) || !(endSec > startSec) || endSec > MAX_EXCERPT_SEC) {
     throw excerptError(422, 'INVALID_EXCERPT_RANGE', 'endSec must be greater than startSec, and both within range');
   }
@@ -64,6 +65,7 @@ export function startExcerptOnProject(project, { startSec, endSec, sections = nu
     startSec,
     endSec,
     status: 'rendering',
+    dependencies: dependencies || captureMusicVideoEvidence(project, { sceneIds: sections?.map((section) => section.sceneId), startSec, endSec }),
     jobId: id,
     filename: null,
     contactSheetFilename: null,

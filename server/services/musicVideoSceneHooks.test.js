@@ -134,16 +134,26 @@ describe('music-video scene completion hooks → takes', () => {
   });
 
   it('records a clip take with its source frame as a basename, filling only an empty video slot', async () => {
+    await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'frame-a.png' });
     mediaJobEvents.emit('completed', videoJob(project.id, scene.sceneId, 'clip-1'));
     mediaJobEvents.emit('completed', videoJob(project.id, scene.sceneId, 'clip-2'));
     await waitFor(() => emitted.length === 2);
     const stored = await sceneOf(project.id, scene.sceneId);
     expect(stored.videoHistoryId).toBe('clip-1');
-    expect(stored.takes.map((t) => [t.kind, t.assetId, t.sourceImageId])).toEqual([
+    expect(stored.takes.filter((t) => t.kind === 'video').map((t) => [t.kind, t.assetId, t.sourceImageId])).toEqual([
       ['video', 'clip-1', 'frame-a.png'],
       ['video', 'clip-2', 'frame-a.png'],
     ]);
     expect(emitted[1]).toMatchObject({ event: 'scene-video', videoHistoryId: 'clip-1' });
+  });
+
+  it('keeps a late clip as a historical candidate when its source plate was replaced', async () => {
+    await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'frame-b.png' });
+    mediaJobEvents.emit('completed', videoJob(project.id, scene.sceneId, 'clip-old'));
+    await waitFor(() => emitted.length === 1);
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.videoHistoryId).toBeNull();
+    expect(stored.takes.find((take) => take.assetId === 'clip-old')).toMatchObject({ sourceImageId: 'frame-a.png', dependencyState: { status: 'stale' } });
   });
 
   it('a late completion cannot resurrect a deleted scene or a deleted project', async () => {

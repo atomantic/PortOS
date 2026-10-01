@@ -21,6 +21,7 @@
  * sweep. The soft-delete fields were already on the record, so this was additive.
  */
 
+import { presentMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
@@ -59,7 +60,7 @@ export async function listProjects(options = {}) {
 }
 
 export async function getProject(id, options = {}) {
-  return (await selectBackend()).getProject(id, options);
+  return presentMusicVideoDependencies(await (await selectBackend()).getProject(id, options));
 }
 
 /** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
@@ -283,7 +284,10 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * service (#8980) so its revision checks run against the freshest record.
  */
 export async function mutateProjectRecord(id, transform) {
-  const outcome = await (await selectBackend()).mutateProjectRecord(id, transform);
+  const outcome = await (await selectBackend()).mutateProjectRecord(id, (current) => {
+    const outcome = transform(current);
+    return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };
+  });
   emitRecordUpdated('musicVideoProject', id);
   return outcome;
 }

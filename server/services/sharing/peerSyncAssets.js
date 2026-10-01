@@ -580,6 +580,7 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
   const imageNames = [...new Set([
     ...scenes.map((s) => (isStr(s?.referenceImageId) ? s.referenceImageId : null)).filter(Boolean),
     ...takeIds('image'),
+    ...scenes.flatMap((scene) => (scene.takes || []).flatMap((take) => [take.sourceImageId, ...(take.inputAssets || []).map((input) => input.assetId)]).filter(isStr)),
     ...specRefs.map((r) => (isStr(r?.imageId) ? r.imageId : null)).filter(Boolean),
     ...(Array.isArray(project?.styleReferences) ? project.styleReferences : []).map((r) => (isStr(r?.imageId) ? r.imageId : null)).filter(Boolean),
   ])];

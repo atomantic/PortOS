@@ -240,6 +240,9 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
             actionContract: structuredClone(scene.direction.actionContract),
           };
         }
+        const { captureTakeDependencies } = await import('../../lib/musicVideoDependencies.js');
+        const { basename } = await import('path');
+        if (scene) params.musicVideoDependencies = captureTakeDependencies(scene, prepared.sourceImagePath ? basename(prepared.sourceImagePath) : null);
       }
       return enqueueJob({ kind: 'video', params });
     },

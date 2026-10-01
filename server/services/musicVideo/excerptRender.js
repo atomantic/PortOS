@@ -17,6 +17,7 @@
  * the SAME project while one is already in flight.
  */
 
+import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
@@ -30,7 +31,7 @@ import { safeUnder } from '../../lib/ffmpeg.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { assertCurrentPerformanceTakes } from './performanceShot.js';
-import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
+import { assertCurrentClipDependencies, planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
 import { renderableCues, sectionCardCues } from './composition.js';
@@ -121,7 +122,10 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   // Same order as a full render: a missing master throws before the
   // excerpt is marked rendering.
   const audioPath = await resolveMasterAudioPath(project);
-  if (renderer.performanceTakes) await assertCurrentPerformanceTakes(project, audioPath);
+  if (renderer.performanceTakes) {
+    assertCurrentClipDependencies(project);
+    await assertCurrentPerformanceTakes(project, audioPath);
+  }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
   if (!(startSec >= 0) || !(endSec > startSec) || endSec > prepared.totalSec + 1e-6) {
     throw new ServerError(
@@ -143,7 +147,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     }));
   const renderingOn = await ensureInstanceId();
   const { excerpt } = await mutateProjectRecord(projectId, (current) => {
-    const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: project, partialFilename: filename, renderingOn, aspect: musicVideoAspect(project), fade });
+    const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: project, dependencies: captureMusicVideoEvidence(project, { sceneIds: sections.map((section) => section.sceneId), startSec, endSec: endClamped }), partialFilename: filename, renderingOn, aspect: musicVideoAspect(project), fade });
     return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
   });
   const excerptId = excerpt.id;
@@ -265,7 +269,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // demote it (#9010).
     const renderingOn = await ensureInstanceId();
     const { excerpt } = await mutateProjectRecord(projectId, (current) => {
-      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: project, partialFilename: filename, renderingOn });
+      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: project, dependencies: captureMusicVideoEvidence(project, { sceneIds: sections.map((section) => section.sceneId), startSec, endSec: endClamped }), partialFilename: filename, renderingOn });
       return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
     });
     const excerptId = excerpt.id;

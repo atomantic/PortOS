@@ -40,6 +40,7 @@ import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js
  * against older writers that would discard them during treatment edits.
  */
 
+import { captureMusicVideoEvidence, musicVideoDependencyChanges, musicVideoTakeChanges, remapMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { createHash, randomUUID } from 'crypto';
 import { MUSIC_VIDEO_MEDIA, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -219,6 +220,8 @@ function normalizeEvidence(evidence) {
     imageId: isNonBlankStr(evidence.imageId) ? evidence.imageId.slice(0, 256) : null,
     note: text(evidence.note, 2000),
     reviewedAt: typeof evidence.reviewedAt === 'string' ? evidence.reviewedAt : null,
+    ...(evidence.dependencies ? { dependencies: structuredClone(evidence.dependencies) } : {}),
+    ...(evidence.dependencyState ? { dependencyState: evidence.dependencyState } : {}),
   };
 }
 
@@ -511,6 +514,14 @@ export function reviewTreatmentProof(project, proofId, { baseRevision, status, e
       throw treatmentError(422, 'PROOF_EVIDENCE_NOT_FOUND', 'That image is not a frame of this proof\'s scenes');
     }
     if (status === 'passed') {
+      const selectedArtifact = isRender || (project.scenes || []).some((scene) => proof.sceneIds.includes(scene.sceneId)
+        && (recorded.videoHistoryId ? scene.videoHistoryId === recorded.videoHistoryId : scene.referenceImageId === recorded.imageId));
+      if (!selectedArtifact || (isRender && musicVideoDependencyChanges(project, project.renderDependencies).length)) {
+        throw treatmentError(409, 'PROOF_DEPENDENCIES_STALE', 'Historical or untracked artifacts cannot pass the current proof — select or rebuild and review current evidence');
+      }
+      const stale = (project.scenes || []).filter((scene) => proof.sceneIds.includes(scene.sceneId))
+        .some((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.assetId === scene.videoHistoryId && take.kind === 'video')).length);
+      if (stale) throw treatmentError(409, 'PROOF_DEPENDENCIES_STALE', 'Repair the derived clip before passing its proof');
       if (proof.checks.includes('lip-sync') && treatment.capabilityGaps.some((g) => g.id === 'lip-sync')) {
         throw treatmentError(422, 'PROOF_CAPABILITY_MISSING', 'This install has no source-audio lip-sync, so a lip-sync check cannot pass');
       }
@@ -527,6 +538,7 @@ export function reviewTreatmentProof(project, proofId, { baseRevision, status, e
       }
     }
   }
+  if (recorded) recorded.dependencies = recorded.videoHistoryId === project.renderHistoryId ? project.renderDependencies : captureMusicVideoEvidence(project, { sceneIds: proof.sceneIds, composition: recorded.videoHistoryId === project.renderHistoryId });
   treatment.proofs[idx] = { ...proof, status, evidence: recorded };
   return stamp(project, treatment, now);
 }
@@ -831,7 +843,7 @@ export function remapTreatmentForClone(treatment, sceneIdMap, { includeGenerated
       return {
         ...p,
         sceneIds: p.sceneIds.map(remap),
-        ...(lost ? { status: 'proposed', evidence: null } : {}),
+        ...(lost ? { status: 'proposed', evidence: null } : p.evidence ? { evidence: { ...p.evidence, dependencies: remapMusicVideoDependencies(p.evidence.dependencies, sceneIdMap) } } : {}),
       };
     }),
     // The scene-set fingerprint covers ids; keep a clean basis clean.

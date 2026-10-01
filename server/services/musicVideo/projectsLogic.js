@@ -14,6 +14,7 @@
  * already on the record, so federation was purely additive (no record migration).
  */
 
+import { remapMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -53,7 +54,7 @@ export function mirrorStatus(status) {
 
 /** Return the next record with `extra` merged and `updatedAt` freshly stamped. */
 function touch(record, extra) {
-  return { ...record, ...extra, updatedAt: new Date().toISOString() };
+  return retainMusicVideoDependencies(record, { ...record, ...extra, updatedAt: new Date().toISOString() });
 }
 
 /** safeParse a scene payload, throwing a 400 ServerError with field detail on failure. */
@@ -201,6 +202,9 @@ export function cloneProjectRecord(source, {
     // carries the whole candidate history; a clean clone starts empty.
     takes: includeGeneratedMedia ? ensureSceneTakes(scene, now) : [],
   }));
+  for (const scene of scenes) scene.takes = scene.takes.map((take) => ({ ...take,
+    ...(take.dependencies ? { dependencies: remapMusicVideoDependencies(take.dependencies, sceneIdMap) } : {}),
+  }));
   const mediaReady = includeGeneratedMedia
     && scenes.length > 0
     && scenes.every((scene) => scene.referenceImageId && scene.videoHistoryId);
@@ -236,7 +240,7 @@ export function cloneProjectRecord(source, {
       // A running encoder belongs only to the source project. Copying its
       // partial-file ownership would let clone recovery delete that output.
       excerpts: source.excerpts.filter((excerpt) => excerpt?.status !== 'rendering').map((excerpt) => (Array.isArray(excerpt?.sections)
-        ? { ...excerpt, sections: excerpt.sections.map((s) => ({ ...s, sceneId: sceneIdMap.get(s.sceneId) ?? s.sceneId })) }
+        ? { ...excerpt, dependencies: remapMusicVideoDependencies(excerpt.dependencies, sceneIdMap), sections: excerpt.sections.map((s) => ({ ...s, sceneId: sceneIdMap.get(s.sceneId) ?? s.sceneId })) }
         : excerpt)),
     } : {}),
     // A revision is in-progress work against the SOURCE's takes; the clone
@@ -254,6 +258,7 @@ export function cloneProjectRecord(source, {
     // interrupted on the clone and can be resumed there.
     ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
     renderHistoryId: null,
+    renderDependencies: null,
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
     renderPartialFilename: null,

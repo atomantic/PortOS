@@ -43,6 +43,7 @@ import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from '.
 import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch, renderSongComposition } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
@@ -572,7 +573,15 @@ export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 2
 // every scene's clip, and refuse a render whose shots don't cover their
 // authored span. Both callers build on the exact same resolved clip list, so
 // an excerpt frame matches what a full render would produce at that song time.
+export function assertCurrentClipDependencies(project) {
+  const stale = (project.scenes || []).filter((scene) => scene.videoHistoryId && scene.visualLayer !== 'still' && scene.visualLayer !== 'card')
+    .filter((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)).length);
+  if (stale.length) throw new ServerError('Selected clips were derived from changed plates — preview and repair their dependencies before rendering',
+    { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
+}
+
 export async function planMusicVideoRender(project) {
+  assertCurrentClipDependencies(project);
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
@@ -675,7 +684,10 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   // Resolve the master before any rendering mark. A missing track throws here
   // and the caller releases the pending slot without leaving a job running.
   const audioPath = await resolveMasterAudioPath(project);
-  if (renderer.performanceTakes) await assertCurrentPerformanceTakes(project, audioPath);
+  if (renderer.performanceTakes) {
+    assertCurrentClipDependencies(project);
+    await assertCurrentPerformanceTakes(project, audioPath);
+  }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
@@ -741,7 +753,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
       createdAt: new Date().toISOString(),
       musicVideoProjectId: projectId,
     });
-    await finish({ status: 'complete', extra: { renderHistoryId: jobId } });
+    await finish({ status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) } });
     console.log(`✅ ${renderer.label[0].toUpperCase()}${renderer.label.slice(1)} music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}`, proof: proof ? `/data/video-thumbnails/${proof}` : null } });
   }).catch(async (err) => {
@@ -933,7 +945,7 @@ export async function renderMusicVideo(projectId, options = {}) {
               musicVideoProjectId: projectId,
             };
             await appendToVideoHistory(meta);
-            await updateProject(projectId, settledRender('complete', { renderHistoryId: jobId })).catch((updateErr) => {
+            await updateProject(projectId, settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) })).catch((updateErr) => {
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→complete write failed: ${updateErr.message}`);
             });
             console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);

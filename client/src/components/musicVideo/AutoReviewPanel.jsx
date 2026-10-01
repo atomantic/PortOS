@@ -58,6 +58,7 @@ function AttemptRow({ attempt }) {
           </span>
         ))}
       </div>
+      {review?.dependencyState && review.dependencyState.status !== 'current' && <p className="text-port-warning">Historical review — {review.dependencyState.reasons.join('; ')}. This pass cannot be reused.</p>}
       {review?.evidence && (
         <p className="text-[10px] text-port-text-muted">
           Evidence: {review.evidence.boundaryFrames ? 'cut/cue sheet + ' : ''}{review.evidence.continuousFrames || 0} continuous frames

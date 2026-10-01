@@ -1,3 +1,4 @@
+import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 /**
  * Music Video production run (#9066) — orchestration contract with injected
  * queue events. The project store is an in-memory double with the real
@@ -172,7 +173,7 @@ describe('music video production run (#9066)', () => {
     expect(theRun().steps.every((s) => s.status === 'completed' && s.rationale)).toBe(true);
 
     // Only a passed continuous review completes the run — never the frames alone.
-    store.get('mv-example').autoReviews[0].status = 'passed';
+    passOwnedReview();
     musicVideoEvents.emit('auto-review', { projectId: 'mv-example', run: { ...store.get('mv-example').autoReviews[0] }, action: { type: 'idle' } });
     await settle();
     expect(theRun().status).toBe('completed');
@@ -585,6 +586,7 @@ function passOwnedReview() {
   const project = store.get('mv-example');
   const review = project.autoReviews[0];
   review.status = 'passed';
+  review.attempts = [{ n: 1, review: { verdict: 'pass', dependencies: captureMusicVideoEvidence(project) } }];
   musicVideoEvents.emit('auto-review', { projectId: project.id, run: clone(review), action: { type: 'idle' } });
 }
 function failOwnedReview(atSec = 6) {

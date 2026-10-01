@@ -46,6 +46,7 @@ import {
   musicVideoCodeGenerateSchema,
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
+  musicVideoDependencyRepairSchema,
   musicVideoRevisionStartSchema,
   musicVideoRevisionReleaseSchema,
   musicVideoAutoReviewStartSchema,
@@ -112,6 +113,8 @@ import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild,
 import { preparePublishDraft, submitPublishDraft, discardPublishDraft, recordPublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import {
+  getDependencyImpact,
+  startDependencyRepair,
   startRevision, resumeRevision, cancelRevision, releaseRevisionSection,
 } from '../services/musicVideo/revisionService.js';
 import {
@@ -735,6 +738,15 @@ router.delete('/:id/excerpt/:excerptId/notes/:noteId', asyncHandler(async (req, 
 // `needsGeneration` for the board to generate; once all hold one, the draft
 // window re-renders. A section holding a take is never asked to generate again,
 // so a render retry never re-submits paid generation.
+router.get('/:id/dependency-impact', asyncHandler(async (req, res) => {
+  res.json(await getDependencyImpact(req.params.id));
+}));
+
+router.post('/:id/dependency-repairs', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoDependencyRepairSchema, req.body || {});
+  res.status(201).json(await startDependencyRepair(req.params.id, input));
+}));
+
 router.post('/:id/excerpt/:excerptId/revisions', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoRevisionStartSchema, req.body || {});
   res.status(201).json(await startRevision(req.params.id, req.params.excerptId, input));
@@ -962,12 +974,15 @@ async function takeAssetExists(kind, assetId) {
 // Add one candidate take to a scene: the synchronous image lane's inline
 // render, or an asset the director imports from the gallery.
 router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
-  const { kind, assetId, source = 'imported', provider, originalName, use } = validateRequest(musicVideoTakeInputSchema, req.body);
+  const { kind, assetId, source = 'imported', provider, originalName, use, sourceImageId, inputAssets } = validateRequest(musicVideoTakeInputSchema, req.body);
   if (!(await takeAssetExists(kind, assetId))) {
     throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
+  for (const imageId of [sourceImageId, ...(inputAssets || []).map((input) => input.assetId)].filter(Boolean)) {
+    if (!(await takeAssetExists('image', imageId))) throw new ServerError('Dependency image not found', { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+  }
   const { scene, appended } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
-    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use,
+    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets,
   }]);
   res.status(201).json({ scene, take: appended[0] });
 }));

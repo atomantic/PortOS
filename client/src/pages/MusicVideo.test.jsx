@@ -95,6 +95,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   addMusicVideoExcerptNote: vi.fn(),
   updateMusicVideoExcerptNote: vi.fn(),
   deleteMusicVideoExcerptNote: vi.fn(),
+  getMusicVideoDependencyImpact: vi.fn(async () => ({ shots: [], evidence: [] })),
+  startMusicVideoDependencyRepair: vi.fn(),
   startMusicVideoRevision: vi.fn(),
   resumeMusicVideoRevision: vi.fn(),
   cancelMusicVideoRevision: vi.fn(),
@@ -144,7 +146,7 @@ const pushSocket = (event, payload) => act(async () => {
 });
 vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn(), listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
-vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn(), uploadGalleryImage: vi.fn() }));
+vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn(async () => ({ status: 'queued', jobId: 'example-frame-job' })), uploadGalleryImage: vi.fn() }));
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
     providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
