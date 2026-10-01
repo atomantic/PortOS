@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   regenerateMusicVideoMixedMediaSection: vi.fn(),
   acceptMusicVideoMixedMediaDocument: vi.fn(),
   discardMusicVideoMixedMediaDocument: vi.fn(),
+  reviseMusicVideoMixedMediaEvents: vi.fn(),
+  updateMusicVideoProject: vi.fn(),
 }));
 vi.mock('../../services/apiMusicVideo.js', () => api);
 vi.mock('../../hooks/useProviderModels.js', () => ({ default: () => ({
@@ -39,6 +41,34 @@ beforeEach(() => {
 });
 
 describe('DocumentCompositionPanel', () => {
+  it('gates authoring on saved event bindings and sends an event-only revision against the reviewed document', async () => {
+    api.getMusicVideoMixedMediaCandidate.mockResolvedValue({ candidate: generated, source: generated, stale: true, eventRevisionAvailable: true,
+      sections: [{ id: 'verse', label: 'Verse', startSec: 0, endSec: 10 }] });
+    let finishSave;
+    api.updateMusicVideoProject.mockImplementation(() => new Promise((resolve) => { finishSave = resolve; }));
+    const onProject = vi.fn();
+    const { rerender } = render(<DocumentCompositionPanel project={withCandidate} onProject={onProject} onSave={vi.fn()} />);
+    const revise = await screen.findByRole('button', { name: 'Revise events only' });
+    await waitFor(() => expect(revise.disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Add narrative event' }));
+    expect(screen.getByRole('button', { name: /Generate mixed-media/ }).disabled).toBe(true);
+    expect(revise.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Save event bindings' }));
+    await waitFor(() => expect(api.updateMusicVideoProject).toHaveBeenCalledTimes(1));
+    const saved = { ...withCandidate, updatedAt: '2026-01-02', composition: api.updateMusicVideoProject.mock.calls[0][1].composition };
+    expect(saved.composition.narrativeEvents[0]).toMatchObject({ kind: 'reveal', anchor: { kind: 'time', atSec: 0 } });
+    expect(revise.disabled).toBe(true);
+    finishSave(saved);
+    await waitFor(() => expect(onProject).toHaveBeenCalledWith(saved));
+    rerender(<DocumentCompositionPanel project={saved} onProject={onProject} onSave={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Revise events only' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Revise events only' }));
+    await waitFor(() => expect(api.reviseMusicVideoMixedMediaEvents).toHaveBeenCalledWith('mv-1', {
+      providerId: 'stub-provider', model: 'fixture-model', expectedDraft: generated.directory,
+    }, { silent: true }));
+    expect(api.generateMusicVideoMixedMediaDocument).not.toHaveBeenCalled();
+  });
+
   it('starts from the template in one click when nothing is attached', async () => {
     const onProject = vi.fn();
     render(<DocumentCompositionPanel project={bare} onProject={onProject} onSave={vi.fn()} />);

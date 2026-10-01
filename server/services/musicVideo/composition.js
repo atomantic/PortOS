@@ -29,6 +29,8 @@ import {
   MUSIC_VIDEO_TYPOGRAPHY_PLACEMENTS as TYPOGRAPHY_PLACEMENTS,
   MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES as TYPOGRAPHY_TEMPLATES,
   isDeterministicCodeSource,
+  musicVideoNarrativeEventSchema,
+  musicVideoReactiveSectionSchema,
 } from '../../lib/musicVideoValidation.js';
 
 export const COMPOSITION_VERSION = 1;
@@ -167,6 +169,12 @@ export function normalizeComposition(input) {
     ...(documentRef ? { document: documentRef } : {}),
     ...(documentDraft ? { documentDraft } : {}),
     ...(overlay ? { overlay } : {}),
+    ...(Array.isArray(input.narrativeEvents) ? { narrativeEvents: input.narrativeEvents.slice(0, 200)
+      .map((event) => musicVideoNarrativeEventSchema.safeParse(event)).filter((result) => result.success).map((result) => result.data)
+      .filter((event, index, events) => events.findIndex((other) => other.id === event.id) === index) } : {}),
+    ...(Array.isArray(input.reactiveSections) ? { reactiveSections: input.reactiveSections.slice(0, 40)
+      .map((section) => musicVideoReactiveSectionSchema.safeParse(section)).filter((result) => result.success).map((result) => result.data)
+      .filter((section, index, sections) => sections.findIndex((other) => other.sectionId === section.sectionId) === index) } : {}),
   };
 }
 
@@ -200,6 +208,7 @@ export function invalidateCompositionTiming(composition) {
     ...composition,
     textCues: (composition.textCues || []).map((cue) => ({ ...cue, startSec: null, endSec: null })),
     posterSec: null,
+    ...(composition.narrativeEvents ? { narrativeEvents: composition.narrativeEvents.map((event) => ({ ...event, anchor: null })) } : {}),
   };
 }
 

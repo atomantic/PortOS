@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { parse } from '@babel/parser';
 import { ServerError } from '../../lib/errorHandler.js';
+import { resolveNarrativeEvents } from '../../lib/musicVideoNarrativeEvents.js';
 import { isDeterministicCodeSource } from '../../lib/musicVideoValidation.js';
 import { summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { buildMixedMediaDocumentPrompt, extractCodeSections } from '../codeAnimation/prompt.js';
@@ -43,7 +44,7 @@ function checkedFunction(source) {
   return source;
 }
 
-function basisFor(project) {
+function basisFor(project, includeEvents = true) {
   // These are all inputs that can change which pixels or authoring directions
   // a section means. A new candidate cannot publish across such an edit.
   const input = {
@@ -59,8 +60,36 @@ function basisFor(project) {
     lyricMarkers: project.lyricMarkers || null,
     scenes: project.scenes || [],
     compositionStyle: project.composition?.style || { color: '#ffffff', font: 'sans' },
+    ...(includeEvents ? { eventInputs: eventInputs(project) } : {}),
   };
   return createHash('sha256').update(JSON.stringify(input)).digest('hex');
+}
+
+const eventInputs = (project) => ({
+  narrativeEvents: project.composition?.narrativeEvents || [],
+  reactiveSections: project.composition?.reactiveSections || [],
+});
+
+function matchesBasis(project, manifest) {
+  if (manifest.structuralBasis) return manifest.basis === basisFor(project);
+  const inputs = eventInputs(project);
+  return !inputs.narrativeEvents.length && !inputs.reactiveSections.length && manifest.basis === basisFor(project, false);
+}
+
+function affectedEventSections(before, after) {
+  const changedSpans = [];
+  const oldEvents = new Map((before.narrativeEvents || []).map((event) => [event.id, event]));
+  const newEvents = new Map((after.narrativeEvents || []).map((event) => [event.id, event]));
+  for (const id of new Set([...oldEvents.keys(), ...newEvents.keys()])) {
+    const old = oldEvents.get(id); const next = newEvents.get(id);
+    if (JSON.stringify(old) !== JSON.stringify(next)) changedSpans.push(...[old, next].filter(Boolean));
+  }
+  return after.sections.filter((section) => {
+    const oldGain = (before.reactiveSections || []).find((entry) => entry.sectionId === section.id);
+    const nextGain = (after.reactiveSections || []).find((entry) => entry.sectionId === section.id);
+    return JSON.stringify(oldGain) !== JSON.stringify(nextGain)
+      || changedSpans.some((event) => event.startSec < section.endSec && event.endSec > section.startSec);
+  }).map((section) => section.id);
 }
 
 async function authoringContext(project) {
@@ -82,6 +111,7 @@ async function authoringContext(project) {
   const media = await resolveSceneMedia(project, { history, strictLayers: true });
   const frame = DOCUMENT_FRAME_SIZES[documentAspect(project)];
   const data = buildDocumentData(project, { media, frame, clock: documentRenderClock(duration), songDurationSec: duration, generated: true });
+  Object.assign(song, { narrativeEvents: data.song.narrativeEvents, reactiveSections: data.song.reactiveSections });
   const scenes = data.scenes.map((scene) => {
     const original = project.scenes.find((entry) => entry.sceneId === scene.sceneId);
     const wanted = scene.visualLayer === 'still' ? 'image' : scene.visualLayer === 'footage' ? 'video' : null;
@@ -97,7 +127,7 @@ async function authoringContext(project) {
       inSec: scene.media?.inSec ?? null, outSec: scene.media?.outSec ?? null,
     };
   });
-  return { song, scenes, basis: basisFor(project), palette: paletteFromProject(project) };
+  return { song, scenes, basis: basisFor(project), structuralBasis: basisFor(project, false), palette: paletteFromProject(project) };
 }
 
 function acceptedSections(text, ids) {
@@ -134,21 +164,24 @@ async function priorManifest(project) {
   return { pointer, manifest };
 }
 
-async function runAuthoring(projectId, { providerId, model, sectionId = null, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
+async function runAuthoring(projectId, { providerId, model, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
   const project = await getProject(projectId);
   if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
   const context = await authoringContext(project);
   let prior = null;
-  if (sectionId) {
+  if (sectionId || eventRevision) {
     prior = await priorManifest(project);
-    if (prior.manifest.basis !== context.basis) throw fail('The treatment or selected media changed — generate a fresh document', 'COMPOSITION_DRAFT_STALE', 409);
+    if (eventRevision ? (prior.manifest.structuralBasis || prior.manifest.basis) !== context.structuralBasis : !matchesBasis(project, prior.manifest)) throw fail('The treatment or selected media changed — generate a fresh document', 'COMPOSITION_DRAFT_STALE', 409);
     if (project.composition?.documentDraft
       && (project.composition?.document?.directory || null) !== (prior.manifest.baseDocumentDirectory || null)) {
       throw fail('The selected document changed — generate a fresh candidate', 'COMPOSITION_DRAFT_STALE', 409);
     }
-    if (!prior.manifest.sections.some((section) => section.id === sectionId)) throw fail('Section not found in the generated document', 'SECTION_NOT_FOUND', 404);
+    if (sectionId && !prior.manifest.sections.some((section) => section.id === sectionId)) throw fail('Section not found in the generated document', 'SECTION_NOT_FOUND', 404);
     if (expectedDraft !== prior.pointer.directory) throw fail('The candidate changed — review it again', 'COMPOSITION_DRAFT_STALE', 409);
   }
+  const ids = eventRevision ? affectedEventSections(prior.manifest.song, context.song)
+    : sectionId ? [sectionId] : context.song.sections.map((section) => section.id);
+  if (!ids.length) throw fail('No narrative event or section gain changes to revise', 'NO_EVENT_CHANGES', 409);
   const sharedStyle = prior?.manifest.sharedStyle || {
     palette: context.palette,
     treatment: { brief: project.treatment?.brief || null, motifs: project.treatment?.arc?.motifs || [], arc: project.treatment?.arc?.beats || [], styleLook: project.treatment?.styleLook || null },
@@ -156,18 +189,19 @@ async function runAuthoring(projectId, { providerId, model, sectionId = null, ex
     styleLines: await styleLinesFor(project),
   };
   const prompt = buildMixedMediaDocumentPrompt({
-    title: project.name, song: context.song, palette: context.palette, treatment: project.treatment,
+    title: project.name, song: { ...context.song, sections: context.song.sections.filter((section) => ids.includes(section.id)) }, palette: context.palette, treatment: project.treatment,
     visualSpec: project.visualSpec, scenes: context.scenes, styleLines: sharedStyle.styleLines,
     onlySectionId: sectionId, sharedStyle,
   });
   const directedPrompt = feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt;
   const run = await runModel({ providerId, model, prompt: directedPrompt, source: 'music-video-document', beforeSubmit });
-  const ids = sectionId ? [sectionId] : context.song.sections.map((section) => section.id);
   const updated = acceptedSections(run.text, ids);
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
   for (const [id, source] of updated) merged.set(id, source);
   const manifest = {
-    version: 1, basis: context.basis, baseDocumentDirectory: project.composition?.document?.directory || null,
+    version: 1, basis: context.basis, structuralBasis: context.structuralBasis, baseDocumentDirectory: project.composition?.document?.directory || null,
+    changedSectionIds: [...new Set([...((prior && project.composition?.documentDraft) ? prior.manifest.changedSectionIds || [] : []), ...ids])],
+    beforeSong: prior ? (project.composition?.documentDraft ? prior.manifest.beforeSong || prior.manifest.song : prior.manifest.song) : null,
     sharedStyle, song: context.song, palette: context.palette,
     scenes: context.scenes,
     sections: context.song.sections.map(({ id }) => ({ id, source: merged.get(id) })),
@@ -189,6 +223,7 @@ async function runAuthoring(projectId, { providerId, model, sectionId = null, ex
 
 export const generateMixedMediaDocument = (projectId, input = {}) => runAuthoring(projectId, input);
 export const regenerateMixedMediaSection = (projectId, sectionId, input = {}) => runAuthoring(projectId, { ...input, sectionId });
+export const reviseMixedMediaEvents = (projectId, input = {}) => runAuthoring(projectId, { ...input, eventRevision: true });
 
 export async function acceptMixedMediaDocument(projectId, directory, { verifyCurrent = () => {} } = {}) {
   const project = await getProject(projectId);
@@ -199,7 +234,7 @@ export async function acceptMixedMediaDocument(projectId, directory, { verifyCur
   return acceptGeneratedDocument(projectId, directory, {
     verifyCurrent: (current) => {
       verifyCurrent(current);
-      if (basisFor(current) !== manifest.basis || (current.composition?.document?.directory || null) !== (manifest.baseDocumentDirectory || null)) {
+      if (!matchesBasis(current, manifest) || (current.composition?.document?.directory || null) !== (manifest.baseDocumentDirectory || null)) {
         throw fail('The treatment or selected media changed — generate a fresh document', 'COMPOSITION_DRAFT_STALE', 409);
       }
     },
@@ -211,12 +246,22 @@ export async function readMixedMediaCandidate(projectId) {
   if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
   if (!project.composition?.documentDraft && project.composition?.document?.source?.kind !== 'generated') return { candidate: null, source: null, sections: [] };
   const { pointer, manifest } = await priorManifest(project);
+  const currentSong = buildSongDocument(project);
+  const resolved = resolveNarrativeEvents(project, currentSong.sections, currentSong.fps);
+  Object.assign(currentSong, { narrativeEvents: resolved.events, reactiveSections: project.composition?.reactiveSections || [] });
   return {
     candidate: project.composition?.documentDraft || null,
     source: pointer,
     sections: (manifest.song?.sections || []).map(({ id, label, startSec, endSec }) => ({ id, label, startSec, endSec })),
     providerId: manifest.providerId, model: manifest.model,
-    stale: manifest.basis !== basisFor(project)
+    eventRevisionAvailable: !resolved.unresolved.length && (manifest.structuralBasis || manifest.basis) === basisFor(project, false)
+      && affectedEventSections(manifest.song, currentSong).length > 0,
+    comparisons: (manifest.changedSectionIds || []).map((id) => ({
+      sectionId: id,
+      before: (manifest.beforeSong?.narrativeEvents || []).filter((event) => event.sectionId === id),
+      after: (manifest.song?.narrativeEvents || []).filter((event) => event.sectionId === id),
+    })),
+    stale: !matchesBasis(project, manifest)
       || (Boolean(project.composition?.documentDraft)
         && (project.composition?.document?.directory || null) !== (manifest.baseDocumentDirectory || null)),
   };

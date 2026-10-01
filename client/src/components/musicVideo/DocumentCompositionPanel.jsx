@@ -5,6 +5,7 @@ import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
+import NarrativeEventsEditor from './NarrativeEventsEditor.jsx';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { formatBytes, timeAgo } from '../../utils/formatters.js';
 import { compositionDraft } from './compositionDraft.js';
@@ -12,6 +13,7 @@ import {
   detachMusicVideoCompositionDocument, getMusicVideoCompositionDocument, getMusicVideoCompositionExport,
   importMusicVideoCompositionDirectory, importMusicVideoCompositionZip, startMusicVideoCompositionTemplate,
   generateMusicVideoMixedMediaDocument, regenerateMusicVideoMixedMediaSection,
+  reviseMusicVideoMixedMediaEvents, updateMusicVideoProject,
   getMusicVideoMixedMediaCandidate, acceptMusicVideoMixedMediaDocument, discardMusicVideoMixedMediaDocument,
 } from '../../services/apiMusicVideo.js';
 
@@ -130,6 +132,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   const [folder, setFolder] = useState('');
   const [candidate, setCandidate] = useState(null);
   const [selectedSection, setSelectedSection] = useState('');
+  const [eventPending, setEventPending] = useState(false);
   const {
     providers, selectedProviderId, selectedModel, availableModels, selectedProvider,
     setSelectedProviderId, setSelectedModel,
@@ -176,6 +179,12 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
     { ...provider, expectedDraft: candidate?.source?.directory }, { silent: true }), 'New candidate ready to review');
   const accept = () => run('accept', () => acceptMusicVideoMixedMediaDocument(project.id, candidate?.candidate?.directory, { silent: true }), 'Candidate selected for rendering');
   const discard = () => run('discard', () => discardMusicVideoMixedMediaDocument(project.id, candidate?.candidate?.directory, { silent: true }), 'Candidate discarded');
+  const saveEvents = (events) => run('events', async () => ({ project: await updateMusicVideoProject(project.id,
+    { composition: compositionDraft(project, events) }, { silent: true }) }), 'Event bindings saved');
+  const reviseEvents = () => run('event-revision', () => reviseMusicVideoMixedMediaEvents(project.id,
+    { ...provider, expectedDraft: candidate?.source?.directory }, { silent: true }), 'Affected sections revised; selected footage retained');
+  const compareSection = candidate?.sections?.find((section) => section.id === selectedSection);
+  const comparisonSeek = compareSection ? { t: compareSection.startSec, n: compareSection.startSec + 1 } : null;
 
   return (
     <section className="mt-3 space-y-2 rounded-lg border border-port-border bg-port-bg p-2" aria-label="Composition document">
@@ -217,6 +226,8 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         </button>
       </div>
       <div className="space-y-2 rounded border border-port-border p-2">
+        <NarrativeEventsEditor key={`${project.id}-${JSON.stringify([project.composition?.narrativeEvents, project.composition?.reactiveSections])}`}
+          project={project} sections={candidate?.sections || []} disabled={!!busy} onSave={saveEvents} onPendingChange={setEventPending} />
         <p className="text-xs text-port-text-muted">Generate from the approved treatment, song timing and selected project assets. Missing media is reported before any provider call.</p>
         {providers.length > 0 && <ProviderModelSelector
           providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel}
@@ -226,7 +237,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         />}
         <p className="text-xs text-port-text-muted">Code authoring uses {selectedProvider?.name || selectedProviderId || 'no provider selected'} / {effectiveModel || 'no model selected'}. Nothing is sent until you click.</p>
         <div className="flex flex-wrap items-end gap-2">
-          <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || !selectedProviderId || !effectiveModel} onClick={generate}>
+          <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || eventPending || !selectedProviderId || !effectiveModel} onClick={generate}>
             <Film size={14} /> {busy === 'generate' ? 'Generating…' : 'Generate mixed-media composition'}
           </button>
           {candidate?.source && <>
@@ -237,19 +248,28 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
                 {candidate.sections.map((section) => <option key={section.id} value={section.id}>{section.label || section.id} · {section.startSec}s</option>)}
               </select>
             </div>
-            <button type="button" className={buttonCls} disabled={!!busy || !selectedSectionValid || candidate.stale || !selectedProviderId || !effectiveModel} onClick={regenerate}>
+            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !selectedSectionValid || candidate.stale || !selectedProviderId || !effectiveModel} onClick={regenerate}>
               <RotateCcw size={14} /> {busy === 'regenerate' ? 'Regenerating…' : 'Regenerate section'}
+            </button>
+            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !candidate.eventRevisionAvailable || !selectedProviderId || !effectiveModel} onClick={reviseEvents}>
+              {busy === 'event-revision' ? 'Revising events…' : 'Revise events only'}
             </button>
           </>}
           {candidate?.candidate && <>
-            <button type="button" className={buttonCls} disabled={!!busy || candidate.stale} onClick={accept}>Accept reviewed version</button>
+            <button type="button" className={buttonCls} disabled={!!busy || eventPending || candidate.stale} onClick={accept}>Accept reviewed version</button>
             <button type="button" className={buttonCls} disabled={!!busy} onClick={discard}>Discard candidate</button>
           </>}
         </div>
-        {candidate?.stale && <p className="text-xs text-port-warning" role="status">The treatment, song or selected assets changed. Generate a fresh candidate.</p>}
+        {candidate?.stale && <p className="text-xs text-port-warning" role="status">{candidate.eventRevisionAvailable ? 'Event bindings changed. Revise events only to retain selected footage.' : 'The treatment, song or selected assets changed. Generate a fresh candidate.'}</p>}
         {candidate?.candidate && <div className="rounded border border-port-border p-2">
           <p className="mb-2 text-xs text-port-text-muted">Candidate preview · {candidate.providerId || 'provider'} / {candidate.model || 'default model'} · active document stays selected until accepted</p>
-          <CompositionPreviewPlayer project={project} audioUrl={audioUrl} draft />
+          <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+            {doc?.source?.kind === 'generated' && <div><p className="text-xs text-port-text-muted">Before · accepted section</p><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={comparisonSeek} /></div>}
+            <div><p className="text-xs text-port-text-muted">After · candidate section</p><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={comparisonSeek} draft /></div>
+          </div>
+          {(candidate.comparisons || []).filter((entry) => !selectedSection || entry.sectionId === selectedSection).map((entry) => <p key={entry.sectionId} className="mt-2 text-xs text-port-text-muted">
+            {entry.sectionId}: before {entry.before.map((event) => `${event.name} @ frame ${event.startFrame}`).join(', ') || 'no events'}; after {entry.after.map((event) => `${event.name} @ frame ${event.startFrame}`).join(', ') || 'no events'}
+          </p>)}
         </div>}
       </div>
       <OverlayEditor key={`${project.id}-${project.composition?.overlay ? 'hud' : 'none'}`} project={project} onSave={onSave} />

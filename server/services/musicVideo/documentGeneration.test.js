@@ -21,7 +21,7 @@ vi.mock('../promptRunner.js', () => ({
 const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projects.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
-const { generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js');
+const { generateMixedMediaDocument, regenerateMixedMediaSection, reviseMixedMediaEvents, readMixedMediaCandidate, acceptMixedMediaDocument } = await import('./documentGeneration.js');
 
 const source = (color) => `function render(ctx, env) { ctx.fillStyle = '${color}'; ctx.fillRect(0, 0, env.width, env.height); }`;
 const response = (colors) => JSON.stringify({ sections: Object.entries(colors).map(([id, color]) => ({ id, source: source(color) })) });
@@ -64,6 +64,77 @@ async function fixture() {
 }
 
 describe('treatment-driven mixed-media document authoring', () => {
+  it('accepts a legacy generated manifest and upgrades it through an event-only revision', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await manifestAt(first);
+    legacy.basis = legacy.structuralBasis;
+    delete legacy.structuralBasis;
+    delete legacy.song.narrativeEvents;
+    delete legacy.song.reactiveSections;
+    await writeFile(join(PATHS.data, first.directory, 'manifest.json'), JSON.stringify(legacy));
+    expect((await readMixedMediaCandidate(id)).stale).toBe(false);
+    await acceptMixedMediaDocument(id, first.directory);
+    const current = await projects.getProject(id);
+    await projects.updateProject(id, { composition: { ...current.composition, narrativeEvents: [{ id: 'new', name: 'Reveal', kind: 'reveal',
+      anchor: { kind: 'time', atSec: 1 }, durationSec: 1, narrativeFunction: 'Introduce the kite', mediumRationale: 'Exact graphic' }] } });
+    h.response = response({ intro: '#00ff00' });
+    const updated = (await reviseMixedMediaEvents(id, { expectedDraft: first.directory })).document;
+    expect((await manifestAt(updated)).structuralBasis).toBe(legacy.basis);
+    expect((await projects.getProject(id)).scenes).toEqual(current.scenes);
+  });
+
+  it('resolves onset/word events and revises only their old/new sections while retaining accepted takes', async () => {
+    const id = await fixture();
+    const event = { id: 'reveal', name: 'Kite opens', kind: 'reveal', anchor: { kind: 'onset', band: 'low', index: 0 }, durationSec: 1,
+      narrativeFunction: 'Reveal flight', mediumRationale: 'Precise cut-paper graphic', text: 'FLIGHT' };
+    await projects.updateProject(id, { composition: { mode: 'document', narrativeEvents: [event], reactiveSections: [{ sectionId: 'intro', gain: 1, maxGain: 0.2 }] } });
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, audioAnalysis: { ...current.audioAnalysis,
+      features: { envelopes: { fps: 1, rms: [1], low: [1], mid: [0], high: [0] }, onsets: { low: [0.51], mid: [], high: [] } },
+    } } }));
+    const first = (await generateMixedMediaDocument(id)).document;
+    const before = await manifestAt(first);
+    expect(before.song.narrativeEvents[0]).toMatchObject({ startFrame: 13, endFrame: 37, sectionId: 'intro' });
+    expect(h.prompt).toContain('Precise cut-paper graphic');
+    expect(h.prompt).toContain('env.reactiveGain');
+    await acceptMixedMediaDocument(id, first.directory);
+    const original = await projects.getProject(id);
+    await projects.updateProject(id, { composition: { ...original.composition, narrativeEvents: [{ ...event, anchor: { kind: 'word', cueId: 'l1', wordIndex: 0 } }] } });
+    expect((await readMixedMediaCandidate(id)).eventRevisionAvailable).toBe(true);
+    h.response = response({ intro: '#aa0000', clip: '#00aa00' });
+    const second = (await reviseMixedMediaEvents(id, { expectedDraft: first.directory })).document;
+    const after = await manifestAt(second);
+    expect(after.changedSectionIds).toEqual(['intro', 'clip']);
+    expect(after.song.narrativeEvents[0]).toMatchObject({ startFrame: 480, endFrame: 504 });
+    expect(after.sections.find((section) => section.id === 'still').source).toBe(before.sections.find((section) => section.id === 'still').source);
+    expect((await projects.getProject(id)).scenes).toEqual(original.scenes);
+    expect((await projects.getProject(id)).composition.document.directory).toBe(first.directory);
+    await acceptMixedMediaDocument(id, second.directory);
+    await expect(reviseMixedMediaEvents(id, { expectedDraft: second.directory })).rejects.toMatchObject({ code: 'NO_EVENT_CHANGES' });
+    expect(h.calls).toBe(2); // document code only, no media generation
+    const comparisons = (await readMixedMediaCandidate(id)).comparisons;
+    expect(comparisons.find((entry) => entry.sectionId === 'intro').before[0].startFrame).toBe(13);
+    expect(comparisons.find((entry) => entry.sectionId === 'clip').after[0].startFrame).toBe(480);
+  });
+
+  it('fails unresolved anchors before spending and refuses publication across a concurrent event edit', async () => {
+    const id = await fixture();
+    const event = { id: 'hold', name: 'Pause', kind: 'silence', anchor: { kind: 'onset', band: 'mid', index: 8 }, durationSec: 1,
+      narrativeFunction: 'Let the image breathe', mediumRationale: 'Hold existing media' };
+    await projects.updateProject(id, { composition: { mode: 'document', narrativeEvents: [event] } });
+    await expect(generateMixedMediaDocument(id)).rejects.toMatchObject({ code: 'NARRATIVE_EVENT_UNRESOLVED' });
+    expect(h.calls).toBe(0);
+    await projects.updateProject(id, { composition: { mode: 'document', narrativeEvents: [{ ...event, anchor: { kind: 'time', atSec: 1 } }] } });
+    const first = (await generateMixedMediaDocument(id)).document;
+    h.onSubmit = async () => {
+      const current = await projects.getProject(id);
+      await projects.updateProject(id, { composition: { ...current.composition, narrativeEvents: [{ ...event, anchor: { kind: 'time', atSec: 2 } }] } });
+    };
+    await expect(regenerateMixedMediaSection(id, 'intro', { expectedDraft: first.directory })).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
+    expect((await projects.getProject(id)).composition.documentDraft.directory).toBe(first.directory);
+    await expect(acceptMixedMediaDocument(id, first.directory)).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
+  });
+
   it('preflights selected media before a provider call and stages a reviewable 30-second document', async () => {
     const id = await fixture();
     const original = await projects.getProject(id);
