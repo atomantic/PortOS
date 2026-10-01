@@ -84,6 +84,8 @@ export function autopilotDraftFromParams(params) {
   const { prompt: _prompt, ...base } = emptyAutonomousDraft();
   return {
     ...base,
+    songSource: AUTONOMOUS_SONG_SOURCES.includes(p.songSource) ? p.songSource : base.songSource,
+    localFallback: p.localFallback === true,
     instrumental: p.instrumental === true,
     tools: Array.isArray(p.tools) ? [...p.tools] : base.tools,
     models: { ...(p.models || {}) },
@@ -98,8 +100,7 @@ export function autopilotDraftFromParams(params) {
 
 /**
  * The `musicVideoAutopilot` params a draft saves. Starts from the saved params
- * so fields the form does not edit (review attempts, authoring provider, song
- * source) survive a save; the server re-normalizes it all on write.
+ * so fields the form does not edit (review attempts, authoring provider) survive a save; the server re-normalizes it all on write.
  */
 export function autopilotParamsFromDraft(draft, saved, { providerId, model } = {}) {
   const { prompt: _prompt, ...request } = autonomousRequestFromDraft({ ...draft, prompt: '' }, {});

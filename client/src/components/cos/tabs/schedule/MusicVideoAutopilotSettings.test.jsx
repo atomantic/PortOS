@@ -43,6 +43,17 @@ describe('MusicVideoAutopilotSettings', () => {
     });
   });
 
+  it('round-trips the song source and the Suno fallback opt-in through the saved params', async () => {
+    const onUpdate = vi.fn(async () => {});
+    const config = { taskMetadata: { musicVideoAutopilot: { songSource: 'suno', localFallback: true } } };
+    render(<MusicVideoAutopilotSettings taskType="music-video-autopilot" config={config} onUpdate={onUpdate} updating={false} setUpdating={() => {}} />);
+    expect(screen.getByLabelText('Render locally if Suno is unavailable').checked).toBe(true);
+    fireEvent.change(screen.getByLabelText('Song source'), { target: { value: 'local' } });
+    fireEvent.click(screen.getByText('Save settings'));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(onUpdate.mock.calls[0][1].taskMetadata.musicVideoAutopilot).toMatchObject({ songSource: 'local', localFallback: false });
+  });
+
   it('keeps a saved writer-LLM pin when saved before the provider catalog loads', async () => {
     const onUpdate = vi.fn(async () => {});
     const config = { taskMetadata: { musicVideoAutopilot: { llm: { providerId: 'prov-1', model: 'm-1' } } } };

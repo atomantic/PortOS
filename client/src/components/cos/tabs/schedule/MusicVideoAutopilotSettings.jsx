@@ -3,6 +3,7 @@ import ToggleChip from '../../../ui/ToggleChip';
 import ProviderModelSelector from '../../../ProviderModelSelector';
 import ToolPicker from '../../../musicVideo/ToolPicker';
 import MoodBoardPicker from '../../../musicVideo/MoodBoardPicker';
+import SongSourcePicker from '../../../musicVideo/SongSourcePicker';
 import useProviderModels from '../../../../hooks/useProviderModels';
 import {
   AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, autopilotDraftFromParams, autopilotParamsFromDraft,
@@ -13,7 +14,7 @@ const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded 
 /**
  * Settings for the `music-video-autopilot` scheduled task, stored in
  * `taskMetadata.musicVideoAutopilot`: the same fields as the Autonomous start
- * drawer (tools, per-tool models, budget, limits, checkpoints, LLM, mood
+ * drawer (song source, tools, per-tool models, budget, limits, checkpoints, LLM, mood
  * board) plus the Brain idea tags a run may draw from. Saved explicitly — the
  * form holds a draft so a half-edited budget never hits the server.
  */
@@ -64,6 +65,8 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
         <label htmlFor="mv-ap-idea-tags" className="block text-xs text-port-text-muted mb-1">Brain idea tags (optional)</label>
         <input id="mv-ap-idea-tags" value={draft.ideaTags} onChange={(e) => patch({ ideaTags: e.target.value })} placeholder="song, music — comma separated; blank = any active idea" className={inputClass} />
       </div>
+
+      <SongSourcePicker idPrefix="mv-ap" songSource={draft.songSource} localFallback={draft.localFallback} onChange={patch} />
 
       <ToggleChip id="mv-ap-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 
