@@ -255,6 +255,27 @@ describe('persistent mind supervisor', () => {
     await running;
   });
 
+  it('passes a local-window context bound from prepare through to context assembly', async () => {
+    const run = vi.fn(async () => ({}));
+    const prepare = vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' }, model: 'example-model', contextMaxChars: 12_000 }));
+    await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
+    await supervisor.startPersistentMind();
+    await supervisor.wakePersistentMind();
+    await supervisor.drainPersistentMind();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(mock.prepareContext).toHaveBeenCalledWith(expect.objectContaining({ maxChars: 12_000 }));
+  });
+
+  it('leaves the default context cap when prepare declares no bound', async () => {
+    const run = vi.fn(async () => ({}));
+    await supervisor.registerPersistentMindTurnAdapter({ prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' }, model: 'example-model' })), run });
+    await supervisor.startPersistentMind();
+    await supervisor.wakePersistentMind();
+    await supervisor.drainPersistentMind();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(mock.prepareContext.mock.calls.at(-1)[0]).not.toHaveProperty('maxChars');
+  });
+
   it('starts and resumes for new messages without allowing retries to undo a later pause', async () => {
     const run = vi.fn(async () => ({}));
     await supervisor.registerPersistentMindTurnAdapter({ prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' }, model: 'example-model', effort: 'high' })), run });
