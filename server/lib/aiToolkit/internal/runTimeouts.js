@@ -52,6 +52,8 @@ export const DEFAULT_API_RUN_MAX_RUNTIME_MS = 1800000;
  * to, never be clamped DOWN by a ceiling it never configured.
  */
 export const apiRunAbsoluteTimeoutMs = (stallTimeout, requestedCap) => {
+  // Zero is an explicit caller opt-out; omission retains ordinary provider bounds.
+  if (requestedCap === 0) return 0;
   const legacy = Math.max(DEFAULT_API_RUN_MAX_RUNTIME_MS, Number(stallTimeout) > 0 ? Number(stallTimeout) : 0);
   // A caller's explicit spending ceiling may only shorten the existing bound.
   return Number.isFinite(requestedCap) && requestedCap > 0 ? Math.min(requestedCap, legacy) : legacy;

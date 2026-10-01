@@ -1,3 +1,4 @@
+import { selectPersistentMindContextEvents, renderPersistentMindContextEvent } from './persistentMindContextEvents.js';
 /**
  * Pure helpers for the persistent mind's decision journal.
  *
@@ -37,7 +38,7 @@ export const PERSISTENT_MIND_JOURNAL_KINDS = Object.freeze([
 export const PERSISTENT_MIND_JOURNAL_STATUSES = Object.freeze(['active', 'superseded', 'resolved']);
 
 /** Bump when the extraction prompt body below changes, like the rollup prompt version. */
-export const PERSISTENT_MIND_JOURNAL_PROMPT_VERSION = 1;
+export const PERSISTENT_MIND_JOURNAL_PROMPT_VERSION = 2;
 
 export const PERSISTENT_MIND_JOURNAL_LIMITS = Object.freeze({
   // A sealed range is minutes of one conversation, not a transcript dump. Five
@@ -158,9 +159,10 @@ export function persistentMindJournalEventId(mindId, kind, text) {
  * citation the model could not have read, so it is dropped; an operation left
  * with nothing is rejected by the caller.
  */
-const groundedSequences = (candidate, range) => {
+const groundedSequences = (candidate, range, allowedSourceSequences) => {
   const unique = [...new Set((Array.isArray(candidate) ? candidate : [])
-    .filter((value) => Number.isSafeInteger(value) && value >= 0))]
+    .filter((value) => Number.isSafeInteger(value) && value >= 0
+      && (!Array.isArray(allowedSourceSequences) || allowedSourceSequences.includes(value))))]
     .sort((a, b) => a - b);
   if (!range) return unique.slice(0, PERSISTENT_MIND_JOURNAL_LIMITS.maxSourceSequences);
   return unique
@@ -181,6 +183,7 @@ export function applyPersistentMindJournalOperations({
   operations = [],
   mindId,
   range = null,
+  allowedSourceSequences = null,
   actor = 'mind',
   providerId = null,
   model = null,
@@ -193,7 +196,7 @@ export function applyPersistentMindJournalOperations({
   const reject = (index, op, reason) => rejected.push({ index, op: op?.op || 'unknown', reason });
 
   operations.forEach((operation, index) => {
-    const sequences = groundedSequences(operation.sourceSequences, range);
+    const sequences = groundedSequences(operation.sourceSequences, range, allowedSourceSequences);
     if (sequences.length === 0) {
       reject(index, operation, 'unsourced');
       return;
@@ -373,11 +376,8 @@ export function renderPersistentMindJournalForPrompt(events, mindId) {
 }
 
 /** `[sequence] kind: text` — the shared source rendering for both mind prompts. */
-export function renderPersistentMindEventLines(events) {
-  return (Array.isArray(events) ? events : []).map((event) => {
-    const text = event?.data?.displayText || event?.data?.summaryText || event?.kind;
-    return `[${event?.sequence ?? '?'}] ${event?.kind}: ${text}`;
-  }).join('\n');
+export function renderPersistentMindEventLines(events, mindId = 'cos-persistent-mind') {
+  return selectPersistentMindContextEvents(events, mindId).map(renderPersistentMindContextEvent).join('\n');
 }
 
 export function buildPersistentMindJournalPrompt({ events, journal = [], mindId, range }) {
@@ -386,7 +386,7 @@ export function buildPersistentMindJournalPrompt({ events, journal = [], mindId,
 ${renderPersistentMindJournalForPrompt(journal, mindId)}
 
 # New trajectory events (messages ${range.fromSequence}-${range.toSequence})
-${renderPersistentMindEventLines(events)}
+${renderPersistentMindEventLines(events, mindId)}
 
 # Your task
 Emit ONLY the journal operations these new events justify. Returning zero operations is the NORMAL outcome: greetings, acknowledgements, tool chatter, status noise and raw reasoning produce nothing.

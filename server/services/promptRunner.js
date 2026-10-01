@@ -1718,7 +1718,7 @@ async function executeProviderRunOnce({
       // nemotron persistent-mind runs died this way at exactly 302s in the two
       // days after #7560 merged, and none before it (#7665).
       const backstopTimeout = apiRunAbsoluteTimeoutMs(effectiveTimeout, absoluteTimeoutMs);
-      apiTimeoutHandle = setTimeout(() => {
+      if (backstopTimeout > 0) apiTimeoutHandle = setTimeout(() => {
         stopRun(runId).catch(() => { /* best-effort cancel */ });
         safeReject(new Error(`API execution timed out after ${backstopTimeout}ms`));
       }, backstopTimeout + API_TIMEOUT_BACKSTOP_GRACE_MS);

@@ -1019,6 +1019,23 @@ describe('promptRunner — API timeout enforcement', () => {
     vi.useRealTimers();
   });
 
+  it('keeps an explicitly unbounded mind call open past provider and absolute defaults', async () => {
+    vi.useFakeTimers();
+    let finish;
+    runner.executeApiRun.mockImplementation(({ onComplete }) => {
+      finish = () => onComplete({ success: true });
+      return new Promise(() => {});
+    });
+    const pending = runPromptThroughProvider({ provider: apiProvider(), prompt: 'p',
+      source: 'cos-persistent-mind', timeout: 0, absoluteTimeoutMs: 0 });
+    await vi.advanceTimersByTimeAsync(86_400_000);
+    expect(runner.executeApiRun).toHaveBeenCalledWith(expect.objectContaining({ timeout: 0, absoluteTimeoutMs: 0 }));
+    expect(runner.stopRun).not.toHaveBeenCalled();
+    finish();
+    await pending;
+    vi.useRealTimers();
+  });
+
   it('does not call stopRun when API completes within the timeout', async () => {
     vi.useFakeTimers();
     runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {

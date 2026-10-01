@@ -29,7 +29,7 @@ const MIND = 'cos-persistent-mind';
 const RANGE = { fromSequence: 10, toSequence: 20 };
 
 const event = (sequence, displayText) => ({
-  eventId: `event-${sequence}`, kind: 'mind.message.accepted', sequence, data: { displayText },
+  mindId: MIND, at: '2026-01-01T00:00:00.000Z', eventId: `event-${sequence}`, kind: 'mind.message.accepted', sequence, data: { displayText },
 });
 const idOf = (kind, statement) => persistentMindJournalEventId(MIND, kind, statement);
 const answering = (...responses) => {
@@ -273,4 +273,19 @@ describe('a damaged store fails closed', () => {
     // of what the mind owed.
     expect(readFileSync(JOURNAL, 'utf8')).toContain('bogus');
   });
+});
+
+
+it('rejects citations to omitted diagnostics and nonexistent events inside the raw range', async () => {
+  const { extract } = answering(JSON.stringify({ operations: [
+    { op: 'append', kind: 'decision', statement: 'A real decision', sourceSequences: [12] },
+    { op: 'append', kind: 'risk', statement: 'A diagnostic invention', sourceSequences: [13] },
+    { op: 'append', kind: 'goal', statement: 'A nonexistent event', sourceSequences: [14] },
+  ] }));
+  const result = await extractPersistentMindJournal({ mindId: MIND, range: RANGE, extract,
+    events: [event(12, 'A real decision'), { ...event(13, 'Timeout noise'), kind: 'mind.model.call' }] });
+  expect(result.rejected).toEqual([
+    { index: 1, op: 'append', reason: 'unsourced' }, { index: 2, op: 'append', reason: 'unsourced' },
+  ]);
+  expect((await readPersistentMindJournal()).map(entry => entry.statement)).toEqual(['A real decision']);
 });

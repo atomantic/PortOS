@@ -458,7 +458,7 @@ export function createRunnerService(config = {}) {
       hooks.onRunCreated?.(metadata);
       console.log(`🤖 AI run [${source}]: ${provider.name}/${metadata.model}`);
 
-      const effectiveTimeout = timeout || provider.timeout;
+      const effectiveTimeout = timeout ?? provider.timeout;
 
       // Surface `fallbackModel` so callers that re-resolve the model against
       // the fallback provider (e.g. stageRunner's args-baked-model logic) use
@@ -588,7 +588,7 @@ export function createRunnerService(config = {}) {
       activeRuns.set(runId, childProcess);
       hooks.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
 
-      timeoutHandle = setTimeout(() => {
+      if (timeout > 0) timeoutHandle = setTimeout(() => {
         if (childProcess && !childProcess.killed) {
           console.log(`⏱️ Run ${runId} timed out after ${timeout}ms`);
           killProcessTree(childProcess);
@@ -688,7 +688,7 @@ export function createRunnerService(config = {}) {
       activeStopRequests.delete(runId);
       activeRuns.set(runId, controller);
 
-      const stallTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
+      const stallTimeout = timeout ?? provider.timeout ?? DEFAULT_API_RUN_TIMEOUT_MS;
       const absoluteTimeout = apiRunAbsoluteTimeoutMs(stallTimeout, absoluteTimeoutMs);
       let finalizer;
       const lifecycle = createRunLifecycle({
