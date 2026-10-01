@@ -2033,6 +2033,7 @@ describe('buildClaimWorkTask reviewer pin', () => {
     expect(prompt).toContain('Lack of enforceable isolation alone does not make a code reviewer unavailable');
     expect(prompt).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
     expect(prompt).toContain('an optional inconclusive result remains non-blocking');
+    expect(prompt).toContain('select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings');
   });
 
   it('persists the reviewers its prompt names so the pin has one owner', async () => {

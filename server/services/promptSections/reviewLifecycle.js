@@ -405,14 +405,14 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
 \`\`\`bash
 REVIEW_RESPONSE=$(mktemp)
 ${diffCommand} | jq -Rs ${shellQuote(reviewInput)} | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)} > "$REVIEW_RESPONSE"
-if ! jq -er '.findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
+if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
   echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
   exit 1 # Never treat an absent or malformed response as clean.
 else
   cat "\${REVIEW_RESPONSE}.findings"
 fi
 \`\`\`
-Only a successfully extracted \`.findings\` value is the review text; treat it like any other reviewer's findings.${pinNote.length && !providerRequest
+Only an \`ok: true\` response with a validated \`clean\` or \`findings\` verdict and a successfully extracted \`.findings\` value is review text; treat it like any other reviewer's findings.${pinNote.length && !providerRequest
   ? ` This run pins settings for ${pinNote.join(', ')} — add those keys to the JSON object (\`jq -Rs '{ ${pinJq} }'\`) so the review runs with them instead of the install defaults. Send ONLY the keys named above; a key with no pinned value overrides the install default with junk.`
   : ''}`;
   return { backendToken, invocation };

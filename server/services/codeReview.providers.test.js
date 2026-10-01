@@ -81,6 +81,23 @@ describe('configured provider reviewers', () => {
     expect(resolveReviewerConfig({ reviewerModels: {} }, defaults, defaults.reviewers).reviewerModels).toEqual({});
   });
 
+  it.each([false, true])('keeps malformed verdicts inconclusive for required/optional provider policy (optional=%s)', async optional => {
+    const config = resolveReviewerConfig({}, pickCodeReviewDefaults({ codeReview: {
+      reviewers: [backend], optionalReviewers: optional ? [backend] : [],
+    } }), [backend]);
+    callProviderAISimple.mockResolvedValue({ text: '## Blocking\n- `example.js:12`: An unfinished finding\nNo findings.' });
+    const result = await runLocalCodeReview({ backend, diff: 'example diff' });
+    expect(result).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW' });
+    expect(isReviewerConfigFault(result.code)).toBe(false);
+    expect(result).not.toHaveProperty('findings');
+    const { buildLocalReviewerInstructions } = await import('./cosTaskPrompts.js');
+    const instructions = buildLocalReviewerInstructions(config.reviewers);
+    expect(instructions).toContain('select(.ok == true and (.verdict == "clean" or .verdict == "findings"))');
+    expect(instructions).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
+    expect(instructions).toContain('an optional inconclusive result remains non-blocking');
+    expect(config.optionalReviewers.includes(backend)).toBe(optional);
+  });
+
   it('uses only this provider default when unpinned and returns provider failure without substitution', async () => {
     callProviderAISimple.mockResolvedValue({ error: 'Selected model is unavailable' });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false, error: 'Selected model is unavailable' });
