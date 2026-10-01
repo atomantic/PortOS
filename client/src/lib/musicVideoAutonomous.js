@@ -3,10 +3,15 @@
 // form's draft ↔ wire mapping and the run's display helpers.
 
 import {
-  AUTONOMOUS_DEFAULT_LIMITS, AUTONOMOUS_DEFAULT_TOOLS, AUTONOMOUS_LIVE_STATUSES, AUTONOMOUS_STAGES,
+  AUTONOMOUS_DEFAULT_LIMITS, AUTONOMOUS_DEFAULT_TOOLS, AUTONOMOUS_LIVE_STATUSES, AUTONOMOUS_SONG_SOURCES, AUTONOMOUS_STAGES,
 } from '../../../server/lib/musicVideoAutonomous.js';
 
-export { AUTONOMOUS_CHECKPOINT_IDS, autonomousMedium } from '../../../server/lib/musicVideoAutonomous.js';
+export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
+  suno: 'Suno (PortOS Browser)',
+  local: 'Local engine (Music Studio)',
+});
+
+export { AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, autonomousMedium } from '../../../server/lib/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
   ...Object.fromEntries(AUTONOMOUS_STAGES.map((stage) => [stage.id, stage.label])),
@@ -20,6 +25,8 @@ export const AUTONOMOUS_STATUS_LABELS = Object.freeze({
 
 export const emptyAutonomousDraft = () => ({
   prompt: '',
+  songSource: AUTONOMOUS_SONG_SOURCES[0],
+  localFallback: false,
   instrumental: false,
   tools: [...AUTONOMOUS_DEFAULT_TOOLS],
   models: {},
@@ -44,6 +51,8 @@ export function autonomousRequestFromDraft(draft, { providerId, model } = {}) {
     .map(([id, value]) => [id, value.trim()]));
   return {
     prompt: draft.prompt.trim(),
+    songSource: draft.songSource,
+    localFallback: draft.songSource === 'suno' && draft.localFallback === true,
     instrumental: draft.instrumental === true,
     tools: draft.tools,
     ...(Object.keys(models).length ? { models } : {}),

@@ -9,7 +9,7 @@ import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { startAutonomousMusicVideo } from '../../services/apiMusicVideo.js';
 import {
-  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, autonomousRequestFromDraft, emptyAutonomousDraft,
+  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_SONG_SOURCES, AUTONOMOUS_SONG_SOURCE_LABELS, autonomousRequestFromDraft, emptyAutonomousDraft,
 } from '../../lib/musicVideoAutonomous.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
@@ -17,7 +17,8 @@ const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded 
 /**
  * "Autonomous music video" — the alternate entry point: one prompt, no track,
  * style or board picked up front. The server writes a creative brief, lyrics and
- * a mood board, makes the song in Suno (PortOS Browser), then produces the video
+ * a mood board, makes the song (Suno in the PortOS Browser, or a local Music
+ * Studio engine), then produces the video
  * with the chosen tools. Checkpoints are optional approval stops.
  */
 export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
@@ -53,7 +54,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
       onClose={onClose}
       size="md"
       title="Autonomous music video"
-      subtitle="One prompt in — lyrics, a Suno song, a mood board and the video out"
+      subtitle="One prompt in — lyrics, a song, a mood board and the video out"
       closeOnEsc={false}
       closeOnBackdrop={false}
     >
@@ -70,8 +71,37 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
             className={inputClass}
           />
           <p className="text-[11px] text-port-text-muted mt-1">
-            The song is made in Suno through the PortOS Browser — sign in to Suno there first. The agent also builds its own mood board and visual style from this prompt.
+            The agent also builds its own mood board and visual style from this prompt.
           </p>
+        </div>
+
+        <div>
+          <label htmlFor="mv-auto-song-source" className="block text-xs text-port-text-muted mb-1">Song source</label>
+          <select
+            id="mv-auto-song-source"
+            value={draft.songSource}
+            onChange={(e) => patch({ songSource: e.target.value })}
+            className={inputClass}
+          >
+            {AUTONOMOUS_SONG_SOURCES.map((source) => (
+              <option key={source} value={source}>{AUTONOMOUS_SONG_SOURCE_LABELS[source]}</option>
+            ))}
+          </select>
+          <p className="text-[11px] text-port-text-muted mt-1">
+            {draft.songSource === 'suno'
+              ? 'Suno is driven through the PortOS Browser — sign in to Suno there first. It spends Suno credits.'
+              : 'Rendered on this machine by a ready Music Studio engine (a lyric-capable one such as ACE-Step for vocals). Free, but it queues behind other GPU work.'}
+          </p>
+          {draft.songSource === 'suno' && (
+            <div className="mt-2">
+              <ToggleChip
+                id="mv-auto-local-fallback"
+                label="Render locally if Suno is unavailable"
+                checked={draft.localFallback}
+                onToggle={() => patch({ localFallback: !draft.localFallback })}
+              />
+            </div>
+          )}
         </div>
 
         <ToggleChip id="mv-auto-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />

@@ -18,7 +18,10 @@
  * Checkpoints are optional approval gates after `lyrics` / `style` / `song`:
  * the run parks `awaiting-approval` and continues on approve. A signed-out
  * Suno parks `needs-human`; any other failure parks `failed`. Both resume at the
- * stage that stopped, reusing Suno songs already submitted.
+ * stage that stopped, reusing Suno songs already submitted. A brief may instead
+ * (or as a fallback, `localFallback`) make the song with the on-device Music
+ * Designer engines (`autonomousLocalSong.js`), so a run finishes with Suno
+ * unavailable.
  *
  * Production is delegated: `produce` starts the server-owned production run (or
  * the code render) and finishes when that reports back over the `production`
@@ -57,6 +60,8 @@ const defaults = {
   writeLyrics: async (args) => (await import('../musicDesigner.js')).writeLyrics(args),
   createMoodBoard: async (spec) => (await import('./autonomousBoard.js')).createAutonomousMoodBoard(spec),
   generateSunoSong: async (fields, opts) => (await import('./autonomousSuno.js')).generateSunoSong(fields, opts),
+  generateLocalSong: async (args) => (await import('./autonomousLocalSong.js')).generateLocalSong(args),
+  cancelLocalSong: async (jobId) => (await import('../mediaJobQueue/index.js')).cancelJob(jobId),
   createTrack: async (input) => (await import('../trackAlbumMembership.js')).createTrackWithAlbum(input).then((r) => r.track),
   attachAudio: async (trackId, filename, take) => (await import('../trackAudioAttach.js')).attachAudioAsRender(trackId, filename, take),
   probeDuration: (filename) => probeVideoDuration(join(PATHS.music, filename)).catch(() => null),
@@ -118,6 +123,31 @@ const stagePatch = (run, stage, patch) => ({ stages: { [stage]: { ...run.stages[
 
 const llmOf = (run) => ({ providerId: run.brief.llm?.providerId, model: run.brief.llm?.model || undefined });
 
+/**
+ * The local song source: the track is created first (its id is stored at once),
+ * the render is queued onto it, and the stage settles once the audio has landed.
+ * A retry rejoins the stored render instead of queuing a second one.
+ */
+async function localSong({ project, run, save }) {
+  const title = trimTo(run.output.title, 200) || 'Untitled';
+  const lyrics = run.brief.instrumental ? '' : run.output.lyrics || '';
+  // The style line is editable at the style checkpoint, so it conditions the render alongside the description.
+  const prompt = [run.output.musicalDescription, run.output.sunoStyle].filter(Boolean).join('\n\n') || run.brief.prompt;
+  let trackId = run.output.localTrackId;
+  if (!trackId) {
+    const track = await deps.createTrack({ title, concept: run.brief.prompt, lyrics, prompt });
+    trackId = track.id;
+    await save({ output: { localTrackId: trackId } });
+  }
+  await deps.generateLocalSong({
+    trackId, title, prompt, lyrics, instrumental: run.brief.instrumental, jobId: run.output.localSongJobId,
+    onSubmitted: (jobId) => save({ output: { localSongJobId: jobId } }),
+  });
+  // Linking the track seeds the project's timed lyric cues from the track lyrics.
+  await deps.updateProject(project.id, { trackId });
+  return { output: { trackId, songSource: 'local' } };
+}
+
 const STAGES = {
   async brief({ project, run }) {
     const { brief } = await deps.draftCreativeBrief({
@@ -150,15 +180,28 @@ const STAGES = {
 
   async song({ project, run, save }) {
     if (run.output.trackId) return { output: {} };
+    // `output.songSource` records a fallback already taken, so a resume stays local.
+    if ((run.output.songSource || run.brief.songSource) === 'local') return localSong({ project, run, save });
     const fields = sunoSongFields({
       title: run.output.title, style: run.output.sunoStyle, lyrics: run.output.lyrics, instrumental: run.brief.instrumental,
     });
-    const song = await deps.generateSunoSong(fields, {
-      songIds: run.output.sunoSongIds,
-      // Stored the moment Suno accepts the request, so a failed download retries
-      // the same songs instead of spending credits on another generation.
-      onSubmitted: (ids) => save({ output: { sunoSongIds: ids } }),
-    });
+    let submitted = run.output.sunoSongIds?.length > 0;
+    let song;
+    try {
+      song = await deps.generateSunoSong(fields, {
+        songIds: run.output.sunoSongIds,
+        // Stored the moment Suno accepts the request, so a failed download retries
+        // the same songs instead of spending credits on another generation.
+        onSubmitted: (ids) => { submitted = true; return save({ output: { sunoSongIds: ids } }); },
+      });
+    } catch (err) {
+      // Only before Suno accepted a request: after that, credits are spent and a
+      // retry reuses those songs rather than paying for a second render.
+      if (!run.brief.localFallback || submitted) throw err;
+      console.warn(`⚠️ Autonomous music video ${short(run.id)} could not use Suno (${trimTo(err.message, 200)}) — rendering the song locally`);
+      await save({ output: { songSource: 'local', songFallbackReason: trimTo(err.message, 500) } });
+      return localSong({ project, run, save });
+    }
     const track = await deps.createTrack({
       title: fields.title, concept: run.brief.prompt, lyrics: fields.lyrics, prompt: fields.style,
     });
@@ -223,6 +266,9 @@ async function advance(projectId) {
       try {
         result = await executor({ project, run, save: (patch) => patchRun(projectId, () => patch) });
       } catch (err) {
+        // A stop/cancel mid-stage (it cancels the local render) must not become a failure.
+        const latest = projectAutonomousRun(await getProject(projectId));
+        if (latest?.status !== 'running' || latest.processId !== PROCESS_ID) return;
         await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500) }));
         await park(projectId, isLoginRequired(err) ? 'needs-human' : 'failed', { error: trimTo(err.message, 500), errorCode: err.code || null });
         return;
@@ -348,6 +394,7 @@ export async function stopAutonomousVideo(projectId) {
     const { stopProduction } = await import('./productionService.js');
     await stopProduction(projectId, run.output.productionRunId).catch(() => {});
   }
+  if (run.stage === 'song' && run.output.localSongJobId) await deps.cancelLocalSong(run.output.localSongJobId).catch(() => {});
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }
 
@@ -359,6 +406,7 @@ export async function cancelAutonomousVideo(projectId) {
     const { cancelProduction } = await import('./productionService.js');
     await cancelProduction(projectId, run.output.productionRunId).catch(() => {});
   }
+  if (run.stage === 'song' && run.output.localSongJobId) await deps.cancelLocalSong(run.output.localSongJobId).catch(() => {});
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }
 

@@ -15,7 +15,8 @@
  *   lyrics   original lyrics written against that description
  *   style    the mood board + visual concept are created from the prompt
  *   song     the PortOS Browser drives the Suno web UI, the song is downloaded
- *            into the music library and imported as a track
+ *            into the music library and imported as a track — or, with
+ *            `songSource: 'local'`, the on-device Music Designer engines render it
  *   analyze  beat / section analysis of the downloaded audio
  *   produce  the existing server-owned production run (footage tools) or the
  *            code-rendered video (code-only tools)
@@ -32,7 +33,7 @@ export const AUTONOMOUS_STAGES = Object.freeze([
   Object.freeze({ id: 'brief', label: 'Creative brief' }),
   Object.freeze({ id: 'lyrics', label: 'Lyrics' }),
   Object.freeze({ id: 'style', label: 'Mood board & style' }),
-  Object.freeze({ id: 'song', label: 'Song (Suno)' }),
+  Object.freeze({ id: 'song', label: 'Song' }),
   Object.freeze({ id: 'analyze', label: 'Analyze song' }),
   Object.freeze({ id: 'produce', label: 'Produce video' }),
 ]);
@@ -45,7 +46,9 @@ export const AUTONOMOUS_STAGE_IDS = Object.freeze(AUTONOMOUS_STAGES.map((s) => s
 const AUTONOMOUS_STAGE_CHECKPOINT_IDS = Object.freeze(['lyrics', 'style', 'song']);
 export const AUTONOMOUS_CHECKPOINT_IDS = Object.freeze([...AUTONOMOUS_STAGE_CHECKPOINT_IDS, 'cast']);
 
-export const AUTONOMOUS_SONG_SOURCES = Object.freeze(['suno']);
+// Where the song comes from: the Suno web UI (needs a signed-in PortOS Browser
+// and credits) or the on-device Music Designer engines (free, no browser).
+export const AUTONOMOUS_SONG_SOURCES = Object.freeze(['suno', 'local']);
 
 // A run in one of these states can still be resumed / approved.
 export const AUTONOMOUS_LIVE_STATUSES = Object.freeze(['running', 'awaiting-approval', 'needs-human', 'stopped']);
@@ -111,6 +114,9 @@ function normalizeAutonomousSettings(raw = {}) {
   const authoringModel = clean(raw.authoring?.model, 200);
   return {
     songSource: AUTONOMOUS_SONG_SOURCES.includes(raw.songSource) ? raw.songSource : AUTONOMOUS_SONG_SOURCES[0],
+    // Suno only: when it cannot even take the request (signed out, no credits,
+    // page changed), render the song locally instead of parking the run.
+    localFallback: raw.localFallback === true,
     instrumental: raw.instrumental === true,
     guidance: clean(raw.guidance, 4000),
     tools,

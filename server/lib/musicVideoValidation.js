@@ -738,6 +738,7 @@ export const musicVideoAutonomousStartSchema = z.object({
   prompt: z.string().trim().min(1).max(AUTONOMOUS_PROMPT_MAX),
   name: z.string().trim().min(1).max(AUTONOMOUS_NAME_MAX).optional(),
   songSource: z.enum(AUTONOMOUS_SONG_SOURCES).optional(),
+  localFallback: z.boolean().optional(),
   instrumental: z.boolean().optional(),
   guidance: z.string().max(4000).optional(),
   tools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),

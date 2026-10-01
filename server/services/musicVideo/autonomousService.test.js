@@ -61,6 +61,11 @@ beforeEach(() => {
       await opts.onSubmitted(['song-a', 'song-b']);
       return { songId: 'song-a', songIds: ['song-a', 'song-b'], filename: 'music-song-a.mp3' };
     }),
+    generateLocalSong: stub('local', async ({ trackId, onSubmitted }) => {
+      await onSubmitted('job-local');
+      return { trackId, filename: 'song.wav', jobId: 'job-local' };
+    }),
+    cancelLocalSong: stub('cancel-local', async () => true),
     createTrack: stub('track', async () => ({ id: 'track-1' })),
     attachAudio: stub('attach', async () => ({})),
     probeDuration: stub('probe', async () => 187),
@@ -198,6 +203,81 @@ describe('failure and retry', () => {
     await expect(service.resumeAutonomousVideo('mv-auto')).rejects.toMatchObject({ code: 'ALREADY_RUNNING' });
     await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
     await expect(service.resumeAutonomousVideo('mv-auto')).rejects.toMatchObject({ code: 'NOT_RESUMABLE' });
+  });
+});
+
+describe('local song source (#9473)', () => {
+  it('runs end to end with Suno never touched: the track exists first, the render lands on it, then analysis', async () => {
+    doubles.generateSunoSong.mockRejectedValue(new Error('Suno must not be used'));
+    await service.startAutonomousVideo({ prompt: 'p', songSource: 'local', instrumental: false });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(calls).toEqual(['createProject', 'brief', 'updateProject', 'lyrics', 'board', 'updateProject', 'track', 'local', 'updateProject', 'analyze', 'production']);
+    expect(doubles.generateLocalSong).toHaveBeenCalledWith(expect.objectContaining({
+      trackId: 'track-1', title: 'Neon Rain', lyrics: '[verse]\nrain on glass', instrumental: false,
+      prompt: 'Synthwave with a melancholic arc\n\nsynthwave, dreamy, 100 bpm',
+    }));
+    expect(runOf().output).toMatchObject({ trackId: 'track-1', localTrackId: 'track-1', localSongJobId: 'job-local', songSource: 'local' });
+    expect(store.get('mv-auto').trackId).toBe('track-1');
+  });
+
+  it('retries a failed render on the same track and job instead of creating a second track', async () => {
+    doubles.generateLocalSong.mockImplementationOnce(async ({ onSubmitted }) => {
+      await onSubmitted('job-local');
+      throw new Error('out of memory');
+    });
+    await service.startAutonomousVideo({ prompt: 'p', songSource: 'local' });
+    await settled('failed');
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(calls.filter((c) => c === 'track')).toHaveLength(1);
+    expect(doubles.generateLocalSong).toHaveBeenLastCalledWith(expect.objectContaining({ trackId: 'track-1', jobId: 'job-local' }));
+  });
+
+  it('falls back to the local engine when the brief opts in and Suno cannot take the request', async () => {
+    doubles.generateSunoSong.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('Sign in to Suno'), { code: 'PUBLISH_LOGIN_REQUIRED' });
+    });
+    await service.startAutonomousVideo({ prompt: 'p', localFallback: true });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(calls).toContain('local');
+    expect(runOf().output).toMatchObject({ songSource: 'local', songFallbackReason: 'Sign in to Suno', trackId: 'track-1' });
+  });
+
+  it('does not fall back without the opt-in, nor after Suno already took credits for the request', async () => {
+    doubles.generateSunoSong.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('Sign in to Suno'), { code: 'PUBLISH_LOGIN_REQUIRED' });
+    });
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await settled('needs-human');
+    expect(calls).not.toContain('local');
+  });
+
+  it('keeps the Suno songs when the download fails even with the fallback on', async () => {
+    doubles.generateSunoSong.mockImplementationOnce(async (_f, opts) => {
+      await opts.onSubmitted(['song-a']);
+      throw new Error('did not finish rendering');
+    });
+    await service.startAutonomousVideo({ prompt: 'p', localFallback: true });
+    await settled('failed');
+    expect(calls).not.toContain('local');
+    expect(runOf().output.sunoSongIds).toEqual(['song-a']);
+  });
+
+  it('cancels the queued render on stop and leaves the run stopped, not failed', async () => {
+    let release;
+    doubles.generateLocalSong.mockImplementationOnce(async ({ onSubmitted }) => {
+      await onSubmitted('job-local');
+      await new Promise((resolve) => { release = resolve; });
+      throw new Error('The local song was canceled');
+    });
+    await service.startAutonomousVideo({ prompt: 'p', songSource: 'local' });
+    await vi.waitFor(() => expect(runOf()?.output.localSongJobId).toBe('job-local'));
+    await service.stopAutonomousVideo('mv-auto');
+    expect(doubles.cancelLocalSong).toHaveBeenCalledWith('job-local');
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20)); // the aborted stage settles in the background
+    expect(runOf()).toMatchObject({ status: 'stopped', stage: 'song' });
+    expect(runOf().stages.song.status).toBe('running');
   });
 });
 
