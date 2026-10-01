@@ -64,13 +64,17 @@ describe('native setup inherited endpoint', () => {
 
 // Run the actual CLI body with synthetic configuration and subprocesses. No
 // imports execute, no install .env is read, and no database can be contacted.
-async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, dotEnv = {} } = {}) {
+async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {} } = {}) {
   const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved', ...dotEnv };
   const initialEnv = { ...savedEnv };
   const calls = [];
   const childEnvs = [];
   const errors = [];
   const exitSignal = {};
+  const volumeRecords = ['example persisted record'];
+  const container = { running, hostBinding, hostPort, volumeRecords };
+  let recreations = 0;
+  const configuredHostBinding = dockerPortBindings[0].match(/"([^:]+):/)[1];
   let exitCode = 0;
   let provisioned = false;
   const source = setupDbSrc.replace(/^#!.*\n/, '').replace(/^import .*;\n/gm, '')
@@ -98,10 +102,16 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
           provisioned = true;
           return '';
         }
-        if (invocation === 'docker compose ps --format json db') return running ? '{"State":"running"}' : '';
+        if (invocation === 'docker compose ps --format json db') return container.running ? '{"State":"running"}' : '';
+        if (invocation === 'docker compose up -d db') {
+          const configuredHostPort = parseDockerPort(savedEnv.PGPORT_DOCKER);
+          if (container.hostBinding !== configuredHostBinding || container.hostPort !== configuredHostPort) recreations++;
+          Object.assign(container, { running: true, hostBinding: configuredHostBinding, hostPort: configuredHostPort });
+          return '';
+        }
         if (invocation.startsWith('docker compose exec -T db psql')) return '1\n';
         if (['docker --version', 'docker info', 'docker compose version',
-          'docker compose up -d db', 'docker compose exec -T db pg_isready -h 127.0.0.1 -U portos'].includes(invocation)) return '';
+          'docker compose exec -T db pg_isready -h 127.0.0.1 -U portos'].includes(invocation)) return '';
         throw new Error(`Unexpected synthetic subprocess: ${invocation}`);
       }
     });
@@ -109,7 +119,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
     if (error !== exitSignal) throw error;
   }
   expect(savedEnv).toEqual(initialEnv);
-  return { exitCode, calls, childEnvs, errors };
+  return { exitCode, calls, childEnvs, errors, container, volumeRecords, recreations };
 }
 
 describe('setup preserves the selected database', () => {
@@ -130,9 +140,36 @@ describe('setup preserves the selected database', () => {
     const result = await runSetup({ running });
     expect(result.exitCode).toBe(0);
     expect(result.calls.every(([command]) => command === 'docker')).toBe(true);
-    expect(result.calls.some((call) => call.includes('up'))).toBe(!running);
+    const upIndex = result.calls.findIndex((call) => call.includes('up'));
+    expect(result.calls[upIndex]).toEqual(['docker', 'compose', 'up', '-d', 'db']);
+    expect(upIndex).toBeLessThan(result.calls.findIndex((call) => call.includes('pg_isready')));
+    expect(result.recreations).toBe(0);
     expect(result.calls.some((call) => call.includes('pg_isready'))).toBe(true);
     expect(result.calls.some((call) => call.includes('psql'))).toBe(true);
+  });
+
+  it.each([
+    { hostBinding: '0.0.0.0', hostPort: 5561, dotEnv: {} },
+    { hostBinding: '127.0.0.1', hostPort: 5561, dotEnv: { PGPORT_DOCKER: '5599' } },
+  ])('reconciles a running container mapping without losing its volume ($hostBinding:$hostPort)', async (configuration) => {
+    const result = await runSetup(configuration);
+    expect(result.exitCode).toBe(0);
+    expect(result.container).toMatchObject({
+      running: true, hostBinding: '127.0.0.1',
+      hostPort: parseDockerPort(configuration.dotEnv.PGPORT_DOCKER),
+      volumeRecords: ['example persisted record'],
+    });
+    expect(result.container.volumeRecords).toBe(result.volumeRecords);
+    expect(result.recreations).toBe(1);
+  });
+
+  it.each([true, false])('fails before readiness when reconciliation fails (running: %s)', async (running) => {
+    const result = await runSetup({ running, unavailable: 'docker compose up -d db' });
+    expect(result.exitCode).toBe(1);
+    expect(result.calls.every(([command]) => command === 'docker')).toBe(true);
+    expect(result.calls.some((call) => call.includes('pg_isready') || call.includes('psql'))).toBe(false);
+    expect(result.container.volumeRecords).toEqual(['example persisted record']);
+    expect(result.errors.join('\n')).toContain('Failed to reconcile');
   });
 
   it.each([true, false])('succeeds with explicitly selected native (already ready: %s)', async (nativeReady) => {
