@@ -66,10 +66,10 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 describe('buildPortosMeta', () => {
   it('rejects repair reservations and edit points on older music-video peers', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(16);
-    for (const receiverV of [13, 14, 15]) {
+    expect(meta.schemaVersions.musicVideoProjects).toBe(17);
+    for (const receiverV of [13, 14, 15, 16]) {
       expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
-        .toContainEqual({ category: 'musicVideoProjects', senderV: 16, receiverV });
+        .toContainEqual({ category: 'musicVideoProjects', senderV: 17, receiverV });
     }
   });
 

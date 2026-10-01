@@ -550,6 +550,11 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
   // The optional vocal stem (#8977) conditions performance shots and lives
   // under PATHS.music beside the master, so it rides the same entries.
   if (isStr(project?.vocalStemFilename)) audioNames.push(project.vocalStemFilename);
+  for (const revision of project?.audioTimingRevisions || []) {
+    if (isStr(revision.before?.audioFilename)) audioNames.push(revision.before.audioFilename);
+    if (isStr(revision.before?.vocalStemFilename)) audioNames.push(revision.before.vocalStemFilename);
+    if (isStr(revision.before?.midiTranscription?.filename)) audioNames.push(revision.before.midiTranscription.filename);
+  }
   for (const name of [...new Set(audioNames)]) {
     const audio = assetReference(name, 'music');
     if (audio) dedup.set(`${audio.kind}:${audio.filename}`, audio);
@@ -564,6 +569,7 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
   const videoIds = [...new Set([
     ...scenes.map((s) => (isStr(s?.videoHistoryId) ? s.videoHistoryId : null)).filter(Boolean),
     ...takeIds('video'),
+    ...(project?.audioTimingRevisions || []).map((revision) => revision.before?.renderHistoryId).filter(isStr),
   ])];
   if (videoIds.length) {
     const byId = await videoHistoryFilenamesById();

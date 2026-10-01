@@ -1013,3 +1013,17 @@ export const musicVideoPerformanceRepairSchema = z.object({
   sourceAssetId: z.string().min(1).max(200),
   boundarySec: z.number().finite().min(0).max(36000),
 }).strict();
+
+
+// Preserved intervals have equal duration: insertions/deletions are gaps, never stretch.
+export const musicVideoAudioTimingPreviewSchema = z.object({
+  targetTrackId: z.string().min(1).max(128),
+  intervals: z.array(z.object({
+    oldStartSec: z.number().finite().min(0).max(36000),
+    oldEndSec: z.number().finite().min(0).max(36000),
+    newStartSec: z.number().finite().min(0).max(36000),
+  }).strict()).min(1).max(200),
+}).strict();
+export const musicVideoAudioTimingApplySchema = musicVideoAudioTimingPreviewSchema.extend({
+  basis: z.string().regex(/^[a-f0-9]{32}$/),
+});

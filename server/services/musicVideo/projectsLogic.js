@@ -246,6 +246,7 @@ export function cloneProjectRecord(source, {
     // A revision is in-progress work against the SOURCE's takes; the clone
     // starts with none (its carried-over notes can open a fresh one).
     revisions: [],
+    audioTimingRevisions: [],
     // #9102: an auto-review run is tied to the SOURCE's revisions/excerpts, so a
     // clone starts with none (terminal runs too — their links are source-scoped).
     ...(Array.isArray(source.autoReviews) ? { autoReviews: [] } : {}),

@@ -406,3 +406,10 @@ export const repairMusicVideoPerformance = (id, sceneId, input, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/performance-repair`, {
     method: 'POST', body: JSON.stringify(input), ...options,
   });
+
+export const previewMusicVideoAudioTiming = (id, data, options = {}) => request(`/music-video/${encodeURIComponent(id)}/audio-timing/preview`, {
+  method: 'POST', body: JSON.stringify(data), ...options,
+});
+export const applyMusicVideoAudioTiming = (id, data, options = {}) => request(`/music-video/${encodeURIComponent(id)}/audio-timing/apply`, {
+  method: 'POST', body: JSON.stringify(data), ...options,
+});
