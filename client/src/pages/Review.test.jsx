@@ -488,6 +488,58 @@ describe('Actions commitments workspace (#7739)', () => {
   });
 });
 
+describe('Review status request ownership (#9447)', () => {
+  const dismissedItem = { ...SHORT_ITEM, status: 'dismissed', title: 'Example dismissed action' };
+
+  it('keeps the latest selected status results when an older success arrives last', async () => {
+    let resolveCompleted;
+    api.getReviewItems
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(new Promise(resolve => { resolveCompleted = resolve; }))
+      .mockResolvedValueOnce([dismissedItem]);
+
+    render(<Review />);
+    await waitFor(() => expect(screen.queryByText('Loading stored review items…')).not.toBeInTheDocument());
+    const selector = screen.getByRole('combobox', { name: 'Filter review items by status' });
+    fireEvent.change(selector, { target: { value: 'completed' } });
+    fireEvent.change(selector, { target: { value: 'dismissed' } });
+    expect(await screen.findByText(dismissedItem.title)).toBeInTheDocument();
+
+    await act(async () => resolveCompleted([COMPLETED_ITEM]));
+
+    expect(selector).toHaveValue('dismissed');
+    expect(screen.getByText(dismissedItem.title)).toBeInTheDocument();
+    expect(screen.queryByText('No review items in this view')).not.toBeInTheDocument();
+  });
+
+  it.each(['success', 'failure'])('ignores an obsolete %s while the selected status is still loading', async (outcome) => {
+    let resolveCompleted;
+    let rejectCompleted;
+    let resolveDismissed;
+    api.getReviewItems
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(new Promise((resolve, reject) => { resolveCompleted = resolve; rejectCompleted = reject; }))
+      .mockReturnValueOnce(new Promise(resolve => { resolveDismissed = resolve; }));
+
+    render(<Review />);
+    await waitFor(() => expect(screen.queryByText('Loading stored review items…')).not.toBeInTheDocument());
+    const selector = screen.getByRole('combobox', { name: 'Filter review items by status' });
+    fireEvent.change(selector, { target: { value: 'completed' } });
+    fireEvent.change(selector, { target: { value: 'dismissed' } });
+
+    await act(async () => {
+      if (outcome === 'success') resolveCompleted([COMPLETED_ITEM]);
+      else rejectCompleted(new Error('synthetic obsolete failure'));
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading stored review items');
+    expect(screen.queryByText(/Stored review items are unavailable/)).not.toBeInTheDocument();
+    await act(async () => resolveDismissed([dismissedItem]));
+    expect(screen.getByText(dismissedItem.title)).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+});
+
 describe('Review Hub bulk status updates (#6853)', () => {
   it('applies a review:items:bulk-updated event to every affected item in one update', async () => {
     render(<Review />);
