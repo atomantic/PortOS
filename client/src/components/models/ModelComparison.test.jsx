@@ -111,3 +111,17 @@ it('defaults fit visible to active and toggles back to full axes', async () => {
   expect(screen.getByRole('button', { name: 'Fit visible' })).toHaveAttribute('aria-pressed', 'false');
 });
 
+
+it('plots local zero API costs with configured evidence and explains their exclusion on a log scale', async () => {
+  const localCost = { value: 0, estimated: false, method: 'Local inference: $0 API charges. Hardware and electricity excluded.', sourceIds: [] };
+  api.getModelComparison.mockResolvedValue({ composite: { sources: [], rows: [
+    { ...row('ornith-1.0-35b', 'reasoning', 19, 0, true), costPerTask: localCost },
+  ] } });
+  render(<ModelComparison />);
+  expect(await screen.findByTestId('scatter-example:ornith-1.0-35b')).toHaveAttribute('data-values', '[[0,19]]');
+  expect(screen.getByText('Configured cost')).toBeTruthy();
+  expect(screen.getByText(/Local inference shows \$0 API charges/)).toBeTruthy();
+  fireEvent.click(screen.getByLabelText('Log cost scale'));
+  expect(screen.queryByTestId('scatter-example:ornith-1.0-35b')).toBeNull();
+  expect(screen.getByText(/No points match/)).toBeTruthy();
+});

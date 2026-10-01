@@ -45,7 +45,7 @@ const valueText = (metric, money = false) => metric ? `${metric.estimated ? '≈
 
 function MetricEvidence({ metric }) {
   if (!metric) return <span>Needs research</span>;
-  return <details><summary className="cursor-pointer">{metric.estimated ? 'Estimated' : 'Sourced'} · {formatCount(metric.sources.length)} references</summary>
+  return <details><summary className="cursor-pointer">{metric.sources.length ? <>{metric.estimated ? 'Estimated' : 'Sourced'} · {formatCount(metric.sources.length)} references</> : 'Configured cost'}</summary>
     <p className="my-2 max-w-xl whitespace-normal text-port-text-muted">{metric.method}</p>
     <ul className="space-y-1">{metric.sources.map(source => <li key={source.url + source.retrievedAt}><a className="text-port-accent underline break-all" href={source.url} target="_blank" rel="noreferrer">{new URL(source.url).hostname}</a> · {source.retrievedAt.slice(0, 10)}<p className="max-w-xl whitespace-normal text-port-text-muted">{source.methodology}</p></li>)}</ul>
   </details>;
@@ -222,6 +222,7 @@ export default function ModelComparison() {
         ? 'Task cost includes the token usage of each model and effort on the same benchmark. It is an API reference cost, not a quote for your workload or subscription. Missing task costs stay unplotted until researched; token rates are never substituted.'
         : 'Token price is the rate per token, not cost per task. Higher effort can use more reasoning tokens at the same rate, so vertical effort curves do not mean equal task cost. Choose Cost per benchmark task to compare reasoning expense.'}</p>
     </section>
+    <p className="text-xs text-port-text-muted">Local inference shows $0 API charges; hardware and electricity are excluded. Local quality references are estimates until measured on your build. Zero-cost points are hidden on the log cost scale.</p>
     <ComparisonValueGuide rows={selected} />
     <GenerationDelta rows={selected} priceId={price[0]} />
     <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Methodology and confidence</summary><p className="mt-2 text-sm text-port-text-muted">PortOS index v1 uses {catalog?.composite?.anchor || 'the versioned reference index'} as its stable scale. Exact results take priority. Other evaluations are calibrated using at least three shared model/effort configurations, then combined by their median. Uncalibrated benchmark scores are never mixed directly. Missing effort levels use interpolation or a low-confidence nearest-effort estimate for the same model. Unknown members of a recognized family receive a low-confidence median family baseline with source range. No improvement is assumed for a new generation without evidence. Each estimate retains its method and source dates below; missing models stay in the coverage list for research.</p></details>
