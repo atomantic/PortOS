@@ -19,6 +19,7 @@ const socket = vi.hoisted(() => {
 vi.mock('../../../services/socket', () => ({ default: socket }));
 
 vi.mock('../../../services/api', () => ({
+  normalizeBrainScanReportPath: path => path,
   submitCosAgentFeedback: vi.fn(),
   sendCosAgentBtw: vi.fn(),
   getCosAgent: vi.fn(),
@@ -1302,4 +1303,14 @@ it('retries a clipped summary after the expanded detail request fails', async ()
   await userEvent.click(retry);
   expect(await screen.findByText('Recovered full summary.')).toBeInTheDocument();
   expect(api.getCosAgent).toHaveBeenCalledTimes(2);
+});
+
+
+it('keeps a dangerous scan report visible while the summary is collapsed', () => {
+  render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: {
+    ...agent.metadata, taskSummary: 'Example scan summary',
+    malwareScan: { verdict: 'DANGEROUS', reportUrl: '/example-report' },
+  } }} completed /></MemoryRouter>);
+  expect(screen.getByRole('link', { name: 'View scan report (DANGEROUS)' })).toHaveAttribute('href', '/example-report');
+  expect(screen.queryByText('Example scan summary')).not.toBeInTheDocument();
 });

@@ -1164,6 +1164,16 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           <InvestigateFindingsButton key={agent.id} agent={agent} />
         )}
 
+        {completed && agent.metadata?.malwareScan?.reportUrl && (
+          <a
+            href={api.normalizeBrainScanReportPath(agent.metadata.malwareScan.reportUrl)}
+            className={`mt-2 inline-flex items-center gap-1 text-xs hover:underline ${agent.metadata.malwareScan.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'}`}
+          >
+            {agent.metadata.malwareScan.verdict === 'DANGEROUS' ? <Skull size={13} /> : <ExternalLink size={13} />}
+            View scan report{agent.metadata.malwareScan.verdict ? ` (${agent.metadata.malwareScan.verdict})` : ''}
+          </a>
+        )}
+
         {/* Feedback section - shown for completed, manually-run, non-system local
             agents. A handoff has no result to rate — the continuation run asks for
             the rating that covers this work — so it is excluded UNLESS a rating is
@@ -1272,7 +1282,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
       {/* Expanded output view */}
       {expanded && (
         <div className="border-t border-port-border bg-port-bg/50 p-3 min-w-0 overflow-y-auto max-h-dvh-cap [--dvh-cap:60dvh]">
-          {completed && (taskSummary || agent.metadata?.malwareScan?.reportUrl) && (
+          {taskSummary && (
             <div className="mt-2 bg-port-bg/50 border border-port-border/50 rounded p-2.5">
               <div className="text-[11px] text-gray-500 mb-1 flex items-center gap-1">
                 <Sparkles size={10} aria-hidden="true" className="text-emerald-400" />
@@ -1285,15 +1295,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                     onClick={() => { setFullOutput(null); setExpanded(true); }}>Load full summary</button>}
                 </p>
               )}
-              {agent.metadata?.malwareScan?.reportUrl && (
-                <a
-                  href={api.normalizeBrainScanReportPath(agent.metadata.malwareScan.reportUrl)}
-                  className={`mt-2 inline-flex items-center gap-1 text-xs hover:underline ${agent.metadata.malwareScan.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'}`}
-                >
-                  {agent.metadata.malwareScan.verdict === 'DANGEROUS' ? <Skull size={13} /> : <ExternalLink size={13} />}
-                  View scan report{agent.metadata.malwareScan.verdict ? ` (${agent.metadata.malwareScan.verdict})` : ''}
-                </a>
-              )}
+
             </div>
           )}
 
