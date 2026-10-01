@@ -58,7 +58,7 @@ import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion, isClaimFlowDispatch } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
-import { extractSimplifySummaries } from './agentSummaryExtraction.js';
+import { extractFinalSummary, extractSimplifySummaries } from './agentSummaryExtraction.js';
 import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { issueNumberFromRef } from './issueReconcile.js';
 
@@ -289,6 +289,60 @@ function hasIssuePartialTrailer(body, issueNumber) {
 }
 
 /**
+ * Does the agent's own completion summary declare that this task's work
+ * already landed through a DIFFERENT change request — the stand-down a retry
+ * reaches when a parallel claim merged the same issue first?
+ *
+ * The resume briefing (`buildResumeSection`) tells a retry exactly this: "If a
+ * PR is already **merged**, the work is done — go straight to your completion
+ * step and report that." Without a finalize outcome that HONORS the report, a
+ * correct stand-down fails as `pr-missing` (non-actionable), the task retries,
+ * the next agent reads the same guidance, reaches the same conclusion, and
+ * fails again — a loop no retry can break (task-mupxru13, three identical
+ * failures).
+ *
+ * Mirrors `mergeGateContract.js`'s `summaryStatesLeaveOpen`: the agent's own
+ * words are read as a DECISION, but never trusted alone — the caller must
+ * verify the named change request is actually merged before this excuses a
+ * missing PR. Two signals, not one:
+ *   - "already merged/landed/completed" language tied to the work, AND
+ *   - a change-request reference (PR/MR #N or a forge URL) the caller can ask
+ *     the forge about.
+ *
+ * @param {string|null|undefined} summary - the run's completion summary text
+ * @returns {boolean}
+ */
+const LANDED_ELSEWHERE_DECLARATION = /\b(?:already|previously)\s+(?:been\s+)?(?:merged|landed|completed|shipped|fixed|implemented)\b/i;
+const CHANGE_REQUEST_REFERENCE = /\b(?:pr|pull request|mr|merge request)\s*#(\d+)\b|\b(?:pr|mr)\/(\d+)\b|(?:\/(?:pull|merge_requests)\/(\d+))/i;
+
+function summaryDeclaresWorkLanded(summary) {
+  if (typeof summary !== 'string' || !summary.trim()) return false;
+  return LANDED_ELSEWHERE_DECLARATION.test(summary) && CHANGE_REQUEST_REFERENCE.test(summary);
+}
+
+/**
+ * The change-request identifiers a landed-elsewhere summary names, in the
+ * order the patterns found them — `#N` first, then a URL path. Returns [] when
+ * the summary names none, which is the caller's signal that nothing can be
+ * verified (and the miss must stand).
+ *
+ * @param {string|null|undefined} summary
+ * @returns {string[]} forge-native references (bare numbers) to probe
+ */
+function landedChangeRequestRefs(summary) {
+  if (typeof summary !== 'string' || !summary.trim()) return [];
+  const refs = [];
+  const push = (n) => {
+    const id = Number(n);
+    if (Number.isSafeInteger(id) && id > 0 && !refs.includes(String(id))) refs.push(String(id));
+  };
+  for (const m of summary.matchAll(new RegExp(CHANGE_REQUEST_REFERENCE.source, 'gi'))) {
+    push(m[1] ?? m[2] ?? m[3]);
+  }
+  return refs;
+}
+
+/**
  * The branch a finished agent's workspace is sitting on, or null when the
  * workspace is gone / not a repo / detached. Read at finalize time, while the
  * worktree still exists (cleanup runs after finalizeAgent in every spawn path).
@@ -367,6 +421,13 @@ const PR_OBSERVATION = Object.freeze({
   EMPTY_BRANCH: 'empty-branch',
   /** The forge holds no change request for a branch that does (or may) hold commits. */
   MISSING_PR: 'missing-pr',
+  /**
+   * The forge holds no change request for this branch, but the run's own
+   * completion summary declares the work already landed via a change request
+   * PortOS VERIFIED is merged — a parallel claim shipped the same issue first
+   * and this run correctly stood down rather than opening a duplicate.
+   */
+  WORK_LANDED_ELSEWHERE: 'work-landed-elsewhere',
   /** The change request exists but does not close the issue its branch names. */
   INVALID_TRAILER: 'invalid-trailer',
   /** We could not ask, or could not read the answer. Says nothing about the PR. */
@@ -401,6 +462,11 @@ const PR_OBSERVATION_POLICY = Object.freeze({
   [PR_OBSERVATION.VERIFIED_CLAIM]: Object.freeze({ completionOk: true, observed: true, namesBranch: true, recordable: true, category: null }),
   [PR_OBSERVATION.EMPTY_BRANCH]: Object.freeze({ completionOk: true, observed: true, namesBranch: true, recordable: true, category: null }),
   [PR_OBSERVATION.MISSING_PR]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: true, category: PR_MISSING_CATEGORY }),
+  // `work-landed-elsewhere` is a VERIFIED terminal state, not an excuse: the
+  // agent's summary named a merged change request and the forge confirmed it,
+  // so the run stands as reported. `recordable` so the ledger carries the
+  // stand-down (verified: true) rather than silently omitting the transition.
+  [PR_OBSERVATION.WORK_LANDED_ELSEWHERE]: Object.freeze({ completionOk: true, observed: true, namesBranch: true, recordable: true, category: null }),
   [PR_OBSERVATION.INVALID_TRAILER]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: true, category: ISSUE_TRAILER_MISSING_CATEGORY }),
   [PR_OBSERVATION.FORGE_UNAVAILABLE]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: false, category: FORGE_UNREACHABLE_CATEGORY }),
 });
@@ -420,6 +486,42 @@ const prObservation = (outcome, fields = {}) => ({
   inconclusive: false,
   ...fields,
 });
+
+/**
+ * Verify that a change request the agent's summary named is actually MERGED.
+ *
+ * The declaration alone is not evidence — an agent that shipped nothing can
+ * write "already merged in PR #7" just as easily as one that checked. So the
+ * stand-down is honored only when the forge CONFIRMS a named change request is
+ * merged. Fail-safe polarity throughout: an unreachable forge or an unreadable
+ * state is `null` (could not verify), never "verified", and the caller leaves
+ * the miss standing rather than taking the agent's word for it.
+ *
+ * Probes every reference the summary names and accepts the FIRST merged one —
+ * a stand-down summary typically names the parallel claim's PR plus the issue's
+ * other landed work, and any one merged change request establishes that this
+ * run's task outcome exists on the default branch.
+ *
+ * @param {string[]} refs - forge-native change-request numbers, from `landedChangeRequestRefs`
+ * @param {{ cli: 'gh'|'glab', env: object|null }} forge - the resolved forge for this repo
+ * @param {string} workspacePath
+ * @returns {Promise<{ ref: string, state: string }|null>} null when no named change request could be verified merged
+ */
+async function verifyLandedChangeRequest(refs, forge, workspacePath) {
+  for (const ref of refs) {
+    if (forge.cli === 'glab') {
+      const { getMergeRequestState } = await import('./gitlab.js');
+      const view = await getMergeRequestState(ref, workspacePath).catch(() => ({ status: 'unavailable', state: null }));
+      if (view.status === 'known' && view.state === 'MERGED') return { ref, state: view.state };
+    } else {
+      const { getPullRequestState } = await import('./github.js');
+      const view = await getPullRequestState(ref, { cwd: workspacePath, env: forge.env || null })
+        .catch(() => ({ status: 'unavailable', state: null }));
+      if (view.status === 'known' && view.state === 'MERGED') return { ref, state: view.state };
+    }
+  }
+  return null;
+}
 
 /**
  * Project an observation onto the historical `verifyPrClaim` result shape.
@@ -474,7 +576,7 @@ function prVerdictFromObservation(observation) {
  *
  * @returns {Promise<{ outcome: string, branch: string|null, message: string|null, advisory: string|null, commitsAhead: number|null, inconclusive: boolean }>}
  */
-async function observePrClaim({ task, workspacePath, success, prExpected }) {
+async function observePrClaim({ task, workspacePath, success, prExpected, agentSummary = null }) {
   // Only a run that CLAIMED success has a claim to verify; a failed run is
   // already recorded as failed.
   if (!prExpected || !success || !workspacePath) return prObservation(PR_OBSERVATION.SKIPPED);
@@ -532,6 +634,23 @@ async function observePrClaim({ task, workspacePath, success, prExpected }) {
     // of an empty branch, so it leaves the miss standing.
     const ahead = await countCommitsAhead(workspacePath).catch(() => null);
     if (ahead === 0) return prObservation(PR_OBSERVATION.EMPTY_BRANCH, { branch });
+    // The stand-down a parallel claim produces: the branch holds this run's
+    // (now redundant) commits, the forge holds no change request for it, and
+    // the agent's own summary says the work already landed elsewhere. The
+    // resume briefing TELLS a retry to conclude exactly this — honor the report
+    // only when the forge confirms a change request the summary names is
+    // actually merged; the agent's word alone never excuses a miss.
+    if (summaryDeclaresWorkLanded(agentSummary)) {
+      const landed = await verifyLandedChangeRequest(
+        landedChangeRequestRefs(agentSummary), { cli, env }, workspacePath
+      ).catch(() => null);
+      if (landed) {
+        return prObservation(PR_OBSERVATION.WORK_LANDED_ELSEWHERE, {
+          branch,
+          advisory: `Work for this task already landed via ${noun} #${landed.ref} — this run stood down rather than opening a duplicate`,
+        });
+      }
+    }
     return prObservation(PR_OBSERVATION.MISSING_PR, {
       branch,
       commitsAhead: ahead,
@@ -555,18 +674,22 @@ async function observePrClaim({ task, workspacePath, success, prExpected }) {
  *   - `ok: true, branchProvenEmpty: true` — the forge answered "no PR" and the
  *     branch holds no commits, so there was nothing a PR could have been opened
  *     for; the run concluded that no change was warranted
+ *   - `ok: true, advisory: …` — the forge answered "no PR" for a branch that
+ *     holds commits, but the run's summary declared the work already landed via
+ *     a change request the forge confirmed is MERGED (a parallel claim shipped
+ *     first; this run correctly stood down)
  *   - `ok: false, category: 'pr-missing'` — the forge answered "no PR" for a
  *     branch that DOES hold commits
  *   - `ok: false, category: 'forge-unreachable'` — we could not ask
  *
- * @returns {Promise<{ ok: boolean, category?: string, message?: string, branch?: string|null, branchProvenEmpty?: boolean, commitsAhead?: number|null, inconclusive?: boolean }>}
+ * @returns {Promise<{ ok: boolean, category?: string, message?: string, advisory?: string, branch?: string|null, branchProvenEmpty?: boolean, commitsAhead?: number|null, inconclusive?: boolean }>}
  * `inconclusive: true` is set for every requested check that cannot reach an
  * unambiguous answer (no resolvable branch, unreachable forge, unreadable claim
  * body, or unreadable commit count). It is omitted for a proven empty branch and
  * a readable non-empty branch missing its PR.
  */
-export async function verifyPrClaim({ task, workspacePath, success, prExpected }) {
-  return prVerdictFromObservation(await observePrClaim({ task, workspacePath, success, prExpected }));
+export async function verifyPrClaim({ task, workspacePath, success, prExpected, agentSummary = null }) {
+  return prVerdictFromObservation(await observePrClaim({ task, workspacePath, success, prExpected, agentSummary }));
 }
 
 /**
@@ -1142,12 +1265,12 @@ export async function stampLiExecutionVerdict(taskUpdate, task, { success, valid
 // scoring a correct no-op as a commit miss.
 async function resolveNoChangeObservation({
   noChangeAudit, prExpected, primaryObservation,
-  task, workspacePath, success, agentId,
+  task, workspacePath, success, agentId, agentSummary = null,
 }) {
   if (!noChangeAudit) return null;
   const unproven = prObservation(PR_OBSERVATION.FORGE_UNAVAILABLE, { inconclusive: true });
   if (prExpected) return primaryObservation.outcome === PR_OBSERVATION.CHECK_THREW ? unproven : primaryObservation;
-  return observePrClaim({ task, workspacePath, success, prExpected: true })
+  return observePrClaim({ task, workspacePath, success, prExpected: true, agentSummary })
     .catch(err => {
       emitLog('warn', `⚠️ No-change verification failed for ${agentId}: ${err.message}`, { agentId });
       return unproven;
@@ -1241,9 +1364,16 @@ export async function finalizeAgent({
   // than manufacturing a failure out of a check that never ran, and say so by
   // NAME so the ledger gate below doesn't have to infer it from an empty result.
   const noChangeAudit = !terminatedByUser && reportedSuccess && permitsNoChangeCompletion(task);
+  // The agent's own completion summary — the sentinel text when one was
+  // ingested, the transcript tail otherwise. The PR check reads it for exactly
+  // one purpose: recognizing the stand-down a parallel claim produces ("the
+  // work already landed via PR #N"), which the resume briefing itself tells a
+  // retry to report. Never trusted alone — the named change request is verified
+  // against the forge before it excuses anything.
+  const agentSummary = terminatedByUser ? null : extractFinalSummary(outputBuffer);
   const primaryPrObservation = terminatedByUser
     ? prObservation(PR_OBSERVATION.SKIPPED)
-    : await observePrClaim({ task, workspacePath, success: reportedSuccess, prExpected })
+    : await observePrClaim({ task, workspacePath, success: reportedSuccess, prExpected, agentSummary })
       .catch(err => {
         emitLog('warn', `⚠️ PR verification failed for ${agentId}: ${err.message}`, { agentId });
         return prObservation(PR_OBSERVATION.CHECK_THREW);
@@ -1256,7 +1386,7 @@ export async function finalizeAgent({
   // a clean exit can satisfy its no-change success criterion.
   const noChangeObservation = await resolveNoChangeObservation({
     noChangeAudit, prExpected, primaryObservation: primaryPrObservation,
-    task, workspacePath, success: reportedSuccess, agentId,
+    task, workspacePath, success: reportedSuccess, agentId, agentSummary,
   });
   const prEvidence = resolvePrEvidence({ primaryObservation: primaryPrObservation, noChangeObservation });
   const branchProvenEmpty = prEvidence.branchProvenEmpty;
@@ -1361,6 +1491,14 @@ export async function finalizeAgent({
     // A no-op run is a legitimate completion, not a silent one — the human still
     // wants to know a task burned an agent and concluded there was nothing to do.
     emitLog('info', `🫧 ${agentId} opened no change request and committed nothing to ${prEvidence.evidenceBranch} — recording the run as complete with no change warranted`, {
+      agentId, taskId: task?.id, branch: prEvidence.evidenceBranch
+    });
+  } else if (primaryPrObservation.outcome === PR_OBSERVATION.WORK_LANDED_ELSEWHERE) {
+    // The parallel-claim stand-down: this run's commits are redundant, the work
+    // itself is on the default branch via a change request the forge confirmed
+    // merged. Worth surfacing — the branch cleanup below will discard the
+    // duplicate commits, and the human should know why.
+    emitLog('info', `🤝 ${agentId} opened no change request for ${prEvidence.evidenceBranch} but its summary's landed work was verified merged — recording the run as complete`, {
       agentId, taskId: task?.id, branch: prEvidence.evidenceBranch
     });
   }
