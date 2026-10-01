@@ -473,7 +473,9 @@ describe('universeBuilderCollectionHook', () => {
 
     await waitFor(async () => {
       const u = await universeBuilder.getUniverse(seeded.id);
-      return u?.characters?.[0]?.imageRefs?.includes(filename);
+      // Entry persistence and sidecar enrichment run independently in parallel.
+      return u?.characters?.[0]?.imageRefs?.includes(filename)
+        && indexedSidecars.some(row => row.entryId === characterId && row.id === 'section-local');
     });
     const u = await universeBuilder.getUniverse(seeded.id);
     expect(u.characters[0].imageRefs).toEqual([filename]);
