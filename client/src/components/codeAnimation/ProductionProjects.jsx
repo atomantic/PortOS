@@ -126,7 +126,7 @@ export default function ProductionProjects() {
             <div className="flex flex-wrap justify-between gap-2 text-sm"><span>Package import · {run.status}</span><span>{timeAgo(run.createdAt)}</span></div>
             <p className="break-all text-xs text-gray-400">{run.data.packageHash}</p>
             <p className="text-xs text-gray-400">{formatBytes(run.data.totalBytes || 0)} · Source execution: {run.data.executed ? 'Recorded' : 'None'}</p>
-            {run.data.error && <p className="text-xs text-port-error">{run.data.error}</p>}
+            {run.data.error && <p role="status" className="text-xs text-port-error">{run.data.error}</p>}
             {run.revisionId && <button className={buttonClass} disabled={busy} onClick={() => download(run.revisionId)}>Export this revision</button>}
           </li>)}
         </ul>
