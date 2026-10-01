@@ -591,7 +591,7 @@ export function ImageGenTab() {
           cleanC2PA: cleanC2PAByMode.agy, denoise: denoiseByMode.agy,
         },
         fal: {
-          enabled: falEnabled, model: falModel || undefined,
+          enabled: falEnabled, model: falImageFamily(falModel) ? falModel : undefined,
           cleanC2PA: cleanC2PAByMode.fal, denoise: denoiseByMode.fal,
         },
         expose: { a1111: exposeA1111 },

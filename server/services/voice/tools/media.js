@@ -61,7 +61,8 @@ export const MEDIA_TOOLS = [
         if (!s?.imageGen?.[requestedMode]?.enabled) {
           const label = requestedMode === imageGen.IMAGE_GEN_MODE.CODEX
             ? 'Codex'
-            : requestedMode === imageGen.IMAGE_GEN_MODE.GROK ? 'Grok' : 'Agy';
+            : requestedMode === imageGen.IMAGE_GEN_MODE.GROK ? 'Grok'
+              : requestedMode === imageGen.IMAGE_GEN_MODE.FAL ? 'fal.ai' : 'Agy';
           return { ok: false, summary: `${label} Imagegen is disabled — enable it in Settings → Image Gen first.` };
         }
       }

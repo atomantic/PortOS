@@ -135,7 +135,12 @@ export async function awaitFalCompletion({
 }) {
   let statusFailures = 0;
   while (Date.now() < deadline) {
-    if (entry.aborted) return { outcome: 'canceled' };
+    if (entry.aborted) {
+      // The cancel may have landed while submit was in flight, before the
+      // receipt's cancel_url existed — send it now rather than leave a paid render running.
+      await cancelFalRequest(entry);
+      return { outcome: 'canceled' };
+    }
     onPoll();
     let status;
     try {
