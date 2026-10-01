@@ -1,8 +1,12 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import { fileURLToPath } from 'node:url';
+import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
 
 import { vitestCiPool } from '../scripts/vitestCiPool.js';
 import { TEST_TIMEOUT_MS } from './src/test/timeouts.js';
+
+const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
 
 export default defineConfig({
   plugins: [react()],
@@ -11,6 +15,13 @@ export default defineConfig({
     dedupe: ['three'],
   },
   test: {
+    globalSetup: [fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url))],
+    env: {
+      TMPDIR: RUN_TEMP_ROOT,
+      TMP: RUN_TEMP_ROOT,
+      TEMP: RUN_TEMP_ROOT,
+      NODE_DISABLE_COMPILE_CACHE: '1',
+    },
     // Four DOM workers exhausted Testing Library's async budget on the public
     // runner before ChiefOfStaff's config panel settled. Keep the proven
     // two-worker client cap; the Node/server runner uses all four CPUs.
