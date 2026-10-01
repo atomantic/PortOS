@@ -193,7 +193,9 @@ async function reviewDraft(project, run, excerpt) {
       ? { takeId: scene.videoHistoryId, speaker: instruction?.speaker || null, conditioning: instruction?.audio?.conditioning || null } : null);
     return performance ? [{ sceneId: section.sceneId, ...performance, startSec: section.startSec, endSec: section.endSec }] : [];
   });
-  const temporal = await analyzeTemporalPerformance({ excerptPath, shots });
+  const temporal = !sections.length && project.scenes?.some(isPerformanceScene)
+    ? { version: 1, status: 'unverified', analyzer: null, reason: 'The draft has no performance-section provenance', shots: [] }
+    : await analyzeTemporalPerformance({ excerptPath, shots });
   const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length, temporal, excerptStartSec: excerpt.startSec };
 
   let parsed = null;

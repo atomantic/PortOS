@@ -499,8 +499,9 @@ export default function MusicVideo() {
     replaceProject({ ...selected, scenes: selected.scenes.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) });
   };
   const saveScene = (sceneId, patch) => {
-    updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
-      .catch((err) => toast.error(err?.message || 'Failed to save scene'));
+    return updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to save scene'); return false; });
   };
 
   // Project-level concept/style (issue #3168) — optimistic-local + silent-PATCH on

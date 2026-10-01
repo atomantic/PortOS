@@ -25,7 +25,8 @@ const resultSchema = z.object({
 });
 const unavailable = (shots, reason, analyzer = null) => ({
   version: 1, status: 'unverified', analyzer, reason,
-  shots: shots.map((shot) => ({ ...shot, spans: [{ startSec: shot.startSec, endSec: shot.endSec, status: 'unverified', offsetSec: null, confidence: null }] })),
+  omittedShots: Math.max(0, shots.length - 256),
+  shots: shots.slice(0, 256).map((shot) => ({ ...shot, spans: [{ startSec: shot.startSec, endSec: shot.endSec, status: 'unverified', offsetSec: null, confidence: null }] })),
 });
 
 // A local executable receives only runtime essentials, never agent/provider or
@@ -36,7 +37,7 @@ const analyzerEnv = () => Object.fromEntries(
 );
 const invoke = async (command, args, timeout) => {
   const { stdout } = await execFileAsync(command, args, safeChildProcessOptions({
-    env: analyzerEnv(), timeout, maxBuffer: 256 * 1024,
+    env: analyzerEnv(), timeout, killSignal: 'SIGKILL', maxBuffer: 256 * 1024,
   }));
   return JSON.parse(stdout);
 };
@@ -44,6 +45,7 @@ const invoke = async (command, args, timeout) => {
 /** Called only by an explicitly requested draft review. */
 export async function analyzeTemporalPerformance({ excerptPath, shots }) {
   if (!shots.length) return { version: 1, status: 'not-applicable', analyzer: null, reason: null, shots: [] };
+  if (shots.length > 256) return unavailable(shots, 'The draft exceeds the temporal evidence section limit');
   const command = findCommandOnPath('portos-temporal-analyzer');
   if (!command || /\.(cmd|bat)$/i.test(command)) return unavailable(shots, 'No supported local temporal analyzer is installed');
   const capability = await invoke(command, ['--capabilities'], 5000).then((value) => capabilities.safeParse(value), () => null);

@@ -438,6 +438,20 @@ describe('temporal performance evidence (#9347)', () => {
     expect(h.procs).toHaveLength(1);
   });
 
+  it('a legacy draft with missing section provenance cannot silently pass as having no performances', async () => {
+    const p = await performanceProject();
+    h.verdicts.push(PASS);
+    await start(p.id, { maxAttempts: 2, maxGenerations: 5 });
+    await vi.waitFor(() => expect(h.procs).toHaveLength(1));
+    await projects.mutateProjectRecord(p.id, (current) => ({ project: {
+      ...current, excerpts: current.excerpts.map((excerpt) => ({ ...excerpt, sections: null })),
+    } }));
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('needs-human'));
+    expect(run(saved).attempts[0].review.checks).toMatchObject({ audioSync: 'pass', lipSync: 'unverified' });
+    expect(run(saved).usage.generations).toBe(0);
+  });
+
   it('equal-length synthetic output with measured mouth offset fails only the temporal check', async () => {
     const p = await performanceProject();
     h.temporalInstalled = true;

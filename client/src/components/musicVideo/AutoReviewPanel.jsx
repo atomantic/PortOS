@@ -54,7 +54,7 @@ function AttemptRow({ attempt }) {
         {review ? <span className="uppercase text-[10px] text-port-text-muted">{review.verdict}</span> : <span className="text-port-text-muted">not reviewed yet</span>}
         {review && Object.entries(CHECK_LABELS).map(([key, label]) => (
           <span key={key} className={`px-1.5 py-0.5 rounded text-[10px] ${CHECK_TONES[review.checks?.[key]] || CHECK_TONES.unverified}`}>
-            {label}: {review.checks?.[key] || 'unverified'}
+            {label}: {key === 'lipSync' && review.evidence?.temporal?.status === 'not-applicable' ? 'not applicable' : review.checks?.[key] || 'unverified'}
           </span>
         ))}
       </div>

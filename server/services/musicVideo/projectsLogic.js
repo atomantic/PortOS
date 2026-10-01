@@ -605,6 +605,7 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
         visualIntent: scene.visualIntent ?? null,
         visualLayer: scene.visualLayer ?? 'footage',
         shotMode: scene.shotMode ?? 'cutaway',
+        performanceSpeaker: scene.performanceSpeaker ?? null,
         ...timing,
       }),
     }, { order: 0 });

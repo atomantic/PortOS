@@ -86,6 +86,8 @@ export default function SceneCard({
     : null;
   // Source-clip length, read from the inline player's metadata and keyed to
   // the clip it was measured from so a regenerated clip is re-measured.
+  const [speakerDirty, setSpeakerDirty] = useState(false);
+  const [speakerSaving, setSpeakerSaving] = useState(false);
   const [clipMeta, setClipMeta] = useState(null);
   const clipSec = clipMeta && clipMeta.id === scene.videoHistoryId ? clipMeta.sec : null;
   // Pre-#8964 scenes have no `loop` key and keep the legacy loop-to-fill render.
@@ -218,8 +220,13 @@ export default function SceneCard({
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <label htmlFor={fieldId('speaker')}>Speaker / singer</label>
             <input id={fieldId('speaker')} value={scene.performanceSpeaker || ''} maxLength={120}
-              onChange={(e) => onEditLocal(scene.sceneId, { performanceSpeaker: e.target.value })}
-              onBlur={() => onSave(scene.sceneId, { performanceSpeaker: scene.performanceSpeaker || null })}
+              onChange={(e) => { setSpeakerDirty(true); onEditLocal(scene.sceneId, { performanceSpeaker: e.target.value }); }}
+              onBlur={(e) => {
+                setSpeakerSaving(true);
+                Promise.resolve(onSave(scene.sceneId, { performanceSpeaker: e.target.value || null }))
+                  .then((saved) => setSpeakerDirty(saved === false), () => setSpeakerDirty(true))
+                  .finally(() => setSpeakerSaving(false));
+              }}
               className="bg-port-bg border border-port-border rounded px-2 py-1" placeholder="Intended singer" />
           </div>
         )}
@@ -397,7 +404,7 @@ export default function SceneCard({
             </div>
           )}
           <button onClick={() => onGenerateVideo(scene)}
-            disabled={settingsSaving || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason || !!performanceBlocked}
+            disabled={settingsSaving || (performance && (speakerDirty || speakerSaving)) || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason || !!performanceBlocked}
             className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
             title={videoBlockedReason || performanceBlocked
               || (!scene.referenceImageId ? 'Generate a reference frame first'
