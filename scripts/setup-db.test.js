@@ -64,10 +64,11 @@ describe('native setup inherited endpoint', () => {
 
 // Run the actual CLI body with synthetic configuration and subprocesses. No
 // imports execute, no install .env is read, and no database can be contacted.
-async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true } = {}) {
-  const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved' };
+async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, dotEnv = {} } = {}) {
+  const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved', ...dotEnv };
   const initialEnv = { ...savedEnv };
   const calls = [];
+  const childEnvs = [];
   const errors = [];
   const exitSignal = {};
   let exitCode = 0;
@@ -87,8 +88,9 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
         exit: (code) => { exitCode = code; throw exitSignal; }
       },
       console: { log: () => {}, error: (message) => errors.push(message) },
-      execFileSync: (command, args) => {
+      execFileSync: (command, args, options) => {
         calls.push([command, ...args]);
+        childEnvs.push(options?.env);
         const invocation = [command, ...args].join(' ');
         if (invocation === unavailable) throw new Error('Synthetic unavailable dependency');
         if (command === 'psql') return nativeReady || provisioned ? '1\n' : '';
@@ -107,7 +109,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
     if (error !== exitSignal) throw error;
   }
   expect(savedEnv).toEqual(initialEnv);
-  return { exitCode, calls, errors };
+  return { exitCode, calls, childEnvs, errors };
 }
 
 describe('setup preserves the selected database', () => {
@@ -138,5 +140,21 @@ describe('setup preserves the selected database', () => {
     expect(result.exitCode).toBe(0);
     expect(result.calls.some(([command]) => command === 'docker')).toBe(false);
     expect(result.calls.some((call) => call.includes('setup-native'))).toBe(!nativeReady);
+  });
+
+  it('probes and provisions the endpoint selected in .env, host and port alike', async () => {
+    const result = await runSetup({
+      mode: 'native', nativeReady: false,
+      dotEnv: { PGHOST: 'db.example.invalid', PGPORT: '5433' },
+    });
+    expect(result.exitCode).toBe(0);
+    const probes = result.calls.filter(([command]) => command === 'psql');
+    expect(probes).toHaveLength(2);
+    for (const probe of probes) {
+      expect(probe.slice(probe.indexOf('-h'), probe.indexOf('-h') + 4))
+        .toEqual(['-h', 'db.example.invalid', '-p', '5433']);
+    }
+    const setupIndex = result.calls.findIndex((call) => call.includes('setup-native'));
+    expect(result.childEnvs[setupIndex]).toMatchObject({ PGHOST: 'db.example.invalid', PGPORT: '5433' });
   });
 });

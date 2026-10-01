@@ -56,6 +56,17 @@ case "$DUMP_MODE" in
 esac
 `;
 
+// Logs each probe; READY_PORTS (space-separated) limits which ports answer, so a
+// test can stand up "another cluster on the default port" without a real server.
+const PG_ISREADY_STUB = `#!/bin/sh
+echo "pg_isready $*" >> "$STUB_LOG"
+port=""; prev=""
+for arg in "$@"; do [ "$prev" = "-p" ] && port="$arg"; prev="$arg"; done
+[ -z "\${READY_PORTS:-}" ] && exit 0
+case " $READY_PORTS " in *" $port "*) exit 0 ;; esac
+exit 1
+`;
+
 function writeStub(binDir, name, body) {
   const path = join(binDir, name);
   writeFileSync(path, body);
@@ -78,7 +89,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     writeStub(binDir, 'docker', DOCKER_STUB);
     writeStub(binDir, 'psql', PSQL_STUB);
     writeStub(binDir, 'pg_dump', PG_DUMP_STUB);
-    writeStub(binDir, 'pg_isready', '#!/bin/sh\nexit 0\n');
+    writeStub(binDir, 'pg_isready', PG_ISREADY_STUB);
     // Not Darwin, so db.sh skips prepending Homebrew's real Postgres to PATH.
     writeStub(binDir, 'uname', '#!/bin/sh\necho Linux\n');
     writeStub(binDir, 'whoami', '#!/bin/sh\necho example_user\n');
@@ -251,5 +262,42 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(log).toContain('--single-transaction');
     expect(log).not.toMatch(/SOURCE_STOP|docker compose stop/);
     expect(result.stdout).toContain('selected mode is unchanged');
+  });
+
+  const psqlCalls = () => readFileSync(stubLog, 'utf8').split('\n').filter(line => line.startsWith('psql '));
+
+  it('provisions only the selected non-default endpoint while another cluster listens on the default port', () => {
+    const result = run(['setup-native'], 'ok', { PGPORT: '5433', PGHOST: 'db.example.invalid', READY_PORTS: '5432 5433' });
+    expect(result.status).toBe(0);
+    const calls = psqlCalls();
+    // role lookup, role alter, db list, two extensions, schema apply
+    expect(calls.length).toBeGreaterThanOrEqual(6);
+    for (const call of calls) expect(call).toContain('-h db.example.invalid -p 5433 ');
+    expect(calls.some(call => call.includes('--single-transaction'))).toBe(true);
+    expect(readFileSync(stubLog, 'utf8')).not.toMatch(/-p 5432\b/);
+  });
+
+  it('initializes a running non-default endpoint without any server on the default port', () => {
+    const result = run(['setup-native'], 'ok', { PGPORT: '5433', READY_PORTS: '5433' });
+    expect(result.status).toBe(0);
+    expect(psqlCalls().length).toBeGreaterThanOrEqual(6);
+    expect(psqlCalls().every(call => call.includes('-p 5433 '))).toBe(true);
+  });
+
+  it('fails without issuing SQL to another cluster when the selected endpoint is down', () => {
+    const result = run(['setup-native'], 'ok', { PGPORT: '5433', READY_PORTS: '5432' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr + result.stdout).toContain('127.0.0.1:5433');
+    expect(psqlCalls()).toEqual([]);
+    expect(readFileSync(envFile, 'utf8')).toBe('PGMODE=docker\n');
+  });
+
+  it('keeps a host-only selection on the default port instead of discovering another cluster', () => {
+    const result = run(['setup-native'], 'ok', { PGHOST: 'db.example.invalid', READY_PORTS: '5432' });
+    expect(result.status).toBe(0);
+    expect(psqlCalls().every(call => call.includes('-h db.example.invalid -p 5432 '))).toBe(true);
+    const down = run(['setup-native'], 'ok', { PGHOST: 'db.example.invalid', READY_PORTS: '5433' });
+    expect(down.status).not.toBe(0);
+    expect(psqlCalls().every(call => !call.includes('-p 5433 '))).toBe(true);
   });
 });
