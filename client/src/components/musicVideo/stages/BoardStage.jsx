@@ -13,6 +13,18 @@ import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 export default function BoardStage({ board }) {
   const { project, locked, busy, sceneMedia, videoSettings, takes } = board;
   const scenes = project.scenes || [];
+  const performanceReviews = new Map();
+  const attempts = (project.autoReviews || []).flatMap((run) => run.attempts || []).slice().reverse();
+  for (const attempt of attempts) {
+    const temporal = attempt.review?.evidence?.temporal;
+    for (const shot of temporal?.shots || []) {
+      const key = `${shot.sceneId}:${shot.takeId}`;
+      if (!performanceReviews.has(key)) performanceReviews.set(key, {
+        shot: { ...shot, status: temporal.status, lipSync: attempt.review.checks?.lipSync, analyzer: temporal.analyzer },
+        excerptStartSec: attempt.review.evidence.excerptStartSec,
+      });
+    }
+  }
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
       <div className="rounded-lg border border-port-border bg-port-card p-3">
@@ -37,6 +49,7 @@ export default function BoardStage({ board }) {
             <SceneCard
               key={scene.sceneId}
               scene={scene}
+              performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
               isLast={idx === scenes.length - 1}
               generatingFrame={sceneMedia.genScenes[scene.sceneId]}

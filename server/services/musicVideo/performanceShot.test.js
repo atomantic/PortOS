@@ -76,7 +76,7 @@ const project = (sceneOver) => ({
   id: 'mv-1',
   uploadedAudioFilename: 'song.wav',
   lyricCues: [
-    { id: 'c1', text: 'hold on', startSec: 19, endSec: 20.5 },
+    { id: 'c1', text: 'hold on', startSec: 19, endSec: 20.5, words: [{ text: 'hold', startSec: 19, endSec: 20 }, { text: 'on', startSec: 20, endSec: 20.5 }] },
     { id: 'c2', text: 'later line', startSec: 40, endSec: 42 },
     { id: 'c3', text: 'untimed', startSec: null, endSec: null },
   ],
@@ -116,9 +116,9 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(si.audioWindow).toEqual({ startSec: 18.225, endSec: 23.275, durationSec: 5.05 });
     expect(si.edit).toEqual({ inSec: 1.775, outSec: 3.275, targetSec: 1.5 });
     expect(si.songInterval).toEqual({ startSec: 20, endSec: 21.5 });
-    expect(si.cues).toEqual([{ text: 'hold on', startSec: 0.775, endSec: 2.275 }]);
+    expect(si.cues).toEqual([{ text: 'hold on', startSec: 0.775, endSec: 2.275, words: [{ text: 'hold', startSec: 0.775, endSec: 1.775 }, { text: 'on', startSec: 1.775, endSec: 2.275 }] }]);
     expect(si.audio.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(si.audio.conditioning).toEqual({ source: 'master', sha256: si.audio.sha256 });
+    expect(si.audio.conditioning).toEqual({ source: 'master', sha256: si.audio.sha256, filename: 'song.wav', selection: 'legacy-default', voiceIsolation: 'unverified' });
     expect(si).toMatchObject({ referenceImageId: 'frame.png', performance: 'sings the held note', generatedCoverageSec: 5.05 });
     // The take's own resolution defaults to 1080P for a music video (fal's own
     // default is 768P) and is recorded on the immutable instruction.
@@ -253,7 +253,13 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     // Staleness still keys on the master; the stem is recorded as what the
     // provider heard.
     expect(si.audio.sha256).toBe(sha(songWav()));
-    expect(si.audio.conditioning).toEqual({ source: 'vocal-stem', sha256: sha(stem) });
+    expect(si.audio.conditioning).toEqual({ source: 'vocal-stem', sha256: sha(stem), filename: 'vocals.wav', selection: 'legacy-default', voiceIsolation: 'unverified' });
+
+    getProject.mockResolvedValue({ ...project({ performanceSpeaker: 'Example Singer' }), vocalStemFilename: 'vocals.wav', performanceConditioningSource: 'clean-singer-stem' });
+    const clean = await preparePerformanceShot(args);
+    expect(clean.shotInstruction).toMatchObject({ version: 2, speaker: 'Example Singer',
+      audio: { conditioning: { source: 'clean-singer-stem', filename: 'vocals.wav', selection: 'user', voiceIsolation: 'unverified' } } });
+    getProject.mockResolvedValue({ ...project(), vocalStemFilename: 'vocals.wav' });
 
     // A trimmed stem would put the syllables on the wrong frames.
     await writeFile(join(PATHS.music, 'vocals.wav'), songWav({ seconds: SONG_SEC - 1 }));

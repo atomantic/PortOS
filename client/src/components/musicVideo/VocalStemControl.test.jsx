@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 vi.mock('../../services/apiMusicVideo.js', () => ({
+  updateMusicVideoProject: vi.fn(),
   uploadMusicVideoVocalStem: vi.fn(),
   removeMusicVideoVocalStem: vi.fn(),
 }));
@@ -72,4 +73,17 @@ describe('VocalStemControl separation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(running.cancel).toHaveBeenCalledOnce();
   });
+});
+
+it('persists the explicitly selected clean singer source without claiming isolation', async () => {
+  const saved = { ...project, vocalStemFilename: 'singer.wav', performanceConditioningSource: 'clean-singer-stem' };
+  api.updateMusicVideoProject.mockResolvedValue(saved);
+  const onUpdated = vi.fn();
+  const { rerender } = render(<VocalStemControl project={{ ...project, vocalStemFilename: 'singer.wav' }} hasAudio onUpdated={onUpdated} />);
+  fireEvent.change(screen.getByLabelText('Conditioning source'), { target: { value: 'clean-singer-stem' } });
+  await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(saved));
+  expect(api.updateMusicVideoProject).toHaveBeenCalledWith(project.id, { performanceConditioningSource: 'clean-singer-stem' }, { silent: true });
+  rerender(<VocalStemControl project={saved} hasAudio onUpdated={onUpdated} />);
+  expect(screen.getByLabelText('Conditioning source').value).toBe('clean-singer-stem');
+  expect(screen.getByText(/do not verify voice isolation/)).toBeTruthy();
 });

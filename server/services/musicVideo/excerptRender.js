@@ -143,7 +143,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     }));
   const renderingOn = await ensureInstanceId();
   const { excerpt } = await mutateProjectRecord(projectId, (current) => {
-    const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, partialFilename: filename, renderingOn, aspect: musicVideoAspect(project), fade });
+    const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: project, partialFilename: filename, renderingOn, aspect: musicVideoAspect(project), fade });
     return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
   });
   const excerptId = excerpt.id;
@@ -265,7 +265,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // demote it (#9010).
     const renderingOn = await ensureInstanceId();
     const { excerpt } = await mutateProjectRecord(projectId, (current) => {
-      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, partialFilename: filename, renderingOn });
+      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: project, partialFilename: filename, renderingOn });
       return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
     });
     const excerptId = excerpt.id;

@@ -211,6 +211,9 @@ export function clipRelativeCues(cues, windowStartSec, windowEndSec) {
       text: typeof cue.text === 'string' ? cue.text : '',
       startSec: round6(Math.max(0, cue.startSec - windowStartSec)),
       endSec: round6(Math.min(windowEndSec, end) - windowStartSec),
+      ...(Array.isArray(cue.words) ? { words: cue.words
+        .filter((word) => Number.isFinite(word.startSec) && Number.isFinite(word.endSec) && word.endSec > windowStartSec && word.startSec < windowEndSec)
+        .map((word) => ({ text: word.text, startSec: round6(Math.max(windowStartSec, word.startSec) - windowStartSec), endSec: round6(Math.min(windowEndSec, word.endSec) - windowStartSec) })) } : {}),
     });
   }
   return out;

@@ -38,7 +38,7 @@ const h = vi.hoisted(() => {
     return p;
   };
   return {
-    procs, spawn, jobs: [], verdicts: [], review: null, analysisAvailable: true, freezeStderr: '',
+    procs, spawn, jobs: [], verdicts: [], review: null, temporalInstalled: false, temporalCapability: null, temporalResult: null, temporalCalls: [], analysisAvailable: true, freezeStderr: '',
   };
 });
 
@@ -46,12 +46,22 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
   const real = await importOriginal();
   // The continuous-excerpt analysis: ffprobe stream lengths + ffmpeg freezedetect.
   const execFile = Object.assign(() => { throw new Error('execFile is only used promisified here'); }, {
-    [promisify.custom]: async (bin) => (bin === 'ffprobe'
+    [promisify.custom]: async (bin, args, options) => {
+      if (bin === 'temporal-analyzer-test') {
+        h.temporalCalls.push({ args, options });
+        return { stdout: JSON.stringify(args[0] === '--capabilities' ? h.temporalCapability : h.temporalResult), stderr: '' };
+      }
+      return (bin === 'ffprobe'
       ? { stdout: 'video,20.000000\naudio,20.010000\n', stderr: '' }
-      : { stdout: '', stderr: h.freezeStderr }),
+      : { stdout: '', stderr: h.freezeStderr });
+    },
   });
   return { ...real, spawn: h.spawn, execFile };
 });
+vi.mock('../lib/processEnv.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  findCommandOnPath: (name) => name === 'portos-temporal-analyzer' && h.temporalInstalled ? 'temporal-analyzer-test' : null,
+}));
 vi.mock('../lib/ffmpeg.js', async (importOriginal) => {
   const real = await importOriginal();
   const { writeFileSync: write, mkdirSync: mkdir } = await import('fs');
@@ -162,6 +172,10 @@ beforeEach(() => {
   h.verdicts.length = 0;
   h.analysisAvailable = true;
   h.freezeStderr = '';
+  h.temporalInstalled = false;
+  h.temporalCapability = { protocolVersion: 1, id: 'example-analyzer', version: '1.0', ready: true, temporalLipSync: true, localOnly: true };
+  h.temporalResult = null;
+  h.temporalCalls.length = 0;
   vi.clearAllMocks();
 });
 afterAll(cleanupTempDataRoots);
@@ -380,4 +394,83 @@ it('cloning an active draft cannot give recovery ownership of the source render'
   } finally {
     await finishDraft(p.id, 2);
   }
+});
+
+// Public workflow regressions: stream parity never certifies mouth timing,
+// and uncertain temporal evidence cannot hand out another paid generation.
+describe('temporal performance evidence (#9347)', () => {
+  const performanceProject = async () => {
+    const p = await project();
+    await projects.updateScene(p.id, 's1', { shotMode: 'performance', performanceSpeaker: 'Example Singer' });
+    await projects.updateProject(p.id, { performanceConditioningSource: 'clean-singer-stem' });
+    await projects.mutateProjectRecord(p.id, (current) => ({ project: {
+      ...current, scenes: current.scenes.map((s) => s.sceneId !== 's1' ? s : { ...s, takes: [{
+        kind: 'video', assetId: 'clip-1', shotInstruction: {
+          version: 2, shotMode: 'performance', speaker: 'Example Singer', edit: { inSec: 1, outSec: 6 },
+          audio: { conditioning: { source: 'clean-singer-stem', filename: 'singer.wav', sha256: 'a'.repeat(64), selection: 'user', voiceIsolation: 'unverified' } },
+        },
+      }] }),
+    } }));
+    return projects.getProject(p.id);
+  };
+
+  it.each([
+    ['missing analyzer', false, null],
+    ['missing evidence', true, null],
+    ['unknown span status', true, { spans: [{ startSec: 0, endSec: 5, status: 'pass', offsetSec: 0, confidence: 1 }] }],
+    ['out-of-bounds evidence', true, { spans: [{ startSec: 0, endSec: 20, status: 'verified', offsetSec: 0, confidence: 1 }] }],
+    ['gapped evidence', true, { spans: [{ startSec: 1, endSec: 5, status: 'verified', offsetSec: 0, confidence: 1 }] }],
+    ['low confidence', true, { spans: [{ startSec: 0, endSec: 5, status: 'verified', offsetSec: 0, confidence: 0.2 }] }],
+  ])('%s stops for a human even when a visual finding could trigger retries', async (_name, installed, result) => {
+    const p = await performanceProject();
+    h.temporalInstalled = installed;
+    h.temporalResult = result;
+    h.verdicts.push(FAIL_S2);
+    await start(p.id, { maxAttempts: 3, maxGenerations: 5 });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('needs-human'));
+    expect(run(saved).usage).toEqual({ reviews: 1, generations: 0 });
+    expect(run(saved).attempts[0]).toMatchObject({ revisionId: null, review: {
+      verdict: 'inconclusive', checks: { audioSync: 'pass', lipSync: 'unverified' },
+      evidence: { temporal: { status: 'unverified' } },
+    } });
+    expect(saved.revisions || []).toHaveLength(0);
+    expect(h.procs).toHaveLength(1);
+  });
+
+  it('equal-length synthetic output with measured mouth offset fails only the temporal check', async () => {
+    const p = await performanceProject();
+    h.temporalInstalled = true;
+    h.temporalResult = { spans: [{ startSec: 0, endSec: 5, status: 'verified', offsetSec: 0.6, confidence: 0.95 }] };
+    h.verdicts.push(PASS);
+    await start(p.id, { maxAttempts: 1, maxGenerations: 0 });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).attempts[0].review).toBeTruthy());
+    expect(run(saved).attempts[0].review).toMatchObject({
+      verdict: 'revise', checks: { audioSync: 'pass', lipSync: 'fail' },
+      evidence: { temporal: { analyzer: { id: 'example-analyzer', version: '1.0' },
+        shots: [{ sceneId: 's1', takeId: 'clip-1', speaker: 'Example Singer', conditioning: { source: 'clean-singer-stem', voiceIsolation: 'unverified' }, spans: [{ offsetSec: 0.6, confidence: 0.95 }] }] } },
+    });
+    expect(h.temporalCalls[1].args).toEqual(expect.arrayContaining(['--audio-start-sec', '0', '--start-sec', '0', '--end-sec', '5']));
+    expect(h.temporalCalls[1].options.env).not.toHaveProperty('PORTOS_API_TOKEN');
+  });
+
+  it('complete confident temporal evidence survives reload and passes independently of parity', async () => {
+    const p = await performanceProject();
+    h.temporalInstalled = true;
+    h.temporalResult = { spans: [{ startSec: 0, endSec: 5, status: 'verified', offsetSec: 0.02, confidence: 0.95 }] };
+    h.verdicts.push(PASS);
+    await start(p.id, { maxAttempts: 1, maxGenerations: 0 });
+    await vi.waitFor(() => expect(h.procs).toHaveLength(1));
+    // Editing the board while its older take is encoding cannot relabel the output.
+    await projects.updateScene(p.id, 's1', { shotMode: 'cutaway', performanceSpeaker: 'Another Singer', videoHistoryId: 'another-take' });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('passed'));
+    expect(run(saved).attempts[0].review.evidence.temporal.shots[0]).toMatchObject({ speaker: 'Example Singer', conditioning: { selection: 'user', voiceIsolation: 'unverified' } });
+    const reloaded = (await request(app).get(base(p.id))).body;
+    expect(reloaded.performanceConditioningSource).toBe('clean-singer-stem');
+    expect(reloaded.scenes[0].performanceSpeaker).toBe('Another Singer');
+    expect(run(reloaded).attempts[0].review).toEqual(run(saved).attempts[0].review);
+    expect(run(reloaded).attempts[0].review.checks).toMatchObject({ lipSync: 'pass', audioSync: 'pass' });
+  });
 });

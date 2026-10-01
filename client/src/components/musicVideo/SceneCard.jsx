@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
+import PerformanceEvidence from './PerformanceEvidence.jsx';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
@@ -68,7 +69,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek,
+  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
@@ -116,6 +117,7 @@ export default function SceneCard({
   const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
   const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
+  const instruction = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   return (
     <details className="group min-w-0 rounded-lg border border-port-border bg-port-card">
@@ -212,6 +214,15 @@ export default function SceneCard({
             </>
           )}
         </div>
+        {performance && (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label htmlFor={fieldId('speaker')}>Speaker / singer</label>
+            <input id={fieldId('speaker')} value={scene.performanceSpeaker || ''} maxLength={120}
+              onChange={(e) => onEditLocal(scene.sceneId, { performanceSpeaker: e.target.value })}
+              onBlur={() => onSave(scene.sceneId, { performanceSpeaker: scene.performanceSpeaker || null })}
+              className="bg-port-bg border border-port-border rounded px-2 py-1" placeholder="Intended singer" />
+          </div>
+        )}
         <div className="flex flex-wrap gap-2 items-center text-xs">
           <label htmlFor={fieldId('layer')}>Layer</label>
           <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
@@ -348,7 +359,11 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} />
         {/* Scene clip — i2v video generated from the reference frame (Phase 1) */}
         <div className="flex items-center gap-2 flex-wrap">
-          {scene.videoHistoryId && (
+          {scene.videoHistoryId && performance && (
+            <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}
+              temporal={performanceReview?.shot} excerptStartSec={performanceReview?.excerptStartSec || 0} />
+          )}
+          {scene.videoHistoryId && !performance && (
             <div className="relative w-40 shrink-0">
               <video
                 ref={clipPlayerRef}

@@ -792,6 +792,7 @@ export const musicVideoProjectCreateSchema = z.object({
   // be created empty and have the track set later via PATCH.
   trackId: z.string().max(64).nullable().optional(),
   uploadedAudioFilename: z.string().max(256).nullable().optional(),
+  performanceConditioningSource: z.enum(['master', 'vocal-stem', 'clean-singer-stem']).nullable().optional(),
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
   styleReferences: musicVideoStyleReferencesSchema.optional(),
@@ -812,6 +813,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   status: z.enum(MUSIC_VIDEO_STATUSES).optional(),
   trackId: z.string().max(64).nullable().optional(),
   uploadedAudioFilename: z.string().max(256).nullable().optional(),
+  performanceConditioningSource: z.enum(['master', 'vocal-stem', 'clean-singer-stem']).nullable().optional(),
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
   styleReferences: musicVideoStyleReferencesSchema.optional(),
@@ -857,6 +859,7 @@ export const musicVideoSceneCreateSchema = z.object({
   // recording (only a verified source-audio provider can render it); absent or
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  performanceSpeaker: z.string().trim().max(120).nullable().optional(),
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
@@ -886,6 +889,7 @@ export const musicVideoSceneUpdateSchema = z.object({
   // recording (only a verified source-audio provider can render it); absent or
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
 }).strict();

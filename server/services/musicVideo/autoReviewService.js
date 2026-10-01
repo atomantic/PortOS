@@ -22,6 +22,8 @@
  * so an event arriving mid-step can never start a second review.
  */
 
+import { isPerformanceScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { analyzeTemporalPerformance } from './temporalPerformance.js';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -184,7 +186,15 @@ async function reviewDraft(project, run, excerpt) {
   const planned = planStripTimes(spanSec, sections, { hasContactSheet: hasSheet });
   const { sheets: strip, captured: frameTimes } = await extractStripSheets(excerptPath, `mvar-${short(run.id)}-a${attemptN}`, planned).catch(() => ({ sheets: [], captured: [] }));
   const screenshots = [...(hasSheet ? [sheet] : []), ...strip];
-  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length };
+  const shots = sections.flatMap((section) => {
+    const scene = project.scenes?.find((s) => s.sceneId === section.sceneId);
+    const instruction = selectedPerformanceInstruction(scene);
+    const performance = 'performance' in section ? section.performance : (isPerformanceScene(scene)
+      ? { takeId: scene.videoHistoryId, speaker: instruction?.speaker || null, conditioning: instruction?.audio?.conditioning || null } : null);
+    return performance ? [{ sceneId: section.sceneId, ...performance, startSec: section.startSec, endSec: section.endSec }] : [];
+  });
+  const temporal = await analyzeTemporalPerformance({ excerptPath, shots });
+  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length, temporal, excerptStartSec: excerpt.startSec };
 
   let parsed = null;
   let reviewerError = null;

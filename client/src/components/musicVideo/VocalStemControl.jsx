@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Mic, Wand2, X } from 'lucide-react';
 import toast from '../ui/Toast';
-import { uploadMusicVideoVocalStem, removeMusicVideoVocalStem } from '../../services/apiMusicVideo.js';
+import { uploadMusicVideoVocalStem, removeMusicVideoVocalStem, updateMusicVideoProject } from '../../services/apiMusicVideo.js';
 
 const HELP = 'Optional. A full-length vocal bounce from the same session as the song, starting at 0:00. '
   + 'Lip-sync performance shots are conditioned on it instead of the full mix. The final video keeps the song.';
@@ -18,6 +18,8 @@ const SEPARATE_HELP = 'Split the vocal out of the song with demucs and attach it
 export default function VocalStemControl({ project, hasAudio, onUpdated, separation = null }) {
   const [busy, setBusy] = useState(false);
   const inputId = `mv-vocal-stem-${project.id}`;
+  const sourceId = `mv-conditioning-source-${project.id}`;
+  const source = project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
   const stem = project.vocalStemFilename || null;
   const separating = Boolean(separation?.active && separation.context === project.id);
   const separationLabel = separating
@@ -64,9 +66,18 @@ export default function VocalStemControl({ project, hasAudio, onUpdated, separat
           Cancel
         </button>
       )}
+      <label htmlFor={sourceId}>Conditioning source</label>
+      <select id={sourceId} value={source} disabled={disabled}
+        onChange={(e) => run(() => updateMusicVideoProject(project.id, { performanceConditioningSource: e.target.value }, { silent: true }), 'Conditioning source saved', 'Failed to save conditioning source')}
+        className="max-w-full bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0">
+        <option value="master">Master mix</option>
+        <option value="vocal-stem" disabled={!stem}>Attached vocal stem</option>
+        <option value="clean-singer-stem" disabled={!stem}>Attached clean singer stem (user selected)</option>
+      </select>
+      <span className="text-port-text-muted">Choose a clean singer bounce explicitly. Separation, source selection and duration parity do not verify voice isolation.</span>
       {stem ? (
         <>
-          <span className="text-port-text-muted break-all">Lip-sync uses {stem}</span>
+          <span className="text-port-text-muted break-all">{source === 'master' ? 'Lip-sync uses the full mix' : `Lip-sync uses ${stem}`}</span>
           <button type="button" onClick={remove} disabled={busy || separating} aria-label="Remove vocal stem"
             className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
             <X size={13} /> Remove

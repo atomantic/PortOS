@@ -22,6 +22,7 @@
  * `mutateProjectRecord`'s write serialization without duplicating validation.
  */
 
+import { isPerformanceScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -53,7 +54,7 @@ function findExcerpt(project, excerptId) {
  * project; the render job fills in `filename`/`contactSheetFilename` (or
  * `error`) once the encode finishes.
  */
-export function startExcerptOnProject(project, { startSec, endSec, sections = null, partialFilename = null, renderingOn = null, aspect = null, fade = false }, now = new Date().toISOString()) {
+export function startExcerptOnProject(project, { startSec, endSec, sections = null, performanceProject = project, partialFilename = null, renderingOn = null, aspect = null, fade = false }, now = new Date().toISOString()) {
   if (!(startSec >= 0) || !(endSec > startSec) || endSec > MAX_EXCERPT_SEC) {
     throw excerptError(422, 'INVALID_EXCERPT_RANGE', 'endSec must be greater than startSec, and both within range');
   }
@@ -75,7 +76,12 @@ export function startExcerptOnProject(project, { startSec, endSec, sections = nu
     renderingOn,
     // #8987: the sections the draft cuts, in ABSOLUTE song time — what a
     // flagged note maps onto when the director asks for a selective revision.
-    sections: Array.isArray(sections) ? sections : null,
+    sections: Array.isArray(sections) ? sections.map((section) => {
+      const scene = performanceProject.scenes?.find((s) => s.sceneId === section.sceneId);
+      const instruction = selectedPerformanceInstruction(scene);
+      return { ...section, performance: isPerformanceScene(scene) && (!section.layer || section.layer === 'footage')
+        ? { takeId: scene.videoHistoryId || null, speaker: instruction?.speaker || null, conditioning: instruction?.audio?.conditioning || null } : null };
+    }) : null,
     // #9280: a social cut's frame (the project's own unless re-framed) and
     // whether its audio edges fade; `width`/`height` land with the finished file.
     aspect: aspect || null,
