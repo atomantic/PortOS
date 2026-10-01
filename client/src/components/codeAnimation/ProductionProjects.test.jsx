@@ -11,6 +11,7 @@ vi.mock('../../services/apiCodeAnimation', () => ({
   listCodeAnimationProjects: vi.fn(), createCodeAnimationProject: vi.fn(), getCodeAnimationProject: vi.fn(),
   updateCodeAnimationProject: vi.fn(), importCodeAnimationPackage: vi.fn(), acceptCodeAnimationSource: vi.fn(),
   getCodeAnimationProjectBrief: vi.fn(), getCodeAnimationRevisionPackage: vi.fn(), listCodeAnimationProjectHistory: vi.fn(),
+  startCodeAnimationStageRun: vi.fn(), cancelCodeAnimationStageRun: vi.fn(),
 }));
 import * as api from '../../services/apiCodeAnimation';
 import ProductionProjects from './ProductionProjects';
@@ -84,6 +85,36 @@ describe('Production project rendered interactions', () => {
     expect(await screen.findByText('example-hash')).toBeInTheDocument();
     expect(screen.getByText(/Source execution: None/)).toBeInTheDocument();
     expect(api.importCodeAnimationPackage).toHaveBeenCalledWith(project.id, source, { silent: true });
+  });
+
+  it('confirms before starting a stage run, then shows live stages, unverified dimensions, cancel and resume', async () => {
+    const user = userEvent.setup();
+    const stage = (key, extra = {}) => ({ key, stageRunId: key + '-id', status: 'completed', ...extra });
+    const runData = (overrides = {}) => ({
+      kind: 'production-stages', spent: { elapsedMs: 2000, iterations: 0 }, budgets: project.budgets, resumable: false, findings: [],
+      stages: [stage('style-frame', { artifacts: [{ atSeconds: 1, relativePath: 'code-animations/example/style.png' }] }), stage('inspect', { verified: ['audio'] })],
+      verdict: { status: 'pass', reason: null, unverified: [{ dimension: 'semantic-visual', reason: 'No visual reviewer pass ran.' }] },
+      ...overrides,
+    });
+    const stopped = { id: 'run-stopped', status: 'canceled', createdAt: '2026-01-01T00:00:00Z', data: runData({ resumable: true, stopReason: 'canceled' }) };
+    api.listCodeAnimationProjectHistory.mockResolvedValue(page([stopped]));
+    api.preflightCodeAnimationProject.mockResolvedValue({ problems: [], capabilities: { imageInputAccepted: true } });
+    api.startCodeAnimationStageRun.mockResolvedValue({ id: 'run-new' });
+    renderPage();
+    expect(await screen.findByText(/Unverified: semantic-visual/)).toBeInTheDocument();
+    expect(screen.getByText('Verified: audio')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Style frame at 1s' })).toHaveAttribute('href', '/data/code-animations/example/style.png');
+
+    await user.click(screen.getByRole('button', { name: 'Run production stages' }));
+    expect(api.startCodeAnimationStageRun).not.toHaveBeenCalled();
+    expect(await screen.findByText(/A repair calls/)).toHaveTextContent('example-provider');
+    await user.click(screen.getByLabelText(/visual review/));
+    await user.click(screen.getByRole('button', { name: 'Start run' }));
+    await waitFor(() => expect(api.startCodeAnimationStageRun).toHaveBeenCalledWith(project.id, { visualReview: true }, { silent: true }));
+
+    await user.click(screen.getByRole('button', { name: 'Resume run' }));
+    await waitFor(() => expect(api.startCodeAnimationStageRun).toHaveBeenCalledWith(project.id, { resumeFromRunId: 'run-stopped' }, { silent: true }));
+    expect(screen.queryByText(/Package import/)).toBeNull();
   });
 
   it('preserves the authoring pin across renderer edits and checks only saved settings', async () => {

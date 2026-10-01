@@ -42,4 +42,6 @@ export const codeAnimationProjectPatchSchema = partialWithoutDefaults(codeAnimat
 export const codeAnimationStageRunSchema = z.object({
   revisionId: z.string().uuid().optional(),
   resumeFromRunId: z.string().uuid().optional(),
+  // Opt-in: ask the project's vision-capable authoring route to review the style frames.
+  visualReview: z.boolean().optional(),
 }).strict().refine(value => !(value.revisionId && value.resumeFromRunId), 'Choose a revision or a run to resume, not both');

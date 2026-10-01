@@ -16,6 +16,7 @@ import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import ProductionProjectForm from './ProductionProjectForm';
 import ProductionPreflight from './ProductionPreflight';
 import ProductionContainment from './ProductionContainment';
+import ProductionStageRuns, { isStageRun } from './ProductionStageRuns';
 
 const EVENTS = ['code-animation:changed'];
 const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm hover:border-port-accent disabled:opacity-50';
@@ -125,8 +126,9 @@ export default function ProductionProjects() {
         </div>
         <p className="text-xs text-gray-400">Imports never execute source or install dependencies. Failed candidates retain accepted source. Accepting source records your selection; it does not mark rendering, motion or sound as verified.</p>
         <p className="text-xs text-gray-400">Requested model: {project.localSettings?.model || 'Unspecified'} · Mode: {project.localSettings?.mode || 'Unspecified'}</p>
+        <ProductionStageRuns project={project} runs={history.items.filter(isStageRun)} disabled={busy || dirty} />
         <ul className="space-y-2">
-          {history.items.map(run => <li key={run.id} className="min-w-0 space-y-1 rounded border border-port-border p-3">
+          {history.items.filter(run => !isStageRun(run)).map(run => <li key={run.id} className="min-w-0 space-y-1 rounded border border-port-border p-3">
             <div className="flex flex-wrap justify-between gap-2 text-sm"><span>Package import · {run.status}</span><span>{timeAgo(run.createdAt)}</span></div>
             <p className="break-all text-xs text-gray-400">{run.data.packageHash}</p>
             <p className="text-xs text-gray-400">{formatBytes(run.data.totalBytes || 0)} · Source execution: {run.data.executed ? 'Recorded' : 'None'}</p>

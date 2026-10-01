@@ -99,6 +99,24 @@ describe.skipIf(!ready)('Production stage runs', () => {
     }
   });
 
+  it('records an opt-in visual review as advisory evidence and only then reports semantic-visual verified', async () => {
+    const { id } = await project();
+    const review = vi.fn(async ({ artifacts }) => ({ findings: [{ detail: 'Palette ignores the style guide.', atSeconds: 1 }], tokens: 10, reviewer: { providerId: 'example-provider', model: 'example-model' }, seen: artifacts.length }));
+    const moving = vi.fn(async ({ files, entryPath }) => ({ files: [{ path: entryPath, content: files.find(file => file.path === entryPath).content.replace('FROZEN', 'MOVING') }], tokens: 1 }));
+    const off = await startProductionStageRun(id, {}, { sample, repair: moving, render, review });
+    expect(await off.done).toBe('completed');
+    expect(review).not.toHaveBeenCalled();
+
+    const second = await project();
+    const on = await startProductionStageRun(second.id, { visualReview: true }, { sample, repair: moving, render, review });
+    expect(await on.done).toBe('completed');
+    expect(review).toHaveBeenCalled();
+    const [saved] = (await getProductionHistory(second.id, { limit: 1, offset: 0 })).items;
+    expect(saved.data.stages.find(stage => stage.key === 'review').reviewer).toEqual({ providerId: 'example-provider', model: 'example-model' });
+    expect(saved.data.findings.some(finding => finding.kind === 'visual-review' && finding.severity === 'warning')).toBe(true);
+    expect(saved.data.verdict.unverified.map(item => item.dimension)).not.toContain('semantic-visual');
+  });
+
   it('never passes unmeasured or unrepairable evidence: exhausted iterations keep artifacts, skip the render, and report audio as unverified', async () => {
     const { id } = await project({ iterations: 1 }, { kind: 'external', notes: 'Separate track' });
     render.mockClear();
