@@ -203,7 +203,7 @@ describe('persistent database maintenance boundary', () => {
     const operation = journal.begin({ source, target });
     // No real pg connection is possible, even if an admission regression occurs.
     const loader = join(root, 'pg-loader.mjs');
-    const stub = `export default {types:{setTypeParser(){}},Pool:class {
+    const stub = `export default {Client:class {connectionParameters={ssl:false,sslnegotiation:"postgres"}},types:{setTypeParser(){}},Pool:class {
       on(){} query(){throw Error('POOL_REACHED')} connect(){throw Error('POOL_REACHED')}
     }};`;
     writeFileSync(loader, `export async function resolve(specifier, context, next) {
@@ -243,6 +243,7 @@ describe('persistent database maintenance boundary', () => {
   it('allows admitted work to finish when checkout completes after the fence', () => {
     const loader = join(root, 'transaction-loader.mjs');
     const stub = `const log=[]; globalThis.sqlLog=log; export default {
+      Client:class {connectionParameters={ssl:false,sslnegotiation:"postgres"}},
       types:{setTypeParser(){}},Pool:class {
         on(){} async connect(){globalThis.beforeCheckout(); return {query:async sql=>{log.push(sql); return {rows:[]}},release(){}}}
         query(){throw Error('NEW_QUERY_REACHED')}
