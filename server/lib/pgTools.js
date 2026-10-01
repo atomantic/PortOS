@@ -15,7 +15,10 @@
  * imports out to other PortOS services.
  */
 
-import { readdir } from 'fs/promises';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { mkdtemp, readdir, rm, writeFile } from 'fs/promises';
+import { getCACertificates } from 'node:tls';
 import { join } from 'path';
 import { execFileAsync } from './fileUtils.js';
 
@@ -132,4 +135,47 @@ export async function resolvePgDumpBinary(serverMajor) {
     return resolvePgDump(serverMajor);
   }
   return { binary: 'pg_dump', satisfies: true };
+}
+
+/** Build a libpq environment from the pool's captured connection policy.
+ * Keep executable resolution and locale, but never inherit a second PG policy.
+ * Inline certificate material needs a separate managed-file adapter; refuse it
+ * rather than silently sending a child with weaker authentication.
+ */
+function buildPgToolEnv(config, inherited = process.env, rootCertPath) {
+  const env = Object.fromEntries(Object.entries(inherited).filter(([key]) => !/^PG/i.test(key)));
+  const ssl = config.ssl;
+  if (ssl && typeof ssl === 'object' && Object.keys(ssl).some(key => key !== 'rejectUnauthorized')) {
+    throw new Error('PostgreSQL tools do not support inline pool TLS certificate settings');
+  }
+  env.PGPASSWORD = config.password;
+  env.PGSSLMODE = ssl ? (ssl.rejectUnauthorized === false ? 'require' : 'verify-full') : 'disable';
+  if (env.PGSSLMODE === 'verify-full') {
+    if (!rootCertPath) throw new Error('Verified PostgreSQL TLS requires a managed root certificate file');
+    env.PGSSLROOTCERT = rootCertPath;
+  }
+  // libpq's require mode verifies a default root.crt when one exists. An
+  // intentionally absent, unique path preserves node-postgres no-verify TLS.
+  if (env.PGSSLMODE === 'require') env.PGSSLROOTCERT = join(tmpdir(), `portos-unused-root-${randomUUID()}.crt`);
+  // libpq otherwise discovers client identity files in the user's home; the
+  // pool does not load them. Missing explicit paths disable that discovery.
+  const unusedIdentity = join(tmpdir(), `portos-unused-identity-${randomUUID()}`);
+  env.PGSSLCERT = `${unusedIdentity}.crt`;
+  env.PGSSLKEY = `${unusedIdentity}.key`;
+  env.PGSSLNEGOTIATION = config.sslnegotiation || 'postgres';
+  return env;
+}
+
+/** Run a tool with the Node TLS trust roots in a private, temporary PEM file.
+ * Explicit files work on older supported libpq versions too. Cleanup covers
+ * successful children, spawn failures, timeouts and rejected callbacks.
+ */
+export async function withPgToolEnv(config, run) {
+  if (!config.ssl || config.ssl.rejectUnauthorized === false) return run(buildPgToolEnv(config));
+  const dir = await mkdtemp(join(tmpdir(), 'portos-pg-tls-'));
+  return (async () => {
+    const path = join(dir, 'roots.pem');
+    await writeFile(path, getCACertificates('default').join('\n'), { mode: 0o600 });
+    return run(buildPgToolEnv(config, process.env, path));
+  })().finally(() => rm(dir, { recursive: true, force: true }));
 }

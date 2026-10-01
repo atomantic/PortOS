@@ -7,8 +7,9 @@ const pool = vi.hoisted(() => ({
   query: vi.fn(),
 }));
 
-vi.mock('pg', () => ({
+vi.mock('pg', async (importOriginal) => ({
   default: {
+    Client: (await importOriginal()).default.Client,
     Pool: vi.fn(function Pool() { return pool; }),
     types: { setTypeParser: vi.fn() },
   },

@@ -25,7 +25,7 @@ beforeEach(() => {
   // database or running install can be reached, even if admission regresses.
   const stub = `import {appendFileSync,writeFileSync} from 'node:fs';
     const log = x => appendFileSync(${JSON.stringify(trace)}, JSON.stringify(x)+'\\n');
-    export default {types:{setTypeParser(){}}, Pool:class {
+    export default {Client:class {connectionParameters={ssl:false,sslnegotiation:"postgres"}},types:{setTypeParser(){}}, Pool:class {
       constructor(config){ log({pool:{host:config.host,port:config.port,database:config.database,user:config.user}}); }
       on(){} async end(){log('closed')}
       async connect(){log('connected');return {

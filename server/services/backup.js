@@ -17,8 +17,8 @@ import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
-import { checkHealth, ensureSchema, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
-import { resolvePgDumpBinary } from '../lib/pgTools.js';
+import { POOL_CONFIG, checkHealth, ensureSchema, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
+import { withPgToolEnv, resolvePgDumpBinary } from '../lib/pgTools.js';
 import { inspectDatabaseDump } from './backupDatabaseDump.js';
 import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 import { getBackendName } from './memoryBackend.js';
@@ -693,14 +693,8 @@ export async function dumpPostgres(outputPath) {
     return { status: 'skipped', reason: 'not_configured' };
   }
 
-  const pgHost = process.env.PGHOST || 'localhost';
-  const pgPort = process.env.PGPORT || '5432';
-  const pgDb = process.env.PGDATABASE || 'portos';
-  const pgUser = process.env.PGUSER || 'portos';
-
-  if (!process.env.PGPASSWORD) {
-    console.warn('⚠️ PGPASSWORD not set for pg_dump — using default');
-  }
+  const { host: pgHost, port, database: pgDb, user: pgUser } = POOL_CONFIG;
+  const pgPort = String(port);
 
   // pg_dump must be >= the server's major version or it aborts on a "server
   // version mismatch". On machines with multiple Postgres installs (the common
@@ -716,7 +710,7 @@ export async function dumpPostgres(outputPath) {
     console.warn(`⚠️ No installed pg_dump satisfies server major ${serverMajor} (using ${pgDumpBin})`);
   }
 
-  return new Promise((resolvePromise) => {
+  return withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolvePromise) => {
     // --clean --if-exists: the dump DROPs each object before recreating it, so it
     // replays cleanly into the live, already-initialized PortOS database (the
     // common Restore-DB target) instead of erroring "relation already exists" on
@@ -733,7 +727,7 @@ export async function dumpPostgres(outputPath) {
       '-f', outputPath
     ], {
       shell: false,
-      env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' }
+      env: pgEnv
     });
 
     let stderr = '';
@@ -799,7 +793,7 @@ export async function dumpPostgres(outputPath) {
       console.warn(`⚠️ pg_dump not available: ${err.message}`);
       resolvePromise({ status: 'failed', reason: 'pg_dump_missing', error: err.message });
     });
-  });
+  }));
 }
 
 // Filesystem messages contain private paths; only expose the operation and errno.
@@ -1607,12 +1601,10 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   return withDatabaseMaintenance(async () => {
     // Read before the replay rewinds them to the dump's values.
     const feedPositions = await captureSyncFeedPositions();
-    const pgHost = process.env.PGHOST || 'localhost';
-    const pgPort = process.env.PGPORT || '5432';
-    const pgDb = process.env.PGDATABASE || 'portos';
-    const pgUser = process.env.PGUSER || 'portos';
+    const { host: pgHost, port, database: pgDb, user: pgUser } = POOL_CONFIG;
+    const pgPort = String(port);
 
-    const replay = await new Promise((resolveP) => {
+    const replay = await withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolveP) => {
       // ON_ERROR_STOP=1 aborts on the first failed statement; --single-transaction
       // wraps the whole replay in one transaction so that abort ROLLs BACK every
       // prior statement. Together they make the restore atomic: it either fully
@@ -1625,7 +1617,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
         '--single-transaction',
         '--echo-all',
         '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', spoolPath
-      ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
+      ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: pgEnv });
 
       let stderr = '';
       const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL restore' });
@@ -1659,7 +1651,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
         console.warn(`⚠️ psql not available: ${err.message}`);
         resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
       });
-    });
+    }));
     if (replay.status !== 'ok') return replay;
 
     // Replay has committed. Reapply this version's upgrades even when readiness

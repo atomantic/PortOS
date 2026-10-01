@@ -29,12 +29,16 @@ if (!process.env.PGPASSWORD) {
 // need a SECOND, independent connection to the same database (a raw `pg`
 // client outside the pool) don't have to re-derive these defaults and risk
 // drifting from them — see server/lib/db.test.js.
+// Capture node-postgres's supported TLS environment once, alongside the endpoint.
+const poolTls = new pg.Client().connectionParameters;
 export const POOL_CONFIG = Object.freeze({
   host: process.env.PGHOST || 'localhost',
   port: parseInt(process.env.PGPORT || '5432', 10),
   database: process.env.PGDATABASE || 'portos',
   user: process.env.PGUSER || 'portos',
   password: process.env.PGPASSWORD || 'portos',
+  ssl: poolTls.ssl && typeof poolTls.ssl === 'object' ? Object.freeze({ ...poolTls.ssl }) : poolTls.ssl,
+  sslnegotiation: poolTls.sslnegotiation || 'postgres',
 });
 
 const pool = new Pool({

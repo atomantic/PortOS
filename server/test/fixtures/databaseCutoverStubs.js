@@ -46,7 +46,10 @@ function Pool(config) {
     },
   };
 }
-export default { Pool, types: { setTypeParser() {} } };
+// db.js snapshots TLS before constructing the pool; this synthetic endpoint
+// uses plain PostgreSQL and never opens a real Client socket.
+class Client { connectionParameters = { ssl: false, sslnegotiation: "postgres" }; }
+export default { Client, Pool, types: { setTypeParser() {} } };
 `);
   const hooks = join(dir, 'pg-hooks.mjs');
   writeFileSync(hooks, `export async function resolve(specifier, context, next) {

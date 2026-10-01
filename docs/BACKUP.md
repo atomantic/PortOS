@@ -11,6 +11,15 @@ The dump includes the machine-local `cos_pending_agent_feedback` reference index
 
 Implementation: `server/services/backup.js` (snapshot/dump/restore), `server/services/backupScheduler.js` (cron), `server/routes/backup.js` (API), and `server/routes/database.js` (DB export/sync).
 
+Snapshot dump and replay use the endpoint and credentials captured by the active
+pool at server startup. Changing `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, or
+`PGPASSWORD` requires restarting PortOS. Inherited libpq overrides (including
+`PGHOSTADDR`, service files and `PGOPTIONS`) are removed from these subprocesses.
+TLS is captured at startup too: disabled TLS stays disabled, verified TLS uses
+`verify-full` with a temporary PEM file containing Node’s active trust roots, and `no-verify` uses `require`. Inline TLS
+certificate settings are refused rather than silently weakened. Executable
+resolution (`PATH` and `PORTOS_PGDUMP`) is preserved.
+
 ## Database backend migration
 
 Settings (Database tab) offers a coordinated offline cutover between Docker and
