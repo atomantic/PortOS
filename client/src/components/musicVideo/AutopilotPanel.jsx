@@ -53,12 +53,16 @@ function StepRow({ step }) {
   );
 }
 
-function RunView({ run, production, codeFirst }) {
+function RunView({ run, production, codeFirst, project }) {
+  const [budget, setBudget] = useState(null);
   const live = RESUMABLE_RUN_STATUSES.has(run.status);
   const steps = run.steps || [];
   const failures = steps.filter((s) => s.error);
   const cap = run.limits.spendCapUsd;
   const needsReplan = run.status === 'needs-replan';
+  const resumeValid = !budget || (Number.isInteger(budget.maxGenerations) && budget.maxGenerations >= run.limits.maxGenerations && budget.maxGenerations <= 500
+    && Number.isInteger(budget.maxReviewAttempts) && budget.maxReviewAttempts >= run.limits.maxReviewAttempts && budget.maxReviewAttempts <= 10
+    && (budget.spendCapUsd == null || (Number.isFinite(budget.spendCapUsd) && budget.spendCapUsd >= cap && budget.spendCapUsd <= 100000)));
   const hint = run.interrupted
     ? 'The server restarted — nothing is running. Resume to continue.'
     : run.stopReason;
@@ -79,6 +83,25 @@ function RunView({ run, production, codeFirst }) {
         return `${kind === 'author' ? 'Code authoring' : kind === 'frame' ? 'Images' : 'Video'}: ${formatUsd(cost)} known${used.some((step) => step.costUsd == null) ? ' + unpriced calls' : ''}`;
       }).join(' · ')}. Reviewer calls use the separate review limit and may also cost money.</p>}
       <p className="text-port-text-muted">Allowed: {(run.pool || []).map(routeLabel).join(', ')}</p>
+      {run.accounting && <div aria-label="Production budget" className="text-port-text-muted space-y-1">
+        <p>Planned remaining: {formatCount(run.accounting.plannedGenerations)} asset jobs · Reserved: {formatUsd(run.accounting.reservedUsd)} · Spent: {formatUsd(run.accounting.spentUsd)}{run.accounting.unpriced ? ' + unpriced calls' : ''}</p>
+        <p>Reviews: {formatCount(run.accounting.reviews)} / {formatCount(run.limits.maxReviewAttempts)} shared by pilots and final review.</p>
+        <p>Expected next spend: {run.nextSpend ? run.nextSpend.costUsd == null ? 'unpriced — refused under a dollar cap' : formatUsd(run.nextSpend.costUsd) : 'quoted before the next submission'}</p>
+      </div>}
+      {run.pilot && <div aria-label="Production pilot evidence" className="border border-port-border rounded p-2 space-y-1">
+        <p className="font-medium">Representative asset pilots</p>
+        <p className="text-port-text-muted">Accepted takes are reused. Every current pilot must pass continuous review before bulk production. Document composition is reviewed after asset preparation.</p>
+        {(run.pilot.scenes || []).map((pilot) => {
+          const excerpt = project.excerpts?.find((e) => e.id === pilot.excerptId);
+          return <div key={pilot.sceneId} className="space-y-0.5">
+            <p>{pilot.operation}: {pilot.sceneId} · {pilot.status || 'pending'}
+              {excerpt?.filename && <> · <a href={`/data/videos/${excerpt.filename}`} target="_blank" rel="noreferrer" className="text-port-accent underline">Watch pilot</a></>}
+            </p>
+            {pilot.evidence && <p className="text-port-text-muted">Continuous analysis: {pilot.evidence.continuous ? 'verified' : 'unverified'} · Sampled frames: {formatCount(pilot.evidence.continuousFrames)} · Temporal alignment: {pilot.evidence.temporal?.status || 'unverified'}</p>}
+            {pilot.repair && <p className="text-port-warning">Repair: {pilot.repair.category} · {pilot.repair.reason} Replacement generation spend for this repair stage: {formatUsd(pilot.repair.expectedGenerationSpendUsd)}.</p>}
+          </div>;
+        })}
+      </div>}
       {hint && <p className="text-port-warning break-words">{hint}</p>}
       {steps.some((step) => step.retryBlocked) && <p className="text-port-warning">Terminal refusal recorded: unchanged inputs will not be submitted again on Resume. Repair the shot or cancel and choose another supported route. No new spend is reserved while blocked.</p>}
       {run.error && <p role="status" className="text-port-error break-words">{run.error}</p>}
@@ -88,6 +111,20 @@ function RunView({ run, production, codeFirst }) {
           {steps.slice(-SHOWN_STEPS).reverse().map((step) => <StepRow key={step.key} step={step} />)}
         </ul>
       )}
+      {live && run.status === 'limit-reached' && <fieldset className="flex flex-wrap gap-2" aria-label="Raise production limits">
+        <label htmlFor={`production-generations-${run.id}`}>Max generations
+          <input id={`production-generations-${run.id}`} type="number" min={run.limits.maxGenerations} max={500} value={budget?.maxGenerations ?? run.limits.maxGenerations}
+            onChange={(e) => setBudget((b) => ({ ...run.limits, ...b, maxGenerations: Number(e.target.value) }))} className={inputCls} />
+        </label>
+        <label htmlFor={`production-reviews-${run.id}`}>Max reviews
+          <input id={`production-reviews-${run.id}`} type="number" min={run.limits.maxReviewAttempts} max={10} value={budget?.maxReviewAttempts ?? run.limits.maxReviewAttempts}
+            onChange={(e) => setBudget((b) => ({ ...run.limits, ...b, maxReviewAttempts: Number(e.target.value) }))} className={inputCls} />
+        </label>
+        {cap != null && <label htmlFor={`production-cap-${run.id}`}>Spend cap (USD)
+          <input id={`production-cap-${run.id}`} type="number" min={cap} max={100000} step={0.01} value={budget?.spendCapUsd ?? cap}
+            onChange={(e) => setBudget((b) => ({ ...run.limits, ...b, spendCapUsd: Number(e.target.value) }))} className={inputCls} />
+        </label>}
+      </fieldset>}
       <div className="flex flex-wrap gap-2">
         {run.status === 'running' && !run.interrupted && (
           <button type="button" disabled={production.busy} onClick={() => production.stop(run.id)}
@@ -96,8 +133,8 @@ function RunView({ run, production, codeFirst }) {
           </button>
         )}
         {live && (!codeFirst || run.authoring) && (run.status !== 'running' || run.interrupted) && (
-          <button type="button" disabled={production.busy}
-            onClick={() => production.resume(run.id, needsReplan ? { acceptBasis: true } : {})}
+          <button type="button" disabled={production.busy || !resumeValid}
+            onClick={() => production.resume(run.id, { ...(needsReplan ? { acceptBasis: true } : {}), ...(budget ? { limits: budget } : {}) })}
             className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
             <Play size={12} /> {needsReplan ? 'Resume with the new setup' : 'Resume'}
           </button>
@@ -151,7 +188,7 @@ function StartForm({ project, production }) {
   return (
     <div className="space-y-2">
       <p className="text-port-text-muted">
-        {assets ? 'Prepares only the approved selected assets, authors the document, reviews motion and audio in a continuous excerpt, revises failed code sections, then renders the chosen document.' : 'Plans the board, generates the missing frames and clips, renders and reviews the draft, and revises failed sections — on the server, so you can close this tab.'}
+        {assets ? 'Reviews representative selected assets before bulk preparation, authors the document, reviews motion and audio in a continuous excerpt, revises failed code sections, then renders the chosen document.' : 'Plans the board, reviews representative pilots before bulk generation, renders and reviews the draft, and revises failed sections — on the server, so you can close this tab.'}
         Only the routes you allow are ever used, and it never exceeds the limits below. fal.ai video is charged each take's estimated list price (its model, length and resolution); other metered routes have no known price, so a dollar cap refuses them.
       </p>
       <fieldset className="min-w-0" aria-labelledby={idFor('pool-label')}>
@@ -328,7 +365,7 @@ function ProductionSection({ project, production }) {
   return (
     <div className="rounded border border-port-border p-2 space-y-2 text-xs" aria-label="Production run">
       <span className="font-medium flex items-center gap-1"><Clapperboard size={12} /> Autonomous production (opt-in)</span>
-      {run && <RunView run={run} production={production} codeFirst={codeFirst} />}
+      {run && <RunView key={run.id} run={run} production={production} codeFirst={codeFirst} project={project} />}
       {codeFirst && <>
         <MediumPlanSummary project={project} />
         <div className="rounded border border-port-border p-2 space-y-1" aria-label="Code-first asset preflight">

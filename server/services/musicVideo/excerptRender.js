@@ -41,6 +41,8 @@ import { markRevisionRendering, settleRevisionRender } from './revision.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { musicVideoAspect, musicVideoAtAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoEvents } from './events.js';
+import { pilotDependencies, productionPilotRenderProject } from './productionPilot.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 
 const jobs = new Map();
 const projectExcerptRenders = new Map();
@@ -210,9 +212,16 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   return { jobId, excerptId };
 }
 
-export async function startExcerptRender(projectId, { startSec, endSec, aspect = null, fade = false }, { revisionId = null } = {}) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+export async function startExcerptRender(projectId, { startSec, endSec, aspect = null, fade = false }, { revisionId = null, pilotSceneId = null, verifyCurrent = null } = {}) {
+  const stored = await getProject(projectId);
+  if (!stored) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  await verifyCurrent?.(stored);
+  const project = pilotSceneId ? productionPilotRenderProject(stored, pilotSceneId) : stored;
+  const pilotEvidence = pilotSceneId ? pilotDependencies(stored, pilotSceneId) : null;
+  if (pilotSceneId) {
+    const scene = stored.scenes.find((s) => s.sceneId === pilotSceneId);
+    if (startSec !== scene.startSec || endSec !== scene.endSec) throw new ServerError('The pilot must review its exact song window', { status: 422, code: 'INVALID_EXCERPT_RANGE' });
+  }
 
   const existingJob = projectExcerptRenders.get(projectId);
   if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
@@ -245,7 +254,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // dims/fps/sections/cues in ABSOLUTE song time — the coordinate space
     // `startSec`/`endSec` and `excerptBoundaryTimes` are given in.
     const probe = buildMusicVideoFfmpegArgs(clips, audioPath, join(PATHS.videos, 'probe.mp4'), { audioDurationSec, frameGrid: composed });
-    if (!(startSec >= 0) || !(endSec > startSec) || endSec > probe.totalDuration + 1e-6) {
+    if (!(startSec >= 0) || !(endSec > startSec) || endSec > probe.totalDuration + (pilotSceneId ? 1 / probe.fps : 1e-6)) {
       throw new ServerError(
         `The excerpt range must fall within the project's ${probe.totalDuration.toFixed(2)}s render`,
         { status: 422, code: 'INVALID_EXCERPT_RANGE', context: { totalDuration: probe.totalDuration } },
@@ -268,8 +277,10 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // and the mark names this instance so a synced peer's boot recovery can't
     // demote it (#9010).
     const renderingOn = await ensureInstanceId();
+    await verifyCurrent?.(await getProject(projectId));
     const { excerpt } = await mutateProjectRecord(projectId, (current) => {
-      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: project, dependencies: captureMusicVideoEvidence(project, { sceneIds: sections.map((section) => section.sceneId), startSec, endSec: endClamped }), partialFilename: filename, renderingOn });
+      if (pilotEvidence && musicVideoDependencyChanges(current, pilotEvidence).length) throw new ServerError('The selected pilot changed before rendering', { status: 409, code: 'COMPOSITION_DRAFT_STALE' });
+      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: stored, dependencies: pilotEvidence || captureMusicVideoEvidence(project, { sceneIds: sections.map((section) => section.sceneId), startSec, endSec: endClamped }), partialFilename: filename, renderingOn });
       return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
     });
     const excerptId = excerpt.id;

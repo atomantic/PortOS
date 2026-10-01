@@ -94,3 +94,33 @@ again. A synchronous enqueue failure with no durable job refunds the reservation
 Once the suffix take lands, Resume renders the revised draft using both original
 prefix footage and the continuation. Retrying the draft render generates no video.
 Existing active run budgets cannot be bypassed by opening a manual repair.
+
+
+## Budgeted production pilots
+
+An explicitly started production run selects representative performance,
+interaction, camera, cutaway and still asset pilots where those operations
+exist. It generates only their missing media and reviews each on its original
+song window before releasing the bulk wave. Passing evidence continues
+automatically within the authorized budget; accepted pilot selections stay in
+the board and are reused without another submission. An incomplete board does
+not move a late pilot to the beginning of the song. Code-first runs pilot only
+the assets permitted by their approved medium plan; their authored document
+still receives its own continuous review.
+
+Pilots and final review share the run's review limit. Reviewer calls are
+reserved before execution and charged to the known dollar total; unknown
+prices cannot run under a dollar cap. Interrupted calls remain spent.
+Exhausted limits are resumable from the Autopilot panel, including raising the
+review or dollar allowance, without replacing accepted media. No boot path
+starts or resumes this work.
+
+Failed or unverified evidence holds the bulk wave. Visible findings select a
+plate, prompt/action or composition repair; measured timing failures select a
+timing repair, and unsupported or missing evidence selects capability
+verification. The first repair choice favors existing assets and edits before
+replacement generation. The panel records the reason and next operation's
+price when it can be quoted. Failed pilots do not automatically become identical
+paid revision requests. After correcting/selecting assets or reviewing the
+unverified evidence, explicitly resume; changed evidence is reviewed again.
+A different provider operation needs a passing pilot of its own.

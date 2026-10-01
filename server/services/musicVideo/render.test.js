@@ -1,3 +1,4 @@
+import { productionPilotRenderProject } from './productionPilot.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Isolate the module's I/O boundaries so the pure builders + resolvers can be
@@ -16,6 +17,7 @@ vi.mock('./projects.js', () => ({ getProject: vi.fn(), updateProject: vi.fn(asyn
 
 import { existsSync } from 'fs';
 import {
+  planMusicVideoRender,
   beatSnapClips,
   buildMusicVideoFfmpegArgs,
   excerptBoundaryTimes,
@@ -431,5 +433,31 @@ describe('frame-grid in-points (#9290)', () => {
     const graph = args[args.indexOf('-filter_complex') + 1];
     expect(graph).toContain('trim=start_frame=48:end_frame=72');
     expect(graph).toContain('trim=end_frame=24');
+  });
+});
+
+describe('partial-board production pilot rendering (#9351)', () => {
+  it('keeps a late pilot on original song time without requiring bulk clips or a composition document', async () => {
+    const project = { id: 'pilot-project', uploadedAudioFilename: 'example.wav', composition: { mode: 'document' },
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 25 }, audioAnalysis: { durationSec: 20, beats: [] },
+      treatment: { shotDirections: [{ sceneId: 'pilot', medium: 'generated-footage' }] },
+      scenes: [
+        { sceneId: 'missing-first', startSec: 0, endSec: 10 },
+        { sceneId: 'pilot', sectionIndex: 1, startSec: 10, endSec: 15, videoHistoryId: 'pilot-take', referenceImageId: 'plate.png' },
+        { sceneId: 'missing-last', startSec: 15, endSec: 20 },
+      ] };
+    loadHistory.mockResolvedValue([{ id: 'pilot-take', filename: 'pilot.mp4', numFrames: 120, fps: 24, width: 768, height: 512 }]);
+    const projected = productionPilotRenderProject(project, 'pilot');
+    const plan = await planMusicVideoRender(projected);
+    const excerpt = buildMusicVideoFfmpegArgs(plan.clips, plan.audioPath, '/out.mp4',
+      { audioDurationSec: 20, frameGrid: plan.composed, excerpt: { startSec: 10, endSec: 15 } });
+    expect(excerpt.totalDuration).toBe(5);
+    expect(excerpt.sections).toEqual([{ sceneId: 'pilot', layer: 'footage', startSec: 0, endSec: 5 }]);
+    const graph = excerpt.args[excerpt.args.indexOf('-filter_complex') + 1];
+    expect(graph).toContain('trim=start=10:end=15');
+    expect(graph).toContain('atrim=start=10:end=15');
+    expect(project.scenes).toHaveLength(3);
+    expect(project.composition.mode).toBe('document');
+    expect(project.scenes[0].videoHistoryId).toBeUndefined();
   });
 });

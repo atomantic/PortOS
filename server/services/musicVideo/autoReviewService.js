@@ -29,6 +29,8 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { promisify } from 'util';
 import { ServerError } from '../../lib/errorHandler.js';
+import { isFreeProvider } from '../../lib/modelPricing.js';
+import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
 import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
@@ -42,6 +44,7 @@ import { projectExcerpts } from './excerpt.js';
 import { projectRevisions, releaseRevisionClaim, revisionSectionStates, startRevisionOnProject } from './revision.js';
 import {
   attachAttemptExcerpt,
+  deferAttemptReview,
   attachAttemptRevision,
   beginAttemptReview,
   beginNextAttempt,
@@ -130,9 +133,18 @@ async function callReviewer(run, prompt, screenshots, projectId) {
   if (provider.enabled === false) throw new Error(`Provider "${provider.name || provider.id}" is disabled`);
   const used = { providerId: provider.id, model: selectedModel || null };
   let beforeExecute;
-  if (run.documentRevisions && run.productionRunId) {
-    const { assertProductionContinuation } = await import('./productionService.js');
-    beforeExecute = () => assertProductionContinuation(projectId, run.productionRunId);
+  if (run.productionRunId) {
+    if (!isToolFreeOneShotProvider(provider)) throw new Error('Production review requires a tool-free provider');
+    if ((run.reviewer.providerId && provider.id !== run.reviewer.providerId)
+      || (run.reviewer.model && selectedModel !== run.reviewer.model)) throw new Error('The selected production reviewer is unavailable');
+    const { assertProductionContinuation, chargeProductionReview } = await import('./productionService.js');
+    let charge = null;
+    beforeExecute = async () => {
+      await assertProductionContinuation(projectId, run.productionRunId);
+      if (!charge) charge = chargeProductionReview(projectId, run.productionRunId, { reviewRunId: run.id, attemptN: run.attempts.at(-1).n,
+        costUsd: isFreeProvider(provider) ? 0 : null });
+      await charge;
+    };
     await assertProductionContinuation(projectId, run.productionRunId);
   }
   if (provider.type !== 'api') {
@@ -200,6 +212,7 @@ async function reviewDraft(project, run, excerpt) {
 
   let parsed = null;
   let reviewerError = null;
+  let providerErrorCode = null;
   let used = { providerId: run.reviewer.providerId, model: run.reviewer.model };
   if (screenshots.length) {
     const shotIntents = (project.scenes || []).filter((scene) => scene.direction?.actionContract != null && scene.startSec < excerpt.endSec && scene.endSec > excerpt.startSec)
@@ -212,6 +225,7 @@ async function reviewDraft(project, run, excerpt) {
       if (!parsed) reviewerError = 'The reviewer returned no usable verdict';
     } catch (err) {
       reviewerError = err.message;
+      providerErrorCode = err.code || null;
       console.warn(`⚠️ Music Video auto-review ${short(run.id)} reviewer call failed: ${err.message}`);
     }
   } else {
@@ -223,6 +237,7 @@ async function reviewDraft(project, run, excerpt) {
     ...review,
     reason: review.verdict === 'inconclusive' && reviewerError ? `${reviewerError} — watch this draft yourself` : review.reason,
     reviewer: used,
+    ...(providerErrorCode ? { providerErrorCode } : {}),
   };
 }
 
@@ -232,7 +247,7 @@ async function takeSteps(projectId, runId) {
   for (let i = 0; i < MAX_STEPS_PER_ADVANCE; i += 1) {
     const project = await requireProject(projectId);
     const run = findRun(project, runId);
-    if (run.documentRevisions && run.productionRunId) {
+    if (run.productionRunId) {
       const { assertProductionContinuation } = await import('./productionService.js');
       const permitted = await assertProductionContinuation(projectId, run.productionRunId).then(() => true, () => false);
       if (!permitted) return { project, run, action: { type: 'idle', interrupted: true } };
@@ -250,7 +265,13 @@ async function takeSteps(projectId, runId) {
       // Draft renders are free; a refusal (another draft rendering, a shot
       // that doesn't cover its span…) pauses the run so the director can fix
       // it and resume, rather than failing the whole checkpoint.
-      const render = await startExcerptRender(projectId, { startSec: run.startSec, endSec: run.endSec }).catch((err) => ({ error: err }));
+      const render = await startExcerptRender(projectId, { startSec: run.startSec, endSec: run.endSec }, {
+        ...(run.productionPilotSceneId ? { pilotSceneId: run.productionPilotSceneId } : {}),
+        ...(run.productionRunId ? { verifyCurrent: async () => {
+          const { assertProductionContinuation } = await import('./productionService.js');
+          await assertProductionContinuation(projectId, run.productionRunId);
+        } } : {}),
+      }).catch((err) => ({ error: err }));
       if (render.error) {
         const out = await halt(projectId, runId, { status: 'stopped', reason: `The draft could not render: ${render.error.message}` });
         return { ...out, action: { type: 'idle' } };
@@ -265,6 +286,11 @@ async function takeSteps(projectId, runId) {
       publish(projectId, begun.project, begun.run, { type: 'reviewing', excerptId: step.excerptId });
       const excerpt = projectExcerpts(project).find((e) => e.id === step.excerptId);
       let review = await reviewDraft(project, run, excerpt);
+      if (['PRODUCTION_REVIEW_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED', 'PRODUCTION_COST_UNKNOWN', 'PRODUCTION_NOT_RUNNING', 'PRODUCTION_BASIS_CHANGED'].includes(review.providerErrorCode)) {
+        const out = await mutateProjectRecord(projectId, (current) => deferAttemptReview(current, runId,
+          { code: review.providerErrorCode, message: review.reason }));
+        return { ...out, action: { type: 'idle' } };
+      }
       const impact = await getDependencyImpact(projectId);
       if (impact.shots.some((shot) => {
         const scene = project.scenes.find((entry) => entry.sceneId === shot.sceneId);
@@ -375,7 +401,17 @@ function advanceInBackground(projectId, runId) {
 
 /** Start a run (explicit director request with limits). Returns `{ project, run }`. */
 export async function startAutoReview(projectId, input) {
-  const out = await mutateProjectRecord(projectId, (current) => startAutoReviewOnProject(current, input));
+  const production = input.productionRunId ? await import('./production.js') : null;
+  const owner = production ? await (await import('./productionService.js')).assertProductionContinuation(projectId, input.productionRunId) : null;
+  const out = await mutateProjectRecord(projectId, (current) => {
+    if (owner) production.assertProductionActive(current, owner.id, owner.processId);
+    const started = startAutoReviewOnProject(current, input);
+    if (!owner) return started;
+    const attached = input.productionPilotSceneId
+      ? production.attachProductionPilotReview(started.project, owner.id, input.productionPilotSceneId, started.run.id)
+      : production.attachProductionReview(started.project, owner.id, started.run.id);
+    return { ...started, project: attached.project };
+  });
   console.log(`🎬 Music Video auto-review ${short(out.run.id)} started: [${out.run.startSec}, ${out.run.endSec}]s, ≤${out.run.limits.maxAttempts} reviews, ≤${out.run.limits.maxGenerations} generations`);
   advanceInBackground(projectId, out.run.id);
   return out;

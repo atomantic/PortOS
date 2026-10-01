@@ -123,7 +123,7 @@ const touchRun = (run, patch, now) => ({ ...run, ...patch, updatedAt: now });
  * Start a run over `[startSec, endSec)`. Refuses while another run is live or
  * a manual revision is open (the run needs the revision slot for its own).
  */
-export function startAutoReviewOnProject(project, { startSec, endSec, limits, reviewer = {}, productionRunId = null, documentRevisions = false }, now = new Date().toISOString()) {
+export function startAutoReviewOnProject(project, { startSec, endSec, limits, reviewer = {}, productionRunId = null, documentRevisions = false, productionPilotSceneId = null }, now = new Date().toISOString()) {
   const live = activeAutoReview(project);
   if (live) throw autoReviewError(409, 'AUTO_REVIEW_IN_PROGRESS', 'Finish, cancel or resume the existing auto-review run first', { runId: live.id });
   const openRevision = projectRevisions(project).find((r) => r.status === 'open' || r.status === 'rendering');
@@ -143,7 +143,8 @@ export function startAutoReviewOnProject(project, { startSec, endSec, limits, re
     // #9066: a production run that handed this run its draft dispatches the
     // run's revised sections server-side (productionService.js), so the board
     // must not also submit them.
-    ...(isNonBlankStr(productionRunId) ? { productionRunId, ...(documentRevisions ? { documentRevisions: true } : {}) } : {}),
+    ...(isNonBlankStr(productionRunId) ? { productionRunId, ...(documentRevisions ? { documentRevisions: true } : {}),
+      ...(productionPilotSceneId ? { productionPilotSceneId } : {}) } : {}),
     attempts: [{ n: 1, excerptId: null, renderFailures: 0, reviewStartedAt: null, review: null, revisionId: null }],
     stopReason: null,
     error: null,
@@ -192,6 +193,7 @@ export function nextAutoReviewStep(project, run) {
   if (attempt.review.verdict !== 'revise') {
     return { type: 'halt', status: 'needs-human', reason: attempt.review.reason || 'The review could not verify every check — watch this draft yourself' };
   }
+  if (run.productionPilotSceneId) return { type: 'halt', status: 'needs-human', reason: 'The pilot failed. Choose a targeted repair before repeating generation.' };
   if (run.documentRevisions) {
     if (run.usage.reviews >= run.limits.maxAttempts) return { type: 'halt', status: 'limit-reached', reason: 'The review limit was reached before another document revision could be reviewed' };
     return { type: 'revise-document', excerptId: attempt.excerptId };
@@ -258,6 +260,16 @@ export function beginAttemptReview(project, runId, now = new Date().toISOString(
   }, now);
 }
 
+/** Production admission refused before provider execution: retain the draft, not a verdict. */
+export function deferAttemptReview(project, runId, error, now = new Date().toISOString()) {
+  return mutateRun(project, runId, (run) => ({
+    usage: { ...run.usage, reviews: Math.max(0, run.usage.reviews - 1) },
+    ...withAttempt(run, { reviewStartedAt: null }),
+    ...(run.status === 'running' ? { status: ['PRODUCTION_REVIEW_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(error.code) ? 'limit-reached' : 'stopped',
+      stopReason: error.message } : {}),
+  }), now);
+}
+
 const cleanFinding = (f, spanSec) => {
   if (!f || typeof f !== 'object' || !isNonBlankStr(f.note)) return null;
   // Clamped INSIDE the half-open excerpt, so a finding at (or past) its end
@@ -270,6 +282,7 @@ const cleanFinding = (f, spanSec) => {
     severity: f.severity === 'minor' ? 'minor' : 'blocking',
     check: AUTO_REVIEW_CHECKS.includes(f.check) ? f.check : null,
     source: f.source === 'analysis' ? 'analysis' : 'reviewer',
+    ...(['plate', 'prompt-action', 'composition'].includes(f.failureCategory) ? { failureCategory: f.failureCategory } : {}),
   };
 };
 

@@ -252,3 +252,37 @@ describe('AutopilotPanel production run', () => {
     expect(await screen.findByText(/No allowed route can generate the frame/)).toBeTruthy();
   });
 });
+
+describe('AutopilotPanel budgeted pilot evidence (#9351)', () => {
+  beforeEach(() => { vi.clearAllMocks(); listeners.clear(); });
+
+  it('renders pushed pilot evidence, repair reasons and known versus unpriced accounting without starting work', () => {
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [run({
+      status: 'blocked', accounting: { plannedGenerations: 1200, reservedUsd: 1.25, spentUsd: 2.5, unpriced: true, reviews: 1 },
+      nextSpend: { kind: 'review', costUsd: null },
+      pilot: { scenes: [{ sceneId: 'shot-example', operation: 'performance', status: 'inconclusive', excerptId: 'excerpt-example',
+        evidence: { continuous: true, continuousFrames: 12, temporal: { status: 'unverified' } },
+        repair: { category: 'temporal-alignment', reason: 'Preview a timing edit.', expectedGenerationSpendUsd: 0 } }] },
+    })], excerpts: [{ id: 'excerpt-example', filename: 'synthetic-pilot.mp4' }] }} />);
+    expect(screen.getByLabelText('Production budget')).toHaveTextContent('Planned remaining: 1,200 asset jobs · Reserved: $1.25 · Spent: $2.50 + unpriced calls');
+    expect(screen.getByLabelText('Production budget')).toHaveTextContent('Expected next spend: unpriced');
+    expect(screen.getByLabelText('Production pilot evidence')).toHaveTextContent('Temporal alignment: unverified');
+    expect(screen.getByLabelText('Production pilot evidence')).toHaveTextContent('Repair: temporal-alignment');
+    expect(screen.getByRole('link', { name: 'Watch pilot' })).toHaveAttribute('href', '/data/videos/synthetic-pilot.mp4');
+    expect(api.startMusicVideoProduction).not.toHaveBeenCalled();
+    expect(api.resumeMusicVideoProduction).not.toHaveBeenCalled();
+  });
+
+  it('raises only explicit limits on Resume and disables an invalid budget', async () => {
+    api.resumeMusicVideoProduction.mockResolvedValueOnce({});
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [run({ status: 'limit-reached',
+      limits: { maxGenerations: 12, maxReviewAttempts: 3, spendCapUsd: 5 } })] }} />);
+    fireEvent.change(screen.getByLabelText('Max reviews'), { target: { value: '2' } });
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Max reviews'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('Spend cap (USD)'), { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(api.resumeMusicVideoProduction).toHaveBeenCalled());
+    expect(api.resumeMusicVideoProduction).toHaveBeenCalledWith('p1', 'run-1', { limits: { maxGenerations: 12, maxReviewAttempts: 5, spendCapUsd: 8 } }, { silent: true });
+  });
+});

@@ -154,11 +154,11 @@ Return ONLY valid JSON:
 {
   "checks": { "composition": "pass" | "fail", "continuity": "pass" | "fail", "motion": "pass" | "fail" },
   "findings": [
-    { "atSec": <seconds on the excerpt timeline where the problem is visible>, "check": "composition" | "continuity" | "motion", "severity": "blocking" | "minor", "note": "<one concrete sentence a director can act on>" }
+    { "atSec": <seconds on the excerpt timeline where the problem is visible>, "check": "composition" | "continuity" | "motion", "severity": "blocking" | "minor", "failureCategory": "plate" | "prompt-action" | "composition", "note": "<one concrete sentence a director can act on>" }
   ],
   "summary": "<one or two sentences>"
 }
-Every "fail" check needs at least one blocking finding placed inside the section that should be regenerated. Use "minor" for polish notes that should not block approval.`;
+Every "fail" check needs at least one blocking finding placed inside the affected section. Classify a visible starting-state or missing-subject mismatch as plate, a mismatch with authored action as prompt-action, and framing/type/layout failures as composition. The repair stage is chosen separately; a finding does not itself authorize regeneration. Use "minor" for polish notes that should not block approval.`;
 }
 
 /** Parse the reviewer's JSON, or null when it gave no usable verdict. */
@@ -171,7 +171,9 @@ export function parseAutoReviewResponse(text) {
   for (const name of MODEL_CHECKS) checks[name] = CHECK_VALUES.has(value.checks[name]) ? value.checks[name] : 'unverified';
   const findings = (Array.isArray(value.findings) ? value.findings : [])
     .filter((f) => f && typeof f === 'object' && isNonBlankStr(f.note) && typeof f.atSec === 'number' && Number.isFinite(f.atSec))
-    .map((f) => ({ atSec: f.atSec, note: f.note, check: MODEL_CHECKS.includes(f.check) ? f.check : null, severity: f.severity === 'minor' ? 'minor' : 'blocking', source: 'reviewer' }));
+    .map((f) => ({ atSec: f.atSec, note: f.note, check: MODEL_CHECKS.includes(f.check) ? f.check : null,
+      ...( ['plate', 'prompt-action', 'composition'].includes(f.failureCategory) ? { failureCategory: f.failureCategory } : {}),
+      severity: f.severity === 'minor' ? 'minor' : 'blocking', source: 'reviewer' }));
   return { checks, findings, summary: isNonBlankStr(value.summary) ? trimTo(value.summary, MAX_SUMMARY_LEN) : '' };
 }
 
