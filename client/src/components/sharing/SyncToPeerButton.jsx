@@ -176,7 +176,7 @@ export default function SyncToPeerButton({
         disabled={nothingToSync}
         aria-expanded={open}
         aria-haspopup="true"
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-port-border hover:border-port-accent/40 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${compact ? 'p-1.5' : ''}`}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-port-border hover:border-port-accent/40 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${compact ? 'min-h-[44px] min-w-[44px] justify-center p-1.5' : ''}`}
         title={nothingToSync ? 'Nothing to sync' : 'Sync to a peer instance'}
       >
         <Cloud size={12} />
