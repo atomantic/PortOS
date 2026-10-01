@@ -5,6 +5,7 @@ import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { universeStylePreset } from '../lib/universeStylePreset';
 import { RUNNER_FAMILIES, loraCompatKey, loraCompatKeysMatch, loraFamilyOf, usesDiffusersRunner } from '../lib/runnerFamilies';
 import {
+  FAL_IMAGE_DEFAULT_MODEL,
   IMAGE_GEN_MODE,
   LOCAL_IMAGEGEN_DEFAULT_MODEL,
   cloudPromptRequired,
@@ -480,7 +481,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     maxSlots: (isLocalMode && isQwen21Model) || isFalMode ? REFERENCE_SLOT_COUNT : 4,
     localSupportsReferences: isFlux2Model || isQwen21Model,
     localInputCap: isQwen21Model ? 10 : null,
-    cloudModelId: isFalMode ? (falModel || savedFalModel || null) : null,
+    cloudModelId: isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL) : null,
   });
   const activeStylePresets = useMemo(() => [
     selectedUniverse ? universeStylePreset(selectedUniverse) : null,

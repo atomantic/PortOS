@@ -25,6 +25,8 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { FAL_IMAGE_FAMILIES, buildFalImageRequest, falImageFamily } from '../../lib/falImageModels.js';
+import { resolveFalApiKey } from '../falQueue.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from '../../lib/generationModes.js';
 import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
@@ -51,11 +53,21 @@ export const falRouteVideoSettings = (project, route) => ({
  * catalog estimate of a default-length cutaway take for a fal video route
  * (null when its model is uncurated), null (unknown) for other metered routes.
  */
+// A fal image route renders on the configured (or per-route) catalog model; when
+// the route names none the configured one is unknown here, so price at the
+// dearest catalog model — a dollar cap then bounds the worst case.
+function falImageRoutePriceUsd(modelId) {
+  const estimate = (id) => buildFalImageRequest({ modelId: id, prompt: 'x' }).estimatedCostUsd;
+  if (falImageFamily(modelId)) return estimate(modelId);
+  return Math.max(...FAL_IMAGE_FAMILIES.map((f) => estimate(f.textEndpoint)));
+}
+
 function routePriceUsd(route, project = null) {
   if (!isMetered(route)) return 0;
   if (route.kind === 'video' && route.mode === 'fal') {
     return falSceneTake({ scene: null, videoSettings: falRouteVideoSettings(project, route) }).costUsd;
   }
+  if (route.kind === 'image' && route.mode === 'fal') return falImageRoutePriceUsd(route.model);
   return null;
 }
 
@@ -129,6 +141,9 @@ async function routeEligibility(route, env) {
     }
     if (settings?.imageGen?.[route.mode]?.enabled !== true) {
       return { ok: false, reason: `${describe(route)} is not enabled in Settings → Image Gen` };
+    }
+    if (route.mode === 'fal' && !resolveFalApiKey(settings)) {
+      return { ok: false, reason: 'fal.ai has no API key — add one in Settings → Image Gen or set FAL_KEY' };
     }
     const configured = settings.imageGen[route.mode].model || null;
     if (route.model && route.model !== configured && !supportsCloudModelOverride(route.mode)) {
