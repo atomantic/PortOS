@@ -27,6 +27,9 @@ const envVar = (key, fallback) => process.env[key] ?? envFile[key] ?? fallback;
 const PG_USER = envVar('PGUSER', 'portos');
 const PG_DATABASE = envVar('PGDATABASE', 'portos');
 const PG_PASSWORD = envVar('PGPASSWORD', 'portos');
+// Same env > .env > default rule as PM2 (ecosystem.config.cjs), so a PGHOST set
+// only in .env reaches both db.sh and the readiness probes.
+const PG_HOST = envVar('PGHOST', 'localhost');
 // A managed parent exports PGPORT for its active pool (possibly Docker), and
 // preserves the native identity separately. Ordinary shells keep legacy PGPORT.
 const PG_PORT_NATIVE = parseNativePort(process.env.PORTOS_NATIVE_PGPORT || envVar('PGPORT', 5432));
@@ -46,6 +49,7 @@ const PG_CHILD_ENV = {
   PGUSER: PG_USER,
   PGDATABASE: PG_DATABASE,
   PGPASSWORD: PG_PASSWORD,
+  PGHOST: PG_HOST,
   PGPORT: String(PG_PORT_NATIVE)
 };
 
@@ -115,7 +119,7 @@ function isPortOSDbReady(port = PG_PORT_NATIVE) {
       'psql',
       [
         '-X',
-        '-h', 'localhost',
+        '-h', PG_HOST,
         '-p', String(port),
         '-U', PG_USER,
         '-d', PG_DATABASE,

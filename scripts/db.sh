@@ -15,6 +15,7 @@
 #   stop         Stop the database
 #   fix          Fix common issues (stale pid files, etc.)
 #   setup-native Install and configure native PostgreSQL via Homebrew
+#                (provisions the PGHOST/PGPORT you select; never another cluster)
 #   use-docker   Unavailable pending coordinated offline cutover
 #   use-native   Unavailable pending coordinated offline cutover
 #   migrate      Unavailable pending coordinated offline cutover
@@ -69,6 +70,9 @@ get_port() {
   fi
 }
 
+# Whether the caller named a port. setup-native provisions exactly that
+# endpoint; only an unnamed port falls back to local service discovery.
+SELECTED_PGPORT="${PGPORT:-}"
 PGPORT=$(get_port)
 EXPLICIT_ENDPOINT=false
 
@@ -462,28 +466,49 @@ cmd_setup_native() {
     fi
   fi
 
-  # Step 2: Ensure PostgreSQL is running
-  local pg_port=""
-  if pg_port=$(detect_system_pg); then
-    log "System PostgreSQL already running on port $pg_port"
-  else
-    info "Starting PostgreSQL..."
-    if [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+  # Step 2: Ensure PostgreSQL is running. A caller-selected endpoint
+  # (PGHOST/PGPORT) is provisioned as-is: discovery must never redirect SQL
+  # (role/password changes, schema) to a different cluster than the one chosen.
+  if [ -n "$SELECTED_PGPORT" ]; then
+    PGPORT="$SELECTED_PGPORT"
+    if pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+      log "PostgreSQL already running at $PGHOST:$PGPORT"
+    elif [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+      info "Starting PostgreSQL..."
       brew services start postgresql@17
       sleep 2
-      if pg_port=$(detect_system_pg); then
-        log "PostgreSQL started on port $pg_port"
+      if pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+        log "PostgreSQL started at $PGHOST:$PGPORT"
       else
-        err "PostgreSQL failed to start. Check: brew services list"
+        err "PostgreSQL is not accepting connections at $PGHOST:$PGPORT. Start the selected cluster and try again."
         exit 1
       fi
     else
-      err "PostgreSQL is not running. Start it and try again."
+      err "PostgreSQL is not running at $PGHOST:$PGPORT. Start the selected cluster and try again."
       exit 1
     fi
+  else
+    local pg_port=""
+    if pg_port=$(detect_system_pg); then
+      log "System PostgreSQL already running on port $pg_port"
+    else
+      info "Starting PostgreSQL..."
+      if [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+        brew services start postgresql@17
+        sleep 2
+        if pg_port=$(detect_system_pg); then
+          log "PostgreSQL started on port $pg_port"
+        else
+          err "PostgreSQL failed to start. Check: brew services list"
+          exit 1
+        fi
+      else
+        err "PostgreSQL is not running. Start it and try again."
+        exit 1
+      fi
+    fi
+    PGPORT="$pg_port"
   fi
-
-  PGPORT="$pg_port"
 
   # Step 3: Create portos user if it doesn't exist
   # Connect as the current system user (default Homebrew superuser) to create the role
