@@ -9,6 +9,8 @@
  *   GET  /api/code-animation/jobs           list saved jobs for the gallery
  *   GET  /api/code-animation/generate/:id   poll a job (html once completed)
  *   POST /api/code-animation/:id/export     queue a frame-exact MP4 render → 202 media job
+ *   GET  /api/code-animation/:id/package    download a portable source package
+ *   POST /api/code-animation/packages/validate   check package data/integrity only
  */
 
 import { Router } from 'express';
@@ -27,6 +29,8 @@ import {
   startCodeAnimationGeneration,
 } from '../services/codeAnimation/index.js';
 import { startCodeAnimationExport } from '../services/codeAnimation/export.js';
+import { exportCodeAnimationPackage } from '../services/codeAnimation/package.js';
+import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../lib/codeAnimationPackage.js';
 import {
   CODE_ANIMATION_ASPECT_RATIOS,
   CODE_ANIMATION_LIMITS,
@@ -157,6 +161,21 @@ router.get('/generate/:id', asyncHandler(async (req, res) => {
 }));
 
 const exportParamsSchema = z.object({ id: z.string().uuid() }).strict();
+
+// External harness handoff is data-only. Validation grants no execution and
+// neither stages imported files nor changes a saved/accepted animation.
+router.post('/packages/validate', (req, res) => {
+  const pkg = validateRequest(codeAnimationPackageSchema, req.body);
+  res.json(summarizeCodeAnimationPackage(pkg));
+});
+
+router.get('/:id/package', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  const pkg = await exportCodeAnimationPackage(id);
+  res.attachment(`code-animation-${id}.json`);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.json(pkg);
+}));
 
 // Frame-exact export: the stored HTML renders through the HTML-composition
 // pipeline (seek each frame, H.264 MP4, Media History) on the media queue.

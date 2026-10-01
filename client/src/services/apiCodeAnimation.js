@@ -33,6 +33,9 @@ export const listCodeAnimationJobPage = ({ cursor, signal, limit = 50 } = {}) =>
 export const getCodeAnimationJob = (id, options) =>
   request(`/code-animation/generate/${encodeURIComponent(id)}`, options);
 
+export const getCodeAnimationPackage = (id, options) =>
+  request(`/code-animation/${encodeURIComponent(id)}/package`, options);
+
 // Queue a frame-exact MP4 export; returns { jobId, notes }. Progress streams
 // from /api/html-composition/:jobId/events.
 export const exportCodeAnimation = (id, options) => request(`/code-animation/${encodeURIComponent(id)}/export`, {

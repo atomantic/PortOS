@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, Clapperboard, Download, FileCode2, LoaderCircle, Save } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../ui/Toast';
-import { cancelCodeAnimationExport, exportCodeAnimation, uploadGalleryVideo } from '../../services/api';
+import { cancelCodeAnimationExport, exportCodeAnimation, getCodeAnimationPackage, uploadGalleryVideo } from '../../services/api';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { downloadBlob } from '../../lib/downloadBlob';
 
@@ -85,6 +85,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const [recordProgress, setRecordProgress] = useState(0);
   const [video, setVideo] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [packageDownloading, setPackageDownloading] = useState(false);
   const recordTimerRef = useRef(null);
   // Frame-exact export runs server-side on the media queue; its progress and
   // result stream from the composition job's SSE channel.
@@ -222,6 +223,17 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     }
   };
 
+  const handleDownloadPackage = async () => {
+    if (!jobId || packageDownloading) return;
+    setPackageDownloading(true);
+    const pkg = await getCodeAnimationPackage(jobId, { silent: true }).catch((error) => {
+      toast.error(error.message || 'Failed to download the package');
+      return null;
+    });
+    setPackageDownloading(false);
+    if (pkg) downloadBlob(JSON.stringify(pkg, null, 2), `${fileBase}.code-animation.json`, 'application/json');
+  };
+
   if (!html) return null;
 
   const aspect = frame?.width && frame?.height ? `${frame.width} / ${frame.height}` : '16 / 9';
@@ -309,6 +321,14 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
         >
           <FileCode2 className="h-4 w-4" /> Download HTML
         </button>
+        {jobId && (
+          <button type="button" onClick={handleDownloadPackage} disabled={packageDownloading}
+            title="Portable source and brief with integrity hashes; selected external audio is not included"
+            className={BUTTON_SECONDARY}>
+            {packageDownloading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            Download package
+          </button>
+        )}
         <span className="text-xs text-gray-500">
           {meta ? 'Animation ready' : 'Waiting for the animation to report ready…'}
           {audio.status === 'failed' ? ' · audio track failed to load' : ''}
