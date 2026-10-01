@@ -72,4 +72,3 @@ export const updateCodeAnimationExecutionTools = (tools, options) => request('/c
 export const probeCodeAnimationExecution = (options) => request('/code-animation/execution/probe', { method: 'POST', ...options });
 
 // Explicit production workflows. Preview and final use the stored soundtrack artifact.
-export const stageCodeAnimationSoundAsset = (id, input, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/sound-assets`, { method: 'POST', body: JSON.stringify(input), ...options });
