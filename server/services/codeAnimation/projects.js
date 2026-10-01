@@ -1,13 +1,13 @@
 /** Production persistence is data-only; later stages own contained execution. */
-import { randomUUID, createHash } from 'crypto';
-import { canonicalStringify } from '../../lib/objects.js';
+import { randomUUID } from 'crypto';
 import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
 import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema } from '../../lib/codeAnimationProjects.js';
 import { validateRequest } from '../../lib/validation.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { emitCodeAnimationChanged } from '../socket.js';
 import * as store from './projectStore.js';
-import { stageProjectFiles, readProjectFiles } from './projectFiles.js';
+import { stageProjectFiles, readProjectFiles, sourceHashOf } from './projectFiles.js';
+import { activeStageRunIds } from './stages.js';
 
 const activeImports = new Set();
 
@@ -33,6 +33,7 @@ export const listProductionProjects = page => store.pageProjectRecords(page);
 export async function getProductionHistory(id, page) {
   await getProductionProject(id);
   await store.interruptImports(id, [...activeImports]);
+  await store.interruptStageRuns(id, activeStageRunIds());
   return store.pageProjectHistory(id, page);
 }
 
@@ -57,7 +58,7 @@ export async function importProductionPackage(projectId, input) {
     staged = true;
     const revision = {
       id: revisionId, packageHash: pkg.revisionHash,
-      sourceHash: createHash('sha256').update(canonicalStringify(pkg.files.map(({ path, sha256 }) => ({ path, sha256 })).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0))).digest('hex'),
+      sourceHash: sourceHashOf(pkg.files),
       totalBytes, schemaVersion: pkg.schemaVersion, manifest: pkg.manifest,
       files: pkg.files.map(({ content: _content, ...file }) => file),
       storage, createdAt: new Date().toISOString(),

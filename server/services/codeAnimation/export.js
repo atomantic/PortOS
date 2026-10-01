@@ -48,7 +48,7 @@ const scriptLiteral = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
  * grid of the attached Music-library track (or null), exposed as
  * window.ANIMATION_SONG (CODE_ANIMATION_SONG_GLOBAL) so audio-reactive films can stay a function of t.
  */
-function buildExportShim({ maxDurationSec = EXPORT_MAX_DURATION_SEC, song = null } = {}) {
+export function buildExportShim({ maxDurationSec = EXPORT_MAX_DURATION_SEC, song = null } = {}) {
   return `(() => {
   const nativeRaf = window.requestAnimationFrame.bind(window);
   ${song ? `window[${scriptLiteral(CODE_ANIMATION_SONG_GLOBAL)}] = ${scriptLiteral(song)};` : ''}
@@ -92,7 +92,7 @@ function buildExportShim({ maxDurationSec = EXPORT_MAX_DURATION_SEC, song = null
 }
 
 /** The stored HTML with the shim inserted as the first script of the document. */
-function injectExportShim(html, shim) {
+export function injectExportShim(html, shim) {
   const tag = `<script>${shim}</script>`;
   const head = html.match(/<head[^>]*>/i);
   if (!head) return `${tag}${html}`;
