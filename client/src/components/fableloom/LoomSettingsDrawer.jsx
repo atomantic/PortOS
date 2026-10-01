@@ -1,3 +1,4 @@
+import { listSheetPointers } from '../../lib/sheetPointers.js';
 /**
  * FableLoom story settings — the loom-level choices that steer every AI lane.
  *
@@ -221,10 +222,7 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
   const universeCharacters = Array.isArray(universe?.characters) ? universe.characters : [];
   const protagonist = universeCharacters.find((character) => character.id === protagonistCharacterId) || null;
   const protagonistWardrobes = Array.isArray(protagonist?.wardrobes) ? protagonist.wardrobes : [];
-  const protagonistSheets = [
-    protagonist?.referenceSheetImageRef,
-    ...Object.values(protagonist?.referenceSheets || {}),
-  ].filter(Boolean);
+  const protagonistSheets = listSheetPointers(protagonist).map(({ filename }) => filename);
   const approvedIdentityRoles = new Set(
     (Array.isArray(protagonist?.identityPack?.assets) ? protagonist.identityPack.assets : [])
       .filter((asset) => asset?.approved === true)

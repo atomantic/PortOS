@@ -1,3 +1,4 @@
+import { listSheetPointers } from '../lib/sheetPointers.js';
 /**
  * LoRA dataset workbench (/models/training/:recordId).
  *
@@ -405,8 +406,7 @@ export default function LoraDatasetDetail({ recordId }) {
       : (variationAxes?.outfits || [])),
     [dataset, subject, variationAxes],
   );
-  const hasReferenceSheet = !!(subject?.referenceSheetImageRef
-    || Object.values(subject?.referenceSheets || {}).some(Boolean));
+  const hasReferenceSheet = listSheetPointers(subject).length > 0;
 
   if (loadError) {
     return (
