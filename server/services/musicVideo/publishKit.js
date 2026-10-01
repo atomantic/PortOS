@@ -85,16 +85,27 @@ async function releaseKitFiles(filenames, keep) {
  * record carries the result.
  */
 export async function startPublishKitBuild(projectId) {
-  const project = await requireProject(projectId);
   if (projectBuilds.has(projectId)) throw kitError(409, 'PUBLISH_KIT_BUILD_IN_PROGRESS', 'A publishing kit build is already running for this project');
+  const jobId = `mvpk-${randomUUID()}`;
+  // Reserve synchronously: final-render lookup and ffmpeg probing can overlap
+  // another request before there is a background job to put in the registry.
+  projectBuilds.set(projectId, jobId);
+  try {
+    return await beginPublishKitBuild(projectId, jobId);
+  } catch (error) {
+    projectBuilds.delete(projectId);
+    throw error;
+  }
+}
+
+async function beginPublishKitBuild(projectId, jobId) {
+  const project = await requireProject(projectId);
   const { entry, path: masterPath } = await finalRenderFile(project);
   const { findFfmpeg, runFfmpegProcess, probeVideoDuration } = await import('../../lib/ffmpeg.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw kitError(500, 'FFMPEG_MISSING', 'ffmpeg not found on PATH');
-  const jobId = `mvpk-${randomUUID()}`;
   const job = { id: jobId, projectId, status: 'running', clients: [], abort: new AbortController() };
   jobs.set(jobId, job);
-  projectBuilds.set(projectId, jobId);
   const tag = jobId.slice(5, 13);
   console.log(`📦 Building music-video publishing kit [${tag}]: project=${projectId.slice(0, 8)}`);
 
@@ -142,7 +153,7 @@ export async function startPublishKitBuild(projectId) {
       return { project: { ...current, publishKit: {
         ...kit,
         builtAt: new Date().toISOString(),
-        master: { filename: entry.filename, renderHistoryId: current.renderHistoryId },
+        master: { filename: entry.filename, renderHistoryId: project.renderHistoryId },
         exports: encodes.map(({ kind, label, filename, window }) => ({ kind, label, filename, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}) })),
         thumbnails,
         thumbnail: thumbnails.includes(kit.thumbnail) ? kit.thumbnail : (thumbnails[0] || null),

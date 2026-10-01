@@ -86,12 +86,15 @@ async function prepareVideo(page, payload) {
 async function submitVideo(page, payload) {
   await step(label, 'post', () => page.locator('#inner-post-submit-button').click({ timeout: T }));
   await step(label, 'wait for it to post', () => page.waitForURL((url) => !/\/submit/.test(url.toString()), { timeout: 180_000 }));
-  const url = await step(label, 'find the new post', () => page.evaluate(async (title) => {
+  const url = await step(label, 'find the new post', () => page.evaluate(async ({ title, firstComment }) => {
     const me = await (await fetch('/api/me.json', { credentials: 'include' })).json();
     const list = await (await fetch(`/user/${me.data.name}/submitted.json?limit=5`, { credentials: 'include' })).json();
     const hit = (list?.data?.children || []).map((c) => c.data).find((d) => d.title === title);
+    if (hit?.name && firstComment) {
+      await fetch('/api/comment', { method: 'POST', credentials: 'include', body: new URLSearchParams({ thing_id: hit.name, text: firstComment, api_type: 'json', uh: me.data.modhash }) });
+    }
     return hit ? `https://www.reddit.com${hit.permalink}` : null;
-  }, payload.title));
+  }, { title: payload.title, firstComment: payload.firstComment }));
   return { url };
 }
 
