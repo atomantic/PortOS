@@ -19,6 +19,8 @@
  *   perpetual gate in cosTaskGenerator.prepareManagedAppImprovementTask.
  */
 
+import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
 import { TASK_READINESS_REASON } from '../lib/taskReadinessReasons.js';
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -190,6 +192,11 @@ export async function getTaskInterval(taskType) {
 }
 
 export async function updateTaskInterval(taskType, settings) {
+  const executionFields = scheduleExecutionFieldsSchema.safeParse(settings);
+  if (!executionFields.success) {
+    throw new ServerError('Invalid schedule execution fields', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  settings = { ...settings, ...executionFields.data };
   const { task, unparkedScopes } = await updateSchedule(async (schedule) => {
     if (!schedule.tasks[taskType]) {
       schedule.tasks[taskType] = { type: INTERVAL_TYPES.ON_DEMAND, perpetual: false, enabled: false, providerId: null, model: null, createdAt: new Date().toISOString() };

@@ -9,7 +9,7 @@ import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination } from '../lib/validation.js';
-import { promptSourceSchema, PROMPT_SOURCES } from '../lib/cosValidation.js';
+import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
 import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
@@ -77,10 +77,12 @@ const SCHEDULE_FIELDS = ['type', 'autoStart', 'perpetual', 'enabled', 'intervalM
  * `suggestedAfter`) can be cleaned here rather than again at the call site.
  */
 function pickScheduleSettings(body, taskType) {
+  const executionFields = validateRequest(scheduleExecutionFieldsSchema, body);
   const settings = {};
   for (const key of SCHEDULE_FIELDS) {
     if (body[key] !== undefined) settings[key] = body[key];
   }
+  Object.assign(settings, executionFields);
   if (settings.enabled !== undefined && typeof settings.enabled !== 'boolean') {
     throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
   }

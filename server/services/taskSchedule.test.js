@@ -1566,6 +1566,26 @@ describe('taskSchedule', () => {
     })
   })
 
+  describe('execution field write safety', () => {
+    it('keeps a persisted custom prompt readable after rejecting malformed updates', async () => {
+      mockSchedule();
+      await updateTaskInterval('documentation', { prompt: 'Example custom prompt', providerId: 'example-provider', model: 'example-model' });
+      const saved = JSON.parse(writeFile.mock.calls.at(-1)[1]);
+      const original = saved.tasks.documentation;
+      readJSONFile.mockResolvedValue(saved);
+      writeFile.mockClear();
+      for (const field of ['prompt', 'providerId', 'model']) {
+        for (const value of [{ text: 'Example malformed prompt' }, ['example'], true, 42]) {
+          await expect(updateTaskInterval('documentation', { [field]: value })).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+        }
+      }
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(saved.tasks.documentation).toEqual(original);
+      expect(await getTaskPrompt('documentation')).toBe('Example custom prompt');
+      expect(original).toMatchObject({ promptSource: 'user', providerId: 'example-provider', model: 'example-model' });
+    });
+  });
+
   describe('getTaskPrompt', () => {
     it('should return default prompt when no custom prompt set', async () => {
       const prompt = await getTaskPrompt('security')
