@@ -4,6 +4,7 @@ import Drawer from '../Drawer.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import ToolPicker from './ToolPicker.jsx';
 import MoodBoardPicker from './MoodBoardPicker.jsx';
+import SongSourcePicker from './SongSourcePicker.jsx';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
@@ -17,7 +18,8 @@ const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded 
 /**
  * "Autonomous music video" — the alternate entry point: one prompt, no track,
  * style or board picked up front. The server writes a creative brief, lyrics and
- * a mood board, makes the song in Suno (PortOS Browser), then produces the video
+ * a mood board, makes the song (Suno in the PortOS Browser, or a local Music
+ * Studio engine), then produces the video
  * with the chosen tools. Checkpoints are optional approval stops.
  */
 export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
@@ -53,7 +55,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
       onClose={onClose}
       size="md"
       title="Autonomous music video"
-      subtitle="One prompt in — lyrics, a Suno song, a mood board and the video out"
+      subtitle="One prompt in — lyrics, a song, a mood board and the video out"
       closeOnEsc={false}
       closeOnBackdrop={false}
     >
@@ -70,9 +72,11 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
             className={inputClass}
           />
           <p className="text-[11px] text-port-text-muted mt-1">
-            The song is made in Suno through the PortOS Browser — sign in to Suno there first. The agent also builds its own mood board and visual style from this prompt.
+            The agent also builds its own mood board and visual style from this prompt.
           </p>
         </div>
+
+        <SongSourcePicker idPrefix="mv-auto" songSource={draft.songSource} localFallback={draft.localFallback} onChange={patch} />
 
         <ToggleChip id="mv-auto-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 

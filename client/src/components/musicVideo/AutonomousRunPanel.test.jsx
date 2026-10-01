@@ -120,7 +120,7 @@ describe('AutonomousStartDrawer', () => {
     const [body, options] = api.startAutonomousMusicVideo.mock.calls[0];
     expect(options).toEqual({ silent: true });
     expect(body).toEqual({
-      prompt: 'a courier crosses a rainy city', instrumental: false, tools: ['image:local', 'video:local'],
+      prompt: 'a courier crosses a rainy city', songSource: 'suno', localFallback: false, instrumental: false, tools: ['image:local', 'video:local'],
       budgetUsd: null, limits: { maxGenerations: 40 }, checkpoints: [],
     });
   });
@@ -139,5 +139,23 @@ describe('AutonomousStartDrawer', () => {
     expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({
       checkpoints: ['lyrics'], models: { 'image:local': 'flux2-dev' }, budgetUsd: 12, moodBoardId: 'mb-1',
     });
+  });
+
+  it('offers the local song source, and the Suno-only fallback opt-in only while Suno is the source', async () => {
+    api.startAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.click(screen.getByLabelText(/render locally if suno is unavailable/i));
+    fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
+    await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(1));
+    expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({ songSource: 'suno', localFallback: true });
+
+    fireEvent.change(screen.getByLabelText('Song source'), { target: { value: 'local' } });
+    expect(screen.queryByLabelText(/render locally if suno is unavailable/i)).toBeNull();
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
+    await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(2));
+    // The stale fallback tick must not ride along once Suno is no longer the source.
+    expect(api.startAutonomousMusicVideo.mock.calls[1][0]).toMatchObject({ songSource: 'local', localFallback: false });
   });
 });

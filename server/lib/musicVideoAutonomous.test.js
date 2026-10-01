@@ -39,6 +39,14 @@ describe('normalizeAutonomousBrief', () => {
     expect(brief.llm).toEqual({ providerId: 'prov', model: 'm' });
   });
 
+  it('keeps Suno the default song source, accepts local, and only honors the fallback opt-in as a boolean', () => {
+    expect(normalizeAutonomousBrief({ prompt: 'p' })).toMatchObject({ songSource: 'suno', localFallback: false });
+    expect(normalizeAutonomousBrief({ prompt: 'p', songSource: 'local', localFallback: true })).toMatchObject({ songSource: 'local', localFallback: true });
+    expect(normalizeAutonomousBrief({ prompt: 'p', songSource: 'spotify', localFallback: 'yes' })).toMatchObject({ songSource: 'suno', localFallback: false });
+    expect(musicVideoAutonomousStartSchema.parse({ prompt: 'p', songSource: 'local', localFallback: true })).toMatchObject({ songSource: 'local' });
+    expect(() => musicVideoAutonomousStartSchema.parse({ prompt: 'p', songSource: 'spotify' })).toThrow();
+  });
+
   it('agrees with the start schema: whatever the schema accepts normalizes to a brief the run can use', () => {
     const body = musicVideoAutonomousStartSchema.parse({
       prompt: 'p', tools: ['video:local'], checkpoints: ['lyrics'], models: { 'video:local': 'ltx' }, budgetUsd: 5,
