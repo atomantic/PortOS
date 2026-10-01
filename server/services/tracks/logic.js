@@ -104,7 +104,7 @@ const posInt = (v, max) => (Number.isInteger(v) && v >= 0 && v <= max ? v : null
  * rendered it and the render settings. Returns null unless the language and
  * source are usable, so a malformed value never half-persists.
  */
-export function sanitizeCodeProvenance(raw) {
+function sanitizeCodeProvenance(raw) {
   if (!raw || typeof raw !== 'object') return null;
   if (!isStr(raw.language) || !CODE_LANGUAGE_RE.test(raw.language)) return null;
   if (!isStr(raw.source) || !raw.source.trim() || raw.source.length > CODE_SOURCE_MAX) return null;
