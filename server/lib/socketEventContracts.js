@@ -324,7 +324,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'code-animation:changed': {
     direction: 'server-to-client',
-    summary: 'Invalidate the bounded Code Animation gallery and matching selected job after a durable job change.',
+    summary: 'Invalidate bounded Code Animation job/project galleries and matching details after a durable change.',
     payloadSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
 
   },

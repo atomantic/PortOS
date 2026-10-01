@@ -817,3 +817,4 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `musicVideoDependencies.js` | Versioned take/evidence provenance, dependency comparisons and bounded selective-repair previews. |
 
 | `musicVideoPlateEvidence.js` | Asset-bound authored-shot plate requirements, current evidence and selected-image admission. |
+| `codeAnimationProjects.js` | Machine-local Production project, patch and independent budget schemas; package imports grant no execution authority. |
