@@ -7,9 +7,19 @@
  * into the manifest on read; a version removed from the array prunes its row.
  */
 
-import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
+import { readFile } from 'fs/promises';
+import { join } from 'path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
+
+// The sync-merge paths stamp base hashes (data/sharing) and may journal
+// conflicts (data/conflict-journal). Re-root PATHS.data at a temp dir so those
+// real file-backed collaborators run without touching the install's live data.
+vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-wr-db-') }));
+afterAll(cleanupTempDataRoots);
 
 const TABLES = [
   'writers_room_folders', 'writers_room_works',
@@ -190,6 +200,9 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     expect((await db.readWork('wr-work-1')).title).toBe('Remote');
     expect(await db.mergeWorksFromSync([manifest('wr-work-1', { title: 'Newer', updatedAt: '2026-03-01T00:00:00.000Z' })])).toEqual({ applied: true, count: 1 });
     expect((await db.readWork('wr-work-1')).title).toBe('Newer');
+    // The base-hash side effect landed in the temp data root, not live data/.
+    const hashes = JSON.parse(await readFile(join(lazyTempDataRoot('portos-wr-db-'), 'sharing', 'sync_base_hashes.json'), 'utf-8'));
+    expect(JSON.stringify(hashes)).toContain('wr-work-1');
   });
 
   it('pruneTombstonedWorks hard-removes old tombstones (rows + drafts) and returns their ids', async () => {
