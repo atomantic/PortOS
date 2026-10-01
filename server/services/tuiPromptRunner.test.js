@@ -933,6 +933,24 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('keeps an explicitly unbounded non-Codex inference alive through silence', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = { id: 'example-tui', type: 'tui', command: 'echo', tuiPromptDelayMs: 50, tuiOneShotIdleMs: 500 };
+      const promise = executeTuiRun({ runId: 'run-unbounded-quiet', provider,
+        prompt: 'do thing big enough to clear the prompt guard', workspacePath: TEST_WORKSPACE, timeout: 0 });
+      await flushAsync();
+      const pty = ptyInstances[0];
+      pty.emitData('ready> ');
+      await vi.advanceTimersByTimeAsync(6000);
+      pty.emitData('Still reasoning');
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
+      expect(pty.kill).not.toHaveBeenCalled();
+      pty.emitExit({ exitCode: 0 });
+      await promise;
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-unbounded-quiet', success: true }));
+    });
+
     it('does not reap a quiet Codex reasoning pass before its response file exists', async () => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],

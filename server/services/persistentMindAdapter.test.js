@@ -74,6 +74,7 @@ const profile = { provider: { id: 'example-api', type: 'api' }, model: 'example-
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mock.stopRun.mockResolvedValue({ stopped: false });
   delete mock.root.config.persistentMindMaintainer;
   mock.readMaintenance.mockResolvedValue({ enabled: true, granted: true, changed: false });
   mock.memories = [{ id: 'memory-1', type: 'fact', content: 'A durable fact.', sourceAgentId: 'cos-persistent-mind', status: 'active' }];
@@ -683,9 +684,9 @@ describe('persistent mind adapter', () => {
     mock.runPrompt.mock.calls.forEach(([request], index) => {
       expect(admitted[index].promptChars).toBe(request.prompt.length);
       expect(admitted[index].promptBytes).toBe(Buffer.byteLength(request.prompt));
-      expect(request.timeout).toBeUndefined();
-      expect(request.absoluteTimeoutMs).toBe(5000);
-      expect(request.maxTokens).toBe(8192);
+      expect(request.timeout).toBe(0);
+      expect(request.absoluteTimeoutMs).toBe(0);
+      expect(request.maxTokens).toBeUndefined();
       expect(request.outputReserveTokens).toBe(8192);
       expect(request.allowFallback).toBe(false);
     });
@@ -801,4 +802,32 @@ describe('persistent mind adapter', () => {
     });
     expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Call access: ON');
   });
+});
+
+
+it('refuses dispatch after Stop while waiting for provider admission', async () => {
+  const controller = new AbortController();
+  let releaseQueue;
+  let queued;
+  const queueWait = new Promise(resolve => { releaseQueue = resolve; });
+  const queueReached = new Promise(resolve => { queued = resolve; });
+  const dispatch = vi.fn();
+  mock.runPrompt.mockImplementationOnce(async (options) => {
+    options.onRunCreated('queued-mind-run');
+    queued();
+    await queueWait;
+    await options.beforeExecute();
+    dispatch();
+    return { text: JSON.stringify({ message: 'Late answer' }) };
+  });
+  const run = createPersistentMindTurnAdapter().run({
+    ...profile, turnId: 'queued-stop', wake: { kind: 'self' },
+    context: { text: 'Continuity' }, signal: controller.signal,
+  });
+  const rejected = expect(run).rejects.toThrow('Operator Stop');
+  await queueReached;
+  controller.abort('Operator Stop');
+  releaseQueue();
+  await rejected;
+  expect(dispatch).not.toHaveBeenCalled();
 });

@@ -295,7 +295,7 @@ export function buildPersistentMindSummaryPrompt({ events, previousSummary, jour
   const journalSection = digest.text
     ? `Decision journal for this mind (authoritative — entries listed here are current; anything retired has already been removed):\n${digest.text}\n\nPreserve every active commitment, open question, risk and goal above verbatim in meaning. Keep only the settled history needed to explain the current state. Never restate a decision that is not listed.\n\n`
     : '';
-  return `Summarize this older portion of one persistent mind's life in first person. Preserve concrete decisions, unresolved questions, user preferences, and causal links. Do not invent facts. Return plain text only, no heading.\n\n${journalSection}${previousSummary ? `Prior cumulative summary:\n${previousSummary}\n\n` : ''}New trajectory events:\n${renderPersistentMindEventLines(events)}`;
+  return `Summarize this older portion of one persistent mind's life in first person. Preserve concrete decisions, unresolved questions, user preferences, and causal links. Do not invent facts. Return plain text only, no heading.\n\n${journalSection}${previousSummary ? `Prior cumulative summary:\n${previousSummary}\n\n` : ''}New trajectory events:\n${renderPersistentMindEventLines(events, mindId)}`;
 }
 
 /**
@@ -305,7 +305,7 @@ export function buildPersistentMindSummaryPrompt({ events, previousSummary, jour
  */
 const passthroughCallBoundary = (_descriptor, run) => run({ reportRunId: () => {} });
 
-async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId, timeoutMs }) {
+async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId }) {
   if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
   if (typeof heartbeat === 'function') await heartbeat();
   let activeRunId = null;
@@ -331,10 +331,16 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
     effort,
     prompt,
     source: 'cos-persistent-mind',
-    ...(timeoutMs ? { absoluteTimeoutMs: timeoutMs, maxTokens: 8192, outputReserveTokens: 8192 } : {}),
+    // Resident inference may be slow or silent while thinking. Stop remains explicit.
+    timeout: 0,
+    absoluteTimeoutMs: 0,
+    outputReserveTokens: 8192,
     allowFallback: false,
     screenshots,
     responseSchema,
+    beforeExecute: () => {
+      if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
+    },
     onRunCreated: (runId) => {
       activeRunId = runId;
       // Reported as soon as the run id exists, so a receipt for a call that
@@ -386,14 +392,14 @@ export function createPersistentMindTurnAdapter() {
 
     async summarize({ events, previousSummary, journal, mindId, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
       const prompt = buildPersistentMindSummaryPrompt({ events, previousSummary, journal, mindId });
-      const result = await callBoundary({ purpose: 'summary', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId, timeoutMs }) => runPinnedPrompt({
+      const result = await callBoundary({ purpose: 'summary', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId }) => runPinnedPrompt({
         provider,
         model,
         effort,
         signal,
         heartbeat,
         reportRunId,
-        prompt, timeoutMs,
+        prompt,
       }));
       return result.text.trim();
     },
@@ -402,8 +408,8 @@ export function createPersistentMindTurnAdapter() {
     // closed-schema validation and the single repair retry, so the adapter
     // cannot accidentally accept a batch the contract would have refused.
     async extractJournal({ prompt, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
-      const result = await callBoundary({ purpose: 'journal', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId, timeoutMs }) => runPinnedPrompt({
-        provider, model, effort, signal, heartbeat, reportRunId, prompt, timeoutMs,
+      const result = await callBoundary({ purpose: 'journal', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId }) => runPinnedPrompt({
+        provider, model, effort, signal, heartbeat, reportRunId, prompt,
       }));
       return result.text.trim();
     },
@@ -487,7 +493,7 @@ export function createPersistentMindTurnAdapter() {
         const prompt = `${providerPrompt}\n\n# Current naming identity\n${persistentMindNamePrompt(await readPersistentMindName(PERSISTENT_MIND_ID), { canChoose: taskAccess.manageMind })}`;
         result = await callBoundary(
           { purpose: round === 0 ? 'turn' : 'tool-round', round, promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) },
-          async ({ reportRunId, timeoutMs }) => runPinnedPrompt({
+          async ({ reportRunId }) => runPinnedPrompt({
             provider,
             model,
             effort,
@@ -495,7 +501,7 @@ export function createPersistentMindTurnAdapter() {
             heartbeat,
             screenshots,
             reportRunId,
-            prompt, timeoutMs,
+            prompt,
             responseSchema: persistentMindResponseSchema,
           }),
         );

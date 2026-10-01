@@ -114,7 +114,7 @@ describe('chosen identity continuity', () => {
 
 describe('persistent mind rollups', () => {
   it('records source and model provenance and assembles it within the budget', async () => {
-    mock.history = [event(1), event(2, 'mind.wake'), event(3, 'mind.turn.completed')];
+    mock.history = [event(1), event(2, 'mind.wake'), event(3, 'mind.reply')];
     const summarize = vi.fn(async () => 'The older events established a useful decision.');
 
     const context = await preparePersistentMindContext({
@@ -130,7 +130,7 @@ describe('persistent mind rollups', () => {
     expect(summarize).toHaveBeenCalledWith(expect.objectContaining({
       mindId: 'cos-persistent-mind',
       source: expect.objectContaining({ fromSequence: 1, toSequence: 2 }),
-      events: mock.history.slice(0, 2),
+      events: mock.history.slice(0, 1),
       promptVersion: PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
     }));
     expect(rollup).toMatchObject({

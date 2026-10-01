@@ -94,10 +94,13 @@ no fallback, model download or global provider-default change.
 `persistentMindMaintainer.inference` accepts partial updates through the existing
 CoS config endpoint. Defaults are `maxCallsPerTurn: 6`, `maxCallsPerDay: 48`,
 `maxPromptChars: 96000`, `maxCallMs: 120000`, and
-`maxReservedMsPerDay: 5760000`. Every admitted attempt reserves its full timeout
-before inference, even if interrupted or failed. The API transport enforces an
-8,192-token output ceiling and the explicit absolute runtime cap; this reserved
-time is separate from provider-call receipts of observed duration. The daily allowance resets at
+`maxReservedMsPerDay: 5760000`. Every admitted attempt reserves the configured `maxCallMs` estimate
+before inference, even if interrupted or failed. These legacy time fields are
+admission accounting only: an admitted mind inference has no elapsed-time,
+no-progress, or output-token ceiling imposed by PortOS. Slow or silent local
+reasoning continues until completion, provider failure, or explicit Stop. The
+8,192-token reserve is context-fit headroom, not a generation cap. Reserved time
+is separate from provider-call receipts of observed duration. The daily allowance resets at
 UTC midnight; a turn's allowance survives midnight and restart. This is a
 conservative time/call allowance, not a dollar or token-spend estimate. Report
 batch review uses the same mind call boundary, not a fresh budget.
@@ -109,13 +112,19 @@ self-thinking requests cannot use paid escalation. Existing accepted-preset
 snapshot and revocation checks still apply. Coding tasks retain their independent
 provider grants and CoS domain budgets.
 
-Reaching a reserved per-call runtime ceiling keeps the attempt charged and its
-failed-call receipt visible. It pauses the mind under policy hold, with no
-provider bench, fallback, or provider-fault investigation. Adjust the inference
-policy and explicitly resume to recheck the exact route, authority, and remaining
-budget. Ordinary queued messages keep their identity; consumed temporary thinking
-sessions still require a fresh message. Provider no-progress, transport, and HTTP
-failures retain their normal recovery behavior.
+Call-count, prompt-fit and reserved daily allowances still gate subsequent calls;
+they never interrupt an admitted inference. Existing runtime-budget holds from
+older builds require explicit Resume. Provider transport and HTTP failures retain
+their normal recovery behavior. Stop is checked again after local queue admission
+so a cancelled queued call cannot start later.
+
+Wake context uses validated conversation, annotations, memory evidence, completed
+assistant replies, successful typed actions and public working notes without a
+final reply. Diagnostic receipts, repeated assistant prose, failed-turn
+replies and malformed events do not consume its recent-event window or feed new
+journal/summary extraction. Recent operator actions exclude automation and stale
+or future records. The diagnostic ledger, protected memories, existing cumulative
+summaries and audit provenance remain intact.
 
 `GET /api/cos/mind/maintainer` returns `inference` readiness and budget status.
 `mind.maintainer.reservation` events distinguish `local-curation` from

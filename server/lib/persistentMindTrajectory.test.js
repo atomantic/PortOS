@@ -83,10 +83,10 @@ describe('projectPersistentMind', () => {
 describe('assemblePersistentMindContext', () => {
   const history = [
     event({ eventId: 'e1', sequence: 1, kind: 'mind.message.accepted', text: 'First message' }),
-    event({ eventId: 'e2', sequence: 2, kind: 'mind.wake', turnId: 'turn-1' }),
-    event({ eventId: 'e3', sequence: 3, kind: 'mind.turn.completed', turnId: 'turn-1' }),
+    event({ eventId: 'e2', sequence: 2, kind: 'mind.message.accepted', turnId: 'turn-1', text: 'Earlier question' }),
+    event({ eventId: 'e3', sequence: 3, kind: 'mind.reply', turnId: 'turn-1', text: 'Earlier answer' }),
     event({ eventId: 'e4', sequence: 4, kind: 'mind.message.accepted', text: 'Recent message' }),
-    event({ eventId: 'e5', sequence: 5, kind: 'mind.wake', turnId: 'turn-2' }),
+    event({ eventId: 'e5', sequence: 5, kind: 'mind.message.accepted', turnId: 'turn-2', text: 'Newest question' }),
   ];
 
   const readyRollup = buildPersistentMindRollup({

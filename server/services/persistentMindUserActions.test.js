@@ -23,8 +23,9 @@ import {
   readPersistentMindUserActionsPrompt,
 } from './persistentMindUserActions.js';
 
+let eventIndex = 0;
 const event = (overrides = {}) => ({
-  id: 'evt-1',
+  id: `evt-${++eventIndex}`,
   type: 'cos.schedule.trigger',
   actor: 'user',
   target: 'branch-reconcile',
@@ -52,6 +53,20 @@ describe('buildPersistentMindUserActionsPrompt', () => {
     expect(prompt).toContain('Last 4, newest first:');
     expect(prompt).toContain("- Ran scheduled task 'branch-reconcile' on demand");
     expect(prompt).toContain('- Queued CoS task "Fix flaky test"');
+  });
+
+  it('excludes automation, stale and malformed rows, and duplicate delivery', () => {
+    const now = Date.parse('2026-09-01T12:00:00Z');
+    const human = event({ id: 'human', summary: 'A real operator request' });
+    const prompt = buildPersistentMindUserActionsPrompt([human, human,
+      event({ actor: 'schedule', summary: 'automatic task' }),
+      event({ happenedAt: '2026-08-29T10:00:00Z', summary: 'stale task' }),
+      event({ happenedAt: 'invalid', summary: 'bad timestamp' }),
+      event({ happenedAt: '2026-09-02T10:00:00Z', summary: 'future task' }),
+    ], { now });
+    expect(prompt).toContain('Last 1,');
+    expect(prompt).toContain('A real operator request');
+    expect(prompt).not.toMatch(/automatic task|stale task|bad timestamp|future task/);
   });
 
   it('omits the section entirely when there are no events', () => {
@@ -102,7 +117,9 @@ describe('readPersistentMindUserActionsPrompt', () => {
     mocks.listUserActions.mockResolvedValueOnce([event()]);
     const prompt = await readPersistentMindUserActionsPrompt({ now });
     expect(mocks.listUserActions).toHaveBeenCalledWith({
+      actor: 'user',
       from: new Date(now - USER_ACTIONS_SNIPPET_WINDOW_MS).toISOString(),
+      to: new Date(now).toISOString(),
       limit: 200,
     });
     expect(prompt).toContain('# Recent user actions (last 24h)');

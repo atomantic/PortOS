@@ -1,3 +1,4 @@
+import { selectPersistentMindContextEvents } from '../lib/persistentMindContextEvents.js';
 /**
  * Persistent-mind context rollups and explicit Brain promotion.
  *
@@ -223,7 +224,8 @@ export async function preparePersistentMindContext({
   ]);
   let rollups = initialRollups;
   let journal = initialJournal;
-  const older = history.slice(0, Math.max(0, history.length - Math.max(1, recentEventLimit)));
+  const recent = selectPersistentMindContextEvents(history, mindId).slice(-Math.max(1, recentEventLimit));
+  const older = recent.length ? history.filter(event => event.sequence < recent[0].sequence) : [];
   let coverageGap = null;
 
   if (older.length > 0) {
@@ -256,6 +258,10 @@ export async function preparePersistentMindContext({
       };
       const rollupId = `${mindId}:${source.fromSequence}-${source.toSequence}:v${promptVersion}`;
       const alreadyAttempted = rollups.some((rollup) => rollup.id === rollupId);
+      // Validate coverage against the complete ledger, then project prompt evidence.
+      // Filtering never edits retained history or its provenance chain.
+      const contextEvents = selectPersistentMindContextEvents(history, mindId)
+        .filter(event => event.sequence > coveredThrough && event.sequence <= source.toSequence);
       // The journal is extracted BEFORE the range is sealed, so the summary
       // compacts from typed events — what is still decided, owed, open and
       // risky — instead of re-compressing the transcript. A failed extraction
@@ -264,7 +270,7 @@ export async function preparePersistentMindContext({
       if (!coverageGap && typeof extractJournal === 'function' && (forceSummary || !alreadyAttempted)) {
         const extraction = await extractPersistentMindJournal({
           mindId,
-          events: rangeEvents,
+          events: contextEvents,
           range: { fromSequence: rangeEvents[0].sequence, toSequence: rangeEvents.at(-1).sequence },
           extract: extractJournal,
           providerId,
@@ -278,7 +284,7 @@ export async function preparePersistentMindContext({
         const outcome = await summaryOutcome(summarize, {
           mindId,
           source,
-          events: rangeEvents,
+          events: contextEvents,
           journal,
           previousSummary: previous?.summary ?? null,
           previousProvenance: previous?.provenance ?? null,

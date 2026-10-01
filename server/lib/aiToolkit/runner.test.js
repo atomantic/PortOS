@@ -1510,6 +1510,43 @@ describe('AI Toolkit runner service', () => {
     };
   };
 
+  it('allows a silent unbounded inference to finish after a day and still supports Stop', async () => {
+    vi.useFakeTimers();
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    let finishRead;
+    vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => ({ ok: true,
+      body: { getReader: () => ({ read: () => new Promise((resolve, reject) => {
+        finishRead = resolve;
+        signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+      }) }) },
+    })));
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise(resolve => { complete = vi.fn(resolve); });
+    const pending = runner.executeApiRun({ runId: 'unbounded', provider: runReady(), prompt: 'hi',
+      workspacePath: process.cwd(), timeout: 0, absoluteTimeoutMs: 0, onComplete: complete });
+    await vi.advanceTimersByTimeAsync(86_400_000);
+    expect(complete).not.toHaveBeenCalled();
+    expect(await runner.isRunActive('unbounded')).toBe(true);
+    finishRead({ done: true });
+    await pending;
+    await completed;
+    expect(complete).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+    let canceled;
+    const canceledResult = new Promise(resolve => { canceled = vi.fn(resolve); });
+    const second = runner.executeApiRun({ runId: 'unbounded-stop', provider: runReady(), prompt: 'hi',
+      workspacePath: process.cwd(), timeout: 0, absoluteTimeoutMs: 0, onComplete: canceled });
+    await vi.advanceTimersByTimeAsync(86_400_000);
+    await runner.stopRun('unbounded-stop');
+    finishRead({ done: true });
+    await second;
+    await canceledResult;
+    expect(canceled).toHaveBeenCalledWith(expect.objectContaining({ canceled: true }));
+    expect(await runner.isRunActive('unbounded-stop')).toBe(false);
+  });
+
   // The regression #7560 reports. A single wall-clock ceiling cannot tell a
   // provider that opened the stream and STALLED from one that is actively
   // streaming and simply needs longer, so both died at the same 300s — an
