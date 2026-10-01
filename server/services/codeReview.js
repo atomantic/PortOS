@@ -1131,7 +1131,9 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
   const summaryDisclosureObjective = trimmedObjective.startsWith(SUMMARY_DISCLOSURE_REPAIR_CUE)
     || (/\bsummar(?:y|ies)\b/i.test(statedObjective)
       && /\b(?:completed[ -]+agent[ -]+cards?|agent[ -]+completion[ -]+cards?)\b/i.test(statedObjective)
-      && /\b(show(?:s|ing|n)?|expand(?:s|ed|ing)?|collaps(?:e[sd]?|ing))\b/i.test(statedObjective))
+      && /\b(show(?:s|ing|n)?|expand(?:s|ed|ing)?|collaps(?:e[sd]?|ing))\b/i.test(statedObjective)
+      && /\b(?:hide|hidden|until|behind|suppress|prevent|remove|avoid)\b/i.test(statedObjective)
+      && !/\b(?:document|audit|review|explain|describe|intentionally|preview)\b/i.test(statedObjective))
   const startedAt = Date.now()
   const result = await runReviewerCompletion({
     backend,

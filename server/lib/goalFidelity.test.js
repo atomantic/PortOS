@@ -8,6 +8,7 @@ import {
   mergeOutcomeObjective,
   mergeOutcomeReview,
   normalizeGoalFidelityVerdict,
+  productionAfterChangeHunks,
   resolveGoalFidelityConfig,
   taskObjective,
 } from './goalFidelity.js';
@@ -200,5 +201,22 @@ describe('mergeOutcomeReview', () => {
   // turning either into a finding would hold runs that did nothing wrong.
   it.each(['OPEN', 'CLOSED', null])('establishes nothing from state %s', prState => {
     expect(mergeOutcomeReview({ number: 7653, prState })).toBeNull();
+  });
+});
+
+
+describe('productionAfterChangeHunks', () => {
+  it('does not invent a summary root or join an outer JSX condition across a hunk gap', () => {
+    const diff = [
+      'diff --git a/Card.jsx b/Card.jsx', '--- a/Card.jsx', '+++ b/Card.jsx',
+      '@@ -1,6 +1,6 @@',
+      ' {expanded && (', '   <div>', '     {taskSummary && (',
+      '+      <MarkdownOutput content={taskSummary} />', '     )}',
+      '@@ -20,2 +20,2 @@', '   </div>', ' )}',
+    ].join('\n');
+    const rows = productionAfterChangeHunks(diff);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].source).toContain('<MarkdownOutput');
+    expect(rows.every(row => row.renderPredicates.length === 0)).toBe(true);
   });
 });

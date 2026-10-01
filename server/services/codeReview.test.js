@@ -1165,7 +1165,12 @@ describe('codeReview helpers', () => {
       expect(global.fetch).toHaveBeenCalledTimes(2)
     })
 
-    it('keeps the full rubric for summary disclosure on cards outside the completed-agent shape', async () => {
+    it.each([
+      'Keep the dashboard card summary hidden until Show and put its transcript behind a separate disclosure.',
+      'Document why completed-agent cards leak summaries before Show.',
+      'Intentionally retain a summary preview on completed-agent cards before Show.',
+      taskObjective({ description: 'Completed-agent cards leak summaries before Show.', metadata: { prompt: 'Keep the preview; document its behavior.' } }),
+    ])('keeps the full rubric outside the completed-agent repair shape: %s', async objective => {
       global.fetch = vi.fn(async (_url, init) => {
         const { messages } = JSON.parse(init.body)
         expect(messages[0].content).toContain('old launch-video failure')
@@ -1174,8 +1179,7 @@ describe('codeReview helpers', () => {
       })
       expect(await runLocalGoalFidelityReview({
         backend: 'ollama', model: 'example-model',
-        objective: 'Keep the dashboard card summary hidden until Show and put its transcript behind a separate disclosure.',
-        diff: summaryDisclosureCase.diff,
+        objective, diff: summaryDisclosureCase.diff,
       })).toMatchObject({ ok: true, verdict: 'rethink', missing: ['requested dashboard behavior'] })
     })
 
