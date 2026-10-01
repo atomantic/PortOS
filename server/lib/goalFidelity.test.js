@@ -13,6 +13,29 @@ import {
 } from './goalFidelity.js';
 
 describe('taskObjective', () => {
+  it('frames the premature agent-summary complaint as a repair while preserving the report', () => {
+    const description = 'Completed-agent cards leak summaries before Show, and opening them duplicates the summary.';
+    const objective = taskObjective({ description });
+    expect(objective).toContain('Repair the current summary-disclosure defects reported below.');
+    expect(objective).toContain(description);
+    expect(objective.length).toBeLessThanOrEqual(MAX_OBJECTIVE_CHARS);
+  });
+
+  it.each([
+    'Intentionally show summaries on completed-agent cards even before Show.',
+    'Document why completed-agent cards leak summaries before Show.',
+    'Dashboard cards leak summaries before Show.',
+    'Completed-agent cards leak summaries before Show.',
+  ])('preserves requests outside that repair-report shape: %s', description => {
+    expect(taskObjective({ description })).toBe(description);
+  });
+
+  it('keeps the report unchanged when additional task context supplies its intent', () => {
+    const description = 'Completed-agent cards leak summaries before Show.';
+    expect(taskObjective({ description, metadata: { prompt: 'Keep the existing preview; document its behavior.' } }))
+      .toBe(`${description}\n\nKeep the existing preview; document its behavior.`);
+  });
+
   it('composes the description with the task prompt block', () => {
     expect(taskObjective({
       description: 'Add a retry to the uploader',

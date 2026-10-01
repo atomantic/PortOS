@@ -64,6 +64,7 @@ import {
   __resetThinkingUnsupportedCache,
 } from './codeReview.js'
 import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS } from '../lib/cosValidation.js'
+import { taskObjective } from '../lib/goalFidelity.js'
 import { updateSettingsWith } from './settings.js'
 
 // Preserve the real transport for the explicitly requested local-model evaluation.
@@ -86,12 +87,14 @@ const launchMusicCases = [
 ]
 
 // Complete production + interaction-test diff from the overturned JSX finding.
-const summaryDisclosureCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-summary-disclosure.json', import.meta.url), 'utf8'))
+const summaryDisclosureFixture = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-summary-disclosure.json', import.meta.url), 'utf8'))
+const summaryDisclosureCase = { ...summaryDisclosureFixture, objective: taskObjective({ description: summaryDisclosureFixture.objective }) }
 const summaryDisclosureCases = [
   ['nested summary and separately disclosed transcript', summaryDisclosureCase.diff, 'ship'],
   ['summary visible while collapsed', summaryDisclosureCase.diff.replace('       {expanded && (', '       {true && ('), 'fix-first'],
   ['duplicate transcript visible after Show', summaryDisclosureCase.diff.replace('+          {(!taskSummary || transcriptExpanded) && <>', '+          {true && <>'), 'fix-first'],
   ['interaction tests without production changes', summaryDisclosureCase.diff.split(/(?=^diff --git )/m).find(part => part.startsWith('diff --git a/client/src/components/cos/tabs/AgentCard.test.jsx')), 'rethink'],
+  ['explicit ban on repeats even in the full transcript', summaryDisclosureCase.diff, 'fix-first', `${summaryDisclosureCase.objective}\n\nNever repeat the summary, even inside the explicitly opened full transcript.`],
 ]
 
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
@@ -1118,11 +1121,12 @@ describe('codeReview helpers', () => {
       else expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
     }, 190_000)
 
-    it('sends the nested JSX disclosure calibration and its narrow exclusions with the full PR evidence', async () => {
+    it.each([summaryDisclosureCase.objective, 'Completed-agent cards are showing summaries even before collapse. Keep summaries hidden until Show.'])('sends the nested JSX disclosure calibration with bounded exclusions: %s', async objective => {
       global.fetch = vi.fn(async (_url, init) => {
         const { messages } = JSON.parse(init.body)
         const rubric = messages[0].content
         expect(rubric).toContain('conditions IN THE ACTUAL DIFF')
+        expect(rubric).toContain('Do not demand the complained-about second copy as a requirement')
         expect(rubric).not.toContain('old launch-video failure')
         expect(rubric).toContain('independently trace each requested outcome')
         expect(rubric).toContain('does something other than what was asked')
@@ -1131,20 +1135,32 @@ describe('codeReview helpers', () => {
         expect(rubric).toContain('does NOT need a second expanded check')
         expect(rubric).toContain('initialized to false')
         expect(rubric).toContain('button cannot hide a branch that uses true')
+        expect(rubric).toContain('do not impose this second check')
+        expect(rubric).toContain('without requiring transcript suppression')
         expect(rubric).toContain('may repeat only after explicitly opening the full transcript')
         expect(rubric).toContain('positive tests cannot override a broken production guard')
         expect(rubric).toContain('test-only diff lacks the production evidence')
         expect(rubric).toContain('explicitly forbids summary repetition even after opening the full transcript')
         expect(rubric).toContain('not proof that tests ran or passed')
-        expect(messages[1].content).toContain(summaryDisclosureCase.objective)
-        expect(messages[1].content).toContain(summaryDisclosureCase.diff.trim())
+        expect(messages[1].content).toContain(objective)
+        if (messages[1].content.includes('AFTER-CHANGE PRODUCTION HUNKS')) {
+          const rows = JSON.parse(messages[1].content.match(/AFTER-CHANGE PRODUCTION HUNKS[^\n]*\n(`+)json\n([\s\S]*)\n\1$/)[2])
+          expect(rows).toHaveLength(4)
+          expect(new Set(rows.map(row => row.hunk)).size).toBe(4)
+          expect(rows.every(row => row.file === 'client/src/components/cos/tabs/AgentCard.jsx')).toBe(true)
+          expect(messages[1].content).toContain('{expanded && (')
+          expect(messages[1].content).toContain('(!taskSummary || transcriptExpanded)')
+          expect(messages[1].content).not.toContain('AgentCard.test.jsx')
+          expect(messages[1].content).not.toContain('content={fullMetadata?.taskSummary ?? agent.metadata.taskSummary}')
+          expect(rubric).toContain('Separate hunks are not contiguous source')
+        } else expect(messages[1].content).toContain(summaryDisclosureCase.diff.trim())
         return completion(shipVerdict)
       })
       // Transport contract only. Real judgement (including negative controls)
       // is exercised by the opt-in local-model regression below.
-      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...summaryDisclosureCase }))
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...summaryDisclosureCase, objective }))
         .toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
-      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(global.fetch).toHaveBeenCalledTimes(2)
     })
 
     it('keeps the full rubric for summary disclosure on cards outside the completed-agent shape', async () => {
@@ -1161,13 +1177,27 @@ describe('codeReview helpers', () => {
       })).toMatchObject({ ok: true, verdict: 'rethink', missing: ['requested dashboard behavior'] })
     })
 
+    it('keeps a primary rejection when the disclosure production pass finds compatible guards', async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion({ verdict: 'fix-first', missing: ['another requested outcome'], unrequested: ['extra scope'], evidence: 'primary verification note' }))
+        .mockResolvedValueOnce(completion(shipVerdict))
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...summaryDisclosureCase }))
+        .toMatchObject({ verdict: 'fix-first', missing: ['another requested outcome'], unrequested: ['extra scope'], evidence: 'primary verification note' })
+    })
+
+    it('adds a disclosure contradiction without replacing primary scope or verification evidence', async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion({ ...shipVerdict, evidence: 'primary verification note' }))
+        .mockResolvedValueOnce(completion({ verdict: 'fix-first', missing: ['summary visible while collapsed'], unrequested: ['ignored audit scope claim'], evidence: 'audit cannot verify tests' }))
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...summaryDisclosureCase }))
+        .toMatchObject({ verdict: 'fix-first', missing: ['summary visible while collapsed'], unrequested: [], evidence: 'primary verification note' })
+    })
+
     // Real judgement regression: no mocked oracle; also reject deliberately broken
     // guards even though the original positive interaction assertions remain.
-    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(summaryDisclosureCases)('judges summary disclosure with a real local model: %s', async (name, diff, expected) => {
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(summaryDisclosureCases)('judges summary disclosure with a real local model: %s', async (name, diff, expected, objective = summaryDisclosureCase.objective) => {
       global.fetch = nativeFetch
       const result = await runLocalGoalFidelityReview({
         backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
-        objective: summaryDisclosureCase.objective, diff, timeoutMs: 180_000,
+        objective, diff, timeoutMs: 180_000,
         effort: process.env.GOAL_FIDELITY_EVAL_EFFORT || null,
       })
       console.log(`🔍 Summary disclosure evaluation ${name}: ${result.verdict}; ${result.evidence || result.error}`)
