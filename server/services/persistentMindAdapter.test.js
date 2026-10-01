@@ -68,7 +68,7 @@ vi.mock('./cosToolRegistry.js', () => ({
   isCosTaskToolName: (name) => name === 'cos.create-task' || name === 'cos_create_task',
 }));
 
-const { createPersistentMindTurnAdapter, persistentMindHarnessInfo } = await import('./persistentMindAdapter.js');
+const { createPersistentMindTurnAdapter, persistentMindHarnessInfo, persistentMindResponseSchema } = await import('./persistentMindAdapter.js');
 
 const profile = { provider: { id: 'example-api', type: 'api' }, model: 'example-model', effort: 'high' };
 
@@ -830,4 +830,34 @@ it('refuses dispatch after Stop while waiting for provider admission', async () 
   releaseQueue();
   await rejected;
   expect(dispatch).not.toHaveBeenCalled();
+});
+
+
+it('normalizes absent optional prose without accepting malformed text or actions', () => {
+  expect(persistentMindResponseSchema.parse({ message: null, thinkingSummary: null }))
+    .toMatchObject({ message: '', thinkingSummary: '' });
+  expect(persistentMindResponseSchema.parse({})).toMatchObject({ message: '', thinkingSummary: '' });
+  for (const field of ['message', 'thinkingSummary']) {
+    for (const invalid of [42, false, {}, ['bad']]) {
+      expect(persistentMindResponseSchema.safeParse({ [field]: invalid }).success).toBe(false);
+    }
+  }
+  expect(persistentMindResponseSchema.safeParse({ message: null, toolCalls: [{ name: 'example', arguments: [] }] }).success).toBe(false);
+});
+
+it('completes a self-directed turn with a public working note and null reply', async () => {
+  mock.root.config.persistentMindCapabilities = { readPortos: true };
+  mock.runPrompt.mockResolvedValueOnce({ text: JSON.stringify({
+    thinkingSummary: 'The exploration checkpoint is settled.', message: null,
+    memoryCandidates: [], taskRequests: [], toolCalls: [],
+    selfWake: { reason: 'Continue normal exploration.', delayMinutes: 60 }, callRequest: null,
+  }) });
+  const result = await createPersistentMindTurnAdapter().run({ ...profile,
+    turnId: 'null-prose', wake: { kind: 'self' }, context: { text: 'Continuity' } });
+  expect(mock.runPrompt.mock.calls[0][0].responseSchema.safeParse({ message: null }).success).toBe(true);
+  expect(result.events.map(event => event.kind)).toEqual(['mind.thought']);
+  expect(result.events[0].data.displayText).toBe('The exploration checkpoint is settled.');
+  expect(result.selfWake.reason).toBe('Continue normal exploration.');
+  expect(Date.parse(result.selfWake.notBefore) - Date.now()).toBeGreaterThan(59 * 60_000);
+  expect(Date.parse(result.selfWake.notBefore) - Date.now()).toBeLessThanOrEqual(60 * 60_000);
 });
