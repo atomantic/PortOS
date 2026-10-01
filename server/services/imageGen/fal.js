@@ -148,7 +148,7 @@ export async function checkConnection({ model } = {}) {
  * spelled out here as prose, with the same fidelity + reference wording the
  * CLI prompt builders share (describeFidelity / visualReferenceRole).
  */
-export function buildFalPrompt({ prompt, hasInitImage = false, initImageStrength, referenceCount = 0 }) {
+function buildFalPrompt({ prompt, hasInitImage = false, initImageStrength, referenceCount = 0 }) {
   const lines = [prompt.trim()];
   if (hasInitImage) {
     lines.push(`The first attached image is the source image to edit — ${describeFidelity(initImageStrength)}.`);
