@@ -194,7 +194,6 @@ export * from './useUpdateChecker.jsx';
 export * from './useVisibilityEvent.js';
 
 // === UI / interaction ===
-export * from './useArmedAction.js';
 export * from './useAutoRefetch.js';
 export * from './useSystemActivity.js';
 export * from './useCmdKSearch.js';
