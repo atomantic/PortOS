@@ -190,7 +190,7 @@ export const FAL_MEGAPIXEL = 1024 * 1024;
  * units (FLUX.2 bills them);
  * `outputPixels` is `{ w, h }` when known.
  */
-export function estimateFalImageCostUsd(family, { resolution = null, outputPixels = null, inputMegapixels = 0 } = {}) {
+function estimateFalImageCostUsd(family, { resolution = null, outputPixels = null, inputMegapixels = 0 } = {}) {
   const { pricing } = family;
   if (pricing.unit === 'megapixel') {
     // FLUX.2's defaults when no size was sent: t2i renders landscape_4_3
