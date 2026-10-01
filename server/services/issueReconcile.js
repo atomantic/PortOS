@@ -309,6 +309,23 @@ function normalizeGithubIssue(issue) {
 }
 
 /**
+ * Whether the three forge lists carry the full claim state. In-progress issues and
+ * open PRs must be unsaturated. The merged-PR list is a rolling window that is
+ * always full in an active repo, so saturation alone is not disqualifying: it is
+ * complete enough when its oldest merge predates every in-progress issue's
+ * creation (a PR cannot ship an issue that did not exist yet).
+ */
+function listsAreComplete(inProgress, merged, open) {
+  if (inProgress.length >= GH_LIST_LIMIT || open.length >= GH_LIST_LIMIT) return false;
+  if (merged.length < GH_LIST_LIMIT) return true;
+  const oldestMerge = Math.min(...merged.map((pr) => Date.parse(pr.mergedAt)));
+  const oldestIssue = Math.min(...inProgress.map((i) => Date.parse(i.createdAt)));
+  if (!Number.isFinite(oldestMerge)) return false;
+  if (inProgress.length === 0) return true;
+  return Number.isFinite(oldestIssue) && oldestMerge <= oldestIssue;
+}
+
+/**
  * Fetch issue/PR facts from GitHub, normalized to the common shape. Returns null
  * on any gh failure (degrade: the caller treats null as "nothing to reconcile /
  * transient"). `fullName` is resolved by the dispatcher, not re-queried here.
@@ -335,7 +352,7 @@ async function getGithubState(repoSpec, fullName, apiHost = null) {
   const [issuesRaw, mergedRaw, openRaw] = await Promise.all([
     ghList(['issue', 'list', '--repo', repoSpec, '--state', 'open',
       '--label', IN_PROGRESS_LABEL, '--limit', String(GH_LIST_LIMIT),
-      '--json', 'number,title,labels,assignees,url,updatedAt,author'], 'gh issue list'),
+      '--json', 'number,title,labels,assignees,url,updatedAt,createdAt,author'], 'gh issue list'),
     ghList(['pr', 'list', '--repo', repoSpec, '--state', 'merged',
       '--limit', String(GH_LIST_LIMIT),
       '--json', 'number,headRefName,body,url,mergedAt'], 'gh pr list --state merged'),
@@ -357,7 +374,7 @@ async function getGithubState(repoSpec, fullName, apiHost = null) {
   const mergedPrs = safeJSONParse(mergedRaw, null);
   const openPrs = safeJSONParse(openRaw, null);
   if (!Array.isArray(mergedPrs) || !Array.isArray(openPrs)) return null;
-  if ([inProgressRaw, mergedPrs, openPrs].some(rows => rows.length >= GH_LIST_LIMIT)) {
+  if (!listsAreComplete(inProgressRaw, mergedPrs, openPrs)) {
     console.warn('⚠️ issue-reconcile: forge lists reached the completeness limit; withholding cleanup until the full claim state is available');
     return null;
   }

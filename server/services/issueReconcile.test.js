@@ -274,6 +274,23 @@ describe('reconcile', () => {
     expect(result.live).toHaveLength(0);
   });
 
+  describe('saturated forge lists', () => {
+    const fullMerged = (oldest) => Array.from({ length: 200 }, (_, i) => ({
+      number: 5000 + i, headRefName: 'x', body: '', mergedAt: i === 199 ? oldest : daysAgo(1),
+    }));
+    const issue = { number: 2220, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u', createdAt: daysAgo(10) };
+
+    it('a full merged-PR window that reaches back past the oldest claim is still complete', async () => {
+      mockGh({ issues: [issue], merged: fullMerged(daysAgo(30)) });
+      expect(await reconcile('/repo', { now: NOW })).not.toBeNull();
+    });
+
+    it('a full merged-PR window that starts after the oldest claim withholds cleanup', async () => {
+      mockGh({ issues: [issue], merged: fullMerged(daysAgo(2)) });
+      expect(await reconcile('/repo', { now: NOW })).toBeNull();
+    });
+  });
+
   it('a live open PR keeps the issue LIVE (not a zombie)', async () => {
     mockGh({
       issues: [{ number: 2220, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u' }],
