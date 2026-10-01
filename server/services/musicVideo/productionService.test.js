@@ -173,7 +173,7 @@ describe('music video production run (#9066)', () => {
     expect(theRun().steps.every((s) => s.status === 'completed' && s.rationale)).toBe(true);
 
     // Only a passed continuous review completes the run — never the frames alone.
-    store.get('mv-example').autoReviews[0].status = 'passed';
+    passOwnedReview();
     musicVideoEvents.emit('auto-review', { projectId: 'mv-example', run: { ...store.get('mv-example').autoReviews[0] }, action: { type: 'idle' } });
     await settle();
     expect(theRun().status).toBe('completed');
