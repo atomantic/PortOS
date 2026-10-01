@@ -42,4 +42,13 @@ describe('MusicVideoAutopilotSettings', () => {
       limits: { maxGenerations: 10, maxReviewAttempts: 5 },
     });
   });
+
+  it('keeps a saved writer-LLM pin when saved before the provider catalog loads', async () => {
+    const onUpdate = vi.fn(async () => {});
+    const config = { taskMetadata: { musicVideoAutopilot: { llm: { providerId: 'prov-1', model: 'm-1' } } } };
+    render(<MusicVideoAutopilotSettings taskType="music-video-autopilot" config={config} onUpdate={onUpdate} updating={false} setUpdating={() => {}} />);
+    fireEvent.click(screen.getByText('Save settings'));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(onUpdate.mock.calls[0][1].taskMetadata.musicVideoAutopilot.llm).toEqual({ providerId: 'prov-1', model: 'm-1' });
+  });
 });

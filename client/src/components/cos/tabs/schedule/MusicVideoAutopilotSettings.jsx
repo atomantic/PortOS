@@ -44,9 +44,12 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
     e.preventDefault();
     if (updating) return;
     setUpdating(true);
-    const params = autopilotParamsFromDraft(draft, saved, {
-      providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined,
-    });
+    // Until the catalog has seeded the picker, "no selection" means "not loaded
+    // yet", not "use the install default" — keep the saved pin untouched.
+    const pin = llmSeeded
+      ? { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined }
+      : { providerId: saved?.llm?.providerId, model: saved?.llm?.model || undefined };
+    const params = autopilotParamsFromDraft(draft, saved, pin);
     await onUpdate(taskType, { taskMetadata: { ...config.taskMetadata, musicVideoAutopilot: params } }).catch(() => {});
     setUpdating(false);
   };
