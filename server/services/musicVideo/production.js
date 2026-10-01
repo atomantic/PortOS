@@ -48,6 +48,7 @@ import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy, summari
 import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
 import { castAndSetsSettled } from './castAndSets.js';
+import { currentPilotPass, pilotClass, pilotInputBasis, pilotRepair, selectProductionPilots } from './productionPilot.js';
 
 const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
   maxGenerations: Object.freeze({ min: 1, max: 500 }),
@@ -237,6 +238,7 @@ export function startProductionOnProject(project, {
     usage: { generations: 0, spentUsd: 0 },
     planned: false,
     reviewRunId: null,
+    pilot: { scenes: null },
     steps: [],
     processId: processId || null,
     stopReason: null,
@@ -259,6 +261,12 @@ export function assertProductionStepOpen(project, runId, stepKey, { sceneId, kin
   if (productionBasisRevision(project, run.basis.version || 1) !== run.basis.revision) {
     throw productionError(409, 'PRODUCTION_BASIS_CHANGED', 'The production policy or approved plan changed before submission');
   }
+  if (['image', 'video'].includes(kind) && run.pilot && (!run.pilot.scenes
+    || (!run.pilot.scenes.some((pilot) => pilot.sceneId === sceneId)
+      && !run.pilot.scenes.every((pilot) => currentPilotPass(project, pilot))))) {
+    throw productionError(409, 'PRODUCTION_PILOT_REQUIRED', 'The pilot evidence changed before bulk submission');
+  }
+  assertProductionPilotRoute(project, run, sceneId, step.kind, step.route);
   if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first') {
     const plan = summarizeMusicVideoMediumPlan(project);
     const medium = project.treatment?.shotDirections?.find((direction) => direction.sceneId === sceneId)?.medium;
@@ -275,6 +283,19 @@ export function assertProductionStepOpen(project, runId, stepKey, { sceneId, kin
   return step;
 }
 
+/** A newly chosen backend or changed operation needs its own passing pilot. */
+export function assertProductionPilotRoute(project, run, sceneId, kind, route) {
+  if (!['frame', 'clip'].includes(kind) || !run.pilot?.scenes
+    || run.pilot.scenes.some((pilot) => pilot.sceneId === sceneId)) return;
+  const scene = project.scenes?.find((s) => s.sceneId === sceneId);
+  const representative = scene && run.pilot.scenes.find((pilot) => pilot.operation === pilotClass(scene, project));
+  const tested = representative && run.steps.findLast((s) => s.sceneId === representative.sceneId && s.kind === kind && s.status === 'completed');
+  if (!representative || !currentPilotPass(project, representative) || !tested || routeKey(tested.route) !== routeKey(route)
+    || tested.providerBasis !== productionProviderBasis(project, kind)) {
+    throw productionError(409, 'PRODUCTION_PILOT_REQUIRED', 'This provider operation has no accepted pilot. Keep the tested route or start a new run to pilot the changed route.');
+  }
+}
+
 // ---- deriving the next step -------------------------------------------------
 
 const SLOT = Object.freeze({ frame: 'referenceImageId', clip: 'videoHistoryId' });
@@ -284,6 +305,9 @@ const productionSceneBasis = (project, sceneId) => canonicalSnapshotChecksum({
   scene: (project.scenes || []).find((scene) => scene.sceneId === sceneId) || null,
   videoSettings: project.videoSettings || null,
 });
+const productionProviderBasis = (project, kind) => canonicalSnapshotChecksum(kind === 'clip'
+  ? { videoSettings: project.videoSettings || null }
+  : { visualSpec: project.visualSpec || null, styleReferences: project.styleReferences || null });
 
 // A retry is a new provider operation only when its actual inputs changed.
 // Take history, review timestamps and UI labels must not clear a terminal refusal.
@@ -338,7 +362,7 @@ function productionTargets(project) {
   const layered = isLayeredComposition(project);
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   return {
-    frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) !== 'card'),
+    frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'still' || (sceneVisualLayer(s, { layered }) !== 'card' && !s.videoHistoryId)),
     clip: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'footage'),
   };
 }
@@ -410,6 +434,22 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
     return { type: 'plan' };
   }
   const targets = productionTargets(project);
+  if (run.pilot && !run.pilot.scenes) return { type: 'plan-pilots' };
+  const pilots = run.pilot?.scenes || [];
+  const pendingPilots = pilots.filter((pilot) => !currentPilotPass(project, pilot));
+  for (const pilot of pendingPilots) {
+    const review = projectAutoReviews(project).find((r) => r.id === pilot.reviewRunId);
+    if (review?.status === 'running') return { type: 'wait', on: 'pilot-review' };
+    if (review && ['stopped', 'limit-reached'].includes(review.status)) return { type: 'halt', status: review.status, reason: review.stopReason || 'Pilot review paused; resume to continue' };
+    const result = review?.attempts?.at(-1)?.review;
+    const changes = result && musicVideoDependencyChanges(project, result.dependencies);
+    if (result && (changes.some((change) => change.role === 'unknown')
+      || (pilot.inputBasis === pilotInputBasis(project, pilot.sceneId) && !changes.length))) {
+      if (result.verdict === 'inconclusive' && result.reviewedAt < run.resumedAt) continue;
+      const exhausted = ['PRODUCTION_REVIEW_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(result.providerErrorCode);
+      return { type: 'halt', status: exhausted ? 'limit-reached' : 'blocked', reason: `Pilot ${pilot.sceneId}: ${result.reason || result.verdict}. ${pilotRepair(result, scenes.find((s) => s.sceneId === pilot.sceneId), project).reason}` };
+    }
+  }
   if (run.authoring && targets.frame.some((scene) => scene.shotMode === 'performance')) {
     const gate = castAndSetsGate(project, run);
     if (gate) return { type: 'halt', status: 'blocked', reason: 'This selected performance shot needs the reviewed Cast & Sets references. Build and approve that check-in, then resume; production will not start an unbudgeted image batch.' };
@@ -417,6 +457,7 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
   let waiting = false;
   for (const stepKind of ['frame', 'clip']) {
     for (const scene of targets[stepKind]) {
+      if (pendingPilots.length && !pendingPilots.some((pilot) => pilot.sceneId === scene.sceneId)) continue;
       if (scene[SLOT[stepKind]]) continue;
       // A clip is generated from the scene's frame; wait for it.
       if (stepKind === 'clip' && !scene.referenceImageId) { waiting = true; continue; }
@@ -432,6 +473,12 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
     }
   }
   if (waiting) return { type: 'wait', on: 'generation' };
+  if (pendingPilots.length) {
+    const pilot = pendingPilots[0];
+    const scene = scenes.find((s) => s.sceneId === pilot.sceneId);
+    if (!scene || !(scene.startSec >= 0) || !(scene.endSec > scene.startSec)) return { type: 'halt', status: 'blocked', reason: 'A pilot needs a timed song window before bulk production' };
+    return { type: 'pilot-review', sceneId: scene.sceneId, startSec: scene.startSec, endSec: scene.endSec };
+  }
   if (run.authoring && !run.documentCheckpoint) return { type: 'author-document' };
   const spans = scenes.filter((s) => typeof s.startSec === 'number' && typeof s.endSec === 'number' && s.endSec > s.startSec);
   if (!spans.length) return { type: 'halt', status: 'blocked', reason: 'No scene is timed on the song, so there is no excerpt to review' };
@@ -480,6 +527,12 @@ export function reserveProductionStep(project, runId, {
     if (run.status !== 'running') throw productionError(409, 'PRODUCTION_NOT_RUNNING', `This production run is ${run.status}`);
     if (run.processId !== processId) throw productionError(409, 'PRODUCTION_INTERRUPTED', 'The server restarted since this run was started — resume it first');
     assertProductionActive(project, runId, processId);
+    if (['frame', 'clip'].includes(kind) && run.pilot
+      && (!run.pilot.scenes || (!run.pilot.scenes.some((pilot) => pilot.sceneId === sceneId)
+        && !run.pilot.scenes.every((pilot) => currentPilotPass(project, pilot))))) {
+      throw productionError(409, 'PRODUCTION_PILOT_REQUIRED', 'Review current pilot evidence before submitting the bulk wave');
+    }
+    assertProductionPilotRoute(project, run, sceneId, kind, route);
     const author = kind === 'author';
     const plate = kind === 'plate';
     const plateRoute = plate && route?.kind === 'plate' && (!run.reviewer?.providerId || route.mode === run.reviewer.providerId) && (!run.reviewer?.model || route.model === run.reviewer.model);
@@ -518,6 +571,7 @@ export function reserveProductionStep(project, runId, {
       rationale: trimTo(rationale, MAX_ERROR_LEN) || '',
       costUsd,
       ...(['frame', 'clip'].includes(kind) ? { retryBasis: productionRetryBasis(project, sceneId, kind) } : {}),
+      ...(['frame', 'clip'].includes(kind) ? { providerBasis: productionProviderBasis(project, kind) } : {}),
       ...(kind === 'clip' && scene?.direction?.actionContract ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene) } } : {}),
       ...(plateRepairBasis ? { plateRepairBasis } : {}),
       ...(run.authoring && !author ? { submissionBasis: productionSceneBasis(project, sceneId) } : {}),
@@ -531,6 +585,7 @@ export function reserveProductionStep(project, runId, {
     return {
       usage: { ...run.usage, generations: run.usage.generations + 1, spentUsd: run.usage.spentUsd + (costUsd || 0) },
       steps: [...run.steps, step],
+      nextSpend: null,
     };
   }, now);
   return { ...out, step };
@@ -646,6 +701,32 @@ export const markProductionPlanned = (project, runId, now = new Date().toISOStri
 export const attachProductionReview = (project, runId, reviewRunId, now = new Date().toISOString()) =>
   mutateRun(project, runId, () => ({ reviewRunId }), now);
 
+export const planProductionPilots = (project, runId, now = new Date().toISOString()) =>
+  mutateRun(project, runId, () => ({ pilot: { scenes: selectProductionPilots(project) } }), now);
+
+export const attachProductionPilotReview = (project, runId, sceneId, reviewRunId, now = new Date().toISOString()) =>
+  mutateRun(project, runId, (run) => ({ pilot: { ...run.pilot, scenes: run.pilot.scenes.map((pilot) =>
+    pilot.sceneId === sceneId ? { ...pilot, reviewRunId, inputBasis: pilotInputBasis(project, sceneId) } : pilot) } }), now);
+
+export const quoteProductionSpend = (project, runId, nextSpend, now = new Date().toISOString()) =>
+  mutateRun(project, runId, () => ({ nextSpend }), now);
+
+/** Shared review budget, charged before the call; interrupted calls stay spent. */
+export function reserveProductionReview(project, runId, { reviewRunId, attemptN, costUsd, processId }, now = new Date().toISOString()) {
+  assertProductionActive(project, runId, processId);
+  const run = findProductionRun(project, runId);
+  const reviews = run.steps.filter((s) => s.kind === 'review').length;
+  if (reviews >= run.limits.maxReviewAttempts) throw productionError(409, 'PRODUCTION_REVIEW_LIMIT', 'The production review budget is exhausted; raise it and resume');
+  if (run.limits.spendCapUsd !== null && (costUsd == null || run.usage.spentUsd + costUsd > run.limits.spendCapUsd + 1e-9)) {
+    throw productionError(409, costUsd == null ? 'PRODUCTION_COST_UNKNOWN' : 'PRODUCTION_BUDGET_EXHAUSTED', 'The next review cannot fit the authorized dollar budget');
+  }
+  return mutateRun(project, runId, (r) => ({ nextSpend: null, usage: { ...r.usage, spentUsd: r.usage.spentUsd + (costUsd || 0) },
+    steps: [...r.steps, { key: `review:${reviewRunId}:${attemptN}:${reviews + 1}`, kind: 'review', sceneId: 'review',
+      route: { kind: 'review', mode: r.reviewer.providerId || 'default', model: r.reviewer.model }, costUsd,
+      status: 'completed', rationale: 'Reserved reviewer call; interruption does not refund provider work',
+      reservedAt: now, settledAt: now }] }), now);
+}
+
 /** Stop the run with a status/reason. */
 export function haltProduction(project, runId, { status, reason = null, error = null }, now = new Date().toISOString()) {
   if (!PRODUCTION_STATUSES.includes(status) || status === 'running') throw new Error(`haltProduction: invalid status ${status}`);
@@ -691,6 +772,7 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       processId,
       resumedAt: now,
       retryAcknowledged: run.steps.filter((step) => step.status === 'failed').map((step) => step.key),
+      ...(!run.pilot && !run.reviewRunId ? { pilot: { scenes: null } } : {}),
       stopReason: null,
       error: null,
       ...(run.finalRender?.status === 'failed' || (run.finalRender && run.processId !== processId) ? { finalRender: null } : {}),

@@ -1,6 +1,8 @@
 import { startProductionOnProject, markProductionPlanned, reserveProductionStep } from './production.js';
 import { plateReviewEvidence } from '../../lib/musicVideoPlateEvidence.js';
 import { plateRequirements } from '../../lib/musicVideoPlateEvidence.js';
+import { startAutoReviewOnProject, nextAutoReviewStep, beginAttemptReview, deferAttemptReview } from './autoReview.js';
+import { pilotDependencies } from './productionPilot.js';
 import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 /**
  * Music Video production run (#9066) — orchestration contract with injected
@@ -67,7 +69,7 @@ const POOL = [
   { kind: 'image', mode: 'codex', model: null },
   { kind: 'video', mode: 'local', model: 'ltx-example' },
 ];
-const LIMITS = { maxGenerations: 10, maxReviewAttempts: 2 };
+const LIMITS = { maxGenerations: 10, maxReviewAttempts: 4 };
 
 function seedProject(overrides = {}) {
   const project = {
@@ -77,7 +79,7 @@ function seedProject(overrides = {}) {
     audioAnalysis: { sections: [{ startSec: 0, endSec: 8, label: 'Verse' }], durationSec: 8 },
     scenes: [
       { sceneId: 'mvs-a', label: 'A', framePrompt: 'a lighthouse', prompt: 'waves roll', startSec: 0, endSec: 4, takes: [] },
-      { sceneId: 'mvs-b', label: 'B', framePrompt: 'a harbor', prompt: 'boats sway', startSec: 4, endSec: 8, takes: [] },
+      { sceneId: 'mvs-b', label: 'B', framePrompt: 'a harbor', prompt: 'boats sway', direction: { camera: 'orbit' }, startSec: 4, endSec: 8, takes: [] },
     ],
     ...overrides,
   };
@@ -134,7 +136,10 @@ beforeEach(() => {
   });
   planProject.mockResolvedValue({ scenesAdded: 0 });
   startAutoReview.mockImplementation(async (projectId, input) => {
-    const reviewRun = { id: 'mvar-example', status: 'running', productionRunId: input.productionRunId, limits: input.limits, usage: { reviews: 0, generations: 0 } };
+    const pilot = input.productionPilotSceneId;
+    const reviewRun = { id: pilot ? 'mvar-pilot-' + pilot : 'mvar-example', status: pilot ? 'passed' : 'running', productionRunId: input.productionRunId, limits: input.limits, usage: { reviews: pilot ? 1 : 0, generations: 0 },
+      ...(pilot ? { attempts: [{ n: 1, review: { verdict: 'pass', dependencies: pilotDependencies(store.get(projectId), pilot) } }] } : {}) };
+    if (pilot) await service.chargeProductionReview(projectId, input.productionRunId, { reviewRunId: reviewRun.id, attemptN: 1, costUsd: 0 });
     const project = store.get(projectId);
     project.autoReviews = [...(project.autoReviews || []), reviewRun];
     return { run: reviewRun };
@@ -178,8 +183,8 @@ describe('music video production run (#9066)', () => {
     completeJob('job-3');
     completeJob('job-4');
     await settle();
-    expect(startAutoReview).toHaveBeenCalledTimes(1);
-    expect(startAutoReview.mock.calls[0][1]).toMatchObject({ startSec: 0, endSec: 8, productionRunId: theRun().id, limits: { maxAttempts: 2, maxGenerations: 6 } });
+    expect(startAutoReview).toHaveBeenCalledTimes(3);
+    expect(startAutoReview.mock.calls.at(-1)[1]).toMatchObject({ startSec: 0, endSec: 8, productionRunId: theRun().id, limits: { maxAttempts: 2, maxGenerations: 6 } });
     expect(theRun()).toMatchObject({ status: 'running', reviewRunId: 'mvar-example', usage: { generations: 4 } });
     expect(theRun().steps.every((s) => s.status === 'completed' && s.rationale)).toBe(true);
 
@@ -527,7 +532,7 @@ describe('music video production run (#9066)', () => {
     await settle();
     completeJob('job-3'); completeJob('job-4');
     await settle();
-    const reviewRun = store.get('mv-example').autoReviews[0];
+    const reviewRun = store.get('mv-example').autoReviews.find((r) => r.id === theRun().reviewRunId);
     store.get('mv-example').scenes[0].videoHistoryId = null;
     musicVideoEvents.emit('auto-review', { projectId: 'mv-example', run: { ...reviewRun }, action: { type: 'generate', revisionId: 'mvrv-example', sections: [{ sceneId: 'mvs-a', kind: 'video' }] } });
     await settle();
@@ -635,13 +640,13 @@ function documentDoubles() {
 }
 function passOwnedReview() {
   const project = store.get('mv-example');
-  const review = project.autoReviews[0];
+  const review = project.autoReviews.find((r) => r.id === project.productionRuns[0].reviewRunId);
   review.status = 'passed';
   review.attempts = [{ n: 1, review: { verdict: 'pass', dependencies: captureMusicVideoEvidence(project) } }];
   musicVideoEvents.emit('auto-review', { projectId: project.id, run: clone(review), action: { type: 'idle' } });
 }
 function failOwnedReview(atSec = 6) {
-  const review = store.get('mv-example').autoReviews[0];
+  const review = store.get('mv-example').autoReviews.find((r) => r.id === theRun().reviewRunId);
   Object.assign(review, { startSec: 0, attempts: [{ n: 1, review: { verdict: 'revise', findings: [{ severity: 'blocking', atSec, note: 'Type transition jumps' }] } }] });
   musicVideoEvents.emit('auto-review', { projectId: 'mv-example', run: clone(review), action: { type: 'revise-document' } });
 }
@@ -1023,5 +1028,178 @@ describe('authored plate preflight', () => {
     await settle();
     expect(theRun()).toMatchObject({ status: 'canceled', usage: { generations: 1 } });
     expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+// These regressions pin the public production workflow, not helper internals.
+describe('budgeted production pilots (#9351)', () => {
+  function board() {
+    seedProject({ scenes: Array.from({ length: 4 }, (_, i) => ({
+      sceneId: 'shot-' + i, label: 'Example shot ' + i, framePrompt: 'a stage', prompt: 'lights move',
+      startSec: i * 2, endSec: (i + 1) * 2, takes: [],
+    })) });
+  }
+  function pendingPilot() {
+    startAutoReview.mockImplementationOnce(async (id, input) => {
+      await service.chargeProductionReview(id, input.productionRunId, { reviewRunId: 'pilot-example', attemptN: 1, costUsd: 0 });
+      const project = store.get(id);
+      const review = { id: 'pilot-example', status: 'running', productionRunId: input.productionRunId,
+        productionPilotSceneId: input.productionPilotSceneId, attempts: [{ n: 1 }], usage: { reviews: 1, generations: 0 }, limits: input.limits };
+      project.autoReviews = [review];
+      return { run: review };
+    });
+  }
+  async function reachPilot() {
+    await start();
+    expect(dispatch.mock.calls.map(([a]) => a.scene.sceneId)).toEqual(['shot-0']);
+    completeJob('job-1'); await settle();
+    completeJob('job-2'); await settle();
+  }
+  function verdict(result, dependencies = pilotDependencies(current(), 'shot-0')) {
+    const review = store.get('mv-example').autoReviews[0];
+    review.status = result.verdict === 'pass' ? 'passed' : 'needs-human';
+    review.attempts = [{ n: 1, review: { ...result, dependencies, reviewedAt: new Date().toISOString() } }];
+    musicVideoEvents.emit('auto-review', { projectId: 'mv-example', run: clone(review), action: { type: 'idle' } });
+  }
+
+  it('selects performance, interaction and the more complex camera operation before ordinary shots', async () => {
+    const scenes = Array.from({ length: 6 }, (_, i) => ({ sceneId: 'shot-' + i, framePrompt: 'a stage', prompt: 'movement',
+      startSec: i, endSec: i + 1, takes: [] }));
+    scenes[1].direction = { actionContract: { cameraConstraints: ['locked'] } };
+    scenes[2].direction = { actionContract: { cameraConstraints: ['dolly inward', 'orbit the pair'] } };
+    scenes[3].direction = { actionContract: { actions: [{ subject: 'singer' }], reactions: [{ subject: 'listener' }] } };
+    scenes[4].shotMode = 'performance';
+    scenes[5].visualLayer = 'still';
+    seedProject({ scenes, composition: { mode: 'composed' } }); await start();
+    expect(theRun().pilot.scenes.map((p) => [p.operation, p.sceneId])).toEqual([
+      ['performance', 'shot-4'], ['interaction', 'shot-3'], ['camera', 'shot-2'], ['cutaway', 'shot-0'], ['still', 'shot-5'],
+    ]);
+    expect(dispatch.mock.calls.map(([a]) => a.scene.sceneId)).not.toContain('shot-1');
+  });
+
+  it('holds bulk reservations until a pass, then reuses the pilot without another submission', async () => {
+    board(); pendingPilot(); await reachPilot();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(startAutoReview.mock.calls[0][1]).toMatchObject({ productionPilotSceneId: 'shot-0', startSec: 0, endSec: 2, limits: { maxAttempts: 1 } });
+    expect(() => reserveProductionStep(current(), theRun().id, { kind: 'frame', sceneId: 'shot-1', route: POOL[0], processId: theRun().processId })).toThrow(/pilot/i);
+    verdict({ verdict: 'pass', evidence: { continuous: true, continuousFrames: 12 } }); await settle();
+    expect(dispatch.mock.calls.slice(2).map(([a]) => a.scene.sceneId)).toEqual(['shot-1', 'shot-2', 'shot-3']);
+    expect(current().scenes[0].videoHistoryId).toBe('job-2');
+    expect(dispatch.mock.calls.filter(([a]) => a.scene.sceneId === 'shot-0')).toHaveLength(2);
+    const shown = (await service.getProduction('mv-example', theRun().id)).run;
+    expect(shown.pilot.scenes[0]).toMatchObject({ status: 'accepted', evidence: { continuous: true } });
+    expect(shown.accounting.reviews).toBe(1);
+  });
+
+  it.each([
+    [{ composition: 'fail' }, 'composition'],
+    [{ motion: 'fail' }, 'provider-capability'],
+    [{ lipSync: 'fail' }, 'temporal-alignment'],
+  ])('blocks failed evidence and chooses an edit before any replacement spend (%j)', async (checks, category) => {
+    board(); pendingPilot(); await reachPilot();
+    verdict({ verdict: 'revise', checks, reason: 'Synthetic failed evidence' }); await settle();
+    expect(theRun().status).toBe('blocked');
+    await service.resumeProduction('mv-example', theRun().id); await settle();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(startAutoReview).toHaveBeenCalledTimes(1);
+    expect((await service.getProduction('mv-example', theRun().id)).run.pilot.scenes[0].repair)
+      .toMatchObject({ category, expectedGenerationSpendUsd: 0 });
+  });
+
+  it('never treats missing provenance as an accepted pilot', async () => {
+    board(); pendingPilot(); await reachPilot();
+    verdict({ verdict: 'pass' }, null); await settle();
+    expect(theRun().status).toBe('blocked');
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops late pilot completion and repins it only on explicit Resume after a restart', async () => {
+    board(); pendingPilot(); await reachPilot();
+    store.get('mv-example').productionRuns[0].processId = 'old-process';
+    verdict({ verdict: 'pass' }); await settle();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    await service.resumeProduction('mv-example', theRun().id); await settle();
+    expect(dispatch).toHaveBeenCalledTimes(5);
+    expect(theRun().usage.generations).toBe(5);
+  });
+
+  it('does not let a changed allowed route bypass its pilot even after a pass', async () => {
+    board(); pendingPilot(); await reachPilot();
+    service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue,
+      autoReview: async () => autoReview, chooseRoute: async () => ({ route: POOL[1], rationale: 'changed route' }) });
+    verdict({ verdict: 'pass' }); await settle();
+    expect(theRun().status).toBe('blocked');
+    expect(theRun().stopReason).toMatch(/no accepted pilot/);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('rechecks pilot assets at the final queue boundary and refunds a refused bulk reservation', async () => {
+    board(); pendingPilot(); await reachPilot();
+    dispatch.mockImplementationOnce(async (args) => {
+      store.get('mv-example').scenes[0].referenceImageId = 'changed-plate.png';
+      await service.assertProductionSubmission('mv-example', args.tag.productionRunId, args.tag.productionStepKey,
+        { sceneId: args.tag.sceneId, kind: 'image' });
+      return enqueueing(args);
+    });
+    verdict({ verdict: 'pass' }); await settle();
+    expect(jobs).toHaveLength(2);
+    expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 2 } });
+    expect(theRun().steps.at(-1)).toMatchObject({ status: 'refused', errorCode: 'PRODUCTION_PILOT_REQUIRED' });
+  });
+
+  it('keeps late pilot evidence after Stop without releasing the bulk wave', async () => {
+    board(); pendingPilot(); await reachPilot();
+    await service.stopProduction('mv-example', theRun().id);
+    expect(autoReview.stopAutoReview).toHaveBeenCalledWith('mv-example', 'pilot-example');
+    verdict({ verdict: 'pass' }); await settle();
+    expect(theRun().status).toBe('stopped');
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    await service.cancelProduction('mv-example', theRun().id); await settle();
+    expect(theRun().status).toBe('canceled');
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('resumes an exhausted shared review budget without regenerating any accepted asset', async () => {
+    board();
+    await start({ limits: { maxGenerations: 10, maxReviewAttempts: 1 } });
+    completeJob('job-1'); await settle();
+    completeJob('job-2'); await settle();
+    for (const id of ['job-3', 'job-4', 'job-5']) completeJob(id);
+    await settle();
+    for (const id of ['job-6', 'job-7', 'job-8']) completeJob(id);
+    await settle();
+    expect(theRun().status).toBe('limit-reached');
+    expect(dispatch).toHaveBeenCalledTimes(8);
+    await service.resumeProduction('mv-example', theRun().id, { limits: { maxReviewAttempts: 3 } }); await settle();
+    expect(theRun()).toMatchObject({ status: 'running', reviewRunId: 'mvar-example' });
+    expect(dispatch).toHaveBeenCalledTimes(8);
+    expect(startAutoReview.mock.calls.at(-1)[1].limits.maxAttempts).toBe(2);
+  });
+
+  it('bounds pilot and final review calls together, including unknown costs and concurrent admissions', async () => {
+    board(); pendingPilot(); await reachPilot();
+    await service.chargeProductionReview('mv-example', theRun().id, { reviewRunId: 'second', attemptN: 1, costUsd: 0 });
+    store.get('mv-example').productionRuns[0].limits.maxReviewAttempts = 3;
+    const results = await Promise.allSettled([1, 2].map((n) => service.chargeProductionReview('mv-example', theRun().id,
+      { reviewRunId: 'race-' + n, attemptN: 1, costUsd: 0 })));
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(theRun().steps.filter((s) => s.kind === 'review')).toHaveLength(3);
+    store.get('mv-example').productionRuns[0].limits = { ...theRun().limits, maxReviewAttempts: 4, spendCapUsd: 0 };
+    await expect(service.chargeProductionReview('mv-example', theRun().id, { reviewRunId: 'unpriced', attemptN: 1, costUsd: null }))
+      .rejects.toMatchObject({ code: 'PRODUCTION_COST_UNKNOWN' });
+    expect(theRun().steps.filter((s) => s.kind === 'review')).toHaveLength(3);
+  });
+
+  it('pauses a failed pilot rather than opening an identical paid revision', () => {
+    const project = seedProject();
+    const started = startAutoReviewOnProject(project, { startSec: 0, endSec: 4, limits: { maxAttempts: 1, maxGenerations: 2 },
+      productionRunId: 'production-example', productionPilotSceneId: 'mvs-a' });
+    const dependencies = pilotDependencies(project, 'mvs-a');
+    const run = { ...started.run, attempts: [{ n: 1, excerptId: 'draft-example', review: { verdict: 'revise', dependencies }, revisionId: null }] };
+    const reviewed = { ...started.project, excerpts: [{ id: 'draft-example', status: 'complete' }], autoReviews: [run] };
+    expect(nextAutoReviewStep(reviewed, run)).toMatchObject({ type: 'halt', status: 'needs-human' });
+    const begun = beginAttemptReview(started.project, started.run.id);
+    const deferred = deferAttemptReview(begun.project, begun.run.id, { code: 'PRODUCTION_BUDGET_EXHAUSTED', message: 'Raise cap and resume' });
+    expect(deferred.run).toMatchObject({ status: 'limit-reached', usage: { reviews: 0 }, attempts: [{ review: null }] });
   });
 });

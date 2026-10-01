@@ -33,13 +33,19 @@ import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
 import { codeFirstProductionAssets } from '../../lib/musicVideoMediumPlan.js';
 import { beginNextAttempt } from './autoReview.js';
 import { withAutopilotCutting } from './composition.js';
+import { currentPilotPass, pilotClass, pilotRepair } from './productionPilot.js';
 import {
   attachProductionReview,
+  attachProductionPilotReview,
+  planProductionPilots,
+  reserveProductionReview,
+  quoteProductionSpend,
   attachProductionDocument,
   assertProductionActive,
   recordProductionDocumentRevision,
   setProductionRender,
   assertProductionStepOpen,
+  assertProductionPilotRoute,
   cancelProductionOnProject,
   findProductionRun,
   haltProduction,
@@ -73,7 +79,7 @@ const MAX_STEPS_PER_ADVANCE = 32;
 // The review's revision budget is bounded by the auto-review run's own limit.
 const AUTO_REVIEW_MAX_GENERATIONS = 100;
 // Refusals that mean "this run cannot continue as configured" — never retried.
-const LIMIT_CODES = new Set(['PRODUCTION_SPEND_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED']);
+const LIMIT_CODES = new Set(['PRODUCTION_SPEND_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED', 'PRODUCTION_REVIEW_LIMIT']);
 
 const advancing = new Map();
 const short = (id) => String(id || '').slice(5, 13);
@@ -126,20 +132,56 @@ export async function assertProductionContinuation(projectId, runId) {
   return run;
 }
 
+export async function chargeProductionReview(projectId, runId, input) {
+  await mutateProjectRecord(projectId, (current) => quoteProductionSpend(current, runId, { kind: 'review', costUsd: input.costUsd }));
+  return mutateProjectRecord(projectId, (current) => reserveProductionReview(current, runId, { ...input, processId: PROCESS_ID }));
+}
+
 async function liveJobs() {
   const { listJobs } = await deps.queue();
   return [...listJobs({ kind: 'image' }), ...listJobs({ kind: 'video' })];
 }
 
 /** The run as reported to the director: `interrupted` when a restart unpinned it. */
-const present = (run) => ({ ...run, interrupted: run.status === 'running' && run.processId !== PROCESS_ID });
+const present = (run, project) => {
+  const counted = run.steps.filter((s) => s.status !== 'refused');
+  const reserved = counted.filter((s) => s.status === 'reserved');
+  const spent = counted.filter((s) => s.status !== 'reserved');
+  const assets = project && codeFirstProductionAssets(project);
+  return { ...run, interrupted: run.status === 'running' && run.processId !== PROCESS_ID,
+    accounting: {
+      plannedGenerations: assets ? assets.steps.filter((s) => ['generate-image', 'generate-video'].includes(s.action)).length
+        : (project?.scenes || []).reduce((n, scene) => n + (scene.visualLayer !== 'card' && !scene.referenceImageId && (!scene.videoHistoryId || pilotClass(scene, project) === 'still') ? 1 : 0) + (!scene.videoHistoryId && pilotClass(scene, project) !== 'still' && scene.visualLayer !== 'card' ? 1 : 0), 0),
+      reservedUsd: reserved.reduce((n, s) => n + (s.costUsd || 0), 0),
+      spentUsd: spent.reduce((n, s) => n + (s.costUsd || 0), 0),
+      unpriced: counted.some((s) => s.costUsd == null),
+      reviews: counted.filter((s) => s.kind === 'review').length,
+    },
+    ...(run.pilot ? { pilot: { ...run.pilot, scenes: (run.pilot.scenes || []).map((pilot) => {
+      const review = project?.autoReviews?.find((r) => r.id === pilot.reviewRunId);
+      const result = review?.attempts?.at(-1)?.review;
+      return { ...pilot, status: result ? currentPilotPass(project, pilot) ? 'accepted' : result.verdict : review?.status || 'pending',
+        excerptId: review?.attempts?.at(-1)?.excerptId, evidence: result?.evidence || null,
+        ...(result && result.verdict !== 'pass' ? { repair: pilotRepair(result, project?.scenes?.find((s) => s.sceneId === pilot.sceneId), project) } : {}) };
+    }) } } : {}),
+  };
+};
+const response = (project, run) => {
+  const shown = present(run, project);
+  return { run: shown, project: { ...project, productionRuns: project.productionRuns.map((r) => r.id === run.id ? shown : r) } };
+};
 
 function publish(projectId, project, run, action) {
-  musicVideoEvents.emit('production', { projectId, runId: run.id, run: present(run), action, project });
+  const shown = present(run, project);
+  musicVideoEvents.emit('production', { projectId, runId: run.id, run: shown, action,
+    project: { ...project, productionRuns: project.productionRuns.map((r) => r.id === run.id ? shown : r) } });
 }
 
 async function halt(projectId, runId, { status, reason, error = null }) {
-  const out = await mutateProjectRecord(projectId, (current) => haltProduction(current, runId, { status, reason, error }));
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const run = findProductionRun(current, runId);
+    return run.status === 'running' ? haltProduction(current, runId, { status, reason, error }) : { project: current, run };
+  });
   const log = status === 'failed' ? console.error : status === 'completed' ? console.log : console.warn;
   log(`${status === 'completed' ? '✅' : status === 'failed' ? '❌' : '⏸️'} Music Video production ${short(runId)} ${status}${reason ? `: ${reason}` : ''}`);
   return out;
@@ -244,6 +286,10 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   // Enforced for ANY chooser — a model's pick outside the pool never reaches the queue.
   const refused = await assertRouteAllowed(run, choice.route, requirement, env).then(() => null, (err) => err);
   if (refused) return { halt: { status: 'blocked', reason: refused.message } };
+  try { assertProductionPilotRoute(project, run, sceneId, stepKind, choice.route); }
+  catch (error) { return { halt: { status: 'blocked', reason: error.message } }; }
+  const costUsd = stepPriceUsd({ route: choice.route, project, scene, stepKind });
+  await mutateProjectRecord(projectId, (current) => quoteProductionSpend(current, runId, { kind: stepKind, sceneId, costUsd }));
 
   const reserved = await mutateProjectRecord(projectId, (current) => reserveProductionStep(current, runId, {
     kind: stepKind, sceneId, revisionId, plateRepairBasis, route: choice.route, rationale: choice.rationale, processId: PROCESS_ID,
@@ -369,6 +415,10 @@ async function takeSteps(projectId, runId) {
     const step = nextProductionStep(project, run, { jobs: await liveJobs(), processId: PROCESS_ID });
 
     if (step.type === 'idle' || step.type === 'wait') return { project, run, action: step };
+    if (step.type === 'plan-pilots') {
+      await mutateProjectRecord(projectId, (current) => planProductionPilots(current, runId));
+      continue;
+    }
 
     if (step.type === 'halt') {
       const out = await halt(projectId, runId, { status: step.status, reason: step.reason });
@@ -452,24 +502,32 @@ async function takeSteps(projectId, runId) {
       continue;
     }
 
-    if (step.type === 'review') {
+    if (step.type === 'review' || step.type === 'pilot-review') {
+      const reviewsSpent = run.steps.filter((s) => s.kind === 'review').length;
+      if (reviewsSpent >= run.limits.maxReviewAttempts) {
+        const out = await halt(projectId, runId, { status: 'limit-reached', reason: 'The production review budget is exhausted; raise it and resume' });
+        return { ...out, action: { type: 'idle' } };
+      }
       const { startAutoReview } = await deps.autoReview();
       const started = await startAutoReview(projectId, {
         startSec: step.startSec,
         endSec: step.endSec,
         limits: {
-          maxAttempts: run.limits.maxReviewAttempts,
+          maxAttempts: step.type === 'pilot-review' ? 1 : run.limits.maxReviewAttempts - reviewsSpent,
           maxGenerations: Math.min(AUTO_REVIEW_MAX_GENERATIONS, remainingProductionGenerations(run)),
         },
         reviewer: run.reviewer,
         productionRunId: runId,
-        ...(run.authoring ? { documentRevisions: true } : {}),
+        ...(step.type === 'pilot-review' ? { productionPilotSceneId: step.sceneId } : {}),
+        ...(run.authoring && step.type !== 'pilot-review' ? { documentRevisions: true } : {}),
       }).catch((err) => ({ error: err }));
       if (started.error) {
         const out = await halt(projectId, runId, { status: 'blocked', reason: `The draft review could not start: ${started.error.message}` });
         return { ...out, action: { type: 'idle' } };
       }
-      await mutateProjectRecord(projectId, (current) => attachProductionReview(current, runId, started.run.id));
+      await mutateProjectRecord(projectId, (current) => step.type === 'pilot-review'
+        ? attachProductionPilotReview(current, runId, step.sceneId, started.run.id)
+        : attachProductionReview(current, runId, started.run.id));
       console.log(`🔎 Music Video production ${short(runId)} handed the draft [${step.startSec}, ${step.endSec}]s to review ${short(started.run.id)}`);
       continue;
     }
@@ -550,7 +608,7 @@ export async function startProduction(projectId, { directive, pool: requested, l
   }));
   console.log(`🎬 Music Video production ${short(out.run.id)} started: ${out.run.pool.length} allowed route(s), ≤${out.run.limits.maxGenerations} generations, ≤${out.run.limits.maxReviewAttempts} reviews`);
   advanceInBackground(projectId, out.run.id);
-  return { project: out.project, run: present(out.run) };
+  return response(out.project, out.run);
 }
 
 /**
@@ -568,10 +626,9 @@ export async function resumeProduction(projectId, runId, { limits, acceptBasis =
     const oldReview = before.autoReviews?.find((entry) => entry.id === priorReviewId);
     if (oldReview && ['running', 'stopped', 'limit-reached'].includes(oldReview.status)) await (await deps.autoReview()).cancelAutoReview(projectId, priorReviewId);
   }
-  const review = out.run.reviewRunId
-    ? (out.project.autoReviews || []).find((r) => r.id === out.run.reviewRunId)
-    : null;
-  if (review && (review.status === 'stopped' || review.status === 'limit-reached' || (out.run.authoring && review.status === 'running'))) {
+  const owned = new Set([out.run.reviewRunId, ...(out.run.pilot?.scenes || []).map((p) => p.reviewRunId)]);
+  for (const review of (out.project.autoReviews || []).filter((r) => owned.has(r.id)
+    && ['running', 'stopped', 'limit-reached'].includes(r.status))) {
     const { resumeAutoReview } = await deps.autoReview();
     const headroom = Math.min(AUTO_REVIEW_MAX_GENERATIONS, review.usage.generations + remainingProductionGenerations(out.run));
     await resumeAutoReview(projectId, review.id, {
@@ -583,22 +640,22 @@ export async function resumeProduction(projectId, runId, { limits, acceptBasis =
   }
   advanceInBackground(projectId, runId);
   const fresh = await requireProject(projectId);
-  return { project: fresh, run: present(findProductionRun(fresh, runId)) };
+  return response(fresh, findProductionRun(fresh, runId));
 }
 
 /** Stop: nothing new is dispatched and queued owned jobs are cancelled; running ones land. */
 export async function stopProduction(projectId, runId) {
   const out = await mutateProjectRecord(projectId, (current) => stopProductionOnProject(current, runId));
   await cancelOwnedJobs(runId);
-  const review = out.run.reviewRunId ? (out.project.autoReviews || []).find((r) => r.id === out.run.reviewRunId) : null;
-  if (review?.status === 'running') {
+  const owned = new Set([out.run.reviewRunId, ...(out.run.pilot?.scenes || []).map((p) => p.reviewRunId)]);
+  for (const review of (out.project.autoReviews || []).filter((r) => owned.has(r.id) && r.status === 'running')) {
     const { stopAutoReview } = await deps.autoReview();
     await stopAutoReview(projectId, review.id).catch(() => {});
   }
   const fresh = await requireProject(projectId);
   const run = findProductionRun(fresh, runId);
   publish(projectId, fresh, run, { type: 'idle' });
-  return { project: fresh, run: present(run) };
+  return response(fresh, run);
 }
 
 /** Cancel (terminal): every owned job still live is cancelled, and the review with its revision. */
@@ -606,21 +663,21 @@ export async function cancelProduction(projectId, runId) {
   const out = await mutateProjectRecord(projectId, (current) => cancelProductionOnProject(current, runId));
   await cancelOwnedJobs(runId, { includeRunning: true });
   if (out.run.finalRender?.jobId) (await deps.render()).cancelRender(out.run.finalRender.jobId);
-  const review = out.run.reviewRunId ? (out.project.autoReviews || []).find((r) => r.id === out.run.reviewRunId) : null;
-  if (review && ['running', 'stopped', 'limit-reached'].includes(review.status)) {
+  const owned = new Set([out.run.reviewRunId, ...(out.run.pilot?.scenes || []).map((p) => p.reviewRunId)]);
+  for (const review of (out.project.autoReviews || []).filter((r) => owned.has(r.id) && ['running', 'stopped', 'limit-reached'].includes(r.status))) {
     const { cancelAutoReview } = await deps.autoReview();
     await cancelAutoReview(projectId, review.id).catch(() => {});
   }
   const fresh = await requireProject(projectId);
   const run = findProductionRun(fresh, runId);
   publish(projectId, fresh, run, { type: 'idle' });
-  return { project: fresh, run: present(run) };
+  return response(fresh, run);
 }
 
 /** One run as the director sees it (`interrupted` after a restart). */
 export async function getProduction(projectId, runId) {
   const project = await requireProject(projectId);
-  return { run: present(findProductionRun(project, runId)) };
+  return { run: present(findProductionRun(project, runId), project) };
 }
 
 // ---- completion events of work a run put in flight --------------------------------
@@ -651,7 +708,12 @@ async function onOwnedReviewAdvanced({ projectId, run: review, action } = {}) {
   if (!projectId || !review?.productionRunId) return;
   const project = await getProject(projectId);
   const run = project ? projectProductionRuns(project).find((r) => r.id === review.productionRunId) : null;
-  if (!runningHere(run) || run.reviewRunId !== review.id) return;
+  if (!runningHere(run)) return;
+  if (run.pilot?.scenes?.some((pilot) => pilot.reviewRunId === review.id)) {
+    if (review.status !== 'running') await advanceProduction(projectId, run.id);
+    return;
+  }
+  if (run.reviewRunId !== review.id) return;
   if (action?.type === 'revise-document' && run.authoring) {
     await advanceProduction(projectId, run.id);
     return;
