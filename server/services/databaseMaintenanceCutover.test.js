@@ -112,7 +112,14 @@ function successor() {
   journal.reserveCoordinatorWorker(operation.id, token);
 }
 
-const run = () => runDatabaseCutover(operation.id, token, fast);
+const run = async () => {
+  try {
+    return await runDatabaseCutover(operation.id, token, fast);
+  } catch (err) {
+    err.message += `\n--- cutover evidence ---\n${evidence()}`;
+    throw err;
+  }
+};
 const savedMode = () => /^PGMODE=(\S+)/m.exec(readFileSync(join(root, '.env'), 'utf8'))?.[1];
 const serverEvents = () => stubs.events().filter(line => line.startsWith('server '));
 // Bounded, synthetic-only failure evidence, read BEFORE afterEach removes the
@@ -124,7 +131,7 @@ const bounded = read => { try { return read(); } catch (err) { return 'unreadabl
 function evidence() {
   const log = join(stubs.dir, 'surrogate-stderr.log');
   return [
-    `events: ${JSON.stringify(stubs.events())}`,
+    `events (last 80): ${JSON.stringify(stubs.events().slice(-80))}`,
     `fenced: ${bounded(() => journal.isFenced())}; stage: ${bounded(() => journal.read()?.stage ?? 'none')}`,
     `coordinator: ${bounded(() => JSON.stringify(journal.coordinatorStatus(operation.id)))}`,
     `authority for this operation: ${bounded(() => createDatabaseAuthority(join(root, 'data')).read()?.operationId === operation.id)}`,
@@ -181,7 +188,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     begin();
     if (fault === 'wrong pool') cutover.overrideRestartPool(native);
     else cutover.setHealth('unhealthy');
-    await expect(run()).rejects.toThrow(/did not prove the target backend/);
+    await expect(run()).rejects.toThrow(/did not prove the target backend[\s\S]*--- cutover evidence ---[\s\S]*events \(last 80\)[\s\S]*coordinator:[\s\S]*surrogate stderr:/);
     await waitForEvent('server refused DATABASE_MAINTENANCE');
     // Mode is committed forward, but PM2 `online`/saved mode is not success.
     expect(journal.read()).toEqual({ ...operation, stage: 'verifying' });
