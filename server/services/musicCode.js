@@ -99,9 +99,9 @@ function buildSupercolliderPrompt({ description, lyrics, guidance, current }) {
   }
 
 Return ONLY the sclang code: no prose and no markdown fence. Rules for the code:
-- Define instruments with SynthDef(\\name, { |out=0, freq=440, amp=0.2, gate=1| ... }) using ONLY stock UGens (SinOsc, Saw, Pulse, LFTri, WhiteNoise, PinkNoise, RLPF, RHPF, LPF, HPF, EnvGen, Env, Pan2, FreeVerb, CombL, Splay, Mix, ...), and finish each with Out.ar(out, signal) in stereo.
-- Compose with Pbind/Pseq/Prand/Pwhite/Pn/Ppar patterns on those SynthDefs, using \\dur, \\degree or \\note, \\scale, \\octave and \\amp. Express timing in beats via \\dur; the runner fixes the tempo at 120 BPM.
-- The runner turns your patterns into a bounded offline score (it supplies the length, 48 kHz stereo, and the output file). Do NOT call s.boot, s.record, Server.default, Score.recordNRT, play, or write any file path.
+- Define instruments with SynthDef(\\name, { |out=0, freq=440, amp=0.2, gate=1| ... }) using ONLY stock UGens (SinOsc, Saw, Pulse, LFTri, WhiteNoise, PinkNoise, RLPF, RHPF, LPF, HPF, EnvGen, Env, Pan2, FreeVerb, CombL, Splay, Mix, ...), finish each with Out.ar(out, signal) in stereo, and register it with .add (e.g. SynthDef(\\lead, { ... }).add;). Give every sustained instrument an envelope that frees it (doneAction: 2), gated by gate when it has one.
+- Compose with Pbind/Pseq/Prand/Pwhite/Pn/Ppar patterns on those SynthDefs, using \\dur, \\degree or \\note, \\scale, \\octave and \\amp. Express timing in beats via \\dur; the runner fixes the tempo at 120 BPM. Use finite or long-running patterns; the runner cuts the piece at its length.
+- The runner turns your patterns into a bounded offline score (it supplies the length, 48 kHz stereo, and the output file). The LAST expression of the code must be ONE pattern (usually Ppar([...]) layering the parts); the runner renders that value. Do NOT call s.boot, s.record, Server.default, Score.recordNRT, play, or write any file path.
 - NEVER use unixCmd, unixCmdGetStdOut, systemCmd, String.runInTerminal, File, Pipe, Document, thisProcess.interpreter.executeFile, load, loadRelative, include, Quarks, SoundFile, Buffer.read or any sample/URL/path loading: there is no filesystem or network access and no sample files, so they always fail.
 - Keep levels sensible (per-voice amp around 0.05-0.3) so a full mix does not clip.
 

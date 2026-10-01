@@ -271,7 +271,7 @@ export function parseDockerImage(stdout) {
  * format and duration. Returns null when it passes, else the reason.
  */
 export function superColliderSmokeFailure(measurement, { durationSec = SUPERCOLLIDER_SMOKE.durationSec } = {}) {
-  if (!measurement) return 'the probe wrote no readable WAV';
+  if (!measurement) return 'no readable WAV was written';
   const { sampleRate, channels } = SUPERCOLLIDER_RENDER_FORMAT;
   if (measurement.channels !== channels) return `expected ${channels} channels, got ${measurement.channels}`;
   if (measurement.sampleRate !== sampleRate) return `expected ${sampleRate} Hz, got ${measurement.sampleRate} Hz`;
@@ -281,6 +281,138 @@ export function superColliderSmokeFailure(measurement, { durationSec = SUPERCOLL
   if (measurement.nonFinite > 0) return `${measurement.nonFinite} non-finite samples`;
   if (measurement.peak < SUPERCOLLIDER_SMOKE.minPeak) return 'the render is silent';
   return null;
+}
+
+/**
+ * The bounded render the Music Designer asks for (#9413). Duration is the Code
+ * panel's 4–120 s take window; format, tempo and every path come from the
+ * trusted runner, never from the source.
+ */
+export const SUPERCOLLIDER_RENDER = Object.freeze({
+  minDurationSec: 4,
+  maxDurationSec: 120,
+  tempoBpm: 120,
+  maxSeed: 2_147_483_647,
+  wrapper: 'render.scd',
+  source: 'source.scd',
+  output: 'render.wav',
+});
+
+/**
+ * The trusted render wrapper. It compiles the untrusted source file without
+ * executing anything on a parse error, seeds the interpreter, evaluates the
+ * source (its last expression must be a Pattern), scores that pattern for
+ * exactly the requested duration at the fixed tempo, sends every SynthDef the
+ * source `.add`ed (plus the stock `\\default`), and renders 48 kHz stereo
+ * float through non-realtime scsynth. It runs INSIDE the same container as the
+ * source — it is a convenience contract, not a security boundary.
+ *
+ * `thisProcess.argv`: source path, output path, duration (s), sample rate,
+ * seed, beat length (s). Each failure prints ONE
+ * `PORTOS_RENDER_ERROR <kind>: <message>` line and exits non-zero, so the
+ * host can tell a syntax error from a runtime error from a failed synthesis.
+ */
+export const SUPERCOLLIDER_RENDER_WRAPPER_SOURCE = `var argv = thisProcess.argv;
+var sourcePath = argv[0];
+var outPath = argv[1];
+var duration = argv[2].asFloat;
+var sampleRate = argv[3].asInteger;
+var seed = argv[4].asInteger;
+var stretch = argv[5].asFloat;
+var fail = { |kind, code, message|
+	("PORTOS_RENDER_ERROR " ++ kind ++ ": " ++ message).postln;
+	code.exit;
+};
+var compiled, pattern, problem, defs, proto, score, options;
+"PORTOS_PHASE compiling".postln;
+compiled = thisProcess.interpreter.compileFile(sourcePath);
+if(compiled.isNil) {
+	fail.("syntax", 65, "the source has a syntax error");
+} {
+	thisThread.randSeed = seed;
+	{ pattern = compiled.value }.try { |error|
+		error.reportError;
+		problem = error.errorString;
+	};
+	if(problem.notNil) {
+		fail.("source", 67, "the source raised an error: " ++ problem);
+	} {
+		if(pattern.isKindOf(Pattern).not) {
+			fail.("pattern", 66, "the source must end with a pattern expression (Pbind, Ppar, Pseq, ...); its last value was a " ++ pattern.class.name);
+		} {
+			{
+				"PORTOS_PHASE scoring".postln;
+				defs = List.new;
+				SynthDescLib.global.synthDescs.do { |desc|
+					desc.def !? { |def| defs.add([0.0, [\\d_recv, def.asBytes]]) };
+				};
+				proto = Event.default;
+				proto[\\stretch] = stretch;
+				score = pattern.asScore(duration, 0, proto);
+				score = Score(defs.asArray ++ score.score);
+				options = ServerOptions.new.numOutputBusChannels_(2).numInputBusChannels_(0).sampleRate_(sampleRate);
+				"PORTOS_PHASE rendering".postln;
+				score.recordNRT(nil, outPath, nil, sampleRate, "WAV", "float", options, "", duration, { |exitCode|
+					if(exitCode == 0) { 0.exit } { fail.("synthesis", 70, "scsynth exited with code " ++ exitCode) };
+				});
+			}.try { |error|
+				error.reportError;
+				fail.("score", 68, "the pattern could not be scored: " ++ error.errorString);
+			};
+		};
+	};
+};
+`;
+
+const RENDER_ERROR_RE = /^PORTOS_RENDER_ERROR (syntax|source|pattern|score|synthesis): (.*)$/;
+const SCLANG_DIAGNOSTIC_RE = /^ERROR:|^\s*line \d+ char \d+/;
+export const SUPERCOLLIDER_RENDER_ERROR_CODES = Object.freeze({
+  syntax: 'SUPERCOLLIDER_SYNTAX_ERROR',
+  source: 'SUPERCOLLIDER_SOURCE_ERROR',
+  pattern: 'SUPERCOLLIDER_NOT_A_PATTERN',
+  score: 'SUPERCOLLIDER_SCORE_ERROR',
+  synthesis: 'SUPERCOLLIDER_SYNTHESIS_FAILED',
+});
+
+/** Is this sclang output line one the failure classifier reads? (Lets the runner keep only those.) */
+export const isSuperColliderDiagnosticLine = (line) => RENDER_ERROR_RE.test(line) || SCLANG_DIAGNOSTIC_RE.test(line);
+
+/**
+ * Classify a failed render from the wrapper's output: the LAST
+ * `PORTOS_RENDER_ERROR` marker names the kind, and sclang's own `ERROR:` /
+ * `line N char M` lines are the detail (where a syntax error is). Null when the
+ * wrapper never reported (crash, kill, timeout).
+ * @param {string[]} lines
+ * @returns {{ kind: string, code: string, message: string, detail: string } | null}
+ */
+export function classifySuperColliderRenderLog(lines) {
+  let marker = null;
+  const detail = [];
+  for (const line of lines) {
+    const match = RENDER_ERROR_RE.exec(line);
+    if (match) marker = { kind: match[1], message: match[2] };
+    else if (SCLANG_DIAGNOSTIC_RE.test(line) && detail.length < 4) detail.push(line.trim());
+  }
+  if (!marker) return null;
+  return { ...marker, code: SUPERCOLLIDER_RENDER_ERROR_CODES[marker.kind], detail: detail.join(' ') };
+}
+
+/**
+ * Parse `docker ps --format '{{json .}}'` (one object per line) into
+ * `[{ name, createdAtMs }]`; `createdAtMs` is null when docker's
+ * `2006-01-02 15:04:05 -0700 MST` timestamp cannot be read, so a caller can
+ * refuse to judge that container's age.
+ */
+export function parseDockerContainerList(stdout) {
+  return String(stdout || '').split('\n').flatMap((line) => {
+    let row;
+    try { row = JSON.parse(line); } catch { return []; }
+    const name = String(row?.Names ?? '').split(',')[0].trim();
+    if (!name) return [];
+    const stamp = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.\d+)? ([+-])(\d{2})(\d{2})\b/.exec(String(row?.CreatedAt ?? ''));
+    const createdAtMs = stamp ? Date.parse(`${stamp[1]}T${stamp[2]}${stamp[3]}${stamp[4]}:${stamp[5]}`) : NaN;
+    return [{ name, createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : null }];
+  });
 }
 
 /** Does recorded evidence describe THIS runtime, policy and image? */

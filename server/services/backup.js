@@ -185,7 +185,7 @@ export const DEFAULT_EXCLUDES = [
   // Anchored, like every entry here. Readiness evidence is bound to THIS
   // machine's local image id (a restored copy would read as stale anyway) and
   // the rest is in-flight render scratch; setup re-derives all of it.
-  { path: '/supercollider/', reason: 'SuperCollider runtime readiness evidence and in-flight render scratch — machine-local, re-derived by npm run setup:supercollider', overridable: false },
+  { path: '/supercollider/', reason: 'SuperCollider runtime readiness evidence, in-flight render scratch and 24-hour render previews — machine-local, re-derived by npm run setup:supercollider', overridable: false },
   // Sprite animation-run raw intermediates: 30–96 ffmpeg-extracted PNGs per
   // run, byte-for-byte regenerable from the archived source video by the
   // deterministic postprocess (walkPostprocess.js). The source video, packaged

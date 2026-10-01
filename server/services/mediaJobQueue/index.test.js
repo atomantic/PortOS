@@ -84,6 +84,8 @@ const stubs = {
   cancelVideoUpscale: vi.fn(),
   renderComposition: vi.fn(async () => ({})),
   cancelComposition: vi.fn(),
+  renderSuperCollider: vi.fn(() => new Promise(() => {})),
+  cancelSuperCollider: vi.fn(() => true),
 };
 
 vi.mock('../musicVideo/revisionService.js', () => ({ assertPerformanceRepairDispatch: vi.fn().mockResolvedValue(undefined) }));
@@ -102,6 +104,11 @@ vi.mock('../videoGen/local.js', () => ({
 vi.mock('../htmlComposition/index.js', () => ({
   renderComposition: (...args) => stubs.renderComposition(...args),
   cancel: (...args) => stubs.cancelComposition(...args),
+}));
+
+vi.mock('../superColliderRender.js', () => ({
+  renderSuperCollider: (...args) => stubs.renderSuperCollider(...args),
+  cancel: (...args) => stubs.cancelSuperCollider(...args),
 }));
 
 vi.mock('../videoGen/upscaleJob.js', () => ({
@@ -276,6 +283,22 @@ describe('mediaJobQueue', () => {
     await mediaJobQueue.cancelJob(jobId);
     expect(stubs.cancelComposition).toHaveBeenCalledWith(jobId);
     videoGenEvents.emit('failed', { generationId: jobId, error: 'Render canceled' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+  });
+
+  // SuperCollider renders (#9413) are local-only audio jobs: progress rides the
+  // audio bus, and a cancel reaches the render module so it can remove the container.
+  it('dispatches SuperCollider renders locally with their frozen source and cancels through the render module', async () => {
+    const params = { source: 'Pbind(\\dur, 1)', sourceHash: 'a'.repeat(64), durationSec: 8, seed: 7 };
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'supercollider', params });
+    await waitFor(() => stubs.renderSuperCollider.mock.calls.length === 1);
+    expect(stubs.renderSuperCollider).toHaveBeenCalledWith(expect.objectContaining({ ...params, jobId }));
+    expect(mediaJobQueue.isRemoteMediaJob(mediaJobQueue.getJob(jobId))).toBe(false);
+    audioGenEvents.emit('progress', { generationId: jobId, progress: 0.5, message: 'Rendering the SuperCollider score' });
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ progress: 0.5, statusMsg: 'Rendering the SuperCollider score' });
+    expect(await mediaJobQueue.cancelJob(jobId)).toMatchObject({ ok: true, status: 'canceling' });
+    expect(stubs.cancelSuperCollider).toHaveBeenCalledWith(jobId);
+    audioGenEvents.emit('failed', { generationId: jobId, error: 'Render canceled' });
     await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
   });
 
