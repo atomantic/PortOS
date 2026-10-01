@@ -64,11 +64,13 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 });
 
 describe('buildPortosMeta', () => {
-  it('rejects temporal-evidence projects on a peer that only knows shot intent', async () => {
+  it('rejects dependency-evidence projects on peers that only know shot intent or temporal evidence', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(14);
-    expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: 13 }).ahead)
-      .toContainEqual({ category: 'musicVideoProjects', senderV: 14, receiverV: 13 });
+    expect(meta.schemaVersions.musicVideoProjects).toBe(15);
+    for (const receiverV of [13, 14]) {
+      expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
+        .toContainEqual({ category: 'musicVideoProjects', senderV: 15, receiverV });
+    }
   });
 
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
