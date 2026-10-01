@@ -3,15 +3,17 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-const h = vi.hoisted(() => ({ calls: 0, prompt: '', response: '' }));
+const h = vi.hoisted(() => ({ calls: 0, prompt: '', response: '', onSubmit: null }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-author-'),
 }));
 vi.mock('../promptRunner.js', () => ({
   assertProvider: () => {},
   resolveProviderAndModel: async () => ({ provider: { id: 'stub-provider' }, selectedModel: 'fixture-model' }),
-  runPromptThroughProvider: async ({ prompt }) => {
+  runPromptThroughProvider: async ({ prompt, beforeExecute }) => {
+    if (beforeExecute) await beforeExecute({ provider: { id: 'stub-provider' }, model: 'fixture-model' });
     h.calls += 1; h.prompt = prompt;
+    if (h.onSubmit) await h.onSubmit();
     return { text: h.response };
   },
 }));
@@ -26,7 +28,7 @@ const response = (colors) => JSON.stringify({ sections: Object.entries(colors).m
 const manifestAt = async (document) => JSON.parse(await readFile(join(PATHS.data, document.directory, 'manifest.json'), 'utf8'));
 
 afterAll(() => cleanupTempDataRoots());
-beforeEach(() => { h.calls = 0; h.prompt = ''; h.response = response({ intro: '#112233', still: '#445566', clip: '#778899' }); });
+beforeEach(() => { h.onSubmit = null; h.calls = 0; h.prompt = ''; h.response = response({ intro: '#112233', still: '#445566', clip: '#778899' }); });
 
 async function fixture() {
   await mkdir(PATHS.images, { recursive: true });
@@ -115,4 +117,21 @@ describe('treatment-driven mixed-media document authoring', () => {
     } }));
     await expect(acceptMixedMediaDocument(id, candidate.directory)).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
   });
+});
+
+
+it('checks production authorization before provider submission and again before candidate publication/acceptance', async () => {
+  const id = await fixture();
+  const blocked = () => { throw Object.assign(new Error('Production canceled'), { code: 'PRODUCTION_STEP_CLOSED' }); };
+  await expect(generateMixedMediaDocument(id, { beforeSubmit: blocked })).rejects.toMatchObject({ code: 'PRODUCTION_STEP_CLOSED' });
+  expect(h.calls).toBe(0);
+  let active = true;
+  h.onSubmit = () => { active = false; };
+  await expect(generateMixedMediaDocument(id, { verifyCurrent: () => { if (!active) blocked(); } })).rejects.toMatchObject({ code: 'PRODUCTION_STEP_CLOSED' });
+  expect(h.calls).toBe(1);
+  expect((await projects.getProject(id)).composition?.documentDraft).toBeUndefined();
+  h.onSubmit = null;
+  const staged = (await generateMixedMediaDocument(id)).document;
+  await expect(acceptMixedMediaDocument(id, staged.directory, { verifyCurrent: blocked })).rejects.toMatchObject({ code: 'PRODUCTION_STEP_CLOSED' });
+  expect((await projects.getProject(id)).composition.documentDraft.directory).toBe(staged.directory);
 });

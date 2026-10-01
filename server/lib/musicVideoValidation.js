@@ -664,8 +664,9 @@ export const musicVideoProductionLimitsSchema = z.object({
 
 export const musicVideoProductionStartSchema = z.object({
   directive: z.string().max(4000).optional(),
-  pool: z.array(musicVideoProductionRouteSchema).min(1).max(12),
+  pool: z.array(musicVideoProductionRouteSchema).max(12),
   limits: musicVideoProductionLimitsSchema,
+  authoring: z.object({ providerId: z.string().min(1).max(200), model: z.string().min(1).max(200) }).strict().optional(),
   providerId: z.string().min(1).max(200).nullable().optional(),
   model: z.string().min(1).max(200).nullable().optional(),
 }).strict();

@@ -36,7 +36,9 @@ const routeLabel = (route) => `${toolLabel.get(`${route.kind}:${route.mode}`) ||
 
 const initialPool = (project) => {
   const fromBrief = (project?.automation?.tools || []).filter((id) => POOL_TOOL_IDS.has(id));
-  return fromBrief.length ? fromBrief : DEFAULT_AUTOMATION_TOOLS.filter((id) => POOL_TOOL_IDS.has(id));
+  const assets = codeFirstProductionAssets(project);
+  const choices = fromBrief.length ? fromBrief : DEFAULT_AUTOMATION_TOOLS.filter((id) => POOL_TOOL_IDS.has(id));
+  return assets ? choices.filter((id) => assets.requiredRoutes[id.split(':')[0]]) : choices;
 };
 
 function StepRow({ step }) {
@@ -69,6 +71,12 @@ function RunView({ run, production, codeFirst }) {
         </span>
       </div>
       {run.directive && <p className="text-port-text-muted break-words">Directive: {run.directive}</p>}
+      {run.authoring && <p className="text-port-text-muted">Authoring: {run.authoring.providerId} · {run.authoring.model} · {run.authoring.costUsd == null ? 'unknown dollar cost (generation count still bounded)' : 'no per-call dollar charge; local compute or quota may apply'}</p>}
+      {run.authoring && <p className="text-port-text-muted">{['author', 'frame', 'clip'].map((kind) => {
+        const used = steps.filter((step) => step.kind === kind && step.status !== 'refused');
+        const cost = used.reduce((total, step) => total + (step.costUsd || 0), 0);
+        return `${kind === 'author' ? 'Code authoring' : kind === 'frame' ? 'Images' : 'Video'}: ${formatUsd(cost)} known${used.some((step) => step.costUsd == null) ? ' + unpriced calls' : ''}`;
+      }).join(' · ')}. Reviewer calls use the separate review limit and may also cost money.</p>}
       <p className="text-port-text-muted">Allowed: {(run.pool || []).map(routeLabel).join(', ')}</p>
       {hint && <p className="text-port-warning break-words">{hint}</p>}
       {run.error && <p role="status" className="text-port-error break-words">{run.error}</p>}
@@ -85,7 +93,7 @@ function RunView({ run, production, codeFirst }) {
             <Pause size={12} /> Stop
           </button>
         )}
-        {live && !codeFirst && (run.status !== 'running' || run.interrupted) && (
+        {live && (!codeFirst || run.authoring) && (run.status !== 'running' || run.interrupted) && (
           <button type="button" disabled={production.busy}
             onClick={() => production.resume(run.id, needsReplan ? { acceptBasis: true } : {})}
             className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
@@ -104,6 +112,8 @@ function RunView({ run, production, codeFirst }) {
 }
 
 function StartForm({ project, production }) {
+  const assets = codeFirstProductionAssets(project);
+  const author = useProviderModels({ allowDefault: false, silent: true });
   const [pool, setPool] = useState(() => initialPool(project));
   const [directive, setDirective] = useState('');
   const [maxGenerations, setMaxGenerations] = useState(12);
@@ -117,7 +127,8 @@ function StartForm({ project, production }) {
   const capValue = spendCap === '' ? null : Number(spendCap);
   const hasImage = pool.some((id) => id.startsWith('image:'));
   const hasVideo = pool.some((id) => id.startsWith('video:'));
-  const valid = hasImage && hasVideo
+  const routesValid = assets ? (!assets.requiredRoutes.image || hasImage) && (!assets.requiredRoutes.video || hasVideo) : hasImage && hasVideo;
+  const valid = routesValid && (!assets || (project.scenes?.length > 0 && assets.conflicts.length === 0 && author.selectedProviderId && author.selectedModel))
     && Number.isInteger(maxGenerations) && maxGenerations >= 1 && maxGenerations <= 500
     && Number.isInteger(maxReviewAttempts) && maxReviewAttempts >= 1 && maxReviewAttempts <= 10
     && (capValue == null || (Number.isFinite(capValue) && capValue >= 0));
@@ -129,6 +140,7 @@ function StartForm({ project, production }) {
       const [kind, mode] = t.id.split(':');
       return { kind, mode };
     }),
+    ...(assets ? { authoring: { providerId: author.selectedProviderId, model: author.selectedModel } } : {}),
     limits: { maxGenerations, maxReviewAttempts, ...(capValue != null ? { spendCapUsd: capValue } : {}) },
     ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
     ...(selectedModel ? { model: selectedModel } : {}),
@@ -137,7 +149,7 @@ function StartForm({ project, production }) {
   return (
     <div className="space-y-2">
       <p className="text-port-text-muted">
-        Plans the board, generates the missing frames and clips, renders and reviews the draft, and revises failed sections — on the server, so you can close this tab.
+        {assets ? 'Prepares only the approved selected assets, authors the document, reviews motion and audio in a continuous excerpt, revises failed code sections, then renders the chosen document.' : 'Plans the board, generates the missing frames and clips, renders and reviews the draft, and revises failed sections — on the server, so you can close this tab.'}
         Only the routes you allow are ever used, and it never exceeds the limits below. fal.ai video is charged each take's estimated list price (its model, length and resolution); other metered routes have no known price, so a dollar cap refuses them.
       </p>
       <fieldset className="min-w-0" aria-labelledby={idFor('pool-label')}>
@@ -154,7 +166,7 @@ function StartForm({ project, production }) {
             />
           ))}
         </div>
-        {!(hasImage && hasVideo) && <p className="text-port-warning mt-1">Allow at least one image and one video route.</p>}
+        {!routesValid && <p className="text-port-warning mt-1">{assets ? 'Allow routes only for the still/video jobs required by the approved plan.' : 'Allow at least one image and one video route.'}</p>}
       </fieldset>
       <div>
         <label htmlFor={idFor('directive')} className="block text-[10px] text-port-text-muted">Production directive</label>
@@ -178,6 +190,19 @@ function StartForm({ project, production }) {
           <input id={idFor('cap')} type="number" min={0} step={1} inputMode="decimal" value={spendCap} disabled={production.busy}
             placeholder="No cap" onChange={(e) => setSpendCap(e.target.value)} className={inputCls} />
         </div>
+        {assets && <ProviderModelSelector
+          providers={author.providers}
+          selectedProviderId={author.selectedProviderId}
+          selectedModel={author.selectedModel}
+          availableModels={author.availableModels}
+          onProviderChange={author.setSelectedProviderId}
+          onModelChange={author.setSelectedModel}
+          label="Code authoring"
+          disabled={production.busy}
+          modelDisabled={author.availableModels.length === 0}
+          compact
+        />}
+        {assets && <p className="text-port-text-muted">Authoring calls consume the generation limit. Unknown authoring prices require no dollar cap; a free/local authoring provider can use a cap. Reviews have a separate call limit.</p>}
         {providers.length > 0 && (
           <ProviderModelSelector
             providers={providers}
@@ -313,11 +338,10 @@ function ProductionSection({ project, production }) {
           {assets.conflicts.length > 0 && <ul className="list-disc pl-4 text-port-warning">
             {assets.conflicts.map((conflict, index) => <li key={`${index}-${conflict}`}>{conflict}</li>)}
           </ul>}
-          <p className="text-port-text-muted">Code authoring, still jobs, and video jobs use separate providers and costs when autonomous dispatch is available. This preflight does not submit jobs.</p>
+          <p className="text-port-text-muted">Code authoring, still jobs, and video jobs use separate providers and costs. Starting production uses only this approved asset plan.</p>
         </div>
-        <p className="text-port-warning">Autonomous code-first production is waiting for document authoring and review checkpoints. Use the mixed-media document controls for the approved plan.</p>
       </>}
-      {!active && !codeFirst && <StartForm key={run?.id || 'new'} project={project} production={production} />}
+      {!active && <StartForm key={run?.id || 'new'} project={project} production={production} />}
     </div>
   );
 }

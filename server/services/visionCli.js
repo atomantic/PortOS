@@ -193,7 +193,7 @@ export async function describeImageViaCli({
  * @returns {Promise<{ text:string, finishReason:null, usage:null, reasoning:string }>}
  */
 export async function describeImagesFromPaths({
-  provider, imagePaths, prompt, model, effort, timeout = CLI_VISION_TIMEOUT_MS, spawnImpl = spawn,
+  provider, imagePaths, prompt, model, effort, timeout = CLI_VISION_TIMEOUT_MS, spawnImpl = spawn, beforeExecute,
 }) {
   const visionModel = model || provider?.defaultModel || null;
   const prepared = await prepareCliVisionRun({ provider, imagePaths, prompt, model: visionModel, effort });
@@ -201,6 +201,7 @@ export async function describeImagesFromPaths({
   try {
     const text = await runCliVisionSpawn({
       provider, model: visionModel, invocation: prepared.invocation, timeout, spawnImpl,
+      beforeExecute,
       setCleanup: (fn) => { cleanupPromptFile = fn; },
     });
     return { text, finishReason: null, usage: null, reasoning: '' };
@@ -212,7 +213,7 @@ export async function describeImagesFromPaths({
 
 // Shared spawn for the two public CLI-vision entry points. `setCleanup` receives
 // the prompt-file cleanup from prepareCliPrompt (Grok-on-Windows temp file).
-async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnImpl, setCleanup }) {
+async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnImpl, setCleanup, beforeExecute }) {
   const { command, args, stdin, cwd } = invocation;
   // Deliver the prompt per provider convention: antigravity as the --print
   // VALUE (agy doesn't read stdin); grok's --prompt-file /dev/stdin via stdin
@@ -252,6 +253,7 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
   // kills below must signal the whole process group (#7496). False — and so
   // byte-identical to today — for every unwrapped provider.
   const processGroup = needsProcessGroup(wrapped);
+  if (beforeExecute) await beforeExecute();
 
   const text = await new Promise((resolve, reject) => {
     const child = spawnImpl(spawnCommand, spawnArgs, {

@@ -1078,6 +1078,33 @@ describe('promptRunner — retry-with-fallback', () => {
     return { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider };
   }
 
+  it('refuses a stopped caller after local concurrency wait without provider fallback, benching, or escalation', async () => {
+    const status = mockToolkitWithFallback();
+    const local = apiProvider({ id: 'local-guard', endpoint: 'http://localhost:11434/v1' });
+    let release;
+    const waiting = new Promise((resolve) => { release = resolve; });
+    let invoked = 0;
+    runner.executeApiRun.mockImplementation(async ({ beforeExecute, onComplete }) => {
+      if (beforeExecute) await beforeExecute();
+      invoked += 1;
+      await waiting;
+      onComplete({ success: true });
+    });
+    const first = runPromptThroughProvider({ provider: local, prompt: 'first', source: 'test' });
+    await vi.waitFor(() => expect(invoked).toBe(1));
+    let active = true;
+    const beforeExecute = vi.fn(() => { if (!active) throw Object.assign(new Error('Production stopped'), { code: 'PRODUCTION_NOT_RUNNING' }); });
+    const second = expect(runPromptThroughProvider({ provider: local, prompt: 'second', source: 'test', beforeExecute }))
+      .rejects.toMatchObject({ code: 'PRODUCTION_NOT_RUNNING', canceled: true });
+    active = false;
+    expect(beforeExecute).not.toHaveBeenCalled();
+    release(); await first; await second;
+    expect(invoked).toBe(1);
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
+  });
+
   it('keeps an exact provider pin and skips every fallback tier when disabled', async () => {
     const status = mockToolkitWithFallback();
     runner.executeCliRun.mockImplementation(async ({ onComplete }) => {

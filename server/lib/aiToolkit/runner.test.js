@@ -178,6 +178,29 @@ describe('AI Toolkit runner service', () => {
     });
   });
 
+  it('refuses a stopped caller after API readiness without fetching and settles its run as canceled', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    let release;
+    const waiting = new Promise((resolve) => { release = resolve; });
+    let active = true;
+    const ensureProviderReady = vi.fn(async () => { await waiting; return { success: true }; });
+    const onRunFailed = vi.fn();
+    const onRunCanceled = vi.fn();
+    const onComplete = vi.fn();
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady, onRunFailed, onRunCanceled } });
+    const execution = runner.executeApiRun({ runId: 'run-admission', provider: { id: 'local', endpoint: 'http://localhost:11434/v1' },
+      prompt: 'hello', beforeExecute: () => { if (!active) throw new Error('Production stopped'); }, onComplete });
+    await vi.waitFor(() => expect(ensureProviderReady).toHaveBeenCalled());
+    active = false; release(); await execution;
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await runner.isRunActive('run-admission')).toBe(false);
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ canceled: true, success: false }));
+    expect(onRunCanceled).toHaveBeenCalledOnce(); expect(onRunFailed).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(join(dataDir, 'runs', 'run-admission', 'metadata.json'), 'utf8'))).toMatchObject({ canceled: true, errorCategory: 'canceled' });
+  });
+
   it('classifies an injected missing-key prerequisite as an authentication failure', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);

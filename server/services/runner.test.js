@@ -444,6 +444,17 @@ describe('executeCliRun — wall-clock timeout classification', () => {
 });
 
 describe('executeCliRun — intentional cancellation', () => {
+  it('refuses a stopped caller after CLI preparation before spawning and files a canceled run', async () => {
+    const onRunFailed = vi.fn(); const onRunCanceled = vi.fn();
+    setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner', hooks: { onRunFailed, onRunCanceled } });
+    await expect(executeCliRun({ runId: 'run-admission', provider: { id: 'codex', type: 'cli', command: 'codex', args: [] },
+      prompt: 'hello', workspacePath: TEST_WORKSPACE, beforeExecute: () => { throw new Error('Production stopped'); } }))
+      .rejects.toThrow('Production stopped');
+    expect(spawn).not.toHaveBeenCalled();
+    expect(onRunCanceled).toHaveBeenCalledOnce(); expect(onRunFailed).not.toHaveBeenCalled();
+    expect(atomicWrite).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.objectContaining({ canceled: true, errorCategory: ERROR_CATEGORIES.CANCELED }));
+  });
+
   it.each([1, 0])('handles shutdown exit %i without a Node signal or provider penalty', async (exitCode) => {
     const child = makeChild();
     spawn.mockReturnValue(child);

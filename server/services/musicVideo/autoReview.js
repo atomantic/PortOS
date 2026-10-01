@@ -122,7 +122,7 @@ const touchRun = (run, patch, now) => ({ ...run, ...patch, updatedAt: now });
  * Start a run over `[startSec, endSec)`. Refuses while another run is live or
  * a manual revision is open (the run needs the revision slot for its own).
  */
-export function startAutoReviewOnProject(project, { startSec, endSec, limits, reviewer = {}, productionRunId = null }, now = new Date().toISOString()) {
+export function startAutoReviewOnProject(project, { startSec, endSec, limits, reviewer = {}, productionRunId = null, documentRevisions = false }, now = new Date().toISOString()) {
   const live = activeAutoReview(project);
   if (live) throw autoReviewError(409, 'AUTO_REVIEW_IN_PROGRESS', 'Finish, cancel or resume the existing auto-review run first', { runId: live.id });
   const openRevision = projectRevisions(project).find((r) => r.status === 'open' || r.status === 'rendering');
@@ -142,7 +142,7 @@ export function startAutoReviewOnProject(project, { startSec, endSec, limits, re
     // #9066: a production run that handed this run its draft dispatches the
     // run's revised sections server-side (productionService.js), so the board
     // must not also submit them.
-    ...(isNonBlankStr(productionRunId) ? { productionRunId } : {}),
+    ...(isNonBlankStr(productionRunId) ? { productionRunId, ...(documentRevisions ? { documentRevisions: true } : {}) } : {}),
     attempts: [{ n: 1, excerptId: null, renderFailures: 0, reviewStartedAt: null, review: null, revisionId: null }],
     stopReason: null,
     error: null,
@@ -187,6 +187,10 @@ export function nextAutoReviewStep(project, run) {
   if (attempt.review.verdict === 'pass') return { type: 'halt', status: 'passed', reason: null };
   if (attempt.review.verdict !== 'revise') {
     return { type: 'halt', status: 'needs-human', reason: attempt.review.reason || 'The review could not verify every check — watch this draft yourself' };
+  }
+  if (run.documentRevisions) {
+    if (run.usage.reviews >= run.limits.maxAttempts) return { type: 'halt', status: 'limit-reached', reason: 'The review limit was reached before another document revision could be reviewed' };
+    return { type: 'revise-document', excerptId: attempt.excerptId };
   }
   if (!attempt.revisionId) return { type: 'revise', excerptId: attempt.excerptId };
   const revision = projectRevisions(project).find((r) => r.id === attempt.revisionId);

@@ -45,6 +45,7 @@ import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.j
 import { assertCurrentPerformanceTakes } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
+import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
 
@@ -666,7 +667,7 @@ const SEEKED_RENDERERS = Object.freeze({
 /** The seeked renderer for a project's render mode, or null for footage modes. */
 export const seekedRendererFor = (project) => SEEKED_RENDERERS[project?.composition?.mode] || null;
 
-async function renderSeekedMode(projectId, project, handOff, renderer) {
+async function renderSeekedMode(projectId, project, handOff, renderer, options = {}) {
   const plan = await renderer.prepare(project);
   // Resolve the master before any rendering mark. A missing track throws here
   // and the caller releases the pending slot without leaving a job running.
@@ -676,6 +677,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer) {
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
   const renderingOn = await ensureInstanceId();
+  if (options.verifyCurrent) options.verifyCurrent(await getProject(projectId));
   const jobId = randomUUID();
   const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
   const outputPath = join(PATHS.videos, filename);
@@ -698,12 +700,17 @@ async function renderSeekedMode(projectId, project, handOff, renderer) {
     await updateProject(projectId, settledRender(patch.status, patch.extra || {})).catch((err) => {
       console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
     });
+    if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null });
     closeJobAfterDelay(jobs, jobId);
   };
-  Promise.resolve().then(() => renderer.encode({
-    plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
-    onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
-  })).then(async (encoded) => {
+  Promise.resolve().then(async () => {
+    if (options.verifyCurrent) options.verifyCurrent(await getProject(projectId));
+    if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
+    return renderer.encode({
+      plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
+      onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
+    });
+  }).then(async (encoded) => {
     job.overlayAbort = null;
     job.status = 'complete';
     let proof = null;
@@ -770,7 +777,7 @@ export async function renderMusicVideo(projectId, options = {}) {
   try {
     const seeked = seekedRendererFor(project);
     if (seeked) {
-      return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked);
+      return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked, options);
     }
     const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);

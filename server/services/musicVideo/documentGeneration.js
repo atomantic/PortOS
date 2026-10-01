@@ -134,7 +134,7 @@ async function priorManifest(project) {
   return { pointer, manifest };
 }
 
-async function runAuthoring(projectId, { providerId, model, sectionId = null, expectedDraft = null } = {}) {
+async function runAuthoring(projectId, { providerId, model, sectionId = null, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
   const project = await getProject(projectId);
   if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
   const context = await authoringContext(project);
@@ -160,7 +160,8 @@ async function runAuthoring(projectId, { providerId, model, sectionId = null, ex
     visualSpec: project.visualSpec, scenes: context.scenes, styleLines: sharedStyle.styleLines,
     onlySectionId: sectionId, sharedStyle,
   });
-  const run = await runModel({ providerId, model, prompt, source: 'music-video-document' });
+  const directedPrompt = feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt;
+  const run = await runModel({ providerId, model, prompt: directedPrompt, source: 'music-video-document', beforeSubmit });
   const ids = sectionId ? [sectionId] : context.song.sections.map((section) => section.id);
   const updated = acceptedSections(run.text, ids);
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
@@ -176,6 +177,7 @@ async function runAuthoring(projectId, { providerId, model, sectionId = null, ex
   const draft = project.composition?.documentDraft?.directory || null;
   const result = await stageGeneratedDocument(projectId, generatedFiles(manifest), {
     verifyCurrent: (current) => {
+      verifyCurrent(current);
       if (basisFor(current) !== context.basis || (current.composition?.document?.directory || null) !== active
         || (current.composition?.documentDraft?.directory || null) !== draft) {
         throw fail('The project or candidate changed during generation — review the current state and retry', 'COMPOSITION_DRAFT_STALE', 409);
@@ -188,7 +190,7 @@ async function runAuthoring(projectId, { providerId, model, sectionId = null, ex
 export const generateMixedMediaDocument = (projectId, input = {}) => runAuthoring(projectId, input);
 export const regenerateMixedMediaSection = (projectId, sectionId, input = {}) => runAuthoring(projectId, { ...input, sectionId });
 
-export async function acceptMixedMediaDocument(projectId, directory) {
+export async function acceptMixedMediaDocument(projectId, directory, { verifyCurrent = () => {} } = {}) {
   const project = await getProject(projectId);
   if (!project?.composition?.documentDraft || project.composition.documentDraft.directory !== directory) {
     throw fail('The composition candidate changed', 'COMPOSITION_DRAFT_STALE', 409);
@@ -196,6 +198,7 @@ export async function acceptMixedMediaDocument(projectId, directory) {
   const { manifest } = await priorManifest(project);
   return acceptGeneratedDocument(projectId, directory, {
     verifyCurrent: (current) => {
+      verifyCurrent(current);
       if (basisFor(current) !== manifest.basis || (current.composition?.document?.directory || null) !== (manifest.baseDocumentDirectory || null)) {
         throw fail('The treatment or selected media changed — generate a fresh document', 'COMPOSITION_DRAFT_STALE', 409);
       }

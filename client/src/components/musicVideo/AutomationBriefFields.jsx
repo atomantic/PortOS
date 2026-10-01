@@ -43,7 +43,7 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
             </div>
           ))}
         </div>
-        <p className="text-xs text-port-text-muted mt-1">Analyze &amp; plan uses the guidance today. The tool list and budget are saved now and will limit the automated generation run.</p>
+        <p className="text-xs text-port-text-muted mt-1">Analyze &amp; plan uses this guidance. Start production selects its own explicit provider pool and limits; the brief does not submit media jobs.</p>
       </fieldset>
       <div>
         <label htmlFor={`${idPrefix}-guidance`} className="block text-xs text-port-text-muted mb-1">Guidance</label>
@@ -69,7 +69,7 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
           <option value="review">Stop for my review</option>
           <option value="auto">Auto-approve</option>
         </select>
-        <p className="text-[11px] text-port-text-muted mt-1">Before planning, autopilot builds a cast &amp; sets sheet for your feedback.</p>
+        <p className="text-[11px] text-port-text-muted mt-1">Footage-led planning builds a cast &amp; sets sheet for your feedback. Code-first plans skip image batches unless a selected performance shot needs references.</p>
       </div>
       <div>
         <label htmlFor={`${idPrefix}-budget`} className="block text-xs text-port-text-muted mb-1">Budget cap (USD)</label>
