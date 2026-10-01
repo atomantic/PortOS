@@ -23,7 +23,7 @@ import { killProcessTree, guardChildStdin } from './bufferedSpawn.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
 import { modelPinIsOffered } from './localProviderRuntime.js';
 import { filterCallerModeEligible } from './callerModePolicy.js';
-import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider } from './providerVendors.js';
+import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider, toolFreeOneShotArgs } from './providerVendors.js';
 import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
 import { resolveCliModel, stripProviderPinArgs } from './providerModels.js';
 import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';
@@ -131,7 +131,11 @@ export function runCliProviderPrompt(args = {}) {
   const restrictedConfig = safetyProfile ? (codeReview ? buildCodeReviewSpawnConfig : buildVendorSpawnConfig)(effectiveProvider, {
     safetyProfile, effectiveModel: resolveCliModel(effectiveProvider.defaultModel), effort: effectiveProvider.effort,
   }) : null;
-  const builtArgs = restrictedConfig?.args || [...buildCliArgs(effectiveProvider), ...(Array.isArray(extraArgs) ? extraArgs : [])];
+  const ordinaryArgs = [...buildCliArgs(effectiveProvider), ...(Array.isArray(extraArgs) ? extraArgs : [])];
+  // A review-only run on a vendor with no enforced recipe falls back to its
+  // ordinary argv; strip every blanket permission grant from it (#9409) while
+  // keeping the model/effort pins. Authoring runs (no codeReview) are untouched.
+  const builtArgs = restrictedConfig?.args || (safetyProfile && codeReview ? toolFreeOneShotArgs(effectiveProvider, ordinaryArgs).args : ordinaryArgs);
   const streamFormat = restrictedConfig?.streamFormat || (builtArgs.some((arg, index) => arg === '--output-format=stream-json' || (arg === '--output-format' && builtArgs[index + 1] === 'stream-json')) ? 'stream-json' : null);
   // Deliver the prompt per provider convention: antigravity gets it as the
   // --print VALUE (no stdin); grok's `--prompt-file /dev/stdin` is fed via stdin
