@@ -33,7 +33,7 @@ const LADDERED_TYPES = new Set(['digit-span', 'go-no-go']);
  * Whether the stored pair values drive the run: reaction-time has no ladder,
  * the others only honor manual values when `progressive === false`.
  */
-export function pairIsManual(type, config) {
+function pairIsManual(type, config) {
   return !LADDERED_TYPES.has(type) || config?.progressive === false;
 }
 
