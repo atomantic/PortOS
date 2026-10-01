@@ -12,7 +12,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 const substitutionOf = requested => requested?.substitution === 'allowed' ? 'allowed' : 'pinned';
 
 /** Pure route capability map: what the selected route can honestly do. No tool or provider probe. */
-export function routeCapabilities(provider, mode) {
+function routeCapabilities(provider, mode) {
   const accepted = mode === 'api' || isVisionCapableCliProvider(provider) || isVisionCapableCodexTuiProvider(provider);
   return {
     packageImportExport: true,
@@ -31,7 +31,7 @@ export function routeCapabilities(provider, mode) {
  * Compare the route that actually ran with the pinned route. Pinned mode throws on
  * any substitution; an opted-in substitution is returned as a recorded decision.
  */
-export function recordEffectiveRoute(resolved, requested, runResult) {
+export function _recordEffectiveRoute(resolved, requested, runResult) {
   const ran = runResult?.fallbackProvider || runResult?.provider || null;
   const effective = { providerId: ran?.id ?? resolved.providerId, model: runResult?.model ?? resolved.model, effort: resolved.effort };
   const substituted = effective.providerId !== resolved.providerId || effective.model !== resolved.model || Boolean(runResult?.usedFallback);
