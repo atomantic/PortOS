@@ -9,8 +9,7 @@ import { useCallback, useState } from 'react';
  * and confirming or cancelling clears it. Only one row is ever armed at once,
  * so opening a second confirm closes the first.
  *
- * Project memory: the user finds the two-click-arm button (useArmedAction)
- * non-discoverable — prefer this hook with an inline confirm row for new
+ * Project memory: prefer this hook with an inline confirm row for new
  * destructive list actions.
  *
  * Returns:
