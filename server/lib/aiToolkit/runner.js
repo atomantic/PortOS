@@ -706,6 +706,7 @@ export function createRunnerService(config = {}) {
         lifecycle,
         stallTimeout,
         absoluteTimeout,
+        callerRuntimeBudget: absoluteTimeout < apiRunAbsoluteTimeoutMs(stallTimeout),
         outputPath,
         metadataPath,
         getOutput: () => output,

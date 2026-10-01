@@ -134,7 +134,7 @@ function benchMsForTimeout(message, floorMs) {
  */
 export function resolveProviderBench(analysis) {
   const category = analysis?.category || ERROR_CATEGORIES.UNKNOWN;
-  if (isRequestSpecificCategory(category)) return null;
+  if (category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED || isRequestSpecificCategory(category)) return null;
 
   const message = analysis?.message || null;
   if (category === ERROR_CATEGORIES.USAGE_LIMIT) {

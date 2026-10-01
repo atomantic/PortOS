@@ -9,6 +9,7 @@
  */
 
 import { join } from 'path';
+import { isRuntimeBudgetError } from '../lib/aiToolkit/errorDetection.js';
 import {
   PATHS,
   atomicWrite,
@@ -187,11 +188,14 @@ const summaryOutcome = (summarize, input) => Promise.resolve()
     (summary) => typeof summary === 'string' && summary.trim()
       ? { ok: true, attempted: true, summary }
       : { ok: false, attempted: true, error: 'Persistent mind summarizer returned no summary text' },
-    (error) => ({
-      ok: false,
-      attempted: !isPersistentMindCallDenial(error),
-      error: String(error?.message || error || 'Persistent mind summary failed').slice(0, 500),
-    })
+    (error) => {
+      if (isRuntimeBudgetError(error)) throw error;
+      return {
+        ok: false,
+        attempted: !isPersistentMindCallDenial(error),
+        error: String(error?.message || error || 'Persistent mind summary failed').slice(0, 500),
+      };
+    }
   );
 
 /**

@@ -634,6 +634,7 @@ describe('AI Toolkit runner service', () => {
     const completed = new Promise((resolve) => { done = resolve; });
     await runner.executeApiRun({
       runId: 'run-timeout',
+      absoluteTimeoutMs: 1000, // a true stall still outranks a later caller cap
       provider: runReady(),
       model: null,
       prompt: 'hi',
@@ -661,6 +662,7 @@ describe('AI Toolkit runner service', () => {
     // bench candidate; one that outran the absolute cap while producing is not,
     // so the host's classifier must be able to tell them apart without prose.
     expect(metadata.timeoutBound).toBe('stall');
+    expect(metadata.timeoutOrigin).toBeUndefined();
     expect(metadata.error).toMatch(/no stream progress/i);
   });
 
@@ -1415,7 +1417,7 @@ describe('AI Toolkit runner service', () => {
   // stream open across the timeout bounds without sleeping. Rejects on abort
   // the way a real reader does, so a timer that wins the race still unwinds
   // `processStream` instead of leaving it parked on a read forever.
-  const clockDrivenReader = ({ intervalMs, frames = Infinity, signal }) => {
+  const clockDrivenReader = ({ intervalMs, frames = Infinity, signal, delta = { content: 'tok' } }) => {
     const encoder = new TextEncoder();
     let sent = 0;
     return {
@@ -1429,7 +1431,7 @@ describe('AI Toolkit runner service', () => {
           sent += 1;
           resolve({
             done: false,
-            value: encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'tok' } }] })}\n`),
+            value: encoder.encode(`data: ${JSON.stringify({ choices: [{ delta }] })}\n`),
           });
         }, intervalMs);
       }),
@@ -1524,18 +1526,29 @@ describe('AI Toolkit runner service', () => {
     tempDirs.push(dataDir);
     vi.useFakeTimers();
     const request = vi.fn(async (_url, opts) => ({ ok: true,
-      body: { getReader: () => clockDrivenReader({ intervalMs: 1000, signal: opts.signal }) } }));
+      body: { getReader: () => clockDrivenReader({ intervalMs: 1000, signal: opts.signal, delta: { reasoning_content: 'thinking' } }) } }));
     vi.stubGlobal('fetch', request);
-    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    const failed = vi.fn();
+    const completeSpy = vi.fn(value => complete(value));
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed: failed } });
     let complete;
     const completed = new Promise(resolve => { complete = resolve; });
     await runner.executeApiRun({ runId: 'run-budget', provider: runReady(), model: null, prompt: 'hi',
       workspacePath: process.cwd(), screenshots: [], timeout: 120000, absoluteTimeoutMs: 5000, maxTokens: 8192,
-      onComplete: complete });
+      onComplete: completeSpy });
     expect(JSON.parse(request.mock.calls[0][1].body).max_tokens).toBe(8192);
     await vi.advanceTimersByTimeAsync(5000);
-    expect(await completed).toMatchObject({ success: false, timeoutBound: 'absolute' });
+    const metadata = await completed;
+    expect(metadata).toMatchObject({ success: false, timeoutBound: 'absolute', timeoutOrigin: 'caller-budget',
+      runtimeBudgetMs: 5000, errorCategory: 'runtime-budget-exhausted',
+      errorAnalysis: { category: 'runtime-budget-exhausted' }, hadReasoning: true, usedReasoningAsFallback: true });
+    expect(metadata.canceled).not.toBe(true);
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(await readFile(join(dataDir, 'runs/run-budget/output.txt'), 'utf8')).toContain('thinking');
     expect(await runner.isRunActive('run-budget')).toBe(false);
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(completeSpy).toHaveBeenCalledTimes(1);
   });
 
   // `Math.max` against the default cap: an install that deliberately raised

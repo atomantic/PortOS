@@ -10,6 +10,7 @@ import {
 
 const mock = vi.hoisted(() => ({
   root: null,
+  inferenceLedger: null,
   scheduled: new Map(),
   events: new Map(),
   emitted: [],
@@ -103,6 +104,19 @@ vi.mock('./updateChecker.js', () => ({
   isUpdateInProgress: vi.fn(() => mock.updateInProgress),
 }));
 
+// Keep real reservation/accounting with an isolated in-memory ledger; daemon
+// route probes are outside this supervisor workflow contract.
+vi.mock('./persistentMindMaintainerInference.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual,
+    inspectMaintainerInferenceRoute: async ({ role }) => ({ ok: true, enforced: true,
+      lane: 'local-curation', policy: role.inference }),
+    reserveMaintainerInference: args => actual.reserveMaintainerInference({ ...args,
+      read: async () => mock.inferenceLedger,
+      write: async value => { mock.inferenceLedger = structuredClone(value); } }),
+  };
+});
+
 const supervisor = await import('./persistentMindSupervisor.js');
 
 const makeRoot = () => ({
@@ -126,6 +140,7 @@ const deferred = () => {
 describe('persistent mind supervisor', () => {
   beforeEach(() => {
     mock.root = makeRoot();
+    mock.inferenceLedger = null;
     mock.scheduled.clear();
     mock.emitted.length = 0;
     mock.budget = { withinBudget: true, exceeded: null };
@@ -1337,6 +1352,68 @@ describe('persistent mind supervisor', () => {
         status: 'waiting',
         pauseReason: 'CoS actions budget exhausted',
       });
+    });
+
+    it.each([false, true])('holds a spent maintainer wake until explicit resume (temporary=%s)', async (temporary) => {
+      vi.useFakeTimers();
+      mock.root.config.persistentMindMaintainer = { enabled: true, inference: { maxCallMs: 120000 } };
+      if (temporary) withDeepPreset();
+      const effects = vi.fn();
+      const providerCall = vi.fn(async ({ timeoutMs, reportRunId }) => {
+        reportRunId('spent-budget-run');
+        if (providerCall.mock.calls.length === 1) {
+          await vi.advanceTimersByTimeAsync(timeoutMs);
+          throw Object.assign(new Error('Caller runtime budget exhausted after 120000ms'), {
+            code: 'RUN_RUNTIME_BUDGET_EXHAUSTED', errorAnalysis: { category: 'runtime-budget-exhausted' },
+          });
+        }
+        effects();
+        return { text: '{}' };
+      });
+      const run = vi.fn(async ({ callBoundary }) => {
+        await callBoundary({ purpose: 'turn' }, providerCall);
+        return {};
+      });
+      await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      const input = { id: 'budget-message', text: 'Example work.', ...(temporary ? { thinkingPresetId: 'deep' } : {}) };
+      await supervisor.enqueuePersistentMindMessage(input);
+      await supervisor.drainPersistentMind();
+      expect(mock.root.persistentMind).toMatchObject({ status: 'paused', activeTurn: null, nextEligibleWakeAt: null });
+      expect(mock.root.persistentMind.pauseReason).toContain('runtime budget');
+      expect(mock.inferenceLedger.day).toMatchObject({ calls: 1, reservedMs: 120000 });
+      expect(mock.recordUsage).toHaveBeenCalledExactlyOnceWith('cos', { actions: 1, ms: 120000 });
+      expect(mindCallReceipts()[0].data).toMatchObject({ outcome: 'failed', runId: 'spent-budget-run' });
+      if (temporary) {
+        expect(mock.root.persistentMind.queuedMessages).toEqual([]);
+        expect(mock.root.persistentMind.recentMessageIds).toContain(input.id);
+      } else expect(mock.root.persistentMind.queuedMessages[0].id).toBe(input.id);
+      expect(await supervisor.enqueuePersistentMindMessage(input)).toMatchObject({ success: true, duplicate: true });
+      await vi.advanceTimersByTimeAsync(PERSISTENT_MIND_LIMITS.BACKOFF_MAX_MS * 2);
+      await supervisor.drainPersistentMind();
+      expect(providerCall).toHaveBeenCalledTimes(1);
+      expect(effects).not.toHaveBeenCalled();
+      // Explicit resume grants no route or spend: admission checks both again.
+      await supervisor.resumePersistentMind();
+      mock.profile = { ok: false, error: 'Pinned route is not authorized' };
+      await supervisor.drainPersistentMind();
+      expect(providerCall).toHaveBeenCalledTimes(1);
+      mock.profile = { ok: true, provider: { id: 'example-cloud', type: 'api' }, model: 'example-model', effort: 'high' };
+      mock.root.persistentMind.nextEligibleWakeAt = null;
+      mock.budget = { withinBudget: false, exceeded: 'actions' };
+      await supervisor.drainPersistentMind();
+      expect(providerCall).toHaveBeenCalledTimes(1);
+      mock.budget = { withinBudget: true };
+      mock.root.persistentMind.nextEligibleWakeAt = null;
+      mock.root.config.persistentMindMaintainer.inference.maxCallMs = 180000;
+      await supervisor.drainPersistentMind();
+      expect(providerCall).toHaveBeenCalledTimes(2);
+      expect(effects).toHaveBeenCalledTimes(1);
+      expect(mock.inferenceLedger.day).toMatchObject({ calls: 2, reservedMs: 300000 });
+      expect(mindCallReceipts().at(-1).data).toMatchObject({ outcome: 'completed',
+        providerId: 'example-cloud', model: 'example-model', temporaryRoute: false });
+      expect(mock.root.persistentMind.queuedMessages).toEqual([]);
     });
 
     it('records a failed attempt and still leaves its route and elapsed time readable', async () => {

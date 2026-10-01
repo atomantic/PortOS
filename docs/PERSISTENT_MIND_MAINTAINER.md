@@ -109,6 +109,14 @@ self-thinking requests cannot use paid escalation. Existing accepted-preset
 snapshot and revocation checks still apply. Coding tasks retain their independent
 provider grants and CoS domain budgets.
 
+Reaching a reserved per-call runtime ceiling keeps the attempt charged and its
+failed-call receipt visible. It pauses the mind under policy hold, with no
+provider bench, fallback, or provider-fault investigation. Adjust the inference
+policy and explicitly resume to recheck the exact route, authority, and remaining
+budget. Ordinary queued messages keep their identity; consumed temporary thinking
+sessions still require a fresh message. Provider no-progress, transport, and HTTP
+failures retain their normal recovery behavior.
+
 `GET /api/cos/mind/maintainer` returns `inference` readiness and budget status.
 `mind.maintainer.reservation` events distinguish `local-curation` from
 `authorized-escalation`; ordinary model-call receipts retain reported usage and

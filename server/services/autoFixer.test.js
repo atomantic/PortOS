@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { extractDeclaration } from '../lib/mirrorParity.js';
+import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 
 // cos.js drags in a giant dependency graph (PM2, fs, sockets…) — mock it
 // so autoFixer's defer/cancel behavior can be tested in isolation. `addTask`
@@ -117,6 +121,41 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  it('publishes caller runtime exhaustion as a bounded warning without an investigation', async () => {
+    // Execute the real bootstrap hook without booting daemons/DB/schedulers.
+    const source = readFileSync(new URL('./bootstrap.js', import.meta.url), 'utf8')
+      .replace('onRunFailed: (metadata, error) => {', 'function failureHook(metadata, error) {');
+    const declaration = extractDeclaration(source, 'failureHook');
+    expect(declaration).toBeTruthy();
+    const hook = runInNewContext(`${declaration}; failureHook`, { errorEvents, ERROR_CATEGORIES, Date });
+    const observed = vi.fn();
+    errorEvents.on('error', observed);
+    try {
+      hook({ id: 'budget-run', providerName: 'Example API', providerId: 'example-api', model: 'm-1',
+        timeoutBound: 'absolute', timeoutOrigin: 'caller-budget', runtimeBudgetMs: 120000,
+        errorAnalysis: { category: 'runtime-budget-exhausted' } }, 'Caller runtime budget exhausted after 120000ms');
+      expect(observed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        code: 'AI_RUNTIME_BUDGET_EXHAUSTED', severity: 'warning', canAutoFix: false,
+        context: expect.objectContaining({ timeoutOrigin: 'caller-budget', runtimeBudgetMs: 120000 }),
+      }));
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(cos.addTask).not.toHaveBeenCalled();
+    } finally { errorEvents.off('error', observed); }
+  });
+
+  it('does not investigate caller budgets or poison dedupe for a later provider fault', async () => {
+    const budget = { code: 'AI_PROVIDER_EXECUTION_FAILED', severity: 'error', canAutoFix: true,
+      context: { provider: 'Example API', model: 'm-1', runId: 'budget-run',
+        errorAnalysis: { category: 'runtime-budget-exhausted' } } };
+    errorEvents.emit('error', budget);
+    await escalateProviderFailure(budget);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(cos.addTask).not.toHaveBeenCalled();
+    emitProviderFailure({ provider: 'Example API', model: 'm-1', runId: 'fault-run' });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
   });
 
   it('never creates an investigation task for a content/safety refusal', async () => {

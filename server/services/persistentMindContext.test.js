@@ -163,6 +163,18 @@ describe('persistent mind rollups', () => {
     expect(rollup).toMatchObject({ status: 'failed', summary: null, error: 'summary provider unavailable' });
   });
 
+  it.each(['summary', 'journal'])('propagates a runtime hold during %s before further context effects', async (stage) => {
+    mock.history = [event(1), event(2), event(3)];
+    const held = Object.assign(buildPersistentMindCallDenial({ reason: 'Maintainer runtime budget exhausted',
+      status: 'waiting', code: 'runtime-budget-exhausted' }), { code: 'RUN_RUNTIME_BUDGET_EXHAUSTED' });
+    const summarize = vi.fn(async () => { if (stage === 'summary') throw held; return 'summary'; });
+    const extractJournal = vi.fn(async () => { if (stage === 'journal') throw held; return '{"operations":[]}'; });
+    await expect(preparePersistentMindContext({ recentEventLimit: 1, summarize, extractJournal })).rejects.toBe(held);
+    if (stage === 'journal') expect(summarize).not.toHaveBeenCalled();
+    expect(await readPersistentMindRollups()).toEqual([]);
+    expect(mock.appendMindEvent).not.toHaveBeenCalled();
+  });
+
   it('leaves the range unattempted when the per-call boundary refuses the summary', async () => {
     mock.history = [event(1), event(2), event(3)];
     const summarize = vi.fn(async () => {

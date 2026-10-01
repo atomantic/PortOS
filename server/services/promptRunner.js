@@ -37,7 +37,7 @@ import { isCompositeProviderId } from '../lib/providerRef.js';
 // both subtrees in every one of them.
 import { ServerError } from '../lib/errorHandler.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
-import { analyzeError, ERROR_CATEGORIES, isRunCanceledError } from '../lib/aiToolkit/errorDetection.js';
+import { analyzeError, ERROR_CATEGORIES, isRunCanceledError, isRuntimeBudgetError } from '../lib/aiToolkit/errorDetection.js';
 import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
@@ -735,10 +735,9 @@ export async function runPromptThroughProvider(rawArgs) {
     }
   }
 
-  // An explicit Stop or host shutdown is a lifecycle outcome, not a failed AI
-  // attempt. Do not enter any correction/fallback tier, mark the provider
-  // unavailable, or escalate an investigation task.
-  if (isRunCanceledError(firstError)) {
+  // Stops and caller spending ceilings carry no provider-health verdict.
+  // Neither enters correction/fallback, benching, or fault investigation.
+  if (isRunCanceledError(firstError) || isRuntimeBudgetError(firstError)) {
     throw stripFallbackContext(firstError);
   }
 
@@ -876,6 +875,14 @@ export async function runPromptThroughProvider(rawArgs) {
       }
     };
 
+    const stopOnRuntimeBudget = async (error) => {
+      if (!isRuntimeBudgetError(error)) return;
+      // A caller cap can also end a correction/fallback already in flight.
+      // Resolve suppression without investigating or starting another tier.
+      for (const entry of suppressed.values()) await resolveHandled(entry.key);
+      throw stripFallbackContext(error);
+    };
+
     // Explicitly escalate the primary failure to a Tier-4 investigation task —
     // used only on a give-up where every attempted key's incidental task was
     // suppressed, so nothing else would surface the unrecovered failure. Honors
@@ -938,6 +945,7 @@ export async function runPromptThroughProvider(rawArgs) {
               runId: undefined, // fresh run so the failed primary's record stays intact
             });
           } catch (tier1Error) {
+            await stopOnRuntimeBudget(tier1Error);
             // The corrected retry failed. If it reached the execution layer, its
             // onRunFailed queued a task keyed on the EFFECTIVE provider/model
             // (createRun may have proactively swapped) — record and suppress that
@@ -995,6 +1003,7 @@ export async function runPromptThroughProvider(rawArgs) {
               runId: undefined, // fresh run so the failed primary's record stays intact
             });
           } catch (tier2Error) {
+            await stopOnRuntimeBudget(tier2Error);
             // Same bookkeeping as Tier 1's failed corrected retry: a retry that
             // reached the execution layer queued its own task keyed on the
             // EFFECTIVE provider/model — record + suppress it so a slow Tier-3
@@ -1074,6 +1083,7 @@ export async function runPromptThroughProvider(rawArgs) {
           runId: undefined, // fresh runId so the failed primary's record stays intact
         });
       } catch (fallbackError) {
+        await stopOnRuntimeBudget(fallbackError);
         // ── Tier 4 — escalate ──: every deterministic tier failed. If the
         // fallback reached the execution layer, its OWN onRunFailed already
         // queued an investigation task (its key was never suppressed), so just
@@ -1611,6 +1621,13 @@ async function executeProviderRunOnce({
         }
         if (result?.errorAnalysis && typeof result.errorAnalysis === 'object') {
           err.errorAnalysis = result.errorAnalysis;
+        }
+        for (const key of ['timeoutBound', 'timeoutOrigin', 'runtimeBudgetMs']) {
+          if (result?.[key] !== undefined) err[key] = result[key];
+        }
+        if (isRuntimeBudgetError(result)) {
+          err.code = 'RUN_RUNTIME_BUDGET_EXHAUSTED';
+          err.runId = runId;
         }
         safeReject(err);
       } else {

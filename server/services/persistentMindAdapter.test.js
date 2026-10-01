@@ -683,7 +683,10 @@ describe('persistent mind adapter', () => {
     mock.runPrompt.mock.calls.forEach(([request], index) => {
       expect(admitted[index].promptChars).toBe(request.prompt.length);
       expect(admitted[index].promptBytes).toBe(Buffer.byteLength(request.prompt));
-      expect(request.timeout).toBe(5000);
+      expect(request.timeout).toBeUndefined();
+      expect(request.absoluteTimeoutMs).toBe(5000);
+      expect(request.maxTokens).toBe(8192);
+      expect(request.outputReserveTokens).toBe(8192);
       expect(request.allowFallback).toBe(false);
     });
   });
