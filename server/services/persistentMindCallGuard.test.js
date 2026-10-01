@@ -314,6 +314,36 @@ describe('maintainer reservation boundary', () => {
     expect(ledger.day.calls).toBe(2);
     expect(receipts().at(-1).data.outcome).toBe('denied');
   });
+  it('charges runtime exhaustion once and holds all subsequent calls on the turn', async () => {
+    let clock = 0;
+    let ledger = null;
+    const { reserveMaintainerInference } = await import('./persistentMindMaintainerInference.js');
+    const { normalizeMaintainerInference } = await import('../lib/persistentMindMaintainer.js');
+    const policy = normalizeMaintainerInference({ maxCallMs: 120000 });
+    const reserveInference = args => reserveMaintainerInference({ ...args,
+      read: async () => ledger, write: async value => { ledger = structuredClone(value); } });
+    const { call, accountedCalls } = boundary({ now: () => clock, reserveInference,
+      evaluate: async () => ({ ok: true, maintainer: { enforced: true, lane: 'local-curation', policy } }) });
+    const error = Object.assign(new Error('Caller runtime budget exhausted after 120000ms'), {
+      code: 'RUN_RUNTIME_BUDGET_EXHAUSTED', errorAnalysis: { category: 'runtime-budget-exhausted' } });
+    const held = await call({ purpose: 'summary' }, async ({ reportRunId, timeoutMs }) => {
+      expect(timeoutMs).toBe(120000);
+      reportRunId('spent-run');
+      clock += timeoutMs;
+      throw error;
+    }).catch(e => e);
+    expect(held).toMatchObject({ persistentMindCallDenied: true, denialCode: 'runtime-budget-exhausted',
+      retryDisposition: 'hold', requiresResubmission: false, cause: error });
+    const later = vi.fn();
+    await expect(call({ purpose: 'turn' }, later)).rejects.toBe(held);
+    expect(later).not.toHaveBeenCalled();
+    expect(accountedCalls()).toBe(1);
+    expect(mock.recordDomainUsage).toHaveBeenCalledExactlyOnceWith('cos', { actions: 1, ms: 120000 });
+    expect(ledger.day).toMatchObject({ calls: 1, reservedMs: 120000 });
+    expect(receipts()).toHaveLength(1);
+    expect(receipts()[0].data).toMatchObject({ outcome: 'failed', runId: 'spent-run', elapsedMs: 120000 });
+  });
+
   it('stops remaining calls when maintainer authority changes, including disabling the role', async () => {
     const { normalizePersistentMindMaintainer } = await import('../lib/persistentMindMaintainer.js');
     const { canonicalStringify } = await import('../lib/objects.js');

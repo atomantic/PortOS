@@ -19,6 +19,7 @@
  * deadlock a turn against its own admission. This boundary only ever refuses.
  */
 
+import { isRuntimeBudgetError } from '../lib/aiToolkit/errorDetection.js';
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { canonicalStringify } from '../lib/objects.js';
@@ -170,6 +171,7 @@ export function createPersistentMindCallBoundary({
 } = {}) {
   let receiptIndex = 0;
   let accountedCalls = 0;
+  let runtimeHold = null;
 
   const writeReceipt = async (fields) => {
     const index = receiptIndex;
@@ -193,6 +195,7 @@ export function createPersistentMindCallBoundary({
   };
 
   const call = async ({ purpose, round = null, promptChars, promptBytes } = {}, run) => {
+    if (runtimeHold) throw runtimeHold;
     const admission = await evaluate({ turnId, route, thinkingPresetId, thinkingSelection, selfThinkingRequest, capabilityFingerprint, signal, maintainerFingerprint, promptChars, promptBytes });
     if (!admission.ok) {
       await writeReceipt({ purpose, round, outcome: 'denied', reason: admission.reason });
@@ -234,6 +237,13 @@ export function createPersistentMindCallBoundary({
         outcome: signal?.aborted ? 'interrupted' : 'failed',
         reason: error?.message,
       });
+      if (reservation && !signal?.aborted && isRuntimeBudgetError(error)) {
+        runtimeHold = Object.assign(buildPersistentMindCallDenial({
+          reason: `Maintainer runtime budget of ${reservation.timeoutMs}ms exhausted; adjust inference policy and explicitly resume.`,
+          status: 'waiting', code: 'runtime-budget-exhausted', disposition: 'hold',
+        }), { cause: error, code: 'RUN_RUNTIME_BUDGET_EXHAUSTED', errorAnalysis: error.errorAnalysis });
+        throw runtimeHold;
+      }
       throw error;
     }
   };

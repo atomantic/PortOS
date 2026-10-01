@@ -14,6 +14,8 @@ export const ERROR_CATEGORIES = {
   MODEL_NOT_FOUND: 'model-not-found',
   NETWORK_ERROR: 'network-error',
   TIMEOUT: 'timeout',
+  // An explicitly shortened caller spending cap, not provider health.
+  RUNTIME_BUDGET_EXHAUSTED: 'runtime-budget-exhausted',
   QUOTA_EXCEEDED: 'quota-exceeded',
   // A frontier model declined the prompt on content/safety grounds. NOT a
   // provider fault — the provider is healthy and other prompts still work, so
@@ -51,6 +53,12 @@ export const ERROR_CATEGORIES = {
  */
 export const isRunCanceledError = (err) => (
   !!err && (err.code === 'RUN_CANCELED' || err.canceled === true)
+);
+
+/** Structured only: old generic absolute timeouts retain provider recovery. */
+export const isRuntimeBudgetError = (err) => (
+  err?.code === 'RUN_RUNTIME_BUDGET_EXHAUSTED'
+  || err?.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED
 );
 
 // A LOCAL inference runtime that ran out of accelerator memory mid-request.

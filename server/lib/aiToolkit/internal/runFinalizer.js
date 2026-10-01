@@ -13,6 +13,7 @@ export function createRunFinalizer({
   lifecycle,
   stallTimeout,
   absoluteTimeout,
+  callerRuntimeBudget = false,
   outputPath,
   metadataPath,
   getOutput,
@@ -94,15 +95,24 @@ export function createRunFinalizer({
 
   const finalizeTimeout = async (bound) => {
     consumeActiveStop(runId);
-    const error = bound === 'absolute'
+    const budgetExhausted = bound === 'absolute' && callerRuntimeBudget;
+    const error = budgetExhausted
+      ? `Caller runtime budget exhausted after ${absoluteTimeout}ms; adjust the policy and explicitly resume`
+      : bound === 'absolute'
       ? `API execution timed out after ${absoluteTimeout}ms: absolute runtime cap reached`
       : `API execution timed out after ${stallTimeout}ms with no stream progress`;
+    const terminal = {
+      error,
+      timeoutBound: bound,
+      errorCategory: budgetExhausted ? ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED : ERROR_CATEGORIES.TIMEOUT,
+      errorAnalysis: budgetExhausted
+        ? { hasError: true, category: ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED, message: error }
+        : analyzeError(error),
+      ...(budgetExhausted ? { timeoutOrigin: 'caller-budget', runtimeBudgetMs: absoluteTimeout } : {}),
+    };
     try {
       const { metadata, partialOutput } = await openTerminalMetadata();
-      metadata.error = error;
-      metadata.errorCategory = ERROR_CATEGORIES.TIMEOUT;
-      metadata.timeoutBound = bound;
-      metadata.errorAnalysis = analyzeError(error);
+      Object.assign(metadata, terminal);
       await atomicWrite(metadataPath, metadata);
       safeSettle(() => hooks.onRunFailed?.(metadata, error, partialOutput), `Run ${runId} onRunFailed hook`);
       safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
@@ -111,7 +121,7 @@ export function createRunFinalizer({
       const salvaged = terminalState().partialOutput;
       safeSettle(() => onComplete?.({
         success: false,
-        error,
+        ...terminal,
         endTime: new Date().toISOString(),
         duration: Date.now() - startTime,
         outputSize: Buffer.byteLength(salvaged),

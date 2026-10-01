@@ -1126,6 +1126,22 @@ describe('promptRunner — retry-with-fallback', () => {
   // A pin opts out of ROUTING, not out of health reporting. Leaving the mark to
   // the fallback cascade let a provider fail every pinned call for hours while
   // the Providers page stayed green and unpinned callers kept choosing it.
+  it.each([false, true])('rejects caller runtime exhaustion without recovery (allowFallback=%s)', async (allowFallback) => {
+    const status = mockToolkitWithFallback();
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({
+      success: false, error: 'Caller runtime budget exhausted after 120000ms', timeoutBound: 'absolute',
+      timeoutOrigin: 'caller-budget', runtimeBudgetMs: 120000,
+      errorAnalysis: { category: 'runtime-budget-exhausted' },
+    }));
+    await expect(runPromptThroughProvider({ provider: primaryApi, prompt: 'p', source: 'test', allowFallback }))
+      .rejects.toMatchObject({ code: 'RUN_RUNTIME_BUDGET_EXHAUSTED', timeoutBound: 'absolute',
+        timeoutOrigin: 'caller-budget', runtimeBudgetMs: 120000 });
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
+    expect(runner.createRun).toHaveBeenCalledTimes(1);
+  });
+
   it('still benches the provider a pinned run failed on', async () => {
     const status = mockToolkitWithFallback();
     runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
@@ -2315,6 +2331,23 @@ describe('promptRunner — Tier 2 schema/type correction (issue #2350)', () => {
     expect(out.text).toBe('{"ok":true,"fixed":1}');
     expect(out.fixTier).toBe(2);
     expect(repair).toHaveBeenCalledWith(expect.objectContaining({ phase: 'response' }));
+  });
+
+  it('stops the correction cascade when its retry exhausts a caller runtime budget', async () => {
+    const status = mockToolkitWithFallback();
+    let attempts = 0;
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      if (++attempts === 1) { onData('not json'); onComplete({ success: true }); }
+      else onComplete({ success: false, error: 'Caller runtime budget exhausted',
+        errorAnalysis: { category: 'runtime-budget-exhausted' } });
+    });
+    await expect(runPromptThroughProvider({ provider: apiProvider({ name: 'P' }), prompt: 'p', source: 'test',
+      responseSchema: okShape, absoluteTimeoutMs: 120000 })).rejects.toMatchObject({ code: 'RUN_RUNTIME_BUDGET_EXHAUSTED' });
+    expect(attempts).toBe(2);
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
   });
 
   it('re-requests the SAME provider with a schema-strengthened prompt when the response is uncoercible', async () => {
