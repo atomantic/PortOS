@@ -174,7 +174,7 @@ const reviewPrompt = ({ manifest, artifacts }) => [
 ].join('\n');
 
 /** The explicit vision route: the project's own saved authoring settings, images attached, no fallback unless the user allowed it. */
-async function reviewViaAuthoringRoute({ project, manifest, artifacts }) {
+async function reviewViaAuthoringRoute({ project, manifest, artifacts, signal, timeoutMs }) {
   const [{ preflightProductionProject, _recordEffectiveRoute }, { runPromptThroughProvider }, { getProviderById }] = await Promise.all([
     import('./preflight.js'), import('../promptRunner.js'), import('../providers.js'),
   ]);
@@ -187,11 +187,17 @@ async function reviewViaAuthoringRoute({ project, manifest, artifacts }) {
   }
   const provider = await getProviderById(preflight.resolved.providerId);
   const prompt = reviewPrompt({ manifest, artifacts });
+  const { stopRun } = await import('../runner.js');
+  let providerRunId = null;
+  const stopProvider = () => { if (providerRunId) stopRun(providerRunId).catch(() => { /* best-effort cancel */ }); };
+  signal?.addEventListener('abort', stopProvider, { once: true });
   const result = await runPromptThroughProvider({
     provider, model: preflight.resolved.model, effort: preflight.resolved.effort || undefined, prompt,
+    ...(timeoutMs ? { timeout: timeoutMs } : {}),
+    onRunCreated: id => { providerRunId = id; if (signal?.aborted) stopProvider(); },
     screenshots: artifacts.map(item => join(PATHS.data, item.relativePath)),
     source: 'code-animation-review', cwd: PATHS.data, allowFallback: preflight.allowFallback, toolFree: true,
-  });
+  }).finally(() => signal?.removeEventListener('abort', stopProvider));
   const route = _recordEffectiveRoute(preflight.resolved, project.localSettings, result);
   const parsed = parseReviewFindings(result.text);
   if (!parsed) throw new ServerError('The reviewer response was not valid JSON findings', { status: 422, code: 'CODE_ANIMATION_REVIEW_INVALID' });
@@ -213,8 +219,8 @@ async function reviewStage(ctx, revision, style) {
   const prior = reusable(ctx, 'review', revision);
   if (prior) { ctx.state.stages.push({ ...prior, reusedFrom: ctx.resumedFrom }); return prior; }
   if (!style.artifacts?.length) return null;
-  return runStage(ctx, 'review', revision, async () => {
-    const out = await ctx.deps.review({ project: ctx.project, manifest: revision.manifest, artifacts: style.artifacts });
+  return runStage(ctx, 'review', revision, async ({ signal }) => {
+    const out = await ctx.deps.review({ project: ctx.project, manifest: revision.manifest, artifacts: style.artifacts, signal, timeoutMs: remainingMs(ctx).ms });
     ctx.state.spent.tokens += out.tokens || 0;
     if (out.effective) ctx.state.effective = out.effective;
     return { reviewer: out.reviewer, reviewFindings: out.findings, evaluatedStageRunId: style.stageRunId };
@@ -397,7 +403,7 @@ export async function startProductionStageRun(projectId, input, deps = {}) {
     kind: STAGE_RUN_KIND, sourceRevisionId: revision.id, currentRevisionId: revision.id, sourceHash: revision.sourceHash,
     budgets: project.budgets, requested: project.localSettings, effective: null, reservedBytes: 0,
     spent: { iterations: priorSpent?.iterations ?? 0, tokens: priorSpent?.tokens ?? 0, renderMs: priorSpent?.renderMs ?? 0, diskBytes: 0, elapsedMs: 0, priorElapsedMs: priorSpent?.elapsedMs ?? 0 },
-    visualReview: request.visualReview === true,
+    visualReview: request.visualReview ?? prior?.data.visualReview ?? false,
     stages: [], findings: [], verdict: null, output: null, repairs: prior?.data.repairs ?? [],
     resumedFrom: prior?.id ?? null, stopReason: null, resumable: false, executed: true,
   };

@@ -117,6 +117,28 @@ describe.skipIf(!ready)('Production stage runs', () => {
     expect(saved.data.verdict.unverified.map(item => item.dimension)).not.toContain('semantic-visual');
   });
 
+  it('cancels a pending visual review through its signal and resumes with the opt-in inherited', async () => {
+    const { id } = await project();
+    let reviewStarted;
+    const started = new Promise(resolve => { reviewStarted = resolve; });
+    let seen;
+    const hanging = vi.fn(async ({ signal, timeoutMs }) => {
+      seen = { timeoutMs };
+      reviewStarted();
+      await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    });
+    const first = await startProductionStageRun(id, { visualReview: true }, { sample, repair: unfreeze, render, review: hanging });
+    await started;
+    expect(seen.timeoutMs).toBeGreaterThan(0);
+    cancelProductionStageRun(id, first.run.id);
+    expect(await first.done).toBe('canceled');
+
+    const review = vi.fn(async () => ({ findings: [], tokens: 1, reviewer: { providerId: 'example-provider', model: 'example-model' } }));
+    const resumed = await startProductionStageRun(id, { resumeFromRunId: first.run.id }, { sample, repair: unfreeze, render, review });
+    expect(await resumed.done).toBe('completed');
+    expect(review).toHaveBeenCalled();
+  });
+
   it('never passes unmeasured or unrepairable evidence: exhausted iterations keep artifacts, skip the render, and report audio as unverified', async () => {
     const { id } = await project({ iterations: 1 }, { kind: 'external', notes: 'Separate track' });
     render.mockClear();
