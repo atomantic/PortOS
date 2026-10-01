@@ -109,7 +109,9 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
       ? (scene.takes || []).findLast((entry) => entry.kind === 'video' && entry.status === 'rejected') : null);
     const changes = take ? musicVideoTakeChanges(project, scene, take) : [];
     const audio = performanceChanges.filter((entry) => entry.sceneId === scene.sceneId);
-    const reasons = [...new Set([...changes.map((entry) => entry.reason), ...audio.map((entry) => entry.reason)])];
+    const unfinished = !scene.videoHistoryId && (project.revisions || []).some((revision) => revision.type === 'dependencies'
+      && revision.sections?.some((section) => section.sceneId === scene.sceneId && section.verdict === 'rejected'));
+    const reasons = [...new Set([...changes.map((entry) => entry.reason), ...audio.map((entry) => entry.reason), ...(unfinished ? ['Replacement clip is still missing'] : [])])];
     if (reasons.length) shots.push({ sceneId: scene.sceneId, kind: 'video', assetId: take?.assetId || scene.videoHistoryId,
       reasons, durationSec: Math.max(0, (scene.endSec || 0) - (scene.startSec || 0)) });
   }

@@ -68,6 +68,17 @@ describe('public dependency save / repair / review workflow', () => {
     expect((await request(app).post(`${base()}/revisions/${restarted.body.revision.id}/resume`)).body.needsGeneration).toEqual([]);
     expect((await fresh()).scenes[0].takes.filter((take) => take.assetId === 'clip-new')).toHaveLength(1);
     expect((await fresh()).scenes[1].videoHistoryId).toBe('clip-b');
+    await expect(assertRevisionOpen(project.id, restarted.body.revision.id, { sceneId: 'a', kind: 'video' })).rejects.toMatchObject({ code: 'REVISION_SECTION_SELECTED' });
+  });
+
+  it('refuses generation when a historical stale take was reselected during repair', async () => {
+    await request(app).patch(`${base()}/scenes/a`).send({ referenceImageId: 'new.png' });
+    const opened = await request(app).post(`${base()}/dependency-repairs`).send({ basis: (await impact()).body.basis });
+    const historical = opened.body.project.scenes[0].takes.find((take) => take.assetId === 'clip-a');
+    await request(app).post(`${base()}/scenes/a/takes/${historical.takeId}/select`);
+    const response = await request(app).post(`${base()}/revisions/${opened.body.revision.id}/resume`);
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('DEPENDENCY_REPAIR_STALE_SELECTION');
   });
 
   it('refuses a stale preview and invalidates passing reviews including an in-flight review race', async () => {

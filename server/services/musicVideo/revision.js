@@ -296,6 +296,10 @@ export function claimRevisionGeneration(project, revisionId, jobs = [], nowMs = 
     throw revisionError(409, 'DEPENDENCY_REPAIR_CHANGED', 'The repair inputs changed — cancel and preview the affected dependencies again');
   }
   const states = revisionSectionStates(project, revision, jobs, nowMs);
+  if (revision.type === 'dependencies' && states.some((section) => section.state === 'needs-generation'
+    && project.scenes.find((scene) => scene.sceneId === section.sceneId)?.videoHistoryId)) {
+    throw revisionError(409, 'DEPENDENCY_REPAIR_STALE_SELECTION', 'Clear the selected stale clip or select a current replacement before resuming');
+  }
   const ref = ({ sceneId, kind }) => ({ sceneId, kind });
   const needsGeneration = states.filter((s) => s.state === 'needs-generation').map(ref);
   const generating = states.filter((s) => s.state === 'generating').map(ref);
@@ -371,6 +375,8 @@ export function assertRevisionOpenForGeneration(project, revisionId, { sceneId =
   const revision = resumableRevision(project, revisionId);
   if (revision.type === 'dependencies') {
     const section = revision.sections.find((entry) => entry.sceneId === sceneId && entry.kind === kind);
+    const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
+    if (scene?.[TAKE_SLOT[kind]]) throw revisionError(409, 'REVISION_SECTION_SELECTED', 'This repair section already has a selected clip — clear or review it before submitting again');
     if (!section || musicVideoDependencyChanges(project, section.dependencies).length) {
       throw revisionError(409, 'DEPENDENCY_REPAIR_CHANGED', 'This generation does not match the previewed repair inputs');
     }
