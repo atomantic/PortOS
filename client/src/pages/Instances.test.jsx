@@ -358,6 +358,34 @@ describe('Instances page connection drawers', () => {
     api.listPeerSubscriptions.mockResolvedValue({ subscriptions: [] });
   });
 
+  it('recovers an unavailable snapshot through the drawer and preserves data on refresh failure', async () => {
+    api.getInstances.mockRejectedValueOnce(new Error('Unavailable'));
+    renderUI(<MemoryRouter><Instances /></MemoryRouter>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Instance snapshot unavailable');
+    expect(screen.queryByText('No peers registered yet')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Connection settings' }));
+    expect(screen.getByText('This instance settings are unavailable until the instance snapshot loads.')).toBeInTheDocument();
+    const updatePeers = socket.on.mock.calls.find(([event]) => event === 'instances:peers:updated')[1];
+    act(() => updatePeers([]));
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry instance settings' }));
+    expect(await within(screen.getByRole('dialog')).findByRole('button', { name: 'Edit', exact: true })).toBeEnabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+    expect(api.getInstances).toHaveBeenLastCalledWith({ silent: true });
+    api.getInstances.mockRejectedValueOnce(new Error('Refresh failed'));
+    const connectHandler = socket.on.mock.calls.find(([event]) => event === 'connect')[1];
+    await act(async () => connectHandler());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Showing last loaded data');
+    expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Edit', exact: true })).toBeEnabled();
+    api.getInstances.mockResolvedValueOnce({ self: { name: 'Recovered' }, peers: [], syncStatus: { cursors: {} } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry snapshot' }));
+    expect(await screen.findByText('No peers registered yet')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Recovered').length).toBeGreaterThan(0);
+  });
+
   // Regression: the full setup stack displaced peer actions, and moving it to
   // remounting drawers could discard drafts or accidentally start networking.
   it('prioritizes peers and retains drafts across drawer sections and failed adds', async () => {
