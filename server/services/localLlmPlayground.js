@@ -138,7 +138,8 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
     allowCustomEndpoint: provider.allowCustomEndpoint === true,
   });
 
-  const stream = backend === 'ollama' && nativeOllamaUsage ? streamOllamaChat : streamOpenAiChat;
+  const requestBody = { ...(Number(provider.numCtx) > 0 ? { num_ctx: Number(provider.numCtx) } : {}), ...extraBody };
+  const stream = backend === 'ollama' && (nativeOllamaUsage || Number(requestBody.num_ctx) > 0) ? streamOllamaChat : streamOpenAiChat;
   return stream({
     endpoint: provider.endpoint,
     apiKey: provider.apiKey,
@@ -147,11 +148,9 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
     temperature,
     maxTokens,
     // The caller's knobs win over the provider default, so a caller measuring a
-    // specific value is never silently run at the provider's. (Ollama is not one
-    // of those callers: its OpenAI-compatible endpoint drops unknown body fields,
-    // so its context window is a daemon-restart knob — see the transport rule in
-    // `lib/localModelTuning.js` and `ollamaManager.ensureContextWindow`.)
-    extraBody: { ...(Number(provider.numCtx) > 0 ? { num_ctx: Number(provider.numCtx) } : {}), ...extraBody },
+    // specific value is never silently run at the provider's. A requested
+    // Ollama context uses native chat, which maps it to options.num_ctx.
+    extraBody: requestBody,
     signal,
     onChunk,
     // Registering `onStats` is what asks the daemon for token counts; a runtime
@@ -183,8 +182,8 @@ export async function runLocalLlmTest({
   // this entirely.
   onToken,
   // The Performance page opts into Ollama's native API so exact eval counts and
-  // decode/prefill durations survive. Normal playground runs stay on the same
-  // OpenAI-compatible path OpenCode uses.
+  // decode/prefill durations survive. A requested num_ctx also needs native
+  // chat; other playground runs keep the OpenAI-compatible transport.
   nativeOllamaUsage = false,
 }) {
   const provider = await resolveLocalProvider(backend);
