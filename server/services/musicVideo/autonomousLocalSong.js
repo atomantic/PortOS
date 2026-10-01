@@ -69,7 +69,7 @@ const defaults = {
  * Pick the local engine for a song: a lyric-capable one when the song has
  * vocals, otherwise any — among the engines this host can actually run now.
  */
-export async function pickLocalSongEngine({ instrumental }, deps = {}) {
+async function pickLocalSongEngine({ instrumental }, deps = {}) {
   const { listEngines, isEngineHealthy } = { ...defaults, ...deps };
   const engines = Object.values(await listEngines());
   const healthy = [];
@@ -132,5 +132,3 @@ export async function generateLocalSong({ trackId, title, prompt, lyrics = '', i
   }
   throw fail(504, 'LOCAL_SONG_ATTACH_TIMEOUT', 'The local song rendered but did not reach its track', { jobId, filename });
 }
-
-export const __testing = { durationFor };

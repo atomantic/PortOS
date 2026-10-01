@@ -14,7 +14,7 @@ vi.mock('../mediaJobQueue/index.js', async () => {
   return { mediaJobEvents: queue.events, getJob: (id) => queue.jobs[id] || null };
 });
 
-import { generateLocalSong, pickLocalSongEngine } from './autonomousLocalSong.js';
+import { generateLocalSong } from './autonomousLocalSong.js';
 
 const ENGINES = {
   musicgen: { id: 'musicgen', minDurationSec: 1, maxDurationSec: 30 },
@@ -39,18 +39,22 @@ function harness({ healthy = ['musicgen', 'acestep'], tracks = {}, jobs = {}, wa
 
 const song = { trackId: 't-1', title: 'Neon Rain', prompt: 'synthwave', lyrics: '[verse]\nrain' };
 
-describe('pickLocalSongEngine', () => {
+describe('engine choice', () => {
   it('takes a ready lyric-capable engine for a vocal song, any ready engine for an instrumental', async () => {
-    const { deps } = harness();
-    expect((await pickLocalSongEngine({ instrumental: false }, deps)).id).toBe('acestep');
-    expect((await pickLocalSongEngine({ instrumental: true }, deps)).id).toBe('musicgen');
+    const vocal = harness();
+    await generateLocalSong(song, vocal.deps);
+    expect(vocal.deps.queueGeneration.mock.calls[0][0].engine).toBe('acestep');
+    const instrumental = harness();
+    await generateLocalSong({ ...song, instrumental: true }, instrumental.deps);
+    expect(instrumental.deps.queueGeneration.mock.calls[0][0].engine).toBe('musicgen');
   });
 
   it('names what is missing instead of rendering the wrong thing', async () => {
-    const { deps } = harness({ healthy: ['musicgen'] });
-    await expect(pickLocalSongEngine({ instrumental: false }, deps)).rejects.toMatchObject({ code: 'LOCAL_SONG_NO_ENGINE', message: expect.stringContaining('sing lyrics') });
+    const instrumentalOnly = harness({ healthy: ['musicgen'] });
+    await expect(generateLocalSong(song, instrumentalOnly.deps)).rejects.toMatchObject({ code: 'LOCAL_SONG_NO_ENGINE', message: expect.stringContaining('sing lyrics') });
     const none = harness({ healthy: [] });
-    await expect(pickLocalSongEngine({ instrumental: true }, none.deps)).rejects.toMatchObject({ code: 'LOCAL_SONG_NO_ENGINE' });
+    await expect(generateLocalSong({ ...song, instrumental: true }, none.deps)).rejects.toMatchObject({ code: 'LOCAL_SONG_NO_ENGINE' });
+    expect(none.deps.queueGeneration).not.toHaveBeenCalled();
   });
 });
 
