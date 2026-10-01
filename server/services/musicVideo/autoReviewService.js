@@ -121,20 +121,27 @@ async function analyzeContinuousExcerpt(excerptPath, spanSec, sections) {
   };
 }
 
-async function callReviewer(run, prompt, screenshots) {
+async function callReviewer(run, prompt, screenshots, projectId) {
   const { resolveProviderAndModel, runPromptThroughProvider, assertVisionRunUsedImages } = await import('../promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel(run.reviewer);
   if (!provider) throw new Error('No AI provider is configured');
   if (provider.enabled === false) throw new Error(`Provider "${provider.name || provider.id}" is disabled`);
   const used = { providerId: provider.id, model: selectedModel || null };
+  let beforeExecute;
+  if (run.documentRevisions && run.productionRunId) {
+    const { assertProductionContinuation } = await import('./productionService.js');
+    beforeExecute = () => assertProductionContinuation(projectId, run.productionRunId);
+    await assertProductionContinuation(projectId, run.productionRunId);
+  }
   if (provider.type !== 'api') {
     if (!isVisionCapableCliProvider(provider)) throw new Error(`Provider "${provider.name || provider.id}" cannot read images`);
     const { describeImagesFromPaths } = await import('../visionCli.js');
-    const result = await describeImagesFromPaths({ provider, imagePaths: screenshots, prompt, model: selectedModel, timeout: provider.timeout || REVIEW_TIMEOUT_MS });
+    const result = await describeImagesFromPaths({ provider, imagePaths: screenshots, prompt, model: selectedModel, timeout: provider.timeout || REVIEW_TIMEOUT_MS, ...(beforeExecute ? { beforeExecute } : {}) });
     return { text: result.text, used };
   }
   const result = await runPromptThroughProvider({
     provider, model: selectedModel, prompt, screenshots, source: 'music-video-auto-review', timeout: provider.timeout || REVIEW_TIMEOUT_MS,
+    ...(beforeExecute ? { beforeExecute, allowFallback: false } : {}),
   });
   assertVisionRunUsedImages(result, provider);
   return { text: result.text, used: { ...used, model: result.model || used.model } };
@@ -185,7 +192,7 @@ async function reviewDraft(project, run, excerpt) {
   if (screenshots.length) {
     const prompt = buildAutoReviewPrompt({ spanSec, sections, frameTimes, hasContactSheet: hasSheet, tiled: true, concept: project.concept });
     try {
-      const reply = await callReviewer(run, prompt, screenshots);
+      const reply = await callReviewer(run, prompt, screenshots, project.id);
       used = reply.used;
       parsed = parseAutoReviewResponse(reply.text);
       if (!parsed) reviewerError = 'The reviewer returned no usable verdict';
@@ -211,6 +218,11 @@ async function takeSteps(projectId, runId) {
   for (let i = 0; i < MAX_STEPS_PER_ADVANCE; i += 1) {
     const project = await requireProject(projectId);
     const run = findRun(project, runId);
+    if (run.documentRevisions && run.productionRunId) {
+      const { assertProductionContinuation } = await import('./productionService.js');
+      const permitted = await assertProductionContinuation(projectId, run.productionRunId).then(() => true, () => false);
+      if (!permitted) return { project, run, action: { type: 'idle', interrupted: true } };
+    }
     const step = nextAutoReviewStep(project, run);
 
     if (step.type === 'idle' || step.type === 'wait') return { project, run, action: step };
@@ -245,6 +257,8 @@ async function takeSteps(projectId, runId) {
       if (out.run.status !== 'running') return { ...out, action: { type: 'idle' } };
       continue;
     }
+
+    if (step.type === 'revise-document') return { project, run, action: { type: 'revise-document', excerptId: step.excerptId } };
 
     if (step.type === 'revise') {
       const opened = await mutateProjectRecord(projectId, (current) => {

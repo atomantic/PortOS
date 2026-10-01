@@ -24,7 +24,10 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
-  default: () => ({
+  default: (options) => options.allowDefault === false ? {
+    providers: [{ id: 'local-fixture', name: 'Local fixture', models: ['fixture-model'] }], selectedProviderId: 'local-fixture', selectedModel: 'fixture-model', availableModels: ['fixture-model'],
+    setSelectedProviderId: () => {}, setSelectedModel: () => {},
+  } : ({
     providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
     setSelectedProviderId: () => {}, setSelectedModel: () => {},
   }),
@@ -154,14 +157,28 @@ function ProductionHarness({ initial }) {
 describe('AutopilotPanel production run', () => {
   beforeEach(() => { vi.clearAllMocks(); listeners.clear(); });
 
-  it('shows a zero-allowance code-first plan without offering the legacy autonomous Start', () => {
+  it('shows a zero-allowance plan and requires an approved scene plan before Start', () => {
     render(<ProductionHarness initial={{ id: 'p1', productionRuns: [],
       productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
       audioAnalysis: { durationSec: 30 }, scenes: [], treatment: { shotDirections: [] },
     }} />);
     expect(screen.getByText(/generated video 0 \/ 0 seconds/)).toBeTruthy();
     expect(screen.getByLabelText('Code-first asset preflight')).toHaveTextContent('Routes needed for selected assets: no image · no video');
-    expect(screen.queryByRole('button', { name: /Start production/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Start production/ })).toBeDisabled();
+  });
+
+  it('starts a code-only plan with a separate authoring model and an empty image/video pool', async () => {
+    api.startMusicVideoProduction.mockResolvedValueOnce({});
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [],
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      composition: { mode: 'document' }, audioAnalysis: { durationSec: 8 },
+      scenes: [{ sceneId: 'code', startSec: 0, endSec: 8 }],
+      treatment: { shotDirections: [{ sceneId: 'code', medium: 'procedural', mediumRationale: 'Typography' }] },
+    }} />);
+    expect(api.startMusicVideoProduction).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start production' }));
+    await waitFor(() => expect(api.startMusicVideoProduction).toHaveBeenCalled());
+    expect(api.startMusicVideoProduction.mock.calls[0][1]).toMatchObject({ pool: [], authoring: { providerId: 'local-fixture', model: 'fixture-model' } });
   });
 
   it('preflights selected assets without treating procedural or imported shots as generation jobs', () => {

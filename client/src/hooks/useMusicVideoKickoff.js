@@ -67,7 +67,10 @@ export default function useMusicVideoKickoff({ analyze, importLyrics, separateVo
         enter('align');
         project = (await attempt(alignLyrics, project)) || project;
       }
-      if (castAndSets && !castAndSetsDone(project)) {
+      const codeFirst = project.productionPolicy?.strategy === 'code-first';
+      const needsPerformanceReference = (project.scenes || []).some((scene) => scene.shotMode === 'performance' && !scene.referenceImageId && !scene.videoHistoryId
+        && project.treatment?.shotDirections?.some((direction) => direction.sceneId === scene.sceneId && direction.medium === 'generated-footage'));
+      if (castAndSets && (!codeFirst || needsPerformanceReference) && !castAndSetsDone(project)) {
         enter('castAndSets');
         const checked = await attempt(castAndSets, project);
         // Waiting for the director (review), or the check-in failed: stop here.

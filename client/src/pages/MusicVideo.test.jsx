@@ -1604,6 +1604,17 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
   });
 
+  it('plans a code-first board without starting a Cast & Sets image batch when no selected shot needs references', async () => {
+    const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [],
+      composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      automation: { tools: ['code:render'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
+    planMusicVideoProject.mockResolvedValue({ project, scenesAdded: 1, promptsSeeded: true });
+    await openProject(project, 'produce');
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
+    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalled());
+    expect(startMusicVideoCastAndSets).not.toHaveBeenCalled();
+  });
+
   it('autopilot stops at the Cast & Sets check-in in review mode, and Approve & continue plans', async () => {
     const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [], automation: { tools: ['image:codex'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
     const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };

@@ -42,7 +42,7 @@ function acceptSources(parsed, ids) {
   return accepted;
 }
 
-export async function runModel({ providerId, model, prompt, source = 'music-video-code' }) {
+export async function runModel({ providerId, model, prompt, source = 'music-video-code', beforeSubmit = null }) {
   const { assertProvider, resolveProviderAndModel, runPromptThroughProvider } = await import('../promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to write the code video', code: 'PROVIDER_UNAVAILABLE', status: 400 });
@@ -53,6 +53,7 @@ export async function runModel({ providerId, model, prompt, source = 'music-vide
     prompt,
     source,
     cwd: PATHS.data,
+    ...(beforeSubmit ? { allowFallback: false, toolFree: true, beforeExecute: beforeSubmit } : {}),
   });
   return { text, providerId: provider.id, model: selectedModel || null };
 }

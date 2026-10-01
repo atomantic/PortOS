@@ -26,9 +26,17 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
+import { isFreeProvider } from '../../lib/modelPricing.js';
+import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
+import { codeFirstProductionAssets } from '../../lib/musicVideoMediumPlan.js';
+import { beginNextAttempt } from './autoReview.js';
 import { withAutopilotCutting } from './composition.js';
 import {
   attachProductionReview,
+  attachProductionDocument,
+  assertProductionActive,
+  recordProductionDocumentRevision,
+  setProductionRender,
   assertProductionStepOpen,
   cancelProductionOnProject,
   findProductionRun,
@@ -79,6 +87,16 @@ const defaults = {
   planProject: async (...args) => (await import('./planner.js')).planProject(...args),
   startCastAndSets: async (...args) => (await import('./castAndSetsService.js')).startCastAndSets(...args),
   autoReview: async () => import('./autoReviewService.js'),
+  documents: async () => import('./documentGeneration.js'),
+  render: async () => import('./render.js'),
+  resolveAuthoring: async (input) => {
+    if (!input?.providerId || !input?.model) throw new ServerError('Select a code-authoring provider and model', { status: 422, code: 'PRODUCTION_AUTHORING_REQUIRED' });
+    const { resolveProviderAndModel } = await import('../promptRunner.js');
+    const { provider, selectedModel } = await resolveProviderAndModel(input);
+    if (!provider || provider.id !== input?.providerId || provider.enabled === false || !selectedModel || selectedModel !== input?.model) throw new ServerError('The selected code-authoring provider/model is unavailable', { status: 409, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
+    if (!isToolFreeOneShotProvider(provider)) throw new ServerError('Choose an API or a tool-free headless CLI for code authoring', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
+    return { providerId: provider.id, model: selectedModel, costUsd: isFreeProvider(provider) ? 0 : null };
+  },
   releaseRevisionSection: async (...args) => (await import('./revisionService.js')).releaseRevisionSection(...args),
 };
 let deps = { ...defaults };
@@ -95,6 +113,13 @@ async function requireProject(projectId) {
 export async function assertProductionSubmission(projectId, runId, stepKey, input) {
   const project = await requireProject(projectId);
   assertProductionStepOpen(project, runId, stepKey, { ...input, processId: PROCESS_ID });
+}
+
+export async function assertProductionContinuation(projectId, runId) {
+  const project = await requireProject(projectId);
+  const run = assertProductionActive(project, runId, PROCESS_ID);
+  if (run.documentCheckpoint && run.documentCheckpoint.directory !== project.composition?.document?.directory) throw new ServerError('The selected document changed since this review began', { status: 409, code: 'COMPOSITION_DRAFT_STALE' });
+  return run;
 }
 
 async function liveJobs() {
@@ -141,7 +166,7 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
 
   const reserved = await mutateProjectRecord(projectId, (current) => reserveProductionStep(current, runId, {
     kind: stepKind, sceneId, revisionId, route: choice.route, rationale: choice.rationale, processId: PROCESS_ID,
-    costUsd: stepPriceUsd({ route: choice.route, project, scene, stepKind }),
+    costUsd: stepPriceUsd({ route: choice.route, project: current, scene: (current.scenes || []).find((s) => s.sceneId === sceneId), stepKind }),
   })).catch((err) => ({ error: err }));
   if (reserved.error) {
     const code = reserved.error.code;
@@ -151,7 +176,7 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   }
   const { step } = reserved;
   const tag = { projectId, sceneId, productionRunId: runId, productionStepKey: step.key, ...(revisionId ? { revisionId } : {}) };
-  const sent = await deps.dispatch({ stepKind, project, scene, route: choice.route, tag, settings: env.settings })
+  const sent = await deps.dispatch({ stepKind, project: reserved.project, scene: reserved.project.scenes.find((s) => s.sceneId === sceneId), route: choice.route, tag, settings: env.settings })
     .catch((err) => ({ error: err }));
   if (sent.error) {
     await mutateProjectRecord(projectId, (current) => settleProductionStep(current, runId, step.key, { status: 'refused', error: sent.error.message }));
@@ -164,6 +189,89 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   // Stopped while this submission was in flight: its job must not run.
   if (linked.run.status !== 'running') await cancelOwnedJobs(runId, { includeRunning: false, jobIds: [sent.jobId] });
   return { ok: true };
+}
+
+/** Author only the failed song sections, preserving every approved asset and medium. */
+async function authorDocument(projectId, runId, action) {
+  const project = await requireProject(projectId);
+  const run = assertProductionActive(project, runId, PROCESS_ID);
+  const documents = await deps.documents();
+  const revise = action.type === 'revise-document';
+  const review = revise ? project.autoReviews.find((entry) => entry.id === action.reviewRunId) : null;
+  const attempt = review?.attempts?.[review.attempts.length - 1];
+  if (revise && (!attempt || attempt.n !== action.attemptN || review.status !== 'running')) return;
+  const revisionId = revise ? `${review.id}:${attempt.n}` : null;
+  const progress = run.documentRevision?.revisionId === revisionId ? run.documentRevision : null;
+  const verifyReviewCurrent = (current, acceptedDirectory = null) => {
+    assertProductionActive(current, runId, PROCESS_ID);
+    if (!revise) return;
+    const liveReview = current.autoReviews.find((entry) => entry.id === review.id);
+    if (liveReview?.status !== 'running' || liveReview.attempts.at(-1)?.n !== attempt.n) throw new ServerError('This document review was stopped or changed', { status: 409, code: 'PRODUCTION_STEP_CLOSED' });
+    if (current.composition?.document?.directory !== (acceptedDirectory || run.documentCheckpoint?.directory)) throw new ServerError('The reviewed document changed during revision', { status: 409, code: 'COMPOSITION_DRAFT_STALE' });
+  };
+  const context = revise ? await documents.readMixedMediaCandidate(projectId) : null;
+  if (revise && (context.stale || !context.sections.length || context.source?.directory !== (progress?.directory || run.documentCheckpoint?.directory))) throw new ServerError('The reviewed document changed — author and review a fresh candidate', { status: 409, code: 'COMPOSITION_DRAFT_STALE' });
+  const findings = attempt?.review?.findings?.filter((finding) => finding.severity === 'blocking') || [];
+  const sections = revise ? context.sections.filter((section) => findings.some((finding) => {
+    const time = review.startSec + finding.atSec;
+    return time >= section.startSec && time < section.endSec;
+  })).map((section) => section.id) : [null];
+  if (revise && !sections.length) throw new ServerError('The review has no failed document section to revise — inspect the plan', { status: 409, code: 'PRODUCTION_MEDIUM_CONFLICT' });
+  if (progress && progress.directory !== (project.composition.documentDraft || project.composition.document)?.directory) throw new ServerError('The revision candidate changed — review the current document', { status: 409, code: 'COMPOSITION_DRAFT_STALE' });
+  const completed = new Set(progress?.completed || []);
+  let directory = progress?.directory || project.composition.document?.directory || null;
+  for (const sectionId of sections) {
+    if (completed.has(sectionId)) continue;
+    let key = null;
+    const sceneId = sectionId || 'document';
+    const verifyCurrent = (current) => {
+      verifyReviewCurrent(current);
+      if (key) assertProductionStepOpen(current, runId, key, { sceneId, kind: 'code', processId: PROCESS_ID });
+    };
+    const input = {
+      ...run.authoring,
+      ...(revise ? { expectedDraft: directory, feedback: findings.map((finding) => `${finding.atSec}s: ${finding.note}`).join('\n') } : {}),
+      verifyCurrent,
+      beforeSubmit: async ({ provider, model }) => {
+        if (provider.id !== run.authoring.providerId || model !== run.authoring.model) throw new ServerError('The authoring provider/model changed; no fallback is allowed', { status: 409, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
+        if (!isToolFreeOneShotProvider(provider)) throw new ServerError('This code authoring provider cannot run without tools', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
+        const costUsd = isFreeProvider(provider) ? 0 : null;
+        const reserved = await mutateProjectRecord(projectId, (current) => {
+          verifyCurrent(current);
+          return reserveProductionStep(current, runId, { kind: 'author', sceneId, revisionId,
+            route: { kind: 'code', mode: provider.id, model }, costUsd,
+            rationale: revise ? 'Revise this failed document section without changing the medium plan' : 'Author the approved mixed-media document', processId: PROCESS_ID });
+        });
+        key = reserved.step.key;
+      },
+    };
+    const result = await (revise ? documents.regenerateMixedMediaSection(projectId, sectionId, input) : documents.generateMixedMediaDocument(projectId, input))
+      .catch(async (error) => {
+        if (key) await mutateProjectRecord(projectId, (current) => settleProductionStep(current, runId, key, { status: 'failed', error: error.message }));
+        throw error;
+      });
+    directory = result.document.directory;
+    completed.add(sectionId);
+    await mutateProjectRecord(projectId, (current) => {
+      verifyCurrent(current);
+      const settled = settleProductionStep(current, runId, key, { status: 'completed' });
+      return recordProductionDocumentRevision(settled.project, runId, { revisionId, completed: [...completed], directory });
+    });
+  }
+  await documents.acceptMixedMediaDocument(projectId, directory, { verifyCurrent: verifyReviewCurrent });
+  await mutateProjectRecord(projectId, (current) => {
+    verifyReviewCurrent(current, directory);
+    if (current.composition.document?.directory !== directory) throw new ServerError('The selected document changed', { status: 409, code: 'COMPOSITION_DRAFT_STALE' });
+    const attached = attachProductionDocument(current, runId, directory);
+    if (!revise) return attached;
+    const liveReview = attached.project.autoReviews.find((entry) => entry.id === review.id);
+    if (liveReview?.status !== 'running' || liveReview.attempts.at(-1)?.n !== attempt.n) throw new ServerError('The review stopped during authoring', { status: 409, code: 'PRODUCTION_STEP_CLOSED' });
+    return { ...attached, project: beginNextAttempt(attached.project, review.id, null).project };
+  });
+  if (revise) {
+    const { resumeAutoReview } = await deps.autoReview();
+    await resumeAutoReview(projectId, review.id);
+  }
 }
 
 // ---- the step loop --------------------------------------------------------------
@@ -222,6 +330,42 @@ async function takeSteps(projectId, runId) {
       continue;
     }
 
+    if (step.type === 'author-document' || step.type === 'revise-document') {
+      const failure = await authorDocument(projectId, runId, step).then(() => null, (error) => error);
+      if (failure) {
+        const fresh = await requireProject(projectId);
+        const active = findProductionRun(fresh, runId);
+        if (active.status !== 'running') return { project: fresh, run: active, action: { type: 'idle' } };
+        const out = await halt(projectId, runId, { status: LIMIT_CODES.has(failure.code) ? 'limit-reached' : 'blocked', reason: `Document authoring stopped: ${failure.message}` });
+        return { ...out, action: { type: 'idle' } };
+      }
+      continue;
+    }
+
+    if (step.type === 'render-document') {
+      const attemptId = randomUUID();
+      await mutateProjectRecord(projectId, (current) => {
+        assertProductionActive(current, runId, PROCESS_ID);
+        return setProductionRender(current, runId, { status: 'reserved', jobId: null, attemptId });
+      });
+      const { renderMusicVideo } = await deps.render();
+      const rendered = await renderMusicVideo(projectId, {
+        productionRunId: runId,
+        productionRenderAttemptId: attemptId,
+        verifyCurrent: (current) => {
+          const active = assertProductionActive(current, runId, PROCESS_ID);
+          if (active.documentCheckpoint?.directory !== current.composition?.document?.directory) throw new ServerError('The reviewed document changed before final render', { status: 409, code: 'COMPOSITION_DRAFT_STALE' });
+        },
+      }).catch((error) => ({ error }));
+      if (rendered.error) {
+        await mutateProjectRecord(projectId, (current) => setProductionRender(current, runId, { status: 'failed', jobId: null, attemptId, error: rendered.error.message }));
+      } else {
+        const out = await mutateProjectRecord(projectId, (current) => setProductionRender(current, runId, { status: 'queued', jobId: rendered.jobId, attemptId }));
+        if (out.run.status !== 'running') (await deps.render()).cancelRender(rendered.jobId);
+      }
+      continue;
+    }
+
     if (step.type === 'review') {
       const { startAutoReview } = await deps.autoReview();
       const started = await startAutoReview(projectId, {
@@ -233,6 +377,7 @@ async function takeSteps(projectId, runId) {
         },
         reviewer: run.reviewer,
         productionRunId: runId,
+        ...(run.authoring ? { documentRevisions: true } : {}),
       }).catch((err) => ({ error: err }));
       if (started.error) {
         const out = await halt(projectId, runId, { status: 'blocked', reason: `The draft review could not start: ${started.error.message}` });
@@ -306,14 +451,16 @@ async function cancelOwnedJobs(runId, { includeRunning = false, jobIds = null } 
  * Start a run (explicit director request). Every pool route must be eligible
  * now. Returns `{ project, run }`; the run advances in the background.
  */
-export async function startProduction(projectId, { directive, pool: requested, limits, reviewer }) {
-  await requireProject(projectId);
-  const pool = normalizeProductionPool(requested);
+export async function startProduction(projectId, { directive, pool: requested, limits, reviewer, authoring: requestedAuthoring }) {
+  const project = await requireProject(projectId);
+  const assets = codeFirstProductionAssets(project);
+  const authoring = assets ? await deps.resolveAuthoring(requestedAuthoring) : null;
+  const pool = normalizeProductionPool(requested, { allowEmpty: !!assets });
   await assertPoolEligible(pool, await deps.loadEnv());
   // The autopilot cuts on the song (#9290) unless the director chose how it
   // cuts — set before the run captures its creative-setup basis.
   const out = await mutateProjectRecord(projectId, (current) => startProductionOnProject(withAutopilotCutting(current), {
-    directive, pool, limits, reviewer, processId: PROCESS_ID, pricing: poolPricing(pool, current),
+    directive, pool, limits, reviewer, authoring, processId: PROCESS_ID, pricing: poolPricing(pool, current),
   }));
   console.log(`🎬 Music Video production ${short(out.run.id)} started: ${out.run.pool.length} allowed route(s), ≤${out.run.limits.maxGenerations} generations, ≤${out.run.limits.maxReviewAttempts} reviews`);
   advanceInBackground(projectId, out.run.id);
@@ -326,13 +473,19 @@ export async function startProduction(projectId, { directive, pool: requested, l
  * paused review, and continue. Returns `{ project, run }`.
  */
 export async function resumeProduction(projectId, runId, { limits, acceptBasis = false } = {}) {
+  const before = await requireProject(projectId);
+  const priorReviewId = findProductionRun(before, runId).reviewRunId;
   const jobs = await liveJobs();
   await mutateProjectRecord(projectId, (current) => reconcileProductionSteps(current, runId, jobs));
   const out = await mutateProjectRecord(projectId, (current) => resumeProductionOnProject(current, runId, { limits, acceptBasis, processId: PROCESS_ID }));
+  if (priorReviewId && !out.run.reviewRunId) {
+    const oldReview = before.autoReviews?.find((entry) => entry.id === priorReviewId);
+    if (oldReview && ['running', 'stopped', 'limit-reached'].includes(oldReview.status)) await (await deps.autoReview()).cancelAutoReview(projectId, priorReviewId);
+  }
   const review = out.run.reviewRunId
     ? (out.project.autoReviews || []).find((r) => r.id === out.run.reviewRunId)
     : null;
-  if (review && (review.status === 'stopped' || review.status === 'limit-reached')) {
+  if (review && (review.status === 'stopped' || review.status === 'limit-reached' || (out.run.authoring && review.status === 'running'))) {
     const { resumeAutoReview } = await deps.autoReview();
     const headroom = Math.min(AUTO_REVIEW_MAX_GENERATIONS, review.usage.generations + remainingProductionGenerations(out.run));
     await resumeAutoReview(projectId, review.id, {
@@ -366,6 +519,7 @@ export async function stopProduction(projectId, runId) {
 export async function cancelProduction(projectId, runId) {
   const out = await mutateProjectRecord(projectId, (current) => cancelProductionOnProject(current, runId));
   await cancelOwnedJobs(runId, { includeRunning: true });
+  if (out.run.finalRender?.jobId) (await deps.render()).cancelRender(out.run.finalRender.jobId);
   const review = out.run.reviewRunId ? (out.project.autoReviews || []).find((r) => r.id === out.run.reviewRunId) : null;
   if (review && ['running', 'stopped', 'limit-reached'].includes(review.status)) {
     const { cancelAutoReview } = await deps.autoReview();
@@ -411,7 +565,11 @@ async function onOwnedReviewAdvanced({ projectId, run: review, action } = {}) {
   if (!projectId || !review?.productionRunId) return;
   const project = await getProject(projectId);
   const run = project ? projectProductionRuns(project).find((r) => r.id === review.productionRunId) : null;
-  if (!runningHere(run)) return;
+  if (!runningHere(run) || run.reviewRunId !== review.id) return;
+  if (action?.type === 'revise-document' && run.authoring) {
+    await advanceProduction(projectId, run.id);
+    return;
+  }
   if (action?.type === 'generate' && review.status === 'running' && action.sections?.length) {
     for (const section of action.sections) {
       const stepKind = section.kind === 'image' ? 'frame' : 'clip';
@@ -471,3 +629,11 @@ function armJobListeners() {
     console.error(`❌ Music Video production could not watch generation jobs: ${err.message}`);
   });
 }
+
+// Internal final-render event: settle only this run, and never advance a run
+// pinned to an older process after a restart.
+musicVideoEvents.on('document-render', guarded('its final document rendered', async ({ projectId, runId, jobId, status, error, attemptId }) => {
+  if (!projectId || !runId) return;
+  const out = await mutateProjectRecord(projectId, (current) => setProductionRender(current, runId, { jobId, status, error, attemptId }));
+  if (runningHere(out.run)) await advanceProduction(projectId, runId);
+}));

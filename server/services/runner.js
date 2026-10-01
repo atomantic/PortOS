@@ -323,7 +323,7 @@ const describeSpawnFailure = (spawnError, command) =>
  * `.cmd`/`.bat` spawn under `shell:false` fails outright post-CVE-2024-27980,
  * and why the `cmd.exe` wrapper avoids DEP0190's unescaped-join hazard).
  */
-export async function executeCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout, toolFree = false }) {
+export async function executeCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout, toolFree = false, beforeExecute }) {
   const toolkit = requireToolkit();
 
   const runsPath = join(runnerConfig.dataDir, 'runs');
@@ -435,6 +435,17 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
   const runCwd = vision?.invocation.cwd || effectiveCwd;
   const { command: spawnCommand, args: spawnArgs, wrapped } = resolveCliSpawn(provider, runCommand, args, childEnv);
   processGroup = needsProcessGroup(wrapped);
+
+  if (beforeExecute) {
+    try { await beforeExecute(); }
+    catch (error) {
+      cleanupPromptFile();
+      await cleanupVisionFiles().catch(() => {});
+      await finalizeRunRecord({ runId, output: '', exitCode: 1, success: false, error: error.message, startTime,
+        extras: { canceled: true, completionReason: 'canceled' } });
+      throw error;
+    }
+  }
 
   childProcess = spawn(spawnCommand, spawnArgs, {
     cwd: runCwd,

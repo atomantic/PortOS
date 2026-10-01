@@ -151,6 +151,7 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
           </div>
         </div>
       )}
+      {run?.documentRevisions && <p className="text-port-text-muted">Code-first review revises failed document sections through the production authoring budget. Selected assets and the generated-video allowance stay fixed; changing the medium requires your plan edit.</p>}
       {run && (
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center justify-between gap-2">

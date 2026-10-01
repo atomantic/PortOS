@@ -95,10 +95,17 @@ export function codeFirstProductionAssets(project) {
   if (plan.strategy !== 'code-first') return null;
   const directions = new Map((project?.treatment?.shotDirections || []).map((d) => [d.sceneId, d]));
   const steps = [];
-  const conflicts = plan.unresolved.filter((item) => item.blocking).map((item) => item.message);
+  const conflicts = plan.unresolved.filter((item) => item.blocking || item.message.startsWith('Visible performance')).map((item) => item.message);
   for (const scene of project?.scenes || []) {
-    const medium = directions.get(scene.sceneId)?.medium;
+    const direction = directions.get(scene.sceneId);
+    const medium = direction?.medium;
     if (!MUSIC_VIDEO_MEDIA.includes(medium)) continue;
+    if (scene.shotMode === 'performance' && !['existing-footage', 'generated-footage'].includes(medium)) conflicts.push(`Performance shot ${scene.label || scene.sceneId} requires selected footage; revise its shot mode or medium explicitly.`);
+    if ((direction?.mode === 'performance' || scene.shotMode === 'performance')
+      && ['existing-footage', 'generated-footage'].includes(medium)
+      && (scene.shotMode !== 'performance' || (scene.visualLayer != null && scene.visualLayer !== 'footage'))) {
+      conflicts.push(`Set ${scene.label || scene.sceneId} to a Performance footage shot before production; its approved performance must retain source-audio timing.`);
+    }
     if (medium === 'procedural') {
       steps.push({ sceneId: scene.sceneId, medium, action: 'code' });
     } else if (medium === 'still') {

@@ -587,6 +587,10 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   TUI run has been registered as an attachable shell session.
  * @param {(runId:string)=>void} [args.onRunSettled] — called when that concrete
  *   attempt resolves or rejects. Observational; callback errors are ignored.
+ * @param {(meta:object)=>Promise<void>} [args.beforeExecute] — enforced caller
+ *   admission immediately before provider dispatch, after concurrency/readiness
+ *   and attachment preparation. A rejection cancels this attempt without
+ *   retrying, benching the provider, or investigating a provider failure.
  * @param {string[]} [args.screenshots] — image paths for a vision/multimodal
  *   call (relative to the runner's screenshots dir, or absolute). API providers
  *   base64-encode each into `image_url` blocks. Codex and Claude Code CLI
@@ -1387,6 +1391,7 @@ async function executeProviderRunOnce({
   onRunCreated,
   onRunReady,
   onRunSettled,
+  beforeExecute,
   timeout: timeoutOverride,
   absoluteTimeoutMs,
   maxTokens,
@@ -1555,6 +1560,16 @@ async function executeProviderRunOnce({
     let text = '';
     let settled = false;
     let apiTimeoutHandle = null;
+    let dispatchRefusal = null;
+    const admitDispatch = typeof beforeExecute === 'function' ? async () => {
+      try {
+        await beforeExecute({ runId, provider: effectiveProvider, model: effectiveModel });
+      } catch (error) {
+        dispatchRefusal = error instanceof Error ? error : new Error(String(error));
+        dispatchRefusal.canceled = true;
+        throw dispatchRefusal;
+      }
+    } : undefined;
 
     const safeResolve = (value) => { if (!settled) { settled = true; if (apiTimeoutHandle) clearTimeout(apiTimeoutHandle); resolve(value); } };
     const safeReject = (err) => {
@@ -1587,6 +1602,7 @@ async function executeProviderRunOnce({
     // explicit `success === false`. Per-site drift was the bug.
     const labelByType = { cli: 'CLI', api: 'API', tui: 'TUI' };
     const onComplete = (result) => {
+      if (dispatchRefusal) { safeReject(dispatchRefusal); return; }
       if (result?.error || result?.success === false) {
         const err = new Error(result?.error || `${labelByType[effectiveProvider.type] || effectiveProvider.type} execution failed`);
         if (result?.canceled === true) {
@@ -1658,7 +1674,7 @@ async function executeProviderRunOnce({
     }
 
     if (effectiveProvider.type === PROVIDER_TYPES.CLI) {
-      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots, onData, onComplete, timeout: effectiveTimeout, toolFree }).catch(safeReject);
+      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots, onData, onComplete, timeout: effectiveTimeout, toolFree, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.API) {
       // API runs take model as a first-class arg — no clone needed. The
       // toolkit's executeApiRun now owns the primary wall-clock timeout (it
@@ -1693,12 +1709,12 @@ async function executeProviderRunOnce({
       // a per-call override (e.g. the importer's long stage timeout) governs the
       // ceiling instead of the runner's provider/default fallback — same
       // caller-override precedence CLI/TUI runs already get.
-      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens }).catch(safeReject);
+      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.
       import('./tuiPromptRunner.js')
-        .then(({ executeTuiRun }) => executeTuiRun({ runId, provider: providerForRun, prompt, screenshots, workspacePath: effectiveCwd, onData, onComplete, onReady: onRunReady, timeout: effectiveTimeout, label: source }))
+        .then(({ executeTuiRun }) => executeTuiRun({ runId, provider: providerForRun, prompt, screenshots, workspacePath: effectiveCwd, onData, onComplete, onReady: onRunReady, timeout: effectiveTimeout, label: source, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }))
         .catch(safeReject);
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));

@@ -135,6 +135,10 @@ beforeEach(() => {
     planProject,
     startCastAndSets,
     autoReview: async () => autoReview,
+    resolveAuthoring: async (input) => {
+      if (!input?.providerId || !input?.model) throw Object.assign(new Error('Select an authoring model'), { code: 'PRODUCTION_AUTHORING_REQUIRED' });
+      return { ...input, costUsd: 0 };
+    },
     releaseRevisionSection: vi.fn(async () => {}),
   });
 });
@@ -482,7 +486,7 @@ describe('music video production run (#9066)', () => {
   it('does not start a code-first document run through legacy frame and clip lanes', async () => {
     seedProject({ composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
     await expect(service.startProduction('mv-example', { pool: POOL, limits: LIMITS }))
-      .rejects.toMatchObject({ code: 'PRODUCTION_CODE_FIRST_NOT_READY' });
+      .rejects.toMatchObject({ code: 'PRODUCTION_AUTHORING_REQUIRED' });
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -506,7 +510,7 @@ describe('music video production run (#9066)', () => {
     expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 0 } });
     expect(theRun().steps[0]).toMatchObject({ status: 'refused', error: expect.stringMatching(/policy|plan/i) });
     await expect(service.resumeProduction('mv-example', theRun().id, { acceptBasis: true }))
-      .rejects.toMatchObject({ code: 'PRODUCTION_CODE_FIRST_NOT_READY' });
+      .rejects.toMatchObject({ code: 'PRODUCTION_AUTHORING_REQUIRED' });
   });
 
   it('keeps pre-upgrade legacy run checksums valid after adding the policy-aware basis', async () => {
@@ -529,4 +533,304 @@ describe('music video production run (#9066)', () => {
     expect(theRun().status).toBe('running');
     expect(theRun().basis).not.toHaveProperty('version');
   });
+});
+
+// The real state machine/pool run against controlled authors and encoders;
+// collaborators must honor the same publication/submission guards as providers.
+const AUTHORING = { providerId: 'local-fixture', model: 'fixture-model' };
+const authorProvider = { id: AUTHORING.providerId, type: 'api', endpoint: 'http://localhost:11434' };
+const storeMutation = async (transform) => (await import('./projects.js')).mutateProjectRecord('mv-example', transform);
+function seedCodeFirst({ scenes, directions, percent = 0, ...patch } = {}) {
+  return seedProject({ composition: { mode: 'document' },
+    productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: percent },
+    scenes: scenes || [{ sceneId: 'mvs-code', label: 'Code', startSec: 0, endSec: 8 }],
+    treatment: { shotDirections: directions || [{ sceneId: 'mvs-code', medium: 'procedural', mediumRationale: 'Typography' }] }, ...patch,
+  });
+}
+function documentDoubles() {
+  let version = 0;
+  const author = vi.fn(async (_id, input) => {
+    await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model });
+    return storeMutation((project) => {
+      input.verifyCurrent(project);
+      const document = { directory: `music-video/mv-example/composition/doc-${version += 1}`, source: { kind: 'generated' } };
+      return { project: { ...project, composition: { ...project.composition, documentDraft: document } }, document };
+    });
+  });
+  const regenerate = vi.fn(async (id, _sectionId, input) => author(id, input));
+  const accept = vi.fn(async (_id, directory, options) => storeMutation((project) => {
+    options.verifyCurrent(project);
+    if (project.composition.documentDraft?.directory !== directory) throw new Error('stale candidate');
+    const { documentDraft, ...composition } = project.composition;
+    return { project: { ...project, composition: { ...composition, document: documentDraft } }, document: documentDraft };
+  }));
+  const documents = { generateMixedMediaDocument: author, regenerateMixedMediaSection: regenerate, acceptMixedMediaDocument: accept,
+    readMixedMediaCandidate: async () => ({ stale: false, source: current().composition.documentDraft || current().composition.document, sections: [
+      { id: 'verse', startSec: 0, endSec: 4 }, { id: 'hook', startSec: 4, endSec: 8 },
+    ] }),
+  };
+  const render = vi.fn(async (_id, options) => { options.verifyCurrent(current()); return { jobId: 'final-render' }; });
+  const cancelRender = vi.fn();
+  service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue,
+    autoReview: async () => autoReview, documents: async () => documents,
+    render: async () => ({ renderMusicVideo: render, cancelRender }),
+    resolveAuthoring: async (input) => {
+      if (!input?.providerId) throw Object.assign(new Error('Select an authoring model'), { code: 'PRODUCTION_AUTHORING_REQUIRED' });
+      return { ...input, costUsd: 0 };
+    },
+  });
+  return { author, regenerate, accept, render, cancelRender };
+}
+function passOwnedReview() {
+  const project = store.get('mv-example');
+  const review = project.autoReviews[0];
+  review.status = 'passed';
+  musicVideoEvents.emit('auto-review', { projectId: project.id, run: clone(review), action: { type: 'idle' } });
+}
+function failOwnedReview(atSec = 6) {
+  const review = store.get('mv-example').autoReviews[0];
+  Object.assign(review, { startSec: 0, attempts: [{ n: 1, review: { verdict: 'revise', findings: [{ severity: 'blocking', atSec, note: 'Type transition jumps' }] } }] });
+  musicVideoEvents.emit('auto-review', { projectId: 'mv-example', run: clone(review), action: { type: 'revise-document' } });
+}
+
+describe('code-first production execution (#9301)', () => {
+  it('authors a code-only plan with no media routes/jobs and completes only after its reviewed final render', async () => {
+    seedCodeFirst(); const { author, render } = documentDoubles();
+    await start({ pool: [], authoring: AUTHORING });
+    expect(jobs).toEqual([]); expect(dispatch).not.toHaveBeenCalled(); expect(author).toHaveBeenCalledOnce();
+    expect(theRun()).toMatchObject({ usage: { generations: 1, spentUsd: 0 }, documentCheckpoint: { directory: current().composition.document.directory } });
+    expect(startAutoReview.mock.calls[0][1]).toMatchObject({ documentRevisions: true, startSec: 0, endSec: 8 });
+    passOwnedReview(); await settle();
+    expect(render).toHaveBeenCalledOnce(); expect(theRun().status).toBe('running');
+    musicVideoEvents.emit('document-render', { projectId: 'mv-example', runId: theRun().id, jobId: 'final-render', attemptId: theRun().finalRender.attemptId, status: 'completed' });
+    await settle(); expect(theRun().status).toBe('completed');
+  });
+
+  it('prepares only missing selected still/footage assets and reuses imported takes', async () => {
+    seedCodeFirst({ percent: 50,
+      scenes: [{ sceneId: 'code', startSec: 0, endSec: 1 }, { sceneId: 'still', startSec: 1, endSec: 2, framePrompt: 'still' },
+        { sceneId: 'imported', startSec: 2, endSec: 4, videoHistoryId: 'imported-take' },
+        { sceneId: 'generated', startSec: 4, endSec: 8, framePrompt: 'frame', prompt: 'motion' }],
+      directions: ['procedural', 'still', 'existing-footage', 'generated-footage'].map((medium, index) => ({ sceneId: ['code', 'still', 'imported', 'generated'][index], medium, mediumRationale: 'Selected look' })),
+    });
+    const { author } = documentDoubles();
+    await start({ pool: [POOL[0], POOL[2]], authoring: AUTHORING });
+    expect(dispatch.mock.calls.map(([args]) => [args.stepKind, args.scene.sceneId])).toEqual([['frame', 'still'], ['frame', 'generated']]);
+    completeJob('job-1'); completeJob('job-2'); await settle();
+    expect(dispatch.mock.calls.at(-1)[0]).toMatchObject({ stepKind: 'clip', scene: { sceneId: 'generated' } });
+    expect(theRun().steps.at(-1).editInterval).toEqual({ startSec: 4, endSec: 8 });
+    completeJob('job-3'); await settle();
+    expect(author).toHaveBeenCalledOnce(); expect(current().scenes[2].videoHistoryId).toBe('imported-take');
+    expect(theRun().usage.generations).toBe(4);
+  });
+
+  it('refuses over-allowance and missing-import plans before any provider submission', async () => {
+    seedCodeFirst({ directions: [{ sceneId: 'mvs-code', medium: 'generated-footage', mediumRationale: 'Motion' }] });
+    const { author } = documentDoubles();
+    await expect(start({ pool: [], authoring: AUTHORING })).rejects.toMatchObject({ code: 'PRODUCTION_MEDIUM_CONFLICT' });
+    expect(dispatch).not.toHaveBeenCalled(); expect(author).not.toHaveBeenCalled();
+    seedCodeFirst({ directions: [{ sceneId: 'mvs-code', medium: 'existing-footage', mediumRationale: 'Imported' }] });
+    await expect(start({ pool: POOL, authoring: AUTHORING })).rejects.toMatchObject({ code: 'PRODUCTION_MEDIUM_CONFLICT' });
+  });
+
+  it('refuses an approved performance disguised by a legacy card layer before any provider call', async () => {
+    seedCodeFirst({ percent: 100,
+      scenes: [{ sceneId: 'mvs-code', shotMode: 'performance', visualLayer: 'card', startSec: 0, endSec: 8 }],
+      directions: [{ sceneId: 'mvs-code', mode: 'performance', medium: 'generated-footage', mediumRationale: 'Sung performance' }],
+    });
+    const { author } = documentDoubles();
+    await expect(start({ pool: POOL, authoring: AUTHORING })).rejects.toMatchObject({ code: 'PRODUCTION_MEDIUM_CONFLICT' });
+    expect(dispatch).not.toHaveBeenCalled(); expect(author).not.toHaveBeenCalled();
+  });
+
+  it('revises only the failed code section while retaining selected assets and a zero video allowance', async () => {
+    seedCodeFirst(); const { regenerate } = documentDoubles();
+    await start({ pool: [], authoring: AUTHORING });
+    failOwnedReview(); await settle();
+    expect(regenerate).toHaveBeenCalledOnce(); expect(regenerate.mock.calls[0][1]).toBe('hook');
+    expect(theRun().usage.generations).toBe(2); expect(jobs).toEqual([]);
+    expect(current().productionPolicy.maxGeneratedVideoPercent).toBe(0);
+    expect(current().autoReviews[0].attempts.at(-1)).toMatchObject({ n: 2, excerptId: null });
+  });
+
+  it('halts a review-driven code revision before a provider call past the generation cap', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    await start({ pool: [], authoring: AUTHORING, limits: { maxGenerations: 1, maxReviewAttempts: 2 } });
+    let submitted = 0;
+    author.mockImplementationOnce(async (_id, input) => { await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); submitted += 1; });
+    failOwnedReview(); await settle();
+    expect(submitted).toBe(0); expect(theRun().usage.generations).toBe(1); expect(theRun().status).toBe('limit-reached');
+  });
+
+  it('refuses an unpriced author at the actual submission boundary under a dollar cap', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    let submitted = 0;
+    author.mockImplementationOnce(async (_id, input) => {
+      await input.beforeSubmit({ provider: { ...authorProvider, endpoint: 'https://api.example.com/v1' }, model: AUTHORING.model });
+      submitted += 1;
+    });
+    await start({ pool: [], authoring: AUTHORING, limits: { ...LIMITS, spendCapUsd: 1 } });
+    expect(submitted).toBe(0); expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 0, spentUsd: 0 } });
+    expect(theRun().stopReason).toMatch(/no known price/);
+  });
+
+  it('does not accept a completed revision after its owning review stops', async () => {
+    seedCodeFirst(); const { accept } = documentDoubles();
+    await start({ pool: [], authoring: AUTHORING });
+    const selected = current().composition.document.directory;
+    const normal = accept.getMockImplementation();
+    accept.mockImplementationOnce(async (...args) => {
+      store.get('mv-example').autoReviews[0].status = 'stopped';
+      return normal(...args);
+    });
+    failOwnedReview(); await settle();
+    expect(current().composition.document.directory).toBe(selected);
+    expect(current().composition.documentDraft.directory).not.toBe(selected);
+    expect(theRun().usage.generations).toBe(2);
+    expect(theRun().status).toBe('blocked');
+  });
+
+  it('does not submit late authoring after cancellation during preparation', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    let release; const waiting = new Promise((resolve) => { release = resolve; });
+    const normal = author.getMockImplementation();
+    author.mockImplementationOnce(async (id, input) => { await waiting; return normal(id, input); });
+    await service.startProduction('mv-example', { pool: [], authoring: AUTHORING, limits: LIMITS });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await service.cancelProduction('mv-example', theRun().id);
+    release(); await settle();
+    expect(theRun().status).toBe('canceled'); expect(theRun().usage.generations).toBe(0);
+    expect(current().composition.documentDraft).toBeUndefined();
+  });
+
+  it('drops a paid authoring result when the policy changes before publication', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    let release; const waiting = new Promise((resolve) => { release = resolve; });
+    author.mockImplementationOnce(async (_id, input) => {
+      await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await waiting;
+      await storeMutation((project) => { input.verifyCurrent(project); return { project }; });
+    });
+    await service.startProduction('mv-example', { pool: [], authoring: AUTHORING, limits: LIMITS });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.get('mv-example').productionPolicy.maxGeneratedVideoPercent = 5;
+    release(); await settle();
+    expect(current().composition.document).toBeUndefined(); expect(theRun().usage.generations).toBe(1);
+    expect(theRun().steps[0].status).toBe('failed');
+  });
+
+  it('retains a fast final-render terminal event when its queue link arrives later', async () => {
+    seedCodeFirst(); const { render } = documentDoubles();
+    render.mockImplementationOnce(async () => {
+      musicVideoEvents.emit('document-render', { projectId: 'mv-example', runId: theRun().id, jobId: 'fast-render', attemptId: theRun().finalRender.attemptId, status: 'completed' });
+      await new Promise((resolve) => setTimeout(resolve, 0)); return { jobId: 'fast-render' };
+    });
+    await start({ pool: [], authoring: AUTHORING }); passOwnedReview(); await settle();
+    expect(theRun()).toMatchObject({ status: 'completed', finalRender: { status: 'completed', jobId: 'fast-render' } });
+  });
+
+  it('refuses a replaced selected document before final render', async () => {
+    seedCodeFirst(); const { render } = documentDoubles();
+    await start({ pool: [], authoring: AUTHORING });
+    store.get('mv-example').composition.document.directory = 'music-video/mv-example/composition/doc-replaced';
+    passOwnedReview(); await settle();
+    expect(render).not.toHaveBeenCalled(); expect(theRun().status).toBe('needs-replan');
+  });
+
+  it('stops a pending final-render preparation before encoding', async () => {
+    seedCodeFirst(); const { render } = documentDoubles();
+    let release; const waiting = new Promise((resolve) => { release = resolve; });
+    let encoded = 0;
+    render.mockImplementationOnce(async (_id, options) => { await waiting; options.verifyCurrent(current()); encoded += 1; return { jobId: 'late-render' }; });
+    await start({ pool: [], authoring: AUTHORING }); passOwnedReview();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await service.stopProduction('mv-example', theRun().id); release(); await settle();
+    expect(encoded).toBe(0); expect(theRun().status).toBe('stopped');
+  });
+});
+
+it('rechecks a generated shot and zero allowance after asynchronous provider preparation', async () => {
+  seedCodeFirst({ percent: 100,
+    scenes: [{ sceneId: 'mvs-a', startSec: 0, endSec: 8, referenceImageId: 'frame.png', prompt: 'move' }],
+    directions: [{ sceneId: 'mvs-a', medium: 'generated-footage', mediumRationale: 'Selected exception' }],
+  });
+  documentDoubles();
+  let release; const waiting = new Promise((resolve) => { release = resolve; });
+  dispatch.mockImplementationOnce(async (args) => {
+    await waiting;
+    await service.assertProductionSubmission('mv-example', args.tag.productionRunId, args.tag.productionStepKey, { sceneId: 'mvs-a', kind: 'video' });
+    return enqueueing(args);
+  });
+  await service.startProduction('mv-example', { pool: [POOL[2]], authoring: AUTHORING, limits: LIMITS });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  store.get('mv-example').productionPolicy.maxGeneratedVideoPercent = 0;
+  release(); await settle();
+  expect(jobs).toHaveLength(0); expect(theRun().usage.generations).toBe(0);
+  expect(theRun().steps[0].status).toBe('refused');
+});
+
+it('charges a selected performance retry by its actual padded provider duration without adding edit share', async () => {
+  seedCodeFirst({ percent: 100, videoSettings: { backend: 'fal', falModelId: 'minimax/h3-max/image-to-video' },
+    audioAnalysis: { durationSec: 30, sections: [{ startSec: 0, endSec: 30 }] },
+    scenes: [{ sceneId: 'performance', shotMode: 'performance', startSec: 0, endSec: 4, referenceImageId: 'frame.png', prompt: 'perform' }],
+    directions: [{ sceneId: 'performance', medium: 'generated-footage', mediumRationale: 'Sung performance' }],
+  });
+  documentDoubles();
+  const usable = env.isVideoModeUsable;
+  env.isVideoModeUsable = (_settings, mode) => mode === 'fal';
+  try {
+    await start({ pool: [{ kind: 'video', mode: 'fal' }], authoring: AUTHORING, limits: { ...LIMITS, spendCapUsd: 1.7 } });
+    const job = jobs[0]; job.status = 'failed'; mediaJobEvents.emit('failed', job); await settle();
+    const clips = theRun().steps.filter((step) => step.kind === 'clip');
+    expect(clips).toHaveLength(2);
+    expect(clips.map((step) => step.costUsd)).toEqual([0.808, 0.808]);
+    expect(clips.map((step) => step.editInterval)).toEqual([{ startSec: 0, endSec: 4 }, { startSec: 0, endSec: 4 }]);
+    jobs[1].status = 'failed'; mediaJobEvents.emit('failed', jobs[1]); await settle();
+    // Explicit resume resets slot failure count, but the paid retry budget stays spent.
+    await service.resumeProduction('mv-example', theRun().id); await settle();
+    expect(jobs).toHaveLength(2); expect(theRun()).toMatchObject({ status: 'limit-reached', usage: { generations: 2, spentUsd: 1.616 } });
+  } finally { env.isVideoModeUsable = usable; }
+});
+
+it.each([1_000, 120_000])('keeps interrupted authoring charged at %i ms without a queue job and requires explicit resume', async (reservationAge) => {
+  seedCodeFirst(); const { author } = documentDoubles();
+  let release; const waiting = new Promise((resolve) => { release = resolve; });
+  author.mockImplementationOnce(async (_id, input) => {
+    await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await waiting;
+    input.verifyCurrent(current());
+  });
+  await service.startProduction('mv-example', { pool: [], authoring: AUTHORING, limits: LIMITS });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  store.get('mv-example').productionRuns[0].processId = 'previous-process';
+  release(); await settle();
+  expect(author).toHaveBeenCalledOnce(); expect(current().composition.document).toBeUndefined();
+  expect(theRun().usage.generations).toBe(1);
+  // Persisted submission intent after a crash is not refundable even past the queue lease.
+  store.get('mv-example').productionRuns[0].steps[0].status = 'reserved';
+  store.get('mv-example').productionRuns[0].steps[0].reservedAt = new Date(Date.now() - reservationAge).toISOString();
+  await service.resumeProduction('mv-example', theRun().id); await settle();
+  expect(author).toHaveBeenCalledTimes(2); expect(theRun().usage.generations).toBe(2);
+});
+
+it('ignores an earlier failed render attempt completion after explicit retry', async () => {
+  seedCodeFirst(); documentDoubles();
+  await start({ pool: [], authoring: AUTHORING }); passOwnedReview(); await settle();
+  const oldAttempt = theRun().finalRender.attemptId;
+  musicVideoEvents.emit('document-render', { projectId: 'mv-example', runId: theRun().id, jobId: 'final-render', attemptId: oldAttempt, status: 'failed', error: 'encoder failed' });
+  await settle(); expect(theRun().status).toBe('blocked');
+  await service.resumeProduction('mv-example', theRun().id); await settle();
+  expect(theRun().finalRender.attemptId).not.toBe(oldAttempt);
+  musicVideoEvents.emit('document-render', { projectId: 'mv-example', runId: theRun().id, jobId: 'final-render', attemptId: oldAttempt, status: 'completed' });
+  await settle(); expect(theRun().status).toBe('running');
+  expect(theRun().finalRender.status).toBe('queued');
+});
+
+it('requires reauthoring and a new review after an accepted policy/selected-asset change', async () => {
+  seedCodeFirst(); const { author } = documentDoubles();
+  await start({ pool: [], authoring: AUTHORING });
+  store.get('mv-example').scenes[0].referenceImageId = 'new-selection.png';
+  await settle(); expect(theRun().status).toBe('needs-replan');
+  await service.resumeProduction('mv-example', theRun().id, { acceptBasis: true }); await settle();
+  expect(author).toHaveBeenCalledTimes(2);
+  expect(autoReview.cancelAutoReview).toHaveBeenCalledWith('mv-example', 'mvar-example');
+  expect(theRun().documentCheckpoint.directory).toBe(current().composition.document.directory);
 });

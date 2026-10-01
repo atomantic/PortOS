@@ -41,6 +41,23 @@ async function documentProject() {
 }
 
 describe('composition-document render plan', () => {
+  it('checks owning production after preparation and again before encoding, releasing refused render slots', async () => {
+    const id = await documentProject();
+    await importDocumentTemplate(id);
+    encodeDocumentComposition.mockClear();
+    const refused = () => { throw Object.assign(new Error('Production stopped'), { code: 'PRODUCTION_NOT_RUNNING' }); };
+    await expect(renderMusicVideo(id, { verifyCurrent: refused })).rejects.toMatchObject({ code: 'PRODUCTION_NOT_RUNNING' });
+    expect(encodeDocumentComposition).not.toHaveBeenCalled();
+    let checks = 0;
+    await renderMusicVideo(id, { verifyCurrent: () => { if (++checks === 2) refused(); } });
+    await vi.waitFor(async () => expect((await projects.getProject(id)).status).toBe('failed'));
+    expect(checks).toBe(2);
+    expect(encodeDocumentComposition).not.toHaveBeenCalled();
+    // Both preparation and asynchronous encode refusal release the per-project slot.
+    await renderMusicVideo(id);
+    await vi.waitFor(() => expect(encodeDocumentComposition).toHaveBeenCalledOnce());
+  });
+
   it('refuses a full render and an excerpt while no document is attached, and releases both slots', async () => {
     const id = await documentProject();
     for (let attempt = 0; attempt < 2; attempt++) {
