@@ -279,6 +279,24 @@ describe('local song source (#9473)', () => {
     expect(runOf()).toMatchObject({ status: 'stopped', stage: 'song' });
     expect(runOf().stages.song.status).toBe('running');
   });
+
+  it('cancels a render queued after the run was already stopped, so no orphan job keeps the GPU busy', async () => {
+    let queued;
+    doubles.generateLocalSong.mockImplementationOnce(async ({ onSubmitted }) => {
+      await new Promise((resolve) => { queued = resolve; }); // engine pick / enqueue still in flight
+      await onSubmitted('job-late');
+      return { filename: 'song.wav' };
+    });
+    await service.startAutonomousVideo({ prompt: 'p', songSource: 'local' });
+    await vi.waitFor(() => expect(queued).toBeTypeOf('function'));
+    await service.stopAutonomousVideo('mv-auto');
+    expect(doubles.cancelLocalSong).not.toHaveBeenCalled(); // nothing was queued yet
+    queued();
+    await vi.waitFor(() => expect(doubles.cancelLocalSong).toHaveBeenCalledWith('job-late'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(runOf()).toMatchObject({ status: 'stopped', stage: 'song' });
+    expect(calls).not.toContain('analyze');
+  });
 });
 
 describe('events and process pinning', () => {

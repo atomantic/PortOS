@@ -141,7 +141,15 @@ async function localSong({ project, run, save }) {
   }
   await deps.generateLocalSong({
     trackId, title, prompt, lyrics, instrumental: run.brief.instrumental, jobId: run.output.localSongJobId,
-    onSubmitted: (jobId) => save({ output: { localSongJobId: jobId } }),
+    onSubmitted: async (jobId) => {
+      await save({ output: { localSongJobId: jobId } });
+      // Stop/cancel cancel the job they find on the record; one that landed
+      // before this id was stored never saw it, so settle that race here.
+      const latest = projectAutonomousRun(await getProject(project.id));
+      if (latest?.status === 'running' && latest.processId === PROCESS_ID) return;
+      await deps.cancelLocalSong(jobId).catch(() => {});
+      throw runError(409, 'NOT_RUNNING', 'The run was stopped before its song render started');
+    },
   });
   // Linking the track seeds the project's timed lyric cues from the track lyrics.
   await deps.updateProject(project.id, { trackId });
@@ -386,6 +394,11 @@ export async function resumeAutonomousVideo(projectId, edits = {}) {
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }
 
+// Read from the freshly patched record, so a job id stored a moment before the status flipped is seen.
+const cancelLocalSongJob = (run) => (run.stage === 'song' && run.output.localSongJobId
+  ? deps.cancelLocalSong(run.output.localSongJobId).catch(() => {})
+  : null);
+
 export async function stopAutonomousVideo(projectId) {
   const { run } = await requireRun(projectId);
   if (!['running', 'awaiting-approval', 'needs-human'].includes(run.status)) throw runError(409, 'NOT_RUNNING', `A ${run.status} run cannot be stopped`);
@@ -394,7 +407,7 @@ export async function stopAutonomousVideo(projectId) {
     const { stopProduction } = await import('./productionService.js');
     await stopProduction(projectId, run.output.productionRunId).catch(() => {});
   }
-  if (run.stage === 'song' && run.output.localSongJobId) await deps.cancelLocalSong(run.output.localSongJobId).catch(() => {});
+  await cancelLocalSongJob(out.run);
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }
 
@@ -406,7 +419,7 @@ export async function cancelAutonomousVideo(projectId) {
     const { cancelProduction } = await import('./productionService.js');
     await cancelProduction(projectId, run.output.productionRunId).catch(() => {});
   }
-  if (run.stage === 'song' && run.output.localSongJobId) await deps.cancelLocalSong(run.output.localSongJobId).catch(() => {});
+  await cancelLocalSongJob(out.run);
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }
 
