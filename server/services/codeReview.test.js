@@ -86,6 +86,26 @@ const launchMusicCases = [
   ['service readiness guard removed', launchMusicCase.diff.replace(/^(\+For the service method only:.*)$/m, line => line.replace('If none is ready, report the setup requirement and stop.', 'If none is ready, continue anyway with the unready engine.')), 'fix-first'],
 ]
 
+// Reconstructed suitability objective + exact public documentation diff from PR #9410.
+// No private task records or runtime data are included in this fixture.
+const audioAssessmentCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-audio-assessment.json', import.meta.url), 'utf8'))
+const assessmentOutlineDiff = `diff --git a/docs/decisions/audio.md b/docs/decisions/audio.md
+new file mode 100644
+--- /dev/null
++++ b/docs/decisions/audio.md
+@@ -0,0 +1,3 @@
++# Audio runtime assessment
++Implementation is tracked in #9407.
++Suitability, alternatives and setup still need investigation.
+`
+const audioAssessmentCases = [
+  ['delivered suitability decision with implementation pending', audioAssessmentCase.objective, audioAssessmentCase.diff, 'ship'],
+  ['implementation request with assessment only', 'Add SuperCollider as an audio creation option now. Implement automated setup, contained rendering, and a working CodePanel choice.', audioAssessmentCase.diff, 'rethink'],
+  ['assessment plus explicit implementation request', `${audioAssessmentCase.objective} Also implement it now with automated setup and contained rendering.`, audioAssessmentCase.diff, 'fix-first'],
+  ['follow-up link without the requested assessment', audioAssessmentCase.objective, assessmentOutlineDiff, 'rethink'],
+  ['unrelated documentation without an assessment', audioAssessmentCase.objective, 'diff --git a/docs/example.md b/docs/example.md\n--- a/docs/example.md\n+++ b/docs/example.md\n@@ -1 +1 @@\n-# Example\n+# Example guide\n', 'rethink'],
+]
+
 // Complete production + interaction-test diff from the overturned JSX finding.
 const summaryDisclosureFixture = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-summary-disclosure.json', import.meta.url), 'utf8'))
 const summaryDisclosureCase = { ...summaryDisclosureFixture, objective: taskObjective({ description: summaryDisclosureFixture.objective }) }
@@ -1089,6 +1109,43 @@ describe('codeReview helpers', () => {
       const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: processManifestCase.objective, diff })
       expect(result).toMatchObject({ ok: true, verdict })
     })
+
+    // This pins rubric delivery and verdict preservation; it does not emulate model judgement.
+    it.each(audioAssessmentCases)('sends the bounded assessment rubric and preserves its verdict: %s', async (_name, objective, diff, verdict) => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        const rubric = messages[0].content
+        expect(rubric).toContain('a suitability assessment, not an instruction to implement')
+        expect(rubric).toContain('decision, rationale, alternatives')
+        expect(rubric).toContain('implementation pending does not make that assessment incomplete')
+        expect(rubric).toContain('A follow-up issue link or a promise to investigate alone')
+        expect(rubric).toContain('including a mixed assessment-and-implementation request')
+        expect(rubric).toContain('must still be judged fix-first or rethink')
+        expect(rubric).toContain('never proof that implementation or tests ran')
+        expect(messages[1].content).toContain(objective)
+        expect(messages[1].content).toContain(diff.trim())
+        return completion({ verdict, missing: verdict === 'ship' ? [] : ['requested delivery absent'], unrequested: [], evidence: 'Documentation shows the assessment; no runtime execution is established.' })
+      })
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff }))
+        .toMatchObject({ ok: true, verdict, ...(verdict === 'ship' ? { missing: [], unrequested: [] } : {}) })
+    })
+
+    // Actual judgement pin: explicitly opt-in so ordinary CI makes zero provider calls.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(audioAssessmentCases)('judges the audio assessment with a real local model: %s', async (name, objective, diff, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective, diff, timeoutMs: 180_000,
+      })
+      console.log(`🔍 Audio assessment evaluation ${name}: ${JSON.stringify(result)}`)
+      expect(result.ok, result.error).toBe(true)
+      if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
+      else {
+        expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+        expect(result.missing.length).toBeGreaterThan(0)
+      }
+      expect(result.evidence).not.toMatch(/(?:tests?|checks?|render(?:ing)?) (?:ran|passed|succeeded)/i)
+    }, 190_000)
 
     it('sends the quoted-failure calibration with its missing-path exclusions', async () => {
       global.fetch = vi.fn(async (_url, init) => {
