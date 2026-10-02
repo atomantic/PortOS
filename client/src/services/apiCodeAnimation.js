@@ -74,3 +74,8 @@ export const probeCodeAnimationExecution = (options) => request('/code-animation
 // Explicit production workflows. Preview and final use the stored soundtrack artifact.
 
 export const getCodeAnimationBlenderStarter = options => request('/code-animation/packages/starter/blender', options);
+
+// Production acceptance (#9392): the accepted output with live freshness, side-by-side run
+// evidence, and explicit promotion of one passing run.
+export const getCodeAnimationAcceptance = (id, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/acceptance`, options);
+export const acceptCodeAnimationOutput = (id, runId, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/accepted-output`, { method: 'POST', body: JSON.stringify({ runId }), ...options });

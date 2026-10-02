@@ -22,6 +22,7 @@ export const DB_TEST_INCLUDE = [
   '**/db.test.js',
   'services/codeAnimation/stages.db.test.js',
   'services/codeAnimation/sound.db.test.js',
+  'services/codeAnimation/acceptance.db.test.js',
   'services/codeAnimation/stages.realBrowser.db.test.js',
   'services/mediaAssetIndex/galleryCollections.db.test.js',
   'services/dbAdmin.db.test.js',
