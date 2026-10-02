@@ -771,10 +771,10 @@ const undirected = rows => {
   return [...edges].sort(([a], [b]) => a.localeCompare(b));
 };
 
-async function seedGraphVectors(count) {
+async function seedGraphVectors(count, runQuery = query) {
   // Synthetic full-dimensional float32 vectors; no live records. The row
   // offset breaks the modulo formula's 997-row repetition (and cutoff ties).
-  await query(`
+  await runQuery(`
     INSERT INTO memories (id, type, content, summary, embedding)
     SELECT md5(i::text)::uuid, 'fact', 'Synthetic graph fixture', 'Synthetic graph fixture',
       ARRAY(SELECT ((i * 17 + j * 31) % 997)::real / 997 + i::real / 10000
@@ -799,7 +799,12 @@ describe.skipIf(!runDb)('memoryDB bounded graph snapshot (#9526)', () => {
     const nullNode = await memoryDB.createMemory({ type: 'fact', content: 'No vector.' });
     const archived = await memoryDB.createMemory({ type: 'fact', content: 'Archived.', status: 'archived' }, VEC_A);
     const distant = await memoryDB.createMemory({ type: 'fact', content: 'Orthogonal.' }, VEC_UNSEEN);
-    const legacy = (await query(legacyGraphSimilarity)).rows;
+    // The oracle must use the old exact scan, not an approximate HNSW plan
+    // selected from statistics/dead index entries left by another DB test.
+    const legacy = await withTransaction(async client => {
+      await client.query('SET LOCAL enable_indexscan = off');
+      return (await client.query(legacyGraphSimilarity)).rows;
+    });
     expect(legacy.length).toBeGreaterThan(3);
     expect(legacy.some(r => [nullNode.id, archived.id, distant.id].includes(r.target_id))).toBe(false);
     const { source_id: source, target_id: target } = legacy[0];
@@ -836,6 +841,7 @@ describe.skipIf(!runDb)('memoryDB bounded graph snapshot (#9526)', () => {
       SELECT md5(i::text)::uuid, 'fact', 'Boundary fixture', 'Boundary fixture',
         CASE WHEN i <= 6 THEN $2::vector ELSE NULL END
       FROM generate_series(1, $1::int) i`, [count, JSON.stringify(VEC_A)]);
+    await query('ANALYZE memories');
     const probe = observeGraph();
     try {
       const graph = await memoryDB.getGraphData();
@@ -900,19 +906,24 @@ describe.skipIf(!runDb)('memoryDB bounded graph snapshot (#9526)', () => {
 
   // Explicit opt-in experiment: no machine-dependent timing assertions.
   it.skipIf(!process.env.MEMORY_GRAPH_BENCHMARK)('compares stored-vector EXPLAIN plans at 512 and 1024 rows', async () => {
+    const probe = observeGraph();
+    let optimized;
+    try {
+      await memoryDB.getGraphData();
+      optimized = probe.observation.statements.find(sql => sql.includes('CROSS JOIN LATERAL'));
+    } finally {
+      probe.restore();
+    }
     for (const count of [512, 1024]) {
-      await resetMemories();
-      await seedGraphVectors(count);
-      await query('ANALYZE memories');
-      const probe = observeGraph();
-      let optimized;
-      try {
-        await memoryDB.getGraphData();
-        optimized = probe.observation.statements.find(sql => sql.includes('CROSS JOIN LATERAL'));
-      } finally {
-        probe.restore();
-      }
       await withTransaction(async client => {
+        // Match the issue's controlled exact-scan fixture. The production table
+        // has an HNSW index whose approximate plan can mask the storage cost.
+        await client.query(`CREATE TEMP TABLE memories (
+          id uuid, type text, content text, summary text,
+          embedding vector(${DIM}), status text DEFAULT 'active'
+        ) ON COMMIT DROP`);
+        await seedGraphVectors(count, client.query.bind(client));
+        await client.query('ANALYZE memories');
         await client.query("SET LOCAL work_mem = '32MB'");
         const cutoffs = await client.query(`
           WITH active_embeddings AS MATERIALIZED (
@@ -938,7 +949,7 @@ describe.skipIf(!runDb)('memoryDB bounded graph snapshot (#9526)', () => {
             expect(root['Temp Read Blocks']).toBe(0);
             expect(root['Temp Written Blocks']).toBe(0);
           }
-          console.log(`Graph fixture rows=${count} strategy=${strategy} ms=${plan['Execution Time']} sharedHits=${root['Shared Hit Blocks']} tempRead=${root['Temp Read Blocks']} tempWritten=${root['Temp Written Blocks']} directed=${newRows.length}`);
+          console.log(`Graph fixture rows=${count} strategy=${strategy} ms=${plan['Execution Time']} sharedHits=${root['Shared Hit Blocks']} localHits=${root['Local Hit Blocks']} tempRead=${root['Temp Read Blocks']} tempWritten=${root['Temp Written Blocks']} directed=${newRows.length}`);
         }
       });
     }
