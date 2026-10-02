@@ -64,6 +64,11 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     browserSession = await browser.newBrowserCDPSession();
   }, 30000);
 
+  beforeEach(async () => {
+    await mkdir(PATHS.videos, { recursive: true });
+    await mkdir(PATHS.videoThumbnails, { recursive: true });
+  });
+
   // Each render writes its composition dir, MP4 and thumbnail under the data
   // root; dropping them per test keeps the run root's peak size (and what a
   // killed run strands) small (#9113). The Chrome profile must survive.
