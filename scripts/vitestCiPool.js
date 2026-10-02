@@ -22,6 +22,15 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   'services/musicVideo/documentRender.browser.test.js',
 ];
 
+// Cutover's real subprocess proof has a four-second test budget. A retained
+// concurrent-run failure spent 3.746 seconds on startup/module import alone
+// (#9368). Isolate that resource-sensitive contract without changing its
+// deadline, process-incarnation checks, or fail-closed negative controls.
+const EXCLUSIVE_TESTS = [
+  ...EXCLUSIVE_CAPTURE_TESTS,
+  'services/databaseMaintenanceCutover.test.js',
+];
+
 export function vitestCaptureProjects(test) {
   const { include, exclude, ...shared } = test;
   // Vite concatenates inherited include arrays: extending the broad root
@@ -36,7 +45,7 @@ export function vitestCaptureProjects(test) {
         ...shared,
         name: 'parallel',
         include,
-        exclude: [...exclude, ...EXCLUSIVE_CAPTURE_TESTS],
+        exclude: [...exclude, ...EXCLUSIVE_TESTS],
         sequence: { groupOrder: 0 },
       },
     },
@@ -45,7 +54,7 @@ export function vitestCaptureProjects(test) {
       test: {
         ...shared,
         name: 'capture',
-        include: EXCLUSIVE_CAPTURE_TESTS,
+        include: EXCLUSIVE_TESTS,
         exclude,
         fileParallelism: false,
         sequence: { groupOrder: 1 },
