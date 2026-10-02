@@ -15,7 +15,7 @@
  */
 
 import { remapMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
@@ -30,7 +30,6 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
-import { isStr } from '../../lib/textUtils.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { normalizeLyricMarkers } from './lyricMarkers.js';
@@ -183,7 +182,12 @@ export function cloneProjectRecord(source, {
   now,
   name,
   includeGeneratedMedia = true,
+  variant = 'revision',
 }) {
+  // Record metadata is independently editable; only immutable asset bytes are shared.
+  source = structuredClone(source);
+  const videoVariant = variant === 'video-generation';
+  if (videoVariant) includeGeneratedMedia = false;
   const nameMatch = typeof source.name === 'string' ? source.name.match(/^(.*?)(?:\s+v(\d+))?$/i) : null;
   const inferredVersion = Number(nameMatch?.[2]) || 1;
   const sourceVersion = Number.isInteger(source.version) && source.version > 0
@@ -209,7 +213,7 @@ export function cloneProjectRecord(source, {
     && scenes.length > 0
     && scenes.every((scene) => scene.referenceImageId && scene.videoHistoryId);
 
-  return {
+  const clone = {
     ...source,
     id,
     name: name?.trim() || `${baseName} v${version}`,
@@ -220,11 +224,17 @@ export function cloneProjectRecord(source, {
     createdAt: now,
     updatedAt: now,
     scenes,
-    ...(source.composition?.grade ? { composition: {
+    ...(source.composition ? { composition: {
       ...source.composition,
-      grade: { ...source.composition.grade, sections: (source.composition.grade.sections || []).map((section) => ({
+      ...(source.composition.codeVideo ? { codeVideo: { ...source.composition.codeVideo,
+        sections: source.composition.codeVideo.sections.map((section) => ({ ...section, id: sceneIdMap.get(section.id) ?? section.id })),
+      } } : {}),
+      ...(source.composition.reactiveSections ? { reactiveSections: source.composition.reactiveSections.map((section) => ({
+        ...section, sectionId: sceneIdMap.get(section.sectionId) ?? section.sectionId,
+      })) } : {}),
+      ...(source.composition.grade ? { grade: { ...source.composition.grade, sections: (source.composition.grade.sections || []).map((section) => ({
         ...section, sceneId: sceneIdMap.get(section.sceneId) ?? section.sceneId,
-      })) },
+      })) } } : {}),
     } } : {}),
     // #8980 — the treatment's shot directions and proofs follow the scenes to
     // their new ids; proof evidence the clone can't back is dropped.
@@ -262,11 +272,35 @@ export function cloneProjectRecord(source, {
     ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
     renderHistoryId: null,
     renderDependencies: null,
+    // Publishing outputs and posted URLs belong to the source final render.
+    ...(source.publishKit ? { publishKit: null } : {}),
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
     renderPartialFilename: null,
     deleted: false,
     deletedAt: null,
+  };
+  if (!videoVariant) return clone;
+  // A footage adaptation starts with the same song and storyboard, but no
+  // procedural approvals, selected takes or running work. Nothing is dispatched.
+  const footageDirection = (direction) => ({ ...direction, route: 'generated',
+    medium: 'generated-footage', mediumPinned: false, mediumRationale: '' });
+  return {
+    ...clone,
+    composition: { ...clone.composition, mode: 'composed' },
+    productionPolicy: normalizeMusicVideoProductionPolicy({ strategy: 'legacy' }),
+    castAndSets: null,
+    visualSpec: clone.visualSpec ? { ...clone.visualSpec, references: [], moodBoardId: null } : null,
+    concept: clone.concept ? { ...clone.concept, subjects: [], moodBoardStyle: '' } : null,
+    styleReferences: [],
+    ...(clone.automation ? { automation: { ...clone.automation, tools: [], moodBoardId: null } } : {}),
+    scenes: clone.scenes.map((scene) => ({ ...scene, visualLayer: 'footage',
+      ...(scene.direction ? { direction: footageDirection(scene.direction) } : {}),
+    })),
+    treatment: clone.treatment ? { ...clone.treatment, appliedRevision: null, basis: null,
+      shotDirections: clone.treatment.shotDirections.map(footageDirection),
+    } : null,
+    excerpts: [],
   };
 }
 
