@@ -1155,7 +1155,7 @@ export function createMcpBootTracker() {
 // overflow as a fault — see `outputBufferTruncated` tracking in
 // `tuiPromptRunner.js`.
 // Cap on the spawner's post-paste accumulator (agentTuiSpawning.js's
-// `postPasteBuffer`), which retains stripped output from a paste attempt until
+// `pasteState.buffer`), which retains stripped output from a paste attempt until
 // the commit resolves. Both signals it carries are LOCAL — a paste-commit chip
 // and a ~40-char prompt prefix — so a few screens of tail is everything the
 // predicate can use, while a codex booting for the full PASTE_COMMIT_PATIENCE_MS
