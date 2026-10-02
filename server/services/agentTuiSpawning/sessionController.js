@@ -802,11 +802,14 @@ export function createTuiSessionController({
    * for a cold recovery agent (`agentRepoStateVerification.js`) to do the
    * same merge later. See mergeGateContract.js for the decision table.
    *
+   * The caller (runFinishDecision) checks `mergeGateIsOwed` and the
+   * once-per-run `mergeGateReprompted` cap synchronously before calling, so a
+   * run that owes no merge finalizes without an extra await in its path.
+   *
    * @returns {Promise<boolean>} true when a re-prompt went out — the caller
    *   must NOT finalize this call; false means finalize normally.
    */
   const checkMergeGateCompliance = async (summary) => {
-    if (!mergeGateIsOwed || mergeGateReprompted) return false;
     const prProbe = await probeMergeGatePr();
     const verdict = resolveMergeGateVerdict({ prProbe, summary });
     if (verdict !== 'needs-reprompt') return false;
@@ -885,28 +888,29 @@ export function createTuiSessionController({
     if (sessionId && session.isAlive(sessionId)) session.kill(sessionId);
   };
 
-  const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
-    // A terminal check alone used to be the whole re-entrancy guard, safe
-    // because it was set SYNCHRONOUSLY as this function's first act. The
-    // merge-gate check below needs `ingestDoneSentinel`'s summary before it can
-    // decide whether to finalize at all, which pushes the terminal transition
-    // past several awaits — wide enough for a second trigger (the shell exiting
-    // right after the sentinel appears) to also pass the gate before the first
-    // call sets it, double-firing `finalizeAgent`. 'finishing' closes that
-    // window synchronously while staying NON-terminal, which is what
-    // `pasteController.resubmit()` depends on: a re-prompt must still be
-    // possible while this call is deciding.
-    //
-    // A trigger parked here while the first call is mid-decision is not
-    // discarded: it's the one call that could carry news the first call
-    // doesn't have (the shell exiting right in this window), so it's replayed
-    // once that call settles on "not finalizing after all" — see below.
-    if (isTerminal()) return;
-    if (sessionPhase === 'finishing') {
-      pendingFinish = { success, exitCode, error, reason };
-      return;
-    }
-    sessionPhase = 'finishing';
+  /**
+   * Decide what one finish() call does, as a single explicit verdict. Runs
+   * while `sessionPhase` is 'finishing'; finish() interprets the result and
+   * owns every phase transition and the parked-trigger replay, so a new exit
+   * here cannot strand the run in 'finishing' with its timers already cleared.
+   *
+   *   { type: 'abandon' }  — PortOS is going down; record no outcome.
+   *   { type: 'finalize' } — record the outcome.
+   *   { type: 'retry-later' | 'reprompt', replayParked } — NOT finalizing:
+   *     the session goes back to 'running', and a trigger parked during this
+   *     decision is replayed per `replayParked`:
+   *       'always'         — replay it; it may be the only news the session died.
+   *       'if-no-sentinel' — replay it only while no sentinel is present. A
+   *                          present sentinel means the agent finished, so a
+   *                          late exit carries no news; the recovery retry
+   *                          re-reads that sentinel instead.
+   *
+   * Order matters: `ingestDoneSentinel` runs before `checkMergeGateCompliance`,
+   * which mutates the sentinel state (clears `sentinelIngested`, deletes the
+   * file, re-arms the watcher) — so finish() reopens the phase only after this
+   * whole function settles.
+   */
+  const runFinishDecision = async ({ success }) => {
     // PortOS is going down. Whatever path got here — the PTY exiting under
     // TreeKill, a provider-signal failure, a paste that failed because the shell died —
     // the cause is the host restart, not the agent, so there is no outcome to
@@ -919,11 +923,10 @@ export function createTuiSessionController({
     // terminated must reach finalizeAgent to be recorded `user-terminated` —
     // abandoning it would leave the record `running` with no such mark, and boot
     // recovery's user-terminated skip would miss it and resurrect the run. And a
-    // run the user paused already has its own don't-finalize branch below, which
-    // owns the paused bookkeeping (pid unregister, active-run delete).
+    // run the user paused already has its own don't-finalize branch in finish(),
+    // which owns the paused bookkeeping (pid unregister, active-run delete).
     if (finalization.shouldAbandonRun({ agentId, sentinelPresent: sentinelPresent() })) {
-      await abandonForHostShutdown();
-      return;
+      return { type: 'abandon' };
     }
 
     // Ingest the .agent-done sentinel BEFORE any teardown decision, so its
@@ -936,15 +939,8 @@ export function createTuiSessionController({
 
     if (sentinelRecoveryPending) {
       sentinelRecoveryPending = false;
-      sessionPhase = 'running';
       scheduleSentinelRecoveryRetry();
-      if (pendingFinish && !sentinelPresent()) {
-        const replay = pendingFinish;
-        pendingFinish = null;
-        return finish(replay);
-      }
-      pendingFinish = null;
-      return;
+      return { type: 'retry-later', replayParked: 'if-no-sentinel' };
     }
 
     // Merge Gate contract check (#5876): only for a run that actually
@@ -953,22 +949,58 @@ export function createTuiSessionController({
     // is not the "the agent believes its Merge Gate is done" signal this
     // reads; re-prompting THAT would paste into a shell whose TUI child may
     // already be gone, parking the run on a nudge that can never land.
-    // Returns true (and this call does NOT finalize) exactly once, when the
-    // run owed a merge, the PR is open, and the summary names no blocker —
-    // see mergeGateContract.js for the full decision table.
-    if (success && sentinelSummary !== null && await checkMergeGateCompliance(sentinelSummary)) {
-      // Not finalizing — reopen the re-entrancy gate for the next completion
-      // signal the re-prompt is expected to produce. A trigger that arrived
-      // WHILE this call was deciding (parked by the 'finishing' guard above)
-      // is the only thing that could tell us the session actually died during
-      // that window, so replay it now rather than losing it — otherwise the
-      // run would sit waiting for a nudge with nothing left alive to receive it.
+    // True (and this call does NOT finalize) exactly once, when the run owed
+    // a merge, the PR is open, and the summary names no blocker — see
+    // mergeGateContract.js for the full decision table. The re-prompt expects
+    // a fresh completion signal; a trigger that arrived while this was
+    // deciding is the only thing that could say the session died meanwhile.
+    if (success && sentinelSummary !== null && mergeGateIsOwed && !mergeGateReprompted
+      && await checkMergeGateCompliance(sentinelSummary)) {
+      return { type: 'reprompt', replayParked: 'always' };
+    }
+
+    return { type: 'finalize' };
+  };
+
+  const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
+    // A terminal check alone used to be the whole re-entrancy guard, safe
+    // because it was set SYNCHRONOUSLY as this function's first act. The
+    // merge-gate check needs `ingestDoneSentinel`'s summary before it can
+    // decide whether to finalize at all, which pushes the terminal transition
+    // past several awaits — wide enough for a second trigger (the shell exiting
+    // right after the sentinel appears) to also pass the gate before the first
+    // call sets it, double-firing `finalizeAgent`. 'finishing' closes that
+    // window synchronously while staying NON-terminal, which is what
+    // `pasteController.resubmit()` depends on: a re-prompt must still be
+    // possible while this call is deciding.
+    //
+    // A trigger parked here while the first call is mid-decision is not
+    // discarded outright: the decision's `replayParked` policy says whether
+    // it is replayed once that call settles on "not finalizing after all".
+    if (isTerminal()) return;
+    if (sessionPhase === 'finishing') {
+      pendingFinish = { success, exitCode, error, reason };
+      return;
+    }
+    sessionPhase = 'finishing';
+
+    const decision = await runFinishDecision({ success });
+
+    if (decision.type === 'abandon') {
+      await abandonForHostShutdown();
+      return;
+    }
+
+    // Every other non-finalizing verdict shares this ONE epilogue: reopen the
+    // re-entrancy gate for the next completion signal, then replay or drop the
+    // parked trigger per the verdict's policy. A verdict without a policy
+    // replays — the safe default, since a dropped trigger can park the run.
+    if (decision.type !== 'finalize') {
       sessionPhase = 'running';
-      if (pendingFinish) {
-        const replay = pendingFinish;
-        pendingFinish = null;
-        return finish(replay);
-      }
+      const parked = pendingFinish;
+      pendingFinish = null;
+      const replay = parked && (decision.replayParked !== 'if-no-sentinel' || !sentinelPresent());
+      if (replay) return finish(parked);
       return;
     }
 
@@ -988,7 +1020,7 @@ export function createTuiSessionController({
     // chain, since lanes serialize related work. See agentRunFinalize.js.
     //
     // The abandon gate is consulted a second time here on purpose: the gate at
-    // the top of finish() ran before ingestDoneSentinel and the merge-gate probe,
+    // the top of runFinishDecision() ran before ingestDoneSentinel and the merge-gate probe,
     // which can take seconds, and a host restart that begins in that window is
     // still an interruption rather than an outcome (#3202).
     const duration = Date.now() - (agentData?.startedAt || Date.now());
