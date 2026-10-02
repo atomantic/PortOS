@@ -6,6 +6,7 @@ import {
   getMusicVideoProject,
   startMusicVideoCastAndSets,
   regenerateMusicVideoCastAndSets,
+  editMusicVideoCastAndSetsDirection,
   resumeMusicVideoCastAndSets,
   approveMusicVideoCastAndSets,
   skipMusicVideoCastAndSets,
@@ -27,7 +28,7 @@ const CHECKPOINTS = new Set(['review', 'approved', 'skipped', 'failed']);
  * reaches a checkpoint (`review`, `approved`, `skipped`, `failed`), or null
  * when it could not start.
  *
- * Returns `{ busy, start, regenerate, resume, approve, skip, runToCheckpoint }`.
+ * Returns `{ busy, start, regenerate, editDirection, resume, approve, skip, runToCheckpoint }`.
  */
 export default function useMusicVideoCastAndSets({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -109,6 +110,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
 
   const start = () => call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
   const regenerate = (notes) => call(() => regenerateMusicVideoCastAndSets(projectId, notes ? { notes } : {}, { silent: true }), 'Regenerating with your notes');
+  const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), 'Direction saved — re-rendering what changed');
   const resume = () => call(() => resumeMusicVideoCastAndSets(projectId, { silent: true }));
   const approve = () => call(() => approveMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets approved');
   const skip = () => call(() => skipMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets check-in skipped');
@@ -132,5 +134,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
       });
   };
 
-  return { busy, start, regenerate, resume, approve, skip, runToCheckpoint };
+  return { busy, start, regenerate, editDirection, resume, approve, skip, runToCheckpoint };
 }

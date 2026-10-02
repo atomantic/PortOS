@@ -329,7 +329,7 @@ function promptSong(song) {
  * render function per section (or just `onlySectionId` when regenerating).
  * The host assembles the page; the model does not return a full HTML document.
  */
-export function buildMusicVideoCodePrompt({ title = '', palette, song, styleLines = [], onlySectionId = null }) {
+export function buildMusicVideoCodePrompt({ title = '', palette, song, styleLines = [], onlySectionId = null, directionContext = '' }) {
   const wanted = (song.sections || []).filter((section) => !onlySectionId || section.id === onlySectionId);
   const brief = wanted.map((section) => `- ${section.id} [${section.startSec}s, ${section.endSec}s) ${section.label || ''}${section.lyric ? ` — lyric: ${section.lyric}` : ' — instrumental'}`).join('\n');
   const scope = onlySectionId
@@ -340,6 +340,7 @@ export function buildMusicVideoCodePrompt({ title = '', palette, song, styleLine
     CODE_VIDEO_RULES,
     `PALETTE:\n${JSON.stringify(palette)}`,
     styleLines.length ? `STYLE SOURCE:\n${styleLines.join('\n')}` : '',
+    directionContext ? `APPROVED CAST & SETS DEFINITIONS AND RULES:\n${directionContext}` : '',
     `SONG (song.json):\n${JSON.stringify(promptSong(song))}`,
     `SECTIONS:\n${brief}`,
     scope,
@@ -366,7 +367,7 @@ export function extractCodeSections(text) {
 }
 
 /** Author only bounded drawing functions; the host owns the page and media. */
-export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment, visualSpec, scenes, styleLines = [], onlySectionId = null, sharedStyle = null }) {
+export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment, visualSpec, scenes, styleLines = [], onlySectionId = null, sharedStyle = null, directionContext = '' }) {
   const sections = (song.sections || []).filter((section) => !onlySectionId || section.id === onlySectionId);
   return [
     `Write original Canvas 2D section functions for a mixed-media music-video document titled ${JSON.stringify(trimTo(title, 200))}. The host owns the document, song clock, selected local media and lyric pass. Return code functions only; do not request or generate image/video assets.`,
@@ -374,6 +375,7 @@ export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment,
     'env additionally has mediaKind (video, image or null) and visualLayer (footage, still or card). The host has already drawn the selected media at its in/out time. Do not read DOM or load assets in a section function. Use seeded arithmetic from env.frame for visual motion. Keep repeated hooks related but deliberately vary their action.',
     'NARRATIVE CLOCK: song.narrativeEvents are resolved absolute startFrame/endFrame bindings. env.events supplies active events with progress and counter value; env.reactiveGain is bounded by the section gain/maxGain and is zero during silence. The host freezes song time, media and graphics for silence, and draws exact event text/counters/motif labels after your function. Use the narrativeFunction, motif and mediumRationale to motivate your graphic actions; do not duplicate event text or infer new onsets. Prefer code/stills/selected media for exact text and graphics. Footage is for actions that need it and must already be selected.',
     `SHARED STYLE CONTRACT:\n${JSON.stringify(sharedStyle || { palette, treatment: { brief: treatment?.brief || null, motifs: treatment?.arc?.motifs || [], styleLook: treatment?.styleLook || null }, visualSpec, styleLines })}`,
+    directionContext ? `APPROVED CAST & SETS DEFINITIONS AND RULES:\n${directionContext}` : '',
     `SONG AND LYRIC TIMING:\n${JSON.stringify(promptSong(song))}`,
     `APPROVED SCENE ASSIGNMENTS AND LOCAL ASSET IDS:\n${JSON.stringify(scenes)}`,
     `SECTIONS TO AUTHOR:\n${JSON.stringify(sections)}`,

@@ -53,6 +53,7 @@ import {
   startCastAndSetsOnProject,
 } from './castAndSets.js';
 import {
+  applyCastAndSetsDirectionEdits,
   buildCastAndSetsPrompt,
   castAndSetsAllowsImages,
   castAndSetsMedium,
@@ -608,6 +609,37 @@ export async function regenerateCastAndSets(projectId, { notes = null, providerI
   inBackground('The regeneration', projectId, () => (redirect
     ? runDirection(projectId, { providerId, model, effort, notes: directionNotes, forceKeys })
     : writePlan(projectId, { forceKeys })));
+  return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+}
+
+/**
+ * Save the director's direct edits to a procedural direction (construction,
+ * palette, expressions, movement, world rules, per-set image role) through the
+ * revision path: the stage re-opens as a new revision, the edited direction is
+ * persisted in the same write, and only images whose prompt changed re-render
+ * before the sheet is re-assembled. No direction (text) provider call is made;
+ * a changed image prompt is the director's save acting on the image queue.
+ * Returns `{ project, stage }`.
+ */
+export async function editCastAndSetsDirection(projectId, edits) {
+  const project = await requireProject(projectId);
+  const sections = songSections(project);
+  let changed = [];
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const stage = current.castAndSets;
+    if (!stage?.direction) throw new ServerError('There is no Cast & Sets direction to edit yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
+    assertCastAndSetsApprovable(current);
+    const edited = applyCastAndSetsDirectionEdits(stage.direction, edits, { sections });
+    if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
+    changed = edited.changed;
+    const notesApplied = [{ id: null, target: 'direction', text: `Edited by the director: ${changed.join(', ')}` }];
+    const revised = reviseCastAndSetsOnProject(current, { processId: PROCESS_ID, notesApplied, redirect: false });
+    const next = { ...revised.project, castAndSets: { ...revised.stage, direction: edited.direction } };
+    return { project: next, stage: next.castAndSets };
+  });
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} direction edited r${out.stage.revision} (${changed.length} field(s))`);
+  publish(projectId, out.project);
+  inBackground('The direction edit', projectId, () => writePlan(projectId));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 

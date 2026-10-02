@@ -18,7 +18,10 @@
  * materials, expressions, movement) and how the world behaves (layout, depth,
  * lighting, camera, transitions), and gives every planned image an intentional
  * role (background, texture, decoration, or an explicit cutout). The medium is
- * stored on the direction so a revision never silently switches it.
+ * stored on the direction so a revision never silently switches it. A procedural
+ * direction may also carry `definitions`: a bounded, validated code definition
+ * per reusable character (castAndSetsDefinitions.js) that the sheet previews and
+ * the code-authoring request reuses.
  *
  * A regeneration sends the current direction plus the director's notes and
  * asks for the full revised object. The merge follows the repo's LLM rule:
@@ -27,9 +30,12 @@
  */
 
 import { z } from 'zod';
+import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoBriefTools as briefTools } from '../../lib/musicVideoMediumPlan.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSetsDefinitions.js';
 
 export const CAST_SETS_LIMITS = Object.freeze({
   looks: { min: 1, max: 4 },
@@ -49,8 +55,6 @@ const MOOD_ITEMS_MAX = 40;
 const MOOD_ITEM_TEXT = 280;
 
 // ---- medium ------------------------------------------------------------------
-
-const briefTools = (project) => (Array.isArray(project?.automation?.tools) ? project.automation.tools.filter((t) => typeof t === 'string') : []);
 
 /**
  * The medium the check-in is directed in. A code-first production policy, or a
@@ -170,6 +174,18 @@ const PROCEDURAL_OUTPUT_SHAPE = `{
   "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the environment, concrete and visual>", "lighting": "<its one dominant light>", "imageRole": "<background | texture | decoration | cutout>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "overlayConcept": { "summary": "<one persistent graphic layer that ties every shot together>", "elements": [{ "name": "<element>", "description": "<what it shows and when it changes>" }] },
+  "definitions": {
+    "characters": [{
+      "id": "<short-slug>",
+      "name": "<character name>",
+      "renderer": "svg | canvas2d | three",
+      "palette": [{ "name": "<color-name>", "hex": "#rrggbb" }],
+      "parts": [{ "id": "<part-slug>", "shape": "circle | ellipse | rect | polygon | path | line", "x": 100, "y": 100, "r": 40, "fill": "<palette color name or #hex>", "stroke": "<palette color name or #hex>", "strokeWidth": 2, "pivot": [100, 100] }],
+      "expressions": [{ "name": "<expression name>", "overrides": { "<part-slug>": { "translate": [0, 0], "rotate": 0, "scale": 1, "fill": "<palette color name or #hex>", "hidden": false } } }],
+      "poses": [{ "name": "<pose name>", "overrides": { "<part-slug>": { "rotate": 0 } } }],
+      "motion": [{ "name": "<motion name>", "target": "<part-slug or all>", "property": "rotate | scale | translateX | translateY | opacity", "amplitude": 4, "periodBeats": 1, "easing": "linear | ease-in-out | ease-out | bounce | step", "trigger": "idle | beat | downbeat | lyric | section" }]
+    }]
+  },
   "moodRefs": [0, 1],
   "questions": ["<a question for the director>"]
 }`;
@@ -225,6 +241,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     '- imageRole says what each planned image is FOR: "background" (a full-bleed environment layer), "texture" (a seamless surface), "decoration" (an isolated ornament) or "cutout" (an isolated subject to composite). Default to "background".',
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
+    `- definitions: one reusable code definition per recurring character (at most ${CAST_SETS_DEFINITION_LIMITS.characters}). Draw it in a 200×200 box (origin top-left, y down) from at most ${CAST_SETS_DEFINITION_LIMITS.parts} simple parts; fills and strokes name a palette entry or a #hex. Expressions and poses are per-part overrides of the base parts; motion rules say what moves, by how much, over how many beats. Keep the definition consistent with the prose above.`,
     `- moodRefs: the ${CAST_SETS_LIMITS.moodRefs.min}–${CAST_SETS_LIMITS.moodRefs.max} mood board image indices that best show the look${moodImages.length ? '' : ' (empty: there are none)'}.`,
     '- questions: up to three things you need the director to decide.',
   ].join('\n');
@@ -287,6 +304,16 @@ const worldSchema = z.object({
   camera: text(500).optional(),
   transitions: text(500).optional(),
 }).passthrough();
+// Unusable definitions (not an object, or no character survives validation) count as
+// absent so the merge keeps the current ones; `{ characters: [] }` is a deliberate clear.
+const definitionsSchema = z.unknown().transform((value, ctx) => {
+  const normalized = normalizeDefinitions(value);
+  if (!normalized) {
+    ctx.addIssue({ code: 'custom', message: 'no usable character definitions' });
+    return z.NEVER;
+  }
+  return normalized;
+});
 const lookSchema = z.object({ name: text(SHORT), description: text(TEXT), chapters: text(300).optional() }).passthrough();
 const setSchema = z.object({
   id: z.string().optional(),
@@ -313,6 +340,7 @@ const FIELD_PARSERS = {
   interpretation: text(2000),
   protagonist: protagonistSchema,
   world: worldSchema,
+  definitions: definitionsSchema,
   looks: z.array(lookSchema),
   sets: z.array(setSchema),
   songMap: z.array(songMapSchema),
@@ -449,8 +477,9 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], moo
       .map((e) => ({ name: e.name, description: e.description })),
   };
   const moodRefs = [...new Set(pick('moodRefs', []))].filter((i) => i < moodImageCount).slice(0, CAST_SETS_LIMITS.moodRefs.max);
+  const definitions = hasOwn(parsed, 'definitions') ? parsed.definitions : (base.definitions || { characters: [] });
   const direction = {
-    ...(procedural ? { medium: 'procedural', world } : {}),
+    ...(procedural ? { medium: 'procedural', world, definitions } : {}),
     logline: pick('logline', ''),
     interpretation: pick('interpretation', ''),
     protagonist,
@@ -469,4 +498,60 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], moo
     sets.length < CAST_SETS_LIMITS.sets.min && 'sets',
   ].filter(Boolean);
   return { direction, missing };
+}
+
+// ---- director edits -----------------------------------------------------------
+
+// The procedural fields the director can edit directly, with the caps the
+// provider answer is held to.
+export const CAST_SETS_EDITABLE_PROTAGONIST = Object.freeze({ construction: TEXT, shapeLanguage: 500, materials: 500, palette: 300, movement: TEXT });
+export const CAST_SETS_EDITABLE_WORLD = Object.freeze({ layout: TEXT, depth: 500, lighting: 500, camera: 500, transitions: 500 });
+
+const pickText = (source, caps) => Object.fromEntries(
+  Object.entries(caps).filter(([key]) => typeof source?.[key] === 'string').map(([key, max]) => [key, source[key].trim().slice(0, max)]),
+);
+
+/**
+ * Apply the director's direct edits to a procedural direction. `edits` is
+ * `{ protagonist?, world?, sets? }`: a text field that is present replaces the
+ * current value (an empty string clears it), one that is absent keeps it;
+ * `protagonist.expressions` replaces the whole list; `sets` is
+ * `[{ id, imageRole }]`. The result goes through the same merge + normalize as
+ * a provider answer, so it can never be shaped differently from one. Returns
+ * `{ direction, changed }` (`changed` names the fields that actually changed, for
+ * the revision record); throws 409 for a photographic direction and 422 for an
+ * unknown set or an edit that would leave the direction unusable.
+ */
+export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] } = {}) {
+  if (previous?.medium !== 'procedural') {
+    throw new ServerError('Only a procedural direction has editable construction and world rules', { status: 409, code: 'CAST_SETS_NOT_PROCEDURAL' });
+  }
+  const parsed = {};
+  if (edits?.protagonist) {
+    const protagonist = pickText(edits.protagonist, CAST_SETS_EDITABLE_PROTAGONIST);
+    if (Array.isArray(edits.protagonist.expressions)) {
+      protagonist.expressions = edits.protagonist.expressions.map((x) => String(x).trim().slice(0, 300)).filter(Boolean);
+    }
+    parsed.protagonist = protagonist;
+  }
+  if (edits?.world) {
+    parsed.world = pickText(edits.world, CAST_SETS_EDITABLE_WORLD);
+  }
+  if (Array.isArray(edits?.sets) && edits.sets.length) {
+    const roles = new Map(edits.sets.map((s) => [s.id, s.imageRole]));
+    const unknown = [...roles.keys()].filter((id) => !(previous.sets || []).some((s) => s.id === id));
+    if (unknown.length) throw new ServerError(`Unknown set: ${unknown.join(', ')}`, { status: 422, code: 'CAST_SETS_UNKNOWN_SET' });
+    parsed.sets = previous.sets.map((s) => (roles.has(s.id) ? { ...s, imageRole: roles.get(s.id) } : s));
+  }
+  // The mood-board indices were validated against the board when it was directed.
+  const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, moodImageCount: Number.POSITIVE_INFINITY, medium: 'procedural' });
+  if (missing.length) throw new ServerError(`That edit would leave the direction without: ${missing.join(', ')}`, { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
+  const differs = (a, b) => JSON.stringify(a ?? '') !== JSON.stringify(b ?? '');
+  const changed = [
+    ...Object.keys(CAST_SETS_EDITABLE_PROTAGONIST).filter((key) => differs(previous.protagonist?.[key], direction.protagonist[key])),
+    ...(differs(previous.protagonist?.expressions, direction.protagonist.expressions) ? ['expressions'] : []),
+    ...Object.keys(CAST_SETS_EDITABLE_WORLD).filter((key) => differs(previous.world?.[key], direction.world[key])).map((key) => `world ${key}`),
+    ...direction.sets.filter((set) => differs(previous.sets.find((s) => s.id === set.id)?.imageRole, set.imageRole)).map((set) => `${set.name} image role`),
+  ];
+  return { direction: { ...direction, look: previous.look || '' }, changed };
 }

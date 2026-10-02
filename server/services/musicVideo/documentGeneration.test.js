@@ -218,3 +218,23 @@ it('checks production authorization before provider submission and again before 
   await expect(acceptMixedMediaDocument(id, staged.directory, { verifyCurrent: blocked })).rejects.toMatchObject({ code: 'PRODUCTION_STEP_CLOSED' });
   expect((await projects.getProject(id)).composition.documentDraft.directory).toBe(staged.directory);
 });
+
+it('hands the approved procedural definitions and rules to the document author, and nothing from an unapproved check-in', async () => {
+  const id = await fixture();
+  const castAndSets = (status) => ({ status, direction: {
+    medium: 'procedural',
+    protagonist: { name: 'Kite', description: 'a paper kite', movement: 'sways on the downbeat' },
+    world: { camera: 'locked wide, slow push' },
+    definitions: { characters: [{ id: 'kite', name: 'Kite', renderer: 'svg', palette: [], parts: [{ id: 'sail', shape: 'polygon', points: [[100, 20], [160, 100], [100, 180], [40, 100]], fill: '#ff7700' }], expressions: [], poses: [], motion: [] }] },
+  } });
+  await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, castAndSets: castAndSets('review') } }));
+  await generateMixedMediaDocument(id);
+  expect(h.prompt).not.toContain('APPROVED CAST & SETS');
+
+  await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, castAndSets: castAndSets('approved') } }));
+  await generateMixedMediaDocument(id);
+  expect(h.prompt).toContain('APPROVED CAST & SETS DEFINITIONS AND RULES');
+  expect(h.prompt).toContain('camera: locked wide, slow push');
+  expect(h.prompt).toContain('movement: sways on the downbeat');
+  expect(h.prompt).toContain('"shape":"polygon"');
+});

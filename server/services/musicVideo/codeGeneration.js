@@ -11,8 +11,10 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { isDeterministicCodeSource } from '../../lib/musicVideoValidation.js';
 import { universeStyleLines } from '../../lib/styleSourcePrompt.js';
+import { musicVideoCodeDirectionContext } from '../../lib/musicVideoCreativeContext.js';
 import { buildMusicVideoCodePrompt, extractCodeSections } from '../codeAnimation/prompt.js';
 import { normalizeComposition } from './composition.js';
+import { approvedCastAndSetsDirection } from './castAndSets.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoLlmRouteLabel } from '../../lib/musicVideoAutomation.js';
 import { effortArg, resolveMusicVideoLlm } from './llmRoute.js';
@@ -30,6 +32,9 @@ export async function styleLinesFor(project) {
     return [];
   }
 }
+
+/** The approved procedural direction's definitions and rules, for a code-authoring request. */
+export const castAndSetsCodeContext = (project) => musicVideoCodeDirectionContext(approvedCastAndSetsDirection(project));
 
 function acceptSources(parsed, ids) {
   const wanted = new Set(ids);
@@ -109,6 +114,7 @@ export async function generateMusicVideoCode(projectId, { providerId, model, eff
     palette,
     song,
     styleLines: await styleLinesFor(project),
+    directionContext: castAndSetsCodeContext(project),
   });
   const run = await runModel({ providerId, model, effort, automation: project.automation, prompt });
   const parsed = extractCodeSections(run.text);
@@ -136,6 +142,7 @@ export async function regenerateMusicVideoCodeSection(projectId, sectionId, { pr
     song,
     styleLines: await styleLinesFor(project),
     onlySectionId: sectionId,
+    directionContext: castAndSetsCodeContext(project),
   });
   const run = await runModel({ providerId, model, effort, automation: project.automation, prompt });
   const sections = acceptSources(extractCodeSections(run.text), [sectionId]);

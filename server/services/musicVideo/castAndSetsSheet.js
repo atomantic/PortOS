@@ -15,6 +15,7 @@
  */
 
 import { plannedTests } from './castAndSetsPlan.js';
+import { renderDefinitionsSection } from './castAndSetsDefinitions.js';
 
 // One color per set (song-map bar + dots), in set order.
 export const CAST_SETS_SET_COLORS = Object.freeze(['#b8d63a', '#2fae8f', '#8a5cff', '#e0342b', '#18c7d6', '#3d7bff', '#f0a13a', '#ff5a1f']);
@@ -72,6 +73,13 @@ figcaption{font-family:var(--mono);font-size:12px;color:var(--muted);padding-top
 .set figcaption b{font-family:var(--body);font-size:17px;color:var(--fg);font-weight:600}
 .set figcaption span{font-family:var(--body);font-size:14px;color:var(--muted)}
 .set figcaption em{font-style:normal;color:var(--green);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.def{border:1px solid var(--line);background:var(--panel);padding:16px;margin-top:18px}
+.def h3{font-family:var(--display);font-size:24px;margin:0 0 10px;font-weight:700}
+.def h3 span{font-family:var(--mono);font-size:12px;color:var(--muted);letter-spacing:.08em;margin-left:8px}
+.def-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.def-tile svg{display:block;width:100%;height:auto;background:#0b0f0d;border:1px solid var(--line)}
+.swatches{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.swatch i{display:inline-block;width:12px;height:12px;margin-right:6px;vertical-align:-2px;border:1px solid var(--line)}
 .bar{display:flex;height:44px;border:1px solid var(--line);margin-top:20px;overflow:hidden}
 .seg{position:relative;border-right:1px solid var(--bg);min-width:0}
 .seg span{position:absolute;left:4px;bottom:3px;font-family:var(--mono);font-size:10px;color:#0b0f0d;white-space:nowrap;overflow:hidden;max-width:calc(100% - 6px)}
@@ -190,6 +198,7 @@ ${d.interpretation ? `<p class="sub">${e(d.interpretation)}</p>` : ''}
 ${applied}
 <section><h2><small>Protagonist</small>${e(p.name || 'Protagonist')}</h2>
 ${procedural ? `<dl class="facts wide">${facts}</dl></section>
+${renderDefinitionsSection(d.definitions)}
 ${worldFacts ? `<section><h2><small>World</small>How the environments behave</h2><dl class="facts wide">${worldFacts}</dl></section>` : ''}` : `<div class="grid2">${figure(images.character, 'Character reference sheet: front, three-quarter, profile, back and face', 'Canonical reference sheet. Every later image of the protagonist uses it as a reference.')}<div><dl class="facts">${facts}</dl></div></div>
 ${figure(images.looks, 'Wardrobe looks', looksCaption ? `Wardrobe by chapter: ${looksCaption}` : 'Wardrobe', 'wide')}
 <div class="grid2">${figure(images.expressions, 'Expression sheet', `Expression range for lip-sync keyframes.${p.gesture ? ` Includes the gesture: ${e(p.gesture)}` : ''}`)}${tests[0] ? figure(images['test:1'], 'First in-set test', e(tests[0].caption || tests[0].action)) : ''}</div>

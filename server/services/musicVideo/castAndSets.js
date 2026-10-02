@@ -51,6 +51,9 @@ const stageError = (status, code, message) => new ServerError(message, { status,
 /** The check-in mode for a project (default: review). */
 export const castAndSetsCheckinMode = (project) => (project?.automation?.checkins?.castAndSets === 'auto' ? 'auto' : 'review');
 
+/** The direction a code-authoring request may reuse: only an APPROVED stage's. */
+export const approvedCastAndSetsDirection = (project) => (project?.castAndSets?.status === 'approved' ? (project.castAndSets.direction || null) : null);
+
 export const castAndSetsSettled = (stage) => CAST_SETS_SETTLED.includes(stage?.status);
 
 /** The stage as the director sees it: `interrupted` when a restart unpinned a working stage. */

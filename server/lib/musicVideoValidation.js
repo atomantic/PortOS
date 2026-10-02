@@ -888,6 +888,31 @@ export const musicVideoCastAndSetsRegenerateSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
+// Direct edits to a procedural direction. A present text field replaces the
+// current value (empty clears it); an absent one keeps it.
+const castSetsText = (max) => z.string().max(max);
+export const musicVideoCastAndSetsDirectionEditSchema = z.object({
+  protagonist: z.object({
+    construction: castSetsText(1000).optional(),
+    shapeLanguage: castSetsText(500).optional(),
+    materials: castSetsText(500).optional(),
+    palette: castSetsText(300).optional(),
+    movement: castSetsText(1000).optional(),
+    expressions: z.array(castSetsText(300)).max(8).optional(),
+  }).strict().optional(),
+  world: z.object({
+    layout: castSetsText(1000).optional(),
+    depth: castSetsText(500).optional(),
+    lighting: castSetsText(500).optional(),
+    camera: castSetsText(500).optional(),
+    transitions: castSetsText(500).optional(),
+  }).strict().optional(),
+  sets: z.array(z.object({
+    id: z.string().min(1).max(64),
+    imageRole: z.enum(['background', 'texture', 'decoration', 'cutout']),
+  }).strict()).max(8).optional(),
+}).strict();
+
 export const musicVideoProjectCreateSchema = z.object({
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200),

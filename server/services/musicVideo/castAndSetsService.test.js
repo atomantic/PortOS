@@ -532,4 +532,71 @@ describe('Cast & Sets procedural check-in', () => {
     await runTo(project.id, 'review');
     expect((await current(project.id)).castAndSets.direction.medium).toBe('procedural');
   });
+
+  it('previews the reusable definitions on the sheet, saves the director\'s direction edits through a revision, and persists them', async () => {
+    const definitions = { characters: [{
+      id: 'boat', name: 'Paper boat', renderer: 'svg', palette: [{ name: 'cream', hex: '#f5f0e6' }],
+      parts: [{ id: 'hull', shape: 'rect', x: 40, y: 100, width: 120, height: 40, fill: 'cream' }],
+      expressions: [{ name: 'proud', overrides: { hull: { rotate: -4 } } }],
+    }] };
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...PROCEDURAL, definitions }) });
+    const project = await seedProcedural(['image:codex', 'code:render']);
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const reviewing = await current(project.id);
+    const sheet = () => readFileSync(join(ROOT(), (reviewing.devArtifacts.find((a) => a.id === reviewing.castAndSets.artifactId)).file), 'utf8');
+    expect(reviewing.castAndSets.direction.definitions.characters[0]).toMatchObject({ id: 'boat', parts: [{ id: 'hull', shape: 'rect' }] });
+    expect(sheet()).toContain('Reusable code definitions');
+    const landed = jobs.length;
+
+    // Edit palette, camera and a plate's role. No direction (text) call; only the plate whose prompt changed re-renders.
+    const edit = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({
+      protagonist: { palette: '#112233, #ddeeff', expressions: ['calm: bow level'] },
+      world: { camera: 'locked off, no push' },
+      sets: [{ id: 'river', imageRole: 'texture' }],
+    });
+    expect(edit.status).toBe(202);
+    expect(edit.body.stage.revision).toBe(2);
+    await until(async () => jobs.length > landed, 'the re-rendered plate');
+    await runTo(project.id, 'review');
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    expect(jobs.slice(landed).map(keyOf)).toEqual(['set:river']);
+
+    // The edit survives a reload and reaches the planner request and the sheet.
+    const after = await current(project.id);
+    expect(after.castAndSets.direction).toMatchObject({
+      protagonist: { palette: '#112233, #ddeeff', expressions: ['calm: bow level'], construction: 'three triangles hinged at the keel' },
+      world: { camera: 'locked off, no push', layout: 'a river through stacked streets' },
+      definitions,
+    });
+    expect(after.castAndSets.direction.sets.find((x) => x.id === 'river').imageRole).toBe('texture');
+    expect(after.castAndSets.notesApplied[0].text).toMatch(/^Edited by the director: palette, expressions, world camera, River image role/);
+    const { buildScenePlanPrompt } = await import('./planner.js');
+    const planPrompt = buildScenePlanPrompt(after, [{ startSec: 0, endSec: 8, sectionIndex: 0, shotIndex: 0, shotCount: 1, sectionLabel: 'Intro', lyricText: '', delivery: [] }]);
+    expect(planPrompt).toContain('locked off, no push');
+    expect(planPrompt).toContain('#112233, #ddeeff');
+
+    // Nothing changed / unknown set / not in review are refused, leaving the direction as saved.
+    const same = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ world: { camera: 'locked off, no push' } });
+    expect(same.status).toBe(422);
+    const unknown = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ sets: [{ id: 'nowhere', imageRole: 'cutout' }] });
+    expect(unknown.status).toBe(422);
+    const invalid = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ sets: [{ id: 'river', imageRole: 'wallpaper' }] });
+    expect(invalid.status).toBe(400);
+    await service.approveCastAndSets(project.id);
+    const approved = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ world: { camera: 'x' } });
+    expect(approved.status).toBe(409);
+    expect((await current(project.id)).castAndSets.direction.world.camera).toBe('locked off, no push');
+    expect(sheet()).toContain('Reusable code definitions');
+  });
+
+  it('refuses to edit a photographic direction', async () => {
+    runPrompt.mockResolvedValue({ text: JSON.stringify(DIRECTION) });
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const res = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ world: { camera: 'x' } });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('CAST_SETS_NOT_PROCEDURAL');
+  });
 });

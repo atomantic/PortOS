@@ -6,7 +6,7 @@ import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
+  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
   getMediaJob: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
@@ -26,11 +26,11 @@ const plan = {
 const project = (images = {}, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status: 'imaging', plan, images, moodImages: [{ kind: 'image-ref', filename: 'mood.png' }], ...extra } });
 const done = (filename, prompt) => ({ status: 'done', jobId: `job-${filename}`, imageId: filename, submittedPrompt: prompt, submittedRevision: 1, submittedReferences: [{ kind: 'image-ref', filename: 'mood.png' }] });
 let selectProject;
-function Harness({ initial }) {
+function Harness({ initial, locked = true }) {
   const [value, setValue] = useState(initial);
   selectProject = setValue;
   const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
-  return <CastSetsStage board={{ project: value, locked: true, castSets: actions, kickoff: { running: true }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip }} />;
+  return <CastSetsStage board={{ project: value, locked, castSets: actions, kickoff: { running: locked }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip }} />;
 }
 const stage = (next) => emit('music-video:cast-and-sets', { projectId: next.id, project: next });
 const card = (name) => within(screen.getByRole('article', { name }));
@@ -129,5 +129,59 @@ describe('Cast & Sets incremental references', () => {
     expect(card('Other cast').getByText('Other plan')).toBeInTheDocument();
     view.unmount();
     expect([...listeners.values()].every((set) => set.size === 0)).toBe(true);
+  });
+});
+
+describe('Cast & Sets direction editing', () => {
+  const direction = (medium) => ({
+    ...(medium ? { medium } : {}),
+    protagonist: { name: 'Boat', description: 'a paper boat', construction: 'three folds', palette: '#f5f0e6', movement: 'bobs', expressions: ['proud: bow lifts'] },
+    world: { layout: 'a river', camera: 'slow dolly' },
+    sets: [{ id: 'river', name: 'River', description: 'a neon river', imageRole: 'background' }, { id: 'quay', name: 'Quay', description: 'wet stone', imageRole: 'texture' }],
+  });
+  const review = (dir, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status: 'review', plan: {}, images: {}, direction: dir, ...extra } });
+
+  it('offers the editor only for a procedural direction waiting in review', () => {
+    const view = render(<Harness initial={review(direction())} locked={false} />);
+    expect(screen.queryByRole('button', { name: /Edit direction/ })).toBeNull();
+    view.unmount();
+    render(<Harness initial={review(direction('procedural'), { status: 'approved' })} locked={false} />);
+    expect(screen.queryByRole('button', { name: /Edit direction/ })).toBeNull();
+  });
+
+  it('sends only the changed fields, applies the saved project, and keeps the edit across the revision', async () => {
+    api.editMusicVideoCastAndSetsDirection.mockImplementation(async (_id, body) => ({ project: review({
+      ...direction('procedural'),
+      protagonist: { ...direction().protagonist, palette: body.protagonist.palette },
+      sets: direction().sets.map((s) => ({ ...s, imageRole: body.sets?.find((x) => x.id === s.id)?.imageRole || s.imageRole })),
+    }, { revision: 2, status: 'imaging' }) }));
+    render(<Harness initial={review(direction('procedural'))} locked={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /Edit direction/ }));
+    const save = screen.getByRole('button', { name: /Save direction/ });
+    expect(save).toBeDisabled();
+    expect(screen.getByLabelText('Construction').value).toBe('three folds');
+    expect(screen.getByLabelText('Expressions (one per line)').value).toBe('proud: bow lifts');
+
+    fireEvent.change(screen.getByLabelText('Palette'), { target: { value: '#112233, #ddeeff' } });
+    fireEvent.change(screen.getByLabelText('Image role · Quay'), { target: { value: 'cutout' } });
+    expect(save).not.toBeDisabled();
+    await act(async () => { fireEvent.click(save); });
+
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenCalledWith('example-project', {
+      protagonist: { palette: '#112233, #ddeeff' },
+      sets: [{ id: 'quay', imageRole: 'cutout' }],
+    }, { silent: true });
+    // The saved revision replaces the sheet's state; the editor closes and the stage shows the new revision.
+    expect(screen.getByText('revision 2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save direction/ })).toBeNull();
+  });
+
+  it('keeps the draft open when the save fails', async () => {
+    api.editMusicVideoCastAndSetsDirection.mockRejectedValue(new Error('Nothing changed'));
+    render(<Harness initial={review(direction('procedural'))} locked={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /Edit direction/ }));
+    fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'locked off' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save direction/ })); });
+    expect(screen.getByLabelText('Camera').value).toBe('locked off');
   });
 });

@@ -1,5 +1,6 @@
 import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Users } from 'lucide-react';
 import Pill from '../ui/Pill.jsx';
+import CastAndSetsDirectionEditor from './CastAndSetsDirectionEditor.jsx';
 import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
 
 const WORKING = new Set(['directing', 'imaging', 'assembling']);
@@ -30,9 +31,9 @@ function statusLine(stage) {
  * The Cast & Sets check-in's state on the Autopilot card: progress while the
  * server works, "Waiting for your check-in" with the sheet one click away,
  * and the director's actions (Approve & continue, Regenerate with notes,
- * Resume, Skip).
+ * Edit direction on a procedural sheet, Resume, Skip).
  */
-export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onApprove, onRegenerate, onResume, onSkip }) {
+export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onSkip }) {
   const stage = project.castAndSets;
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
@@ -61,6 +62,9 @@ export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onAppro
               className={`${buttonClass} border border-port-border`}>
               <RotateCcw size={14} aria-hidden="true" /> Regenerate with notes
             </button>
+            {onEditDirection && stage.direction?.medium === 'procedural' && (
+              <CastAndSetsDirectionEditor key={stage.revision} project={project} direction={stage.direction} busy={busy} onSave={onEditDirection} />
+            )}
             <button type="button" disabled={busy} onClick={onApprove} className={`${buttonClass} bg-port-accent text-white`}>
               <CheckCircle2 size={14} aria-hidden="true" /> Approve &amp; continue
             </button>
