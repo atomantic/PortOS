@@ -111,7 +111,7 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
         aria-expanded={open}
         aria-label={label}
         title={label}
-        className="px-2 py-1.5 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 inline-flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-border transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+        className="px-2 py-1.5 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-border transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
       >
         <MoreHorizontal size={16} aria-hidden="true" />
       </button>
@@ -130,7 +130,7 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
           }}
         >
           {items.map(item => {
-            const itemClass = `w-full px-3 py-2 min-h-[44px] sm:min-h-[40px] text-left text-xs flex items-center gap-2 transition-colors disabled:opacity-50 focus:outline-hidden focus:bg-port-border/70 ${TONES[item.tone] || TONES.default}`;
+            const itemClass = `w-full px-3 py-2 min-h-[44px] text-left text-xs flex items-center gap-2 transition-colors disabled:opacity-50 focus:outline-hidden focus:bg-port-border/70 ${TONES[item.tone] || TONES.default}`;
             const content = (
               <>
                 {item.icon ? <item.icon size={14} aria-hidden="true" /> : null}
