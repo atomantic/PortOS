@@ -280,6 +280,20 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Motion toolkit: executes the downloaded installer and writes agent skills user-wide.
   'POST /api/html-composition/toolkit/skills/install',
 
+  // Media authoring can launch a coding CLI/TUI agent, including via provider
+  // fallback. Gate the whole operation even when the initial provider is API;
+  // runtime-data cwd and later render containment do not sandbox authoring.
+  'POST /api/code-animation/brief',
+  'POST /api/code-animation/generate',
+  'POST /api/code-animation/projects/:id/stage-runs',
+  'POST /api/music/describe',
+  'POST /api/music/lyrics',
+  'POST /api/music/waveform',
+  'POST /api/music/code',
+  'POST /api/tracks/:id/waveform/draw',
+  'POST /api/music-video/autonomous',
+  'POST /api/music-video/:id/autonomous/resume',
+
   // Code Animation contained execution (#9388): choosing the installed tool a
   // worker runs, and the containment check that spawns sandboxed processes.
   'PUT /api/code-animation/execution/tools',

@@ -1,15 +1,17 @@
 /**
  * Code-rendered music: the Music Designer's "Code" engine.
  *
- *   writeMusicCode()       musical description → Strudel or Tone.js code the LLM
- *                          wrote (fence-stripped and size-checked; nothing runs here).
+ *   writeMusicCode()       musical description → code the LLM wrote
+ *                          (fence-stripped and size-checked).
  *   saveCodeTakeToTrack()  a WAV the browser recorded from that code → the
  *                          shared music library, appended to the track's render
  *                          history as an `engine: 'code'` take.
  *
- * The code is arbitrary JavaScript, so the server never executes it. The
- * browser runs it inside a sandboxed, network-blocked iframe
- * (client/src/components/music/strudelFrame.js) and records the take there.
+ * Strudel/Tone.js playback runs in a sandboxed, network-blocked browser iframe
+ * (client/src/components/music/strudelFrame.js); SuperCollider uses a contained
+ * server renderer. These playback boundaries do not contain authoring: the
+ * selected provider or fallback may launch a CLI/TUI agent with host tools.
+ * The authoring HTTP entry point therefore requires operator authority.
  *
  * Nothing here runs on its own: every call is driven by an explicit button
  * press in the same request (AI Provider Usage Policy: no cold bootstrap).
