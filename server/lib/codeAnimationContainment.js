@@ -173,7 +173,7 @@ export function codeAnimationSeccompFilter(arch) {
     [0x20, 0, 0, 16],                   // clone flags, args[0] low word
     [0x45, 0, 1, 0x7e020000],           // namespace creation flags
     [0x06, 0, 0, EPERM],
-    [0x45, 1, 0, 0x00010000],           // CLONE_THREAD
+    [0x45, 1, 0, 0x00010000],           // CLONE_THREAD: true skips EPERM to ALLOW
     [0x06, 0, 0, EPERM],
     [0x06, 0, 0, ALLOW],
   ];
