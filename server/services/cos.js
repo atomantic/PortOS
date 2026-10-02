@@ -1040,12 +1040,15 @@ async function tryImmediateSpawn(task) {
 // that reads/mutates the per-cycle spawn capacity via `ctx.capacity` (the pure
 // tracker from cosDequeue.js) and emits `task:ready` for admitted tasks. This
 // mirrors the established `spawnPriorityN(ctx)` decomposition in
-// cosTaskGenerator.js's evaluateTasks (issue #2530).
+// cosTaskGenerator.js's evaluateTasks (issue #2530). `ctx` is frozen: a tier
+// returns the values a later tier needs and the orchestrator passes them on as
+// named arguments, so tier order cannot silently change what a tier reads.
 
 /**
  * Priority 0 — on-demand task requests (explicit user "Run"). Runs even while
- * paused. Loads the task schedule onto `ctx` (reused by Priority 2) and drains
- * the on-demand request queue, generating + persisting a task per request.
+ * paused. Drains the on-demand request queue, generating + persisting a task per
+ * request. Returns the schedule it loaded so the orchestrator can hand it to
+ * Priority 2's disabled-analysis-type gate (avoids a second load).
  */
 async function spawnDequeuePriority0OnDemand(ctx) {
   const { state, capacity, ignoreTaskId } = ctx;
@@ -1067,21 +1070,18 @@ async function spawnDequeuePriority0OnDemand(ctx) {
     addTaskOptions: { ignoreTaskId },
   });
 
-  // Stash the loaded schedule for Priority 2's disabled-analysis-type gate
-  // (avoids a second load).
-  ctx.taskSchedule = schedule;
+  return { schedule };
 }
 
 /**
- * Priority 1 — pending user tasks. Records `pendingUserTasks` /
- * `hasPendingUserTasks` on `ctx` for the idle tier below.
+ * Priority 1 — pending user tasks. Returns `hasPendingUserTasks`
+ * for the idle tier below.
  */
 async function spawnDequeuePriority1UserTasks(ctx) {
   const { instanceId, capacity } = ctx;
 
   const userTaskData = await getUserTasks();
   const pendingUserTasks = userTaskData.grouped?.pending || [];
-  ctx.hasPendingUserTasks = pendingUserTasks.length > 0;
 
   await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
     capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
@@ -1089,28 +1089,28 @@ async function spawnDequeuePriority1UserTasks(ctx) {
     emitSpawn: (task) => cosEvents.emit('task:ready', task),
     trackSpawn: (task) => capacity.trackSpawn(task),
   });
+
+  return { hasPendingUserTasks: pendingUserTasks.length > 0 };
 }
 
 /**
  * Priority 2 — auto-approved system tasks, gated by the CoS auto-run domain.
- * Resolves `ctx.cosAutonomyMode` and `ctx.autonomousSpawnCeiling` (used by the
- * idle tier) from the daily CoS budget (#711). `off`/`dry-run` withhold
+ * Returns `cosAutonomyMode` and `autonomousSpawnCeiling` (used by the
+ * idle tier) resolved from the daily CoS budget (#711). `off`/`dry-run` withhold
  * the unattended spawn; `dry-run` logs what execute mode would have run.
  */
-async function spawnDequeuePriority2AutoApproved(ctx) {
+async function spawnDequeuePriority2AutoApproved(ctx, { taskSchedule }) {
   const { state, instanceId, capacity } = ctx;
 
   const cosTaskData = await getCosTasks();
   const runningAgentEntries = Object.values(state.agents).filter((agent) => agent.status === 'running');
   const { cosAutonomyMode, autonomousActionsRemaining } = await resolveAutonomyBudget(state, runningAgentEntries);
   const autonomousSpawnCeiling = Math.min(capacity.availableSlots, capacity.spawned + autonomousActionsRemaining);
-  ctx.cosAutonomyMode = cosAutonomyMode;
-  ctx.autonomousSpawnCeiling = autonomousSpawnCeiling;
 
-  return admitAutoApprovedSystemTasks({
+  await admitAutoApprovedSystemTasks({
     state,
     cosTaskData,
-    taskSchedule: ctx.taskSchedule,
+    taskSchedule,
     cosAutonomyMode,
     autonomousSlotCeiling: autonomousSpawnCeiling,
     alreadySpawned: capacity.spawned,
@@ -1124,6 +1124,8 @@ async function spawnDequeuePriority2AutoApproved(ctx) {
       cosEvents.emit('task:ready', task);
     },
   });
+
+  return { cosAutonomyMode, autonomousSpawnCeiling };
 }
 
 /**
@@ -1131,14 +1133,14 @@ async function spawnDequeuePriority2AutoApproved(ctx) {
  * cycle. The shared owner checks eligibility and capacity before preparation,
  * then performs the committed handoff.
  */
-async function spawnDequeuePriority3IdleReview(ctx) {
+async function spawnDequeuePriority3IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
   const { capacity } = ctx;
   return admitIdleReviewTask({
     state: ctx.state,
     alreadySpawned: capacity.spawned,
-    hasPendingUserTasks: ctx.hasPendingUserTasks,
-    cosAutonomyMode: ctx.cosAutonomyMode,
-    autonomousSlotCeiling: ctx.autonomousSpawnCeiling,
+    hasPendingUserTasks,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
     ignoreTaskId: ctx.ignoreTaskId,
   }, {
     canSpawn: (task, ceiling) => capacity.canSpawnCommitted(task, ceiling),
@@ -1245,35 +1247,31 @@ export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
 
   // Shared spawn context threaded through each priority tier. The tiers mutate
   // the running spawn total + per-project counts through `capacity` (whose
-  // `canSpawn`/`trackSpawn` close over that state), and stash cross-tier values
-  // (taskSchedule, hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling)
-  // on `ctx` as they resolve them.
-  const ctx = {
+  // `canSpawn`/`trackSpawn` close over that state). Frozen: cross-tier values
+  // (schedule, hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling) are
+  // returned by the tier that resolves them and passed on as named arguments.
+  const ctx = Object.freeze({
     state,
     instanceId,
     capacity,
-    hasPendingUserTasks: false,
-    taskSchedule: null,
-    cosAutonomyMode: null,
-    autonomousSpawnCeiling: availableSlots,
     ignoreTaskId
-  };
+  });
 
   // Priority 0 (on-demand) runs even when paused — an explicit user "Run"
   // bypasses the global pause.
-  await spawnDequeuePriority0OnDemand(ctx);
+  const { schedule: taskSchedule } = await spawnDequeuePriority0OnDemand(ctx);
 
   // Global pause stops every autonomous/scheduled/user tier below; only the
   // on-demand queue above (explicit user "Run") bypasses it.
   if (paused) return;
 
   // Priority 1 spends against the global slot cap.
-  await spawnDequeuePriority1UserTasks(ctx);
+  const { hasPendingUserTasks } = await spawnDequeuePriority1UserTasks(ctx);
 
   // Priorities 2 and 3 spend against the lower autonomous ceiling that
-  // Priority 2 resolves onto `ctx.autonomousSpawnCeiling` from the daily budget.
-  await spawnDequeuePriority2AutoApproved(ctx);
-  await spawnDequeuePriority3IdleReview(ctx);
+  // Priority 2 resolves `autonomousSpawnCeiling` from the daily budget.
+  const { cosAutonomyMode, autonomousSpawnCeiling } = await spawnDequeuePriority2AutoApproved(ctx, { taskSchedule });
+  await spawnDequeuePriority3IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
 
   if (capacity.spawned > 0) {
     const ids = capacity.spawnedTaskIds.join(', ');
