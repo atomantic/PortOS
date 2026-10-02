@@ -42,6 +42,15 @@ describe('InfoTooltip', () => {
     expect(screen.getByRole('tooltip').className).toContain('bottom-full');
   });
 
+  it('keeps a 44px minimum, non-shrinking hit area on the trigger button', () => {
+    render(<InfoTooltip label="help">Big target</InfoTooltip>);
+    const cls = screen.getByRole('button', { name: 'help' }).className;
+    expect(cls).toContain('min-h-[44px]');
+    expect(cls).toContain('min-w-[44px]');
+    expect(cls).toContain('shrink-0');
+    expect(cls).toContain('justify-center');
+  });
+
   it('latches open on click for touch users and survives blur', () => {
     render(<InfoTooltip label="help">Tap reachable</InfoTooltip>);
     const btn = screen.getByRole('button', { name: 'help' });
