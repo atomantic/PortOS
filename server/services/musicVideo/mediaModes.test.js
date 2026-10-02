@@ -48,8 +48,16 @@ describe('whole-workflow media modes', () => {
     expect((await projects.getProject(project.id)).composition.document).toBeUndefined();
     await writeFile(join(dir, 'index.html'), '<canvas></canvas>');
     await writeFile(join(dir, 'example.woff2'), 'synthetic font');
+    await writeFile(join(dir, 'scene.js'), '/** @type {Array<Image>} */ const objects = [];');
     const imported = await importDocumentDirectory(project.id, 'candidate');
     expect(imported.project.composition.mode).toBe('document');
+    await writeFile(join(dir, 'scene.js'), 'const svg = `<image href="photo.png"/>`;');
+    await expect(importDocumentDirectory(project.id, 'candidate')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+    await writeFile(join(dir, 'scene.js'), 'const objects = [];');
+    // Renaming a raster to an allowed local-font extension must not bypass admission.
+    await writeFile(join(dir, 'example.woff2'), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    await expect(importDocumentDirectory(project.id, 'candidate')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+    await writeFile(join(dir, 'example.woff2'), 'synthetic font');
     await writeFile(join(dir, 'photo.png'), 'synthetic raster');
     await expect(importDocumentDirectory(project.id, 'candidate')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
   });

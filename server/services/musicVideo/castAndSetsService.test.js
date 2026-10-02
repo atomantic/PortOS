@@ -513,7 +513,7 @@ describe('Cast & Sets procedural check-in', () => {
       runPrompt, getSettings: async () => ({}), enqueue, resolveRoute,
       loadBoard: async () => null, loadTrack: async () => null,
     });
-    const project = await seedProcedural(['code:render']);
+    const project = await seed({ visualSpec: null, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 }, automation: { tools: ['code:render'], checkins: { castAndSets: 'review' } } });
     await service.startCastAndSets(project.id);
     await until(async () => (await current(project.id)).castAndSets?.status === 'review', 'the code-only check-in');
     const stage = (await current(project.id)).castAndSets;

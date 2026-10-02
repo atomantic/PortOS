@@ -1,3 +1,4 @@
+vi.mock('../musicVideo/projects.js', () => ({ getProject: vi.fn(async () => ({ mediaMode: 'code-images-video' })) }));
 vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSceneReview: vi.fn(async () => {}) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
@@ -246,6 +247,19 @@ afterAll(async () => {
 });
 
 describe('mediaJobQueue', () => {
+  it('blocks guide generation and rechecks media policy before delayed provider dispatch', async () => {
+    const { getProject } = await import('../musicVideo/projects.js');
+    const request = { kind: 'image', params: { prompt: 'Synthetic guide', musicVideo: { projectId: 'mv-example', castAndSets: { key: 'guide' } } } };
+    getProject.mockResolvedValueOnce({ mediaMode: 'code-only' });
+    await expect(mediaJobQueue.enqueueJob(request)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    getProject.mockResolvedValueOnce({ mediaMode: 'code-images' }).mockResolvedValueOnce({ mediaMode: 'code-only' });
+    const { jobId } = await mediaJobQueue.enqueueJob(request);
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(jobId).error).toContain('planning guides');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+  });
+
   it('rejects an unreviewed music-video scene before queue admission and rechecks delayed dispatch', async () => {
     const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
     const request = { kind: 'video', params: { prompt: 'Synthetic scene', musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' } } };

@@ -1,4 +1,4 @@
-import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
+import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { productionFeedbackContext } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
@@ -152,6 +152,7 @@ async function chooseCastAndSetsRoute(project, { preferred = null, settings } = 
 // ---- direction ------------------------------------------------------------------
 
 async function loadContext(project) {
+  assertMusicVideoMediaSelections(project);
   const boardId = project?.visualSpec?.moodBoardId;
   const board = boardId ? await deps.loadBoard(boardId).catch(() => null) : null;
   const resolveItem = board ? await deps.boardItemImage() : null;
