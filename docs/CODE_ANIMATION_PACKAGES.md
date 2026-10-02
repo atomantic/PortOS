@@ -211,8 +211,10 @@ Memory and disk limits are watchdog-enforced, so brief overshoots are possible.
 
 **Create painterly Blender starter** creates a data-only package containing the
 original `build_scene(config)` Python source for *Lantern in a Painted Garden*:
-a deterministic pigment atlas, faceted paper forms, a subject animated on twos,
-baked sparks on threes, and a continuously keyed camera. No external assets,
+a deterministic brush-stroke pigment atlas, faceted paper forms, a subject animated on
+twos with anticipation/squash and sparks that lag on threes, a warm lantern light
+against a cool moon-side fill, dark foreground leaves, and a continuously keyed
+perspective camera with shallow focus on the lantern. No external assets,
 downloads, add-ons, provider calls or rendering occur on import. The default
 format is 10 seconds at 1920 × 1080 / 24 fps, Blender 4.2.0 / Cycles CPU. The
 project's authoring provider remains independent from its renderer.
@@ -230,7 +232,8 @@ their children from motion blur; EEVEE disables blur to preserve the holds.
 These are transform/cadence checks, not a claim that arbitrary mesh deformation
 or semantic visual quality was independently reviewed.
 
-The baked `.blend` packs original textures. Scene, report, every decoded PNG,
+The baked `.blend` packs original textures (the driver packs each image once; repacking an
+already packed image re-encodes it and corrupts its colour channels). Scene, report, every decoded PNG,
 pilot MP4 and final sequence are immutable run artifacts, separate from accepted
 source revisions. Missing frames, malformed output, unsupported runtime/engine,
 revoked readiness, worker failure and cancellation cannot pass. PNG geometry
@@ -242,29 +245,65 @@ apply throughout; cancellation keeps earlier accepted artifacts. Failed native
 workers never fall back to browser rendering or a different engine.
 
 Runtime/format/cadence fixtures test these contracts but do not constitute real
-Blender acceptance. A bounded native run on 2026-10-01 rendered frames 25, 121
-and 217 (seconds 1, 5 and 9) from package
-`e9cb67e74f33291ea444cfa79dc8648120b7359596a95cf4d8b7149a7958febf`
-at 1920 × 1080 / 24 fps in explicit trusted-local mode: Blender 4.2.0,
-Cycles CPU, four samples, seed 17, two threads. It took 68.12 seconds end to
-end (67.42 seconds in the worker), retained 11,883,500 artifact bytes, decoded
-all three PNGs and saved a packed `.blend`. The driver measured all 240
-frames' object/camera transforms; **only three images were rendered**.
+Blender acceptance. That is established by
+`scripts/code-animation-blender-acceptance.js`, which drives the production
+`renderBlenderSequence` against an operator-supplied Blender 4.2.0 executable and
+writes an `evidence.json` verdict. It refuses to reuse an output directory, never
+writes machine settings, fingerprints the executable rather than recording its
+path, and `--mode trusted-local` prints the no-containment warning.
 
-Decoded RGBA SHA-256 values:
+```bash
+node scripts/code-animation-blender-acceptance.js --executable <Blender 4.2.0> --out <new dir> \
+  --mode trusted-local --phase pilot|final            # full 10 s sequence
+node scripts/code-animation-blender-acceptance.js ... --repeat --times 1,5,9   # repeat sampled frames
+node scripts/code-animation-blender-acceptance.js ... --cancel-after 40        # real cancellation
+node scripts/code-animation-blender-acceptance.js ... --engine BLENDER_EEVEE_NEXT --backend METAL
+```
 
-| Frame | SHA-256 |
-|---|---|
-| 25 | `fe18b712637f3bcb8259a46383ef8058cbe4d59aa70a3a29c9da233f2bbdd930` |
-| 121 | `61a864e4cb370d9dd1e00135c75c8f9271ffb2b24865c876289e988da74c10a6` |
-| 217 | `bfe102954770c5dc0b1a2a145c23f36dbfe466a31a8fa5d52532462babbc2e1c` |
+**Acceptance run, 2026-10-02.** Official Blender 4.2.0 macOS arm64 build (the
+download's SHA-256 matched the published checksum), Apple Silicon host, explicit
+trusted-local mode, bundled starter source SHA-256
+`3e108ac6e3610219dfe8249a8292a499cae1e55db730826296713845c98d3b16`, seed 17, two
+CPU threads, 1920 × 1080 / 24 fps / 10 s. Every run produced all 240 PNGs, a
+packed `.blend`, a complete decode of every frame, and an H.264 MP4 probed at
+exactly 240 frames and 1920 × 1080 / 24 fps.
 
-The native stills are a rough, faceted and noisy study, **not polished painterly
-acceptance**. #9390 remains open for the full 10–15 second 1080p/24fps pilot
-and final sequence, repeated sampled-frame comparison, actual EEVEE/GPU
-validation, and visual-quality refinement/review. The measured CPU cost did
-not justify silently starting a long full-sequence run during this bounded
-validation. No synthetic fixture substitutes for those remaining checks.
+| Engine / device | Profile | Samples | Wall time | Retained | MP4 SHA-256 |
+|---|---|---|---|---|---|
+| Cycles / CPU | pilot | 4 | 27.1 min | 1.08 GB | `1952dd80…133f3e` |
+| Cycles / CPU | final | 16 | 103 min | 0.88 GB | `963a0e30…f27394` |
+| EEVEE Next / GPU (Metal) | pilot | 4 | 55 s | 0.63 GB | `a3409aef…18ea` |
+| EEVEE Next / GPU (Metal) | final | 16 | 76 s | 0.59 GB | `f93885a3…133c` |
+
+Cycles CPU costs roughly 30× (pilot) to 80× (final) the wall time of EEVEE on this host, so the
+preview/final choice is a real cost decision. The cadence check passed in every
+run: the lantern holds on twos, nine sparks hold on threes, motion blur is off for
+held subjects, and the camera moves on every frame. Reported engine, device and
+backend came from Blender itself, and no engine was substituted.
+
+- **Repeatability.** Two independent renders of seconds 1, 5 and 9 gave
+  byte-identical decoded pixels for Cycles CPU (SHA-256 `59195b0d…ce3b`,
+  `e66853ca…58bd`, `77992468…ec36`) and for EEVEE Next/Metal, on the same
+  executable and host. This does not claim cross-machine or cross-version identity.
+- **Cancellation.** Aborting a Cycles pilot after 40 s terminated the worker
+  (`reason: canceled`, SIGKILL) with an empty process group and no accepted
+  artifacts.
+- **Memory.** A full EEVEE Next pilot peaked near 9.7 GiB resident and was killed
+  by the 8 GiB worker watchdog before the limit was raised for that engine only
+  (16 GiB; Cycles CPU stays on the default). The watchdog still applies.
+- **Missing or unsupported runtime.** The script refuses a missing executable
+  before starting a worker, and the readiness gate refuses an unchecked or
+  mismatched runtime. Contained mode on this macOS host fails closed: the Seatbelt
+  profile cannot start Blender, so nothing is accepted and no mode is substituted.
+- **Malformed output.** Truncated, missing and mismatched output is exercised by
+  the fixtures in `blenderRender.test.js`; the real runtime was not made to emit
+  malformed output.
+
+Not demonstrated: real contained-mode acceptance (Linux bubblewrap, or a macOS
+Blender build the Seatbelt profile can run), a GPU backend other than Metal, and
+cross-machine repeatability. The Cycles pilot was produced by the first revision of
+the acceptance script; the remaining runs used the current one, which calls the same
+`renderBlenderSequence`.
 
 The browser lane does not use this worker. It reuses the HTML-composition
 renderer sandbox (`server/services/htmlComposition/browser.js`): an in-memory

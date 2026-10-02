@@ -78,8 +78,9 @@ for obj in subjects:
 if any(a == b for a, b in zip(camera_transforms, camera_transforms[1:])):
     raise RuntimeError('Camera movement is not continuous across the sequence')
 # Pack original textures into the immutable scene artifact; no live caches.
+# Repacking an already packed image re-encodes it and corrupts its colour channels.
 for image in bpy.data.images:
-    if image.source in ('FILE', 'GENERATED') and image.has_data:
+    if image.source in ('FILE', 'GENERATED') and image.has_data and not image.packed_file:
         image.pack()
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, 'scene.blend'))
 for frame in config['frames']:
