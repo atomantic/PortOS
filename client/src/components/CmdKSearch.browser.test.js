@@ -60,7 +60,7 @@ describe.skipIf(!chrome)('command palette viewport and keyboard layout', () => {
     await server.listen();
     origin = server.resolvedUrls.local[0];
     browserTemp = await mkdtemp(join(tmpdir(), 'palette-chrome-'));
-    browser = await chromium.launch({ executablePath: chrome, headless: true,
+    browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--mute-audio'],
       env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
     });
   }, 60000);

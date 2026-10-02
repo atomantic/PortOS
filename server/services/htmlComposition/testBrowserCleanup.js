@@ -3,9 +3,11 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 // These owned browsers render on explicit seek(t), not wall/display time.
 // Chromium's display scheduler must not pace a song-length offline capture.
 // Background flags match Playwright's standard Chromium launch posture.
+// --mute-audio: compositions embed audio, and an unmuted test browser plays it
+// through the developer's real speakers.
 export function _testChromeCaptureArgs(profile) {
   return [
-    '--headless=new', '--no-sandbox', '--no-first-run', '--disable-background-networking',
+    '--headless=new', '--mute-audio', '--no-sandbox', '--no-first-run', '--disable-background-networking',
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding', '--disable-frame-rate-limit',
     '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank',
