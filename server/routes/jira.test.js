@@ -84,6 +84,73 @@ describe('GET /reports/:appId/:date', () => {
   });
 });
 
+describe('GET /reports/:appId/latest', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('rejects invalid appId characters with 400 VALIDATION_ERROR', async () => {
+    const response = await request(makeApp()).get('/api/jira/reports/bad@app/latest');
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(jiraReports.getLatestReport).not.toHaveBeenCalled();
+  });
+
+  it('rejects appId with spaces and special characters', async () => {
+    const response = await request(makeApp()).get('/api/jira/reports/bad%20app/latest');
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(jiraReports.getLatestReport).not.toHaveBeenCalled();
+  });
+
+  it('accepts valid appId with alphanumeric, dot, underscore, and dash', async () => {
+    jiraReports.getLatestReport.mockResolvedValue({ appId: 'valid-app.v2_0', date: '2026-01-01', status: 'ok' });
+
+    const response = await request(makeApp()).get('/api/jira/reports/valid-app.v2_0/latest');
+
+    expect(response.status).toBe(200);
+    expect(jiraReports.getLatestReport).toHaveBeenCalledWith('valid-app.v2_0');
+  });
+
+  it('returns 404 when no reports found', async () => {
+    jiraReports.getLatestReport.mockResolvedValue(null);
+
+    const response = await request(makeApp()).get('/api/jira/reports/example-app/latest');
+
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('POST /reports/generate', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('rejects invalid appId in request body', async () => {
+    const response = await request(makeApp()).post('/api/jira/reports/generate').send({ appId: 'bad@app' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(jiraReports.generateReport).not.toHaveBeenCalled();
+  });
+
+  it('accepts empty appId to generate all reports', async () => {
+    jiraReports.generateAllReports.mockResolvedValue([{ appId: 'app1' }, { appId: 'app2' }]);
+
+    const response = await request(makeApp()).post('/api/jira/reports/generate').send({});
+
+    expect(response.status).toBe(200);
+    expect(jiraReports.generateAllReports).toHaveBeenCalled();
+  });
+
+  it('rejects non-string appId values', async () => {
+    const response = await request(makeApp()).post('/api/jira/reports/generate').send({ appId: 123 });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(jiraReports.generateReport).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /instances/:instanceId/my-sprint-tickets/:projectKey', () => {
   let app;
   beforeEach(() => {
