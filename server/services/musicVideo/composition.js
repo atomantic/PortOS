@@ -208,6 +208,7 @@ export function invalidateCompositionTiming(composition) {
     ...composition,
     textCues: (composition.textCues || []).map((cue) => ({ ...cue, startSec: null, endSec: null })),
     posterSec: null,
+    ...(composition.reactiveSections ? { reactiveSections: [] } : {}),
     ...(composition.narrativeEvents ? { narrativeEvents: composition.narrativeEvents.map((event) => ({ ...event, anchor: null })) } : {}),
   };
 }
