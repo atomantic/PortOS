@@ -161,7 +161,7 @@ import {
 // Shared capacity and idle-review admission owner. The engines retain their
 // priority ordering and dispatch adapters; cosDequeue owns idle preparation's
 // capacity precheck and its committed handoff.
-import { admitIdleReviewTask, createDequeueCapacity, countRunningAgentsByLocalEndpoint } from './cosDequeue.js';
+import { admitFeatureAgentTasks, admitIdleReviewTask, createDequeueCapacity, countRunningAgentsByLocalEndpoint } from './cosDequeue.js';
 import { buildLocalEndpointSlotContext, localEndpointCapacityError } from './cosLocalEndpointSlots.js';
 import {
   initializePersistentMindSupervisor,
@@ -1129,11 +1129,30 @@ async function spawnDequeuePriority2AutoApproved(ctx, { taskSchedule }) {
 }
 
 /**
- * Priority 3 — idle review task, only when the daemon is completely idle this
+ * Priority 3.6 — due feature agents. Same shared admission pass as
+ * evaluateTasks, so an agent that comes due is dispatched by the next
+ * completion/queue event instead of waiting for a batch evaluation.
+ */
+async function spawnDequeuePriority36FeatureAgents(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
+  const { capacity } = ctx;
+  return admitFeatureAgentTasks({
+    spawnedCount: () => capacity.spawned,
+    hasPendingUserTasks,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
+  }, {
+    canSpawn: (task, ceiling) => capacity.canSpawn(task, ceiling),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
+}
+
+/**
+ * Priority 4 — idle review task, only when the daemon is completely idle this
  * cycle. The shared owner checks eligibility and capacity before preparation,
  * then performs the committed handoff.
  */
-async function spawnDequeuePriority3IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
+async function spawnDequeuePriority4IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
   const { capacity } = ctx;
   return admitIdleReviewTask({
     state: ctx.state,
@@ -1165,11 +1184,14 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
  *
  * Triggered by: agent:completed, tasks:user:added, tasks:cos:added, status:resumed
  * Thin orchestrator: computes per-cycle capacity, then threads a shared `ctx`
- * through the four priority tiers in order (same order as evaluateTasks):
+ * through the priority tiers in order (same tiers/numbering as evaluateTasks;
+ * evaluateTasks' queue-regeneration step is
+ * batch-only and has no event-driven counterpart):
  *   0. On-demand requests (bypasses pause)
  *   1. User tasks
  *   2. Auto-approved system tasks
- *   3. Idle review task (if idleReviewEnabled)
+ *   3.6. Due feature agents
+ *   4. Idle review task (if idleReviewEnabled)
  * Returns silently when idle — no log noise.
  */
 /**
@@ -1268,10 +1290,11 @@ export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
   // Priority 1 spends against the global slot cap.
   const { hasPendingUserTasks } = await spawnDequeuePriority1UserTasks(ctx);
 
-  // Priorities 2 and 3 spend against the lower autonomous ceiling that
+  // Priorities 2, 3.6 and 4 spend against the lower autonomous ceiling that
   // Priority 2 resolves `autonomousSpawnCeiling` from the daily budget.
   const { cosAutonomyMode, autonomousSpawnCeiling } = await spawnDequeuePriority2AutoApproved(ctx, { taskSchedule });
-  await spawnDequeuePriority3IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
+  await spawnDequeuePriority36FeatureAgents(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
+  await spawnDequeuePriority4IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
 
   if (capacity.spawned > 0) {
     const ids = capacity.spawnedTaskIds.join(', ');

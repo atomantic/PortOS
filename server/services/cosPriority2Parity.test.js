@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  dueFeatureAgents: [], featureAgentPending: [], userPending: [],
   state: null,
   cosTaskData: null,
   emit: vi.fn(),
@@ -23,10 +24,10 @@ vi.mock('./cosState.js', async (importActual) => ({
 vi.mock('./cosTaskStore.js', async (importActual) => ({
   ...(await importActual()),
   getAllTasks: async () => ({
-    user: { exists: true, grouped: { pending: [], in_progress: [], blocked: [] } },
+    user: { exists: true, grouped: { pending: mocks.userPending, in_progress: [], blocked: [] } },
     cos: mocks.cosTaskData,
   }),
-  getUserTasks: async () => ({ exists: true, grouped: { pending: [] } }),
+  getUserTasks: async () => ({ exists: true, grouped: { pending: mocks.userPending } }),
   getCosTasks: async () => mocks.cosTaskData,
 }));
 vi.mock('./onDemandDrain.js', () => ({
@@ -67,7 +68,8 @@ vi.mock('./cosLocalEndpointSlots.js', async (importActual) => ({
 }));
 vi.mock('./featureAgents.js', async (importActual) => ({
   ...(await importActual()),
-  getDueFeatureAgents: async () => [],
+  getDueFeatureAgents: async () => [...mocks.dueFeatureAgents],
+  setCurrentAgent: async (...args) => { mocks.featureAgentPending.push(args); },
 }));
 
 const { evaluateTasks } = await import('./cosTaskGenerator.js');
@@ -122,6 +124,9 @@ function resetFixtures(mode = 'execute') {
     grouped: { pending: [], blocked: [] },
   };
   mocks.cooldownAppId = null;
+  mocks.dueFeatureAgents = [];
+  mocks.featureAgentPending = [];
+  mocks.userPending = [];
 }
 
 beforeEach(() => {
@@ -169,6 +174,49 @@ describe.each(engines)('%s Priority-2 public boundary', (_name, run) => {
 
     expect(readyIds()).toEqual([]);
     expect(dryRunIds()).toEqual(executeIds);
+  });
+});
+
+const dueAgent = (id) => ({ id, name: `Agent ${id}`, description: 'example', appId: `app-${id}` });
+const featureAgentIds = () => readyIds().filter(id => id.startsWith('fa-run-'));
+
+describe.each(engines)('%s Priority-3.6 feature-agent tier', (_name, run) => {
+  it('spawns a due feature agent and marks it pending so the next cycle skips it', async () => {
+    mocks.dueFeatureAgents = [dueAgent('a')];
+
+    await run();
+
+    expect(featureAgentIds()).toHaveLength(1);
+    expect(mocks.featureAgentPending).toEqual([['a', featureAgentIds()[0]]]);
+  });
+
+  it('runs after the auto-approved tier and stops at the free slots', async () => {
+    mocks.state.config.maxConcurrentAgents = 2;
+    mocks.state.config.maxConcurrentAgentsPerProject = 2;
+    mocks.cosTaskData.autoApproved = [ordinaryTask('enabled-task', 'enabled')];
+    mocks.dueFeatureAgents = [dueAgent('a'), dueAgent('b')];
+
+    await run();
+
+    const ids = readyIds();
+    expect(ids[0]).toBe('enabled-task');
+    expect(ids).toHaveLength(2);
+    expect(featureAgentIds()).toHaveLength(1);
+    expect(mocks.featureAgentPending).toHaveLength(1);
+  });
+
+  it.each(['pending-user', 'dry-run', 'off'])('does not spawn a due agent for %s', async (gate) => {
+    mocks.dueFeatureAgents = [dueAgent('a')];
+    if (gate === 'pending-user') {
+      mocks.userPending = [{ id: 'user-waiting', status: 'pending', approvalRequired: true }];
+    } else {
+      mocks.state.config.domainAutonomy.cos = gate;
+    }
+
+    await run();
+
+    expect(featureAgentIds()).toEqual([]);
+    expect(mocks.featureAgentPending).toEqual([]);
   });
 });
 
