@@ -152,7 +152,9 @@ const LIMIT_SCRIPTS = {
 // sandbox, environment and limits, running synthetic hostile scripts.
 const probeTool = (extra = []) => ({ executable: process.execPath, argv: (entry) => [entry, ...extra] });
 
-const denied = (result, code = 'EPERM') => result && result.allowed === false && result.code === code;
+// Seatbelt denies access; a bubblewrap filesystem instead hides unmounted
+// paths (ENOENT) and exposes read-only binds (EROFS).
+const denied = (result) => result && result.allowed === false && ['EPERM', 'EACCES', 'ENOENT', 'EROFS'].includes(result.code);
 
 async function probeBoundary(workspaceRoot) {
   const scratch = await mkdtemp(join(tmpdir(), 'portos-containment-canary-'));
@@ -181,7 +183,7 @@ async function probeBoundary(workspaceRoot) {
       { id: 'list-home', passed: denied(report.listHome), detail: 'The home directory could not be listed.' },
       { id: 'write-outside', passed: denied(report.writeOutside), detail: 'Nothing could be written outside the workspace.' },
       { id: 'write-input', passed: denied(report.writeInput), detail: 'Staged input is read-only.' },
-      { id: 'spawn-process', passed: denied(report.spawnProcess), detail: 'No shell, installer or other process could be started.' },
+      { id: 'spawn-process', passed: report.spawnProcess?.allowed === false && report.spawnProcess.code === 'EPERM', detail: 'No shell, installer or other process could be started.' },
       { id: 'file-size', passed: report.oversizedFile?.allowed === false, detail: 'A single file larger than the disk limit could not be written.' },
       { id: 'credentials', passed: Array.isArray(report.envKeys) && inherited.length === 0, detail: inherited.length ? `Unexpected inherited variables: ${inherited.length}.` : 'The environment contained only the worker’s own paths; no PortOS token or credential was inherited.' },
       { id: 'host-api', passed: denied(report.loopback) && connections === 0, detail: 'Loopback (where PortOS and local services listen) was unreachable.' },

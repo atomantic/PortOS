@@ -1,15 +1,17 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CODE_ANIMATION_SEATBELT } from '../../lib/codeAnimationContainment.js';
-import { runContainedWorker } from './containedWorker.js';
+import { currentContainmentMechanism, runContainedWorker } from './containedWorker.js';
 
 // Real-mechanism suite: these run only where the enforced sandbox exists. The
 // adversarial boundary and limit checks run end to end through the probe route
 // (routes/codeAnimationExecution.test.js); this file pins the worker lifecycle.
-const seatbelt = process.platform === 'darwin' && existsSync(CODE_ANIMATION_SEATBELT);
+const mechanism = await currentContainmentMechanism();
+const supported = mechanism.supported;
+if (process.env.PORTOS_REQUIRE_LINUX_CONTAINMENT === '1' && mechanism.id !== 'linux-bubblewrap') {
+  throw new Error(`Real Linux containment is required by this test job: ${mechanism.reason}`);
+}
 const roots = [];
 const workspaceRoot = async () => {
   const root = await mkdtemp(join(tmpdir(), 'portos-contained-worker-'));
@@ -20,18 +22,45 @@ const node = (extra = []) => ({ executable: process.execPath, argv: (entry) => [
 afterAll(async () => { await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe('contained worker refusal', () => {
+  it.skipIf(process.platform !== 'linux')('refuses a present wrapper that cannot create namespaces before staging', async () => {
+    const root = await workspaceRoot();
+    await expect(runContainedWorker({
+      tool: node(), workspaceRoot: root, bubblewrapPath: '/usr/bin/false',
+    })).rejects.toMatchObject({ code: 'CODE_ANIMATION_CONTAINMENT_UNAVAILABLE', message: expect.stringContaining('user namespaces') });
+    expect(await readdir(root)).toEqual([]);
+  });
+
+
   it('refuses with no enforced mechanism and creates no workspace', async () => {
     const root = await workspaceRoot();
     await expect(runContainedWorker({
       tool: node(), workspaceRoot: root, entrypoint: 'main.cjs',
       files: [{ path: 'main.cjs', content: 'require("fs").writeFileSync("/tmp/never", "x")' }],
       seatbeltPath: join(root, 'missing-sandbox-exec'),
+      bubblewrapPath: join(root, 'missing-bwrap'),
     })).rejects.toMatchObject({ status: 503, code: 'CODE_ANIMATION_CONTAINMENT_UNAVAILABLE' });
     expect(await readdir(root)).toEqual([]);
   });
 });
 
-describe.skipIf(!seatbelt)('contained worker lifecycle under macOS Seatbelt', () => {
+describe.skipIf(!supported)('contained worker lifecycle under the real host sandbox', () => {
+  it('allows native worker threads to complete without granting subprocess creation', async () => {
+    const root = await workspaceRoot();
+    const result = await runContainedWorker({
+      tool: node(), workspaceRoot: root, entrypoint: 'main.cjs',
+      files: [{ path: 'main.cjs', content: `
+const { Worker } = require('worker_threads');
+const worker = new Worker('require("worker_threads").parentPort.postMessage("thread complete")', { eval: true });
+worker.on('message', (value) => console.log(value));
+worker.on('error', () => process.exit(1));
+` }],
+    });
+    expect(result).toMatchObject({ status: 'completed', processGroupClear: true });
+    expect(result.stdout).toContain('thread complete');
+    expect(await readdir(root)).toEqual([]);
+  });
+
+
   it('stages input read-only, collects regular output files, then removes the workspace', async () => {
     const root = await workspaceRoot();
     let collected = null;
@@ -43,7 +72,7 @@ describe.skipIf(!seatbelt)('contained worker lifecycle under macOS Seatbelt', ()
       ],
       onOutput: async (dir, outputs) => { collected = { outputs, body: await readFile(join(dir, 'frames/0001.txt'), 'utf8') }; },
     });
-    expect(result).toMatchObject({ status: 'completed', mechanism: 'macos-seatbelt', exitCode: 0, processGroupClear: true });
+    expect(result).toMatchObject({ status: 'completed', mechanism: mechanism.id, exitCode: 0, processGroupClear: true });
     expect(result.stdout).toContain('rendered');
     expect(collected).toEqual({ outputs: [{ path: 'frames/0001.txt', bytes: 5 }], body: 'frame' });
     expect(await readdir(root)).toEqual([]);
