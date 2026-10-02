@@ -8,7 +8,7 @@ import { isDeterministicCodeSource } from '../../lib/musicVideoValidation.js';
 import { summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { buildMixedMediaDocumentPrompt, extractCodeSections } from '../codeAnimation/prompt.js';
 import { buildCodeTimeline, buildSongDocument, paletteFromProject } from './codeTimeline.js';
-import { runModel, styleLinesFor } from './codeGeneration.js';
+import { castAndSetsCodeContext, runModel, styleLinesFor } from './codeGeneration.js';
 import { getProject } from './projects.js';
 import { buildDocumentData, documentAspect, documentRenderClock, documentSongDuration, DOCUMENT_FRAME_SIZES, resolveSceneMedia } from './documentRender.js';
 import { acceptGeneratedDocument, readDocumentFiles, stageGeneratedDocument } from './compositionDocument.js';
@@ -164,7 +164,7 @@ async function priorManifest(project) {
   return { pointer, manifest };
 }
 
-async function runAuthoring(projectId, { providerId, model, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
+async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
   const project = await getProject(projectId);
   if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
   const context = await authoringContext(project);
@@ -191,10 +191,10 @@ async function runAuthoring(projectId, { providerId, model, sectionId = null, ev
   const prompt = buildMixedMediaDocumentPrompt({
     title: project.name, song: { ...context.song, sections: context.song.sections.filter((section) => ids.includes(section.id)) }, palette: context.palette, treatment: project.treatment,
     visualSpec: project.visualSpec, scenes: context.scenes, styleLines: sharedStyle.styleLines,
-    onlySectionId: sectionId, sharedStyle,
+    onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project),
   });
   const directedPrompt = feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt;
-  const run = await runModel({ providerId, model, prompt: directedPrompt, source: 'music-video-document', beforeSubmit });
+  const run = await runModel({ providerId, model, effort, automation: project.automation, prompt: directedPrompt, source: 'music-video-document', beforeSubmit });
   const updated = acceptedSections(run.text, ids);
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
   for (const [id, source] of updated) merged.set(id, source);

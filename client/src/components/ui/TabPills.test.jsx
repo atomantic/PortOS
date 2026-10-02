@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Users, MapPin, Package } from 'lucide-react';
@@ -10,6 +10,18 @@ const sampleTabs = [
   { id: 'places', label: 'Places', icon: MapPin, count: 0 },
   { id: 'objects', label: 'Objects', icon: Package },
 ];
+
+afterEach(() => vi.restoreAllMocks());
+
+function setMotionPreference(initial) {
+  const media = new EventTarget();
+  media.matches = initial;
+  vi.spyOn(window, 'matchMedia').mockReturnValue(media);
+  return (reduced) => act(() => {
+    media.matches = reduced;
+    media.dispatchEvent(new Event('change'));
+  });
+}
 
 describe('TabPills — underline variant (default)', () => {
   it('renders one button per tab with role="tab" and aria-selected on the active one', () => {
@@ -171,7 +183,9 @@ describe('TabPills — mobileCompact icon row', () => {
     expect(castBtn.querySelector('svg')).toBeTruthy();
   });
 
-  it.each(['underline', 'pills'])('reveals a scrollable edge with a chevron in the %s variant', async (variant) => {
+  it.each([['underline', false], ['pills', true]])('scrolls either chevron in the %s variant with reduced motion=%s and live changes', async (variant, reduced) => {
+    const changePreference = setMotionPreference(reduced);
+    const behavior = reduced ? 'instant' : 'smooth';
     // happy-dom reports every box as 0x0 and ships no ResizeObserver, so both
     // the overflow and the re-measure that publishes it have to be stated. The
     // fake observer is also what proves the split: the scroll path alone never
@@ -196,12 +210,17 @@ describe('TabPills — mobileCompact icon row', () => {
     expect(screen.queryByRole('button', { name: 'Scroll tabs left' })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Scroll tabs right' }));
-    expect(scrollBy).toHaveBeenCalledWith({ left: 240, behavior: 'smooth' });
+    expect(scrollBy).toHaveBeenCalledWith({ left: 240, behavior });
 
     strip.scrollLeft = 200;
     fireEvent.scroll(strip);
     await user.click(screen.getByRole('button', { name: 'Scroll tabs left' }));
-    expect(scrollBy).toHaveBeenLastCalledWith({ left: -240, behavior: 'smooth' });
+    expect(scrollBy).toHaveBeenLastCalledWith({ left: -240, behavior });
+    changePreference(!reduced);
+    await user.click(screen.getByRole('button', { name: 'Scroll tabs right' }));
+    expect(scrollBy).toHaveBeenLastCalledWith({ left: 240, behavior: reduced ? 'smooth' : 'instant' });
+    await user.click(screen.getByRole('button', { name: 'Scroll tabs left' }));
+    expect(scrollBy).toHaveBeenLastCalledWith({ left: -240, behavior: reduced ? 'smooth' : 'instant' });
     vi.unstubAllGlobals();
   });
 
@@ -303,7 +322,9 @@ describe('TabPills — filter variant', () => {
   });
 });
 
-it('reveals tabs horizontally without moving ancestors or stealing draft focus', () => {
+it.each([false, true])('reveals tabs with reduced motion=%s without moving ancestors or stealing draft focus', (reduced) => {
+  const changePreference = setMotionPreference(reduced);
+  const behavior = reduced ? 'instant' : 'smooth';
   const ancestorScroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
   const view = (activeTab, tabs) => <><TabPills tabs={tabs} activeTab={activeTab} onChange={vi.fn()} /><input aria-label="Draft" /></>;
   const { rerender } = render(view('cast', []));
@@ -317,7 +338,8 @@ it('reveals tabs horizontally without moving ancestors or stealing draft focus',
   const draft = screen.getByRole('textbox', { name: 'Draft' });
   draft.focus();
   rerender(view('places', sampleTabs));
-  expect(scroll).toHaveBeenLastCalledWith({ left: 60, behavior: 'smooth' });
+  expect(scroll).toHaveBeenLastCalledWith({ left: 60, behavior });
+  expect(places).toHaveAttribute('aria-selected', 'true');
   rerender(view('places', sampleTabs.map(tab => ({ ...tab, count: 10 }))));
   expect(scroll).toHaveBeenCalledTimes(1);
   expect(draft).toHaveFocus();
@@ -326,6 +348,11 @@ it('reveals tabs horizontally without moving ancestors or stealing draft focus',
   const cast = screen.getByRole('tab', { name: /Cast/ });
   vi.spyOn(cast, 'getBoundingClientRect').mockReturnValue({ left: -80, right: 20 });
   rerender(view('cast', sampleTabs));
-  expect(scroll).toHaveBeenLastCalledWith({ left: -80, behavior: 'smooth' });
+  expect(scroll).toHaveBeenLastCalledWith({ left: -80, behavior });
+  changePreference(!reduced);
+  expect(scroll).toHaveBeenLastCalledWith({ left: -80, behavior: reduced ? 'smooth' : 'instant' });
+  expect(cast).toHaveAttribute('aria-selected', 'true');
+  expect(draft).toHaveFocus();
+  expect(ancestorScroll).not.toHaveBeenCalled();
   ancestorScroll.mockRestore();
 });

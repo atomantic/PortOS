@@ -2,6 +2,8 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
 import useClickOutside from '../../hooks/useClickOutside';
 
+// The trigger keeps a 44x44px minimum hit area at every width (touch input is not
+// detectable by breakpoint); the negative vertical margin stops it growing rows.
 // Accessible info/help tooltip. Renders a focusable <button> trigger with an
 // Info icon; the help text is revealed on hover, keyboard focus, OR click/tap,
 // and dismissed with Escape or a click/tap outside. This replaces CSS-only
@@ -80,7 +82,7 @@ export default function InfoTooltip({
         onClick={() => setPinned((v) => !v)}
         onFocus={() => setHovering(true)}
         onBlur={() => setHovering(false)}
-        className="inline-flex items-center rounded text-gray-500 transition-colors hover:text-gray-300 focus:text-gray-300 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent"
+        className="inline-flex shrink-0 items-center justify-center min-h-[44px] min-w-[44px] -my-[15px] rounded text-gray-500 transition-colors hover:text-gray-300 focus:text-gray-300 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent"
       >
         <Info size={iconSize} aria-hidden="true" />
       </button>

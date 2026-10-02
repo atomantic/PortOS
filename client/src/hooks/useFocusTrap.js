@@ -124,12 +124,15 @@ export default function useFocusTrap(active, containerRef, { initialFocusRef } =
       // `focusable`, and without this Shift+Tab from there fell through to the
       // browser and walked straight out of the modal.
       //
+      // Only when it is absent from `focusable`: a tabbable initial input must
+      // let forward Tab reach its next sibling and wrap only at the boundaries.
+      //
       // Scoped to THAT element on purpose. Other unlisted-but-focusable
       // descendants — chiefly `<video controls>`, which the selector doesn't
       // match — must keep falling through, or Tab yanks focus off the video
       // instead of walking into its native controls.
       const steerTarget = initialFocusRef?.current || (container.getAttribute('tabindex') === '-1' ? container : null);
-      const adrift = activeEl === steerTarget || !container.contains(activeEl);
+      const adrift = (activeEl === steerTarget && !focusable.includes(steerTarget)) || !container.contains(activeEl);
       if (e.shiftKey) {
         if (activeEl === first || adrift) {
           e.preventDefault();

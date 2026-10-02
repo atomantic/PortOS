@@ -20,6 +20,9 @@ export const DB_TEST_INCLUDE = [
   '../scripts/perf/collectionFixture.db.test.js',
   'services/appQuality.db.test.js',
   '**/db.test.js',
+  'services/codeAnimation/stages.db.test.js',
+  'services/codeAnimation/sound.db.test.js',
+  'services/codeAnimation/stages.realBrowser.db.test.js',
   'services/mediaAssetIndex/galleryCollections.db.test.js',
   'services/dbAdmin.db.test.js',
   'services/backup.db.test.js',
@@ -56,6 +59,7 @@ export const DB_TEST_INCLUDE = [
   'services/decksSync.db.test.js',
   'services/modelPinRecords.db.test.js',
   'scripts/run-db-migrations.test.js',
+  'scripts/migrateMemoryToPg.db.test.js',
   'lib/db/schema/audit.db.test.js',
   'lib/db/schema/syncFeed.db.test.js',
 ];

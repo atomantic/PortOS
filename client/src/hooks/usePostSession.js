@@ -604,6 +604,17 @@ export function usePostSession() {
         return null;
       });
       if (!training) return null;
+      if (Array.isArray(training.attempts)) {
+        const localAttempts = new Map(attempts.map((attempt, index) => [attempt.id, { result: drillResults[index], index }]));
+        setDrillResults(training.attempts
+          .toSorted((a, b) => (localAttempts.get(a.id)?.index ?? Infinity) - (localAttempts.get(b.id)?.index ?? Infinity))
+          .map(attempt => ({
+            ...localAttempts.get(attempt.id)?.result,
+            ...attempt,
+            type: attempt.drillType,
+            config: attempt.difficulty,
+          })));
+      }
       setSavedSession(training);
       toast.success('Training session logged');
       setState(STATES.SAVED);
@@ -629,6 +640,7 @@ export function usePostSession() {
       return null;
     });
     if (!session) return null;
+    if (Array.isArray(session.tasks)) setDrillResults(session.tasks);
     setSavedSession(session);
     // Replace the pre-save estimate (computeSessionScoreFromResults, a plain
     // per-domain average) with the server's authoritative score — which now

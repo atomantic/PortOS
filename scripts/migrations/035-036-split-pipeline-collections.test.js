@@ -1,10 +1,23 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
 import issuesMigration from './035-split-pipeline-issues-to-per-id.js';
 import seriesMigration from './036-split-pipeline-series-to-per-id.js';
+
+// Lets a test fail directory listings (EIO) while every other fs call is real.
+const fault = vi.hoisted(() => ({ readdirFails: false }));
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    readdir: (...args) => {
+      if (fault.readdirFails) return Promise.reject(Object.assign(new Error('EIO: i/o error, scandir'), { code: 'EIO' }));
+      return actual.readdir(...args);
+    },
+  };
+});
 
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
@@ -101,7 +114,38 @@ describe.each(cases)('migration split pipeline $name', (cfg) => {
     expect(existsSync(join(typeDir, cfg.otherId, 'index.json'))).toBe(true);
   });
 
-  it('skips invalid ids and reports unreadable legacy files', async () => {
+  it('aborts without mutating anything when the existing-record directory cannot be listed, then recovers on retry', async () => {
+    writeJson(legacyPath, {
+      [cfg.key]: [
+        { id: cfg.validId, name: 'Legacy', title: 'Legacy' },
+        { id: cfg.otherId, name: 'Other', title: 'Other' },
+      ],
+    });
+    mkdirSync(join(typeDir, cfg.validId), { recursive: true });
+    const newerPath = join(typeDir, cfg.validId, 'index.json');
+    writeJson(newerPath, { id: cfg.validId, name: 'Newer', title: 'Newer' });
+    const newerBytes = readFileSync(newerPath);
+    const legacyBytes = readFileSync(legacyPath);
+
+    fault.readdirFails = true;
+    try {
+      await expect(cfg.migration.up({ rootDir })).rejects.toThrow(/EIO/);
+    } finally {
+      fault.readdirFails = false;
+    }
+    expect(readFileSync(newerPath).equals(newerBytes)).toBe(true);
+    expect(readFileSync(legacyPath).equals(legacyBytes)).toBe(true);
+    expect(existsSync(typeIndexPath)).toBe(false);
+    expect(existsSync(join(typeDir, cfg.otherId, 'index.json'))).toBe(false);
+    expect(existsSync(backupPath)).toBe(false);
+
+    const retry = await cfg.migration.up({ rootDir });
+    expect(retry).toEqual({ ok: true, reason: 'split', written: 1, skipped: 1, invalid: 0 });
+    expect(readFileSync(newerPath).equals(newerBytes)).toBe(true);
+    expect(existsSync(join(typeDir, cfg.otherId, 'index.json'))).toBe(true);
+  });
+
+  it('skips invalid ids and rejects unreadable legacy files', async () => {
     writeJson(legacyPath, { [cfg.key]: [{ id: cfg.validId }, { id: cfg.invalidId }, null] });
     const split = await cfg.migration.up({ rootDir });
     expect(split.written).toBe(1);
@@ -110,7 +154,6 @@ describe.each(cases)('migration split pipeline $name', (cfg) => {
     rmSync(rootDir, { recursive: true, force: true });
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(legacyPath, 'not json');
-    const unreadable = await cfg.migration.up({ rootDir });
-    expect(unreadable).toEqual({ ok: false, reason: 'unreadable' });
+    await expect(cfg.migration.up({ rootDir })).rejects.toThrow(/unreadable/);
   });
 });

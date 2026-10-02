@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, symlinkSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -256,8 +256,20 @@ describe('listIds', () => {
     await store.saveTypeIndex({});
     writeFileSync(join(dir, '.DS_Store'), '');
     writeFileSync(join(dir, 'loose-file.txt'), 'noise');
+    mkdirSync(join(dir, '.hidden'));
+    symlinkSync(join(dir, 'alpha'), join(dir, 'linked'), 'junction');
     const ids = await store.listIds();
     expect([...ids].sort()).toEqual(['alpha', 'beta']);
+  });
+
+  it('retains known ids only when the directory is missing and propagates other errors', async () => {
+    const collectionDir = join(dir, 'records');
+    const store = createCollectionStore({ dir: collectionDir, type: 'widgets', schemaVersion: 1 });
+    await store.saveOne('alpha', { id: 'alpha' });
+    rmSync(collectionDir, { recursive: true });
+    expect(await store.listIds()).toEqual(['alpha']);
+    writeFileSync(collectionDir, 'not a directory');
+    await expect(store.listIds()).rejects.toMatchObject({ code: 'ENOTDIR' });
   });
 
   it('rejects entries that fail the idPattern', async () => {

@@ -34,7 +34,7 @@ import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
 import { currentTaskTypeName } from '../lib/scheduledTaskTypes.js';
 import { isPlainObject } from '../lib/objects.js';
-import { hasQuotaBurnProvenance, isManualOnDemandRequest } from '../lib/quotaBurnOrigin.js';
+import { hasQuotaBurnProvenance, isManualOnDemandRequest, onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
@@ -2011,14 +2011,20 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // A stolen request's run parameters (a quota-burn or maintenance step's
   // `params`), forwarded exactly as the on-demand drain forwards them.
   let stolenRunOverrides = null;
+  let stolenRequest = null;
 
   if (appRequests.length > 0) {
-    const request = appRequests[0];
+    const request = await taskSchedule.clearOnDemandRequest(appRequests[0].id);
+    if (!request) {
+      // Another drain (or cancellation) owns this receipt. Returning its card
+      // would let the idle tier close the winner's still-running preflight.
+      return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
+    }
+    stolenRequest = request;
     targetPullRequest = request.targetPullRequest ?? null;
     stolenRunOverrides = request.burn?.overrides?.params ?? null;
     const { cardIdForRequest } = await import('./preflightTaskCard.js');
     stolenCardId = cardIdForRequest(request);
-    await taskSchedule.clearOnDemandRequest(request.id);
     // Only a human "Run" may clear the drain's brakes (park state, dispatch
     // count); the policy lives in applyOnDemandRunResets so this idle-review
     // path can't drift from the shared on-demand drain — without it,
@@ -2067,6 +2073,7 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     targetPullRequest,
     onDemand: selectionReason === 'on-demand',
     runOverrides: stolenRunOverrides,
+    providerOverride: stolenRequest?.providerOverride ?? null,
     // The deterministic pre-agent work (pr-reviewer's security preflight)
     // reports into the stolen Run's card as it runs, exactly as it does on the
     // on-demand drain — this is the whole reason the card is opened early.
@@ -2075,7 +2082,10 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   const { task, pendingPerpetualDispatch } = prepared;
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
-  if (selectionReason === 'on-demand') applyOnDemandConsent(task);
+  if (stolenRequest) {
+    applyOnDemandConsent(task);
+    if (task) task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(stolenRequest) };
+  }
   // The card is closed by whoever rules on the task (the spawn tier), not here:
   // a task this returns can still be refused a slot, and a card closed
   // `handed-off` would then name an agent that never started.
@@ -2175,9 +2185,9 @@ export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, reque
     // can hold the same request; `clearOnDemandRequest` is a serialized
     // read-modify-write that returns the record only to the caller that removed
     // it, and returns null to the loser. Without this check one "Run Now" would
-    // spend two describe/render batches and toast twice — the agent path gets
-    // the same protection from `addTask`'s duplicate detection, which a handler
-    // that queues nothing has no equivalent of.
+    // spend two describe/render batches and toast twice. Agent preparation
+    // takes the same claim before any preflight work; task-store deduplication
+    // alone happens too late to protect either lane's preparation.
     const claimed = await taskScheduleMod.clearOnDemandRequest(request.id);
     if (!claimed) continue;
 

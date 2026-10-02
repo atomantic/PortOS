@@ -22,6 +22,7 @@ import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 import { clamp, formatTimecode } from '../../utils/formatters';
+import SuperColliderStage from './SuperColliderStage';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
 import { renderTrackCode, writeMusicCode } from '../../services/api';
 import {
@@ -35,7 +36,7 @@ const CODE_MAX = 20000;
 // music upload cap.
 const TAKE_SEC = { MIN: 4, MAX: 120, DEFAULT: 30 };
 
-// Both languages' frame documents are static per version, so build each once.
+// Each browser language's frame document are static per version, so build each once.
 const LANGUAGES = {
   strudel: {
     label: 'Strudel',
@@ -50,6 +51,16 @@ const LANGUAGES = {
     version: TONE_VERSION,
     frameDoc: buildToneFrameDoc(),
     placeholder: 'const synth = new Tone.PolySynth(Tone.Synth).toDestination();\nconst pattern = new Tone.Pattern((time, note) => {\n  synth.triggerAttackRelease(note, "8n", time);\n}, ["C3", "Eb3", "G3", "Bb3"]);\npattern.start(0);\nTone.getTransport().bpm.value = 120;\nTone.getTransport().start();',
+  },
+  // Rendered server-side in a contained runtime (SuperColliderStage), not in the
+  // browser frame: no frameDoc, and the take is saved from the server's preview.
+  supercollider: {
+    label: 'SuperCollider',
+    docsUrl: 'https://supercollider.github.io/',
+    version: '3.14',
+    frameDoc: null,
+    serverRendered: true,
+    placeholder: 'SynthDef(\\pad, { |out=0, freq=220, amp=0.15, gate=1|\n  var sig = Splay.ar(Saw.ar(freq * [1, 1.005]) * 0.3);\n  sig = sig * EnvGen.kr(Env.asr(0.5, 1, 1), gate, doneAction: 2);\n  Out.ar(out, sig * amp);\n}).add;\n\nPbind(\\instrument, \\pad, \\degree, Pseq([0, 2, 4, 7], inf), \\dur, 2)',
   },
 };
 const DEFAULT_LANGUAGE = 'strudel';
@@ -187,11 +198,15 @@ export default function CodePanel({
   const hasCode = !!code.trim();
   const playing = frameState === 'playing';
   const lang = LANGUAGES[language];
+  const serverRendered = !!lang.serverRendered;
+  const takeLength = clamp(Number(lengthInput) || TAKE_SEC.DEFAULT, TAKE_SEC.MIN, TAKE_SEC.MAX);
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-gray-400">
-        No audio model: the AI writes the piece as <a href={lang.docsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">{lang.label}</a> code, and your browser plays it in a sandboxed player. Edit the code freely, then save a recording of it as a take.
+        {serverRendered
+          ? <>No audio model: the AI writes the piece as <a href={lang.docsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">{lang.label}</a> code, and PortOS renders it offline in a contained runtime. Edit the code freely, preview the render, then save it as a take.</>
+          : <>No audio model: the AI writes the piece as <a href={lang.docsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">{lang.label}</a> code, and your browser plays it in a sandboxed player. Edit the code freely, then save a recording of it as a take.</>}
       </p>
 
       <div role="group" aria-label="Code language" className="flex gap-2">
@@ -223,7 +238,7 @@ export default function CodePanel({
           />
         </label>
         <label htmlFor="music-code-length" className="block">
-          <span className={LABEL_CLASS}>Take length (sec)</span>
+          <span className={LABEL_CLASS}>{serverRendered ? 'Render length (sec)' : 'Take length (sec)'}</span>
           <input
             id="music-code-length"
             type="number"
@@ -277,44 +292,56 @@ export default function CodePanel({
         </p>
       )}
 
-      <div className="space-y-2">
-        <iframe
-          key={language}
-          ref={frameRef}
-          title={`${lang.label} ${lang.version} player`}
-          // Opaque origin (no allow-same-origin): the LLM's code gets no access
-          // to PortOS cookies, storage, or DOM. Do not widen this.
-          sandbox="allow-scripts"
-          allow="autoplay"
-          srcDoc={lang.frameDoc}
-          className="h-10 w-full rounded border border-port-border bg-port-bg"
+      {serverRendered ? (
+        <SuperColliderStage
+          code={code}
+          durationSec={takeLength}
+          trackId={trackId}
+          description={description}
+          title={title}
+          disabled={disabled || !!writing}
+          onRendered={onRendered}
         />
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={play} disabled={!frameReady || !hasCode || !!savePhase} className={GHOST_BTN}>
-            <Play className="h-4 w-4" />
-            <span>{playing ? 'Re-run' : 'Play'}</span>
-          </button>
-          <button type="button" onClick={stop} disabled={!frameReady || savePhase === 'uploading' || !(playing || frameState === 'blocked' || savePhase === 'recording')} className={GHOST_BTN}>
-            <Square className="h-4 w-4" />
-            <span>Stop</span>
-          </button>
-          <button type="button" onClick={save} disabled={disabled || busy || !frameReady || !hasCode || !trackId} className={PRIMARY_BTN}>
-            {savePhase ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            <span>{savePhase === 'recording' ? 'Recording…' : savePhase === 'uploading' ? 'Saving…' : 'Save as take'}</span>
-          </button>
-          {savePhase === 'recording' && (
-            <span className="text-xs font-mono tabular-nums text-gray-500">
-              {formatTimecode(recordedSec)}{' / '}{formatTimecode(takeSec)}
-            </span>
+      ) : (
+        <div className="space-y-2">
+          <iframe
+            key={language}
+            ref={frameRef}
+            title={`${lang.label} ${lang.version} player`}
+            // Opaque origin (no allow-same-origin): the LLM's code gets no access
+            // to PortOS cookies, storage, or DOM. Do not widen this.
+            sandbox="allow-scripts"
+            allow="autoplay"
+            srcDoc={lang.frameDoc}
+            className="h-10 w-full rounded border border-port-border bg-port-bg"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={play} disabled={!frameReady || !hasCode || !!savePhase} className={GHOST_BTN}>
+              <Play className="h-4 w-4" />
+              <span>{playing ? 'Re-run' : 'Play'}</span>
+            </button>
+            <button type="button" onClick={stop} disabled={!frameReady || savePhase === 'uploading' || !(playing || frameState === 'blocked' || savePhase === 'recording')} className={GHOST_BTN}>
+              <Square className="h-4 w-4" />
+              <span>Stop</span>
+            </button>
+            <button type="button" onClick={save} disabled={disabled || busy || !frameReady || !hasCode || !trackId} className={PRIMARY_BTN}>
+              {savePhase ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              <span>{savePhase === 'recording' ? 'Recording…' : savePhase === 'uploading' ? 'Saving…' : 'Save as take'}</span>
+            </button>
+            {savePhase === 'recording' && (
+              <span className="text-xs font-mono tabular-nums text-gray-500">
+                {formatTimecode(recordedSec)}{' / '}{formatTimecode(takeSec)}
+              </span>
+            )}
+          </div>
+          {frameState === 'blocked' && (
+            <p className="text-xs text-port-warning">The browser is holding audio back. Click “Enable audio” in the player above.</p>
           )}
+          <p className="text-xs text-gray-500">
+            Saving plays the code in real time while it records, so a {takeLength}s take takes that long.
+          </p>
         </div>
-        {frameState === 'blocked' && (
-          <p className="text-xs text-port-warning">The browser is holding audio back. Click “Enable audio” in the player above.</p>
-        )}
-        <p className="text-xs text-gray-500">
-          Saving plays the code in real time while it records, so a {clamp(Number(lengthInput) || TAKE_SEC.DEFAULT, TAKE_SEC.MIN, TAKE_SEC.MAX)}s take takes that long.
-        </p>
-      </div>
+      )}
     </div>
   );
 }

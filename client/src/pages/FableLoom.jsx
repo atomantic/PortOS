@@ -276,22 +276,22 @@ export default function FableLoom() {
           </p>
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {looms.map((loom) => (
             <div
               key={loom.id}
-              className="bg-port-card border border-port-border rounded-lg p-4 hover:border-port-accent transition-colors cursor-pointer"
+              className="min-w-0 bg-port-card border border-port-border rounded-lg p-4 hover:border-port-accent transition-colors cursor-pointer"
               role="link"
               tabIndex={0}
               onClick={() => navigate(`/fableloom/${loom.id}`)}
               onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/fableloom/${loom.id}`); }}
             >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <h2 className="font-medium truncate">{loom.name}</h2>
-                  {loom.logline && <p className="text-xs text-port-text-muted mt-0.5 line-clamp-2">{loom.logline}</p>}
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <div className="min-w-0 flex-1 break-words">
+                  <h2 className="font-medium break-words">{loom.name}</h2>
+                  {loom.logline && <p className="text-xs text-port-text-muted mt-0.5 line-clamp-2 break-words">{loom.logline}</p>}
                 </div>
-                <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} role="none">
+                <div className="shrink-0" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} role="none">
                   <div className="flex items-center gap-1">
                     <SyncToPeerButton recordKind="fableLoom" recordId={loom.id} compact />
                     {del.isConfirming(loom.id) ? (
@@ -299,6 +299,7 @@ export default function FableLoom() {
                         prompt="Delete?"
                         onConfirm={() => handleDelete(loom.id)}
                         onCancel={del.cancelDelete}
+                        largeTouchTargets
                       />
                     ) : (
                       <button

@@ -59,6 +59,7 @@ describe('mtplxServerManager', () => {
   let pm2State = null;
   let execPm2Calls = [];
   let testLogDir = null;
+  let settingsStore = {};
 
   beforeEach(async () => {
     testLogDir = await mkdtemp(join(tmpdir(), 'portos-mtplx-test-'));
@@ -71,6 +72,16 @@ describe('mtplxServerManager', () => {
     vi.restoreAllMocks();
     pm2State = null;
     execPm2Calls = [];
+    settingsStore = {};
+
+    // Successful starts persist their launch line. Keep that collaborator
+    // in-memory so ordinary lifecycle cases never reach install settings.
+    const settings = await import('./settings.js');
+    vi.spyOn(settings, 'getSettings').mockImplementation(async () => settingsStore);
+    vi.spyOn(settings, 'updateSettingsWith').mockImplementation(async (mutate) => {
+      settingsStore = await mutate(settingsStore);
+      return settingsStore;
+    });
 
     // The host may genuinely be running MTPLX (or anything else) on :8000 — pin
     // both probes so a developer machine's real listeners can't decide these.
@@ -963,19 +974,12 @@ describe('mtplxServerManager', () => {
       vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
       resetForTest({ idleMinutes: 1, keepLoaded: false });
 
-      // Real `settings.js` writes are refused outside a test's own isolated
-      // data root (see `testDataIsolation.js`) — spy the two calls the manager
-      // makes onto an in-memory store, the same seam the "probes the saved
-      // port" test above uses for reads.
-      const settings = await import('./settings.js');
-      let store = {};
-      vi.spyOn(settings, 'getSettings').mockImplementation(async () => store);
-      vi.spyOn(settings, 'updateSettingsWith').mockImplementation(async (mutate) => {
-        store = await mutate(store);
-        return store;
-      });
-
       await startMtplxServer({ port: 8010, tuning: { depth: 5, kvQuant: 'q4' } });
+      expect(settingsStore.localLlm.mtplx.launch).toEqual({
+        port: 8010,
+        model: 'Example/Qwen-MTP',
+        tuning: { depth: 5, kvQuant: 'q4' },
+      });
       execPm2Calls = [];
 
       const { reapIdleDaemons } = await import('../lib/managedDaemon.js');

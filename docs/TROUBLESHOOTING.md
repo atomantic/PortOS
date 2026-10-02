@@ -234,6 +234,22 @@ Two caveats:
 The Models → Runtimes page shows the window loaded models are actually running
 at, and flags it when it's below what an agent harness needs.
 
+### Ollama API provider ignores its num_ctx (prompts truncated to ~2K tokens)
+
+**Symptom**: a local mind or CoS run on the `ollama` API provider behaves as if
+it forgot most of its prompt; the Ollama log repeats
+`truncating input prompt limit=2050 prompt=14776` and `ollama ps` shows the
+model at `CONTEXT 4096` even though **Local num_ctx** is set higher.
+
+**Cause**: Ollama's OpenAI-compatible `/v1/chat/completions` has no way to set
+the context window — it ignores `num_ctx` in any position — so each `/v1`
+request loads the model at the daemon default.
+
+**Solution**: update PortOS. An API run whose Ollama provider sets **Local
+num_ctx** is sent to Ollama's native `/api/chat` with `options.num_ctx`, which
+loads the model at that window. Runs with no num_ctx stay on `/v1` and use the
+daemon default (`OLLAMA_CONTEXT_LENGTH`).
+
 ## Chief of Staff Issues
 
 ### CoS Not Running
@@ -425,6 +441,31 @@ pg_isready -h localhost -p 5432 || pg_isready -h localhost -p 5561
 ### Missing/Corrupted Relational Data
 
 Universes, series, catalog ingredients, memories, and other relational records live in PostgreSQL, not `data/` files. Inspect them via the Database settings tab or `psql`. To recover, restore a snapshot's `portos-db.sql` from the Backup tab (see [BACKUP.md](./BACKUP.md)).
+
+### Legacy Record Split Stamped Applied With a Corrupt Source
+
+**Symptom**: On an install that upgraded before #9557, `data/universe-builder.json` (migration 034), `data/pipeline-issues.json` (035) or `data/pipeline-series.json` (036) was truncated when migrations ran. The migration was stamped applied in `data/migrations.applied.json`, but `data/universes/`, `data/pipeline-issues/` or `data/pipeline-series/` lacks the records. Current builds throw and keep the migration pending instead, so only already-stamped installs need this.
+
+**Solution** (touch only the affected split):
+```bash
+# 1. Stop PortOS, then back up the source, the target layout and the ledger
+pm2 stop all
+cp -R data/pipeline-issues data/pipeline-issues.bak-manual 2>/dev/null
+mkdir -p data/manual-backup && cp data/pipeline-issues.json* data/manual-backup/ 2>/dev/null
+cp data/migrations.applied.json data/migrations.applied.json.bak-manual
+
+# 2. Repair the source JSON (restore from a backup or fix the truncation).
+#    If the migration already renamed it, repair the `.bak-035` file instead.
+
+# 3. Remove ONLY the affected migration's entry (e.g. 035-split-pipeline-issues-to-per-id.js)
+#    from data/migrations.applied.json — never clear the whole list.
+
+# 4. Re-run migrations; records already split are kept, only missing ones are added
+node scripts/run-migrations.js
+pm2 start all
+```
+
+The split never overwrites a record directory that already exists. If a later Postgres import (`server/scripts/migrateUniversesToDB.js` and similar) already ran, re-run that explicit legacy-import tool after the split rather than resetting import markers or schema versions.
 
 ### Lost App Registrations
 
@@ -840,3 +881,19 @@ a test, and update macOS + `mflux`/`mlx`.
 2. **Browser console**: F12 → Console for frontend errors
 3. **Server logs**: Look for emoji prefixes (❌ errors, ⚠️ warnings)
 4. **GitHub Issues**: Report bugs at https://github.com/atomantic/PortOS/issues
+
+## Recovering a store with an orphaned `.bak` file
+
+**Symptom**: a read reports a store as unreadable with "is missing but a `<name>.*.bak` backup sibling exists — recovery required", or a Windows write fails with "stayed locked … the existing file was left untouched".
+
+**Cause**: Windows can keep a file locked (antivirus scan, open handle) so the atomic replace is refused. Current versions retry briefly, then fail the write and leave the original file untouched. Older versions instead moved the file to `<name>.<pid>.<ts>.<uuid>.bak` and could lose the canonical copy if installing the new file also failed. PortOS never picks a backup automatically, because it cannot tell which copy is correct.
+
+**Solution**:
+
+1. Stop PortOS (and anything else that writes the data directory) so nothing recreates the canonical file.
+2. Keep every copy — do not delete any `.bak` or `.tmp` sibling yet.
+3. Inspect the `.bak` files (newest timestamp first) and decide which holds the right state.
+4. Copy the chosen one to the canonical filename (e.g. `settings.json`), leaving the other copies in place.
+5. Restart PortOS, confirm the data is intact, then remove the leftover backups.
+
+For a failed write, wait for the lock to clear (pause the antivirus scan on the data directory) and repeat the action; no recovery is needed.

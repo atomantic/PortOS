@@ -19,28 +19,20 @@ const BASE_ENV = {
 // running server instead of silently falling back to the `portos` defaults
 // while setup provisioned something else (#8447). An explicit process.env wins
 // over the .env file so a one-off shell override still works.
-const fs = require('fs');
 const envFile = path.join(__dirname, '.env');
-const readEnvValue = (content, key) => content.match(new RegExp(`^${key}=(\\S+)`, 'm'))?.[1] ?? null;
-let pgMode = 'docker';
-let envServerMaxMemory = null;
-let envPgPassword = null;
-let envPgUser = null;
-let envPgDatabase = null;
-let envPgHost = null;
-let envPgPort = null;
-let envPgPortDocker = null;
-try {
-  const envContent = fs.readFileSync(envFile, 'utf8');
-  pgMode = readEnvValue(envContent, 'PGMODE') || pgMode;
-  envServerMaxMemory = readEnvValue(envContent, 'PORTOS_SERVER_MAX_MEMORY');
-  envPgPassword = readEnvValue(envContent, 'PGPASSWORD');
-  envPgUser = readEnvValue(envContent, 'PGUSER');
-  envPgDatabase = readEnvValue(envContent, 'PGDATABASE');
-  envPgHost = readEnvValue(envContent, 'PGHOST');
-  envPgPort = readEnvValue(envContent, 'PGPORT');
-  envPgPortDocker = readEnvValue(envContent, 'PGPORT_DOCKER');
-} catch { /* no .env file — default to docker */ }
+// Parsed by the same dependency-free grammar setup uses (scripts/lib/envFile.cjs),
+// so quoted values resolve identically here and in setup (#9471).
+const { parseEnvFile } = require('./scripts/lib/envFile.cjs');
+const dotenv = parseEnvFile(envFile); // {} when .env is missing
+const envValue = (key) => dotenv[key] || null;
+const pgMode = envValue('PGMODE') || 'docker';
+const envServerMaxMemory = envValue('PORTOS_SERVER_MAX_MEMORY');
+const envPgPassword = envValue('PGPASSWORD');
+const envPgUser = envValue('PGUSER');
+const envPgDatabase = envValue('PGDATABASE');
+const envPgHost = envValue('PGHOST');
+const envPgPort = envValue('PGPORT');
+const envPgPortDocker = envValue('PGPORT_DOCKER');
 
 // Same precedence as scripts/setup-db.js: process.env → .env → default. Keep the
 // 'portos' password fallback (AGENTS.md: intentional backward-compatible

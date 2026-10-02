@@ -118,6 +118,29 @@ describe('AutopilotPanel kickoff', () => {
     expect(steps.alignLyrics).not.toHaveBeenCalled();
   });
 
+  it('keeps the Cast & Sets check-in for a code-first project and plans only once it is settled', async () => {
+    const project = { id: 'mv-4', trackId: 't1', automation, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 }, audioAnalysis: { sections: [] }, lyricCues: [] };
+    const reviewing = { ...project, castAndSets: { status: 'review' } };
+    const steps = {
+      analyze: vi.fn(), importLyrics: vi.fn(async () => null), separateVocals: vi.fn(), alignLyrics: vi.fn(),
+      castAndSets: vi.fn(async () => reviewing),
+      plan: vi.fn(async () => {}),
+    };
+    const { unmount } = render(<KickoffHarness project={project} steps={steps} />);
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
+    await waitFor(() => expect(steps.castAndSets).toHaveBeenCalledWith(project));
+    // Waiting for the director: nothing is planned yet.
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    expect(steps.plan).not.toHaveBeenCalled();
+    unmount();
+
+    steps.castAndSets.mockClear();
+    render(<KickoffHarness project={{ ...project, castAndSets: { status: 'approved' } }} steps={steps} />);
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
+    await waitFor(() => expect(steps.plan).toHaveBeenCalled());
+    expect(steps.castAndSets).not.toHaveBeenCalled();
+  });
+
   it('stops when the analysis fails', async () => {
     const analyzing = deferred();
     const steps = {

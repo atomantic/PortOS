@@ -64,6 +64,15 @@ describe('parseEnvFile', () => {
   });
 });
 
+describe('pre-install module boundary', () => {
+  it('loads the CommonJS parser without any installed dependency', async () => {
+    const { createRequire } = await import('module');
+    const cjs = createRequire(import.meta.url)('./envFile.cjs');
+    expect(Object.keys(cjs).sort()).toEqual(['parseEnvContent', 'parseEnvFile']);
+    expect(cjs.parseEnvContent('A = "x y"\r\nB=\'z\'\n')).toEqual({ A: 'x y', B: 'z' });
+  });
+});
+
 describe('upsertEnvKey', () => {
   it('creates .env with the key when file is missing', () => {
     upsertEnvKey(envPath, 'PGMODE', 'docker');

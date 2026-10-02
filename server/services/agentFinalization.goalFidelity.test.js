@@ -87,7 +87,7 @@ vi.mock('./goalFidelityFollowUp.js', () => ({
 }));
 
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
-vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null) }));
+vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null), extractFinalSummary: vi.fn(() => null) }));
 
 const getGoalFidelityConfigMock = vi.fn(async () => ({ enabled: true, backend: 'ollama', model: 'example-model', effort: null }));
 const runLocalGoalFidelityReviewMock = vi.fn();

@@ -6,6 +6,12 @@ import * as api from '../../services/api';
 vi.mock('../../services/api', () => ({
   writeMusicCode: vi.fn(),
   renderTrackCode: vi.fn(),
+  getSuperColliderStatus: vi.fn(),
+  setupSuperCollider: vi.fn(),
+  renderSuperCollider: vi.fn(),
+  cancelSuperColliderRender: vi.fn(),
+  saveSuperColliderTake: vi.fn(),
+  superColliderRenderEventsUrl: (id) => `/events/${id}`,
 }));
 
 // The real frame documents load Strudel/Tone.js from a CDN; the tests stub
@@ -55,6 +61,16 @@ describe('<CodePanel>', () => {
     posted = vi.spyOn(frame().contentWindow, 'postMessage').mockImplementation(() => {});
     await fromFrame({ type: 'ready' });
   };
+
+  it('swaps the browser player for the server-side SuperCollider stage', async () => {
+    api.getSuperColliderStatus.mockResolvedValue({ state: 'ready', ready: true, message: 'ready', action: '' });
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'SuperCollider' }));
+    expect(await screen.findByText('Render preview')).toBeTruthy();
+    expect(screen.queryByTitle(/player/)).toBeNull(); // no browser frame runs SuperCollider code
+    expect(screen.queryByText('Save as take')).toBeNull(); // nothing to save before a preview exists
+    expect(api.renderSuperCollider).not.toHaveBeenCalled();
+  });
 
   it('runs the code only in an opaque-origin sandboxed frame', () => {
     renderPanel();

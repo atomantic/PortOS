@@ -1,3 +1,4 @@
+import { selectPersistentMindContextEvents, renderPersistentMindContextEvent } from './persistentMindContextEvents.js';
 import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from './promptFencing.js';
 /**
  * Pure persistent-mind trajectory helpers.
@@ -312,18 +313,6 @@ export function buildPersistentMindRollup({
   });
 }
 
-const renderEventLine = (event) => {
-  const parts = [`[${event.at}]`, event.kind];
-  if (event.turnId) parts.push(`turn=${event.turnId}`);
-  const text = displayText(event);
-  if (text !== null) parts.push(JSON.stringify(text));
-  for (const key of ['providerId', 'model', 'effort', 'capability', 'status', 'purpose', 'outcome']) {
-    const value = event.data?.[key];
-    if (typeof value === 'string' && value) parts.push(`${key}=${value}`);
-  }
-  return parts.join(' ');
-};
-
 /**
  * Render stable identity + older rollups + recent verbatim events into a hard
  * character budget. Unavailable/failed/stale summary state is explicit;
@@ -344,18 +333,19 @@ export function assemblePersistentMindContext({
 } = {}) {
   const cap = Math.max(1_000, Math.min(Number(maxChars) || PERSISTENT_MIND_TRAJECTORY_LIMITS.maxContextChars, 100_000));
   const ordered = orderedMindEvents(events, mindId);
-  const recent = ordered.slice(-Math.max(1, recentEventLimit));
-  const older = ordered.slice(0, Math.max(0, ordered.length - recent.length));
+  const meaningful = selectPersistentMindContextEvents(ordered, mindId);
+  const recent = meaningful.slice(-Math.max(1, recentEventLimit));
+  const older = recent.length ? ordered.filter(event => event.sequence < recent[0].sequence) : [];
   const validRollups = (Array.isArray(rollups) ? rollups : [])
     .filter(isStoredPersistentMindRollup)
     .filter((rollup) => rollup.mindId === mindId)
     .sort((a, b) => a.source.fromSequence - b.source.fromSequence);
 
   // A rollup can outlive every raw event it summarizes. Select every sealed
-  // range before the recent window, not only ranges that overlap retained raw
-  // history, or a quiet mind would appear to forget its life after retention.
-  const recentStart = recent[0]?.sequence ?? Number.POSITIVE_INFINITY;
-  const selectedRollups = validRollups.filter((rollup) => rollup.source.toSequence < recentStart);
+  // range, including overlap with the expanded meaningful-event window. The
+  // cumulative summary may be the only surviving record of earlier decisions;
+  // bounded overlap is preferable to silently dropping that durable context.
+  const selectedRollups = validRollups;
   const currentReadyRollups = selectedRollups
     .filter((rollup) => rollup.status === 'ready' && rollup.provenance.promptVersion === promptVersion);
   // Incremental summaries are cumulative. Keep only ranges that are not fully
@@ -395,6 +385,7 @@ export function assemblePersistentMindContext({
     typeof instructions === 'string' ? instructions : JSON.stringify(instructions),
     PERSISTENT_MIND_TRAJECTORY_LIMITS.maxInstructionsChars
   );
+  const seenMemoryContent = new Set();
   const memoryLines = (Array.isArray(memories) ? memories : [])
     .filter((memory) => memory && typeof memory === 'object')
     .sort(comparePersistentMindMemories)
@@ -402,7 +393,9 @@ export function assemblePersistentMindContext({
       const content = typeof memory.content === 'string' && memory.content.trim()
         ? memory.content.trim()
         : typeof memory.summary === 'string' ? memory.summary.trim() : '';
-      if (!content) return null;
+      const key = content.replace(/\s+/g, ' ');
+      if (!content || seenMemoryContent.has(key)) return null;
+      seenMemoryContent.add(key);
       const label = [memory.type, memory.category].filter(Boolean).join('/') || 'memory';
       const protection = persistentMindMemoryProtection(memory);
       return `- [${label}; id=${memory.id || 'unknown'}${protection === 'standard' ? '' : `; protected=${protection}`}] ${content}`;
@@ -464,7 +457,7 @@ export function assemblePersistentMindContext({
   const recentLines = [];
   let recentChars = 0;
   for (const event of [...recent].reverse()) {
-    const line = renderEventLine(event);
+    const line = renderPersistentMindContextEvent(event);
     const separator = recentLines.length ? 1 : 0;
     if (recentChars + separator + line.length > recentBudget) continue;
     recentLines.unshift(line);

@@ -40,7 +40,8 @@ import { musicVideoCreativeContext, musicVideoDirectionContext } from '../../lib
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
-import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
+import { runPromptThroughProvider } from '../promptRunner.js';
+import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import { directShots, planShots, resolveClipCapacitySec, validSections } from './shotPlan.js';
 import { getProject, addProjectScenes, mutateProjectRecord } from './projects.js';
 
@@ -223,14 +224,15 @@ function parseScenePlanResponse(text, count) {
  * provider disabled, LLM call failed, response didn't parse) so the caller
  * can fall back to plain scenes without the whole plan request failing.
  */
-async function tryProposeScenePrompts(project, shots, { providerId, model } = {}) {
+async function tryProposeScenePrompts(project, shots, { providerId, model, effort } = {}) {
   if (shots.length > MAX_SHOTS_FOR_PROMPTS) {
     return { seeded: null, reason: 'too-many-shots' };
   }
 
-  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model }).catch((err) => {
+  // Request pin > the brief's saved LLM > an eligible TUI provider > the active one (llmRoute.js).
+  const { provider, selectedModel, route } = await resolveMusicVideoLlm({ providerId, model, effort, automation: project.automation }).catch((err) => {
     console.warn(`⚠️ Music Video plan: provider resolution failed for ${project.id}: ${err.message}`);
-    return { provider: null, selectedModel: null };
+    return { provider: null, selectedModel: null, route: null };
   });
   if (!provider) return { seeded: null, reason: 'no-provider' };
   if (provider.enabled === false) return { seeded: null, reason: 'provider-disabled' };
@@ -240,20 +242,21 @@ async function tryProposeScenePrompts(project, shots, { providerId, model } = {}
     ({ text } = await runPromptThroughProvider({
       provider,
       model: selectedModel,
+      ...effortArg(route),
       prompt: buildScenePlanPrompt(project, shots),
       source: 'music-video-plan',
     }));
   } catch (err) {
     console.warn(`⚠️ Music Video plan: scene-prompt LLM call failed for ${project.id}: ${err.message}`);
-    return { seeded: null, reason: 'llm-failed' };
+    return { seeded: null, reason: 'llm-failed', route };
   }
 
   const seeded = parseScenePlanResponse(text, shots.length);
   if (!seeded) {
     console.warn(`⚠️ Music Video plan: unparsable scene-prompt response for ${project.id}`);
-    return { seeded: null, reason: 'unparsable-response' };
+    return { seeded: null, reason: 'unparsable-response', route };
   }
-  return { seeded, reason: null };
+  return { seeded, reason: null, route };
 }
 
 /**
@@ -266,11 +269,16 @@ async function tryProposeScenePrompts(project, shots, { providerId, model } = {}
  * @param {string} [options.providerId] — pin a specific provider instead of
  *   the active one.
  * @param {string} [options.model] — model override for the prompt-seeding call.
+ * @param {string} [options.effort] — reasoning-effort override for an
+ *   effort-capable CLI/TUI provider (clamped by the runner).
  * @param {string} [options.directive] — a production run's directive (#9066),
  *   added to the director guidance the first-pass prompts are written under.
- * @returns {Promise<{ project: object, scenesAdded: number, promptsSeeded: boolean, promptsSkippedReason: string|null, pacing: object }>}
+ * @returns {Promise<{ project: object, scenesAdded: number, promptsSeeded: boolean, promptsSkippedReason: string|null, pacing: object, llmRoute: object|null }>}
+ *   `llmRoute` is the effective provider/model/effort/transport the prompt call
+ *   used (null when none was made); a project with an automation brief also
+ *   keeps it under `automation.routes.plan`.
  */
-export async function planProject(id, { seedPrompts = true, providerId, model, directive } = {}) {
+export async function planProject(id, { seedPrompts = true, providerId, model, effort, directive } = {}) {
   const project = await getProject(id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -297,10 +305,12 @@ export async function planProject(id, { seedPrompts = true, providerId, model, d
 
   let promptsSeeded = false;
   let promptsSkippedReason = seedPrompts ? null : 'not-requested';
+  let llmRoute = null;
   if (seedPrompts) {
     const guidance = [project.automation?.guidance?.trim(), directive?.trim()].filter(Boolean).join('\n');
     const planning = directive?.trim() ? { ...project, automation: { ...project.automation, guidance } } : project;
-    const { seeded, reason } = await tryProposeScenePrompts(planning, shots, { providerId, model });
+    const { seeded, reason, route } = await tryProposeScenePrompts(planning, shots, { providerId, model, effort });
+    llmRoute = route || null;
     if (seeded) {
       promptsSeeded = true;
       for (const [idx, fields] of seeded) {
@@ -326,11 +336,13 @@ export async function planProject(id, { seedPrompts = true, providerId, model, d
   const hasCards = sceneInputs.some((s) => s.visualLayer === 'card');
   // Persist card scenes and the mode that renders them in the same transaction.
   // Read the current composition under the lock so concurrent edits survive.
-  const { project: updated, scenes } = hasCards
+  const { project: persisted, scenes } = hasCards
     ? await persistCardPlan(id, sceneInputs)
     : await addProjectScenes(id, sceneInputs);
+  // Only a project with an automation brief keeps the route it planned on.
+  const updated = (persisted.automation && await recordLlmRoute(id, 'plan', llmRoute)) || persisted;
   console.log(`🪄 Music Video plan: seeded ${scenes.length} scene${scenes.length === 1 ? '' : 's'} for ${id} (prompts ${promptsSeeded ? 'seeded' : `skipped: ${promptsSkippedReason || 'n/a'}`})`);
-  return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason, pacing };
+  return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason, pacing, llmRoute };
 }
 
 async function persistCardPlan(id, sceneInputs) {

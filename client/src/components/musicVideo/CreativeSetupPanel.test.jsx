@@ -102,3 +102,36 @@ it('defaults code-first to zero, offers 20% selective footage, and saves the exp
     productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 12.5 },
   })));
 });
+
+describe('tools / policy conflict', () => {
+  const render_ = (extra, onSave = vi.fn(async () => {})) => {
+    render(<MemoryRouter><CreativeSetupPanel project={{ ...project, ...extra }} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
+    return onSave;
+  };
+  const noVideo = { automation: { tools: ['image:codex', 'code:render'] } };
+
+  it('warns when no video tool is selected but footage is still planned, and only a deliberate replan saves the new policy', async () => {
+    const onSave = render_({ ...noVideo, productionPolicy: { strategy: 'legacy', maxGeneratedVideoPercent: 100 } });
+    expect(screen.getByRole('status')).toHaveTextContent('No video tool is selected');
+    expect(screen.getByText(/stay as saved until you replan/)).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Replan as code-first, no generated video'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } }));
+  });
+
+  it('keeps a failed replan visible and re-enables the action', async () => {
+    render_({ ...noVideo }, vi.fn(async () => { throw new Error('Save rejected'); }));
+    fireEvent.click(screen.getByText('Replan as code-first, no generated video'));
+    await screen.findByText('Save rejected');
+    expect(screen.getByText('Replan as code-first, no generated video')).not.toBeDisabled();
+  });
+
+  it.each([
+    ['a video tool is selected', { automation: { tools: ['image:codex', 'video:fal'] } }],
+    ['the policy already allows no generated video', { ...noVideo, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } }],
+    ['the brief names no tools', {}],
+  ])('shows nothing when %s', (_label, extra) => {
+    render_(extra);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+});

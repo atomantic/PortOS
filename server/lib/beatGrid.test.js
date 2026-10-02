@@ -37,6 +37,27 @@ function clickTrack({ bpm, durationSec, sampleRate = BEAT_GRID_SAMPLE_RATE, offs
   return out;
 }
 
+// Long beatless noise intro, then a regular pulse: the full-track
+// autocorrelation peak falls below the significance floor, so only the
+// windowed tempo fallback shared with the Music Video analyzer (#9424) can
+// measure it.
+function lateClickTrack({ bpm, introSec, rhythmicSec, sampleRate = BEAT_GRID_SAMPLE_RATE }) {
+  const out = new Float32Array(Math.round((introSec + rhythmicSec) * sampleRate));
+  let seed = 7;
+  for (let i = 0; i < introSec * sampleRate; i++) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    out[i] = ((seed / 0x7fffffff) * 2 - 1) * 0.15;
+  }
+  const burstLen = Math.round(0.025 * sampleRate);
+  for (let t = introSec; t < introSec + rhythmicSec; t += 60 / bpm) {
+    const start = Math.round(t * sampleRate);
+    for (let k = 0; k < burstLen && start + k < out.length; k++) {
+      out[start + k] += 0.8 * Math.exp(-k / (burstLen / 5)) * Math.sin((2 * Math.PI * 1200 * k) / sampleRate);
+    }
+  }
+  return out;
+}
+
 /** Minimal 16-bit PCM mono WAV encoder for the ffmpeg round-trip test. */
 function encodeWav(samples, sampleRate) {
   const numSamples = samples.length;
@@ -113,6 +134,15 @@ describe('__analyzeBeatGridPcm', () => {
       const nearest = result.hits.reduce((best, h) => (Math.abs(h - t) < Math.abs(best - t) ? h : best), Infinity);
       expect(Math.abs(nearest - t)).toBeLessThan(0.06);
     }
+  });
+
+  it('measures a tempo after a long beatless intro via the windowed fallback', () => {
+    const samples = lateClickTrack({ bpm: 108, introSec: 45, rhythmicSec: 30 });
+    const result = __analyzeBeatGridPcm(samples, BEAT_GRID_SAMPLE_RATE);
+    expect(result.bpm).toBeGreaterThan(105);
+    expect(result.bpm).toBeLessThan(111);
+    expect(result.beats.length).toBeGreaterThan(100);
+    expect(result.tempoConfidence).toBeGreaterThanOrEqual(0.3);
   });
 
   it('reports no tempo for silence/noise rather than a bogus BPM', () => {

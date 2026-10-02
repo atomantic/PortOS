@@ -30,7 +30,7 @@ export function createRunLifecycle({ runId, controller, stallTimeout, absoluteTi
   };
 
   const armStallTimer = () => {
-    stallTimeoutHandle = setTimeout(() => fireTimeout('stall'), stallTimeout);
+    if (stallTimeout > 0) stallTimeoutHandle = setTimeout(() => fireTimeout('stall'), stallTimeout);
   };
 
   const noteStreamProgress = () => {
@@ -43,7 +43,7 @@ export function createRunLifecycle({ runId, controller, stallTimeout, absoluteTi
     if (started || settled) return;
     started = true;
     armStallTimer();
-    absoluteTimeoutHandle = setTimeout(() => fireTimeout('absolute'), absoluteTimeout);
+    if (absoluteTimeout > 0) absoluteTimeoutHandle = setTimeout(() => fireTimeout('absolute'), absoluteTimeout);
   };
 
   return { start, markSettled, noteStreamProgress };

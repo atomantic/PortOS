@@ -6,34 +6,11 @@
  */
 
 import { readFileSync, writeFileSync } from 'fs';
+import envFileParser from './envFile.cjs';
 
-/**
- * Parse a .env file into a key/value map.
- * Tolerates blank lines, # comments, and optional surrounding single/double
- * quotes around values. Returns {} when the file is missing or unreadable.
- *
- * @param {string} filePath - absolute path to the .env file
- * @returns {Record<string, string>}
- */
-export function parseEnvFile(filePath) {
-  const result = {};
-  let content = '';
-  try { content = readFileSync(filePath, 'utf8'); } catch { return result; }
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const idx = trimmed.indexOf('=');
-    if (idx === -1) continue;
-    const key = trimmed.slice(0, idx).trim();
-    let value = trimmed.slice(idx + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    result[key] = value;
-  }
-  return result;
-}
+// The grammar lives in envFile.cjs so ecosystem.config.cjs (PM2) parses `.env`
+// exactly as setup does; see that file for the supported syntax.
+export const { parseEnvContent, parseEnvFile } = envFileParser;
 
 /**
  * Set (or add) a single key in a .env file without touching other lines.

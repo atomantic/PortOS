@@ -28,7 +28,7 @@ import { withMusicVideoStyle } from './styleReferences.js';
 
 import { randomUUID } from 'crypto';
 import { readFile } from 'fs/promises';
-import { extname } from 'path';
+import { basename, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
@@ -36,6 +36,7 @@ import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
+import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import {
   allCastAndSetsImagesDone,
   assertCastAndSetsApprovable,
@@ -52,7 +53,10 @@ import {
   startCastAndSetsOnProject,
 } from './castAndSets.js';
 import {
+  applyCastAndSetsDirectionEdits,
   buildCastAndSetsPrompt,
+  castAndSetsAllowsImages,
+  castAndSetsMedium,
   mergeCastAndSetsDirection,
   moodBoardImageList,
   parseCastAndSetsResponse,
@@ -73,10 +77,12 @@ import { findProductionRun, haltProduction, rebaseProductionAfterCheckin, reserv
 const PROCESS_ID = `proc-${randomUUID()}`;
 const short = (id) => String(id || '').slice(3, 11);
 const MAX_KEY_NOTES = 8;
+const MAX_SUBMITTED_PROMPT = 20_000;
+const MAX_SUBMITTED_REFERENCES = 16;
 
 // Test seam: provider, queue, settings and mood-board access are swappable.
 const defaults = {
-  resolveProvider: async (opts) => (await import('../promptRunner.js')).resolveProviderAndModel(opts),
+  resolveProvider: async (opts) => resolveMusicVideoLlm(opts),
   runPrompt: async (opts) => (await import('../promptRunner.js')).runPromptThroughProvider(opts),
   getSettings: async () => (await import('../settings.js')).getSettings(),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
@@ -157,25 +163,32 @@ async function loadContext(project) {
  * plan. `notes` (a revision) are sent with the current direction; `forceKeys`
  * are image keys the director flagged directly.
  */
-async function runDirection(projectId, { providerId, model, notes = [], forceKeys = [] } = {}) {
+async function runDirection(projectId, { providerId, model, effort, notes = [], forceKeys = [] } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const { board, moodImages, track } = await loadContext(project);
-  const { provider, selectedModel } = await deps.resolveProvider({ providerId, model }).catch(() => ({ provider: null }));
+  // Request pin > the brief's saved LLM > an eligible TUI provider > the active one (llmRoute.js).
+  const { provider, selectedModel, route } = await deps.resolveProvider({ providerId, model, effort, automation: project.automation }).catch(() => ({ provider: null }));
   if (!provider) return fail(projectId, 'No AI provider is available for the creative direction');
   if (provider.enabled === false) return fail(projectId, `The ${provider.name || provider.id} provider is disabled`);
   const previous = stage?.direction || null;
-  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes });
+  // A revision keeps the medium it was directed in; a fresh pass resolves it
+  // from the project's policy and tools, so a saved direction is never
+  // silently re-cast into the other medium.
+  // A saved direction without a medium predates the procedural one: photographic.
+  const medium = notes.length && previous ? (previous.medium || 'photographic') : castAndSetsMedium(project);
+  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium });
   let text;
   try {
-    ({ text } = await deps.runPrompt({ provider, model: selectedModel, prompt, source: 'music-video-cast-sets' }));
+    ({ text } = await deps.runPrompt({ provider, model: selectedModel, ...effortArg(route), prompt, source: 'music-video-cast-sets' }));
   } catch (err) {
     return fail(projectId, 'The creative direction call failed', err.message);
   }
+  await recordLlmRoute(projectId, 'castAndSets', route);
   const parsed = parseCastAndSetsResponse(text);
   if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
-  const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, moodImageCount: moodImages.length });
+  const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, moodImageCount: moodImages.length, medium });
   if (missing.length) return fail(projectId, `The creative direction answer is missing: ${missing.join(', ')}`);
   // The photographic look every image prompt carries: the mood board's composed
   // style, else the project's visual style (never the board's literal places).
@@ -192,17 +205,20 @@ async function writePlan(projectId, { direction = null, moodImages = null, force
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const nextDirection = direction || stage.direction;
-  const plan = buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes) });
+  // A procedural project whose brief names no image tool is code-only: nothing
+  // is rendered, so no image backend is needed (or consulted).
+  const codeOnly = nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
+  const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes) });
   const renderKeys = affectedImageKeys(stage.plan || {}, plan, forceKeys);
   const settings = await deps.getSettings();
   const run = stage.productionRunId ? (project.productionRuns || []).find((r) => r.id === stage.productionRunId) : null;
   const preferred = run?.pool?.find((r) => r.kind === 'image') || stage.route || null;
-  const route = await chooseCastAndSetsRoute(project, { preferred, settings });
-  if (!route) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
+  const route = codeOnly ? (stage.route || null) : await chooseCastAndSetsRoute(project, { preferred, settings });
+  if (!route && !codeOnly) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
   const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsDirection(current, {
     direction: nextDirection, plan, moodImages, route, renderKeys,
   }));
-  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render on ${route.mode}`);
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render${route ? ` on ${route.mode}` : ' (code-only, no image backend)'}`);
   publish(projectId, out.project);
   return advance(projectId);
 }
@@ -266,7 +282,25 @@ async function enqueueImage(project, stage, key) {
   const settings = await deps.getSettings();
   const baseParams = await deps.imageParams(settings, stage.route, common);
   const params = await withMusicVideoStyle(project, baseParams, stage.route.mode, stage.route.model, settings);
-  return deps.enqueue({ kind: 'image', params, owner: `music-video-cast-sets:${project.id}` });
+  // Persist the actual styled queue input, with only served local references.
+  // Never expose the absolute host paths used by the provider transport.
+  const submittedReferences = (params.referenceImagePaths || []).flatMap((path) => {
+    if (typeof path !== 'string') return [];
+    const filename = basename(path);
+    if (resolveGalleryImage(filename, { mustExist: false }) === path) return [{ kind: 'image', filename }];
+    if (resolveImageRef(filename, { mustExist: false }) === path) return [{ kind: 'image-ref', filename }];
+    return [];
+  });
+  const prompt = String(params.prompt || '');
+  const submission = {
+    submittedPrompt: prompt.slice(0, MAX_SUBMITTED_PROMPT),
+    submittedPromptTruncated: prompt.length > MAX_SUBMITTED_PROMPT,
+    submittedReferences: submittedReferences.slice(0, MAX_SUBMITTED_REFERENCES),
+    submittedReferencesTruncated: submittedReferences.length > MAX_SUBMITTED_REFERENCES,
+    submittedRevision: stage.revision,
+  };
+  const sent = await deps.enqueue({ kind: 'image', params, owner: `music-video-cast-sets:${project.id}` });
+  return { ...sent, submission };
 }
 
 // Check-in slots use the existing production ledger; the revision separates
@@ -335,7 +369,7 @@ async function dispatchKey(projectId, key) {
     const reason = sent?.error?.message || 'The image job was not queued';
     const out = await mutateProjectRecord(projectId, (current) => {
       const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'refused', error: reason }).project : current;
-      const settled = settleCastAndSetsImage(next, key, { error: reason });
+      const settled = settleCastAndSetsImage(next, key, { error: reason, revision: reserved.stage.revision });
       if (settled.stage?.status === 'failed') settled.project = refundUnusedCheckinSteps(settled.project);
       return settled;
     });
@@ -343,10 +377,11 @@ async function dispatchKey(projectId, key) {
     publish(projectId, out.project);
     return;
   }
-  await mutateProjectRecord(projectId, (current) => {
+  const linked = await mutateProjectRecord(projectId, (current) => {
     const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'queued', jobId: sent.jobId }).project : current;
-    return linkCastAndSetsJob(next, key, sent.jobId);
+    return linkCastAndSetsJob(next, key, sent.jobId, sent.submission);
   });
+  publish(projectId, linked.project);
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} ${key} → ${reserved.stage.route.mode} job ${String(sent.jobId).slice(0, 8)}`);
 }
 
@@ -525,7 +560,7 @@ export async function skipCastAndSets(projectId) {
 // ---- director actions ------------------------------------------------------------------
 
 /** Start the check-in (explicit request). The work continues in the background. */
-export async function startCastAndSets(projectId, { providerId, model, productionRunId = null } = {}) {
+export async function startCastAndSets(projectId, { providerId, model, effort, productionRunId = null } = {}) {
   const project = await requireProject(projectId);
   if (!Array.isArray(project.audioAnalysis?.sections) || !project.audioAnalysis.sections.length) {
     throw new ServerError('Analyze the song before the Cast & Sets check-in', { status: 409, code: 'NOT_ANALYZED' });
@@ -533,7 +568,7 @@ export async function startCastAndSets(projectId, { providerId, model, productio
   const out = await mutateProjectRecord(projectId, (current) => startCastAndSetsOnProject(current, { processId: PROCESS_ID, productionRunId }));
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} started (r${out.stage.revision})`);
   publish(projectId, out.project);
-  inBackground('The creative direction', projectId, () => runDirection(projectId, { providerId, model }));
+  inBackground('The creative direction', projectId, () => runDirection(projectId, { providerId, model, effort }));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
@@ -544,7 +579,7 @@ export async function startCastAndSets(projectId, { providerId, model, productio
  * note revises the direction, and only images whose prompt changed re-render.
  * The consumed notes are resolved on the sheet. Returns `{ project, stage }`.
  */
-export async function regenerateCastAndSets(projectId, { notes = null, providerId, model } = {}) {
+export async function regenerateCastAndSets(projectId, { notes = null, providerId, model, effort } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   if (!stage?.direction) throw new ServerError('There is no Cast & Sets sheet to regenerate yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
@@ -572,18 +607,49 @@ export async function regenerateCastAndSets(projectId, { notes = null, providerI
   publish(projectId, out.project);
   const forceKeys = Object.keys(imageNotes);
   inBackground('The regeneration', projectId, () => (redirect
-    ? runDirection(projectId, { providerId, model, notes: directionNotes, forceKeys })
+    ? runDirection(projectId, { providerId, model, effort, notes: directionNotes, forceKeys })
     : writePlan(projectId, { forceKeys })));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
+/**
+ * Save the director's direct edits to a procedural direction (construction,
+ * palette, expressions, movement, world rules, per-set image role) through the
+ * revision path: the stage re-opens as a new revision, the edited direction is
+ * persisted in the same write, and only images whose prompt changed re-render
+ * before the sheet is re-assembled. No direction (text) provider call is made;
+ * a changed image prompt is the director's save acting on the image queue.
+ * Returns `{ project, stage }`.
+ */
+export async function editCastAndSetsDirection(projectId, edits) {
+  const project = await requireProject(projectId);
+  const sections = songSections(project);
+  let changed = [];
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const stage = current.castAndSets;
+    if (!stage?.direction) throw new ServerError('There is no Cast & Sets direction to edit yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
+    assertCastAndSetsApprovable(current);
+    const edited = applyCastAndSetsDirectionEdits(stage.direction, edits, { sections });
+    if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
+    changed = edited.changed;
+    const notesApplied = [{ id: null, target: 'direction', text: `Edited by the director: ${changed.join(', ')}` }];
+    const revised = reviseCastAndSetsOnProject(current, { processId: PROCESS_ID, notesApplied, redirect: false });
+    const next = { ...revised.project, castAndSets: { ...revised.stage, direction: edited.direction } };
+    return { project: next, stage: next.castAndSets };
+  });
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} direction edited r${out.stage.revision} (${changed.length} field(s))`);
+  publish(projectId, out.project);
+  inBackground('The direction edit', projectId, () => writePlan(projectId));
+  return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+}
+
 /** Resume an interrupted (restart) or failed stage in this process. */
-export async function resumeCastAndSets(projectId, { providerId, model } = {}) {
+export async function resumeCastAndSets(projectId, { providerId, model, effort } = {}) {
   const out = await mutateProjectRecord(projectId, (current) => resumeCastAndSetsOnProject(current, { processId: PROCESS_ID }));
   console.log(`▶️ Music Video Cast & Sets ${short(projectId)} resumed (${out.stage.status})`);
   publish(projectId, out.project);
   inBackground('The resume', projectId, () => {
-    if (out.stage.status === 'directing') return runDirection(projectId, { providerId, model, notes: out.stage.notesApplied || [] });
+    if (out.stage.status === 'directing') return runDirection(projectId, { providerId, model, effort, notes: out.stage.notesApplied || [] });
     if (out.stage.status === 'assembling') return assemble(projectId);
     return advance(projectId);
   });
@@ -603,15 +669,16 @@ export async function getCastAndSets(projectId) {
  * Settles its key (idempotent) and, when the stage is dispatching in this
  * process, continues. Returns true when the record changed.
  */
-export async function onCastAndSetsImageSettled({ projectId, key, jobId = null, filename = null, error = null, productionRunId = null, productionStepKey = null, status = null }) {
+export async function onCastAndSetsImageSettled({ projectId, key, jobId = null, filename = null, error = null, revision = null, productionRunId = null, productionStepKey = null, status = null }) {
   const project = await getProject(projectId);
   if (!project?.castAndSets?.images?.[key]) return false;
   const out = await mutateProjectRecord(projectId, (current) => {
+    if (revision != null && revision !== current.castAndSets?.revision) return { project: current, changed: false };
     const next = productionRunId && productionStepKey
       ? settleProductionStep(current, productionRunId, productionStepKey, {
         status: filename ? 'completed' : status === 'canceled' ? 'canceled' : 'failed', jobId, error,
       }).project : current;
-    const settled = settleCastAndSetsImage(next, key, { jobId, filename, error });
+    const settled = settleCastAndSetsImage(next, key, { jobId, filename, error, revision });
     if (settled.stage?.status === 'failed') settled.project = refundUnusedCheckinSteps(settled.project);
     return settled;
   });

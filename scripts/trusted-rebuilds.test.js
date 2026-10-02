@@ -319,6 +319,40 @@ describe('npm spawn shape', () => {
   });
 });
 
+describe('install-time dependency patch wiring (#9462)', () => {
+  // The patch itself is covered in scripts/lib/getUriFtpPatch.test.js; this pins
+  // that every managed install path (rebuildTrusted for any workspace, and the
+  // rebuild-free CLI branch) actually reaches it.
+  const upstream = 'const ftp = async () => {\n  lastModified = entry.modifiedAt;\n};\n';
+  const tree = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trusted-patch-'));
+    mkdirSync(join(dir, 'node_modules', 'get-uri', 'dist'), { recursive: true });
+    writeFileSync(join(dir, 'node_modules', 'get-uri', 'dist', 'ftp.js'), upstream);
+    return dir;
+  };
+  const patched = (dir) => readFileSync(join(dir, 'node_modules', 'get-uri', 'dist', 'ftp.js'), 'utf8').includes('parseUnixListDate');
+
+  it('patches a workspace tree from rebuildTrusted even when it has no rebuilds', () => {
+    const dir = tree();
+    try {
+      expect(rebuildTrusted(dir, 'client', { spawn: () => {} })).toBe(true);
+      expect(patched(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('patches from the rebuild-free CLI branch too', () => {
+    const dir = tree();
+    try {
+      expect(runCli(['browser', dir], { spawn: () => {} })).toBe(0);
+      expect(patched(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('runCli exit codes', () => {
   const noop = () => {};
 

@@ -89,6 +89,7 @@ describe('toRunnerPath', () => {
     expect(toRunnerPath('client', 'client/src/lib/index.test.js')).toBe('./src/lib/index.test.js');
     expect(toRunnerPath('server', 'server/lib/index.test.js')).toBe('./lib/index.test.js');
     expect(toRunnerPath('server', 'scripts/checkNodeVersion.test.js')).toBe('../scripts/checkNodeVersion.test.js');
+    expect(toRunnerPath('client', 'server/lib/postScoring.js')).toBe('../server/lib/postScoring.js');
   });
 });
 

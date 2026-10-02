@@ -15,6 +15,7 @@
  */
 
 import { plannedTests } from './castAndSetsPlan.js';
+import { renderDefinitionsSection } from './castAndSetsDefinitions.js';
 
 // One color per set (song-map bar + dots), in set order.
 export const CAST_SETS_SET_COLORS = Object.freeze(['#b8d63a', '#2fae8f', '#8a5cff', '#e0342b', '#18c7d6', '#3d7bff', '#f0a13a', '#ff5a1f']);
@@ -34,11 +35,11 @@ const fmtTime = (sec) => {
 // placeholder so the file can never reach the network.
 const safeSrc = (src) => (typeof src === 'string' && /^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(src) ? src : null);
 
-function figure(src, alt, caption, cls = '') {
+function figure(src, alt, caption, cls = '', placeholder = 'Image not rendered') {
   const ok = safeSrc(src);
   const media = ok
     ? `<img src="${ok}" alt="${e(alt)}">`
-    : `<div class="missing" role="img" aria-label="${e(alt)}">Image not rendered</div>`;
+    : `<div class="missing" role="img" aria-label="${e(alt)}">${e(placeholder)}</div>`;
   return `<figure${cls ? ` class="${cls}"` : ''}>${media}${caption ? `<figcaption>${caption}</figcaption>` : ''}</figure>`;
 }
 
@@ -72,6 +73,13 @@ figcaption{font-family:var(--mono);font-size:12px;color:var(--muted);padding-top
 .set figcaption b{font-family:var(--body);font-size:17px;color:var(--fg);font-weight:600}
 .set figcaption span{font-family:var(--body);font-size:14px;color:var(--muted)}
 .set figcaption em{font-style:normal;color:var(--green);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.def{border:1px solid var(--line);background:var(--panel);padding:16px;margin-top:18px}
+.def h3{font-family:var(--display);font-size:24px;margin:0 0 10px;font-weight:700}
+.def h3 span{font-family:var(--mono);font-size:12px;color:var(--muted);letter-spacing:.08em;margin-left:8px}
+.def-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.def-tile svg{display:block;width:100%;height:auto;background:#0b0f0d;border:1px solid var(--line)}
+.swatches{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.swatch i{display:inline-block;width:12px;height:12px;margin-right:6px;vertical-align:-2px;border:1px solid var(--line)}
 .bar{display:flex;height:44px;border:1px solid var(--line);margin-top:20px;overflow:hidden}
 .seg{position:relative;border-right:1px solid var(--bg);min-width:0}
 .seg span{position:absolute;left:4px;bottom:3px;font-family:var(--mono);font-size:10px;color:#0b0f0d;white-space:nowrap;overflow:hidden;max-width:calc(100% - 6px)}
@@ -91,6 +99,11 @@ td.tc{font-family:var(--mono);color:var(--muted);white-space:nowrap;width:64px}
 @media (max-width:760px){.grid2,.sets,.overlay{grid-template-columns:1fr}.row{grid-template-columns:repeat(2,1fr)}}
 `;
 
+const PROCEDURAL_QUESTIONS = [
+  'Is the character construction right: shapes, materials, palette and expressions?',
+  'Do the movement, camera and transition rules fit the song?',
+  'Do the environments and their image roles work, or should any be swapped out?',
+];
 const DEFAULT_QUESTIONS = [
   'Is the protagonist right: face, hair, signature detail and the looks?',
   'Do the sets work, or should any be swapped out?',
@@ -107,21 +120,34 @@ export function renderCastAndSetsSheet({
   revision = 1, notesApplied = [], checkinMode = 'review', status = 'review',
 }) {
   const d = direction || {};
+  const procedural = d.medium === 'procedural';
   const p = d.protagonist || {};
+  const w = d.world || {};
   const sets = d.sets || [];
   const colorOf = new Map(sets.map((s, i) => [s.id, CAST_SETS_SET_COLORS[i % CAST_SETS_SET_COLORS.length]]));
   const setOfSection = new Map((d.songMap || []).map((m) => [m.section, m.setId]));
   const tests = plannedTests(project, d);
   const total = durationSec || (sections.length ? sections[sections.length - 1].endSec : 0);
 
-  const facts = [
+  const facts = (procedural ? [
+    ['Who', p.description],
+    ['Construction', p.construction],
+    ['Shapes', p.shapeLanguage],
+    ['Materials', p.materials],
+    ['Palette', p.palette],
+    ['Expressions', (p.expressions || []).join('; ')],
+    ['Movement', p.movement],
+    ['Signature', p.signature],
+    ['Gesture', p.gesture],
+    ['Rules', (p.rules || []).map((r) => r.replace(/[.;]\s*$/, '')).join('; ')],
+  ] : [
     ['Who', p.description],
     ['Face', p.face],
     ['Hair', p.hair],
     ['Signature', p.signature],
     ['Gesture', p.gesture],
     ['Rules', (p.rules || []).map((r) => r.replace(/[.;]\s*$/, '')).join('; ')],
-  ].filter(([, v]) => v).map(([k, v]) => `<dt>${e(k)}</dt><dd>${e(v)}</dd>`).join('');
+  ]).filter(([, v]) => v).map(([k, v]) => `<dt>${e(k)}</dt><dd>${e(v)}</dd>`).join('');
 
   const looksCaption = (d.looks || []).map((l, i) => `0${i + 1} ${e(l.name)}${l.chapters ? ` (${e(l.chapters)})` : ''}`).join(' · ');
 
@@ -131,8 +157,9 @@ export function renderCastAndSetsSheet({
   }).join('');
 
   const setFigures = sets.map((s) => {
-    const caption = `<b>${e(s.name)}</b><span>${e(s.description)}${s.lighting ? ` ${e(s.lighting)}` : ''}</span>${(s.sections || []).length ? `<em>${e(s.sections.join(', '))}</em>` : ''}`;
-    return figure(images[`set:${s.id}`], s.name, caption, 'set');
+    const role = procedural ? `<em>Role: ${e(s.imageRole || 'background')}</em>` : '';
+    const caption = `<b>${e(s.name)}</b><span>${e(s.description)}${s.lighting ? ` ${e(s.lighting)}` : ''}</span>${role}${(s.sections || []).length ? `<em>${e(s.sections.join(', '))}</em>` : ''}`;
+    return figure(images[`set:${s.id}`], s.name, caption, 'set', procedural ? 'No raster image: drawn in code' : undefined);
   }).join('');
 
   const bar = sections.map((s) => {
@@ -149,7 +176,9 @@ export function renderCastAndSetsSheet({
 
   const overlay = d.overlayConcept || {};
   const overlayCards = (overlay.elements || []).map((el) => `<div><h3>${e(el.name)}</h3><p>${e(el.description)}</p></div>`).join('');
-  const questions = (d.questions && d.questions.length ? d.questions : DEFAULT_QUESTIONS).map((q) => `<li>${e(q)}</li>`).join('');
+  const worldFacts = [['Layout', w.layout], ['Depth', w.depth], ['Lighting', w.lighting], ['Camera', w.camera], ['Transitions', w.transitions]]
+    .filter(([, v]) => v).map(([k, v]) => `<dt>${e(k)}</dt><dd>${e(v)}</dd>`).join('');
+  const questions = (d.questions && d.questions.length ? d.questions : (procedural ? PROCEDURAL_QUESTIONS : DEFAULT_QUESTIONS)).map((q) => `<li>${e(q)}</li>`).join('');
   const applied = notesApplied.length
     ? `<p class="sub"><b>Revision ${revision}.</b> Notes applied: ${notesApplied.map((n) => `${n.target ? `[${e(n.target)}] ` : ''}${e(n.text)}`).join(' · ')}</p>`
     : '';
@@ -162,17 +191,19 @@ export function renderCastAndSetsSheet({
 <title>${e(title)} — Cast &amp; Sets</title>
 <style>${STYLE}</style></head>
 <body><div class="wrap">
-<div class="hud"><span>Check-in <b>Cast &amp; Sets</b></span><span>Revision <b>${Number(revision) || 1}</b></span>${p.name ? `<span>Protagonist <b>${e(p.name)}</b></span>` : ''}${total ? `<span>Track ${fmtTime(total)}${bpm ? ` · ${Math.round(bpm)} BPM` : ''}</span>` : ''}<span>${sets.length} sets · ${(d.looks || []).length} looks</span></div>
+<div class="hud"><span>Check-in <b>Cast &amp; Sets</b></span><span>Revision <b>${Number(revision) || 1}</b></span>${p.name ? `<span>Protagonist <b>${e(p.name)}</b></span>` : ''}${total ? `<span>Track ${fmtTime(total)}${bpm ? ` · ${Math.round(bpm)} BPM` : ''}</span>` : ''}<span>${sets.length} sets · ${procedural ? 'built in code' : `${(d.looks || []).length} looks`}</span></div>
 <h1>${e(title)}</h1>
 <p class="lede">${e(d.logline)}</p>
 ${d.interpretation ? `<p class="sub">${e(d.interpretation)}</p>` : ''}
 ${applied}
 <section><h2><small>Protagonist</small>${e(p.name || 'Protagonist')}</h2>
-<div class="grid2">${figure(images.character, 'Character reference sheet: front, three-quarter, profile, back and face', 'Canonical reference sheet. Every later image of the protagonist uses it as a reference.')}<div><dl class="facts">${facts}</dl></div></div>
+${procedural ? `<dl class="facts wide">${facts}</dl></section>
+${renderDefinitionsSection(d.definitions)}
+${worldFacts ? `<section><h2><small>World</small>How the environments behave</h2><dl class="facts wide">${worldFacts}</dl></section>` : ''}` : `<div class="grid2">${figure(images.character, 'Character reference sheet: front, three-quarter, profile, back and face', 'Canonical reference sheet. Every later image of the protagonist uses it as a reference.')}<div><dl class="facts">${facts}</dl></div></div>
 ${figure(images.looks, 'Wardrobe looks', looksCaption ? `Wardrobe by chapter: ${looksCaption}` : 'Wardrobe', 'wide')}
 <div class="grid2">${figure(images.expressions, 'Expression sheet', `Expression range for lip-sync keyframes.${p.gesture ? ` Includes the gesture: ${e(p.gesture)}` : ''}`)}${tests[0] ? figure(images['test:1'], 'First in-set test', e(tests[0].caption || tests[0].action)) : ''}</div>
 </section>
-<section><h2><small>In-set tests</small>The protagonist, in the world</h2><div class="row">${testFigures}</div></section>
+<section><h2><small>In-set tests</small>The protagonist, in the world</h2><div class="row">${testFigures}</div></section>`}
 <section><h2><small>Sets</small>${sets.length} sets</h2><p class="sub">Each set has its own light, so a cut says where we are before anything else.</p><div class="sets">${setFigures}</div></section>
 <section><h2><small>Song map</small>Where each set lives in the track</h2>
 ${sections.length ? `<div class="bar">${bar}</div><div class="ticks"><span>0:00</span><span>${fmtTime(total)}</span></div><div class="tablewrap"><table>${rows}</table></div>` : '<p class="sub">The song has not been sectioned yet.</p>'}

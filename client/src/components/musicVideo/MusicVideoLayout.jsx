@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, Circle, CircleDot, Clapperboard, Film, Layers, LayoutGrid, Music, Play,
+  AlertTriangle, ArrowRight, CheckCircle2, CircleDot, Clapperboard, Film, Layers, LayoutGrid, Music, Play,
   Send, SlidersHorizontal, Users,
 } from 'lucide-react';
 import TabPills from '../ui/TabPills.jsx';
@@ -14,11 +14,13 @@ const STAGE_ICONS = {
   setup: SlidersHorizontal, 'cast-sets': Users, board: LayoutGrid, produce: Clapperboard, compose: Layers, review: Film,
   publish: Send,
 };
-const STATE_MARKS = {
-  done: { Icon: CheckCircle2, cls: 'text-port-success', label: 'done' },
-  active: { Icon: CircleDot, cls: 'text-port-accent', label: 'in progress' },
-  blocked: { Icon: AlertTriangle, cls: 'text-port-warning', label: 'needs you' },
-  todo: { Icon: Circle, cls: 'text-port-text-muted', label: 'not started' },
+// The tab bar is the one stage row, so each tab carries its own status mark. The
+// quiet marks (done, in progress) drop out below `lg`, where the bar is icons
+// only; "needs you" always shows.
+const STAGE_TRAILING = {
+  done: <CheckCircle2 size={12} className="shrink-0 text-port-success max-lg:hidden" aria-label="done" />,
+  active: <CircleDot size={12} className="shrink-0 text-port-accent max-lg:hidden" aria-label="in progress" />,
+  blocked: <AlertTriangle size={12} className="shrink-0 text-port-warning" aria-label="needs you" />,
 };
 
 // Below `lg` the preview is a mini-player pinned above the bottom tab bar (or
@@ -27,34 +29,11 @@ const STATE_MARKS = {
 // scroll container's md:p-6, which sticky offsets are measured inside of).
 const DOCK_CLASSES = 'max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 max-lg:max-h-[70vh] max-lg:overflow-y-auto max-md:bottom-[calc(env(safe-area-inset-bottom)+3rem)] lg:sticky lg:top-[calc(var(--mv-header-h,9rem)-0.75rem)] lg:max-h-[calc(100vh-var(--mv-header-h,9rem)-2rem)] lg:overflow-y-auto';
 
-/** Progress through the pipeline. Status only — the tabs below are the navigation. */
-function ProgressStrip({ stages, current }) {
-  return (
-    <ol aria-label="Progress" className="flex min-w-0 items-center gap-x-3 gap-y-1 overflow-hidden text-xs">
-      {stages.map((stage) => {
-        const { Icon, cls, label } = STATE_MARKS[stage.state];
-        const isCurrent = stage.id === current;
-        return (
-          <li
-            key={stage.id}
-            aria-current={isCurrent ? 'step' : undefined}
-            data-state={stage.state}
-            className={`flex shrink-0 items-center gap-1 ${isCurrent ? 'font-medium text-port-text' : 'text-port-text-muted'}`}
-          >
-            <Icon size={13} className={`shrink-0 ${cls}`} aria-hidden="true" />
-            <span className={isCurrent ? '' : 'max-sm:sr-only'}>{stage.title}</span>
-            <span className="sr-only">({label})</span>
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
 /**
- * The Music Video project frame: a sticky header (name, track, spend, the
- * progress strip and the one next action for the project's stage), the stage
- * tabs — on top from `md` up, a bottom tab bar on a phone — the active stage's
+ * The Music Video project frame: a sticky header (name, track, spend and the
+ * one next action for the project's stage), the stage tabs — the single stage
+ * row, each tab marking its stage done / in progress / needs you — on top from
+ * `md` up, a bottom tab bar on a phone — the active stage's
  * content, and the docked preview player beside it on the Board, Compose and
  * Review tabs.
  *
@@ -97,9 +76,7 @@ export default function MusicVideoLayout({
     id: entry.id,
     label: entry.label,
     icon: STAGE_ICONS[entry.id],
-    trailing: entry.state === 'blocked'
-      ? <AlertTriangle size={12} className="shrink-0 text-port-warning" aria-label="needs you" />
-      : entry.state === 'done' ? <CheckCircle2 size={12} className="shrink-0 text-port-success max-lg:hidden" aria-label="done" /> : null,
+    trailing: STAGE_TRAILING[entry.state] || null,
   }));
   const showSpend = spend.spentUsd > 0 || spend.capUsd != null;
   const ActionIcon = nextAction?.kind === 'goto' ? ArrowRight : Play;
@@ -112,20 +89,6 @@ export default function MusicVideoLayout({
       >
         <div className="flex min-w-0 items-center gap-3">
           <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">{project.name}</h2>
-          {nextAction && (
-            <button
-              type="button"
-              onClick={onNextAction}
-              disabled={nextAction.disabled}
-              title={nextAction.reason}
-              className="flex min-h-[44px] shrink-0 items-center gap-1 rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 sm:min-h-0"
-            >
-              <ActionIcon size={14} aria-hidden="true" /> {nextAction.label}
-            </button>
-          )}
-        </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-          <ProgressStrip stages={progress.stages} current={progress.current} />
           <span className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted max-sm:hidden">
             <Music size={12} className="shrink-0" aria-hidden="true" />
             <span className="truncate">{trackLabel}</span>
@@ -136,6 +99,17 @@ export default function MusicVideoLayout({
                 {formatUsd(spend.spentUsd)}{spend.capUsd != null ? ` / ${formatUsd(spend.capUsd)}` : ' · no cap'}
               </span>
             </Pill>
+          )}
+          {nextAction && (
+            <button
+              type="button"
+              onClick={onNextAction}
+              disabled={nextAction.disabled}
+              title={nextAction.reason}
+              className="flex min-h-[44px] shrink-0 items-center gap-1 rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 sm:min-h-0"
+            >
+              <ActionIcon size={14} aria-hidden="true" /> {nextAction.label}
+            </button>
           )}
         </div>
         <nav

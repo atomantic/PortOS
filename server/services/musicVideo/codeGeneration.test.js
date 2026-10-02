@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fixtureSectionSource = (color) => `function render(ctx, env) {\n  ctx.fillStyle = ${JSON.stringify(color)};\n  ctx.fillRect(env.safe.x, env.safe.y, 12 + (env.frame % 3), 12);\n}`;
 
-const h = vi.hoisted(() => ({ project: null, calls: 0, response: '' }));
+const h = vi.hoisted(() => ({ project: null, calls: 0, response: '', prompts: [] }));
 
 vi.mock('../promptRunner.js', () => ({
   assertProvider: () => {},
@@ -9,8 +9,9 @@ vi.mock('../promptRunner.js', () => ({
     provider: { id: providerId || 'stub-provider' },
     selectedModel: model || 'fixture-model',
   })),
-  runPromptThroughProvider: vi.fn(async () => {
+  runPromptThroughProvider: vi.fn(async ({ prompt }) => {
     h.calls += 1;
+    h.prompts.push(prompt);
     return { text: h.response };
   }),
 }));
@@ -52,6 +53,7 @@ beforeEach(() => {
   h.project = base();
   h.calls = 0;
   h.response = '';
+  h.prompts = [];
 });
 
 describe('music video code generation (#9076)', () => {
@@ -91,5 +93,50 @@ describe('music video code generation (#9076)', () => {
     expect(stored.a).toBe(next);
     expect(stored.b).toBe(fixtureSectionSource('#222222'));
     expect(h.calls).toBe(1);
+  });
+
+  describe('approved procedural Cast & Sets direction', () => {
+    const direction = () => ({
+      medium: 'procedural',
+      protagonist: { name: 'Boat', description: 'a folded paper boat', construction: 'three triangles hinged at the keel', palette: '#f5f0e6, #ff5a1f', movement: 'bobs on every beat' },
+      world: { layout: 'a river through stacked streets', camera: 'slow dolly with a beat-synced push', transitions: 'wipe through reflections' },
+      sets: [{ id: 'river', name: 'River', description: 'a neon river', lighting: 'magenta', imageRole: 'background' }],
+      definitions: { characters: [{
+        id: 'boat', name: 'Boat', renderer: 'svg', palette: [{ name: 'cream', hex: '#f5f0e6' }],
+        parts: [{ id: 'hull', shape: 'rect', x: 40, y: 100, width: 120, height: 40, fill: 'cream' }],
+        expressions: [{ name: 'proud', overrides: { hull: { rotate: -4 } } }], poses: [],
+        motion: [{ name: 'Bob', target: 'hull', property: 'translateY', amplitude: 4, periodBeats: 1, easing: 'ease-in-out', trigger: 'beat' }],
+      }] },
+    });
+    const response = () => JSON.stringify({ sections: [{ id: 'a', source: fixtureSectionSource('#555555') }, { id: 'b', source: fixtureSectionSource('#666666') }] });
+
+    it('sends the approved definitions and motion/camera rules with both the full and the one-section request', async () => {
+      h.project = { ...base(), castAndSets: { status: 'approved', direction: direction() } };
+      h.response = response();
+      await generateMusicVideoCode('mv-code', { providerId: 'stub-provider' });
+      await regenerateMusicVideoCodeSection('mv-code', 'a', { providerId: 'stub-provider' });
+      expect(h.prompts).toHaveLength(2);
+      for (const prompt of h.prompts) {
+        expect(prompt).toContain('APPROVED CAST & SETS DEFINITIONS AND RULES');
+        expect(prompt).toContain('camera: slow dolly with a beat-synced push');
+        expect(prompt).toContain('movement: bobs on every beat');
+        expect(prompt).toContain('"parts":[{"id":"hull","shape":"rect"');
+        expect(prompt).toContain('"motion":[{"name":"Bob"');
+      }
+    });
+
+    it('does not send an unapproved, skipped or photographic direction to the code author', async () => {
+      h.response = response();
+      for (const castAndSets of [
+        { status: 'review', direction: direction() },
+        { status: 'skipped', direction: direction() },
+        { status: 'approved', direction: { ...direction(), medium: undefined } },
+      ]) {
+        h.project = { ...base(), castAndSets };
+        await generateMusicVideoCode('mv-code', { providerId: 'stub-provider' });
+      }
+      expect(h.prompts).toHaveLength(3);
+      for (const prompt of h.prompts) expect(prompt).not.toContain('APPROVED CAST & SETS');
+    });
   });
 });

@@ -13,10 +13,11 @@
  *     processId,            // the server process that may dispatch for it
  *     productionRunId,      // the production run that started it, if any
  *     route: { mode, model },
- *     direction,            // castAndSetsDirection.js shape
+ *     direction,            // castAndSetsDirection.js shape (`medium`: absent = photographic)
  *     moodImages: [{ kind, filename }],
  *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, moodRefs?, setId?, testIndex? } },
- *     images: { [key]: { status, jobId, imageId, history, failures, error, updatedAt } },
+ *     images: { [key]: { status, jobId, imageId, history, failures, error, updatedAt,
+ *       submittedPrompt?, submittedPromptTruncated?, submittedReferences?, submittedRevision? } },
  *     artifactId, artifactVersion, notesApplied,
  *     createdAt, updatedAt, approvedAt,
  *   }
@@ -49,6 +50,9 @@ const stageError = (status, code, message) => new ServerError(message, { status,
 
 /** The check-in mode for a project (default: review). */
 export const castAndSetsCheckinMode = (project) => (project?.automation?.checkins?.castAndSets === 'auto' ? 'auto' : 'review');
+
+/** The direction a code-authoring request may reuse: only an APPROVED stage's. */
+export const approvedCastAndSetsDirection = (project) => (project?.castAndSets?.status === 'approved' ? (project.castAndSets.direction || null) : null);
 
 export const castAndSetsSettled = (stage) => CAST_SETS_SETTLED.includes(stage?.status);
 
@@ -170,8 +174,14 @@ export function dispatchableImageKeys(stage) {
     .map((item) => item.key);
 }
 
-export const allCastAndSetsImagesDone = (stage) => Object.keys(stage?.plan || {}).length > 0
-  && Object.keys(stage.plan).every((key) => stage.images?.[key]?.status === 'done');
+// A procedural direction with no planned images (a code-only project) has
+// nothing to render: its characters and worlds are code, so the sheet can go
+// straight to review.
+export const allCastAndSetsImagesDone = (stage) => {
+  const keys = Object.keys(stage?.plan || {});
+  if (!keys.length) return stage?.direction?.medium === 'procedural';
+  return keys.every((key) => stage.images?.[key]?.status === 'done');
+};
 
 /**
  * Reserve one key for dispatch in a serialized write, so two advances cannot
@@ -187,11 +197,11 @@ export function reserveCastAndSetsImage(project, key, { processId }, now = new D
 }
 
 /** Link the queued job to its key. */
-export function linkCastAndSetsJob(project, key, jobId, now = new Date().toISOString()) {
+export function linkCastAndSetsJob(project, key, jobId, submission = {}, now = new Date().toISOString()) {
   const stage = requireStage(project);
   const img = stage.images?.[key];
-  if (!img) return { project, stage };
-  return write(project, { ...stage, images: { ...stage.images, [key]: { ...img, jobId, updatedAt: now } } }, now);
+  if (!img || (submission.submittedRevision != null && submission.submittedRevision !== stage.revision)) return { project, stage };
+  return write(project, { ...stage, images: { ...stage.images, [key]: { ...img, ...submission, jobId, updatedAt: now } } }, now);
 }
 
 /**
@@ -200,10 +210,11 @@ export function linkCastAndSetsJob(project, key, jobId, now = new Date().toISOSt
  * retried once (back to pending); the second consecutive failure stops the
  * stage `failed`. Returns `{ project, stage, changed }`.
  */
-export function settleCastAndSetsImage(project, key, { jobId = null, filename = null, error = null }, now = new Date().toISOString()) {
+export function settleCastAndSetsImage(project, key, { jobId = null, filename = null, error = null, revision = null }, now = new Date().toISOString()) {
   const stage = project?.castAndSets;
   const img = stage?.images?.[key];
-  if (!img || img.status !== 'queued' || (jobId && img.jobId && img.jobId !== jobId)) return { project, stage, changed: false };
+  if (!img || img.status !== 'queued' || (revision != null && revision !== stage.revision)
+    || (jobId && img.jobId && img.jobId !== jobId)) return { project, stage, changed: false };
   if (filename) {
     const history = img.imageId && img.imageId !== filename ? [...(img.history || []), img.imageId].slice(-MAX_HISTORY) : (img.history || []);
     const next = { ...img, status: 'done', jobId: jobId || img.jobId, imageId: filename, history, failures: 0, error: null, updatedAt: now };

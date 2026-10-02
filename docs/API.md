@@ -748,12 +748,13 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/media-jobs` | Async media job queue |
 | `/api/creative-director` | Creative Director projects |
 | `/api/fableloom` | FableLoom interactive story generation |
-| `/api/music-video` | Music video projects |
+| `/api/music-video` | Music video projects; [one-prompt autonomous runs](./features/music-video-autonomous.md) at `/api/music-video/autonomous` |
 | `/api/mood-boards` | Mood boards |
 | `/api/decks` | Decks (playing-card / tarot designer) |
 | `/api/writers-room` | Writers Room |
 | `/api/universe-builder` | Universe Builder |
 | `/api/authors`, `/api/artists`, `/api/albums`, `/api/tracks`, `/api/music` | Music/creator catalogs |
+| `/api/music/supercollider` | Contained SuperCollider runtime status, setup and offline renders ([SUPERCOLLIDER.md](./SUPERCOLLIDER.md)) |
 | `/api/pipeline` | Series/comic pipeline |
 | `/api/conflict-journal` | Sync conflict journal |
 | `/api/importer` | Story importer |
@@ -769,6 +770,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/sprites` | Sprite catalog / export |
 | `/api/threejs-models` | Procedural Three.js models |
 | `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
+| `/api/code-animation/execution` | Code Animation contained production execution: platform sandbox and lane readiness (`GET /`), operator-owned tool paths (`PUT /tools`, host control) and the on-demand adversarial containment check (`POST /probe`, host control) ([contract](CODE_ANIMATION_PACKAGES.md#contained-production-execution)) |
 | `/api/image-to-3d` | Image-to-3D conversion |
 | `/api/rigging` | Auto-skin rigging and animation retargeting for image-to-3D models |
 | `/api/privacy` | PII vault / trusted-org / broker opt-out |

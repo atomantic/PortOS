@@ -252,6 +252,8 @@ export function cloneProjectRecord(source, {
     ...(Array.isArray(source.autoReviews) ? { autoReviews: [] } : {}),
     // #9066: a production run executes against the SOURCE's scenes and jobs.
     ...(Array.isArray(source.productionRuns) ? { productionRuns: [] } : {}),
+    // An autonomous run executes against the SOURCE's audio, board and production.
+    ...(source.autonomousRun ? { autonomousRun: null } : {}),
     // Development artifacts ride along as-is: every version is an immutable
     // file, so the clone points at the same bytes (devArtifacts.js). The Cast
     // & Sets check-in keeps its direction and images, but its dispatch pin and
@@ -674,6 +676,7 @@ export function mergeProjectRecord(local, remoteRaw) {
   // their files and jobs exist only on this install.
   if (Object.hasOwn(local, 'devArtifacts')) remote.devArtifacts = local.devArtifacts;
   if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
+  if (Object.hasOwn(local, 'autonomousRun')) remote.autonomousRun = local.autonomousRun;
   // The composition document's files live only on this install as well
   // (compositionDocument.js), so its pointer survives a newer remote body.
   if (local.composition?.document || local.composition?.documentDraft) {

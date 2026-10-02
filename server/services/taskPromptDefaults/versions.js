@@ -105,8 +105,9 @@ export const PROMPT_VERSIONS = {
 // v37 (claim-issue) / v33 (gitlab): the shared dispatch-label contract renders whole
 // `gh label create <name> --color <hex>` commands instead of a `name hex` list, which
 // agents copied verbatim into malformed label names (#9056).
-PROMPT_VERSIONS['claim-issue'] = 37;
-PROMPT_VERSIONS['claim-issue-gitlab'] = 33;
+// Code review isolation is a preference; supported headless reviewers remain usable.
+PROMPT_VERSIONS['claim-issue'] = 38;
+PROMPT_VERSIONS['claim-issue-gitlab'] = 34;
 PROMPT_VERSIONS['claim-issue-jira'] = 21;
 
 // Audit anchor for reference-watch's read/write coupling.

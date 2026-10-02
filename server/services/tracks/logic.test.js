@@ -291,3 +291,22 @@ describe('tracks logic', () => {
     });
   });
 });
+
+describe('sanitizeRender codeProvenance (#9414)', () => {
+  const provenance = {
+    language: 'supercollider', source: 'Pbind(\\degree, 0)', sourceHash: 'b'.repeat(64), seed: 42,
+    runtimeVersion: '3.14.1-portos.1', policyVersion: 1,
+    settings: { durationSec: 8, sampleRate: 48000, channels: 2, tempoBpm: 120 },
+  };
+
+  it('keeps a reproducibility record and leaves older renders without one', () => {
+    expect(sanitizeRender({ audioFilename: 'a.wav', codeProvenance: provenance }).codeProvenance).toEqual({ ...provenance, policyVersion: '1' });
+    expect('codeProvenance' in sanitizeRender({ audioFilename: 'a.wav' })).toBe(false);
+  });
+
+  it('drops a record without usable source rather than half-persisting it', () => {
+    expect('codeProvenance' in sanitizeRender({ audioFilename: 'a.wav', codeProvenance: { ...provenance, source: '  ' } })).toBe(false);
+    expect(sanitizeRender({ audioFilename: 'a.wav', codeProvenance: { ...provenance, sourceHash: 'nope', seed: -1 } }).codeProvenance)
+      .toMatchObject({ sourceHash: '', seed: null });
+  });
+});

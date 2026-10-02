@@ -13,6 +13,7 @@ import {
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
 } from '../lib/agentExecutionProfiles.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
+import { normalizeAutopilotParams } from '../lib/musicVideoAutonomous.js';
 
 // Programmatic handler types + target-scope vocabulary live in
 // `lib/taskTargetScope.js` (see that file for why); re-exported here because
@@ -430,6 +431,14 @@ const TASK_INTERVAL_DEFAULTS = {
   // ON_DEMAND with NO interval and NO cron: enabled so the user can press Run
   // Now, never clock-due, so a fresh install spends nothing until they do.
   'development-watchdog': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: null },
+  // music-video-autopilot turns one unused Brain idea into a fully autonomous
+  // music video per run (lyrics → Suno song → mood board → production). Like
+  // the bible handlers it is on-demand until the operator sets a cadence on the
+  // card. Its params bag is `musicVideoAutopilot` (tools, per-tool models,
+  // budget, checkpoints, idea tags); the shipped default is the free/local tool
+  // set so nothing metered is spent until the operator opts in. It has no Quota
+  // Burn form: image/video spend is bounded by its own budget and limits.
+  'music-video-autopilot': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { musicVideoAutopilot: normalizeAutopilotParams({}) } },
   'universe-bible-describe': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', depth: 'full', maxEntries: 10 } },
   'universe-bible-images':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', maxEntries: 10, requireDescribed: false } }
 };
@@ -608,6 +617,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'user-action-review': 'Review the operator-action log for repeated manual work and propose automations — file issues (default) or queue CoS tasks',
   'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code",
   'development-watchdog': 'Inspect maintainer repository ownership and queue eligible work without an inference call',
+  'music-video-autopilot': 'Turn the next unused Brain idea into a fully autonomous music video — lyrics, Suno song, mood board and video. No agent',
   'universe-bible-describe': 'Fill in blank universe bible sheets — one expand prompt per entry, emptiest first. No agent',
   'universe-bible-images': 'Render images for universe bible entries that have none yet. No agent — PortOS enqueues the renders itself'
 };
@@ -643,6 +653,10 @@ export const TASK_TYPE_PROMPT_INFO = Object.freeze({
   // `programmatic` is NOT `runtime-generated`: there is no prompt at all for the
   // user to read or a hook to render. PortOS performs the work itself, so the
   // UI shows the settings that bound it instead of a prompt editor.
+  'music-video-autopilot': Object.freeze({
+    mode: 'programmatic',
+    description: 'PortOS picks the oldest unused active Brain idea and runs the autonomous music-video pipeline itself — no agent and no prompt template. Tools, per-tool models, budget, checkpoints and idea tags are the settings that bound it.'
+  }),
   'universe-bible-describe': Object.freeze({
     mode: 'programmatic',
     description: 'PortOS sends one bible-expand prompt per entry itself — no agent and no prompt template. Scope, depth, and the per-run entry cap are the settings that bound it.'

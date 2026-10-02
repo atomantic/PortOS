@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+import { copyEcosystemConfig } from '../test/fixtures/ecosystemConfigCopy.js';
 
 // Pass-through fs whose readFileSync can run one hook before or after it: the
 // only way to land a concurrent fence move deterministically between read()'s
@@ -203,7 +204,7 @@ describe('persistent database maintenance boundary', () => {
     const operation = journal.begin({ source, target });
     // No real pg connection is possible, even if an admission regression occurs.
     const loader = join(root, 'pg-loader.mjs');
-    const stub = `export default {types:{setTypeParser(){}},Pool:class {
+    const stub = `export default {Client:class {connectionParameters={ssl:false,sslnegotiation:"postgres"}},types:{setTypeParser(){}},Pool:class {
       on(){} query(){throw Error('POOL_REACHED')} connect(){throw Error('POOL_REACHED')}
     }};`;
     writeFileSync(loader, `export async function resolve(specifier, context, next) {
@@ -243,6 +244,7 @@ describe('persistent database maintenance boundary', () => {
   it('allows admitted work to finish when checkout completes after the fence', () => {
     const loader = join(root, 'transaction-loader.mjs');
     const stub = `const log=[]; globalThis.sqlLog=log; export default {
+      Client:class {connectionParameters={ssl:false,sslnegotiation:"postgres"}},
       types:{setTypeParser(){}},Pool:class {
         on(){} async connect(){globalThis.beforeCheckout(); return {query:async sql=>{log.push(sql); return {rows:[]}},release(){}}}
         query(){throw Error('NEW_QUERY_REACHED')}
@@ -350,7 +352,7 @@ describe('persistent database maintenance boundary', () => {
   });
 
   it('drives the operator CLI against disposable saved configuration without touching PostgreSQL', () => {
-    copyFileSync(new URL('../../ecosystem.config.cjs', import.meta.url), join(root, 'ecosystem.config.cjs'));
+    copyEcosystemConfig(root);
     const config = 'PGMODE=native\nPGPORT=6543\nPGPORT_DOCKER=6544\n';
     writeFileSync(join(root, '.env'), config);
     const cli = new URL('../../scripts/database-maintenance.mjs', import.meta.url);
@@ -391,7 +393,7 @@ describe('persistent database maintenance boundary', () => {
   });
 
   it('keeps maintenance direction when invoked by a Docker-managed process', () => {
-    copyFileSync(new URL('../../ecosystem.config.cjs', import.meta.url), join(root, 'ecosystem.config.cjs'));
+    copyEcosystemConfig(root);
     writeFileSync(join(root, '.env'), 'PGMODE=docker\nPGPORT=6543\nPGPORT_DOCKER=6544\n');
     const cli = fileURLToPath(new URL('../../scripts/database-maintenance.mjs', import.meta.url));
     const env = { ...childEnv, PORTOS_DATA_ROOT: root, PGPORT: '6544',

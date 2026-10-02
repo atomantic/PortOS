@@ -1,15 +1,17 @@
 /**
  * Code-rendered music: the Music Designer's "Code" engine.
  *
- *   writeMusicCode()       musical description → Strudel or Tone.js code the LLM
- *                          wrote (fence-stripped and size-checked; nothing runs here).
+ *   writeMusicCode()       musical description → code the LLM wrote
+ *                          (fence-stripped and size-checked).
  *   saveCodeTakeToTrack()  a WAV the browser recorded from that code → the
  *                          shared music library, appended to the track's render
  *                          history as an `engine: 'code'` take.
  *
- * The code is arbitrary JavaScript, so the server never executes it. The
- * browser runs it inside a sandboxed, network-blocked iframe
- * (client/src/components/music/strudelFrame.js) and records the take there.
+ * Strudel/Tone.js playback runs in a sandboxed, network-blocked browser iframe
+ * (client/src/components/music/strudelFrame.js); SuperCollider uses a contained
+ * server renderer. These playback boundaries do not contain authoring: the
+ * selected provider or fallback may launch a CLI/TUI agent with host tools.
+ * The authoring HTTP entry point therefore requires operator authority.
  *
  * Nothing here runs on its own: every call is driven by an explicit button
  * press in the same request (AI Provider Usage Policy: no cold bootstrap).
@@ -20,13 +22,15 @@ import { ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { trimTo } from '../lib/textUtils.js';
 import { wavDurationMs, writeWavAudioFile } from '../lib/wavAudioFile.js';
+import { readFile } from 'fs/promises';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import * as tracks from './tracks/index.js';
+import { readSuperColliderPreview } from './superColliderRender.js';
 
 const CODE_ENGINE = 'code';
-// Strudel was the first language; Tone.js is the second (client/src/components/music/strudelFrame.js
+// Strudel was the first language; Tone.js the second; SuperCollider is rendered server-side (contained, offline; no browser frame) (client/src/components/music/strudelFrame.js
 // mounts a frame document per language, same postMessage protocol for both).
-export const MUSIC_CODE_LANGUAGES = Object.freeze(['strudel', 'tonejs']);
+export const MUSIC_CODE_LANGUAGES = Object.freeze(['strudel', 'tonejs', 'supercollider']);
 // Longest code the designer accepts, from the LLM or back from the editor.
 export const MUSIC_CODE_MAX = 20000;
 
@@ -86,7 +90,29 @@ Return ONLY the JavaScript: no prose and no markdown fence. Rules for the code:
 Compose real music: a memorable melody, a bassline that moves, harmony, and percussion that grooves unless the description asks otherwise. Stay in key, and vary the pattern over multiple bars (with scheduleRepeat callbacks or a Part with several events) so the piece develops instead of looping one bar forever.`;
 }
 
-const PROMPT_BUILDERS = { strudel: buildStrudelPrompt, tonejs: buildTonejsPrompt };
+/** The SuperCollider writing contract sent to the LLM (rendered offline by a trusted, contained runner). */
+function buildSupercolliderPrompt({ description, lyrics, guidance, current }) {
+  return `You are a composer who writes music as SuperCollider (sclang) code. The code is the whole piece: it is compiled and rendered OFFLINE by a trusted runner in a sandbox, never played live, and there is no audio model and no DAW.${
+    section('MUSIC TO WRITE', trimTo(description, MAX_DESCRIPTION) || '(none given)')
+  }${
+    section('LYRICS / THEME (mood only; nothing is sung, so instruments carry the melody)', trimTo(lyrics, MAX_LYRICS))
+  }${
+    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE))
+  }${
+    current ? section('CURRENT CODE (revise it per the request above; keep what works, change what is asked)', current) : ''
+  }
+
+Return ONLY the sclang code: no prose and no markdown fence. Rules for the code:
+- Define instruments with SynthDef(\\name, { |out=0, freq=440, amp=0.2, gate=1| ... }) using ONLY stock UGens (SinOsc, Saw, Pulse, LFTri, WhiteNoise, PinkNoise, RLPF, RHPF, LPF, HPF, EnvGen, Env, Pan2, FreeVerb, CombL, Splay, Mix, ...), finish each with Out.ar(out, signal) in stereo, and register it with .add (e.g. SynthDef(\\lead, { ... }).add;). Give every sustained instrument an envelope that frees it (doneAction: 2), gated by gate when it has one.
+- Compose with Pbind/Pseq/Prand/Pwhite/Pn/Ppar patterns on those SynthDefs, using \\dur, \\degree or \\note, \\scale, \\octave and \\amp. Express timing in beats via \\dur; the runner fixes the tempo at 120 BPM. Use finite or long-running patterns; the runner cuts the piece at its length.
+- The runner turns your patterns into a bounded offline score (it supplies the length, 48 kHz stereo, and the output file). The LAST expression of the code must be ONE pattern (usually Ppar([...]) layering the parts); the runner renders that value. Do NOT call s.boot, s.record, Server.default, Score.recordNRT, play, or write any file path.
+- NEVER use unixCmd, unixCmdGetStdOut, systemCmd, String.runInTerminal, File, Pipe, Document, thisProcess.interpreter.executeFile, load, loadRelative, include, Quarks, SoundFile, Buffer.read or any sample/URL/path loading: there is no filesystem or network access and no sample files, so they always fail.
+- Keep levels sensible (per-voice amp around 0.05-0.3) so a full mix does not clip.
+
+Compose real music: a memorable melody, a bassline that moves, harmony, and percussion from synths that grooves unless the description asks otherwise. Stay in key and vary the patterns over several bars so the piece develops instead of looping one bar.`;
+}
+
+const PROMPT_BUILDERS = { strudel: buildStrudelPrompt, tonejs: buildTonejsPrompt, supercollider: buildSupercolliderPrompt };
 
 // A reply usually arrives bare, but a fenced block (with or without prose
 // around it) is common. Take the first fence's body when there is one.
@@ -147,5 +173,44 @@ export async function saveCodeTakeToTrack({ trackId, wav, prompt, title }) {
   }, title ? { title } : {});
   if (!updated) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`🎹 Saved code-rendered take (${durationSec}s)`);
+  return { track: updated, filename, durationSec };
+}
+
+/**
+ * Save a finished SuperCollider preview as the track's active take (#9414).
+ * The audio is read back from the host-written preview store (never from a
+ * container), re-checked as a PCM WAV, and stored with the provenance that
+ * reproduces it: language, source, hash, seed, runtime version and settings.
+ * Previewing alone never reaches here, so it cannot change a track.
+ */
+export async function saveSuperColliderTakeToTrack({ trackId, jobId, prompt, title }) {
+  const found = await readSuperColliderPreview(jobId);
+  if (!found) throw new ServerError('Preview not found or expired. Render it again.', { status: 404, code: 'SUPERCOLLIDER_PREVIEW_NOT_FOUND' });
+  const track = await tracks.getTrack(trackId);
+  if (!track) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
+  const wav = await readFile(found.wavPath);
+  const durationMs = wavDurationMs(wav);
+  if (!durationMs) throw new ServerError('The preview is not a PCM WAV file', { status: 400, code: 'MUSIC_CODE_TAKE_NOT_WAV' });
+
+  const { preview } = found;
+  const filename = await writeWavAudioFile(wav, PATHS.music, `music-${randomUUID()}`);
+  const durationSec = Math.max(1, Math.round(durationMs / 1000));
+  const updated = await tracks.appendActiveTake(trackId, {
+    audioFilename: filename,
+    prompt: prompt || track.prompt,
+    engine: CODE_ENGINE,
+    durationSec,
+    codeProvenance: {
+      language: preview.language,
+      source: preview.source,
+      sourceHash: preview.sourceHash,
+      seed: preview.seed,
+      runtimeVersion: preview.runtime?.version,
+      policyVersion: preview.runtime?.policyVersion,
+      settings: preview.settings,
+    },
+  }, title ? { title } : {});
+  if (!updated) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
+  console.log(`🎛️ Saved SuperCollider take (${durationSec}s, seed ${preview.seed})`);
   return { track: updated, filename, durationSec };
 }

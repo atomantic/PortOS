@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles, Trash2, Smartphone, Clapperboard, X } from 'lucide-react';
+import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles, Trash2, Smartphone, Clapperboard, X, Loader2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { isStandardizable, NON_PM2_TYPES, isLaunchVideoDisabled } from '../constants';
+import { PORTOS_APP_ID } from '../../../lib/appIdentity.js';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
 import Banner from '../../ui/Banner';
@@ -143,7 +144,7 @@ export default function OverviewTab({ app, onRefresh }) {
     }
   };
 
-  const showLaunchVideoCard = !isLaunchVideoDisabled(app) && !launchVideoCardDismissed;
+  const showLaunchVideoCard = app.id !== PORTOS_APP_ID && !isLaunchVideoDisabled(app) && !launchVideoCardDismissed;
 
   return (
     <div className="space-y-6">
@@ -368,7 +369,7 @@ export default function OverviewTab({ app, onRefresh }) {
           disabled={isOperating || restarting}
           className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
         >
-          <Download size={14} className={updating ? 'animate-bounce' : ''} />
+          {updating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
           {updating ? 'Updating...' : restarting ? 'Restarting...' : 'Update'}
         </button>
         <button

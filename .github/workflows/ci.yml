@@ -639,7 +639,7 @@ jobs:
 
       # Backup restore coverage takes a real pg_dump. The runner's default
       # PostgreSQL 16 client cannot dump the PostgreSQL 17 service above.
-      - name: Install matching PostgreSQL client
+      - name: Install PostgreSQL client and audio verification tools
         run: |
           # Ubuntu's default repository only supplies its bundled major.
           # Use PostgreSQL's signed repository for the service's major.
@@ -648,7 +648,7 @@ jobs:
           . /etc/os-release
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
-          sudo apt-get install -y postgresql-client-17
+          sudo apt-get install -y postgresql-client-17 ffmpeg
           echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
 
       - name: Run DB-backed tests (portos_test)
@@ -843,10 +843,48 @@ jobs:
       - name: Run the Node compatibility contract
         run: npm run test:fast --prefix server -- ../scripts/checkNodeVersion.test.js ../scripts/node-version-drift.test.js
 
+  linux-containment:
+    name: Linux worker containment
+    needs: impact
+    if: needs.impact.outputs.server_mode != 'skip'
+    # 22.04 allows unprivileged user namespaces without changing the runner's
+    # AppArmor policy. Restricted hosts must remain fail-closed in the product.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install the containment prerequisite
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+      - name: Install test dependencies
+        run: npm ci --ignore-scripts --prefix server
+      - name: Exercise real namespaces, seccomp, limits and cancellation
+        env:
+          PORTOS_REQUIRE_LINUX_CONTAINMENT: '1'
+        run: npm test --prefix server -- --run lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js
+
+      - name: Report the failure, then cancel sibling CI jobs
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          CI_FAILED_SHARD: ${{ matrix.shard }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, server, client, lint, database, windows-server, node-minimum]
+    needs: [impact, server, client, lint, database, windows-server, node-minimum, linux-containment]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # READ, not write: the reporter only lists this run's jobs, to name the one
@@ -885,6 +923,7 @@ jobs:
           CI_GATE_RESULT_DATABASE: ${{ needs.database.result }}
           CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
           CI_GATE_RESULT_NODE_MINIMUM: ${{ needs.node-minimum.result }}
+          CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}
         run: node scripts/ci-gate-report.js
 
   full-gate:

@@ -27,7 +27,10 @@
  *                     earlier one. Each entry is `{ id, audioFilename, prompt,
  *                     authoredPrompt, lyrics, instrumentalOnly, engine,
  *                     modelId, executionProfile, source, durationSec,
- *                     createdAt }`. `source` is the take's provenance when it
+ *                     createdAt, codeProvenance? }`. `codeProvenance` (#9414) is
+ *                     present only on a server-rendered code take: `{ language,
+ *                     source, sourceHash, seed, runtimeVersion, policyVersion,
+ *                     settings }`. `source` is the take's provenance when it
  *                     did not come from a local engine — `'upload'` (a plain
  *                     file), `'suno'` (audio exported from Suno and imported by
  *                     hand), `'youtube'` (the YouTube audio import) — or '' when
@@ -90,6 +93,38 @@ function legacyRenderId(audioFilename) {
   return `r-${slug}`.slice(0, RENDER_ID_MAX);
 }
 
+const CODE_SOURCE_MAX = 20000; // mirrors MUSIC_CODE_MAX (services/musicCode.js)
+const CODE_LANGUAGE_RE = /^[a-z0-9]{1,20}$/;
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const posInt = (v, max) => (Number.isInteger(v) && v >= 0 && v <= max ? v : null);
+
+/**
+ * A code-rendered take's reproducibility record (#9414): the language and exact
+ * source that produced the audio, its SHA-256, the seed, the runtime that
+ * rendered it and the render settings. Returns null unless the language and
+ * source are usable, so a malformed value never half-persists.
+ */
+function sanitizeCodeProvenance(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (!isStr(raw.language) || !CODE_LANGUAGE_RE.test(raw.language)) return null;
+  if (!isStr(raw.source) || !raw.source.trim() || raw.source.length > CODE_SOURCE_MAX) return null;
+  const settings = raw.settings && typeof raw.settings === 'object' ? raw.settings : {};
+  return {
+    language: raw.language,
+    source: raw.source,
+    sourceHash: isStr(raw.sourceHash) && SHA256_RE.test(raw.sourceHash) ? raw.sourceHash : '',
+    seed: posInt(raw.seed, 2 ** 31),
+    runtimeVersion: trimTo(raw.runtimeVersion, 40),
+    policyVersion: trimTo(String(raw.policyVersion ?? ''), 40),
+    settings: {
+      durationSec: posInt(settings.durationSec, DURATION_MAX_SEC),
+      sampleRate: posInt(settings.sampleRate, 384000),
+      channels: posInt(settings.channels, 64),
+      tempoBpm: posInt(settings.tempoBpm, 1000),
+    },
+  };
+}
+
 /**
  * Normalize one render-history entry. Returns null for a non-object or an entry
  * without usable audio bytes (a render with no audioFilename is meaningless and
@@ -101,6 +136,7 @@ export function sanitizeRender(raw) {
   const audioFilename = trackAudioFilename(raw.audioFilename);
   if (!audioFilename) return null;
   const id = isStr(raw.id) && RENDER_ID_RE.test(raw.id) ? raw.id : legacyRenderId(audioFilename);
+  const codeProvenance = sanitizeCodeProvenance(raw.codeProvenance);
   return {
     id,
     audioFilename,
@@ -116,6 +152,7 @@ export function sanitizeRender(raw) {
     source: isStr(raw.source) && RENDER_SOURCE_RE.test(raw.source) ? raw.source : '',
     durationSec: sanitizeDuration(raw.durationSec),
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : new Date().toISOString(),
+    ...(codeProvenance ? { codeProvenance } : {}),
   };
 }
 

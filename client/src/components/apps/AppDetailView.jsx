@@ -4,7 +4,7 @@ import {
   ArrowLeft, Play, Square, RotateCcw, ExternalLink, Gamepad2, Hammer, RefreshCw,
   Pencil, AlertTriangle, Sparkles, LayoutDashboard, Zap, Dog, FileText, GitBranch,
   Compass, CircleDot, GitPullRequest, Ticket, Cpu, ShieldCheck, BookOpen, Boxes,
-  ListChecks, Clapperboard,
+  ListChecks, Clapperboard, Loader2,
 } from 'lucide-react';
 import DeployPanel from './DeployPanel';
 import EditAppDrawer from './EditAppDrawer';
@@ -524,7 +524,11 @@ function AppDetail() {
                 className="px-2 py-1 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                 aria-label={`${buildLoading ? 'Building' : 'Build'} production UI: ${app.buildCommand}`}
               >
-                <Hammer size={14} className={buildLoading ? 'animate-bounce' : ''} />
+                {buildLoading ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Hammer size={14} />
+                )}
                 <span className="text-xs">{buildLoading ? 'Building…' : 'Build'}</span>
               </button>
             )}

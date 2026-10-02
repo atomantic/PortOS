@@ -131,5 +131,14 @@ export const renderTrackCode = (id, formData, requestOptions = {}) => request(`/
   ...requestOptions,
 });
 
+// Save a finished SuperCollider preview as the active take. The server reads
+// the audio and provenance (source, hash, seed, runtime) from its own preview
+// store, so only the job id and optional prompt/title travel. → { track, filename, durationSec }.
+export const saveSuperColliderTake = (id, body, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/supercollider/take`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
 // Caps come from the server leaf so client inputs and the server sanitizer can't drift.
 export { TITLE_MAX as TRACK_TITLE_MAX, LYRICS_MAX as TRACK_LYRICS_MAX, PROMPT_MAX as TRACK_PROMPT_MAX } from '../../../server/lib/trackLimits.js';

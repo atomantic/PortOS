@@ -6,7 +6,7 @@ import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import { usePagedCollection } from '../../hooks/usePagedCollection';
 import socket from '../../services/socket';
 import {
-  listCodeAnimationProjects, createCodeAnimationProject, getCodeAnimationProject,
+  listCodeAnimationProjects, createCodeAnimationProject, getCodeAnimationProject, getCodeAnimationBlenderStarter,
   updateCodeAnimationProject, importCodeAnimationPackage, acceptCodeAnimationSource,
   getCodeAnimationProjectBrief, getCodeAnimationRevisionPackage, listCodeAnimationProjectHistory,
 } from '../../services/apiCodeAnimation';
@@ -14,6 +14,9 @@ import { downloadBlob } from '../../lib/downloadBlob';
 import { formatCount, formatBytes, timeAgo } from '../../utils/formatters';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import ProductionProjectForm from './ProductionProjectForm';
+import ProductionPreflight from './ProductionPreflight';
+import ProductionContainment from './ProductionContainment';
+import ProductionStageRuns, { isStageRun } from './ProductionStageRuns';
 
 const EVENTS = ['code-animation:changed'];
 const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm hover:border-port-accent disabled:opacity-50';
@@ -56,6 +59,14 @@ export default function ProductionProjects() {
     if (!projectId) navigate(`/code-animation/production/${project.id}`);
     return project;
   });
+  const createBlenderStarter = () => act(async () => {
+    const pkg = await getCodeAnimationBlenderStarter({ silent: true });
+    const created = await createCodeAnimationProject({ manifest: pkg.manifest, budgets: { timeSeconds: 14400, renderSeconds: 14000, diskBytes: 4000000000 } }, { silent: true });
+    applyProject(created);
+    navigate(`/code-animation/production/${created.id}`);
+    const imported = await importCodeAnimationPackage(created.id, pkg, { silent: true });
+    applyProject(imported.project);
+  });
   const importFile = event => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -85,6 +96,8 @@ export default function ProductionProjects() {
         <Link to="/code-animation/production" className={buttonClass}>New Production project</Link>
       </div>
       <p className="text-sm text-gray-400">Keep a film brief, independent budgets and immutable source revisions. Import and source acceptance stage files; rendering and evidence review are separate production stages.</p>
+      <button type="button" className={buttonClass} disabled={busy} onClick={createBlenderStarter}>Create painterly Blender starter</button>
+      <p className="text-xs text-gray-400">Creates original scene source at 1080p, 24 fps, 10 seconds. Importing starts no render or AI call. Check Blender execution before starting production.</p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {projects.items.map(item => <Link key={item.id} to={`/code-animation/production/${item.id}`} className="min-w-0 rounded border border-port-border p-3 hover:border-port-accent" aria-current={item.id === projectId ? 'page' : undefined}>
           <span className="block truncate font-medium">{item.title || 'Untitled production'}</span>
@@ -93,6 +106,7 @@ export default function ProductionProjects() {
       </div>
       <InfiniteScrollFooter hasMore={projects.hasMore} loading={projects.loading} error={projects.error} onLoadMore={projects.loadMore} autoLoad={false} label="Load older projects" />
     </section>
+    <ProductionContainment />
 
     {projectId && resource.loading && <p>Loading production project…</p>}
     {resource.error && <div role="alert" className="rounded border border-port-error p-3">
@@ -106,6 +120,7 @@ export default function ProductionProjects() {
       </section>
       {project && <section className="min-w-0 space-y-4 rounded-xl border border-port-border bg-port-card p-4">
         <h2 className="text-base font-semibold">Source and history</h2>
+        <ProductionPreflight key={JSON.stringify([project.id, project.localSettings, dirty])} project={project} disabled={busy || dirty} />
         <div className="flex flex-wrap gap-2">
           <button className={buttonClass} disabled={busy || dirty} onClick={() => download()}>Export brief</button>
           {project.acceptedRevisionId && <button className={buttonClass} disabled={busy} onClick={() => download(project.acceptedRevisionId)}>Export accepted package</button>}
@@ -121,8 +136,10 @@ export default function ProductionProjects() {
         </div>
         <p className="text-xs text-gray-400">Imports never execute source or install dependencies. Failed candidates retain accepted source. Accepting source records your selection; it does not mark rendering, motion or sound as verified.</p>
         <p className="text-xs text-gray-400">Requested model: {project.localSettings?.model || 'Unspecified'} · Mode: {project.localSettings?.mode || 'Unspecified'}</p>
+        <ProductionStageRuns project={project} runs={history.items.filter(isStageRun)} disabled={busy || dirty}
+          onRunStarted={run => history.setItems(previous => [{ id: run.id, status: run.status, data: run, createdAt: new Date().toISOString() }, ...previous.filter(item => item.id !== run.id)])} />
         <ul className="space-y-2">
-          {history.items.map(run => <li key={run.id} className="min-w-0 space-y-1 rounded border border-port-border p-3">
+          {history.items.filter(run => !isStageRun(run)).map(run => <li key={run.id} className="min-w-0 space-y-1 rounded border border-port-border p-3">
             <div className="flex flex-wrap justify-between gap-2 text-sm"><span>Package import · {run.status}</span><span>{timeAgo(run.createdAt)}</span></div>
             <p className="break-all text-xs text-gray-400">{run.data.packageHash}</p>
             <p className="text-xs text-gray-400">{formatBytes(run.data.totalBytes || 0)} · Source execution: {run.data.executed ? 'Recorded' : 'None'}</p>

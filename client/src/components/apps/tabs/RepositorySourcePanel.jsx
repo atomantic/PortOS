@@ -5,6 +5,7 @@ import {
   Download,
   GitBranch,
   GitFork,
+  Loader2,
   RefreshCw,
   Server,
 } from 'lucide-react';
@@ -369,7 +370,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
                   disabled={!canUpdate || syncingFork || operationBusy || updateRequested}
                   className="flex min-h-[40px] items-center gap-1.5 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:bg-port-accent/80 disabled:opacity-50"
                 >
-                  <Download size={16} className={updating ? 'animate-bounce' : ''} />
+                  {updating ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                   {updating ? 'Updating...' : updateRequested ? 'Reload to update again' : primaryLabel}
                 </button>
               )}

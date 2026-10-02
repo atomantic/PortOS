@@ -370,7 +370,7 @@ export const deleteBackupSnapshot = (snapshotId, source, options = {}) => {
 };
 
 // Data Manager
-export const getDataOverview = () => request('/data');
+export const getDataOverview = (options) => request('/data', options);
 export const getDataCategory = (key, options = {}) => request(`/data/${key}${options.measure ? '?measure=1' : ''}`, options);
 export const archiveDataCategory = (key, opts) => request(`/data/${key}/archive`, { method: 'POST', body: JSON.stringify(opts || {}) });
 export const purgeDataCategory = (key, opts, options = {}) => request(`/data/${key}`, {
@@ -378,7 +378,7 @@ export const purgeDataCategory = (key, opts, options = {}) => request(`/data/${k
   body: JSON.stringify(opts || {}),
   ...options,
 });
-export const getDataBackups = () => request('/data/backups');
+export const getDataBackups = (options) => request('/data/backups', options);
 export const deleteDataBackup = (filename) => request(`/data/backups/${filename}`, { method: 'DELETE' });
 
 // Notifications

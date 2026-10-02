@@ -32,14 +32,10 @@ const isWindows = () => process.platform === 'win32';
 
 // Windows-only retry knobs (#4095). A destination lock from a concurrent reader
 // or an AV scan clears in milliseconds, so a handful of short retries is enough
-// to avoid both the writer's destination-missing backup swap and the reader's
+// to avoid both a failed write and the reader's
 // phantom "nothing here yet".
 const WIN_RETRY_ATTEMPTS = 5;
 const WIN_RETRY_DELAY_MS = 10;
-// The backup move follows a failed atomic replace, where a reader or AV scan
-// can keep the existing destination locked longer than the first retry window.
-const WIN_BACKUP_RETRY_ATTEMPTS = 20;
-const WIN_BACKUP_RETRY_DELAY_MS = 25;
 // rename(2) failures that mean "the destination is momentarily locked", not
 // "this rename can never work".
 const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];
@@ -258,36 +254,16 @@ export async function atomicWrite(filePath, data) {
   };
   // Node's fs.rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows (atomic
   // overwrite), but still fails with EPERM/EACCES/EBUSY if the destination is locked (AV scan,
-  // concurrent reader). Fall back to a backup-swap so the original file is never lost.
+  // concurrent reader). Retry the atomic rename a bounded number of times; if the lock
+  // persists, FAIL the write (#9556). The previous fallback moved the destination to a `.bak`
+  // sibling and installed the temp file — if that install also failed, the only canonical
+  // copy was left orphaned at the backup path while readers saw a trustworthy "absent" store.
+  // Rejecting leaves the original bytes untouched at filePath.
   const replace = async () => {
-    // Retry the ATOMIC rename before resorting to the backup swap (#4095). The
-    // swap below renames the destination away and back, so for that instant the
-    // destination DOES NOT EXIST — a concurrent read lands on ENOENT and reads
-    // it as a trustworthy "nothing here yet", silently handing the caller its
-    // default instead of the file's real contents. A transient lock clears in
-    // milliseconds, so retrying keeps almost every write on the atomic path and
-    // never opens that window.
-    const firstRename = await renameWithWindowsRetries(tmp, filePath);
-    const err = firstRename.err;
+    const { err } = await renameWithWindowsRetries(tmp, filePath);
     if (!err) return;
     if (isWindows() && WIN_RENAME_LOCK_CODES.includes(err.code)) {
-      const bak = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.bak`;
-      // A transient Windows lock can also reject the move to the backup. Retry
-      // that move before giving up; until it succeeds, the original stays at
-      // filePath and is safe to read.
-      const backupRename = await renameWithWindowsRetries(filePath, bak, {
-        attempts: WIN_BACKUP_RETRY_ATTEMPTS,
-        delayMs: WIN_BACKUP_RETRY_DELAY_MS,
-      });
-      if (backupRename.err && backupRename.err.code !== 'ENOENT') throw backupRename.err;
-      const hadExisting = !backupRename.err;
-      const renameErr = (await renameWithWindowsRetries(tmp, filePath)).err;
-      if (renameErr) {
-        if (hadExisting) await renameWithWindowsRetries(bak, filePath);
-        throw renameErr;
-      }
-      if (hadExisting) await unlink(bak).catch(() => {});
-      return;
+      err.message = `${err.message} — ${basename(filePath)} stayed locked after ${WIN_RETRY_ATTEMPTS} attempts; the existing file was left untouched, so retry the write once the lock (AV scan, open handle) clears`;
     }
     throw err;
   };

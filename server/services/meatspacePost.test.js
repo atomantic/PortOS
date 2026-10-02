@@ -2749,3 +2749,34 @@ describe('resolveDrillConfig — maintenance-review bypass (issue #2096)', () =>
     expect(progression).toBeNull();
   });
 });
+
+describe('updatePostConfig — cognitive pair constraints (#9460)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    atomicWrite.mockResolvedValue(undefined);
+  });
+
+  it('rejects a one-field patch that inverts a pair with the stored partner, without writing', async () => {
+    readJSONFile.mockResolvedValue({ cognitive: { drillTypes: { 'reaction-time': { minDelayMs: 4000, maxDelayMs: 5000 } } } });
+    await expect(updatePostConfig({ cognitive: { drillTypes: { 'reaction-time': { maxDelayMs: 300 } } } }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('does not block unrelated patches because another drill holds a legacy inverted pair', async () => {
+    readJSONFile.mockResolvedValue({ cognitive: { drillTypes: { 'reaction-time': { minDelayMs: 4000, maxDelayMs: 300 } } } });
+    await expect(updatePostConfig({ adaptive: { enabled: true } })).resolves.toBeTruthy();
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('cognitive generators honor the shared pair contract (#9460)', () => {
+  it('a valid manual pair runs exactly as saved', () => {
+    expect(generateCognitiveDrill('go-no-go', { stimulusMs: 700, responseDeadlineMs: 900 }).config)
+      .toMatchObject({ stimulusMs: 700, responseDeadlineMs: 900 });
+    expect(generateCognitiveDrill('digit-span', { startLength: 4, maxLength: 6 }).config)
+      .toMatchObject({ startLength: 4, maxLength: 6 });
+    expect(generateCognitiveDrill('reaction-time', { minDelayMs: 500, maxDelayMs: 900 }).config)
+      .toMatchObject({ minDelayMs: 500, maxDelayMs: 900 });
+  });
+});

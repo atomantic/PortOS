@@ -131,6 +131,7 @@ import {
   resetExecutionHistory,
   triggerOnDemandTask,
   getOnDemandRequests,
+  clearOnDemandRequest,
   getScheduleStatus,
   computePerpetualRecheckAt,
   parkPerpetual,
@@ -1566,6 +1567,26 @@ describe('taskSchedule', () => {
     })
   })
 
+  describe('execution field write safety', () => {
+    it('keeps a persisted custom prompt readable after rejecting malformed updates', async () => {
+      mockSchedule();
+      await updateTaskInterval('documentation', { prompt: 'Example custom prompt', providerId: 'example-provider', model: 'example-model' });
+      const saved = JSON.parse(writeFile.mock.calls.at(-1)[1]);
+      const original = saved.tasks.documentation;
+      readJSONFile.mockResolvedValue(saved);
+      writeFile.mockClear();
+      for (const field of ['prompt', 'providerId', 'model']) {
+        for (const value of [{ text: 'Example malformed prompt' }, ['example'], true, 42]) {
+          await expect(updateTaskInterval('documentation', { [field]: value })).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+        }
+      }
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(saved.tasks.documentation).toEqual(original);
+      expect(await getTaskPrompt('documentation')).toBe('Example custom prompt');
+      expect(original).toMatchObject({ promptSource: 'user', providerId: 'example-provider', model: 'example-model' });
+    });
+  });
+
   describe('getTaskPrompt', () => {
     it('should return default prompt when no custom prompt set', async () => {
       const prompt = await getTaskPrompt('security')
@@ -2161,6 +2182,37 @@ describe('taskSchedule', () => {
       expect(result.taskType).toBe('feature-ideas')
       expect(result.appId).toBe('critical-mass')
       expect(result.id).toMatch(/^demand-/)
+    })
+
+    it('allocates distinct receipt IDs for mixed task types within one clock tick', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-01-02T03:04:05.000Z'))
+      mockSchedule({ tasks: {
+        security: { type: INTERVAL_TYPES.ON_DEMAND, enabled: true },
+        'universe-bible-describe': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true },
+      } })
+
+      const agentRequest = await triggerOnDemandTask('security', null, { emit: false })
+      const programmaticRequest = await triggerOnDemandTask('universe-bible-describe', null, { emit: false })
+
+      expect(agentRequest.id).toMatch(/^demand-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+      expect(programmaticRequest.id).toMatch(/^demand-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+      expect(agentRequest.id).not.toBe(programmaticRequest.id)
+      expect(agentRequest.requestedAt).toBe('2026-01-02T03:04:05.000Z')
+      expect(programmaticRequest.requestedAt).toBe(agentRequest.requestedAt)
+    })
+
+    it('keeps legacy timestamp receipt IDs cancellable', async () => {
+      const legacyRequest = {
+        id: 'demand-m5d4ruo0', taskType: 'security', appId: null,
+        origin: ON_DEMAND_ORIGINS.USER, requestedAt: '2024-01-01T00:00:00.000Z',
+      }
+      mockSchedule({ onDemandRequests: [legacyRequest] })
+
+      await expect(clearOnDemandRequest(legacyRequest.id)).resolves.toEqual(legacyRequest)
+
+      const persisted = JSON.parse(writeFile.mock.calls.at(-1)[1])
+      expect(persisted.onDemandRequests).toEqual([])
     })
 
     // The drain's completion refill re-issues itself through this same queue. It

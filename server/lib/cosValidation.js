@@ -16,6 +16,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES, PR_REVIEW_MODE_VALUES } from './prDisposition.js';
 import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
+import { normalizeAutopilotParams } from './musicVideoAutonomous.js';
 import { PUBLIC_REVIEW_EXECUTION_PROFILES } from './agentExecutionProfiles.js';
 import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
@@ -49,6 +50,8 @@ import {
   normalizeReviewerModels,
   resolveReviewUsernames,
 } from './reviewerConfig.js';
+
+export { scheduleExecutionFieldsSchema } from './scheduleExecutionFieldsValidation.js';
 
 export { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
 // Transitional shim: the reviewer vocabulary lives in reviewerConfig.js but is
@@ -1328,7 +1331,17 @@ export function sanitizeTaskMetadata(raw) {
     clean.mode = raw.mode;
     hasKeys = true;
   }
-  // Pipeline configuration is the one nested task-metadata shape. Keep only
+  // The music-video-autopilot handler's params bag (lib/musicVideoAutonomous.js
+  // owns the shape): tools, per-tool models, budget, limits, checkpoints, LLM,
+  // and the Brain idea tags it may draw from. Re-normalized on every save.
+  if (Object.prototype.hasOwnProperty.call(raw, 'musicVideoAutopilot')) {
+    const params = normalizeAutopilotParams(raw.musicVideoAutopilot);
+    if (params) {
+      clean.musicVideoAutopilot = params;
+      hasKeys = true;
+    }
+  }
+  // Pipeline configuration is the other nested task-metadata shape. Keep only
   // known stage fields and fail the whole update when a known field is malformed
   // so a bad custom pipeline cannot silently lose its safety posture.
   if (Object.prototype.hasOwnProperty.call(raw, 'pipeline')) {

@@ -277,6 +277,43 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Runs the configured local or provider reviewer on a caller-supplied diff.
   'POST /api/code-review/local',
 
+  // Motion toolkit: executes the downloaded installer and writes agent skills user-wide.
+  'POST /api/html-composition/toolkit/skills/install',
+
+  // Media runtime setup installs executable dependencies or builds a Docker
+  // image; authorize before opening SSE or probing runtime readiness.
+  'POST /api/music/setup/runtime-install',
+  'POST /api/video-gen/setup/runtime-install',
+  'POST /api/music/supercollider/setup',
+
+  // Image-to-3D (TRELLIS.2 / Pixal3D) installers git-clone and build engines,
+  // the MuScriptor installer builds a venv via the setup script, and the
+  // yt-dlp update replaces a package-managed host binary (#9555). Status GETs
+  // stay open.
+  'POST /api/image-to-3d/targets/:targetId/install',
+  'POST /api/image-to-3d/trellis2/install',
+  'POST /api/midi-runtime/install',
+  'POST /api/devtools/video-download/yt-dlp/update',
+
+  // Media authoring can launch a coding CLI/TUI agent, including via provider
+  // fallback. Gate the whole operation even when the initial provider is API;
+  // runtime-data cwd and later render containment do not sandbox authoring.
+  'POST /api/code-animation/brief',
+  'POST /api/code-animation/generate',
+  'POST /api/code-animation/projects/:id/stage-runs',
+  'POST /api/music/describe',
+  'POST /api/music/lyrics',
+  'POST /api/music/waveform',
+  'POST /api/music/code',
+  'POST /api/tracks/:id/waveform/draw',
+  'POST /api/music-video/autonomous',
+  'POST /api/music-video/:id/autonomous/resume',
+
+  // Code Animation contained execution (#9388): choosing the installed tool a
+  // worker runs, and the containment check that spawns sandboxed processes.
+  'PUT /api/code-animation/execution/tools',
+  'POST /api/code-animation/execution/probe',
+
   // Providers: which binary runs, with which args, against which endpoint and
   // credentials; installing or launching runtimes; signing a CLI in or out.
   // `PUT /api/providers/:id` also matches `/active` and `/bootstraps`.
@@ -389,12 +426,13 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
 /**
  * `PUT /api/settings` slices that set what runs or the guardrails around it:
- * harness enablement and wrapper CLIs, the code-review chain, the untrusted
- * content screen in front of agent work, scheduled self-update, and scheduled
- * series autopilots. The store is polymorphic, so its other slices stay open.
+ * harness enablement and wrapper CLIs, the Code Animation worker tools, the
+ * code-review chain, the untrusted content screen in front of agent work,
+ * scheduled self-update, and scheduled series autopilots. The store is polymorphic, so its other slices stay open.
  */
 export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'autoUpdate',
+  'codeAnimationExecution',
   'codeReview',
   'credentialBootstraps',
   'harnesses',

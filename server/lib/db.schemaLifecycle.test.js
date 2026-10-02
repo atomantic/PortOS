@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   query: vi.fn(), release: vi.fn(), connect: vi.fn(),
 }));
-vi.mock('pg', () => ({ default: {
+vi.mock('pg', async (importOriginal) => ({ default: {
+  Client: (await importOriginal()).default.Client,
   Pool: class {
     on() {}
     connect = state.connect;

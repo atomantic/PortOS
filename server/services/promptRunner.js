@@ -40,14 +40,15 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES, isRunCanceledError, isRuntimeBudgetError } from '../lib/aiToolkit/errorDetection.js';
 import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
-import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
+import { contextWindowRejection, knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
+import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
 import { apiRunAbsoluteTimeoutMs } from '../lib/aiToolkit/internal/runTimeouts.js';
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
-import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens } from '../lib/contextBudget.js';
+import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens, localOutputReserveTokens } from '../lib/contextBudget.js';
 import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
 import { attachGatewaySiblingKey } from '../lib/providerGateways.js';
 
@@ -548,6 +549,105 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
   return ran;
 }
 
+/** Own deferred investigations for one retry cascade, independently of retry policy. */
+function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
+  // Load the fallback-lifecycle notifiers lazily and once for the whole
+  // cascade. Lazy (see loadAutoFixer) so the happy path never drags in the
+  // CoS stack — and so a failure with NO recovery path (no tier applies)
+  // never loads it either, since none of the note* helpers below fire.
+  let autoFixerModule;
+  let autoFixerLoaded = false;
+  const getAutoFixer = async () => {
+    if (!autoFixerLoaded) {
+      autoFixerLoaded = true;
+      autoFixerModule = await loadAutoFixer().catch((err) => {
+        console.error(`❌ autoFixer load failed (investigation task not suppressed): ${err.message}`);
+        return null;
+      });
+    }
+    return autoFixerModule;
+  };
+  // Keys must match what bootstrap.js's onRunFailed hook published
+  // (metadata.providerName + metadata.model). Best-effort throughout: a
+  // notifier failure must never turn a working retry into a user-visible error.
+  const noteStarted = async (key) => { const a = await getAutoFixer(); try { a?.noteFallbackStarted(key); } catch { /* best-effort */ } };
+  const noteFailed = async (key) => { const a = await getAutoFixer(); try { a?.noteFallbackFailed(key); } catch { /* best-effort */ } };
+  const noteHandled = async (key) => {
+    const a = await getAutoFixer();
+    try { a?.noteFallbackHandled(key); } catch (suppressErr) {
+      console.error(`❌ noteFallbackHandled failed (investigation task not suppressed): ${suppressErr.message}`);
+    }
+  };
+
+  // Track every provider+model key whose deferred investigation task we
+  // suppress across the cascade, so (a) a recovery at ANY tier cancels ALL of
+  // them, (b) a give-up releases them without leaking autoFixer's in-flight
+  // set, and (c) the `finally` safety-net releases any left unresolved by an
+  // unexpected throw (e.g. coalesceFallbackMarkAndPick) — which would
+  // otherwise suppress every future identical failure for the process
+  // lifetime. Keyed by a NUL-joined string (provider names / model ids both
+  // contain '-'); the value carries the original key object + resolution state.
+  const suppressed = new Map();
+  const keyStr = (k) => `${k.provider}\x00${k.model}`;
+  const suppress = async (key) => {
+    const id = keyStr(key);
+    if (suppressed.has(id)) return; // idempotent across tiers
+    suppressed.set(id, { key, resolved: false });
+    await noteStarted(key);
+  };
+  const recoverAll = async () => {
+    for (const entry of suppressed.values()) {
+      if (!entry.resolved) { entry.resolved = true; await noteHandled(entry.key); }
+    }
+  };
+  const releaseForExistingInvestigation = async () => {
+    for (const entry of suppressed.values()) {
+      if (!entry.resolved) { entry.resolved = true; await noteFailed(entry.key); }
+    }
+  };
+
+  // Explicitly escalate the primary failure to a Tier-4 investigation task —
+  // used only on a give-up where every attempted key's incidental task was
+  // suppressed, so nothing else would surface the unrecovered failure. Honors
+  // the circuit breaker. Best-effort: a failure here must not mask the rethrow.
+  const escalatePrimaryFailure = async () => {
+    const a = await getAutoFixer();
+    try {
+      await a?.escalateProviderFailure?.({
+        code: 'AI_PROVIDER_EXECUTION_FAILED',
+        message: firstError.message,
+        timestamp: Date.now(),
+        context: {
+          provider: failed.name || failed.id,
+          providerId: failed.id,
+          model: failedModel,
+          errorDetails: firstError.message,
+          errorAnalysis: firstError.errorAnalysis,
+        },
+      });
+    } catch (escalateErr) {
+      console.error(`❌ escalateProviderFailure failed (unrecovered failure not escalated): ${escalateErr.message}`);
+    }
+  };
+
+  const escalateAndRelease = async () => {
+    // With no suppression, the execution layer still owns the original event.
+    // Preserve that path without loading autoFixer or creating a replacement.
+    if (suppressed.size === 0) return;
+    await escalatePrimaryFailure();
+    await releaseForExistingInvestigation();
+  };
+  const closeUnexpectedFailure = async () => {
+    // Explicit terminal operations settle every key; only an unexpected throw
+    // can leave canceled backstops without a surviving investigation here.
+    if ([...suppressed.values()].some((entry) => !entry.resolved)) {
+      await escalateAndRelease();
+    }
+  };
+
+  return { suppress, recoverAll, releaseForExistingInvestigation, escalateAndRelease, closeUnexpectedFailure };
+}
+
 /**
  * Run a prompt through a provider and resolve with the streamed text +
  * run id. Rejects (via the strictest discriminator) on any runner-
@@ -820,91 +920,12 @@ export async function runPromptThroughProvider(rawArgs) {
     // (autoFixer.TASK_DEFER_MS) and leave a task behind for a recovered failure.
     const primaryKey = { provider: failed.name || failed.id, model: failedModel };
 
-    // Load the fallback-lifecycle notifiers lazily and once for the whole
-    // cascade. Lazy (see loadAutoFixer) so the happy path never drags in the
-    // CoS stack — and so a failure with NO recovery path (no tier applies)
-    // never loads it either, since none of the note* helpers below fire.
-    let autoFixerModule;
-    let autoFixerLoaded = false;
-    const getAutoFixer = async () => {
-      if (!autoFixerLoaded) {
-        autoFixerLoaded = true;
-        autoFixerModule = await loadAutoFixer().catch((err) => {
-          console.error(`❌ autoFixer load failed (investigation task not suppressed): ${err.message}`);
-          return null;
-        });
-      }
-      return autoFixerModule;
-    };
-    // Keys must match what server/index.js's onRunFailed hook published
-    // (metadata.providerName + metadata.model). Best-effort throughout: a
-    // notifier failure must never turn a working retry into a user-visible error.
-    const noteStarted = async (key) => { const a = await getAutoFixer(); try { a?.noteFallbackStarted(key); } catch { /* best-effort */ } };
-    const noteFailed = async (key) => { const a = await getAutoFixer(); try { a?.noteFallbackFailed(key); } catch { /* best-effort */ } };
-    const noteHandled = async (key) => {
-      const a = await getAutoFixer();
-      try { a?.noteFallbackHandled(key); } catch (suppressErr) {
-        console.error(`❌ noteFallbackHandled failed (investigation task not suppressed): ${suppressErr.message}`);
-      }
-    };
-
-    // Track every provider+model key whose deferred investigation task we
-    // suppress across the cascade, so (a) a recovery at ANY tier cancels ALL of
-    // them, (b) a give-up releases them without leaking autoFixer's in-flight
-    // set, and (c) the `finally` safety-net releases any left unresolved by an
-    // unexpected throw (e.g. coalesceFallbackMarkAndPick) — which would
-    // otherwise suppress every future identical failure for the process
-    // lifetime. Keyed by a NUL-joined string (provider names / model ids both
-    // contain '-'); the value carries the original key object + resolution state.
-    const suppressed = new Map();
-    const keyStr = (k) => `${k.provider}\x00${k.model}`;
-    const suppress = async (key) => {
-      const id = keyStr(key);
-      if (suppressed.has(id)) return; // idempotent across tiers
-      suppressed.set(id, { key, resolved: false });
-      await noteStarted(key);
-    };
-    const resolveHandled = async (key) => {
-      const entry = suppressed.get(keyStr(key));
-      if (entry) entry.resolved = true;
-      await noteHandled(key);
-    };
-    const releaseAllUnresolved = async () => {
-      for (const entry of suppressed.values()) {
-        if (!entry.resolved) { entry.resolved = true; await noteFailed(entry.key); }
-      }
-    };
-
+    const investigation = createRecoveryInvestigationScope({ failed, failedModel, firstError });
     const stopOnRuntimeBudget = async (error) => {
       if (!isRuntimeBudgetError(error)) return;
-      // A caller cap can also end a correction/fallback already in flight.
-      // Resolve suppression without investigating or starting another tier.
-      for (const entry of suppressed.values()) await resolveHandled(entry.key);
+      // Caller ceilings settle ownership without declaring a provider fault.
+      await investigation.recoverAll();
       throw stripFallbackContext(error);
-    };
-
-    // Explicitly escalate the primary failure to a Tier-4 investigation task —
-    // used only on a give-up where every attempted key's incidental task was
-    // suppressed, so nothing else would surface the unrecovered failure. Honors
-    // the circuit breaker. Best-effort: a failure here must not mask the rethrow.
-    const escalatePrimaryFailure = async () => {
-      const a = await getAutoFixer();
-      try {
-        await a?.escalateProviderFailure?.({
-          code: 'AI_PROVIDER_EXECUTION_FAILED',
-          message: firstError.message,
-          timestamp: Date.now(),
-          context: {
-            provider: failed.name || failed.id,
-            providerId: failed.id,
-            model: failedModel,
-            errorDetails: firstError.message,
-            errorAnalysis: firstError.errorAnalysis,
-          },
-        });
-      } catch (escalateErr) {
-        console.error(`❌ escalateProviderFailure failed (unrecovered failure not escalated): ${escalateErr.message}`);
-      }
     };
 
     try {
@@ -920,8 +941,6 @@ export async function runPromptThroughProvider(rawArgs) {
       // model would silently be the same failed one — a pointless retry that
       // would also mis-key the corrected task onto the primary key. Skip Tier 1
       // for those and let the cascade fall through to a real fallback provider.
-      let tier1CorrectedKey = null;
-      let tier2CorrectedKey = null;
       // Only a wrong-model failure is config-correctable here. Compare against
       // string literals, not `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` — that member
       // does NOT exist (it would be `undefined`, matching a category-less failure
@@ -935,7 +954,7 @@ export async function runPromptThroughProvider(rawArgs) {
           // Suppress the primary's investigation task while the corrected retry
           // runs so a slow (>TASK_DEFER_MS) but SUCCESSFUL retry can't leave a
           // task behind for a recovered failure.
-          await suppress(primaryKey);
+          await investigation.suppress(primaryKey);
           let tier1Result;
           try {
             tier1Result = await executeProviderRunOnce({
@@ -951,18 +970,17 @@ export async function runPromptThroughProvider(rawArgs) {
             // (createRun may have proactively swapped) — record and suppress that
             // key too, so a slow Tier-3 recovery below can't let its backstop
             // fire. A pre-execution throw (no effectiveProvider) queued NO task,
-            // so leave the key null and let the give-up branch escalate.
+            // so leave ownership with the primary for explicit escalation.
             if (tier1Error?.effectiveProvider) {
-              tier1CorrectedKey = {
+              await investigation.suppress({
                 provider: tier1Error.effectiveProvider.name || tier1Error.effectiveProvider.id,
                 model: tier1Error.effectiveModel || correctedModel,
-              };
-              await suppress(tier1CorrectedKey);
+              });
             }
             console.log(`↪️ Tier 1 correction failed on ${failed.name} (${correctedModel}): ${tier1Error.message} — escalating to constrained-agent-retry`);
           }
           if (tier1Result) {
-            await resolveHandled(primaryKey);
+            await investigation.recoverAll();
             return {
               ...tier1Result,
               usedFallback: true,
@@ -993,7 +1011,7 @@ export async function runPromptThroughProvider(rawArgs) {
         });
         if (correctedPrompt) {
           console.log(`🧩 Tier 2 (schema/type) retry: ${rawArgs.source} on ${failed.name} (category ${category})`);
-          await suppress(primaryKey);
+          await investigation.suppress(primaryKey);
           let tier2Result;
           try {
             tier2Result = await executeProviderRunOnce({
@@ -1008,13 +1026,12 @@ export async function runPromptThroughProvider(rawArgs) {
             // reached the execution layer queued its own task keyed on the
             // EFFECTIVE provider/model — record + suppress it so a slow Tier-3
             // recovery can't let its backstop fire. A pre-execution throw queued
-            // no task, so leave the key null for the give-up branch to escalate.
+            // no task, so leave ownership with the primary for explicit escalation.
             if (tier2Error?.effectiveProvider) {
-              tier2CorrectedKey = {
+              await investigation.suppress({
                 provider: tier2Error.effectiveProvider.name || tier2Error.effectiveProvider.id,
                 model: tier2Error.effectiveModel || failedModel,
-              };
-              await suppress(tier2CorrectedKey);
+              });
             }
             console.log(`↪️ Tier 2 correction failed on ${failed.name}: ${tier2Error.message} — escalating to constrained-agent-retry`);
           }
@@ -1025,7 +1042,7 @@ export async function runPromptThroughProvider(rawArgs) {
             // through to the Tier-3 fallback provider.
             const revalidated = await correctResponseToSchema(tier2Result, args);
             if (revalidated.ok) {
-              await resolveHandled(primaryKey);
+              await investigation.recoverAll();
               return {
                 ...revalidated.result,
                 usedFallback: true,
@@ -1052,10 +1069,7 @@ export async function runPromptThroughProvider(rawArgs) {
         // ── Tier 4 — escalate ──: no recovery path left. Every attempted key's
         // incidental task was suppressed, so escalate exactly one investigation
         // task explicitly (honors the circuit breaker), then release the keys.
-        if (suppressed.size > 0) {
-          await escalatePrimaryFailure();
-          await releaseAllUnresolved();
-        }
+        await investigation.escalateAndRelease();
         throw stripFallbackContext(firstError);
       }
       const fallback = picked.provider;
@@ -1063,7 +1077,7 @@ export async function runPromptThroughProvider(rawArgs) {
       console.log(`⚡ Tier 3 (constrained-agent-retry): ${rawArgs.source} with fallback ${fallback.name} (primary ${failed.name} failed: ${firstError.message})`);
 
       // Suppress the primary key (idempotent across tiers) for the fallback run.
-      await suppress(primaryKey);
+      await investigation.suppress(primaryKey);
 
       // Run the fallback as a fresh attempt. Pass the configured `fallbackModel`
       // when one is set (so the user's chosen fallback provider+model pair is
@@ -1091,8 +1105,11 @@ export async function runPromptThroughProvider(rawArgs) {
         // threw BEFORE execution (e.g. createRun error), no task was queued and
         // the suppressed primary/corrected keys would leave ZERO tasks — so
         // escalate one explicitly first (deduped inside escalateProviderFailure).
-        if (!fallbackError?.effectiveProvider) await escalatePrimaryFailure();
-        await releaseAllUnresolved();
+        if (fallbackError?.effectiveProvider) {
+          await investigation.releaseForExistingInvestigation();
+        } else {
+          await investigation.escalateAndRelease();
+        }
         throw stripFallbackContext(fallbackError);
       }
 
@@ -1102,8 +1119,7 @@ export async function runPromptThroughProvider(rawArgs) {
       // up (a fresh-but-unusable fallback response is not a recovery).
       const fallbackValidated = await correctResponseToSchema(fallbackResult, args);
       if (!fallbackValidated.ok) {
-        await escalatePrimaryFailure();
-        await releaseAllUnresolved();
+        await investigation.escalateAndRelease();
         throw stripFallbackContext(buildSchemaFailureError(fallbackResult));
       }
 
@@ -1111,9 +1127,7 @@ export async function runPromptThroughProvider(rawArgs) {
       // Tier-1/Tier-2 corrected-retry key) so a fully-recovered action creates
       // ZERO investigation tasks (issue #2342 acceptance: only UNRECOVERED
       // failures escalate to Tier 4).
-      await resolveHandled(primaryKey);
-      if (tier1CorrectedKey) await resolveHandled(tier1CorrectedKey);
-      if (tier2CorrectedKey) await resolveHandled(tier2CorrectedKey);
+      await investigation.recoverAll();
 
       return {
         ...fallbackValidated.result,
@@ -1124,17 +1138,7 @@ export async function runPromptThroughProvider(rawArgs) {
         fallbackProvider: fallback,
       };
     } finally {
-      // Safety net for an UNEXPECTED throw (e.g. coalesceFallbackMarkAndPick
-      // rejecting) that bypassed the explicit give-up handlers: those handlers
-      // resolve every suppressed key, so any key still unresolved HERE means a
-      // throw cancelled the primary's backstop task with no replacement queued.
-      // Escalate one investigation task (deduped — a no-op if an explicit branch
-      // already escalated) so the unrecovered failure still surfaces, then
-      // release the keys so the in-flight set can't leak.
-      if ([...suppressed.values()].some((entry) => !entry.resolved)) {
-        await escalatePrimaryFailure();
-        await releaseAllUnresolved();
-      }
+      await investigation.closeUnexpectedFailure();
     }
   }
 }
@@ -1295,6 +1299,74 @@ function stripFallbackContext(err) {
 }
 
 /**
+ * Whether `provider` generates on a local inference server — an API provider
+ * served by an Ollama daemon, flagged as llama.cpp / LM Studio / MTPLX / vLLM /
+ * SGLang, or pointed at a loopback endpoint. These are the windows a cloud-sized
+ * output reserve can swallow whole.
+ */
+function isLocalInferenceProvider(provider) {
+  if (provider?.type !== PROVIDER_TYPES.API) return false;
+  return isOllamaBackedProvider(provider)
+    || provider.llamaBacked === true
+    || provider.lmstudioBacked === true
+    || provider.mtplxBacked === true
+    || provider.vllmBacked === true
+    || provider.sglangBacked === true
+    || isLocalEndpoint(provider.endpoint);
+}
+
+/**
+ * The output reserve (and generation cap) for a run on a LOCAL model.
+ *
+ * A caller's declared `outputReserveTokens` is a cloud-sized number (the
+ * persistent mind declares 8,192). On a 16K local daemon that reserve alone is
+ * half the window, so since #9437 made the mind declare it on every wake, a
+ * ~13.5K-token prompt that fits was refused before dispatch ("known 16384-token
+ * context is below the 21744-token request budget"). For a local provider with
+ * a KNOWN window the reserve shrinks to `localOutputReserveTokens` (floor 2,048,
+ * ⅛ of the window, never above what was declared), and the request's
+ * `max_tokens` / `num_predict` is capped at the same number so generation
+ * cannot outgrow the room the gate planned for.
+ *
+ * Unchanged when the caller named its own `maxTokens` (it sized the answer
+ * deliberately), declared no reserve, the window is unknown, or the provider
+ * is not local.
+ *
+ * @returns {Promise<{ outputReserveTokens: number|undefined, maxTokens: number|undefined }>}
+ */
+async function resolveLocalOutputBudget(provider, model, { outputReserveTokens, maxTokens }) {
+  const unchanged = { outputReserveTokens, maxTokens };
+  if (Number.isInteger(maxTokens) && maxTokens > 0) return unchanged;
+  if (!Number.isFinite(Number(outputReserveTokens)) || !isLocalInferenceProvider(provider)) return unchanged;
+  const observed = withOllamaRuntimeContextWindow(await withObservedContextWindowsLazy(provider));
+  const reserve = localOutputReserveTokens(outputReserveTokens, knownContextWindow(observed, model));
+  return reserve ? { outputReserveTokens: reserve, maxTokens: reserve } : unchanged;
+}
+
+/**
+ * The prompt room a LOCAL provider leaves once its output reserve is planned,
+ * for callers that build their own prompt and want to fit it rather than be
+ * refused (the persistent mind's tool rounds). Uses the same window lookup and
+ * the same `localOutputReserveTokens` sizing as the dispatch gate, so a prompt
+ * kept under `maxPromptTokens` (chars/4) is one the gate admits.
+ *
+ * Returns `null` for a cloud / CLI provider, an undeclared reserve, or an
+ * unknown window — callers then build exactly as before.
+ *
+ * @param {{ provider: object, model?: string|null, outputReserveTokens: number }} args
+ * @returns {Promise<{ contextWindow: number, outputReserveTokens: number, maxPromptTokens: number }|null>}
+ */
+export async function resolveLocalPromptBudget({ provider, model = null, outputReserveTokens }) {
+  if (!isLocalInferenceProvider(provider)) return null;
+  const resolvedModel = model || provider?.defaultModel || null;
+  const observed = withOllamaRuntimeContextWindow(await withObservedContextWindowsLazy(provider));
+  const contextWindow = knownContextWindow(observed, resolvedModel);
+  const reserve = localOutputReserveTokens(outputReserveTokens, contextWindow);
+  if (!reserve) return null;
+  return { contextWindow, outputReserveTokens: reserve, maxPromptTokens: Math.max(0, contextWindow - reserve) };
+}
+
+/**
  * The budget a pre-dispatch REFUSAL is allowed to act on.
  *
  * `requiredContextTokens` is the prompt plus an output reserve, and when the
@@ -1446,11 +1518,12 @@ async function executeProviderRunOnce({
   // context gate needs it on EVERY attempt — a caller that supplies its own
   // runId (stageRunner, the loops) skips that branch entirely and would
   // otherwise dispatch ungated.
-  const requestCapabilities = buildRequestCapabilities({ prompt, screenshots, outputReserveTokens, callerPolicy });
+  const localBudget = await resolveLocalOutputBudget(provider, effectiveModel, { outputReserveTokens, maxTokens });
+  const requestCapabilities = buildRequestCapabilities({ prompt, screenshots, outputReserveTokens: localBudget.outputReserveTokens, callerPolicy });
   await assertRequestFitsContext(
     effectiveProvider,
     effectiveModel,
-    refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens }),
+    refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens: localBudget.outputReserveTokens }),
     { runId: callerRunId, startTime: Date.now() },
   );
 
@@ -1718,7 +1791,7 @@ async function executeProviderRunOnce({
       // nemotron persistent-mind runs died this way at exactly 302s in the two
       // days after #7560 merged, and none before it (#7665).
       const backstopTimeout = apiRunAbsoluteTimeoutMs(effectiveTimeout, absoluteTimeoutMs);
-      apiTimeoutHandle = setTimeout(() => {
+      if (backstopTimeout > 0) apiTimeoutHandle = setTimeout(() => {
         stopRun(runId).catch(() => { /* best-effort cancel */ });
         safeReject(new Error(`API execution timed out after ${backstopTimeout}ms`));
       }, backstopTimeout + API_TIMEOUT_BACKSTOP_GRACE_MS);
@@ -1726,7 +1799,7 @@ async function executeProviderRunOnce({
       // a per-call override (e.g. the importer's long stage timeout) governs the
       // ceiling instead of the runner's provider/default fallback — same
       // caller-override precedence CLI/TUI runs already get.
-      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
+      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens: effectiveProvider === provider ? localBudget.maxTokens : maxTokens, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.

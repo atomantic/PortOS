@@ -37,7 +37,8 @@ import {
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { composePersistentMindInstructions, normalizePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { resolvePersistentMindPlaybookPhase } from './persistentMindPlaybookSignals.js';
-import { assertVisionRunUsedImages, runPromptThroughProvider } from './promptRunner.js';
+import { assertVisionRunUsedImages, resolveLocalPromptBudget, runPromptThroughProvider } from './promptRunner.js';
+import { CHARS_PER_TOKEN } from '../lib/contextBudget.js';
 import { stopRun } from './runner.js';
 import {
   buildPersistentMindTaskCapabilityPrompt,
@@ -69,6 +70,23 @@ const { HEARTBEAT_INTERVAL_MS } = PERSISTENT_MIND_LIMITS;
 const MAX_TOOL_PROVIDER_ROUNDS = 4;
 const MAX_TOOL_RESULT_CHARS = 4_000;
 const MAX_CONTINUATION_TOOL_PROMPT_CHARS = 24_000;
+// Every mind call declares this much answer room. On a local window the
+// prompt runner shrinks it to fit (localOutputReserveTokens) and caps
+// generation at the shrunk number.
+const PERSISTENT_MIND_OUTPUT_RESERVE_TOKENS = 8_192;
+// Local-window prompt fitting. chars/4 undercounts real tokenizers (qwen3
+// packed a 54K-char wake into 14,990 tokens, ~10% over the estimate), so the
+// fitted prompt targets 90% of the room the dispatch gate allows.
+const LOCAL_PROMPT_TOKENIZER_MARGIN = 0.9;
+// Share of the fitted prompt the recalled context (memories, journal, recent
+// history) may take on a local window; the rest is the response contract,
+// capabilities, tool catalog and in-wake tool results.
+const LOCAL_CONTEXT_PROMPT_SHARE = 0.25;
+// The narrowest tool catalog a local-window rebuild may fall to. Tools that
+// already ran stay in full (requiredToolNames); the rest stay discoverable.
+const MIN_LOCAL_TOOL_PROMPT_CHARS = 6_000;
+// Per-result caps tried in order when completed tool results must shrink.
+const TOOL_RESULT_COMPACTION_CAPS = [2_000, 1_000, 500, 200];
 const MAX_MEMORY_CANDIDATES_PER_TURN = 5;
 
 const memoryCandidateSchema = z.object({
@@ -81,8 +99,10 @@ const memoryCandidateSchema = z.object({
 }).strict();
 
 export const persistentMindResponseSchema = z.object({
-  thinkingSummary: z.string().trim().max(4_000).optional().default(''),
-  message: z.string().trim().max(8_000).optional().default(''),
+  // A local model may use null for absent optional prose. Normalize only
+  // absence; malformed text and every action contract remain strict.
+  thinkingSummary: z.string().trim().max(4_000).nullish().transform(value => value ?? ''),
+  message: z.string().trim().max(8_000).nullish().transform(value => value ?? ''),
   memoryCandidates: z.array(memoryCandidateSchema).max(MAX_MEMORY_CANDIDATES_PER_TURN).optional().default([]),
   taskRequests: z.array(persistentMindTaskRequestSchema)
     .max(PERSISTENT_MIND_TASK_LIMITS.maxPerTurn)
@@ -107,6 +127,56 @@ const boundedToolResult = (result) => {
     ? result
     : { truncated: true, preview: serialized.slice(0, MAX_TOOL_RESULT_CHARS) };
 };
+
+const compactToolResult = (toolResult, cap) => {
+  const compacted = { ...toolResult };
+  if (toolResult.result !== undefined) {
+    const serialized = JSON.stringify(toolResult.result);
+    if (serialized.length > cap) compacted.result = { truncated: true, preview: serialized.slice(0, cap) };
+  }
+  if (typeof toolResult.error === 'string' && toolResult.error.length > cap) compacted.error = toolResult.error.slice(0, cap);
+  return compacted;
+};
+
+/**
+ * Completed tool results shrunk to fit `maxChars` of JSON, for a local window
+ * that cannot hold them verbatim. Tries progressively smaller per-result
+ * previews, then falls back to one stub per call (`requestId`, `name`,
+ * `state`) so the model still knows what already ran and must not be repeated.
+ * Returns the input unchanged when it already fits.
+ *
+ * @param {Array<object>} results
+ * @param {number} maxChars
+ * @returns {Array<object>}
+ */
+function compactToolResultsToFit(results, maxChars) {
+  if (JSON.stringify(results).length <= maxChars) return results;
+  for (const cap of TOOL_RESULT_COMPACTION_CAPS) {
+    const compacted = results.map((toolResult) => compactToolResult(toolResult, cap));
+    if (JSON.stringify(compacted).length <= maxChars) return compacted;
+  }
+  return results.map(({ requestId, name, state }) => ({ requestId, name, state, compacted: true }));
+}
+
+/**
+ * The char budget for a whole mind prompt on a LOCAL provider with a known
+ * window, or null (cloud, CLI, unknown window) to build exactly as before.
+ * `maxPromptChars` bounds every round's prompt; `contextMaxChars` bounds the
+ * recalled context assembled before the turn.
+ *
+ * @returns {Promise<{ contextWindow: number, outputReserveTokens: number, maxPromptChars: number, contextMaxChars: number }|null>}
+ */
+async function resolvePersistentMindPromptBudget({ provider, model }) {
+  const local = await resolveLocalPromptBudget({ provider, model, outputReserveTokens: PERSISTENT_MIND_OUTPUT_RESERVE_TOKENS });
+  if (!local || local.maxPromptTokens <= 0) return null;
+  const maxPromptChars = Math.floor(local.maxPromptTokens * LOCAL_PROMPT_TOKENIZER_MARGIN) * CHARS_PER_TOKEN;
+  return {
+    contextWindow: local.contextWindow,
+    outputReserveTokens: local.outputReserveTokens,
+    maxPromptChars,
+    contextMaxChars: Math.floor(maxPromptChars * LOCAL_CONTEXT_PROMPT_SHARE),
+  };
+}
 
 const toolRequestId = (turnId, call) => `mind-tool-${sha256Text(canonicalStringify(call.requestId
   ? { turnId, providerRequestId: call.requestId }
@@ -295,7 +365,7 @@ export function buildPersistentMindSummaryPrompt({ events, previousSummary, jour
   const journalSection = digest.text
     ? `Decision journal for this mind (authoritative — entries listed here are current; anything retired has already been removed):\n${digest.text}\n\nPreserve every active commitment, open question, risk and goal above verbatim in meaning. Keep only the settled history needed to explain the current state. Never restate a decision that is not listed.\n\n`
     : '';
-  return `Summarize this older portion of one persistent mind's life in first person. Preserve concrete decisions, unresolved questions, user preferences, and causal links. Do not invent facts. Return plain text only, no heading.\n\n${journalSection}${previousSummary ? `Prior cumulative summary:\n${previousSummary}\n\n` : ''}New trajectory events:\n${renderPersistentMindEventLines(events)}`;
+  return `Summarize this older portion of one persistent mind's life in first person. Preserve concrete decisions, unresolved questions, user preferences, and causal links. Do not invent facts. Return plain text only, no heading.\n\n${journalSection}${previousSummary ? `Prior cumulative summary:\n${previousSummary}\n\n` : ''}New trajectory events:\n${renderPersistentMindEventLines(events, mindId)}`;
 }
 
 /**
@@ -305,7 +375,7 @@ export function buildPersistentMindSummaryPrompt({ events, previousSummary, jour
  */
 const passthroughCallBoundary = (_descriptor, run) => run({ reportRunId: () => {} });
 
-async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId, timeoutMs }) {
+async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId }) {
   if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
   if (typeof heartbeat === 'function') await heartbeat();
   let activeRunId = null;
@@ -331,10 +401,16 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
     effort,
     prompt,
     source: 'cos-persistent-mind',
-    ...(timeoutMs ? { absoluteTimeoutMs: timeoutMs, maxTokens: 8192, outputReserveTokens: 8192 } : {}),
+    // Resident inference may be slow or silent while thinking. Stop remains explicit.
+    timeout: 0,
+    absoluteTimeoutMs: 0,
+    outputReserveTokens: PERSISTENT_MIND_OUTPUT_RESERVE_TOKENS,
     allowFallback: false,
     screenshots,
     responseSchema,
+    beforeExecute: () => {
+      if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
+    },
     onRunCreated: (runId) => {
       activeRunId = runId;
       // Reported as soon as the run id exists, so a receipt for a call that
@@ -371,6 +447,9 @@ export function createPersistentMindTurnAdapter() {
       const playbookPhase = playbook.mode === 'continuous-play'
         ? await resolvePersistentMindPlaybookPhase({ signal })
         : null;
+      // A local window bounds the recalled context up front, so the wake
+      // prompt leaves room for the tool rounds that follow it.
+      const promptBudget = await resolvePersistentMindPromptBudget({ provider: profile.provider, model: profile.model });
       return {
         ok: true,
         provider: profile.provider,
@@ -381,19 +460,20 @@ export function createPersistentMindTurnAdapter() {
         playbook,
         playbookPhase,
         memories,
+        ...(promptBudget ? { contextMaxChars: promptBudget.contextMaxChars } : {}),
       };
     },
 
     async summarize({ events, previousSummary, journal, mindId, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
       const prompt = buildPersistentMindSummaryPrompt({ events, previousSummary, journal, mindId });
-      const result = await callBoundary({ purpose: 'summary', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId, timeoutMs }) => runPinnedPrompt({
+      const result = await callBoundary({ purpose: 'summary', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId }) => runPinnedPrompt({
         provider,
         model,
         effort,
         signal,
         heartbeat,
         reportRunId,
-        prompt, timeoutMs,
+        prompt,
       }));
       return result.text.trim();
     },
@@ -402,8 +482,8 @@ export function createPersistentMindTurnAdapter() {
     // closed-schema validation and the single repair retry, so the adapter
     // cannot accidentally accept a batch the contract would have refused.
     async extractJournal({ prompt, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
-      const result = await callBoundary({ purpose: 'journal', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId, timeoutMs }) => runPinnedPrompt({
-        provider, model, effort, signal, heartbeat, reportRunId, prompt, timeoutMs,
+      const result = await callBoundary({ purpose: 'journal', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId }) => runPinnedPrompt({
+        provider, model, effort, signal, heartbeat, reportRunId, prompt,
       }));
       return result.text.trim();
     },
@@ -452,25 +532,64 @@ export function createPersistentMindTurnAdapter() {
       // isUserTurn omitted so a multi-round turn can't age its own tools out
       // from under itself.
       const isUserTurn = wake?.kind === 'message';
-      const toolCapabilityPrompt = await buildPersistentMindToolPrompt(taskAccess, await readPersistentMindRecipeCatalog(taskAccess), { turnId, isUserTurn, trace: true });
+      const recipeCatalog = await readPersistentMindRecipeCatalog(taskAccess);
+      const toolCapabilityPrompt = await buildPersistentMindToolPrompt(taskAccess, recipeCatalog, { turnId, isUserTurn, trace: true });
       const callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: taskAccess.callUser });
       const screenshots = (Array.isArray(wake?.message?.images) ? wake.message.images : []).map((image) => {
         const path = resolveScreenshot(image?.filename);
         if (!path) throw new Error('A Persistent Mind image attachment no longer resolves under the screenshots directory');
         return path;
       });
-      let basePrompt = buildPersistentMindTurnPrompt({
+      const turnPromptSections = {
         context,
         wake,
         taskCapabilityPrompt,
         issueCapabilityPrompt,
-        toolCapabilityPrompt,
         visibilityPrompt,
         userActionsPrompt,
         maintenancePrompt,
         callCapabilityPrompt,
-      });
-      let providerPrompt = basePrompt;
+      };
+      // On a local window every round is fitted under the room the dispatch
+      // gate allows, instead of being refused mid-wake once tool results grow.
+      const promptBudget = await resolvePersistentMindPromptBudget({ provider, model });
+      // Set after the first tool round: what a continuation prompt carries.
+      let continuation = null;
+      const composeRoundPrompt = async (namePrompt) => {
+        // Rebuilds never age the lease or trace (isUserTurn/trace omitted).
+        const buildTools = (maxChars) => (continuation
+          ? buildPersistentMindToolPrompt(continuation.capabilities, continuation.recipes, {
+            turnId, maxChars, requiredToolNames: continuation.requiredToolNames,
+          })
+          : buildPersistentMindToolPrompt(taskAccess, recipeCatalog, { turnId, maxChars }));
+        const assemble = (toolPrompt, toolResults) => `${buildPersistentMindTurnPrompt({ ...turnPromptSections, toolCapabilityPrompt: toolPrompt })}${continuation
+          ? `\n\n# Completed tool results\n${JSON.stringify(toolResults)}\n\n${continuation.suffix}`
+          : ''}${namePrompt}`;
+        // A successful call proves only that its own schema was useful. Keep
+        // that schema (and the compact discovery index) for continuation; do
+        // not expand every sibling in the leased family.
+        let toolPrompt = continuation ? await buildTools(MAX_CONTINUATION_TOOL_PROMPT_CHARS) : toolCapabilityPrompt;
+        let toolResults = completedToolResults;
+        let prompt = assemble(toolPrompt, toolResults);
+        const limit = promptBudget?.maxPromptChars;
+        if (!limit || prompt.length <= limit) return prompt;
+        const untrimmedChars = prompt.length;
+        // 1. Narrow the tool catalog: schemas that already ran stay in full,
+        //    the rest stay listed as budget-limited and can be re-requested.
+        const toolTarget = Math.max(Math.min(toolPrompt.length, MIN_LOCAL_TOOL_PROMPT_CHARS), toolPrompt.length - (prompt.length - limit));
+        if (toolTarget < toolPrompt.length) {
+          toolPrompt = await buildTools(toolTarget);
+          prompt = assemble(toolPrompt, toolResults);
+        }
+        // 2. Compact completed tool results (previews, then per-call stubs).
+        if (continuation && prompt.length > limit) {
+          const resultsChars = JSON.stringify(toolResults).length;
+          toolResults = compactToolResultsToFit(toolResults, Math.max(0, resultsChars - (prompt.length - limit)));
+          prompt = assemble(toolPrompt, toolResults);
+        }
+        console.log(`📏 Persistent mind prompt fitted to the ${promptBudget.contextWindow}-token local window: ${untrimmedChars} → ${prompt.length} chars (limit ${limit})`);
+        return prompt;
+      };
       let result;
       let parsed;
       const toolBudget = { used: 0 };
@@ -484,10 +603,10 @@ export function createPersistentMindTurnAdapter() {
       for (let round = 0; round < MAX_TOOL_PROVIDER_ROUNDS; round += 1) {
         // Round 0 is the turn itself; every later round is a continuation the
         // model earned by asking for tools. Each is admitted on its own.
-        const prompt = `${providerPrompt}\n\n# Current naming identity\n${persistentMindNamePrompt(await readPersistentMindName(PERSISTENT_MIND_ID), { canChoose: taskAccess.manageMind })}`;
+        const prompt = await composeRoundPrompt(`\n\n# Current naming identity\n${persistentMindNamePrompt(await readPersistentMindName(PERSISTENT_MIND_ID), { canChoose: taskAccess.manageMind })}`);
         result = await callBoundary(
           { purpose: round === 0 ? 'turn' : 'tool-round', round, promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) },
-          async ({ reportRunId, timeoutMs }) => runPinnedPrompt({
+          async ({ reportRunId }) => runPinnedPrompt({
             provider,
             model,
             effort,
@@ -495,7 +614,7 @@ export function createPersistentMindTurnAdapter() {
             heartbeat,
             screenshots,
             reportRunId,
-            prompt, timeoutMs,
+            prompt,
             responseSchema: persistentMindResponseSchema,
           }),
         );
@@ -615,17 +734,13 @@ export function createPersistentMindTurnAdapter() {
           .filter((toolResult) => toolResult.state === 'completed')
           .map((toolResult) => toolResult.name)
           .filter(Boolean);
-        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, maintenancePrompt, callCapabilityPrompt,
-          // A successful call proves only that its own schema was useful. Keep
-          // that schema (and the compact discovery index) for continuation;
-          // do not expand every sibling in the leased family. This bounds the
-          // complete prompt while preserving explicit activation semantics.
-          toolCapabilityPrompt: await buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities), {
-            turnId, maxChars: MAX_CONTINUATION_TOOL_PROMPT_CHARS, requiredToolNames: completedToolNames,
-          }),
-        });
         const budgetExhausted = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;
-        providerPrompt = `${basePrompt}\n\n# Completed tool results\n${JSON.stringify(completedToolResults)}\n\n${parsed.taskRequests.length > 0 ? 'Task requests from this intermediate round were not queued. Include only the final desired taskRequests in a terminal response with toolCalls: [].\n' : ''}${budgetExhausted ? 'The tool-call budget is exhausted. Return a final response with toolCalls: [] and do not repeat completed actions.' : 'Use these results to continue. Do not repeat a completed requestId.'}`;
+        continuation = {
+          capabilities: liveCapabilities,
+          recipes: await readPersistentMindRecipeCatalog(liveCapabilities),
+          requiredToolNames: completedToolNames,
+          suffix: `${parsed.taskRequests.length > 0 ? 'Task requests from this intermediate round were not queued. Include only the final desired taskRequests in a terminal response with toolCalls: [].\n' : ''}${budgetExhausted ? 'The tool-call budget is exhausted. Return a final response with toolCalls: [] and do not repeat completed actions.' : 'Use these results to continue. Do not repeat a completed requestId.'}`,
+        };
       }
       // After the tool rounds, so a call is placed on the turn's final answer
       // rather than on an intermediate round the model went on to revise.

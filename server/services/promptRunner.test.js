@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./runner.js', () => ({
   createRun: vi.fn(),
@@ -84,7 +84,7 @@ const observedWindows = await import('./observedContextWindows.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { apiRunAbsoluteTimeoutMs } = await import('../lib/aiToolkit/internal/runTimeouts.js');
 const { CREATIVE_LATITUDE_HEADING, withCreativeLatitude } = await import('../lib/creativeLatitude.js');
-const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities, assertVisionRunUsedImages } = await import('./promptRunner.js');
+const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities, assertVisionRunUsedImages, resolveLocalPromptBudget } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', type: 'api', defaultModel: 'm-default', ...extra,
@@ -1019,6 +1019,23 @@ describe('promptRunner — API timeout enforcement', () => {
     vi.useRealTimers();
   });
 
+  it('keeps an explicitly unbounded mind call open past provider and absolute defaults', async () => {
+    vi.useFakeTimers();
+    let finish;
+    runner.executeApiRun.mockImplementation(({ onComplete }) => {
+      finish = () => onComplete({ success: true });
+      return new Promise(() => {});
+    });
+    const pending = runPromptThroughProvider({ provider: apiProvider(), prompt: 'p',
+      source: 'cos-persistent-mind', timeout: 0, absoluteTimeoutMs: 0 });
+    await vi.advanceTimersByTimeAsync(86_400_000);
+    expect(runner.executeApiRun).toHaveBeenCalledWith(expect.objectContaining({ timeout: 0, absoluteTimeoutMs: 0 }));
+    expect(runner.stopRun).not.toHaveBeenCalled();
+    finish();
+    await pending;
+    vi.useRealTimers();
+  });
+
   it('does not call stopRun when API completes within the timeout', async () => {
     vi.useFakeTimers();
     runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
@@ -1461,6 +1478,10 @@ describe('promptRunner — retry-with-fallback', () => {
 
     expect(runner.executeApiRun).not.toHaveBeenCalled();
     expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+    // No retry suppressed the original event, so it remains the sole owner.
+    expect(autoFixer.noteFallbackStarted).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
+    expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
   });
 
   it('rethrows when toolkit/providerStatus is not initialized (no retry path possible)', async () => {
@@ -1931,6 +1952,12 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
     expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'good-model' });
     expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledTimes(1);
+    expect(autoFixer.noteFallbackFailed).toHaveBeenCalledTimes(2);
+    // The replacement must exist before suppression is released; finally must
+    // not escalate again after this explicit terminal operation.
+    expect(autoFixer.escalateProviderFailure.mock.invocationCallOrder[0])
+      .toBeLessThan(autoFixer.noteFallbackFailed.mock.invocationCallOrder[0]);
   });
 
   it('skips Tier 1 for a CLI provider whose model flag is baked into args (override ignored)', async () => {
@@ -2081,11 +2108,17 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
       onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
     });
 
-    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' })).rejects.toThrow();
+    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' })).rejects.toThrow('provider registry corrupt');
 
     expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
       context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
     }));
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledTimes(1);
+    expect(autoFixer.noteFallbackFailed.mock.calls).toEqual([
+      [{ provider: 'Primary API', model: 'primary-model' }],
+      [{ provider: 'Primary API', model: 'good-model' }],
+    ]);
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
   });
 
   it('does NOT engage Tier 1 for a category-less failure even when the provider lists alternatives', async () => {
@@ -2616,6 +2649,119 @@ describe('promptRunner — context gate on the requested provider', () => {
     // The endpoint is healthy — a smaller prompt still works there — so this
     // must not take it offline for every other caller.
     expect(status.markUnavailable).not.toHaveBeenCalled();
+  });
+
+  // #9437 made the persistent mind declare an 8,192-token reserve on every
+  // wake. On a 16K local daemon that refused a ~13.5K-token prompt that fits
+  // ("known 16384-token context is below the 21744-token request budget").
+  // A local provider plans a window-sized reserve instead, and caps generation
+  // at the same number so the answer cannot outgrow the room the gate planned.
+  describe('local output reserve', () => {
+    beforeEach(() => {
+      vi.stubEnv('OLLAMA_CONTEXT_LENGTH', undefined);
+      vi.stubEnv('OLLAMA_URL', undefined);
+      vi.stubEnv('OLLAMA_HOST', undefined);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    const localOllama = (extra = {}) => apiProvider({
+      id: 'ollama',
+      name: 'Ollama',
+      defaultModel: 'qwen3.8-27b',
+      models: ['qwen3.8-27b'],
+      endpoint: 'http://localhost:11434/v1',
+      ...extra,
+    });
+    // ~13,552 prompt tokens: fits 16K with a 2,048 reserve, not with 8,192.
+    const HELM_SIZED_PROMPT = 'x'.repeat(13_552 * 4);
+
+    it('dispatches a prompt that fits a 16K local window and caps max tokens at the local reserve', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(16_384));
+      runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+      await runPromptThroughProvider({
+        provider: localOllama(),
+        prompt: HELM_SIZED_PROMPT,
+        source: 'test',
+        outputReserveTokens: 8_192,
+        allowFallback: false,
+      });
+
+      expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
+      expect(runner.executeApiRun.mock.calls[0][0].maxTokens).toBe(2_048);
+    });
+
+    it('still refuses a local prompt that cannot fit even with the smaller reserve', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(16_384));
+
+      const rejection = await runPromptThroughProvider({
+        provider: localOllama(),
+        prompt: 'x'.repeat(15_000 * 4),
+        source: 'test',
+        outputReserveTokens: 8_192,
+        allowFallback: false,
+      }).catch((err) => err);
+
+      expect(rejection.message).toMatch(/known 16384-token context is below the 17048-token request budget/);
+      expect(runner.executeApiRun).not.toHaveBeenCalled();
+    });
+
+    it('leaves an explicit caller maxTokens alone', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(32_768));
+      runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+      await runPromptThroughProvider({
+        provider: localOllama(),
+        prompt: 'short',
+        source: 'test',
+        outputReserveTokens: 8_192,
+        maxTokens: 6_000,
+        allowFallback: false,
+      });
+
+      expect(runner.executeApiRun.mock.calls[0][0].maxTokens).toBe(6_000);
+    });
+
+    it('reports the prompt room a local window leaves after its reserve', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(20_480));
+      await expect(resolveLocalPromptBudget({ provider: localOllama(), outputReserveTokens: 8_192 })).resolves.toEqual({
+        contextWindow: 20_480, outputReserveTokens: 2_560, maxPromptTokens: 17_920,
+      });
+      await expect(resolveLocalPromptBudget({
+        provider: apiProvider({ id: 'cloud-api', defaultModel: 'qwen3.8-27b', endpoint: 'https://api.example.com/v1' }),
+        outputReserveTokens: 8_192,
+      })).resolves.toBeNull();
+      observedWindows.withObservedContextWindows.mockImplementation(async (provider) => provider);
+      await expect(resolveLocalPromptBudget({ provider: localOllama(), outputReserveTokens: 8_192 })).resolves.toBeNull();
+    });
+
+    it('budgets from the configured Ollama window when no observed window is available', async () => {
+      vi.stubEnv('OLLAMA_CONTEXT_LENGTH', '32768');
+      vi.stubEnv('OLLAMA_URL', 'http://localhost:11434');
+      observedWindows.withObservedContextWindows.mockImplementation(async (provider) => provider);
+
+      await expect(resolveLocalPromptBudget({ provider: localOllama(), outputReserveTokens: 8_192 })).resolves.toEqual({
+        contextWindow: 32_768, outputReserveTokens: 4_096, maxPromptTokens: 28_672,
+      });
+    });
+
+    it('keeps the declared reserve for a cloud provider', async () => {
+      observedWindows.withObservedContextWindows.mockImplementation(servingWindow(16_384));
+
+      const rejection = await runPromptThroughProvider({
+        provider: apiProvider({ id: 'cloud-api', name: 'Cloud API', defaultModel: 'qwen3.8-27b', endpoint: 'https://api.example.com/v1' }),
+        prompt: HELM_SIZED_PROMPT,
+        source: 'test',
+        outputReserveTokens: 8_192,
+        allowFallback: false,
+      }).catch((err) => err);
+
+      expect(rejection.message).toMatch(/known 16384-token context is below the 21744-token request budget/);
+      expect(runner.executeApiRun).not.toHaveBeenCalled();
+    });
   });
 
   it('dispatches unchanged when nothing declared a window', async () => {

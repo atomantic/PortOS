@@ -44,9 +44,18 @@ const oneLine = (value, max) => {
  * Deliberately reads ONLY type/actor/target/summary: payload values (even
  * post-redaction) never reach the wake prompt from here.
  */
-export function buildPersistentMindUserActionsPrompt(events) {
+export function buildPersistentMindUserActionsPrompt(events, { now } = {}) {
+  const seen = new Set();
   const rows = (Array.isArray(events) ? events : [])
-    .filter((event) => event && typeof event === 'object' && event.type);
+    .filter(event => {
+      if (!event || typeof event.type !== 'string' || !event.type.trim() || event.actor !== 'user'
+        || typeof event.id !== 'string' || !event.id || seen.has(event.id)) return false;
+      if (typeof event.happenedAt !== 'string') return false;
+      const at = Date.parse(event.happenedAt);
+      if (!Number.isFinite(at) || (Number.isFinite(now) && (at > now || at < now - USER_ACTIONS_SNIPPET_WINDOW_MS))) return false;
+      seen.add(event.id);
+      return true;
+    });
   if (rows.length === 0) return '';
 
   const counts = new Map();
@@ -95,7 +104,9 @@ export function buildPersistentMindUserActionsPrompt(events) {
 export async function readPersistentMindUserActionsPrompt({ now = Date.now() } = {}) {
   const [events, findings] = await Promise.all([
     listUserActions({
+      actor: 'user',
       from: new Date(now - USER_ACTIONS_SNIPPET_WINDOW_MS).toISOString(),
+      to: new Date(now).toISOString(),
       limit: SNIPPET_FETCH_LIMIT,
     }).catch((error) => {
       console.error(`❌ Persistent mind user-action snippet read failed: ${error.message}`);
@@ -106,7 +117,7 @@ export async function readPersistentMindUserActionsPrompt({ now = Date.now() } =
       return [];
     }),
   ]);
-  const eventsSection = buildPersistentMindUserActionsPrompt(events);
+  const eventsSection = buildPersistentMindUserActionsPrompt(events, { now });
   const detectorLines = formatLeftoverBranchSnippet(findings);
   if (!eventsSection && !detectorLines) return '';
   if (!eventsSection) return `# Recent user actions (last 24h)\n${detectorLines}`;

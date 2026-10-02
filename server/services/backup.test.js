@@ -26,7 +26,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
-import { basename, join as joinPath } from 'path';
+import { basename, dirname, join as joinPath } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // runBackup persists state to PATHS.data/backup/state.json. Re-root PATHS at
@@ -47,7 +47,9 @@ afterAll(() => {
 
 
 // Mock the DB health check and child_process.spawn before importing backup.js
+const poolConfig = vi.hoisted(() => Object.freeze({ host: 'db.example.test', port: 5439, database: 'example_db', user: 'example_user', password: 'example-secret', ssl: false, sslnegotiation: 'postgres' }));
 vi.mock('../lib/db.js', () => ({
+  POOL_CONFIG: poolConfig,
   checkHealth: vi.fn(),
   query: vi.fn().mockResolvedValue({ rows: [] }),
   withDatabaseMaintenance: vi.fn(fn => fn()),
@@ -118,15 +120,19 @@ import * as fs from 'fs/promises';
 // Partial mock of the settings service: only reloadSettings is overridden, so a
 // live restore can be asserted to re-sync the settings caches without actually
 // touching the developer's settings.json or emitting socket events.
-vi.mock('./settings.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  reloadSettings: vi.fn(async () => {}),
-}));
+vi.mock('./settings.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    reloadSettings: vi.fn(async () => {}),
+    withLiveSettingsRestore: vi.fn(actual.withLiveSettingsRestore),
+  };
+});
 vi.mock('./brainStorage.js', async (importOriginal) => ({
   ...(await importOriginal()),
   invalidateAllCaches: vi.fn(),
 }));
-import { reloadSettings } from './settings.js';
+import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary, deleteSnapshot } from './backup.js';
 import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../lib/sharedSchemas.js';
@@ -825,6 +831,18 @@ describe('openSnapshotStream', () => {
   });
 });
 
+
+function assertPoolToolSpawn([, args, { env }]) {
+  for (const [flag, key] of [['-h', 'host'], ['-p', 'port'], ['-U', 'user'], ['-d', 'database']]) {
+    expect(args[args.indexOf(flag) + 1]).toBe(String(poolConfig[key]));
+  }
+  expect(env.PGPASSWORD).toBe(poolConfig.password);
+  expect(env.PGSSLMODE).toBe('disable');
+  expect(env.PGSSLNEGOTIATION).toBe('postgres');
+  for (const key of ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS', 'PGHOST', 'PGDATABASE']) expect(env).not.toHaveProperty(key);
+  expect(env.PATH).toBe(process.env.PATH);
+}
+
 describe('dumpPostgres status classification', () => {
   let dumpPostgres;
   beforeEach(async () => {
@@ -919,6 +937,21 @@ describe('dumpPostgres status classification', () => {
     expect(result.status).toBe('skipped');
     expect(result.reason).toBe('not_configured');
     if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
+  });
+
+  it('dumps the checked pool endpoint despite changed credentials and poisoned libpq settings', async () => {
+    for (const key of ['PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGPASSWORD', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS', 'PGSSLMODE']) vi.stubEnv(key, 'poisoned');
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096 });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from('CREATE TABLE public.memories (id uuid);\n')]));
+    const result = dumpPostgres('/tmp/example.sql');
+    await flush();
+    assertPoolToolSpawn(spawn.mock.calls[0]);
+    proc.emit('close', 0);
+    expect(await result).toMatchObject({ status: 'ok' });
+    vi.unstubAllEnvs();
   });
 
   it('returns failed/pg_dump_missing when spawn errors', async () => {
@@ -1324,7 +1357,7 @@ describe('restorePostgres', () => {
     await flush();
     proc.emit('close', 0);
     await flush();
-    expect(ensureSchema).toHaveBeenCalledWith({ force: true });
+    await vi.waitFor(() => expect(ensureSchema).toHaveBeenCalledWith({ force: true }));
     expect(runDbMigrations).not.toHaveBeenCalled();
     expect(settled).toBe(false);
     finishSchema();
@@ -1627,7 +1660,7 @@ describe('restorePostgres', () => {
   // and --single-transaction rolls the whole replay back, so a failed restore
   // leaves the live DB untouched instead of half-dropped. Both flags are load
   // bearing — a refactor that drops either turns a failed restore into data loss.
-  it('passes --single-transaction and ON_ERROR_STOP=1 with the default PGPASSWORD', async () => {
+  it('passes atomic replay flags with the captured pool credentials', async () => {
     vi.stubEnv('PGPASSWORD', '');
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
     mockLegacyDumpRead();
@@ -1644,11 +1677,11 @@ describe('restorePostgres', () => {
     // Assert the flag/value pairing, not just membership: '-v' followed by
     // something else would still satisfy arrayContaining.
     expect(args[args.indexOf('-v') + 1]).toBe('ON_ERROR_STOP=1');
-    expect(opts.env.PGPASSWORD).toBe('portos');
+    expect(opts.env.PGPASSWORD).toBe(poolConfig.password);
   });
 
-  it('prefers an explicit PGPASSWORD over the portos default', async () => {
-    vi.stubEnv('PGPASSWORD', 'from-env');
+  it('ignores changed endpoint, password and inherited libpq policy during restore', async () => {
+    for (const key of ['PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGPASSWORD', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS', 'PGSSLMODE']) vi.stubEnv(key, 'poisoned');
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
     mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
@@ -1658,7 +1691,7 @@ describe('restorePostgres', () => {
     await flush();
     proc.emit('close', 0);
     await p;
-    expect(spawn.mock.calls[0][2].env.PGPASSWORD).toBe('from-env');
+    assertPoolToolSpawn(spawn.mock.calls[0]);
   });
 });
 
@@ -2486,6 +2519,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     reloadSettings.mockClear();
     invalidateBrainCaches.mockClear();
     withLiveCosRestore.mockClear();
+    withLiveSettingsRestore.mockClear();
   });
 
   // Drive a mocked rsync to a clean exit so restoreSnapshot resolves.
@@ -2610,6 +2644,89 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     });
   });
 
+  describe('settings restore ownership boundary', () => {
+    it.each([undefined, 'settings.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const reloading = Promise.withResolvers();
+      const finishReload = Promise.withResolvers();
+      reloadSettings.mockImplementationOnce(async () => {
+        reloading.resolve();
+        await finishReload.promise;
+      });
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter });
+      await flush();
+      expect(withLiveSettingsRestore).toHaveBeenCalledTimes(1);
+      const later = vi.fn();
+      const waitingWrite = withLiveSettingsRestore(later);
+      proc.emit('close', 0);
+      await reloading.promise;
+      expect(later).not.toHaveBeenCalled();
+      finishReload.resolve();
+      await Promise.all([pending, waitingWrite]);
+      expect(later).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([{ dryRun: true }, { dryRun: true, subdirFilter: 'settings.json' }, { dryRun: false, subdirFilter: 'images' }, { dryRun: false, subdirFilter: 'cos' }])('leaves unaffected scope alone: %j', async options => {
+      await runRestore('/dest', 'snap-1', options);
+      expect(withLiveSettingsRestore).not.toHaveBeenCalled();
+    });
+
+    it('drains settings before acquiring CoS and holds them through CoS reconciliation', async () => {
+      const admitted = Promise.withResolvers();
+      const finishWrite = Promise.withResolvers();
+      const writing = withLiveSettingsRestore(async () => {
+        admitted.resolve();
+        await finishWrite.promise;
+      });
+      await admitted.promise;
+      const reconciled = Promise.withResolvers();
+      const finishCosReload = Promise.withResolvers();
+      withLiveCosRestore.mockImplementationOnce(async transfer => {
+        const result = await transfer();
+        reconciled.resolve();
+        await finishCosReload.promise;
+        return result;
+      });
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(withLiveSettingsRestore).toHaveBeenCalledTimes(2));
+      expect(withLiveCosRestore).not.toHaveBeenCalled();
+      finishWrite.resolve();
+      await flush();
+      const later = vi.fn();
+      const waitingWrite = withLiveSettingsRestore(later);
+      proc.emit('close', 0);
+      await reconciled.promise;
+      expect(later).not.toHaveBeenCalled();
+      finishCosReload.resolve();
+      await Promise.all([writing, pending, waitingWrite]);
+      expect(later).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves full-restore CoS busy refusal and releases settings admission', async () => {
+      withLiveCosRestore.mockRejectedValueOnce(Object.assign(new Error('Stop CoS before restoring'), { code: 'COS_RESTORE_BUSY' }));
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false })).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
+      expect(spawn).not.toHaveBeenCalled();
+      await expect(withLiveSettingsRestore(() => 'released')).resolves.toBe('released');
+    });
+
+    it.each([0, 1])('releases settings after reconciliation failure with rsync exit %s', async exitCode => {
+      reloadSettings.mockRejectedValueOnce(new Error('settings reload failed'));
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'settings.json' });
+      await flush();
+      const later = vi.fn();
+      const waitingWrite = withLiveSettingsRestore(later);
+      proc.emit('close', exitCode);
+      await expect(pending).rejects.toThrow(/settings reload failed/);
+      await waitingWrite;
+      expect(later).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('settings cache re-sync', () => {
     it('reloads settings after a live restore', async () => {
       await runRestore('/dest', 'snap-1', { dryRun: false });
@@ -2723,8 +2840,8 @@ describe('runBackup lifecycle', () => {
   // rsync/pg_dump are stubbed, so backup work completes via real async I/O
   // rather than on a fixed number of microtasks. Poll instead of guessing.
   async function waitFor(predicate, label) {
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + 5000;
+    while (performance.now() < deadline) {
       if (await predicate()) return;
       await new Promise((r) => setTimeout(r, 5));
     }
@@ -2776,6 +2893,73 @@ describe('runBackup lifecycle', () => {
     if (prevMemoryBackend === undefined) delete process.env.MEMORY_BACKEND;
     else process.env.MEMORY_BACKEND = prevMemoryBackend;
     rmSync(destRoot, { recursive: true, force: true });
+  });
+
+  it.each(['completed', 'failed', 'interrupted', 'reservation', 'directory race'])('preserves a colliding %s snapshot while a new run fails', async (state) => {
+    const fsp = await actualFs();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-02T03:04:05Z'));
+    try {
+      const oldId = '2026-01-02T03-04-05';
+      const root = joinPath(destRoot, 'snapshots', machineHost);
+      const oldDir = joinPath(root, oldId);
+      const guard = joinPath(root, `.${oldId}.in-progress`);
+      await fsp.mkdir(root, { recursive: true });
+      if (state === 'reservation') {
+        await fsp.writeFile(guard, 'other reservation');
+      } else if (state === 'directory race') {
+        vi.spyOn(fs, 'mkdir').mockImplementation(async (path, ...args) => {
+          if (path === oldDir) {
+            await fsp.mkdir(oldDir);
+            await fsp.writeFile(joinPath(oldDir, 'portos-db.sql'), 'old dump');
+          }
+          return fsp.mkdir(path, ...args);
+        });
+      } else {
+        await fsp.mkdir(oldDir);
+        await fsp.writeFile(joinPath(oldDir, 'portos-db.sql'), 'old dump');
+        if (state === 'failed') await fsp.writeFile(joinPath(oldDir, '.failed'), 'old failure');
+        if (state === 'interrupted') await fsp.writeFile(guard, 'other reservation');
+      }
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = runBackup(destRoot).catch(error => error);
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      const newDir = dirname(spawn.mock.calls[0][1].at(-1));
+      expect(basename(newDir)).not.toBe(oldId);
+      await expect(fsp.access(joinPath(root, `.${basename(newDir)}.in-progress`))).resolves.toBeUndefined();
+      proc.emit('close', 1);
+      expect(await pending).toBeInstanceOf(Error);
+      if (state !== 'reservation') expect(await fsp.readFile(joinPath(oldDir, 'portos-db.sql'), 'utf8')).toBe('old dump');
+      if (state === 'failed') expect(await fsp.readFile(joinPath(oldDir, '.failed'), 'utf8')).toBe('old failure');
+      if (state === 'interrupted' || state === 'reservation') expect(await fsp.readFile(guard, 'utf8')).toBe('other reservation');
+      else await expect(fsp.access(guard)).rejects.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('allocates distinct completed snapshots within the same second', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-02T03:04:05Z'));
+    try {
+      const ids = [];
+      for (let i = 0; i < 2; i += 1) {
+        const proc = fakeProc();
+        spawn.mockReturnValue(proc);
+        const pending = runBackup(destRoot);
+        await waitFor(() => spawn.mock.calls.length === i + 1, 'rsync spawn');
+        proc.emit('close', 0);
+        ids.push((await pending).snapshotId);
+      }
+      expect(new Set(ids).size).toBe(2);
+      const { listSnapshots } = await import('./backup.js');
+      const snapshots = await listSnapshots(destRoot);
+      expect(snapshots.map(snapshot => snapshot.id).sort()).toEqual(ids.sort());
+      expect(snapshots.every(snapshot => !snapshot.incomplete && !snapshot.failed)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([0, 1])('invalidates scheduled backups only after readable lifecycle transitions (exit %s)', async (exitCode) => {

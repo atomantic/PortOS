@@ -358,7 +358,7 @@ export default function Apps() {
                           <button
                             onClick={() => handleStop(app)}
                             disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-error"
+                            className="px-3 py-1.5 min-h-[44px] bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-error"
                             aria-label={`Stop ${app.name}`}
                             aria-busy={actionLoading[app.id] === 'stop'}
                           >
@@ -368,7 +368,7 @@ export default function Apps() {
                           <button
                             onClick={() => handleRestart(app)}
                             disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
+                            className="px-3 py-1.5 min-h-[44px] bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
                             aria-label={`Restart ${app.name}`}
                             aria-busy={actionLoading[app.id] === 'restart'}
                           >
@@ -383,7 +383,7 @@ export default function Apps() {
                         <button
                           onClick={() => fetchApps()}
                           disabled={actionLoading[app.id]}
-                          className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
+                          className="px-3 py-1.5 min-h-[44px] bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
                           aria-label={`${app.name} status unavailable — refresh`}
                           title="PM2 status could not be read — refresh to retry"
                         >
@@ -394,7 +394,7 @@ export default function Apps() {
                         <button
                           onClick={() => handleStart(app)}
                           disabled={actionLoading[app.id]}
-                          className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-success"
+                          className="px-3 py-1.5 min-h-[44px] bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-success"
                           aria-label={`Start ${app.name}`}
                           aria-busy={actionLoading[app.id] === 'start'}
                         >
@@ -411,7 +411,7 @@ export default function Apps() {
                         {app.overallStatus === 'online' && primaryLaunchUrl && (
                           <button
                             onClick={() => handleWebLaunch(primaryLaunchUrl)}
-                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
+                            className="px-3 py-1.5 min-h-[44px] bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
                             aria-label={`Launch ${app.name} UI`}
                           >
                             <ExternalLink size={14} aria-hidden="true" />
@@ -421,7 +421,7 @@ export default function Apps() {
                         {app.overallStatus === 'online' && launchUrls.dev && (
                           <button
                             onClick={() => handleWebLaunch(launchUrls.dev)}
-                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
+                            className="px-3 py-1.5 min-h-[44px] bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
                             aria-label={`Launch ${app.name} Dev UI`}
                           >
                             <ExternalLink size={14} aria-hidden="true" />
@@ -432,7 +432,7 @@ export default function Apps() {
                           <button
                             onClick={() => handleNativeLaunch(app)}
                             disabled={nativeLaunchLoading[app.id]}
-                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors flex items-center gap-1 disabled:opacity-50"
+                            className="px-3 py-1.5 min-h-[44px] bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors flex items-center gap-1 disabled:opacity-50"
                             aria-label={`Launch ${app.nativeLaunch.label} for ${app.name}`}
                             aria-busy={nativeLaunchLoading[app.id]}
                           >
@@ -451,7 +451,7 @@ export default function Apps() {
                     <div className="flex items-center gap-2">
                       <Link
                         to={`/apps/${app.id}/overview`}
-                        className="px-4 py-1.5 min-h-[40px] sm:min-h-0 inline-flex items-center rounded-lg bg-port-accent text-white hover:bg-port-accent/80 transition-colors text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                        className="px-4 py-1.5 min-h-[44px] inline-flex items-center rounded-lg bg-port-accent text-white hover:bg-port-accent/80 transition-colors text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-port-accent"
                         aria-label={`Manage ${app.name}`}
                       >
                         Manage

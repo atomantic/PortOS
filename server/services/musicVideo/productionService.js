@@ -105,7 +105,7 @@ const defaults = {
     const { provider, selectedModel } = await resolveProviderAndModel(input);
     if (!provider || provider.id !== input?.providerId || provider.enabled === false || !selectedModel || selectedModel !== input?.model) throw new ServerError('The selected code-authoring provider/model is unavailable', { status: 409, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
     if (!isToolFreeOneShotProvider(provider)) throw new ServerError('Choose an API or a tool-free headless CLI for code authoring', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
-    return { providerId: provider.id, model: selectedModel, costUsd: isFreeProvider(provider) ? 0 : null };
+    return { providerId: provider.id, model: selectedModel, ...(input.effort ? { effort: input.effort } : {}), costUsd: isFreeProvider(provider) ? 0 : null };
   },
   releaseRevisionSection: async (...args) => (await import('./revisionService.js')).releaseRevisionSection(...args),
 };
@@ -428,10 +428,13 @@ async function takeSteps(projectId, runId) {
     if (step.type === 'cast-and-sets') {
       // Marked first, like the plan: a failed start halts instead of looping.
       await mutateProjectRecord(projectId, (current) => markProductionCastAndSets(current, runId));
+      // The reviewer pick steers the direction call only when the brief pins no LLM of its
+      // own — a saved brief pin is the deliberate choice (castAndSetsService resolves it).
+      const reviewerPin = !project.automation?.llm?.providerId && run.reviewer?.providerId;
       const started = await deps.startCastAndSets(projectId, {
         productionRunId: runId,
-        ...(run.reviewer?.providerId ? { providerId: run.reviewer.providerId } : {}),
-        ...(run.reviewer?.model ? { model: run.reviewer.model } : {}),
+        ...(reviewerPin ? { providerId: run.reviewer.providerId } : {}),
+        ...(reviewerPin && run.reviewer?.model ? { model: run.reviewer.model } : {}),
       }).catch((err) => ({ error: err }));
       if (started.error) {
         const out = await halt(projectId, runId, { status: 'blocked', reason: `The Cast & Sets check-in could not start: ${started.error.message}` });

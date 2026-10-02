@@ -1,3 +1,4 @@
+import { selectPersistentMindContextEvents } from '../lib/persistentMindContextEvents.js';
 /**
  * The persistent mind's decision journal — store and extraction.
  *
@@ -74,6 +75,7 @@ export function recordPersistentMindJournalOperations({
   mindId = PERSISTENT_MIND_ID,
   operations = [],
   range = null,
+  allowedSourceSequences = null,
   actor = 'mind',
   providerId = null,
   model = null,
@@ -84,7 +86,7 @@ export function recordPersistentMindJournalOperations({
     const others = store.events.filter((event) => event.mindId !== mindId);
     const mine = store.events.filter((event) => event.mindId === mindId);
     const result = applyPersistentMindJournalOperations({
-      events: mine, operations, mindId, range, actor, providerId, model, promptVersion,
+      events: mine, operations, mindId, range, allowedSourceSequences, actor, providerId, model, promptVersion,
     });
     // Zero operations is the normal outcome, and an idempotent re-resolve
     // changes nothing. Neither should create the file or rewrite it — an absent
@@ -164,9 +166,10 @@ export async function extractPersistentMindJournal({
   promptVersion = PERSISTENT_MIND_JOURNAL_PROMPT_VERSION,
   isCallDenial = () => false,
 } = {}) {
-  if (typeof extract !== 'function' || events.length === 0) return { attempted: false, ok: false, applied: [], rejected: [] };
+  const evidence = selectPersistentMindContextEvents(events, mindId);
+  if (typeof extract !== 'function' || evidence.length === 0) return { attempted: false, ok: false, applied: [], rejected: [] };
   const journal = await readPersistentMindJournal(mindId);
-  const prompt = buildPersistentMindJournalPrompt({ events, journal, mindId, range });
+  const prompt = buildPersistentMindJournalPrompt({ events: evidence, journal, mindId, range });
   const first = await Promise.resolve()
     .then(() => extract({ prompt }))
     .then((text) => ({ attempted: true, text }), (error) => ({ attempted: !isCallDenial(error), error }));
@@ -190,7 +193,7 @@ export async function extractPersistentMindJournal({
   }
 
   const { applied, rejected } = await recordPersistentMindJournalOperations({
-    mindId, operations: parsed.value.operations, range, actor: 'mind', providerId, model, promptVersion,
+    mindId, operations: parsed.value.operations, range, allowedSourceSequences: evidence.map(event => event.sequence), actor: 'mind', providerId, model, promptVersion,
   });
   return { attempted: true, ok: true, applied, rejected };
 }

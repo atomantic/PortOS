@@ -38,7 +38,7 @@ describe('vitestCiPool', () => {
 
 // Real workers catch inheritance/array-merging mistakes that can duplicate or
 // drop suites, or defeat exclusion, despite correct-looking config objects.
-it('runs the full server config with parallel units and exclusive, nonduplicated captures', () => {
+it('runs parallel units before exclusive, nonduplicated captures and cutover proofs', () => {
   const scratch = mkdtempSync(join(tmpdir(), 'portos-capture-schedule-'));
   const fixture = join(scratch, 'fixture');
   const server = fileURLToPath(new URL('../server/', import.meta.url));
@@ -79,6 +79,7 @@ it('runs the full server config with parallel units and exclusive, nonduplicated
     for (const [name, path] of [
       ['html', 'services/htmlComposition/index.test.js'],
       ['music', 'services/musicVideo/documentRender.browser.test.js'],
+      ['cutover', 'services/databaseMaintenanceCutover.test.js'],
     ]) {
       put(path, common + `test('${name}', async () => {
         expect(existsSync(marker('unit-a-done')) && existsSync(marker('unit-b-done'))).toBe(true);
@@ -100,7 +101,7 @@ it('runs the full server config with parallel units and exclusive, nonduplicated
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const events = readFileSync(join(fixture, 'events'), 'utf8').trim().split('\n');
     expect(events.slice(0, 2).sort()).toEqual(['unit-a', 'unit-b']);
-    expect(events.slice(2).sort()).toEqual(['html', 'music']);
+    expect(events.slice(2).sort()).toEqual(['cutover', 'html', 'music']);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

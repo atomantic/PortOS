@@ -32,6 +32,11 @@ import { EventEmitter } from 'events';
 //     production run advanced (steps, route choices, spend, halts); socket.js
 //     bridges it to `music-video:production`.
 //
+// A fully-autonomous run (autonomousService.js) adds:
+//   'autonomous' → { projectId, runId, run } — the run changed stage or status
+//     (a stage settled, a checkpoint is waiting, it needs the director, it
+//     finished); bridged to `music-video:autonomous`.
+//
 // The Cast & Sets check-in adds:
 //   'cast-and-sets' → { projectId, stage, project } — the check-in stage
 //     advanced (direction, an image landed, the sheet is ready, approved);

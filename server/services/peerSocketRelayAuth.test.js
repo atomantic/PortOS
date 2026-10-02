@@ -10,7 +10,7 @@
  * two files this fix touches) and a REAL socket.io-client over a loopback
  * HTTP server, so the handshake and per-event middleware run unmocked.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { io as ioClient } from 'socket.io-client';
@@ -64,9 +64,25 @@ let clients = [];
 // Host-control handlers the stand-ins below actually reached (#8708).
 let reached = [];
 
+// Names the setup phase that stalls. A failure before the server exists (module
+// import / password hashing under suite load) otherwise surfaces only as an
+// opaque test timeout, which the socket-stage waiters below cannot name (#8484).
+// The deadline sits inside the unchanged 30s test budget.
+const STAGE_DEADLINE_MS = 25_000;
+const stage = (name, work) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error(`setup stage "${name}" exceeded ${STAGE_DEADLINE_MS}ms`)), STAGE_DEADLINE_MS);
+  Promise.resolve(work).then(resolve, reject).finally(() => clearTimeout(timer));
+});
+
+const setInstancePassword = async () => {
+  const auth = await stage('import auth.js', import('./auth.js'));
+  await stage('set instance password', auth.setPassword({ newPassword: 'instance-secret' }));
+  return auth;
+};
+
 const startServer = async () => {
-  const { socketAuthGate } = await import('./authGate.js');
-  const { __testing } = await import('./socket.js');
+  const { socketAuthGate } = await stage('import authGate.js', import('./authGate.js'));
+  const { __testing } = await stage('import socket.js', import('./socket.js'));
   httpServer = createServer();
   ioServer = new Server(httpServer);
   ioServer.use(socketAuthGate);
@@ -97,8 +113,12 @@ const stopServer = async () => {
   for (const client of clients) client.close();
   clients = [];
   reached = [];
-  await new Promise((resolve) => ioServer.close(resolve));
-  await new Promise((resolve) => httpServer.close(resolve));
+  // Tolerate partial setup (a stage failed before the server existed) so the
+  // teardown error does not mask the original failure.
+  if (ioServer) await new Promise((resolve) => ioServer.close(resolve));
+  if (httpServer) await new Promise((resolve) => httpServer.close(resolve));
+  ioServer = undefined;
+  httpServer = undefined;
 };
 
 const connectClient = (extraHeaders) => {
@@ -116,7 +136,33 @@ afterAll(() => {
   cleanupDataRoot();
 });
 
-const waitFor = (emitter, event) => new Promise((resolve) => emitter.once(event, resolve));
+// Resolves on `event`; rejects with the stage name and reason if the socket
+// fails the handshake (connect_error) or drops (disconnect) while we wait, so a
+// transport failure under suite load surfaces as a named stage instead of an
+// opaque 30s test timeout (#8484). Waiters for those events themselves opt out.
+const waitFor = (emitter, event) => new Promise((resolve, reject) => {
+  const cleanup = () => {
+    emitter.off(event, onEvent);
+    emitter.off('connect_error', onConnectError);
+    emitter.off('disconnect', onDisconnect);
+  };
+  const onEvent = (value) => { cleanup(); resolve(value); };
+  const onConnectError = (err) => { cleanup(); reject(new Error(`awaiting "${event}": connect_error ${err?.data?.code || err?.message}`)); };
+  const onDisconnect = (reason) => { cleanup(); reject(new Error(`awaiting "${event}": socket disconnected (${reason})`)); };
+  emitter.on(event, onEvent);
+  if (event !== 'connect_error') emitter.on('connect_error', onConnectError);
+  if (event !== 'disconnect') emitter.on('disconnect', onDisconnect);
+});
+
+// socket.js pulls in nearly the whole server graph. Measured under CPU
+// contention, that cold import alone took ~7.5s on the first test (later
+// tests hit the transform cache in ~0.2s), so under full-suite load it ate the
+// per-test 30s budget before any socket work began (#8484). Pay it once in a
+// hook with its own budget so each test's budget covers only the socket exchange.
+beforeAll(async () => {
+  await import('./authGate.js');
+  await import('./socket.js');
+}, 120_000);
 
 describe('peer socket relay stays connected through cos:subscribe on a password-gated peer (#8386)', () => {
   beforeEach(async () => {
@@ -130,10 +176,9 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
   });
 
   it('a peer-token-authenticated socket survives cos:subscribe but is disconnected by a shell:* event', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'instance-secret' });
+    await setInstancePassword();
     instanceRegistry.data.peers = [{ id: 'peer-record', name: 'Example Peer', instanceId: PEER_ID, enabled: true, syncSecret: PAIR_SECRET }];
-    const { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } = await import('../lib/peerHttpClient.js');
+    const { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } = await stage('import peerHttpClient.js', import('../lib/peerHttpClient.js'));
 
     await startServer();
     const client = connectClient({
@@ -154,8 +199,7 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
   });
 
   it('a Basic-authenticated socket also survives cos:subscribe but is disconnected by a shell:* event', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'instance-secret' });
+    await setInstancePassword();
 
     await startServer();
     const client = connectClient({
@@ -175,8 +219,7 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
   });
 
   it('an unauthenticated socket is rejected at the handshake', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'instance-secret' });
+    await setInstancePassword();
 
     await startServer();
     const client = connectClient({});
@@ -240,8 +283,8 @@ describe('host-control socket events need operator authority (#8708)', () => {
   });
 
   it('auth on: a session socket keeps the shell; a remote connection does not change that', async () => {
-    const auth = await import('./auth.js');
-    const { token } = await auth.setPassword({ newPassword: 'instance-secret' });
+    const auth = await stage('import auth.js', import('./auth.js'));
+    const { token } = await stage('set instance password', auth.setPassword({ newPassword: 'instance-secret' }));
     await startServer();
     const client = connectClient({ cookie: `portos_auth=${token}`, ...REMOTE_VIA_DEV_PROXY });
     await waitFor(client, 'connect');
@@ -252,8 +295,7 @@ describe('host-control socket events need operator authority (#8708)', () => {
   });
 
   it('auth on: a Basic-authenticated relay socket never reaches a host-control handler', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'instance-secret' });
+    await setInstancePassword();
     await startServer();
     const client = connectClient({ Authorization: `Basic ${Buffer.from(':instance-secret').toString('base64')}` });
     await waitFor(client, 'connect');

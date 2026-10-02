@@ -153,6 +153,28 @@ describe('drainProgrammaticOnDemandRequests — cross-engine claim', () => {
     expect(recordExecution).not.toHaveBeenCalled();
     expect(cosEvents.emit).not.toHaveBeenCalled();
   });
+
+  it('removes only the programmatic receipt from a mixed agent queue', async () => {
+    const agentRequest = { id: 'demand-00000000-0000-4000-8000-000000000001', taskType: 'security' };
+    const programmaticRequest = { id: 'demand-00000000-0000-4000-8000-000000000002', taskType: 'universe-bible-describe' };
+    const queued = [agentRequest, programmaticRequest];
+    clearOnDemandRequest.mockImplementation(async (id) => {
+      const index = queued.findIndex((item) => item.id === id);
+      return index < 0 ? null : queued.splice(index, 1)[0];
+    });
+
+    const handled = await drainProgrammaticOnDemandRequests({
+      taskScheduleMod, requests: [...queued], schedule: schedule(), state: {},
+    });
+
+    expect(handled).toEqual(new Set([programmaticRequest.id]));
+    expect(queued).toEqual([agentRequest]);
+    expect(runScheduledHandler).toHaveBeenCalledTimes(1);
+    expect(runScheduledHandler).toHaveBeenCalledWith(expect.objectContaining({
+      taskType: 'universe-bible-describe',
+    }));
+    expect(clearOnDemandRequest).toHaveBeenCalledWith(programmaticRequest.id);
+  });
 });
 
 

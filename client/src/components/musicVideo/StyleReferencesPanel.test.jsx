@@ -1,12 +1,34 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import StyleReferencesPanel from './StyleReferencesPanel.jsx';
+import { getMoodBoard } from '../../services/apiMoodBoard.js';
+
+vi.mock('../../services/apiMoodBoard.js', () => ({ getMoodBoard: vi.fn() }));
 
 vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage: vi.fn(async () => ({ filename: 'uploaded.png' })) }));
 vi.mock('../../utils/fileUpload.js', () => ({ IMAGE_ACCEPT: 'image/png,image/jpeg,image/webp', readFileAsBase64: vi.fn(async () => 'encoded'), validateImageFile: vi.fn(() => null) }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
 
 describe('project moodboard', () => {
+  it('shows the mood board the project links to (an autonomous run’s board), not just an empty uploader', async () => {
+    getMoodBoard.mockResolvedValue({ id: 'board-1', name: 'Example Board', items: [{ id: 'i1', type: 'image', imageUrl: '/data/images/pin.png' }] });
+    render(<MemoryRouter><StyleReferencesPanel project={{ id: 'example', visualSpec: { moodBoardId: 'board-1' } }} onSave={vi.fn()} /></MemoryRouter>);
+    const link = await screen.findByRole('link', { name: /example board/i });
+    expect(link.getAttribute('href')).toBe('/mood-boards/board-1');
+    expect(await screen.findByAltText('Mood board image 1')).toBeTruthy();
+    expect(getMoodBoard).toHaveBeenCalledWith('board-1', { silent: true });
+  });
+
+  it('renders no linked-board block without a link, and still links when the board fails to load', async () => {
+    const { unmount } = render(<MemoryRouter><StyleReferencesPanel project={{ id: 'example' }} onSave={vi.fn()} /></MemoryRouter>);
+    expect(screen.queryByTestId('linked-mood-board')).toBeNull();
+    unmount();
+    getMoodBoard.mockRejectedValue(new Error('gone'));
+    render(<MemoryRouter><StyleReferencesPanel project={{ id: 'example', visualSpec: { moodBoardId: 'board-2' } }} onSave={vi.fn()} /></MemoryRouter>);
+    expect(await screen.findByRole('link', { name: /open mood board/i })).toBeTruthy();
+  });
+
   it('uploads, captions and saves references, holding generation pending through the save', async () => {
     let finish;
     const onSave = vi.fn(() => new Promise((resolve) => { finish = resolve; }));

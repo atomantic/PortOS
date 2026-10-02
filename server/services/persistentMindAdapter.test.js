@@ -15,6 +15,8 @@ const mock = vi.hoisted(() => ({
   executeCallRequest: vi.fn(),
   resolvePlaybookPhase: vi.fn(),
   readMaintenance: vi.fn(),
+  resolveLocalPromptBudget: vi.fn(),
+  toolPromptPadding: '',
   createPersistentMindMemoryFromCandidate: vi.fn(async ({ candidateId, ...candidate }) => ({
     success: true,
     duplicate: false,
@@ -35,6 +37,7 @@ vi.mock('./persistentMindContext.js', () => ({
 vi.mock('./promptRunner.js', () => ({
   runPromptThroughProvider: (...args) => mock.runPrompt(...args),
   assertVisionRunUsedImages: (...args) => mock.assertVision(...args),
+  resolveLocalPromptBudget: (...args) => mock.resolveLocalPromptBudget(...args),
 }));
 vi.mock('./runner.js', () => ({ stopRun: (...args) => mock.stopRun(...args) }));
 vi.mock('./persistentMindTaskCapability.js', () => ({
@@ -63,17 +66,22 @@ vi.mock('./persistentMindPlaybookSignals.js', () => ({
 }));
 vi.mock('./cosToolRegistry.js', () => ({
   readPersistentMindRecipeCatalog: vi.fn(async () => []),
-  buildPersistentMindToolPrompt: ({ readPortos, writePortos }) => `PortOS tools: read=${Boolean(readPortos)} write=${Boolean(writePortos)}`,
+  // Honors maxChars like the real builder, so local-window narrowing is visible.
+  buildPersistentMindToolPrompt: ({ readPortos, writePortos }, _recipes, { maxChars = Infinity } = {}) => {
+    const rendered = `PortOS tools: read=${Boolean(readPortos)} write=${Boolean(writePortos)}${mock.toolPromptPadding}`;
+    return rendered.length > maxChars ? rendered.slice(0, maxChars) : rendered;
+  },
   executeCosToolCall: (...args) => mock.executeToolCall(...args),
   isCosTaskToolName: (name) => name === 'cos.create-task' || name === 'cos_create_task',
 }));
 
-const { createPersistentMindTurnAdapter, persistentMindHarnessInfo } = await import('./persistentMindAdapter.js');
+const { createPersistentMindTurnAdapter, persistentMindHarnessInfo, persistentMindResponseSchema} = await import('./persistentMindAdapter.js');
 
 const profile = { provider: { id: 'example-api', type: 'api' }, model: 'example-model', effort: 'high' };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mock.stopRun.mockResolvedValue({ stopped: false });
   delete mock.root.config.persistentMindMaintainer;
   mock.readMaintenance.mockResolvedValue({ enabled: true, granted: true, changed: false });
   mock.memories = [{ id: 'memory-1', type: 'fact', content: 'A durable fact.', sourceAgentId: 'cos-persistent-mind', status: 'active' }];
@@ -86,6 +94,8 @@ beforeEach(() => {
   mock.executeToolCall.mockResolvedValue({ state: 'completed', result: { ok: true, count: 1 } });
   mock.resolvePlaybookPhase.mockResolvedValue({ phase: 'construct', reason: 'test default', signals: {} });
   mock.assertVision.mockImplementation((result, provider) => result?.provider || provider);
+  mock.resolveLocalPromptBudget.mockResolvedValue(null);
+  mock.toolPromptPadding = '';
   mock.runPrompt.mockResolvedValue({ text: JSON.stringify({
     thinkingSummary: 'I connected the new request to the durable fact.',
     message: 'Here is the answer.',
@@ -683,9 +693,9 @@ describe('persistent mind adapter', () => {
     mock.runPrompt.mock.calls.forEach(([request], index) => {
       expect(admitted[index].promptChars).toBe(request.prompt.length);
       expect(admitted[index].promptBytes).toBe(Buffer.byteLength(request.prompt));
-      expect(request.timeout).toBeUndefined();
-      expect(request.absoluteTimeoutMs).toBe(5000);
-      expect(request.maxTokens).toBe(8192);
+      expect(request.timeout).toBe(0);
+      expect(request.absoluteTimeoutMs).toBe(0);
+      expect(request.maxTokens).toBeUndefined();
       expect(request.outputReserveTokens).toBe(8192);
       expect(request.allowFallback).toBe(false);
     });
@@ -800,5 +810,163 @@ describe('persistent mind adapter', () => {
       context: { text: '# Context' },
     });
     expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Call access: ON');
+  });
+});
+
+
+it('refuses dispatch after Stop while waiting for provider admission', async () => {
+  const controller = new AbortController();
+  let releaseQueue;
+  let queued;
+  const queueWait = new Promise(resolve => { releaseQueue = resolve; });
+  const queueReached = new Promise(resolve => { queued = resolve; });
+  const dispatch = vi.fn();
+  mock.runPrompt.mockImplementationOnce(async (options) => {
+    options.onRunCreated('queued-mind-run');
+    queued();
+    await queueWait;
+    await options.beforeExecute();
+    dispatch();
+    return { text: JSON.stringify({ message: 'Late answer' }) };
+  });
+  const run = createPersistentMindTurnAdapter().run({
+    ...profile, turnId: 'queued-stop', wake: { kind: 'self' },
+    context: { text: 'Continuity' }, signal: controller.signal,
+  });
+  const rejected = expect(run).rejects.toThrow('Operator Stop');
+  await queueReached;
+  controller.abort('Operator Stop');
+  releaseQueue();
+  await rejected;
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+
+it('normalizes absent optional prose without accepting malformed text or actions', () => {
+  expect(persistentMindResponseSchema.parse({ message: null, thinkingSummary: null }))
+    .toMatchObject({ message: '', thinkingSummary: '' });
+  expect(persistentMindResponseSchema.parse({})).toMatchObject({ message: '', thinkingSummary: '' });
+  for (const field of ['message', 'thinkingSummary']) {
+    for (const invalid of [42, false, {}, ['bad']]) {
+      expect(persistentMindResponseSchema.safeParse({ [field]: invalid }).success).toBe(false);
+    }
+  }
+  expect(persistentMindResponseSchema.safeParse({ message: null, toolCalls: [{ name: 'example', arguments: [] }] }).success).toBe(false);
+});
+
+it('completes a self-directed turn with a public working note and null reply', async () => {
+  mock.root.config.persistentMindCapabilities = { readPortos: true };
+  mock.runPrompt.mockResolvedValueOnce({ text: JSON.stringify({
+    thinkingSummary: 'The exploration checkpoint is settled.', message: null,
+    memoryCandidates: [], taskRequests: [], toolCalls: [],
+    selfWake: { reason: 'Continue normal exploration.', delayMinutes: 60 }, callRequest: null,
+  }) });
+  const result = await createPersistentMindTurnAdapter().run({ ...profile,
+    turnId: 'null-prose', wake: { kind: 'self' }, context: { text: 'Continuity' } });
+  expect(mock.runPrompt.mock.calls[0][0].responseSchema.safeParse({ message: null }).success).toBe(true);
+  expect(result.events.map(event => event.kind)).toEqual(['mind.thought']);
+  expect(result.events[0].data.displayText).toBe('The exploration checkpoint is settled.');
+  expect(result.selfWake.reason).toBe('Continue normal exploration.');
+  expect(Date.parse(result.selfWake.notBefore) - Date.now()).toBeGreaterThan(59 * 60_000);
+  expect(Date.parse(result.selfWake.notBefore) - Date.now()).toBeLessThanOrEqual(60 * 60_000);
+});
+
+// A 16K local window: the dispatch gate allows window − local reserve
+// (16,384 − 2,048) chars/4 tokens. On 2026-10-01 a qwen3:8b wake ran round 0
+// at 15,043 tokens and round 1 at 15,730, then round 2 was refused mid-wake at
+// a 16,967-token budget because tool results kept growing the prompt.
+describe('local-window prompt fitting', () => {
+  const LOCAL_16K = { contextWindow: 16_384, outputReserveTokens: 2_048, maxPromptTokens: 14_336 };
+  const LIMIT_16K = Math.floor(14_336 * 0.9) * 4;
+
+  it('bounds the recalled context only for a local window', async () => {
+    expect((await createPersistentMindTurnAdapter().prepare({ profile })).contextMaxChars).toBeUndefined();
+    mock.resolveLocalPromptBudget.mockResolvedValue(LOCAL_16K);
+    expect((await createPersistentMindTurnAdapter().prepare({ profile })).contextMaxChars).toBe(Math.floor(LIMIT_16K * 0.25));
+    // Sized with the mind's declared reserve, which the runner shrinks locally.
+    expect(mock.resolveLocalPromptBudget).toHaveBeenCalledWith(expect.objectContaining({ outputReserveTokens: 8192 }));
+  });
+
+  it('keeps every round of a tool-heavy wake under the local limit instead of growing past it', async () => {
+    mock.resolveLocalPromptBudget.mockResolvedValue(LOCAL_16K);
+    mock.root.config.persistentMindCapabilities = { readPortos: true };
+    // A wide catalog and a long recalled context, plus ~4K-char results: the
+    // catalog narrows first, then the completed results compact.
+    mock.toolPromptPadding = 'T'.repeat(44_000);
+    mock.executeToolCall.mockImplementation(async ({ call }) => ({ state: 'completed', result: { call: call.requestId, blob: 'x'.repeat(3_800) } }));
+    const toolRound = (prefix) => ({ text: JSON.stringify({
+      thinkingSummary: 'Looking.',
+      toolCalls: [1, 2].map((n) => ({ requestId: `${prefix}-${n}`, name: 'catalog.search', arguments: { query: `${prefix}${n}` } })),
+    }) });
+    mock.runPrompt
+      .mockResolvedValueOnce(toolRound('a'))
+      .mockResolvedValueOnce(toolRound('b'))
+      .mockResolvedValueOnce({ text: JSON.stringify({ thinkingSummary: 'Done.', message: 'Finished.' }) });
+
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'local-fit', wake: { kind: 'self' }, context: { text: 'C'.repeat(30_000) }, recordCapabilityEvent: vi.fn(async () => true) });
+
+    const prompts = mock.runPrompt.mock.calls.map(([request]) => request.prompt);
+    expect(prompts).toHaveLength(3);
+    for (const prompt of prompts) expect(prompt.length).toBeLessThanOrEqual(LIMIT_16K);
+    // The last round still names every call that already ran, so the model
+    // cannot repeat one, even though their bodies were compacted.
+    for (const id of ['a-1', 'a-2', 'b-1', 'b-2']) expect(prompts[2]).toContain(`"requestId":"${id}"`);
+    expect(prompts[2]).toMatch(/"truncated":true|"compacted":true/);
+    expect(prompts[2]).toContain('# Current naming identity');
+  });
+
+  it('leaves cloud prompts untouched however large they are', async () => {
+    mock.root.config.persistentMindCapabilities = { readPortos: true };
+    mock.toolPromptPadding = 'T'.repeat(60_000);
+    mock.executeToolCall.mockResolvedValue({ state: 'completed', result: { blob: 'x'.repeat(3_800) } });
+    mock.runPrompt
+      .mockResolvedValueOnce({ text: JSON.stringify({ thinkingSummary: 'Looking.', toolCalls: [{ requestId: 'c-1', name: 'catalog.search', arguments: {} }] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ thinkingSummary: 'Done.', message: 'Finished.' }) });
+
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'cloud', wake: { kind: 'self' }, context: { text: 'C'.repeat(8_000) }, recordCapabilityEvent: vi.fn(async () => true) });
+
+    const [first, second] = mock.runPrompt.mock.calls.map(([request]) => request.prompt);
+    expect(first).toContain('T'.repeat(60_000));
+    // Continuation keeps the pre-existing 24K catalog cap and verbatim results.
+    expect(second).toContain(`"blob":"${'x'.repeat(3_800)}"`);
+    expect(second).not.toContain('"compacted":true');
+  });
+});
+
+describe('local-window tool result compaction', () => {
+  const runTwoRounds = async (contextChars) => {
+    mock.resolveLocalPromptBudget.mockResolvedValue({ contextWindow: 16_384, outputReserveTokens: 2_048, maxPromptTokens: 14_336 });
+    mock.root.config.persistentMindCapabilities = { readPortos: true };
+    mock.executeToolCall.mockImplementation(async ({ call }) => ({ state: 'completed', result: { call: call.requestId, blob: 'x'.repeat(3_800) } }));
+    mock.runPrompt
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        thinkingSummary: 'Looking.',
+        toolCalls: [1, 2, 3].map((n) => ({ requestId: `r-${n}`, name: 'catalog.search', arguments: { query: `q${n}` } })),
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ thinkingSummary: 'Done.', message: 'Finished.' }) });
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: `compact-${contextChars}`, wake: { kind: 'self' }, context: { text: 'C'.repeat(contextChars) }, recordCapabilityEvent: vi.fn(async () => true) });
+    return mock.runPrompt.mock.calls[1][0].prompt;
+  };
+
+  it('keeps tool results verbatim while they fit', async () => {
+    const prompt = await runTwoRounds(1_000);
+    expect(prompt).toContain(`"blob":"${'x'.repeat(3_800)}"`);
+    expect(prompt).not.toMatch(/"truncated":true|"compacted":true/);
+  });
+
+  it('shrinks result bodies to previews before dropping them', async () => {
+    const prompt = await runTwoRounds(36_000);
+    expect(prompt).toContain('"truncated":true');
+    expect(prompt).not.toContain('"compacted":true');
+    expect(prompt).not.toContain('x'.repeat(3_800));
+  });
+
+  // Sized so the base prompt leaves room for stubs but not previews; if the
+  // response contract grows, lower the context here.
+  it('falls back to per-call stubs that still name what ran', async () => {
+    const prompt = await runTwoRounds(47_300);
+    for (const id of ['r-1', 'r-2', 'r-3']) {
+      expect(prompt).toContain(`{"requestId":"${id}","name":"catalog.search","state":"completed","compacted":true}`);
+    }
   });
 });

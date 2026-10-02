@@ -38,6 +38,7 @@
 // count (e.g. PipelineIssue's per-stage status dot).
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
 
 const SIZE = {
   xs: { text: 'text-[11px]', icon: 11, padding: 'px-2 py-2', gap: 'gap-1' },
@@ -66,6 +67,8 @@ export default function TabPills({
   className = '',
 }) {
   const sz = SIZE[size] || SIZE.md;
+  const reducedMotion = usePrefersReducedMotion();
+  const scrollBehavior = reducedMotion ? 'instant' : 'smooth';
   const visibleTabs = tabs.filter(Boolean);
   const tabRefs = useRef([]);
   const stripRef = useRef(null);
@@ -99,8 +102,8 @@ export default function TabPills({
     const delta = tabBounds.left < left
       ? tabBounds.left - left
       : Math.max(0, tabBounds.right - right);
-    if (delta) strip.scrollBy({ left: delta, behavior: 'smooth' });
-  }, [activeTab, activeIndex, variant]);
+    if (delta) strip.scrollBy({ left: delta, behavior: scrollBehavior });
+  }, [activeTab, activeIndex, variant, scrollBehavior]);
 
   // Scroll path: position only, against the cached extent.
   const syncPosition = useCallback(() => {
@@ -131,7 +134,7 @@ export default function TabPills({
 
   const scrollStrip = (direction) => {
     const strip = stripRef.current;
-    if (strip) strip.scrollBy({ left: direction * strip.clientWidth * 0.8, behavior: 'smooth' });
+    if (strip) strip.scrollBy({ left: direction * strip.clientWidth * 0.8, behavior: scrollBehavior });
   };
 
   const handleTabKeyDown = (event, index) => {

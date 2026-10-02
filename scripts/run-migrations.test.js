@@ -454,3 +454,45 @@ describe('listPendingMigrations', () => {
     expect(existsSync(appliedFile)).toBe(true);
   });
 });
+
+describe('runMigrations record-split retry after source repair (#9557)', () => {
+  let rootDir;
+  let migrationsDir;
+  let appliedFile;
+  let sourcePath;
+  const realMigration = new URL('./migrations/035-split-pipeline-issues-to-per-id.js', import.meta.url).href;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'run-migrations-split-'));
+    migrationsDir = join(rootDir, 'migrations');
+    mkdirSync(join(rootDir, 'data'), { recursive: true });
+    mkdirSync(migrationsDir, { recursive: true });
+    appliedFile = join(rootDir, 'data', 'migrations.applied.json');
+    sourcePath = join(rootDir, 'data', 'pipeline-issues.json');
+    // A non-empty ledger so the empty-ledger purge guard stays out of the way.
+    writeFileSync(appliedFile, JSON.stringify(['000-earlier.js']) + '\n');
+    writeFileSync(join(migrationsDir, '035-wrapper.js'), `export { default } from ${JSON.stringify(realMigration)};\n`);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('leaves a corrupt-source split pending, then splits and stamps it after repair', async () => {
+    const recordIndex = join(rootDir, 'data', 'pipeline-issues', 'iss-example', 'index.json');
+    writeFileSync(sourcePath, '{"issues": [');
+
+    await expect(runMigrations({ rootDir, migrationsDir })).rejects.toThrow(/unreadable/);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['000-earlier.js']);
+
+    writeFileSync(sourcePath, JSON.stringify({ issues: [{ id: 'iss-example', title: 'Example' }] }));
+    expect(await runMigrations({ rootDir, migrationsDir })).toBe(1);
+    expect(existsSync(recordIndex)).toBe(true);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['000-earlier.js', '035-wrapper.js']);
+
+    expect(await runMigrations({ rootDir, migrationsDir })).toBe(0);
+  });
+});

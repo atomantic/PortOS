@@ -1,10 +1,33 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy, mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
+const roots = new Set();
+const pendingTests = new Set();
+
+// Vitest's fail-fast cancellation settles its wrapper before the async test
+// body stops. Own that body until its writes settle before removing fixtures.
+function promotionTest(name, body) {
+  it(name, (context) => {
+    const pending = Promise.resolve().then(() => body(context));
+    pendingTests.add(pending);
+    pending.then(() => pendingTests.delete(pending), () => pendingTests.delete(pending));
+    return pending;
+  });
+}
+
+async function cleanupFixtures() {
+  const settled = await Promise.allSettled([...pendingTests]);
+  for (const root of roots) {
+    rmSync(root, { recursive: true, force: true });
+    roots.delete(root);
+  }
+  const failures = settled.filter(result => result.status === 'rejected').map(result => result.reason);
+  if (failures.length) throw new AggregateError(failures, 'Interrupted promotion test failed');
+}
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
@@ -30,11 +53,11 @@ const universeSvc = await import('../universeBuilder.js');
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), 'wr-promote-test-'));
+  roots.add(tempRoot);
 });
 
-afterEach(() => {
-  if (tempRoot && existsSync(tempRoot)) rmSync(tempRoot, { recursive: true, force: true });
-});
+afterEach(cleanupFixtures);
+afterAll(cleanupFixtures);
 
 async function seedWorkWithProse(prose = 'Once upon a time there was a paragraph.') {
   const work = await wrLocal.createWork({ title: 'Test Work', kind: 'short-story' });
@@ -43,7 +66,7 @@ async function seedWorkWithProse(prose = 'Once upon a time there was a paragraph
 }
 
 describe('promoteWorkToPipeline', () => {
-  it('rejects a work whose active draft is empty', async () => {
+  promotionTest('rejects a work whose active draft is empty', async () => {
     const work = await wrLocal.createWork({ title: 'Blank', kind: 'short-story' });
     let caught;
     try {
@@ -55,7 +78,7 @@ describe('promoteWorkToPipeline', () => {
     expect(caught.code).toBe(ERR_NO_DRAFT_BODY);
   });
 
-  it('creates a series + first issue and copies prose into stages.prose.output', async () => {
+  promotionTest('creates a series + first issue and copies prose into stages.prose.output', async () => {
     const work = await seedWorkWithProse('The vault loomed in the dark.');
 
     const result = await promoteWorkToPipeline(work.id);
@@ -73,7 +96,7 @@ describe('promoteWorkToPipeline', () => {
     expect(result.issue.stages.storyboards.status).toBe('empty');
   });
 
-  it('records the bidirectional link on both sides', async () => {
+  promotionTest('records the bidirectional link on both sides', async () => {
     const work = await seedWorkWithProse();
     const { series, issue } = await promoteWorkToPipeline(work.id);
 
@@ -85,7 +108,7 @@ describe('promoteWorkToPipeline', () => {
     expect(reloadedSeries.writersRoomWorkId).toBe(work.id);
   });
 
-  it('carries over characters / places / objects bibles into the linked universe (Phase B.4)', async () => {
+  promotionTest('carries over characters / places / objects bibles into the linked universe (Phase B.4)', async () => {
     const work = await seedWorkWithProse();
     await createCharacter(work.id, { name: 'Aria', physicalDescription: 'tall, freckles' });
     await createPlace(work.id, { name: 'The Foundry', slugline: 'INT. FOUNDRY — NIGHT', description: 'molten light' });
@@ -108,7 +131,7 @@ describe('promoteWorkToPipeline', () => {
     expect(universe.objects[0].name).toBe('The Locket');
   });
 
-  it('retains the authored character framework and valid relationship links (#6417)', async () => {
+  promotionTest('retains the authored character framework and valid relationship links (#6417)', async () => {
     const work = await seedWorkWithProse();
     const ines = await createCharacter(work.id, { name: 'Ines Mbeki', role: 'rival' });
     await createCharacter(work.id, {
@@ -162,7 +185,7 @@ describe('promoteWorkToPipeline', () => {
     expect(universe.characters.some((c) => c.id === targetId)).toBe(true);
   });
 
-  it('is idempotent: a second promote returns the same series/issue with reused=true', async () => {
+  promotionTest('is idempotent: a second promote returns the same series/issue with reused=true', async () => {
     const work = await seedWorkWithProse();
     const first = await promoteWorkToPipeline(work.id);
     const second = await promoteWorkToPipeline(work.id);
@@ -176,7 +199,7 @@ describe('promoteWorkToPipeline', () => {
     expect(all.filter((s) => s.writersRoomWorkId === work.id)).toHaveLength(1);
   });
 
-  it('with force:true creates a fresh series even when the work is already linked', async () => {
+  promotionTest('with force:true creates a fresh series even when the work is already linked', async () => {
     const work = await seedWorkWithProse();
     const first = await promoteWorkToPipeline(work.id);
     const second = await promoteWorkToPipeline(work.id, { force: true });
@@ -188,7 +211,7 @@ describe('promoteWorkToPipeline', () => {
     expect(reloaded.pipelineSeriesId).toBe(second.series.id);
   });
 
-  it('falls through to a fresh create if the work links to a deleted series', async () => {
+  promotionTest('falls through to a fresh create if the work links to a deleted series', async () => {
     const work = await seedWorkWithProse();
     const first = await promoteWorkToPipeline(work.id);
     await seriesSvc.deleteSeries(first.series.id);
@@ -198,7 +221,7 @@ describe('promoteWorkToPipeline', () => {
     expect(second.series.id).not.toBe(first.series.id);
   });
 
-  it('falls through to a fresh create when the linked issue belongs to a different series (mismatched link)', async () => {
+  promotionTest('falls through to a fresh create when the linked issue belongs to a different series (mismatched link)', async () => {
     const work = await seedWorkWithProse();
     const first = await promoteWorkToPipeline(work.id);
     // Simulate a corrupted link: rewrite the work manifest to point at the
@@ -220,7 +243,7 @@ describe('promoteWorkToPipeline', () => {
     expect(second.issue.seriesId).toBe(second.series.id);
   });
 
-  it('populates storyboards scenes from a succeeded script analysis (visualPrompt → description)', async () => {
+  promotionTest('populates storyboards scenes from a succeeded script analysis (visualPrompt → description)', async () => {
     const work = await seedWorkWithProse();
 
     // Hand-write a `script` analysis snapshot on disk to mimic a completed run

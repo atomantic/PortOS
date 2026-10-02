@@ -11,9 +11,13 @@
  *   POST /api/code-animation/:id/export     queue a frame-exact MP4 render → 202 media job
  *   GET  /api/code-animation/:id/package    download a portable source package
  *   POST /api/code-animation/packages/validate   check package data/integrity only
+ *   POST /api/code-animation/projects/:id/stage-runs            start a bounded production run → 202
+ *   POST /api/code-animation/projects/:id/stage-runs/:runId/cancel   stop an active run
  */
 
 import { Router } from 'express';
+import { soundAssetSchema, stageProductionSoundAsset } from '../services/codeAnimation/soundAssets.js';
+import { preflightProductionProject } from '../services/codeAnimation/preflight.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
@@ -29,9 +33,11 @@ import {
   startCodeAnimationGeneration,
 } from '../services/codeAnimation/index.js';
 import { startCodeAnimationExport } from '../services/codeAnimation/export.js';
+import { getBlenderStarterPackage } from '../services/codeAnimation/blenderStarter.js';
 import { exportCodeAnimationPackage } from '../services/codeAnimation/package.js';
 import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../lib/codeAnimationPackage.js';
-import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema } from '../lib/codeAnimationProjects.js';
+import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema, codeAnimationStageRunSchema } from '../lib/codeAnimationProjects.js';
+import { startProductionStageRun, cancelProductionStageRun } from '../services/codeAnimation/stages.js';
 import {
   createProductionProject, getProductionProject, patchProductionProject,
   listProductionProjects, getProductionHistory, importProductionPackage,
@@ -192,6 +198,10 @@ router.patch('/projects/:id', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   res.json(await patchProductionProject(id, validateRequest(codeAnimationProjectPatchSchema, req.body)));
 }));
+router.get('/projects/:id/preflight', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await preflightProductionProject(id));
+}));
 router.get('/projects/:id/history', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   res.json(await getProductionHistory(id, projectPage(req.query)));
@@ -200,10 +210,25 @@ router.post('/projects/:id/import', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   res.status(201).json(await importProductionPackage(id, validateRequest(codeAnimationPackageSchema, req.body)));
 }));
+router.post('/projects/:id/sound-assets', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.status(201).json(await stageProductionSoundAsset(id, validateRequest(soundAssetSchema, req.body)));
+}));
 router.post('/projects/:id/accept', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   const { revisionId } = validateRequest(z.object({ revisionId: z.string().uuid() }).strict(), req.body);
   res.json(await acceptProductionSource(id, revisionId));
+}));
+// An explicit, user-started stage run (style frame → pilot → inspect → repair → final).
+// 202: the run continues in the background; progress arrives as code-animation:changed.
+router.post('/projects/:id/stage-runs', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  const { run } = await startProductionStageRun(id, validateRequest(codeAnimationStageRunSchema, req.body ?? {}));
+  res.status(202).json(run);
+}));
+router.post('/projects/:id/stage-runs/:runId/cancel', asyncHandler(async (req, res) => {
+  const { id, runId } = validateRequest(z.object({ id: z.string().uuid(), runId: z.string().uuid() }).strict(), req.params);
+  res.json(cancelProductionStageRun(id, runId));
 }));
 router.get('/projects/:id/brief', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
@@ -220,6 +245,8 @@ router.get('/projects/:id/revisions/:revisionId/package', asyncHandler(async (re
 
 // External harness handoff is data-only. Validation grants no execution and
 // neither stages imported files nor changes a saved/accepted animation.
+router.get('/packages/starter/blender', asyncHandler(async (_req, res) => res.json(await getBlenderStarterPackage())));
+
 router.post('/packages/validate', (req, res) => {
   const pkg = validateRequest(codeAnimationPackageSchema, req.body);
   res.json(summarizeCodeAnimationPackage(pkg));

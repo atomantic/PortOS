@@ -11,17 +11,18 @@
 //   databaseCutoverHandshake + databaseBootFence against a pool configured
 //   from its environment, then records `server booted` (or `server refused`).
 //   Its stderr is kept in `surrogate-stderr.log` as failure evidence.
-import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, existsSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from '../../lib/childProcess.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { copyEcosystemConfig } from './ecosystemConfigCopy.js';
 
 const handshakeUrl = new URL('../../services/databaseCutoverHandshake.js', import.meta.url).href;
 const bootFenceUrl = new URL('../../services/databaseBootFence.js', import.meta.url).href;
 
 export function installCutoverStubs(root, dir, { source, target }) {
   writeFileSync(join(dir, 'endpoints.json'), JSON.stringify({ [source.mode]: source, [target.mode]: target }));
-  copyFileSync(new URL('../../../ecosystem.config.cjs', import.meta.url), join(root, 'ecosystem.config.cjs'));
+  copyEcosystemConfig(root);
 
   const pgStub = join(dir, 'pg-stub.mjs');
   writeFileSync(pgStub, `import { existsSync, readFileSync } from 'node:fs';
@@ -45,7 +46,10 @@ function Pool(config) {
     },
   };
 }
-export default { Pool, types: { setTypeParser() {} } };
+// db.js snapshots TLS before constructing the pool; this synthetic endpoint
+// uses plain PostgreSQL and never opens a real Client socket.
+class Client { connectionParameters = { ssl: false, sslnegotiation: "postgres" }; }
+export default { Client, Pool, types: { setTypeParser() {} } };
 `);
   const hooks = join(dir, 'pg-hooks.mjs');
   writeFileSync(hooks, `export async function resolve(specifier, context, next) {

@@ -24,4 +24,6 @@ export default makeSplitMigration({
   recordsKey: 'issues',
   idPattern: VALID_ID,
   recordNoun: 'issue',
+  // Corrupt source must stay pending (not stamped applied) so a repaired file re-splits.
+  onUnreadable: 'throw',
 });

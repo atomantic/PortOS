@@ -9,7 +9,8 @@
 import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { access, lstat, mkdtemp, readdir, rm, stat, unlink, writeFile } from 'fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, rm, stat, unlink, writeFile } from 'fs/promises';
+import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { hostname, tmpdir } from 'os';
 import { basename, join, resolve, relative, isAbsolute } from 'path';
@@ -17,14 +18,14 @@ import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
-import { checkHealth, ensureSchema, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
-import { resolvePgDumpBinary } from '../lib/pgTools.js';
+import { POOL_CONFIG, checkHealth, ensureSchema, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
+import { withPgToolEnv, resolvePgDumpBinary } from '../lib/pgTools.js';
 import { inspectDatabaseDump } from './backupDatabaseDump.js';
 import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
-import { reloadSettings } from './settings.js';
+import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { noteSystemActivity } from './systemActivityNotify.js';
 
@@ -171,6 +172,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
   { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true },
   { path: '/composition-proofs/', reason: 'HTML-composition contact-sheet proofs — review stills, re-rendered from the composition source', overridable: true },
+  { path: '/code-animation-workspaces/', reason: 'In-flight sandboxed Code Animation worker workspaces — removed when each run ends', overridable: false },
   { path: '/code-animation-exports/', reason: 'Code Animation frame-exact export staging — the stored HTML plus render shim, staged once per export', overridable: true },
   { path: '/music-video-compositions/', reason: 'In-flight music-video typography overlay scratch — removed when its render ends and swept at boot', overridable: false },
   { path: '/music-video-song-renders/', reason: 'In-flight music-video composition renders (a staged copy of the document plus scene media) — removed when the render ends and swept at boot', overridable: false },
@@ -181,6 +183,10 @@ export const DEFAULT_EXCLUDES = [
   // would claim gigabytes of models that machine does not have, and offer delete
   // buttons for them. It is fully re-derivable by a rescan from Models → Status.
   { path: '/model-manifest.json', reason: 'Tracked downloaded-model inventory — machine-local and re-derivable by rescanning the model stores; a restored copy would describe another machine\'s disks', overridable: false },
+  // Anchored, like every entry here. Readiness evidence is bound to THIS
+  // machine's local image id (a restored copy would read as stale anyway) and
+  // the rest is in-flight render scratch; setup re-derives all of it.
+  { path: '/supercollider/', reason: 'SuperCollider runtime readiness evidence, in-flight render scratch and 24-hour render previews — machine-local, re-derived by npm run setup:supercollider', overridable: false },
   // Sprite animation-run raw intermediates: 30–96 ffmpeg-extracted PNGs per
   // run, byte-for-byte regenerable from the archived source video by the
   // deterministic postprocess (walkPostprocess.js). The source video, packaged
@@ -570,20 +576,43 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       error.cause = cause;
       throw error;
     });
-    snapshotId = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
+    const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
     const snapshotsRoot = join(destPath, 'snapshots', MACHINE_HOST);
-    snapshotDir = join(snapshotsRoot, snapshotId);
-    parentMarker = parentMarkerPath(snapshotDir, snapshotId);
+    await ensureDir(snapshotsRoot);
+    // Own the durable guard before exposing a directory. Never adopt an
+    // existing tree, even when its timestamp matches this run's clock.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const candidateId = attempt === 0 ? timestamp : `${timestamp}-${randomUUID()}`;
+      const candidateDir = join(snapshotsRoot, candidateId);
+      const candidateMarker = parentMarkerPath(candidateDir, candidateId);
+      const exists = await lstat(candidateDir).then(() => true, err => {
+        if (err.code === 'ENOENT') return false;
+        throw err;
+      });
+      if (exists) continue;
+      const reserved = await writeFile(candidateMarker, '', { flag: 'wx' }).then(() => true, err => {
+        if (err.code === 'EEXIST') return false;
+        throw err;
+      });
+      if (!reserved) continue;
+      const created = await mkdir(candidateDir).then(() => true, async err => {
+        // Only our exclusive reservation can be released here. The directory
+        // may belong to a competing writer and must remain untouched.
+        await unlink(candidateMarker);
+        if (err.code === 'EEXIST') return false;
+        throw err;
+      });
+      if (!created) continue;
+      snapshotId = candidateId;
+      snapshotDir = candidateDir;
+      parentMarker = candidateMarker;
+      break;
+    }
+    if (!snapshotDir) throw new Error('Unable to reserve a fresh backup snapshot');
     const dataDestDir = join(snapshotDir, 'data');
 
     console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
     if (io) io.emit('backup:started', { snapshotId });
-
-    // Establish the durable parent marker before exposing the snapshot
-    // directory. A crash during directory setup therefore cannot leave a
-    // snapshot that consumers mistake for a completed backup after restart.
-    await ensureDir(snapshotsRoot);
-    await writeFile(parentMarker, '');
     await ensureDir(dataDestDir);
     activeSnapshotId = snapshotId;
     await writeFile(markerPath(snapshotDir), '');
@@ -688,14 +717,8 @@ export async function dumpPostgres(outputPath) {
     return { status: 'skipped', reason: 'not_configured' };
   }
 
-  const pgHost = process.env.PGHOST || 'localhost';
-  const pgPort = process.env.PGPORT || '5432';
-  const pgDb = process.env.PGDATABASE || 'portos';
-  const pgUser = process.env.PGUSER || 'portos';
-
-  if (!process.env.PGPASSWORD) {
-    console.warn('⚠️ PGPASSWORD not set for pg_dump — using default');
-  }
+  const { host: pgHost, port, database: pgDb, user: pgUser } = POOL_CONFIG;
+  const pgPort = String(port);
 
   // pg_dump must be >= the server's major version or it aborts on a "server
   // version mismatch". On machines with multiple Postgres installs (the common
@@ -711,7 +734,7 @@ export async function dumpPostgres(outputPath) {
     console.warn(`⚠️ No installed pg_dump satisfies server major ${serverMajor} (using ${pgDumpBin})`);
   }
 
-  return new Promise((resolvePromise) => {
+  return withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolvePromise) => {
     // --clean --if-exists: the dump DROPs each object before recreating it, so it
     // replays cleanly into the live, already-initialized PortOS database (the
     // common Restore-DB target) instead of erroring "relation already exists" on
@@ -728,7 +751,7 @@ export async function dumpPostgres(outputPath) {
       '-f', outputPath
     ], {
       shell: false,
-      env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' }
+      env: pgEnv
     });
 
     let stderr = '';
@@ -794,7 +817,7 @@ export async function dumpPostgres(outputPath) {
       console.warn(`⚠️ pg_dump not available: ${err.message}`);
       resolvePromise({ status: 'failed', reason: 'pg_dump_missing', error: err.message });
     });
-  });
+  }));
 }
 
 // Filesystem messages contain private paths; only expose the operation and errno.
@@ -1486,11 +1509,20 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
   };
   const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
-  if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
-    const { withLiveCosRestore } = await import('./cosState.js');
-    return withLiveCosRestore(restoreFiles);
+  const restoreWithCosBoundary = async () => {
+    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
+      const { withLiveCosRestore } = await import('./cosState.js');
+      return withLiveCosRestore(restoreFiles);
+    }
+    return restoreFiles();
+  };
+  // Fixed acquisition order: settings -> CoS config -> CoS runtime. Settings
+  // writers drain before any CoS queue is held, and remain fenced until both
+  // the transfer and all cache reconciliation (including CoS) have settled.
+  if (!dryRun && (!scope || scope === 'settings.json')) {
+    return withLiveSettingsRestore(restoreWithCosBoundary);
   }
-  return restoreFiles();
+  return restoreWithCosBoundary();
 }
 
 const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadable', error: 'The snapshot database dump could not be read or staged for restore. Restore was refused without changing data.' });
@@ -1602,12 +1634,10 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   return withDatabaseMaintenance(async () => {
     // Read before the replay rewinds them to the dump's values.
     const feedPositions = await captureSyncFeedPositions();
-    const pgHost = process.env.PGHOST || 'localhost';
-    const pgPort = process.env.PGPORT || '5432';
-    const pgDb = process.env.PGDATABASE || 'portos';
-    const pgUser = process.env.PGUSER || 'portos';
+    const { host: pgHost, port, database: pgDb, user: pgUser } = POOL_CONFIG;
+    const pgPort = String(port);
 
-    const replay = await new Promise((resolveP) => {
+    const replay = await withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolveP) => {
       // ON_ERROR_STOP=1 aborts on the first failed statement; --single-transaction
       // wraps the whole replay in one transaction so that abort ROLLs BACK every
       // prior statement. Together they make the restore atomic: it either fully
@@ -1620,7 +1650,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
         '--single-transaction',
         '--echo-all',
         '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', spoolPath
-      ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
+      ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: pgEnv });
 
       let stderr = '';
       const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL restore' });
@@ -1654,7 +1684,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
         console.warn(`⚠️ psql not available: ${err.message}`);
         resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
       });
-    });
+    }));
     if (replay.status !== 'ok') return replay;
 
     // Replay has committed. Reapply this version's upgrades even when readiness

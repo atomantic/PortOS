@@ -534,10 +534,13 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
       project: { ...project, excerpts: [{ ...project.excerpts[0], notes: [{ id: 'mvn-1', atSec: 0, note: 'looks great', verdict: 'approved' }] }] },
       note: { id: 'mvn-1', atSec: 0, note: 'looks great', verdict: 'approved' },
     });
+    // A note can render before the add action clears its in-flight gate.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     await waitFor(() => expect(updateMusicVideoExcerptNote).toHaveBeenCalledWith('mv-1', 'mve-1', 'mvn-1', { verdict: 'approved' }, { silent: true }));
 
     deleteMusicVideoExcerptNote.mockResolvedValue({ ...project, excerpts: [{ ...project.excerpts[0], notes: [] }] });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete note' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Delete note' }));
     await waitFor(() => expect(deleteMusicVideoExcerptNote).toHaveBeenCalledWith('mv-1', 'mve-1', 'mvn-1', { silent: true }));
     await waitFor(() => expect(screen.queryByText('looks great')).not.toBeInTheDocument());
@@ -1453,6 +1456,25 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     expect(deleteMusicVideoProject).not.toHaveBeenCalled();
   });
 
+  it('asks for confirmation before deleting a project and allows cancelling or confirming', async () => {
+    deleteMusicVideoProject.mockResolvedValue({});
+    await openProject(PROJECT_NO_CLIP, 'setup');
+
+    fireEvent.click(screen.getByTitle('Delete project'));
+    expect(deleteMusicVideoProject).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete?')).toBeTruthy();
+
+    // Cancel deletion
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(deleteMusicVideoProject).not.toHaveBeenCalled();
+    expect(screen.getByTitle('Delete project')).toBeTruthy();
+
+    // Arm confirmation again and confirm
+    fireEvent.click(screen.getByTitle('Delete project'));
+    fireEvent.click(screen.getByRole('button', { name: `Confirm delete project ${PROJECT_NO_CLIP.name}` }));
+    await waitFor(() => expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_NO_CLIP.id, { silent: true }));
+  });
+
   it('pressing Enter in the create-form URL input starts the import instead of submitting the form', async () => {
     listMusicVideoProjects.mockResolvedValue([]);
     renderMV();
@@ -1621,15 +1643,17 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
   });
 
-  it('plans a code-first board without starting a Cast & Sets image batch when no selected shot needs references', async () => {
+  it('keeps the Cast & Sets check-in for a code-first board and waits for it before planning', async () => {
     const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [],
       composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
       automation: { tools: ['code:render'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
-    planMusicVideoProject.mockResolvedValue({ project, scenesAdded: 1, promptsSeeded: true });
+    const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
+    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     await openProject(project, 'produce');
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
-    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalled());
-    expect(startMusicVideoCastAndSets).not.toHaveBeenCalled();
+    // The server directs it procedurally (no image backend for a code-only brief); the run still gates on it.
+    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    expect(planMusicVideoProject).not.toHaveBeenCalled();
   });
 
   it('autopilot stops at the Cast & Sets check-in in review mode, and Approve & continue plans', async () => {

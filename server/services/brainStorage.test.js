@@ -15,6 +15,13 @@ function getTempRoot() {
   return tempRoot;
 }
 
+vi.mock('fs/promises', async () => {
+  const actual = await vi.importActual('fs/promises');
+  return { ...actual, readdir: vi.fn(actual.readdir), lstat: vi.fn(actual.lstat) };
+});
+
+import { readdir, lstat } from 'fs/promises';
+
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   return makePathsProxy({
@@ -934,12 +941,42 @@ describe('getInboxLog (paginated inbox reads, issue #5440)', () => {
     }
     await brainStorage.getInboxLog({ status: 'needs_review', limit: 1 });
 
+    await brainStorage.getSummary();
+    readdir.mockClear();
+    lstat.mockClear();
     readJSONFile.mockClear();
     const page = await brainStorage.getInboxLog({ status: 'needs_review', limit: 1 });
 
     expect(page).toHaveLength(1);
     await brainStorage.getInboxLogCounts();
     expect(readJSONFile).toHaveBeenCalledTimes(1);
+    await brainStorage.getSummary();
+    expect(readdir).toHaveBeenCalled();
+    expect(readdir.mock.calls.every(([, options]) => options?.withFileTypes === true)).toBe(true);
+    expect(lstat).not.toHaveBeenCalled();
+  });
+
+  it('refreshes warm inbox membership after external directory additions and deletions', async () => {
+    const counts = await brainStorage.getInboxLogCounts();
+    const summary = await brainStorage.getSummary();
+    const id = 'external-inbox-record';
+    const recordDir = join(getTempRoot(), 'brain', 'inbox', id);
+    mkdirSync(recordDir, { recursive: true });
+    writeFileSync(join(recordDir, 'index.json'), JSON.stringify({
+      id, capturedText: 'External example', status: 'needs_review',
+      capturedAt: '2099-01-01T00:00:00.000Z',
+    }));
+
+    expect((await brainStorage.getInboxLog({ limit: 1 }))[0].id).toBe(id);
+    expect(await brainStorage.getInboxLogCounts()).toMatchObject({
+      total: counts.total + 1, needs_review: counts.needs_review + 1,
+    });
+    expect((await brainStorage.getSummary()).counts.inbox.total).toBe(summary.counts.inbox.total + 1);
+
+    rmSync(recordDir, { recursive: true });
+    expect((await brainStorage.getInboxLog({ limit: 1 }))[0]?.id).not.toBe(id);
+    expect(await brainStorage.getInboxLogCounts()).toEqual(counts);
+    expect(await brainStorage.getSummary()).toEqual(summary);
   });
 
   it('invalidates the projection after status updates and deletes', async () => {

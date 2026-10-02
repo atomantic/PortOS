@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Rocket, X, ChevronDown } from 'lucide-react';
+import { Rocket, X, ChevronDown, Loader2 } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import Modal from '../ui/Modal';
 import { useAppDeploy } from '../../hooks/useAppDeploy';
@@ -84,7 +84,7 @@ export default function DeployPanel({ appId, appName }) {
           className="px-2 py-1 bg-port-accent-2/20 text-port-accent-2 hover:bg-port-accent-2/30 transition-colors flex items-center gap-1"
           title={isDeploying && dismissed ? 'Show deploy output' : undefined}
         >
-          <Rocket size={14} className={isDeploying ? 'animate-pulse' : ''} />
+          {isDeploying ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
           <span className="text-xs">
             {isDeploying ? (dismissed ? 'View deploy…' : 'Deploying…') : 'Deploy'}
           </span>

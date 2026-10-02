@@ -1571,13 +1571,23 @@ function InstancesContent() {
   // card needs a slice of it. Running a check is on-demand per card.
   const [parityReports, setParityReports] = useState({});
   const [loading, setLoading] = useState(true);
+  const [snapshotError, setSnapshotError] = useState(false);
+  const [snapshotLoaded, setSnapshotLoaded] = useState(false);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const snapshotRequest = useRef(0);
 
   const fetchData = useCallback(async () => {
-    const data = await getInstances().catch(() => null);
+    const request = ++snapshotRequest.current;
+    setSnapshotLoading(true);
+    const data = await getInstances({ silent: true }).catch(() => null);
+    if (request !== snapshotRequest.current) return;
+    setSnapshotLoading(false);
+    setSnapshotError(!data);
     if (data) {
       setSelf(data.self);
       setPeers(data.peers);
       setSyncStatus(data.syncStatus ?? null);
+      setSnapshotLoaded(true);
     }
   }, []);
 
@@ -1609,6 +1619,7 @@ function InstancesContent() {
 
     return () => {
       active = false;
+      snapshotRequest.current += 1;
       socket.off('instances:peers:updated', handlePeersUpdated);
     };
   }, [fetchData]);
@@ -1662,6 +1673,15 @@ function InstancesContent() {
               <span>{networkExposure?.setup?.complete ? 'Tailscale HTTPS ready' : 'Network setup available'}</span>
               <span>{peers.filter((peer) => peer.status === 'online').length} / {peers.length} peers online</span>
             </div>
+            {snapshotError && (
+              <div role="alert" className="rounded-lg border border-port-warning/40 p-3 text-sm text-port-warning">
+                <p>{snapshotLoaded ? 'Instance snapshot unavailable. Showing last loaded data.' : 'Instance snapshot unavailable. Peer and instance settings could not be loaded.'}</p>
+                <button type="button" onClick={fetchData} disabled={snapshotLoading}
+                  className="mt-2 min-h-[44px] rounded-lg border border-port-border px-3 disabled:opacity-50">
+                  {snapshotLoading ? 'Retrying snapshot…' : 'Retry snapshot'}
+                </button>
+              </div>
+            )}
             {(orphanCount > 0 || serveStatus?.status === 'failed') && (
               <button type="button" onClick={() => openDrawer('settings', 'relay')}
                 className="block w-full rounded-lg border border-port-warning/40 p-3 text-left text-sm text-port-warning">
@@ -1699,7 +1719,7 @@ function InstancesContent() {
               </div>
             )}
 
-            {peers.length === 0 && (
+            {snapshotLoaded && !snapshotError && peers.length === 0 && (
               <EmptyState
                 icon={Network}
                 title="No peers registered yet"
@@ -1721,6 +1741,15 @@ function InstancesContent() {
               activeTab={settingsTab} onTabChange={setSettingsTab}>
               {settingsTab === 'instance' && (
                 <div className="space-y-4">
+                  {!self && (
+                    <div className="rounded-lg border border-port-warning/40 p-3 text-sm text-port-warning">
+                      <p>This instance settings are unavailable until the instance snapshot loads.</p>
+                      <button type="button" onClick={fetchData} disabled={snapshotLoading}
+                        className="mt-2 min-h-[44px] rounded-lg border border-port-border px-3 disabled:opacity-50">
+                        {snapshotLoading ? 'Retrying snapshot…' : 'Retry instance settings'}
+                      </button>
+                    </div>
+                  )}
                   <SelfCard self={self} onUpdate={fetchData} syncStatus={syncStatus} tailnetInfo={tailnetInfo}
                     editing={editingSelf} setEditing={setEditingSelf} name={selfName} setName={setSelfName} />
                   <BrainParitySchedule />

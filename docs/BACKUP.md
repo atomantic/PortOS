@@ -11,13 +11,25 @@ The dump includes the machine-local `cos_pending_agent_feedback` reference index
 
 Implementation: `server/services/backup.js` (snapshot/dump/restore), `server/services/backupScheduler.js` (cron), `server/routes/backup.js` (API), and `server/routes/database.js` (DB export/sync).
 
+Snapshot dump and replay use the endpoint and credentials captured by the active
+pool at server startup. Changing `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, or
+`PGPASSWORD` requires restarting PortOS. Inherited libpq overrides (including
+`PGHOSTADDR`, service files and `PGOPTIONS`) are removed from these subprocesses.
+TLS is captured at startup too: disabled TLS stays disabled, verified TLS uses
+`verify-full` with a temporary PEM file containing Node’s active trust roots, and `no-verify` uses `require`. Inline TLS
+certificate settings are refused rather than silently weakened. Executable
+resolution (`PATH` and `PORTOS_PGDUMP`) is preserved.
+
 ## Database backend migration
 
 Settings (Database tab) offers a coordinated offline cutover between Docker and
 native PostgreSQL. It stops/drains every PortOS writer (including the CoS
 runner), transfers the data, commits the new backend, restarts, and verifies
 the restarted server's target connection before reporting success — the same
-lifecycle `scripts/database-maintenance.mjs` drives from the CLI (see
+lifecycle `POST /api/database/maintenance/cutover` runs for automation (the
+Settings tab submits that same request; it uses the ordinary instance
+authentication gate). `scripts/database-maintenance.mjs` is **not** a complete
+migration path: its `begin` command only admits a fence and starts nothing (see
 [Database maintenance admission](#database-maintenance-admission) below).
 `scripts/db.sh migrate`, `use-native`, and `use-docker` still refuse directly;
 native setup provisions without selecting a backend. Do not substitute Sync
@@ -60,8 +72,9 @@ An explicit endpoint only selects where a standalone transfer runs. Import
 replaces database objects present in the dump: keep recovery copies and stop
 the target's writers before restoring. These commands do not stop PortOS,
 change saved mode, verify a restarted pool, or authorize a backend cutover —
-use the coordinated cutover above (Settings Database tab or
-`scripts/database-maintenance.mjs`) for that.
+use the coordinated cutover above (Settings Database tab, or the
+authenticated `POST /api/database/maintenance/cutover` for automation) for
+that. `scripts/database-maintenance.mjs` is admission-only and does not run it.
 
 ## What gets backed up
 
@@ -230,6 +243,21 @@ reports that replay committed and recovery still needs attention. Application
 database operations drain before reset; new operations receive a temporary
 maintenance error until replay and reconciliation finish (including failures).
 
+### Restoring settings in a running server
+
+Full live file restores and selective `settings.json` restores join the settings
+write queue. Previously admitted mutations finish before transfer starts; later
+mutations wait through transfer and cache reconciliation, then read the restored
+file as their base. Partial transfer and reconciliation failures release the
+queue while retaining the existing restore diagnostics. Malformed restored
+settings still invalidate the cache rather than broadcasting empty defaults.
+Dry runs and unrelated selective restores do not acquire this settings boundary.
+
+A full restore acquires queues in this order: settings, CoS configuration, CoS
+runtime state. The settings queue remains held through CoS reconciliation. A
+restore callback must never call a queued settings write API; cache reload reads
+directly and does not re-enter the queue.
+
 ### Restoring CoS files in a running server
 
 A full live file restore or selective `cos` restore requires the CoS daemon and
@@ -251,7 +279,13 @@ While the server is still running, `GET /api/database/maintenance/status` reads 
 
 The persistent maintenance boundary is a prerequisite for coordinated offline migration (#8805). It does **not** migrate data, change saved mode, stop existing writer processes, or prove a target cutover. In particular, entering maintenance is not permission to invoke an uncoordinated SQL import or backend migration.
 
-From the install root, inspect or establish the fence:
+From the install root, inspect the journal with `status`. `begin` is a
+**low-level, admission-only command — it does not start a migration.** It
+immediately fences normal database work, launches no coordinator or worker, and
+will never progress by waiting; `recover` cannot start it either, because
+there is no coordinator to resume. Use Settings (Database tab) or
+`POST /api/database/maintenance/cutover` to migrate. Run `begin` only when you
+deliberately want the bare fence:
 
 ```sh
 node scripts/database-maintenance.mjs status
@@ -259,6 +293,11 @@ node scripts/database-maintenance.mjs begin native docker
 # Or, when the saved source mode is Docker:
 node scripts/database-maintenance.mjs begin docker native
 ```
+
+If an operation was created by `begin` alone (status shows stage `accepted`
+and no `coordinator`), cancel it with the command below, using the unchanged
+source configuration, before starting the complete cutover. The cutover is
+refused while that ownerless fence exists.
 
 The command returns the operation ID and direction. Plan for downtime: new pooled database operations, database administration mutations/exports, and CoS spawn admission are refused immediately, and both managed server and runner refuse normal boot while fenced. Admission is the synchronous fence check: work admitted just before publication may still obtain a connection or spawn afterward. Already-admitted transactions may finish; this boundary alone is **not a drained snapshot boundary**. The offline coordinator must still stop/drain all owned writers and validate live/spawning work before export. A process-local restore callback cannot bypass this persistent fence.
 
@@ -270,7 +309,7 @@ node scripts/database-maintenance.mjs cancel <operation-id>
 
 Cancellation supports only the initial accepted stage, preserves the journal in the machine-local cancelled archive, and never switches mode or reverses direction. Restart managed processes through the existing PM2 ecosystem workflow after cancellation if their normal boot was refused. CLI configuration follows the ecosystem's environment precedence; run from the same configured operator environment. Changed source configuration, a different operation ID, an unknown stage/version, and a competing operation are refused.
 
-An incomplete publication or interrupted cancellation remains fenced. Do not remove the active directory, steal its cancellation claim, or guess a backend from `.env`: retain the journal for recovery. There is no rollback, force or skip command; `node scripts/database-maintenance.mjs recover <operation-id>` only resumes the recorded operation after its worker exited. The offline transfer, its retained `data/db-dumps/portos-maintenance-<operation-id>.sql` recovery dump, mode commit, verified restart and release are described in [offline transfer](STORAGE.md#offline-transfer) and [mode commit, verified restart, and release](STORAGE.md#mode-commit-verified-restart-and-release); Settings (Database tab) surfaces the interrupted state and its Resume control from the same journal. `data/database-authority.json` and `data/database-maintenance-completed/` are local records of a finished cutover — restoring an older backup without them lifts the retired-backend guard. Normal startup and migration must not be re-enabled by treating this preparatory operation as a completed cutover.
+An incomplete publication or interrupted cancellation remains fenced. Do not remove the active directory, steal its cancellation claim, or guess a backend from `.env`: retain the journal for recovery. There is no rollback, force or skip command. Cancellation clears an ownerless `accepted` fence; `node scripts/database-maintenance.mjs recover <operation-id>` is a different case: it only resumes the same recorded, coordinator-owned operation (identity preserved) after its worker exited. The offline transfer, its retained `data/db-dumps/portos-maintenance-<operation-id>.sql` recovery dump, mode commit, verified restart and release are described in [offline transfer](STORAGE.md#offline-transfer) and [mode commit, verified restart, and release](STORAGE.md#mode-commit-verified-restart-and-release); Settings (Database tab) surfaces the interrupted state and its Resume control from the same journal. `data/database-authority.json` and `data/database-maintenance-completed/` are local records of a finished cutover — restoring an older backup without them lifts the retired-backend guard. Normal startup and migration must not be re-enabled by treating this preparatory operation as a completed cutover.
 
 Coordinator stage publication uses immutable, atomically linked records. A same-operation retry with the existing owner token can confirm its last transition after a lost response; abandoned temporary files do not advance the stage, and a delayed retry cannot overwrite later progress. Interrupted claims from the older publication protocol still fail closed. This does not permit replacing a coordinator, reopening admission, or retrying SQL import: those require the offline recovery protocol.
 

@@ -18,6 +18,10 @@ const localSettingsSchema = z.object({
   mode: z.enum(['api', 'cli', 'tui']).nullable().default(null),
   model: z.string().max(256).nullable().default(null),
   effort: z.enum(EFFORT_LEVELS).nullable().default(null),
+  // 'pinned' (default): the selected route must run the work; a fallback or
+  // swapped route is an error. 'allowed': substitution is an explicit decision
+  // that the effective-route record carries.
+  substitution: z.enum(['pinned', 'allowed']).default('pinned'),
 }).strict();
 
 export const codeAnimationProjectSchema = z.object({
@@ -32,3 +36,16 @@ export const codeAnimationProjectSchema = z.object({
 }).strict();
 
 export const codeAnimationProjectPatchSchema = partialWithoutDefaults(codeAnimationProjectSchema);
+
+// POST /projects/:id/stage-runs. Starting is an explicit user action; the body
+// can only name which stored revision to work from or which stopped run to resume.
+export const codeAnimationStageRunSchema = z.object({
+  revisionId: z.string().uuid().optional(),
+  resumeFromRunId: z.string().uuid().optional(),
+  // Opt-in: ask the project's vision-capable authoring route to review the style frames.
+  visualReview: z.boolean().optional(),
+  audioConsent: z.boolean().default(false),
+  audioProviderId: z.string().trim().min(1).max(128).optional(),
+  audioModel: z.string().trim().min(1).max(256).optional(),
+  audioBudgetUsd: z.number().positive().max(1000).optional(),
+}).strict().refine(value => !(value.revisionId && value.resumeFromRunId), 'Choose a revision or a run to resume, not both');

@@ -397,7 +397,9 @@ async function interruptActiveTurn(reason, status, { retry = false, expectedTurn
         status,
         pauseReason: reason,
         failureCount,
-        lastError: reason,
+        // A pause or global hold is not a wake failure: keep the real last
+        // error (OOM kill, canceled run, ...) visible next to the pause reason.
+        lastError: status === 'paused' || status === 'waiting' ? next.lastError : reason,
         nextEligibleWakeAt: retry
           ? new Date(Date.now() + persistentMindBackoffMs(failureCount)).toISOString()
           : null,
@@ -910,6 +912,9 @@ async function runClaimedPersistentMindTurn(turn, mind, globalSlot) {
       identity: prepared.identity ?? turnAdapter.identity ?? 'One supervised persistent Chief of Staff mind.',
       instructions: prepared.instructions || '',
       memories: Array.isArray(prepared.memories) ? prepared.memories : [],
+      // A local window's adapter bounds the recalled context so the wake
+      // prompt leaves room for its tool rounds; absent means the default cap.
+      ...(Number.isInteger(prepared.contextMaxChars) && prepared.contextMaxChars > 0 ? { maxChars: prepared.contextMaxChars } : {}),
       providerId: prepared.provider.id,
       model: prepared.model || null,
       summarize: typeof turnAdapter.summarize === 'function'

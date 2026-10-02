@@ -76,6 +76,14 @@ describe('programmatic scheduled handlers — shipped params', () => {
         expect(DEFAULT_TASK_INTERVALS[taskType].taskMetadata).toBeNull();
         continue;
       }
+      // The music-video autopilot is configured on its own Schedule card (its
+      // paid image/video spend is bounded by its budget and limits), so it has
+      // no Quota Burn form to mirror.
+      if (taskType === 'music-video-autopilot') {
+        expect(params).toEqual({});
+        expect(Object.keys(DEFAULT_TASK_INTERVALS[taskType].taskMetadata)).toEqual(['musicVideoAutopilot']);
+        continue;
+      }
       expect(Object.keys(params).length, taskType).toBeGreaterThan(0);
       const expected = Object.fromEntries(
         Object.entries(params)

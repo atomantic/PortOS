@@ -23,6 +23,31 @@ export function normalizeMusicVideoProductionPolicy(patch, base = null) {
   };
 }
 
+/** The brief's selected render tools (`image:*`, `video:*`, `code:render`); empty when the brief names none. */
+export const musicVideoBriefTools = (project) => (Array.isArray(project?.automation?.tools) ? project.automation.tools.filter((t) => typeof t === 'string') : []);
+
+/** False when the brief names tools and none of them makes video. A brief naming no tools restricts nothing. */
+export function musicVideoBriefAllowsVideo(project) {
+  const tools = musicVideoBriefTools(project);
+  return tools.length === 0 || tools.some((t) => t.startsWith('video:'));
+}
+
+/**
+ * The saved tools and production policy disagree: the brief selected tools but
+ * no video tool, while the policy still plans generated footage (legacy, or
+ * code-first with a non-zero allowance). Describes the mismatch; never edits
+ * anything — an approved plan stays as saved until the director replans.
+ */
+export function musicVideoToolPolicyConflict(project) {
+  if (musicVideoBriefAllowsVideo(project)) return null;
+  const policy = normalizeMusicVideoProductionPolicy(project?.productionPolicy);
+  if (policy.strategy === 'code-first' && policy.maxGeneratedVideoPercent <= 0) return null;
+  return {
+    code: 'NO_VIDEO_TOOL',
+    message: 'No video tool is selected, but the production policy still allows generated footage. Replan as code-first with no generated video, or add a video tool to the brief.',
+  };
+}
+
 function unionSeconds(intervals) {
   let end = 0;
   let total = 0;

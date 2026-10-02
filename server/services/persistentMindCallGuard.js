@@ -217,7 +217,7 @@ export function createPersistentMindCallBoundary({
     const reportRunId = (id) => { if (typeof id === 'string' && id) runId = id; };
     const startedAt = now();
     try {
-      const result = await run({ reportRunId, timeoutMs: reservation?.timeoutMs });
+      const result = await run({ reportRunId, timeoutMs: 0 });
       const elapsedMs = Math.max(0, now() - startedAt);
       reportRunId(result?.runId);
       await account(elapsedMs);

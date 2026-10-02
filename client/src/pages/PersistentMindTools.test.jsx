@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { typeSettled } from '../test/settledInput.js';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -261,12 +260,12 @@ describe('PersistentMindTools', () => {
 
     const retentionInput = await screen.findByLabelText('Retention window (extra turns)');
     expect(retentionInput).toHaveValue(3);
-    await user.clear(retentionInput);
-    // Clearing this controlled number field renders 0. Settle that transition
-    // before typing: otherwise user.type can append 5 to the old 3 and the
-    // component clamps 35 to 20. The generic empty-field helper expects null.
-    await waitFor(() => expect(retentionInput).toHaveValue(0));
-    await typeSettled(user, retentionInput, '5');
+    // One change event (3 -> 5) instead of clear-then-type: a clear is its own
+    // controlled-input transition that a late capabilities sync can overwrite
+    // under CI load, leaving the field at 3.
+    fireEvent.change(retentionInput, { target: { value: '5' } });
+    await waitFor(() => expect(retentionInput).toHaveValue(5));
+    await user.click(retentionInput);
     await user.tab();
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({

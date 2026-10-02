@@ -1,10 +1,8 @@
 import { defineConfig } from 'vitest/config';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { vitestCaptureProjects, vitestCiPool } from '../scripts/vitestCiPool.js';
 import { DB_TEST_INCLUDE } from './vitest.config.db.js';
-import { sweepStaleRunRoots, writeOwnerFile } from './test/staleRunRoots.js';
+import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
 
 // `npm run test:fast` is the Windows-safe way to set the flag (a
 // `VITEST_FAST=1 vitest` script is parsed as an executable name on cmd.exe).
@@ -12,51 +10,8 @@ if (process.env.npm_lifecycle_event === 'test:fast') {
   process.env.VITEST_FAST = '1';
 }
 
-// Run-scoped temp root (#9032). #9000 added the static `mkdtempCleanup.guards
-// .test.js` scan, and #9009 documented it as file-wide (any rmSync anywhere in
-// a file satisfies it for every mkdtemp call in that file) — a heuristic that
-// cannot see a leak driven by a spawned child process, a fixed-name log file,
-// or a partially-cleaned file. Rather than chasing more static patterns, give
-// every mkdtemp/tmpdir() call in the run nowhere to leak TO: create one root
-// for the whole run, in the REAL host tmpdir, and point TMPDIR/TMP/TEMP at it
-// before any worker spawns. `os.tmpdir()` reads those env vars dynamically —
-// in this process, in a forked worker (workers inherit process.env), and in
-// any spawned child that inherits process.env (Python's tempfile module,
-// ffmpeg, git) — so every one of those calls resolves inside the root instead
-// of the host's real temp directory. `server/test/runTempRoot.js` (wired
-// below as globalSetup) is the other half: it reports and removes whatever is
-// left in the root after the run.
-//
-// Stale-root sweep: see `test/staleRunRoots.js` (owner pid, 6h fallback).
-// Idempotency guard: `server/vitest.config.test.js` (and any other suite
-// that asserts on this file's own NODE_ENV-forcing behavior) dynamically
-// re-imports this module after `vi.resetModules()`, re-running every
-// top-level statement — including the mkdtempSync below — even though a real
-// `vitest run` only ever loads this config once. Without a guard, each of
-// those re-imports mints and abandons its OWN "pvt-*" root (nobody's
-// globalSetup teardown owns it), which is itself a leak this same change is
-// fixing (#9032). `process.env.PORTOS_TEST_TEMP_ROOT` marks that this
-// process already has a run root; reuse it instead of minting another.
-const REAL_TMPDIR = tmpdir();
-let RUN_TEMP_ROOT = process.env.PORTOS_TEST_TEMP_ROOT;
-
-if (!RUN_TEMP_ROOT) {
-  // Stale-root sweep (#9113): reclaim `pvt-*` roots of killed runs — at once
-  // when the recorded owner pid is gone, after 6h when no owner is recorded,
-  // never while the owner lives. Uses the REAL tmpdir, before the override below.
-  sweepStaleRunRoots(REAL_TMPDIR);
-
-  // Short prefix: Unix-socket tests (e.g. services/itermBridge.test.js) build
-  // a `join(tmpdir(), 'prefix-XXXXXX', 'name.sock')` path, and macOS caps
-  // `sockaddr_un.sun_path` at 104 bytes — a long run-root prefix nested under
-  // another temp dir could push a legitimate socket path over that limit.
-  RUN_TEMP_ROOT = mkdtempSync(join(REAL_TMPDIR, 'pvt-'));
-  writeOwnerFile(RUN_TEMP_ROOT);
-  process.env.PORTOS_TEST_TEMP_ROOT = RUN_TEMP_ROOT;
-}
-process.env.TMPDIR = RUN_TEMP_ROOT;
-process.env.TMP = RUN_TEMP_ROOT;
-process.env.TEMP = RUN_TEMP_ROOT;
+// Reimports reuse the enclosing run root; capture projects share its one owner.
+const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
 
 // The suite REQUIRES NODE_ENV=test: it is what selects the file storage backend
 // (memoryBackend.js and every store facade) so no suite talks to the real
@@ -232,7 +187,7 @@ const config = defineConfig({
     // after the whole run finishes (unlike setupFiles, which runs per test
     // file, per worker). Reports and removes whatever is left in
     // RUN_TEMP_ROOT once every test has finished (#9032).
-    globalSetup: ['./test/runTempRoot.js'],
+    globalSetup: [fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url))],
   }
 });
 

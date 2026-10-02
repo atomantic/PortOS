@@ -62,8 +62,8 @@ describe('managed-app feature overrides', () => {
 });
 
 describe('isLaunchVideoDisabled', () => {
-  it('disables launch videos for PortOS baseline app and Eidoverse Worlds app', () => {
-    expect(isLaunchVideoDisabled({ id: PORTOS_APP_ID })).toBe(true);
+  it('keeps launch videos available for PortOS while disabling Eidoverse Worlds', () => {
+    expect(isLaunchVideoDisabled({ id: PORTOS_APP_ID })).toBe(false);
     expect(isLaunchVideoDisabled({ id: 'eidoverse-worlds' })).toBe(true);
     expect(isLaunchVideoDisabled({ id: 'eidoverse' })).toBe(true);
     expect(isLaunchVideoDisabled({ id: 'custom-id', pm2ProcessNames: ['eidoverse-worlds'] })).toBe(true);
@@ -72,10 +72,10 @@ describe('isLaunchVideoDisabled', () => {
     expect(isLaunchVideoDisabled(null)).toBe(false);
   });
 
-  it('hides launch-video detail tab for PortOS and Eidoverse Worlds apps via visibleWhen', () => {
+  it('shows the PortOS launch-video detail tab while hiding Eidoverse Worlds', () => {
     const launchVideoTab = featureEntry('launch-video');
     expect(typeof launchVideoTab.visibleWhen).toBe('function');
-    expect(launchVideoTab.visibleWhen({ id: 'portos-default' })).toBe(false);
+    expect(launchVideoTab.visibleWhen({ id: PORTOS_APP_ID })).toBe(true);
     expect(launchVideoTab.visibleWhen({ id: 'eidoverse-worlds' })).toBe(false);
     expect(launchVideoTab.visibleWhen({ id: 'my-app' })).toBe(true);
   });

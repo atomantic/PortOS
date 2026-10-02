@@ -7,7 +7,10 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  applyCastAndSetsDirectionEdits,
   buildCastAndSetsPrompt,
+  castAndSetsAllowsImages,
+  castAndSetsMedium,
   mergeCastAndSetsDirection,
   parseCastAndSetsResponse,
   songSections,
@@ -89,5 +92,129 @@ describe('Cast & Sets direction', () => {
     expect(direction.logline).toBe('She escapes.');
     expect(direction.questions).toEqual([]);
     expect(direction.interpretation).toBe('');
+  });
+});
+
+const PROCEDURAL_ANSWER = {
+  logline: 'A paper boat crosses a neon city.',
+  protagonist: {
+    name: 'Boat', description: 'a folded paper boat', construction: 'three triangles hinged at the keel', shapeLanguage: 'sharp, folded',
+    materials: 'flat fills with a soft glow', palette: '#f5f0e6, #ff5a1f', expressions: ['proud: bow lifts', 'tired: bow droops'], movement: 'eases in, bobs on every beat',
+  },
+  world: { layout: 'a river through stacked streets', depth: 'three parallax planes', camera: 'slow dolly with a beat-synced push', transitions: 'wipe through reflections' },
+  sets: [
+    { name: 'River', description: 'a neon river', lighting: 'magenta', imageRole: 'Background' },
+    { name: 'Bridge', description: 'an iron span', lighting: 'cyan', imageRole: 'decoration' },
+    { name: 'Quay', description: 'wet stone', lighting: 'amber', imageRole: 'photo-booth' },
+  ],
+  looks: [],
+};
+
+describe('Cast & Sets procedural medium', () => {
+  const procedural = { ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } };
+  it('resolves the medium from the production policy and the brief tools together', () => {
+    expect(castAndSetsMedium(procedural)).toBe('procedural');
+    expect(castAndSetsMedium({ automation: { tools: ['image:codex', 'code:render'] } })).toBe('procedural');
+    // A video tool, an image-only brief and an untouched project stay photographic.
+    expect(castAndSetsMedium({ automation: { tools: ['image:codex', 'code:render', 'video:local'] } })).toBe('photographic');
+    expect(castAndSetsMedium({ automation: { tools: ['image:codex'] } })).toBe('photographic');
+    expect(castAndSetsMedium(project)).toBe('photographic');
+    expect(castAndSetsAllowsImages({ automation: { tools: ['code:render'] } })).toBe(false);
+    expect(castAndSetsAllowsImages({ automation: { tools: ['image:codex', 'code:render'] } })).toBe(true);
+    expect(castAndSetsAllowsImages(project)).toBe(true);
+  });
+
+  it('asks for construction, world and image roles instead of a photographic cast', () => {
+    const prompt = buildCastAndSetsPrompt(procedural);
+    expect(prompt).toContain('PROCEDURAL music video');
+    expect(prompt).toContain('"construction"');
+    expect(prompt).toContain('"imageRole"');
+    expect(prompt).toContain('"cutout"');
+    expect(prompt).not.toMatch(/"face"|"hair"|"tests"/);
+    expect(buildCastAndSetsPrompt(project)).toContain('"face"');
+    // A revision keeps the medium the saved direction was made in, whatever the project says now.
+    // ...and a saved photographic direction (no medium) stays photographic under a code-first project.
+    expect(buildCastAndSetsPrompt(procedural, { previous: { protagonist: { name: 'Nova' } }, notes: [{ text: 'x' }] })).toContain('"face"');
+    expect(buildCastAndSetsPrompt(project, { previous: { medium: 'procedural' }, notes: [{ text: 'bigger sail' }] })).toContain('PROCEDURAL');
+  });
+
+  it('merges procedural fields, defaults an unknown image role, and does not require looks', () => {
+    const parsed = parseCastAndSetsResponse(JSON.stringify(PROCEDURAL_ANSWER));
+    const { direction, missing } = mergeCastAndSetsDirection(null, parsed, { sections, medium: 'procedural' });
+    expect(missing).toEqual([]);
+    expect(direction).toMatchObject({ medium: 'procedural', looks: [], tests: [] });
+    expect(direction.protagonist).toMatchObject({ construction: 'three triangles hinged at the keel', expressions: ['proud: bow lifts', 'tired: bow droops'] });
+    expect(direction.world.camera).toBe('slow dolly with a beat-synced push');
+    expect(direction.sets.map((s) => s.imageRole)).toEqual(['background', 'decoration', 'background']);
+
+    // Revision: absent keys keep the saved values, a present empty value clears.
+    const revision = parseCastAndSetsResponse(JSON.stringify({ protagonist: { movement: '' }, world: { depth: 'two planes' } }));
+    const revised = mergeCastAndSetsDirection(direction, revision, { sections }).direction;
+    expect(revised.medium).toBe('procedural');
+    expect(revised.protagonist).toMatchObject({ movement: '', construction: 'three triangles hinged at the keel' });
+    expect(revised.world).toMatchObject({ depth: 'two planes', layout: 'a river through stacked streets' });
+    expect(revised.sets).toEqual(direction.sets);
+  });
+
+  it('leaves a photographic direction exactly as it was', () => {
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(ANSWER)), { sections });
+    expect(direction).not.toHaveProperty('medium');
+    expect(direction).not.toHaveProperty('world');
+    expect(direction.protagonist).not.toHaveProperty('construction');
+    expect(direction.sets[0]).not.toHaveProperty('imageRole');
+  });
+});
+
+describe('Cast & Sets reusable definitions', () => {
+  const DEFINITIONS = { characters: [{
+    name: 'Boat', palette: [{ name: 'cream', hex: '#f5f0e6' }],
+    parts: [{ id: 'hull', shape: 'rect', x: 40, y: 100, width: 120, height: 40, fill: 'cream' }],
+    expressions: [{ name: 'proud', overrides: { hull: { rotate: -4 } } }],
+  }] };
+  const direct = (extra) => mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...PROCEDURAL_ANSWER, ...extra })), { sections, medium: 'procedural' }).direction;
+
+  it('asks for definitions and keeps them through a revision (absent keeps, empty clears, unusable keeps)', () => {
+    expect(buildCastAndSetsPrompt({ ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } })).toContain('"definitions"');
+    const direction = direct({ definitions: DEFINITIONS });
+    expect(direction.definitions.characters[0]).toMatchObject({ id: 'boat', renderer: 'svg' });
+
+    const revise = (answer) => mergeCastAndSetsDirection(direction, parseCastAndSetsResponse(JSON.stringify(answer)), { sections }).direction;
+    expect(revise({ protagonist: { movement: 'slower' } }).definitions).toEqual(direction.definitions);
+    expect(revise({ definitions: { characters: [{ name: 'Broken', parts: [{ shape: 'path', d: '<bad>' }] }] } }).definitions).toEqual(direction.definitions);
+    expect(revise({ definitions: { characters: [] } }).definitions).toEqual({ characters: [] });
+  });
+
+  it('gives a photographic direction no definitions', () => {
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, definitions: DEFINITIONS })), { sections });
+    expect(direction).not.toHaveProperty('definitions');
+  });
+});
+
+describe('Cast & Sets direct edits', () => {
+  const saved = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(PROCEDURAL_ANSWER)), { sections, medium: 'procedural' }).direction;
+  const direction = { ...saved, look: 'flat fills', moodRefs: [0, 2] };
+
+  it('replaces present fields, keeps absent ones, clears on empty, and reports what changed', () => {
+    const edited = applyCastAndSetsDirectionEdits(direction, {
+      protagonist: { palette: '#112233, #445566', movement: '', expressions: ['calm: bow level'] },
+      world: { camera: 'locked off' },
+      sets: [{ id: direction.sets[0].id, imageRole: 'texture' }],
+    }, { sections });
+    expect(edited.direction.protagonist).toMatchObject({ palette: '#112233, #445566', movement: '', expressions: ['calm: bow level'], construction: direction.protagonist.construction });
+    expect(edited.direction.world).toMatchObject({ camera: 'locked off', layout: direction.world.layout });
+    expect(edited.direction.sets[0].imageRole).toBe('texture');
+    expect(edited.direction.sets.slice(1)).toEqual(direction.sets.slice(1));
+    // The mood-board picks and photographic look are not touched by an edit.
+    expect(edited.direction).toMatchObject({ look: 'flat fills', moodRefs: [0, 2], songMap: direction.songMap });
+    expect(edited.changed).toEqual(['palette', 'movement', 'expressions', 'world camera', `${direction.sets[0].name} image role`]);
+    // Re-saving the same values is no change at all.
+    expect(applyCastAndSetsDirectionEdits(direction, { world: { camera: direction.world.camera } }, { sections }).changed).toEqual([]);
+  });
+
+  it('refuses a photographic direction, an unknown set, and an edit that empties the protagonist', () => {
+    expect(() => applyCastAndSetsDirectionEdits({ ...direction, medium: undefined }, { world: { camera: 'x' } })).toThrow(/procedural/);
+    expect(() => applyCastAndSetsDirectionEdits(direction, { sets: [{ id: 'nowhere', imageRole: 'cutout' }] })).toThrow(/Unknown set/);
+    const bare = { ...direction, protagonist: { ...direction.protagonist, description: '' } };
+    expect(() => applyCastAndSetsDirectionEdits(bare, { protagonist: { construction: '' } })).toThrow(/protagonist/);
   });
 });

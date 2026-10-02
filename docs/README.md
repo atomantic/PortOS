@@ -9,7 +9,8 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | Doc | Covers |
 |-----|--------|
 | [HTML_COMPOSITIONS.md](./HTML_COMPOSITIONS.md) | Seekable HTML scenes rendered offline to MP4 through hidden managed-browser targets |
-| [CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md) | Versioned portable Code Animation source/brief packages and non-executing validation |
+| [SUPERCOLLIDER.md](./SUPERCOLLIDER.md) | Managed SuperCollider Docker runtime: `setup:supercollider`, readiness states, containment policy and platform evidence |
+| [CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md) | Versioned portable Code Animation source/brief packages, non-executing validation, and contained production execution |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
 | [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |
 | [API.md](./API.md) | REST endpoints, complete route-domain index, Socket.IO events |
@@ -30,6 +31,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [MODEL_ACCESS.md](./MODEL_ACCESS.md) | Scoping a provider to the models your plan entitles you to — free tiers, allow/deny globs, gateway inheritance |
 | [MODEL-COMPARISON.md](./MODEL-COMPARISON.md) | Sourced provider/model/effort comparisons, cost estimates and CoS research refresh |
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
+| [features/music-video-autonomous.md](./features/music-video-autonomous.md) | One-prompt autonomous music videos: brief → lyrics → mood board → Suno song → production, optional checkpoints, and the `music-video-autopilot` scheduled task that turns Brain ideas into videos |
 | [features/music-video-temporal-evidence.md](./features/music-video-temporal-evidence.md) | Performance source provenance, synchronized playback and optional local temporal analyzer protocol |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |

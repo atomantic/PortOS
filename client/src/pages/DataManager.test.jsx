@@ -345,7 +345,7 @@ describe('DataManager full-width shell (#4145)', () => {
     expect(bar.className).not.toMatch(/overflow-(auto|y-auto|scroll)/);
   });
 
-  it('reserves the same shell in the loading skeleton', () => {
+  it('reserves the same shell in the loading skeleton', async () => {
     // Never resolves — hold the page in its loading state.
     getDataOverview.mockReset().mockReturnValue(new Promise(() => {}));
     const { container } = render(<DataManager />);
@@ -355,6 +355,7 @@ describe('DataManager full-width shell (#4145)', () => {
     const skeletonScrollers = [...skeleton.children].filter((el) => /overflow-y-auto/.test(el.className));
     expect(skeletonScrollers).toHaveLength(1);
     expect(skeletonScrollers[0].className).toContain('p-4');
+    await act(async () => {});
   });
 });
 
@@ -611,4 +612,67 @@ it('prevents overlapping item cleanup and an already-open bucket purge', async (
   expect(screen.getByRole('button', { name: 'Purge' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Archive' })).toBeDisabled();
   await act(async () => finish({ category: 'messages', subPath: 'example-account' }));
+});
+
+
+describe('DataManager independent read failures (#9446)', () => {
+  let getDataBackups;
+  const archive = { name: 'example-backup.tar.gz', size: 5000, created: '2025-01-01T10:00:00Z' };
+  beforeEach(async () => {
+    getDataBackups = (await import('../services/api')).getDataBackups;
+    getDataBackups.mockReset().mockResolvedValue([archive]);
+    getDataOverview.mockReset().mockResolvedValue(overview);
+  });
+
+  it('shows unavailable measurements on initial failure and recovers measured empty snapshots', async () => {
+    getDataOverview.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ totalSize: 0, totalFileCount: 0, categories: [] });
+    getDataBackups.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([]);
+    render(<DataManager />);
+    await screen.findByRole('button', { name: 'Retry storage overview' });
+    expect(screen.getByRole('button', { name: 'Retry backups' })).toBeInTheDocument();
+    expect(screen.getByText(/Backup count unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(/0 files|0 categories|0 backups|0 B/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry storage overview' }));
+    await screen.findByText(/0 files · 0 categories/);
+    expect(screen.getByRole('button', { name: 'Retry backups' })).toBeInTheDocument();
+    expect(getDataBackups).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry backups' }));
+    await screen.findByText(/0 backups/);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(getDataOverview).toHaveBeenCalledWith({ silent: true });
+    expect(getDataBackups).toHaveBeenCalledWith({ silent: true });
+  });
+
+  it.each(['overview', 'backups'])('keeps the healthy resource usable when initial %s fails', async resource => {
+    (resource === 'overview' ? getDataOverview : getDataBackups).mockRejectedValue(new Error('offline'));
+    render(<DataManager />);
+    await screen.findByRole('alert');
+    if (resource === 'overview') {
+      expect(screen.getByText(archive.name)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Delete backup' })).toBeEnabled();
+      expect(screen.queryByText(UNKNOWN_DESCRIPTION)).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByText(UNKNOWN_DESCRIPTION)).toBeInTheDocument();
+      expect(screen.queryByText(archive.name)).not.toBeInTheDocument();
+      expect(screen.getByText(/Backup count unavailable/)).toBeInTheDocument();
+    }
+  });
+
+  it.each(['overview', 'backups'])('preserves the last successful %s snapshot on failed refresh and retries only it', async resource => {
+    render(<DataManager />);
+    await screen.findByText(archive.name);
+    const failed = resource === 'overview' ? getDataOverview : getDataBackups;
+    const healthy = resource === 'overview' ? getDataBackups : getDataOverview;
+    failed.mockRejectedValueOnce(new Error('offline'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    const banner = await screen.findByRole('alert');
+    expect(banner).toHaveTextContent('Showing last successful snapshot; values may be stale.');
+    expect(screen.getByText(archive.name)).toBeInTheDocument();
+    expect(screen.getByText(UNKNOWN_DESCRIPTION)).toBeInTheDocument();
+    expect(screen.getAllByText(formatBytes(3000)).length).toBeGreaterThan(0);
+    const healthyCalls = healthy.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: resource === 'overview' ? 'Retry storage overview' : 'Retry backups' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(healthy).toHaveBeenCalledTimes(healthyCalls);
+  });
 });

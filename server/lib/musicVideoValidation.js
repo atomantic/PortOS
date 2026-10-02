@@ -10,6 +10,7 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
  */
 
 import { z } from 'zod';
+import { EFFORT_LEVELS } from './providerModels.js';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
@@ -21,6 +22,14 @@ import {
   MUSIC_VIDEO_AUTOMATION_TOOL_IDS,
   MUSIC_VIDEO_CHECKIN_MODES,
 } from './musicVideoAutomation.js';
+import {
+  AUTONOMOUS_CHECKPOINT_IDS,
+  AUTONOMOUS_LIMIT_BOUNDS,
+  AUTONOMOUS_NAME_MAX,
+  AUTONOMOUS_ORIGINS,
+  AUTONOMOUS_PROMPT_MAX,
+  AUTONOMOUS_SONG_SOURCES,
+} from './musicVideoAutonomous.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 
@@ -331,6 +340,7 @@ export const musicVideoCodeVideoSchema = z.object({
 export const musicVideoCodeGenerateSchema = z.object({
   providerId: z.string().max(120).optional(),
   model: z.string().max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
 // Where the project's composition document lives. Set only by the import
@@ -707,11 +717,18 @@ export const musicVideoProductionLimitsSchema = z.object({
   spendCapUsd: z.number().min(0).max(100000).nullable().optional(),
 }).strict();
 
+// A code-authoring provider pin: both ids are required, effort is optional.
+const musicVideoAuthoringSchema = z.object({
+  providerId: z.string().min(1).max(200),
+  model: z.string().min(1).max(200),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+}).strict();
+
 export const musicVideoProductionStartSchema = z.object({
   directive: z.string().max(4000).optional(),
   pool: z.array(musicVideoProductionRouteSchema).max(12),
   limits: musicVideoProductionLimitsSchema,
-  authoring: z.object({ providerId: z.string().min(1).max(200), model: z.string().min(1).max(200) }).strict().optional(),
+  authoring: musicVideoAuthoringSchema.optional(),
   providerId: z.string().min(1).max(200).nullable().optional(),
   model: z.string().min(1).max(200).nullable().optional(),
 }).strict();
@@ -720,6 +737,49 @@ export const musicVideoProductionStartSchema = z.object({
 export const musicVideoProductionResumeSchema = z.object({
   limits: musicVideoProductionLimitsSchema.partial().optional(),
   acceptBasis: z.boolean().optional(),
+}).strict();
+
+// ---- Fully-autonomous run: one prompt → lyrics → Suno song → video --------------
+// The alternate entry point: no track, style or board is picked up front. Tool
+// ids are the same catalog the autopilot brief uses; `checkpoints` names the
+// stages that park for approval (none = fully unattended).
+export const musicVideoAutonomousStartSchema = z.object({
+  prompt: z.string().trim().min(1).max(AUTONOMOUS_PROMPT_MAX),
+  name: z.string().trim().min(1).max(AUTONOMOUS_NAME_MAX).optional(),
+  songSource: z.enum(AUTONOMOUS_SONG_SOURCES).optional(),
+  localFallback: z.boolean().optional(),
+  instrumental: z.boolean().optional(),
+  guidance: z.string().max(4000).optional(),
+  tools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),
+  // Per-tool model pin, e.g. { 'image:local': 'flux-dev' }; absent = the install default.
+  models: z.partialRecord(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS), z.string().trim().min(1).max(200)).optional(),
+  budgetUsd: z.number().min(0).max(MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD).nullable().optional(),
+  limits: z.object({
+    maxGenerations: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.max).optional(),
+    maxReviewAttempts: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.max).optional(),
+  }).strict().optional(),
+  checkpoints: z.array(z.enum(AUTONOMOUS_CHECKPOINT_IDS)).max(AUTONOMOUS_CHECKPOINT_IDS.length).optional(),
+  // Reuse this existing mood board instead of generating one from the prompt.
+  moodBoardId: z.string().trim().min(1).max(64).nullable().optional(),
+  // The LLM that writes the brief and lyrics (blank = an eligible TUI provider, else the
+  // install's active provider — see services/musicVideo/llmRoute.js).
+  providerId: z.string().trim().min(1).max(200).nullable().optional(),
+  model: z.string().trim().min(1).max(200).nullable().optional(),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  // The separate code-authoring provider a code-rendered video needs.
+  authoring: musicVideoAuthoringSchema.optional(),
+  origin: z.object({
+    kind: z.enum(AUTONOMOUS_ORIGINS).optional(),
+    ideaId: z.string().max(80).nullable().optional(),
+    ideaTitle: z.string().max(200).nullable().optional(),
+  }).strict().optional(),
+}).strict();
+
+// Resume a parked/failed run, or approve the checkpoint it is waiting on.
+export const musicVideoAutonomousResumeSchema = z.object({
+  // Replace the stage output the director edited at a checkpoint.
+  lyrics: z.string().max(20000).optional(),
+  style: z.string().max(AUTONOMOUS_PROMPT_MAX).optional(),
 }).strict();
 
 // A generation kickoff that failed before reaching the queue (#9011) — names
@@ -737,6 +797,14 @@ export const musicVideoSoundBedSchema = z.object({
   volume: z.number().min(0.05).max(1).optional(),
 }).strict();
 
+// A provider/model/effort pin for a Music Video text stage. Effort is the union
+// of every accepted level; the runner clamps it to the chosen provider's ladder.
+export const musicVideoLlmSchema = z.object({
+  providerId: z.string().trim().min(1).max(200),
+  model: z.string().trim().min(1).max(200).nullable().optional(),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+}).strict();
+
 // Automation-first brief: which render tools the agent may use, the director's
 // free-text guidance, and a spend cap (null = no cap). A patch merges per
 // sub-field; `tools` replaces its list whole. See musicVideoAutomation.js.
@@ -749,6 +817,9 @@ export const musicVideoAutomationSchema = z.object({
   checkins: z.object({
     castAndSets: z.enum(MUSIC_VIDEO_CHECKIN_MODES).optional(),
   }).strict().optional(),
+  // The direction/planning LLM (#9545): absent keeps the stored pin, null clears
+  // it back to Auto (an eligible TUI provider, else the active provider).
+  llm: musicVideoLlmSchema.nullable().optional(),
 }).strict();
 
 // ---- Development artifacts ("ingredients") ----------------------------------
@@ -801,6 +872,7 @@ export const musicVideoDevArtifactFileQuerySchema = z.object({
 export const musicVideoCastAndSetsStartSchema = z.object({
   providerId: z.string().min(1).max(64).optional(),
   model: z.string().min(1).max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
 // Regenerate with notes. Omitted notes = the open notes on the sheet. A
@@ -813,6 +885,32 @@ export const musicVideoCastAndSetsRegenerateSchema = z.object({
   }).strict()).min(1).max(50).optional(),
   providerId: z.string().min(1).max(64).optional(),
   model: z.string().min(1).max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+
+// Direct edits to a procedural direction. A present text field replaces the
+// current value (empty clears it); an absent one keeps it.
+const castSetsText = (max) => z.string().max(max);
+export const musicVideoCastAndSetsDirectionEditSchema = z.object({
+  protagonist: z.object({
+    construction: castSetsText(1000).optional(),
+    shapeLanguage: castSetsText(500).optional(),
+    materials: castSetsText(500).optional(),
+    palette: castSetsText(300).optional(),
+    movement: castSetsText(1000).optional(),
+    expressions: z.array(castSetsText(300)).max(8).optional(),
+  }).strict().optional(),
+  world: z.object({
+    layout: castSetsText(1000).optional(),
+    depth: castSetsText(500).optional(),
+    lighting: castSetsText(500).optional(),
+    camera: castSetsText(500).optional(),
+    transitions: castSetsText(500).optional(),
+  }).strict().optional(),
+  sets: z.array(z.object({
+    id: z.string().min(1).max(64),
+    imageRole: z.enum(['background', 'texture', 'decoration', 'cutout']),
+  }).strict()).max(8).optional(),
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
@@ -947,6 +1045,7 @@ export const musicVideoPlanRequestSchema = z.object({
   seedPrompts: z.boolean().optional(),
   providerId: z.string().max(64).optional(),
   model: z.string().max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
 // Manual-tempo fallback (see services/musicVideo/audioAnalysis.js for why bpm

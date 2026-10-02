@@ -206,7 +206,8 @@ export async function executeTuiRun({ runId, provider, prompt, screenshots = [],
   // inline answer kills the live request and returns terminal chrome such as
   // "[Pasted Content …]" to JSON parsers. Wait for the authoritative file,
   // natural process exit, explicit cancellation, or the configured hard cap.
-  const requiresResponseFileForIdleCompletion = isCodexCommand(command);
+  // Unbounded calls likewise cannot infer completion from a quiet screen.
+  const requiresResponseFileForIdleCompletion = totalTimeoutMs === 0 || isCodexCommand(command);
   // Mirror runner.js#executeCliRun's runs-path resolution so TUI runs land
   // under the runner-config dataDir (not always PATHS.runs) — otherwise a
   // non-default dataDir would split metadata + output across two trees.
@@ -1092,7 +1093,7 @@ ${prompt}`;
     // a backgrounded tab (idle-completion is paused while watched, but this is
     // not — a run can't exceed its configured max time). Provider-configurable
     // via `timeout`; defaults to 5 min.
-    hardTimeoutTimer = setTimeout(async () => {
+    if (totalTimeoutMs > 0) hardTimeoutTimer = setTimeout(async () => {
       if (finalized) return;
       // try/catch is mandatory in an async timer callback — see the response-file
       // watcher above. Only the salvage read is wrapped: a read that rejects

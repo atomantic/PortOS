@@ -264,6 +264,22 @@ describe('submitVideoGenJob', () => {
       expect(mocks.assertRevisionOpen).not.toHaveBeenCalled();
     });
 
+    it('refuses generated footage when the brief names tools and none makes video, and queues once a video tool is selected', async () => {
+      const prepared = falPrepared();
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [], automation: { tools: ['image:codex', 'code:render'] }, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
+      await expect(submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', musicVideo }, {})).rejects.toMatchObject({ status: 409, code: 'MUSIC_VIDEO_NO_VIDEO_TOOL' });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+
+      // A brief naming no tools restricts nothing; one naming a video tool dispatches.
+      for (const automation of [undefined, { tools: [] }, { tools: ['image:codex', 'video:fal'] }]) {
+        mocks.enqueueJob.mockReturnValue(queued);
+        mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1' }], automation });
+        await expect(submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', musicVideo }, {})).resolves.toMatchObject({ jobId: 'job-123' });
+      }
+    });
+
     it('checks the current production policy after video preparation, before queueing', async () => {
       const changed = Object.assign(new Error('The approved plan changed'), { status: 409, code: 'PRODUCTION_BASIS_CHANGED' });
       const prepared = falPrepared();

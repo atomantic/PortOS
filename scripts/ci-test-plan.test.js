@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 
 import {
   ALWAYS_RUN_TESTS,
@@ -169,7 +170,98 @@ it('builds the same plan from an explicit working-tree override as from the equi
   }
 });
 
+it('schedules the real client precision-copy import chain for a shared scoring change', () => {
+  const cwd = fileURLToPath(new URL('../', import.meta.url));
+  const source = 'server/lib/postScoring.js';
+  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+  const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+
+  expect(plan.full).toBe(false);
+  expect(plan.server.mode).toBe('related');
+  expect(plan.server.sources).toContain(source);
+  expect(plan.client.mode).toBe('related');
+  expect(plan.client.sources).toContain(source);
+  expect(plan.build).toBe(true);
+  // The test names its client helper, not postScoring: only import-graph
+  // selection can reach this regression through the intermediate module.
+  expect(inputs.pathContractTests[source]).not.toContain('client/src/lib/estimationTolerance.test.js');
+  expect(staticImportClosure(join(cwd, 'client/src/lib/estimationTolerance.test.js')).files)
+    .toContain(join(cwd, source));
+});
+
+it('carries transitive browser re-exports through the planner CLI and fails closed on unresolved edges', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-browser-deps-'));
+  const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const leaf = 'server/lib/shared/leaf.js';
+  const clientSource = 'client/src/lib/consumer.js';
+  const clientTest = 'client/src/lib/consumer.test.js';
+  const serverOnly = 'server/lib/privateOnly.js';
+  const plan = (changedFiles) => JSON.parse(execFileSync(process.execPath, [planner], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
+      CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+  }));
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write('server/lib/shared/leaf.ts', 'export const value = 3;\n');
+    write('server/lib/bridge.js', "export { value } from './shared/leaf';\n");
+    write(clientSource, "export { value } from '../../../server/lib/bridge.js';\n");
+    write(clientTest, "import { value } from './consumer.js';\n");
+    write(serverOnly, 'export const privateValue = 2;\n');
+    write('client/vite.config.js', 'export default {};\n');
+    git('add', '--all');
+
+    const shared = plan([leaf]);
+    expect(shared).toMatchObject({ full: false, build: true,
+      client_mode: 'related', client_sources: JSON.stringify([leaf]) });
+    expect(shared.server_mode).not.toBe('skip');
+    expect(plan(['server/lib/shared/leaf.ts'])).toMatchObject({ build: true,
+      client_mode: 'related', client_sources: JSON.stringify(['server/lib/shared/leaf.ts']) });
+
+    const mixed = plan([leaf, clientSource, clientTest]);
+    expect(mixed).toMatchObject({ client_mode: 'related', client_sources: JSON.stringify([clientSource, leaf]),
+      client_files: JSON.stringify([clientTest]) });
+    expect(mixed.build).toBe(true);
+    expect(plan([serverOnly])).toMatchObject({ full: false, build: false, client_mode: 'skip' });
+    expect(plan([leaf, 'client/vite.config.js'])).toMatchObject({ full: true, build: true, client_mode: 'full' });
+
+    write('server/lib/bridge.js', "export { value } from './missing.js';\n");
+    expect(plan([leaf])).toMatchObject({ full: true, build: true, client_mode: 'full',
+      reason: 'client dependency discovery unresolved' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 describe('CI test impact planner', () => {
+  it('selects executable documentation tests, including contracts outside the always-run list', () => {
+    const paths = ['docs/features/product-surfaces.test.js', 'docs/example.test.js'];
+    const plan = buildCiTestPlan(paths, { trackedFiles: [...TRACKED, ...paths] });
+
+    expect(plan.full).toBe(false);
+    expect(plan.server.mode).toBe('files');
+    expect(plan.server.files).toEqual(expect.arrayContaining(paths));
+    expect(plan.client.mode).toBe('skip');
+  });
+
+  it('covers the product-surfaces Markdown input without widening ordinary documentation changes', () => {
+    const contract = 'docs/features/product-surfaces.test.js';
+    const plan = buildCiTestPlan(['docs/features/product-surfaces.md'], {
+      trackedFiles: [...TRACKED, contract],
+    });
+
+    expect(plan).toMatchObject({ full: false, reason: 'documentation-only change',
+      server: { mode: 'files' }, client: { mode: 'skip' }, build: false, db: false, windows: false });
+    expect(plan.server.files).toContain(contract);
+  });
+
   it('skips all expensive jobs for documentation-only changes, keeping the always-run guards', () => {
     const plan = buildCiTestPlan([
       '.changelog/NEXT.md',
@@ -484,6 +576,7 @@ describe('CI test impact planner', () => {
     const plan = buildCiTestPlan([
       'server/services/sprites/atlas.test.js', // deleted alongside its source
       'client/src/components/catalog/CatalogCard.test.jsx', // deleted test
+      'docs/example.test.js', // executable documentation contract was removed
     ], { trackedFiles: TRACKED.filter((path) => ![
       'server/services/sprites/atlas.test.js',
       'client/src/components/catalog/CatalogCard.test.jsx',
@@ -491,6 +584,7 @@ describe('CI test impact planner', () => {
 
     expect(plan.full).toBe(false);
     expect(plan.server.files).not.toContain('server/services/sprites/atlas.test.js');
+    expect(plan.server.files).not.toContain('docs/example.test.js');
   });
 
   it('widens when a changed executable source was deleted', () => {
