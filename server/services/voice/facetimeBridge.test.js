@@ -42,7 +42,7 @@ vi.mock('../../lib/bufferedSpawn.js', async (importOriginal) => {
   };
 });
 
-import { CALL_AUDIO_DEVICE_RATE, FACETIME_COMMANDS, blockingSetupFailure, checkAudioDevice, checkSetup, facetimeControlResultSchema, run } from './facetimeBridge.js';
+import { CALL_AUDIO_DEVICE_RATE, FACETIME_COMMANDS, blockingSetupFailure, checkAudioDevice, checkLocalSetup, checkSetup, facetimeControlResultSchema, run } from './facetimeBridge.js';
 
 const device = (overrides = {}) => ({
   name: 'BlackHole 16ch',
@@ -108,6 +108,32 @@ guard !matcher.matches(["Incoming call from +44 1555 123 4567"]) else { exit(4) 
     const setup = await checkSetup({ facetime: { targetHandle: '', targetName: '' } });
     expect(setup.identity.ok).toBe('missing');
     expect(JSON.stringify(setup)).not.toContain('targetHandle');
+  });
+
+  it('feature detection never spawns the audio-device probe', async () => {
+    const spawned = [];
+    helperRun.spawnImpl = async (cmd) => {
+      spawned.push(cmd);
+      return { success: true, code: 0, signal: null, stdout: '{}', stderr: '', timedOut: false };
+    };
+    const restorePlatform = pinPlatform('darwin');
+    try {
+      const { detectFeatureConfiguration } = await import('../instanceFeatures.js');
+      await detectFeatureConfiguration();
+      expect(spawned).not.toContain('system_profiler');
+    } finally {
+      helperRun.spawnImpl = null;
+      restorePlatform();
+    }
+  });
+
+  it('checkLocalSetup returns the helper and identity facts that checkSetup composes', async () => {
+    const config = { facetime: { targetHandle: '', targetName: '' } };
+    const local = await checkLocalSetup(config);
+    const full = await checkSetup(config);
+    expect(Object.keys(local).sort()).toEqual(['helper', 'identity']);
+    expect(full).toMatchObject(local);
+    expect(Object.keys(full).sort()).toEqual(['accessibility', 'blackHole16ch', 'blackHole2ch', 'helper', 'identity', 'platform']);
   });
 
   describe('BlackHole device check', () => {
