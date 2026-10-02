@@ -158,7 +158,7 @@ const blockUntil = (marker) => `while [ ! -f "${marker}" ]; do sleep 0.02; done`
 describe('spawnDetached', () => {
   // Independent launches, never retries: each cold launcher must satisfy all
   // stream and exit assertions. Windows CI exercises the handoff three times.
-  it.each(IS_POSIX ? [1] : [1, 2, 3])('streams stdout and stderr, then closes with the exit code (launch %i)', async () => {
+  it.each(IS_POSIX ? [1] : [1, 2, 3])('streams stdout and stderr, then closes with the exit code (launch %i)', async (launch) => {
     const controlDir = await tmpControlDir();
     // Windows CI runners occasionally take longer than the 10s production
     // default to spin up the launcher/supervisor powershell chain on a cold,
@@ -178,6 +178,14 @@ describe('spawnDetached', () => {
     expect(getOut()).toBe('out-a\nout-b\n');
     expect(getErr()).toBe('err-1\n');
     expect(handle.exitCode).toBe(0);
+    if (!IS_POSIX) {
+      const diagnostic = await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log');
+      expect(diagnostic).toMatch(/^pid-written hresult=0 elapsed-ms=\d+; timeline=reading-job@\d+ms>starting-job@\d+ms>job-started@\d+ms>handle-acquired@\d+ms>pid-written@\d+ms$/);
+      // Keep passing-run evidence too, using the same bounded projection as
+      // production failures. CI's quiet setup replaces console methods, so
+      // write this bounded evidence directly. Never print raw control files.
+      process.stdout.write(`🪟 Windows detached stream launch ${launch}: ${diagnostic}\n`);
+    }
   // Leave room beyond the 30s PID deadline for the handle's bounded error or
   // close event to reach the test, especially on a loaded Windows runner.
   }, 45_000);
@@ -356,7 +364,7 @@ describe('spawnDetached', () => {
     expect(getOut()).toBe('a b "c"\n');
   });
 
-  it.skipIf(IS_POSIX).each([1, 2, 3])('reports a real supervisor bootstrap failure without private paths (launch %i)', async () => {
+  it.skipIf(IS_POSIX).each([1, 2, 3])('reports a real supervisor bootstrap failure without private paths (launch %i)', async (launch) => {
     const controlDir = await tmpControlDir();
     // Each independent supervisor pays the cold PowerShell/Start-Process cost.
     // Use the stream fixture's bounded CI budget so we test the command error,
@@ -365,7 +373,9 @@ describe('spawnDetached', () => {
       controlDir, pidTimeoutMs: 30000,
     });
     await expect(onClose(handle)).rejects.toThrow(/supervisor-stage=failed hresult=-?\d+/);
-    expect(await readFile(join(controlDir, 'supervisor-bootstrap.log'), 'utf8')).toMatch(/^failed hresult=-?\d+$/);
+    const diagnostic = await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log');
+    expect(diagnostic).toMatch(/^failed hresult=-?\d+ elapsed-ms=\d+; timeline=reading-job@\d+ms>starting-job@\d+ms>failed@\d+ms$/);
+    process.stdout.write(`🪟 Windows detached expected refusal ${launch}: ${diagnostic}\n`);
   }, 45_000);
 
   it.runIf(!IS_POSIX)('cancels a cold supervisor after PID acquisition times out', async () => {

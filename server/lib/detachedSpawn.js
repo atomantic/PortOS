@@ -251,15 +251,20 @@ d="$1"; shift
 // error write and never reach the sentinel — leaving the tailer polling
 // forever. Bootstrap diagnostics use their own file, independent of those
 // locks, and never include raw exception text.
-// Only fixed stage names and numeric HRESULTs reach diagnostics. PowerShell
-// exception text can embed commands, credentials and user-specific paths.
+// Only fixed stage names, numeric HRESULTs and elapsed milliseconds reach
+// diagnostics. The launcher and supervisor share a wall-clock origin so a late
+// supervisor can be distinguished from time spent inside Start-Process. Keep
+// the short history on success too; a last-stage label alone loses that timing.
+// PowerShell exception text can embed commands, credentials and private paths.
 const WINDOWS_BOOTSTRAP_DIAGNOSTIC = `
-function Write-BootstrapStage($stage, $errorCode = 0) {
-  [System.IO.File]::WriteAllText($diagnosticFile, "$stage hresult=$errorCode")
+function Write-BootstrapStage($stage, $errorCode = 0, $elapsedMs = $null) {
+  if ($null -eq $elapsedMs) { $elapsedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $bootstrapStartedAt }
+  [System.IO.File]::AppendAllText($diagnosticFile, "$stage hresult=$errorCode elapsed-ms=$elapsedMs\`n")
 }
 `;
 
-const WINDOWS_SUPERVISOR = `$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+const WINDOWS_SUPERVISOR = `param([long]$bootstrapStartedAt)
+$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $diagnosticFile = Join-Path $dir 'supervisor-bootstrap.log'
 ${WINDOWS_BOOTSTRAP_DIAGNOSTIC}
 $started = $false
@@ -287,7 +292,13 @@ try {
   Write-BootstrapStage 'starting-job'
   $p = Start-Process @params
   $started = $true
+  $jobStartedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $bootstrapStartedAt
+  # Cache the process handle before any diagnostic file I/O: a short job can
+  # exit while that I/O runs, but we must retain its exit-code contract.
   $null = $p.Handle
+  $handleAcquiredMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $bootstrapStartedAt
+  Write-BootstrapStage 'job-started' 0 $jobStartedMs
+  Write-BootstrapStage 'handle-acquired' 0 $handleAcquiredMs
   [System.IO.File]::WriteAllText((Join-Path $dir 'pid'), "$($p.Id)")
   Write-BootstrapStage 'pid-written'
   # A timed-out caller can remove its control directory before this cold
@@ -350,9 +361,11 @@ async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd }) {
     }), 'utf8'),
     writeFile(supervisorPath, WINDOWS_SUPERVISOR, 'utf8'),
   ]);
-  const supervisorArgs = `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ${quoteWindowsArg(supervisorPath)}`;
+  const bootstrapStartedAt = Date.now();
+  const supervisorArgs = `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ${quoteWindowsArg(supervisorPath)} -bootstrapStartedAt ${bootstrapStartedAt}`;
   const startSupervisor = [
     '$ErrorActionPreference = "Stop";',
+    `$bootstrapStartedAt = ${bootstrapStartedAt};`,
     `$diagnosticFile = ${quoteForShell(join(controlDir, 'launcher-bootstrap.log'), 'powershell')};`,
     WINDOWS_BOOTSTRAP_DIAGNOSTIC,
     'try {',
@@ -383,11 +396,22 @@ async function readBootstrapDiagnostic(controlDir, name) {
   const file = await open(join(controlDir, name), 'r').catch(() => null);
   if (!file) return 'unavailable';
   try {
-    const buffer = Buffer.alloc(256);
+    // One launcher writes at most three rows; one supervisor at most six.
+    // Read an extra byte so a valid prefix cannot conceal an oversized tail.
+    const buffer = Buffer.alloc(1025);
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > 1024) return 'invalid';
     const value = buffer.subarray(0, bytesRead).toString('utf8');
-    return /^(starting-supervisor|supervisor-started|reading-job|starting-job|pid-written|failed|cancelled) hresult=-?\d{1,11}$/.test(value)
-      ? value : 'invalid';
+    const rows = value.replace(/\r?\n$/, '').split(/\r?\n/);
+    const pattern = /^(starting-supervisor|supervisor-started|reading-job|starting-job|job-started|handle-acquired|pid-written|failed|cancelled) hresult=-?\d{1,11}(?: elapsed-ms=(-?\d{1,13}))?$/;
+    if (rows.length > 6 || !rows.every((row) => pattern.test(row))) return 'invalid';
+    // A single legacy stage/HRESULT row remains readable. Only allowlisted
+    // stage names and relative times are projected from the earlier rows.
+    const timeline = rows.map((row) => {
+      const [, stage, elapsed] = pattern.exec(row);
+      return elapsed === undefined ? stage : `${stage}@${elapsed}ms`;
+    });
+    return rows.at(-1) + (rows.length > 1 ? `; timeline=${timeline.join('>')}` : '');
   } catch {
     return 'unreadable';
   } finally {
@@ -1006,7 +1030,7 @@ const processMatches = async (pid, expectedProcess) => {
   return processCommandMatches(command, expectedProcess);
 };
 
-export const __detachedSpawnTesting = { processCommandMatches };
+export const __detachedSpawnTesting = { processCommandMatches, readBootstrapDiagnostic };
 
 export async function isDetachedRunning(controlDir, expectedProcess = null) {
   const pidRaw = await readControlFile(join(controlDir, 'pid'));
