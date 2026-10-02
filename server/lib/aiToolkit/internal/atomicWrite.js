@@ -22,8 +22,6 @@ import { dirname } from 'path';
 
 const WIN_RETRY_ATTEMPTS = 5;
 const WIN_RETRY_DELAY_MS = 10;
-const WIN_BACKUP_RETRY_ATTEMPTS = 20;
-const WIN_BACKUP_RETRY_DELAY_MS = 25;
 const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];
 const isWindows = () => process.platform === 'win32';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,31 +51,10 @@ export async function atomicWrite(filePath, data) {
   await ensureDir(dirname(filePath));
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmp, payload);
-  const replace = async () => {
-    const err = await renameWithWindowsRetries(tmp, filePath);
-    if (!err) return;
-    if (isWindows() && WIN_RENAME_LOCK_CODES.includes(err.code)) {
-      const bak = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.bak`;
-      const backupError = await renameWithWindowsRetries(filePath, bak, {
-        attempts: WIN_BACKUP_RETRY_ATTEMPTS,
-        delayMs: WIN_BACKUP_RETRY_DELAY_MS,
-      });
-      if (backupError && backupError.code !== 'ENOENT') throw backupError;
-      const hadExisting = !backupError;
-      const renameErr = await renameWithWindowsRetries(tmp, filePath);
-      if (renameErr) {
-        if (hadExisting) await renameWithWindowsRetries(bak, filePath);
-        throw renameErr;
-      }
-      if (hadExisting) await unlink(bak).catch(() => {});
-      return;
-    }
-    throw err;
-  };
-  try {
-    await replace();
-  } catch (err) {
-    await unlink(tmp).catch(() => {});
-    throw err;
-  }
+  // Persistent Windows lock after the retry window: fail the write and leave the
+  // destination untouched. Never move it aside to a `.bak` (#9564, mirrors #9556).
+  const err = await renameWithWindowsRetries(tmp, filePath);
+  if (!err) return;
+  await unlink(tmp).catch(() => {});
+  throw err;
 }
