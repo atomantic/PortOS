@@ -99,6 +99,34 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
     expect(musicVideoDependencyImpact(synced).shots).toEqual(musicVideoDependencyImpact(stale).shots);
   });
 
+  it('migrates legacy tool intent identically in PostgreSQL and files without replacing assets or timestamps', async () => {
+    const { mkdir, readFile, writeFile } = await import('node:fs/promises');
+    const { default: migration } = await import('../../../scripts/migrations/421-music-video-media-modes.js');
+    const records = [
+      { id: 'mv-migration-top-level', tools: ['code:render'] },
+      { id: 'mv-migration-nested', automation: { tools: ['code:render'] } },
+      { id: 'mv-migration-override', tools: ['code:render'], automation: { tools: ['image:local'] } },
+      { id: 'mv-migration-explicit', mediaMode: 'code-images', tools: ['code:render'] },
+    ].map((record) => ({ ...record, scenes: [{ referenceImageId: 'historical-example.png' }], updatedAt: '2026-01-01T00:00:00.000Z' }));
+    const rootDir = join(testState.dataRoot, 'migration-fixture');
+    const file = join(rootDir, 'data', 'music-video-projects.json');
+    await mkdir(join(rootDir, 'data'), { recursive: true });
+    await writeFile(file, JSON.stringify(records));
+    for (const record of records) {
+      await query(`INSERT INTO music_video_projects (id, status, data, created_at, updated_at)
+        VALUES ($1, 'draft', $2::jsonb, $3, $3)`, [record.id, JSON.stringify(record), record.updatedAt]);
+    }
+    await migration.up({ rootDir });
+    await migration.up({ rootDir });
+    const expected = records.map((record, index) => ({ ...record, mediaMode: ['code-only', 'code-only', 'code-images-video', 'code-images'][index] }));
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual(expected);
+    for (const record of expected) {
+      const { rows: [stored] } = await query('SELECT data, updated_at FROM music_video_projects WHERE id = $1', [record.id]);
+      expect(stored.data).toEqual(record);
+      expect(new Date(stored.updated_at).toISOString()).toBe(record.updatedAt);
+    }
+  });
+
   it('backfills a missing JSONB id from the primary-key column', async () => {
     const id = `${PRUNE_PREFIX}legacy-no-json-id`;
     await query(

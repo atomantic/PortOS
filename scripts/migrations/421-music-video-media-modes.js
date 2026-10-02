@@ -18,11 +18,11 @@ export default {
     const { query } = await import('../../server/lib/db.js');
     const table = await query("SELECT to_regclass('public.music_video_projects') AS name");
     if (table.rows[0]?.name) {
-      await query(`UPDATE music_video_projects SET data = data || jsonb_build_object('mediaMode',
-        CASE WHEN data->'automation'->'tools' @> '["code:render"]'::jsonb
-          AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(data->'automation'->'tools') = 'array' THEN data->'automation'->'tools' ELSE '[]'::jsonb END) AS tool WHERE tool LIKE 'image:%' OR tool LIKE 'video:%')
-          THEN 'code-only' ELSE 'code-images-video' END)
-        WHERE NOT data ? 'mediaMode'`);
+      const { rows } = await query("SELECT id, data FROM music_video_projects WHERE NOT data ? 'mediaMode'");
+      for (const { id, data } of rows) {
+        await query(`UPDATE music_video_projects SET data = jsonb_set(data, '{mediaMode}', to_jsonb($2::text))
+          WHERE id = $1 AND NOT data ? 'mediaMode'`, [id, migrateMediaMode(data).mediaMode]);
+      }
     }
     return { success: true };
   },
