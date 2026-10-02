@@ -48,6 +48,7 @@ import { musicVideoEvents } from './events.js';
 
 const PROCESS_ID = `proc-${randomUUID()}`;
 const inflight = new Set();
+const sunoControllers = new Map();
 const short = (id) => String(id).slice(0, 8);
 
 // Lazy imports keep this module's static closure small: it is reached by the
@@ -195,9 +196,15 @@ const STAGES = {
     });
     let submitted = run.output.sunoSongIds?.length > 0;
     let song;
+    const controller = new AbortController();
+    sunoControllers.set(run.id, controller);
     try {
+      const latest = projectAutonomousRun(await getProject(project.id));
+      if (latest?.id !== run.id || latest.status !== 'running') controller.abort();
+      controller.signal.throwIfAborted();
       song = await deps.generateSunoSong(fields, {
         songIds: run.output.sunoSongIds,
+        signal: controller.signal,
         // Stored the moment Suno accepts the request, so a failed download retries
         // the same songs instead of spending credits on another generation.
         onSubmitted: (ids) => { submitted = true; return save({ output: { sunoSongIds: ids } }); },
@@ -205,11 +212,14 @@ const STAGES = {
     } catch (err) {
       // Only before Suno accepted a request: after that, credits are spent and a
       // retry reuses those songs rather than paying for a second render.
-      if (!run.brief.localFallback || submitted) throw err;
+      if (controller.signal.aborted || !run.brief.localFallback || submitted) throw err;
       console.warn(`⚠️ Autonomous music video ${short(run.id)} could not use Suno (${trimTo(err.message, 200)}) — rendering the song locally`);
       await save({ output: { songSource: 'local', songFallbackReason: trimTo(err.message, 500) } });
       return localSong({ project, run, save });
+    } finally {
+      sunoControllers.delete(run.id);
     }
+    controller.signal.throwIfAborted();
     const track = await deps.createTrack({
       title: fields.title, concept: run.brief.prompt, lyrics: fields.lyrics, prompt: fields.style,
     });
@@ -274,7 +284,7 @@ async function advance(projectId) {
       try {
         result = await executor({ project, run, save: (patch) => patchRun(projectId, () => patch) });
       } catch (err) {
-        // A stop/cancel mid-stage (it cancels the local render) must not become a failure.
+        // A stop/cancel mid-stage (it cancels the song operation) must not become a failure.
         const latest = projectAutonomousRun(await getProject(projectId));
         if (latest?.status !== 'running' || latest.processId !== PROCESS_ID) return;
         await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500) }));
@@ -407,6 +417,7 @@ export async function stopAutonomousVideo(projectId) {
     const { stopProduction } = await import('./productionService.js');
     await stopProduction(projectId, run.output.productionRunId).catch(() => {});
   }
+  sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(out.run);
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }
@@ -419,6 +430,7 @@ export async function cancelAutonomousVideo(projectId) {
     const { cancelProduction } = await import('./productionService.js');
     await cancelProduction(projectId, run.output.productionRunId).catch(() => {});
   }
+  sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(out.run);
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }

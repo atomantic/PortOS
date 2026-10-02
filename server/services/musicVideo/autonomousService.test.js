@@ -263,6 +263,26 @@ describe('local song source (#9473)', () => {
     expect(runOf().output.sunoSongIds).toEqual(['song-a']);
   });
 
+  it.each(['stopAutonomousVideo', 'cancelAutonomousVideo'])('aborts a Suno export through %s and preserves its submitted ids without attaching audio', async (action) => {
+    let signal;
+    let ended = false;
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      signal = opts.signal;
+      await opts.onSubmitted(['song-a', 'song-b']);
+      try {
+        await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+      } finally { ended = true; }
+    });
+    await service.startAutonomousVideo({ prompt: 'p', localFallback: true });
+    await vi.waitFor(() => expect(runOf()?.output.sunoSongIds).toEqual(['song-a', 'song-b']));
+    await service[action]('mv-auto');
+    await vi.waitFor(() => expect(ended).toBe(true));
+    expect(signal.aborted).toBe(true);
+    expect(runOf()).toMatchObject({ status: action === 'stopAutonomousVideo' ? 'stopped' : 'canceled', output: { sunoSongIds: ['song-a', 'song-b'] } });
+    expect(doubles.createTrack).not.toHaveBeenCalled();
+    expect(doubles.generateLocalSong).not.toHaveBeenCalled();
+  });
+
   it('cancels the queued render on stop and leaves the run stopped, not failed', async () => {
     let release;
     doubles.generateLocalSong.mockImplementationOnce(async ({ onSubmitted }) => {

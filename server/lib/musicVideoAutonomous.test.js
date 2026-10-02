@@ -8,7 +8,6 @@ import {
   normalizeAutonomousBrief,
   normalizeAutopilotParams,
   pickBrainIdea,
-  sunoAudioUrl,
   sunoSongFields,
   sunoSongIdsFromHrefs,
 } from './musicVideoAutonomous.js';
@@ -87,7 +86,6 @@ describe('Suno field shaping', () => {
     const b = '9f8e7d6c-aaaa-bbbb-cccc-ddddeeeeffff';
     expect(sunoSongIdsFromHrefs([`/song/${a}`, '/create', `https://suno.com/song/${b.toUpperCase()}?x=1`, `/song/${a}`, null, '/song/not-a-uuid']))
       .toEqual([a, b]);
-    expect(sunoAudioUrl(a)).toBe(`https://cdn1.suno.ai/${a}.mp3`);
   });
 });
 
