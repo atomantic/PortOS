@@ -286,6 +286,15 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/setup/runtime-install',
   'POST /api/music/supercollider/setup',
 
+  // Image-to-3D (TRELLIS.2 / Pixal3D) installers git-clone and build engines,
+  // the MuScriptor installer builds a venv via the setup script, and the
+  // yt-dlp update replaces a package-managed host binary (#9555). Status GETs
+  // stay open.
+  'POST /api/image-to-3d/targets/:targetId/install',
+  'POST /api/image-to-3d/trellis2/install',
+  'POST /api/midi-runtime/install',
+  'POST /api/devtools/video-download/yt-dlp/update',
+
   // Media authoring can launch a coding CLI/TUI agent, including via provider
   // fallback. Gate the whole operation even when the initial provider is API;
   // runtime-data cwd and later render containment do not sandbox authoring.
