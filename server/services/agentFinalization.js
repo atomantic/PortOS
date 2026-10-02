@@ -35,12 +35,12 @@ import { markProviderUsageLimit, markProviderUnavailable } from './providerStatu
 import { resolveProviderBench } from '../lib/providerCooldown.js';
 import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
-import { resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
+import { resolveFailedTaskDecision, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
+import { resolveAgentFinalVerdict } from '../lib/agentFinalVerdict.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, runWindowDiff } from '../lib/gitCommitProbe.js';
 import {
-  GOAL_FIDELITY_CATEGORY,
   GOAL_FIDELITY_HOLD_EVENT,
   MAX_FIDELITY_DIFF_CHARS,
   MAX_OBJECTIVE_CHARS,
@@ -55,7 +55,7 @@ import {
 import { formatGoalFidelityFollowUpSummary, goalFidelityFollowUpApplies } from '../lib/goalFidelityFollowUp.js';
 import { getGoalFidelityConfig, runLocalGoalFidelityReview } from './codeReview.js';
 import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
-import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
+import { detectPrimaryCheckoutDrift } from '../lib/primaryCheckoutGuard.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion, isClaimFlowDispatch } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { extractFinalSummary, extractSimplifySummaries } from './agentSummaryExtraction.js';
@@ -714,42 +714,6 @@ export async function checkPrimaryCheckoutDrift(agentId) {
   return await detectPrimaryCheckoutDrift(baseline, { agentBranch: agent?.metadata?.worktreeBranch || null });
 }
 
-/**
- * The `errorAnalysis` shape for a detected branch-jack. `actionable` because a
- * human has to decide whether to discard the primary's commits — a retry cannot
- * repair this, and silently retrying would leave the mutated checkout in place.
- */
-function primaryCheckoutDriftAnalysis(drift) {
-  return {
-    category: drift.category,
-    // Observed by the spawner from the checkout's own git state, not scraped out
-    // of the transcript — the same provenance rule the structural analyses use.
-    origin: 'runner',
-    completionReason: PRIMARY_CHECKOUT_MUTATED_REASON,
-    actionable: true,
-    escalation: PRIMARY_CHECKOUT_MUTATED_ESCALATION,
-    message: drift.message,
-    suggestedFix: drift.suggestedFix
-  };
-}
-
-/**
- * The `errorAnalysis` shape for a failed PR verification. Non-actionable so the
- * task RETRIES (a re-run can open the missing PR, or find the forge back) rather
- * than blocking on a first miss — `resolveFailedTaskDecision` still blocks it
- * once it has burned its retry budget.
- */
-function prVerificationAnalysis(verdict) {
-  return {
-    category: verdict.category,
-    message: verdict.message,
-    actionable: false,
-    suggestedFix: verdict.category === PR_MISSING_CATEGORY
-      ? `The branch ${verdict.branch} holds ${verdict.commitsAhead ?? 'unreviewed'} commit(s) but has no open change request. Re-run the task, or open it by hand (\`gh pr create --head ${verdict.branch}\` / \`glab mr create --source-branch ${verdict.branch}\`).`
-      : 'Check the forge probe on the System Health page — the forge CLI could not reach the forge, so the run\'s change request could not be confirmed.'
-  };
-}
-
 /** Resolve requirements independently of the agent's transcript or PR prose. */
 async function claimedIssueObjective(workspacePath) {
   const branch = await resolveWorkspaceBranch(workspacePath);
@@ -963,20 +927,6 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       checkedAt: new Date().toISOString(),
     },
     error: null,
-  };
-}
-
-/** `errorAnalysis` for a run held by the goal-fidelity gate. */
-function goalFidelityAnalysis(review) {
-  const named = [...(review.missing || []), ...(review.unrequested || [])];
-  return {
-    category: GOAL_FIDELITY_CATEGORY,
-    message: `${formatGoalFidelitySummary(review)} — the diff does not deliver the task's stated objective`,
-    actionable: false,
-    origin: 'goal-fidelity-review',
-    suggestedFix: named.length
-      ? `Re-read the task against the change and reconcile: ${named.slice(0, 3).join('; ')}.`
-      : 'Re-read the task against the change: the review found the work does something other than what was asked.',
   };
 }
 
@@ -1447,42 +1397,22 @@ export async function finalizeAgent({
       agentId, taskId: task?.id
     });
   }
-  // A drift downgrade only OVERRIDES a run that would otherwise have been
-  // recorded a success. On a run that already failed, the original analysis is
-  // the better diagnosis of why it failed, and the branch-jack is already on the
-  // record via the warn above — replacing it would trade a real cause for a
-  // side effect. Same reason `terminatedByUser` keeps its own verdict.
-  const driftDowngrade = drift.drifted && reportedSuccess && !terminatedByUser;
-
-  // One accumulator owns every completion write and the caller's cleanup
-  // decision. Apply diagnoses in priority order: drift > PR > fidelity > hook
-  // > original error. Fidelity and hooks can only replace an eligible verdict.
-  // Drift demands repair of the primary checkout even if a PR exists; a
-  // missing PR is a concrete delivery failure, ahead of fidelity's judgement
-  // about what was built. Keep each diagnosis's card text and reason together.
-  const prCompletionVerdict = prEvidence.completionVerdict;
-  const verdict = {
-    source: 'reported',
-    success: reportedSuccess && prEvidence.completionOk && !driftDowngrade,
+  // The run's outcome is one pure resolution over the evidence (see
+  // resolveAgentFinalVerdict for the drift > PR > fidelity > hook > reported
+  // ladder). Fidelity and the output hook are themselves gated on an earlier
+  // layer's answer, so each stage below re-resolves with the evidence gathered
+  // so far rather than amending a shared accumulator.
+  const verdictEvidence = {
+    reportedSuccess,
     errorAnalysis: reportedErrorAnalysis,
     error,
     completionReason,
+    terminatedByUser,
+    drift,
+    prEvidence,
   };
-  if (driftDowngrade) {
-    Object.assign(verdict, {
-      source: 'drift',
-      errorAnalysis: primaryCheckoutDriftAnalysis(drift),
-      error: drift.message,
-      completionReason: PRIMARY_CHECKOUT_MUTATED_REASON,
-    });
-  } else if (!prEvidence.completionOk) {
-    Object.assign(verdict, {
-      source: 'pr',
-      errorAnalysis: prVerificationAnalysis(prCompletionVerdict),
-      error: prCompletionVerdict.message,
-      completionReason: prCompletionVerdict.category,
-    });
-  }
+  const deliveredVerdict = resolveAgentFinalVerdict(verdictEvidence);
+  const prCompletionVerdict = prEvidence.completionVerdict;
   if (!prEvidence.completionOk) {
     emitLog('warn', `⚠️ ${prCompletionVerdict.message} — recording ${agentId} as needs-attention (${prCompletionVerdict.category}) rather than complete`, {
       agentId, taskId: task?.id, branch: prCompletionVerdict.branch, category: prCompletionVerdict.category
@@ -1511,7 +1441,7 @@ export async function finalizeAgent({
   // the diff probe's git timeouts — it holds the agent's CoS concurrency slot for
   // its duration, which is why it is skipped entirely unless the user configured
   // a local backend for it.
-  const fidelity = verdict.success && !isPrivateSecurityTask(task)
+  const fidelity = deliveredVerdict.success && !isPrivateSecurityTask(task)
     ? await evaluateGoalFidelity({ task, workspacePath, startedAt: runStartedAt })
       .catch(err => {
         emitLog('warn', `Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
@@ -1526,16 +1456,7 @@ export async function finalizeAgent({
   } else if (fidelity.error) {
     emitLog('warn', `Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
   }
-  if (fidelityDowngrade) {
-    const analysis = goalFidelityAnalysis(fidelity.review);
-    Object.assign(verdict, {
-      source: 'fidelity',
-      success: false,
-      errorAnalysis: analysis,
-      error: analysis.message,
-      completionReason: GOAL_FIDELITY_CATEGORY,
-    });
-  }
+  const judgedVerdict = resolveAgentFinalVerdict({ ...verdictEvidence, fidelityReview: fidelity.review });
   // A finding that lives only in this run's record dies with the agent card
   // nobody opened. When the user has configured it, the follow-up files the
   // finding on the project's own tracker and/or queues the run that fixes it.
@@ -1579,24 +1500,9 @@ export async function finalizeAgent({
     cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
 
-  if (verdict.success) {
+  if (judgedVerdict.success) {
     await persistSimplifySummaries(agentId, task, outputBuffer);
   }
-
-  const taskType = task?.taskType || 'user';
-  let taskUpdate = terminatedByUser
-    ? {
-      status: 'blocked',
-      metadata: {
-        ...task.metadata,
-        blockedReason: 'Terminated by user',
-        blockedCategory: 'user-terminated',
-        blockedAt: new Date().toISOString(),
-      },
-    }
-    : verdict.success
-      ? { status: 'completed' }
-      : await resolveFailedTaskUpdate(task, verdict.errorAnalysis, agentId);
 
   // Programmatic-I/O task types (e.g. layered-intelligence) run a deterministic
   // post-agent step on the agent's STRUCTURED output — the parsed `.agent-done`
@@ -1620,7 +1526,7 @@ export async function finalizeAgent({
   // of awaiting here is that the agent still counts against the CoS concurrency
   // gate for the hook's duration, so the dispatch is hard-bounded — see
   // withOutputHookTimeout.
-  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success: verdict.success, workspacePath });
+  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success: judgedVerdict.success, workspacePath });
   // A private assessment's deliverable is the validated, persisted report.
   // A skipped, thrown or timed-out hook cannot establish that deliverable,
   // even when the CLI exited zero. Keep other task types' existing semantics.
@@ -1643,54 +1549,46 @@ export async function finalizeAgent({
   // sees the narrowed input set. An explicit `accepted: false` is a real
   // programmatic-output failure even when the agent exited zero; this is the
   // fail-closed path for incomplete or contradictory eligibility envelopes.
+  // The patch only travels with a run the hook itself failed or one that
+  // succeeded — any other failure or a user termination is resolved against the
+  // task as it stood before the hook ran, so a retry does not inherit a stage
+  // advance its own run never earned.
   const hookOutcome = hookResult?.outcome;
   const hookMetadata = hookOutcome?.taskMetadata && typeof hookOutcome.taskMetadata === 'object'
     && !Array.isArray(hookOutcome.taskMetadata)
     ? hookOutcome.taskMetadata
     : null;
+  const preHookTask = hookMetadata ? { ...task } : task;
   if (hookMetadata) {
     task.metadata = { ...task.metadata, ...hookMetadata };
   }
-  const hookRejected = !terminatedByUser && hookResult?.ran && hookOutcome?.accepted === false;
-  // A PERMANENT hook rejection (#6124) — the stage produced no parseable output
-  // at all — re-fails identically on every retry, so it blocks instead of
-  // burning MAX_TASK_RETRIES spawns and (for a pipeline whose generator keys its
-  // dedup on a live task) re-generating behind them. Honoured only when the run
-  // named no other cause: an exit-0 run, or a failure whose category is the
-  // `unknown` that an empty run produces. A run that failed for a NAMED reason
-  // (rate-limit, auth-error, a killed provider) keeps its ordinary retries —
-  // that output is missing because the environment misbehaved, not because the
-  // stage can never produce one.
-  const causeNamed = !verdict.success && verdict.errorAnalysis?.category && verdict.errorAnalysis.category !== 'unknown';
-  const hookPermanent = hookRejected && hookOutcome?.permanent === true && !causeNamed;
-  // When the run had already failed, `taskUpdate` holds its retry decision. Only
-  // escalate a decision that is still retrying — a task this run already blocked
-  // is terminal, and re-resolving it would file a second investigation task.
-  const escalatePermanent = hookPermanent && !verdict.success && taskUpdate?.status !== 'blocked';
-  if (hookRejected && (verdict.success || escalatePermanent)) {
-    const analysis = {
-      category: hookOutcome.reason || 'output-hook-rejected',
-      message: hookOutcome.message || 'The scheduled task output was rejected by its validation hook',
-      actionable: false,
-      ...(hookPermanent && { permanent: true }),
-      origin: 'task-output-hook',
-    };
-    Object.assign(verdict, {
-      source: 'hook',
-      success: false,
-      errorAnalysis: analysis,
-      error: analysis.message || error,
-      completionReason: analysis.category || completionReason,
-    });
-    taskUpdate = await resolveFailedTaskUpdate(task, verdict.errorAnalysis, agentId);
-  } else if (hookRejected && verdict.source === 'reported') {
-    // A rejection on an already-failed run keeps its original diagnosis.
-    // Surface that analysis on the card too, without replacing a prior downgrade.
-    verdict.error = verdict.errorAnalysis?.message || error;
-    verdict.completionReason = verdict.errorAnalysis?.category || completionReason;
-  } else if (hookMetadata && verdict.success && !terminatedByUser) {
-    taskUpdate = { ...taskUpdate, metadata: task.metadata };
-  }
+
+  // A permanent hook rejection on an already-failed run escalates only while
+  // that failure would still be retried; a task the prior failure would block
+  // is terminal and keeps its own diagnosis. Asked of the PURE retry decision
+  // so the side-effecting resolveFailedTaskUpdate below runs exactly once.
+  const verdict = resolveAgentFinalVerdict({
+    ...verdictEvidence,
+    fidelityReview: fidelity.review,
+    hookResult,
+    failureIsTerminal: (analysis) => isPrivateSecurityTask(task)
+      || resolveFailedTaskDecision(preHookTask, analysis, { agentId }).status === 'blocked',
+  });
+
+  const taskType = task?.taskType || 'user';
+  const taskUpdate = terminatedByUser
+    ? {
+      status: 'blocked',
+      metadata: {
+        ...preHookTask.metadata,
+        blockedReason: 'Terminated by user',
+        blockedCategory: 'user-terminated',
+        blockedAt: new Date().toISOString(),
+      },
+    }
+    : verdict.success
+      ? (hookMetadata ? { status: 'completed', metadata: task.metadata } : { status: 'completed' })
+      : await resolveFailedTaskUpdate(verdict.source === 'hook' ? task : preHookTask, verdict.errorAnalysis, agentId);
 
   // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
   // null-when-undeclared) verdict onto the completion result, distinct from the
