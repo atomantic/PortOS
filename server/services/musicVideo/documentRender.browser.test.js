@@ -74,7 +74,9 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
   }, 30000);
   afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: () => {} }));
 
-  it('authors a local Three.js world and renders the same deterministic scene through module preview and export', async () => {
+  // Server-only CI does not install client dependencies; the full local install
+  // exercises this cross-workspace package/render contract alongside the UI proof.
+  it.skipIf(!existsSync(new URL('../../../client/node_modules/three/package.json', import.meta.url)))('authors a local Three.js world and renders the same deterministic scene through module preview and export', async () => {
     const created = await projects.createProject({ name: 'Synthetic authored world', mediaMode: 'code-only' });
     await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
       audioAnalysis: { durationSec: 1, beats: [0, 0.5], downbeats: [0], sections: [{ id: 'world', label: 'World', startSec: 0, endSec: 1 }] },
