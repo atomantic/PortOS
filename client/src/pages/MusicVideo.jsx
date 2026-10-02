@@ -337,10 +337,10 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to delete project'));
   };
 
-  const handleClone = () => {
+  const handleClone = (options = {}) => {
     if (!selected || cloning) return;
     setCloning(true);
-    cloneMusicVideoProject(selected.id, {}, { silent: true })
+    cloneMusicVideoProject(selected.id, options, { silent: true })
       .then((project) => {
         setProjects((prev) => [...prev, project]);
         navigate(`/music-video/${project.id}`);
@@ -949,15 +949,24 @@ export default function MusicVideo() {
               </span>
             )}
             {selected && (
-              <span className="flex items-center gap-1">
+              <span className="flex flex-wrap items-center gap-1">
                 <button
                   type="button"
-                  onClick={handleClone}
+                  onClick={() => handleClone()}
                   disabled={cloning}
                   title={`Create an editable v${(selected.version || 1) + 1}; keep scene media attached and clear the final render`}
                   className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm disabled:opacity-50 sm:min-h-0 sm:min-w-0"
                 >
                   <Copy size={15} aria-hidden="true" /> <span className="max-sm:sr-only">{cloning ? 'Forking…' : `Fork v${(selected.version || 1) + 1}`}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleClone({ variant: 'video-generation' })}
+                  disabled={cloning}
+                  title="Keep the song and storyboard; start fresh cast, sets and mood board with footage rendering. No generation starts."
+                  className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm disabled:opacity-50 sm:min-h-0"
+                >
+                  Fork for video generation
                 </button>
                 {isConfirmingDelete(selected.id) ? (
                   <ConfirmButtonPair

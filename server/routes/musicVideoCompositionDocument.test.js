@@ -7,9 +7,9 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
-import { existsSync, readdirSync, rmSync } from 'fs';
-import { mkdir, symlink, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { createZip } from '../lib/zipWriter.js';
@@ -76,6 +76,27 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 describe('music-video composition documents', () => {
+  it('preserves source document bytes when a fork imports revised code, including after source removal', async () => {
+    const zip = (files) => createZip(Object.entries(files).map(([name, data]) => ({ name, data })));
+    const imported = await uploadZip(project.id, zip(FILES));
+    expect(imported.status).toBe(201);
+    const fork = await request(app).post(`/api/music-video/${project.id}/clone`).send({});
+    expect(fork.status).toBe(201);
+    const footage = await request(app).post(`/api/music-video/${project.id}/clone`).send({ variant: 'video-generation' });
+    expect(footage.status).toBe(201);
+    const revised = await uploadZip(fork.body.id, zip({ ...FILES, 'app.js': `${FILES['app.js']}\n// revised drawing` }));
+    expect(revised.status).toBe(201);
+    expect(revised.body.document.directory).not.toBe(imported.body.document.directory);
+    const sourceFile = await request(app).get(`/api/music-video/${project.id}/composition/document/file?path=app.js`);
+    expect(sourceFile.text).toBe(FILES['app.js']);
+    await request(app).delete(`/api/music-video/${project.id}/composition/document`);
+    // The footage variant still owns the immutable original pointer, so GC
+    // must retain its bytes even though it currently renders in composed mode.
+    const retained = await request(app).get(`/api/music-video/${footage.body.id}/composition/document/file?path=app.js`);
+    expect(retained.status).toBe(200);
+    expect(retained.text).toBe(FILES['app.js']);
+  });
+
   it('persists validated narrative events and gain caps through the project route, and clears anchors on a song replacement', async () => {
     const event = { id: 'counter', name: 'Count rises', kind: 'counter-change', anchor: { kind: 'time', atSec: 0.51 }, durationSec: 1,
       narrativeFunction: 'Show progress', mediumRationale: 'Exact code counter', fromValue: 3, toValue: 8 };
@@ -131,8 +152,8 @@ describe('music-video composition documents', () => {
     expect(file.text).toBe(FILES['app.js']);
     expect(file.headers['content-security-policy']).toMatch(/^sandbox;/);
     expect(file.headers['x-content-type-options']).toBe('nosniff');
-    const escape = await request(app).get(`/api/music-video/${project.id}/composition/document/file?path=${encodeURIComponent('../../../music-video-projects.json')}`);
-    expect(escape.status).toBe(400);
+    const traversal = await request(app).get(`/api/music-video/${project.id}/composition/document/file?path=${encodeURIComponent('../../../music-video-projects.json')}`);
+    expect(traversal.status).toBe(400);
   });
 
   it('refuses a zip member that climbs out of the document and writes nothing', async () => {
