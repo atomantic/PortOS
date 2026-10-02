@@ -1,3 +1,4 @@
+import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Fully-autonomous Music Video — the run orchestrator.
  *
@@ -69,6 +70,8 @@ const defaults = {
   probeDuration: (filename) => probeVideoDuration(join(PATHS.music, filename)).catch(() => null),
   analyzeSong: async (projectId) => (await import('./projectAudio.js')).analyzeProjectSong(projectId),
   startProduction: async (...args) => (await import('./productionService.js')).startProduction(...args),
+  generateDocument: async (...args) => (await import('./documentGeneration.js')).generateMixedMediaDocument(...args),
+  acceptDocument: async (...args) => (await import('./documentGeneration.js')).acceptMixedMediaDocument(...args),
   generateCode: async (...args) => (await import('./codeGeneration.js')).generateMusicVideoCode(...args),
   renderVideo: async (...args) => (await import('./render.js')).renderMusicVideo(...args),
 };
@@ -194,6 +197,10 @@ const STAGES = {
   },
 
   async style({ project, run }) {
+    if (musicVideoMediaMode(project) === 'code-only') {
+      await deps.updateProject(project.id, { concept: { prompt: run.output.concept.prompt, style: run.output.concept.style || run.output.moodBoard?.stylePrompt || '' } });
+      return { output: { moodBoardId: null } };
+    }
     const board = run.output.moodBoard;
     const moodBoardId = run.brief.moodBoardId || run.output.moodBoardId || (await deps.createMoodBoard(board)).id;
     // The board is also the project's linked mood board; the server derives the
@@ -256,13 +263,14 @@ const STAGES = {
   },
 
   async produce({ project, run }) {
-    const medium = autonomousMedium(run.brief.tools);
+    const medium = musicVideoMediaMode(project) === 'code-only' ? 'code' : autonomousMedium(run.brief.tools);
     if (medium === 'code') {
-      await deps.updateProject(project.id, { composition: { mode: 'code' } });
+      await deps.updateProject(project.id, { composition: { mode: 'document', authoringRenderer: 'three' } });
       const authoring = run.brief.authoring || (run.brief.llm ? { providerId: run.brief.llm.providerId, model: run.brief.llm.model, effort: run.brief.llm.effort } : {});
-      await deps.generateCode(project.id, {
+      const candidate = await deps.generateDocument(project.id, {
         providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}),
       });
+      await deps.acceptDocument(project.id, candidate.document.directory);
       const render = await deps.renderVideo(project.id);
       return { output: { renderJobId: render?.jobId || null } };
     }
@@ -357,6 +365,8 @@ export async function startAutonomousVideo(input) {
   const created = await deps.createProject({
     name: brief.name || trimTo(brief.prompt.replace(/\s+/g, ' '), 60) || 'Autonomous music video',
     mode: 'autonomous',
+    mediaMode: brief.mediaMode,
+    ...(brief.mediaMode !== 'code-images-video' ? { productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } } : {}),
     concept: { prompt: trimTo(brief.prompt, 8000) },
     automation: {
       tools: brief.tools,

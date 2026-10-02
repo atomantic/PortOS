@@ -152,6 +152,7 @@ export function normalizeComposition(input) {
   return {
     version: COMPOSITION_VERSION,
     mode: pick(input.mode, COMPOSITION_MODES, 'concat'),
+    ...(['canvas', 'three'].includes(input.authoringRenderer) ? { authoringRenderer: input.authoringRenderer } : {}),
     textCues,
     style: {
       color: typeof style.color === 'string' && /^#[0-9a-f]{6}$/i.test(style.color) ? style.color.toLowerCase() : '#ffffff',

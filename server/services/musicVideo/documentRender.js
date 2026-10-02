@@ -1,3 +1,4 @@
+import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render a project's composition document over the song.
@@ -102,6 +103,7 @@ export function documentRenderClock(songDurationSec, fps = DOCUMENT_RENDER_FPS) 
  * history did not (hosted renders record no geometry).
  */
 export async function resolveSceneMedia(project, { history = [], probe = async () => null, strictLayers = false } = {}) {
+  assertMusicVideoMediaSelections(project);
   const byId = new Map((Array.isArray(history) ? history : []).map((entry) => [entry.id, entry]));
   const out = new Map();
   const { safeUnder } = await import('../../lib/ffmpeg.js');
@@ -331,11 +333,11 @@ export async function encodeDocumentComposition({
       prepare: (dir) => stageDocumentData(dir, data, media),
     });
     signal?.throwIfAborted();
-    page = await openComposition(staged.directory, { signal, streamMedia: true });
+    page = await openComposition(staged.directory, { signal, streamMedia: true, mediaMode: musicVideoMediaMode(project) });
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
       if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');
-      return { durationSec: c.durationSec, fps: c.fps, width: c.width, height: c.height, formats: c.formats, layout: typeof c.layout === 'function' };
+      return { durationSec: c.durationSec, fps: c.fps, width: c.width, height: c.height, motionBlur: c.motionBlur, formats: c.formats, layout: typeof c.layout === 'function' };
     })()`);
     // The managed browser is Google Chrome by default; a Chromium build without
     // proprietary codecs cannot decode the H.264 takes. Say so up front instead
@@ -354,7 +356,7 @@ export async function encodeDocumentComposition({
         status: 422, code: 'COMPOSITION_DOCUMENT_CONTRACT',
       });
     }
-    const target = documentTargetFrame({ ...parsed.data, motionBlur: 1 }, project);
+    const target = documentTargetFrame(parsed.data, project);
     const window = documentRenderWindow(target, { windowStart, windowEnd });
     await encodeComposition(page, { ...target, durationSec: window.durationSec }, silent, {
       videoFilter: musicVideoGradeFilter(project.composition?.grade, data.scenes, { fps: target.fps, offsetSec: window.startSec }),

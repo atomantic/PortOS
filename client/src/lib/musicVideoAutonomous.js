@@ -25,6 +25,7 @@ export const AUTONOMOUS_STATUS_LABELS = Object.freeze({
 
 export const emptyAutonomousDraft = () => ({
   prompt: '',
+  mediaMode: 'code-images-video',
   songSource: AUTONOMOUS_SONG_SOURCES[0],
   localFallback: false,
   instrumental: false,
@@ -51,6 +52,7 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
     .map(([id, value]) => [id, value.trim()]));
   return {
     prompt: draft.prompt.trim(),
+    mediaMode: draft.mediaMode,
     songSource: draft.songSource,
     localFallback: draft.songSource === 'suno' && draft.localFallback === true,
     instrumental: draft.instrumental === true,
@@ -125,6 +127,7 @@ export function autopilotDraftFromParams(params) {
   const { prompt: _prompt, ...base } = emptyAutonomousDraft();
   return {
     ...base,
+    mediaMode: p.mediaMode || base.mediaMode,
     songSource: AUTONOMOUS_SONG_SOURCES.includes(p.songSource) ? p.songSource : base.songSource,
     localFallback: p.localFallback === true,
     instrumental: p.instrumental === true,

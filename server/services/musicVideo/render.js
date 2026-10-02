@@ -1,3 +1,4 @@
+import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -582,6 +583,7 @@ export function assertCurrentClipDependencies(project) {
 }
 
 export async function planMusicVideoRender(project) {
+  assertMusicVideoMediaSelections(project);
   assertCurrentClipDependencies(project);
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });

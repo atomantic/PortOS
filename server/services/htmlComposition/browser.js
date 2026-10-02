@@ -90,7 +90,7 @@ async function readSlice(asset, start, end) {
   } finally { await handle.close(); }
 }
 
-export async function openComposition(directory, { signal, validateAssets, streamMedia = false } = {}) {
+export async function openComposition(directory, { signal, validateAssets, streamMedia = false, mediaMode = 'code-images-video' } = {}) {
   const assets = await snapshotAssets(directory, { streamMedia });
   validateAssets?.(assets);
   signal?.throwIfAborted();
@@ -125,7 +125,9 @@ export async function openComposition(directory, { signal, validateAssets, strea
       });
     });
   }
+  const policyCsp = CSP.replace('img-src http: https:', mediaMode === 'code-only' ? "img-src 'none'" : 'img-src http: https:').replace("media-src 'self'", mediaMode !== 'code-images-video' ? "media-src 'none'" : "media-src 'self'");
   async function request(params) {
+    if (params.resourceType === 'Image' && mediaMode === 'code-only' || params.resourceType === 'Media' && mediaMode !== 'code-images-video') throw new Error('Composition media mode refused this asset');
     const url = new URL(params.request.url);
     const key = decodeURIComponent(url.pathname);
     const asset = url.origin === ORIGIN && !url.username && !url.password && params.request.method === 'GET' && assets.get(key);
@@ -147,7 +149,7 @@ export async function openComposition(directory, { signal, validateAssets, strea
     const range = rangeHeader ? parseByteRange(rangeHeader, size) : null;
     if (rangeHeader && !range && size > 0) {
       await send('Fetch.fulfillRequest', { requestId: params.requestId, responseCode: 416,
-        responseHeaders: [{ name: 'Content-Range', value: `bytes */${size}` }, { name: 'Content-Security-Policy', value: CSP }], body: '' });
+        responseHeaders: [{ name: 'Content-Range', value: `bytes */${size}` }, { name: 'Content-Security-Policy', value: policyCsp }], body: '' });
       return;
     }
     const start = range ? range.start : 0;
@@ -157,7 +159,7 @@ export async function openComposition(directory, { signal, validateAssets, strea
       requestId: params.requestId, responseCode: range ? 206 : 200,
       responseHeaders: [
         { name: 'Content-Type', value: MIME[extname(key).toLowerCase()] ?? 'application/octet-stream' },
-        { name: 'Content-Security-Policy', value: CSP },
+        { name: 'Content-Security-Policy', value: policyCsp },
         { name: 'Access-Control-Allow-Origin', value: '*' },
         { name: 'X-DNS-Prefetch-Control', value: 'off' },
         { name: 'Accept-Ranges', value: 'bytes' },

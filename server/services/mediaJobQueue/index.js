@@ -1256,6 +1256,7 @@ async function runJobLifecycle(job, markDispatched) {
   watchdogTimer.unref?.();
 
   try {
+    await assertMusicVideoJobPolicy(job.kind, job.params);
     const mod = await getGenModuleForJob(job);
     if (job.params?.videoProduction) {
       const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
@@ -1353,7 +1354,18 @@ export function assertMediaQueueRoom(count = 1) {
 // refused (429 MEDIA_QUEUE_FULL) before ANY state changes — no id, no queue
 // entry, no SSE entry, no snapshot write. The check and the push below run in
 // one synchronous stretch, so concurrent submissions cannot overshoot it.
+async function assertMusicVideoJobPolicy(kind, params) {
+  if (params?.musicVideo?.projectId && ['image', 'video'].includes(kind)) {
+    const { getProject } = await import('../musicVideo/projects.js');
+    const { assertMusicVideoMedia } = await import('../../lib/musicVideoMediaPolicy.js');
+    const project = await getProject(params.musicVideo.projectId);
+    if (!project) throw new Error('Music Video project not found');
+    assertMusicVideoMedia(project, kind, 'generation');
+  }
+}
+
 export async function enqueueJob({ kind, params, owner = null }) {
+  await assertMusicVideoJobPolicy(kind, params);
   if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);
   }

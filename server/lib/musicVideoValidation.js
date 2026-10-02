@@ -1,3 +1,4 @@
+import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
@@ -401,6 +402,7 @@ export const musicVideoReactiveSectionSchema = z.object({
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
   mode: z.enum(MUSIC_VIDEO_COMPOSITION_MODES).optional(),
+  authoringRenderer: z.enum(['canvas', 'three']).optional(),
   cutting: z.enum(MUSIC_VIDEO_CUTTING_MODES).optional(),
   grade: z.object({
     preset: z.enum(MUSIC_VIDEO_GRADE_PRESETS).optional(),
@@ -746,6 +748,7 @@ export const musicVideoProductionResumeSchema = z.object({
 export const musicVideoAutonomousStartSchema = z.object({
   prompt: z.string().trim().min(1).max(AUTONOMOUS_PROMPT_MAX),
   name: z.string().trim().min(1).max(AUTONOMOUS_NAME_MAX).optional(),
+  mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   songSource: z.enum(AUTONOMOUS_SONG_SOURCES).optional(),
   localFallback: z.boolean().optional(),
   instrumental: z.boolean().optional(),
@@ -914,6 +917,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
+  mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
@@ -937,6 +941,7 @@ export const musicVideoProjectCreateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
+  mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200).optional(),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),

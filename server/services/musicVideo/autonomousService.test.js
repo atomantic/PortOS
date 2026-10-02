@@ -74,6 +74,8 @@ beforeEach(() => {
     analyzeSong: stub('analyze', async () => ({})),
     startProduction: stub('production', async () => ({ run: { id: 'mvpr-1' } })),
     generateCode: stub('code', async () => ({})),
+    generateDocument: stub('document', async () => ({ document: { directory: 'music-video/mv-auto/composition/example' } })),
+    acceptDocument: stub('accept-document', async () => ({})),
     renderVideo: stub('render', async () => ({ jobId: 'render-1' })),
   };
   service.__setAutonomousDepsForTests(doubles);
@@ -127,8 +129,10 @@ describe('startAutonomousVideo', () => {
     await settled('running').catch(() => {});
     await vi.waitFor(() => expect(calls).toContain('render'));
     expect(calls).not.toContain('production');
-    expect(doubles.generateCode).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm' });
-    expect(store.get('mv-auto').composition).toEqual({ mode: 'code' });
+    expect(calls).not.toContain('board');
+    expect(doubles.acceptDocument).toHaveBeenCalledWith('mv-auto', 'music-video/mv-auto/composition/example');
+    expect(doubles.generateDocument).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm' });
+    expect(store.get('mv-auto').composition).toEqual({ mode: 'document', authoringRenderer: 'three' });
     await settled('completed');
   });
 
@@ -157,7 +161,7 @@ describe('startAutonomousVideo', () => {
   it('threads the authoring effort into code generation for a code-only brief', async () => {
     await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'prov', model: 'm', effort: 'medium' } });
     await vi.waitFor(() => expect(calls).toContain('render'));
-    expect(doubles.generateCode).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm', effort: 'medium' });
+    expect(doubles.generateDocument).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm', effort: 'medium' });
   });
 
   it('sends the Cast & Sets check-in to review only when the cast checkpoint is chosen', async () => {

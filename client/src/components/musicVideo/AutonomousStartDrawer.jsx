@@ -1,3 +1,4 @@
+import MediaModePicker from './MediaModePicker.jsx';
 import { useState } from 'react';
 import { Wand2 } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
@@ -81,6 +82,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
 
         <ToggleChip id="mv-auto-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 
+        <MediaModePicker id="mv-auto-media-mode" value={draft.mediaMode} onChange={(mediaMode) => patch({ mediaMode })} />
         <ToolPicker tools={draft.tools} models={draft.models} onChange={patch} />
 
         <MoodBoardPicker id="mv-auto-mood-board" value={draft.moodBoardId} onChange={(moodBoardId) => patch({ moodBoardId })} />

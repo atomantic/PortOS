@@ -1,3 +1,4 @@
+import { musicVideoMediaMode, musicVideoDocumentRenderer, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 /** User-triggered mixed-media document authoring. No provider runs on read or boot. */
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -48,6 +49,8 @@ function basisFor(project, includeEvents = true) {
   // These are all inputs that can change which pixels or authoring directions
   // a section means. A new candidate cannot publish across such an edit.
   const input = {
+    mediaMode: musicVideoMediaMode(project),
+    authoringRenderer: musicVideoDocumentRenderer(project),
     name: project.name || null,
     treatment: project.treatment || null,
     productionPolicy: project.productionPolicy || null,
@@ -93,6 +96,8 @@ function affectedEventSections(before, after) {
 }
 
 async function authoringContext(project) {
+  assertMusicVideoMediaSelections(project);
+  if (musicVideoDocumentRenderer(project) === 'three' && (project.scenes || []).some((scene) => scene.referenceImageId || scene.videoHistoryId)) throw fail('Generated Three.js worlds currently use geometry only. Use Canvas or import a document to compose selected media.', 'COMPOSITION_RENDERER_MEDIA_UNSUPPORTED');
   const plan = summarizeMusicVideoMediumPlan(project);
   if (plan.strategy === 'code-first' && plan.blocked) {
     throw fail(plan.unresolved.filter((item) => item.blocking).map((item) => item.message).join(' '), 'COMPOSITION_MEDIUM_PLAN_INCOMPLETE');
@@ -189,6 +194,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     styleLines: await styleLinesFor(project),
   };
   const prompt = buildMixedMediaDocumentPrompt({
+    renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),
     title: project.name, song: { ...context.song, sections: context.song.sections.filter((section) => ids.includes(section.id)) }, palette: context.palette, treatment: project.treatment,
     visualSpec: project.visualSpec, scenes: context.scenes, styleLines: sharedStyle.styleLines,
     onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project),
@@ -199,7 +205,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
   for (const [id, source] of updated) merged.set(id, source);
   const manifest = {
-    version: 1, basis: context.basis, structuralBasis: context.structuralBasis, baseDocumentDirectory: project.composition?.document?.directory || null,
+    version: 1, renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project), basis: context.basis, structuralBasis: context.structuralBasis, baseDocumentDirectory: project.composition?.document?.directory || null,
     changedSectionIds: [...new Set([...((prior && project.composition?.documentDraft) ? prior.manifest.changedSectionIds || [] : []), ...ids])],
     beforeSong: prior ? (project.composition?.documentDraft ? prior.manifest.beforeSong || prior.manifest.song : prior.manifest.song) : null,
     sharedStyle, song: context.song, palette: context.palette,
@@ -210,6 +216,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   const active = project.composition?.document?.directory || null;
   const draft = project.composition?.documentDraft?.directory || null;
   const result = await stageGeneratedDocument(projectId, generatedFiles(manifest), {
+    renderer: manifest.renderer,
     verifyCurrent: (current) => {
       verifyCurrent(current);
       if (basisFor(current) !== context.basis || (current.composition?.document?.directory || null) !== active

@@ -294,6 +294,7 @@ export default function MusicVideo() {
     // Only the ids go up: the server snapshots the universe/board style and track metadata into the concept.
     createMusicVideoProject({
       name: form.name.trim(),
+      mediaMode: form.mediaMode || 'code-images-video',
       mode: form.mode,
       trackId: form.trackId || null,
       concept: { universeId: form.universeId || null },

@@ -41,6 +41,27 @@ beforeEach(() => {
 });
 
 describe('DocumentCompositionPanel', () => {
+  it('selects code-only and authors, previews and accepts a Three.js scene candidate', async () => {
+    const saved = { ...bare, mediaMode: 'code-only' };
+    api.updateMusicVideoProject.mockResolvedValue(saved);
+    api.generateMusicVideoMixedMediaDocument.mockResolvedValue({ project: { ...saved, composition: { ...saved.composition, documentDraft: generated } } });
+    api.getMusicVideoMixedMediaCandidate.mockResolvedValue({ candidate: generated, source: generated, stale: false, sections: [{ id: 'world', label: 'World' }] });
+    api.acceptMusicVideoMixedMediaDocument.mockResolvedValue({ project: { ...saved, composition: { ...saved.composition, document: generated } } });
+    const onProject = vi.fn();
+    const view = render(<DocumentCompositionPanel project={bare} onProject={onProject} onSave={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Design and composition media'), { target: { value: 'code-only' } });
+    await waitFor(() => expect(onProject).toHaveBeenCalledWith(saved));
+    view.rerender(<DocumentCompositionPanel project={saved} onProject={onProject} onSave={vi.fn()} />);
+    expect(screen.getByLabelText('Authoring renderer').value).toBe('three');
+    fireEvent.click(screen.getByRole('button', { name: 'Generate authored 3D composition' }));
+    await waitFor(() => expect(api.generateMusicVideoMixedMediaDocument).toHaveBeenCalledWith('mv-1', { providerId: 'stub-provider', model: 'fixture-model' }, { silent: true }));
+    const next = onProject.mock.calls.at(-1)[0];
+    view.rerender(<DocumentCompositionPanel project={next} onProject={onProject} onSave={vi.fn()} />);
+    await screen.findByText('Candidate preview');
+    fireEvent.click(await screen.findByRole('button', { name: /Accept/ }));
+    await waitFor(() => expect(api.acceptMusicVideoMixedMediaDocument).toHaveBeenCalled());
+  });
+
   it('gates authoring on saved event bindings and sends an event-only revision against the reviewed document', async () => {
     api.getMusicVideoMixedMediaCandidate.mockResolvedValue({ candidate: generated, source: generated, stale: true, eventRevisionAvailable: true,
       sections: [{ id: 'verse', label: 'Verse', startSec: 0, endSec: 10 }] });

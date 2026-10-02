@@ -1,3 +1,4 @@
+import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — pure record transforms (issue #1760, Phase 1).
  *
@@ -154,13 +155,14 @@ export function buildProjectRecord(input, { id, now }) {
     pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
     // The document pointer is set only by the import routes, never on create.
-    composition: input.composition ? withStoredCompositionDocument(normalizeComposition(input.composition), null) : null,
+    composition: input.composition || input.mediaMode ? withStoredCompositionDocument(normalizeComposition(input.composition || { mode: 'document' }), null) : null,
     // #8988 — optional sound-design bed mixed under the song.
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
-    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy),
+    mediaMode: musicVideoMediaMode(input),
+    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null)),
     scenes: [],
     renderHistoryId: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
@@ -287,6 +289,7 @@ export function cloneProjectRecord(source, {
     medium: 'generated-footage', mediumPinned: false, mediumRationale: '' });
   return {
     ...clone,
+    mediaMode: 'code-images-video',
     composition: { ...clone.composition, mode: 'composed' },
     productionPolicy: normalizeMusicVideoProductionPolicy({ strategy: 'legacy' }),
     castAndSets: null,
@@ -381,6 +384,7 @@ export function applyProjectPatch(project, patch) {
   // the flag set would render the old song's cut points against new audio.
   const trackChanged = ('trackId' in patch && patch.trackId !== project.trackId)
     || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
+  if ('mediaMode' in patch || patch.visualSpec || patch.styleReferences) assertMusicVideoMediaSelections({ ...project, ...mergedPatch });
   if (!trackChanged) return touch(project, mergedPatch);
   // A planned section belongs to the old audio too; clear its provenance so
   // the renderer does not preserve that plan's timing on the replacement song.
@@ -525,6 +529,7 @@ export function applySceneUpdate(project, sceneId, patch) {
   if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {
     throw new ServerError('endSec must be >= startSec', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  assertMusicVideoMediaSelections({ ...project, scenes: [updated], visualSpec: null });
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
   const next = touch(project, { scenes: nextScenes });

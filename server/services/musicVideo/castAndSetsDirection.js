@@ -1,3 +1,4 @@
+import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — Cast & Sets creative direction (pure): the LLM prompt, the
  * response parser and the absent-vs-empty merge.
@@ -63,6 +64,7 @@ const MOOD_ITEM_TEXT = 280;
  * read together because either can be saved without the other.
  */
 export function castAndSetsMedium(project) {
+  if (!musicVideoAllowsMedia(project, 'image')) return 'procedural';
   if (project?.productionPolicy?.strategy === 'code-first') return 'procedural';
   const tools = briefTools(project);
   return tools.some((t) => t.startsWith('code:')) && !tools.some((t) => t.startsWith('video:')) ? 'procedural' : 'photographic';
@@ -70,6 +72,7 @@ export function castAndSetsMedium(project) {
 
 /** False when the brief names tools and none of them makes images (a code-only project). */
 export function castAndSetsAllowsImages(project) {
+  if (!musicVideoAllowsMedia(project, 'image')) return false;
   const tools = briefTools(project);
   return tools.length === 0 || tools.some((t) => t.startsWith('image:'));
 }

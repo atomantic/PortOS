@@ -203,7 +203,7 @@ describe('AutonomousStartDrawer', () => {
     const [body, options] = api.startAutonomousMusicVideo.mock.calls[0];
     expect(options).toEqual({ silent: true });
     expect(body).toEqual({
-      prompt: 'a courier crosses a rainy city', songSource: 'suno', localFallback: false, instrumental: false, tools: ['image:local', 'video:local'],
+      prompt: 'a courier crosses a rainy city', mediaMode: 'code-images-video', songSource: 'suno', localFallback: false, instrumental: false, tools: ['image:local', 'video:local'],
       budgetUsd: null, limits: { maxGenerations: 40 }, checkpoints: [],
     });
   });

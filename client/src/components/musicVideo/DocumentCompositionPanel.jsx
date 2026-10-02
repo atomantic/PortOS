@@ -1,3 +1,5 @@
+import MediaModePicker from './MediaModePicker.jsx';
+import { musicVideoMediaMode, musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { useEffect, useState } from 'react';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { Download, FileArchive, FolderInput, LayoutTemplate, Unlink, Film, RotateCcw } from 'lucide-react';
@@ -226,6 +228,13 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         </button>
       </div>
       <div className="space-y-2 rounded border border-port-border p-2">
+        <MediaModePicker value={musicVideoMediaMode(project)} disabled={!!busy} onChange={(mediaMode) => run('policy', () => updateMusicVideoProject(project.id, { mediaMode }, { silent: true }).then((project) => ({ project })), 'Media mode saved')} />
+        <label htmlFor="mv-doc-renderer" className="block text-xs text-port-text-muted">Authoring renderer</label>
+        <select id="mv-doc-renderer" disabled={!!busy} value={musicVideoDocumentRenderer(project)} className={inputCls}
+          onChange={(event) => run('renderer', () => updateMusicVideoProject(project.id, { composition: { ...compositionDraft(project), authoringRenderer: event.target.value } }, { silent: true }).then((project) => ({ project })), 'Renderer saved')}>
+          <option value="three">Three.js authored worlds</option><option value="canvas">Canvas layered scenes</option>
+        </select>
+        <p className="text-xs text-port-text-muted">Three.js: modeled geometry, lighting, articulated characters and camera, with a local font overlay. Generated Three.js worlds use geometry only; selected images/video require Canvas or an imported document. Preview and export share deterministic seek(t), 1080p at 24 fps by default. Native Code mode remains the limited 720p Canvas renderer. Local ES modules and fonts are packaged; remote imports are blocked. Document motion blur is honored on export.</p>
         <NarrativeEventsEditor key={`${project.id}-${JSON.stringify([project.composition?.narrativeEvents, project.composition?.reactiveSections])}`}
           project={project} sections={candidate?.sections || []} disabled={!!busy} onSave={saveEvents} onPendingChange={setEventPending} />
         <p className="text-xs text-port-text-muted">Generate from the approved treatment, song timing and selected project assets. Missing media is reported before any provider call.</p>
@@ -238,7 +247,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         <p className="text-xs text-port-text-muted">Code authoring uses {selectedProvider?.name || selectedProviderId || 'no provider selected'} / {effectiveModel || 'no model selected'}. Nothing is sent until you click.</p>
         <div className="flex flex-wrap items-end gap-2">
           <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || eventPending || !selectedProviderId || !effectiveModel} onClick={generate}>
-            <Film size={14} /> {busy === 'generate' ? 'Generating…' : 'Generate mixed-media composition'}
+            <Film size={14} /> {busy === 'generate' ? 'Generating…' : musicVideoDocumentRenderer(project) === 'three' ? 'Generate authored 3D composition' : 'Generate mixed-media composition'}
           </button>
           {candidate?.source && <>
             <div>

@@ -1,3 +1,4 @@
+import MediaModePicker from '../../../musicVideo/MediaModePicker.jsx';
 import { useEffect, useState } from 'react';
 import ToggleChip from '../../../ui/ToggleChip';
 import ProviderModelSelector from '../../../ProviderModelSelector';
@@ -71,6 +72,7 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
 
       <ToggleChip id="mv-ap-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 
+      <MediaModePicker id="mv-auto-media-mode" value={draft.mediaMode} onChange={(mediaMode) => patch({ mediaMode })} />
       <ToolPicker idPrefix="mv-ap" tools={draft.tools} models={draft.models} onChange={patch} />
 
       <MoodBoardPicker id="mv-ap-mood-board" value={draft.moodBoardId} onChange={(moodBoardId) => patch({ moodBoardId })} />

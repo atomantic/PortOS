@@ -1,3 +1,4 @@
+import { assertDocumentMediaPolicy } from './documentMediaPolicy.js';
 /**
  * Music Video — development artifact workflow: import/upload, generated saves,
  * notes, review and soft delete over the pure transforms in devArtifacts.js
@@ -60,6 +61,7 @@ async function storeVersion(projectId, {
   const mimeType = devArtifactTypeFor(ext);
   if (!mimeType) throw new ServerError('Unsupported file type — accepted: HTML, Markdown, MP4, PNG, JPG', { status: 400, code: 'VALIDATION_ERROR' });
   const project = await requireProject(projectId);
+  await assertDocumentMediaPolicy(project, [{ rel: `guide.${ext}`, data: buffer, abs: tempPath }]);
   if (artifactId) findDevArtifact(project, artifactId);
   const id = artifactId || newDevArtifactId();
   const version = nextDevArtifactVersion(project, artifactId);

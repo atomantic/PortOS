@@ -1,3 +1,4 @@
+import { richSceneSource } from './__richSceneFixture.js';
 /**
  * The shipped layered template with real Chrome and ffmpeg: an excerpt of a
  * composition-document project seeks the selected take's <video> on SONG time
@@ -69,6 +70,47 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     browser = await chromium.connectOverCDP(endpoint);
   }, 30000);
   afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: () => {} }));
+
+  it('authors a local Three.js world and renders the same deterministic scene through module preview and export', async () => {
+    const created = await projects.createProject({ name: 'Synthetic authored world', mediaMode: 'code-only' });
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1, beats: [0, 0.5], downbeats: [0], sections: [{ id: 'world', label: 'World', startSec: 0, endSec: 1 }] },
+      composition: { mode: 'document', authoringRenderer: 'three' },
+    } }));
+    author.response = JSON.stringify({ sections: [{ id: 'world', source: richSceneSource }] });
+    const candidate = await generateMixedMediaDocument(created.id, { providerId: 'stub-provider' });
+    await acceptMixedMediaDocument(created.id, candidate.document.directory);
+    author.response = null;
+    const project = await projects.getProject(created.id);
+    const preview = await buildDocumentPreview(project);
+    expect(preview.assets).toEqual([]);
+    expect(preview.html).toContain("img-src 'none'");
+    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+    const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+    await page.setContent(preview.html);
+    await page.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+    const at = (t) => page.evaluate(async (t) => {
+      await window.portosComposition.seek(t);
+      return document.getElementById('world').toDataURL();
+    }, t);
+    const first = await at(0);
+    const moved = await at(0.5);
+    expect(moved).not.toBe(first);
+    expect(await at(0)).toBe(first);
+    const pixels = await sharp(Buffer.from(first.split(',')[1], 'base64')).resize(64,36).removeAlpha().raw().toBuffer();
+    const orange = [...Array(pixels.length / 3).keys()].filter((i) => pixels[i*3] > pixels[i*3+2] * 1.5 && pixels[i*3] > 100).length;
+    expect(orange).toBeGreaterThan(15); // authored character, not a blank backdrop/overlay-only fallback
+    expect(errors).toEqual([]);
+    await page.close();
+    await mkdir(PATHS.music, { recursive: true }); await mkdir(PATHS.videos, { recursive: true });
+    const master = join(PATHS.music, 'world.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', master]);
+    const outputPath = join(PATHS.videos, 'world.mp4');
+    const result = await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'world-proof', audioPath: master, outputPath, windowStart: 0, windowEnd: 2/24 });
+    expect(result).toMatchObject({ width: 1920, height: 1080, fps: 24 });
+    const rendered = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    expect(rendered.reduce((sum, v, i) => sum + Math.abs(v-pixels[i]), 0) / pixels.length).toBeLessThan(15);
+  }, 120000);
 
   it('keeps event frames identical across shuffled seeks, an excerpt and a full render, and freezes silence', async () => {
     const created = await projects.createProject({ name: 'Synthetic event proof' });

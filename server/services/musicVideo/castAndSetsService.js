@@ -1,3 +1,4 @@
+import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
@@ -207,7 +208,7 @@ async function writePlan(projectId, { direction = null, moodImages = null, force
   const nextDirection = direction || stage.direction;
   // A procedural project whose brief names no image tool is code-only: nothing
   // is rendered, so no image backend is needed (or consulted).
-  const codeOnly = nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
+  const codeOnly = !musicVideoAllowsMedia(project, 'image') || nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
   const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes) });
   const renderKeys = affectedImageKeys(stage.plan || {}, plan, forceKeys);
   const settings = await deps.getSettings();
