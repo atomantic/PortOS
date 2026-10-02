@@ -363,6 +363,9 @@ describe('permanent output-hook rejection (#6124)', () => {
     expect(completeAgentRun).toHaveBeenCalledWith('run-rejected', '', 1, 1000,
       expect.objectContaining({ category: 'output-missing', permanent: true }), false);
     expect(addTask).not.toHaveBeenCalled();
+    // The task's retry decision is resolved once, against the final verdict —
+    // not once for the run's own failure and again for the escalation (#9645).
+    expect(resolveFailedTaskUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('leaves a named failure on its ordinary retry path', async () => {
