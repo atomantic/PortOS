@@ -485,4 +485,19 @@ musicVideoEvents.on('production', (event) => {
   onProductionEvent(event).catch((err) => console.error(`❌ Autonomous music video could not settle on production: ${err.message}`));
 });
 
-export const __testing = { onProductionEvent, advance };
+/**
+ * Resolves once no background advance loop is in flight, including one a
+ * resume started while the previous settled. Bounded, so a stage that never
+ * returns fails the caller's teardown loudly instead of hanging it.
+ */
+async function settleBackground(timeoutMs = 10_000) {
+  let timer;
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Autonomous advance did not settle within ${timeoutMs}ms`)), timeoutMs); });
+  try {
+    await Promise.race([(async () => { while (inflight.size) await Promise.allSettled([...inflight.values()]); })(), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export const __testing = { onProductionEvent, advance, settleBackground };
