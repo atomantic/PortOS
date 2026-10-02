@@ -16,6 +16,19 @@ describe('OverflowMenu', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('keeps trigger and rows touch-sized at every breakpoint', async () => {
+    const user = userEvent.setup();
+    render(<OverflowMenu label="More actions" items={items()} />);
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+    expect(trigger.className).toMatch(/(^|\s)min-h-\[44px\](\s|$)/);
+    expect(trigger.className).toMatch(/(^|\s)min-w-\[44px\](\s|$)/);
+    expect(trigger.className).not.toMatch(/sm:min-[hw]-/);
+    await user.click(trigger);
+    const row = screen.getByRole('menuitem', { name: 'Archive' });
+    expect(row.className).toMatch(/(^|\s)min-h-\[44px\](\s|$)/);
+    expect(row.className).not.toMatch(/sm:min-h-/);
+  });
+
   it('keeps items hidden until the trigger is clicked', async () => {
     const user = userEvent.setup();
     render(<OverflowMenu label="More actions" items={items()} />);
