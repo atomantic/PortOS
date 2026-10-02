@@ -426,38 +426,15 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Build context compaction section if task is retrying after a context-limit failure
   const compactionSection = task.metadata?.compaction?.needed ? buildCompactionSection(task) : '';
 
-  // Build worktree context section if applicable
-  const willOpenPR = isTruthyMeta(task.metadata?.openPR);
+  // Task-metadata flags shared with the light path (see resolveTaskMetadataFlags).
+  // `noCodeOutput` includes the Creative Director marker, so pre-upgrade `pending`
+  // CD tasks are recognized without a metadata migration.
+  const {
+    willOpenPR, claimFlow, portosMergesBranch, prCompletion, simplifyEnabled, isReadOnly,
+    discardWorktree, noCodeOutput, toolFreeReasoning, sentinelPayloadOutput, noChangeSuccess,
+    isReviewLoopFollowUp, isWorktreeOnExistingBranch,
+  } = resolveTaskMetadataFlags(task, worktreeInfo);
   const whenDone = task.metadata?.whenDone === 'commit-push' ? 'commit-push' : 'leave-uncommitted';
-  const claimFlow = isClaimFlowTask(task);
-  // Worktree with no PR: PortOS merges the branch back on exit, so every
-  // commit/push instruction below is commit-only (see portosMergesBranchOnExit).
-  const portosMergesBranch = portosMergesBranchOnExit({ worktreeInfo, willOpenPR });
-  const prCompletion = resolvePrCompletion(task.metadata);
-  // A discard (reasoning-only) worktree: the agent reasons in it but it's thrown
-  // away on exit with no commit/merge/PR (see agentWorktreeCleanup.js). Suppresses
-  // all commit/push/PR completion guidance in favor of the sentinel-only contract.
-  const discardWorktree = isTruthyMeta(task.metadata?.discardWorktree);
-  // No-code / API-action task (e.g. Creative Director agents): deliverable is an
-  // HTTP PATCH, not a commit — suppress the /do:push completion workflow. Also
-  // derive from a CD task's own `creativeDirector` marker so tasks queued as
-  // `pending` BEFORE this flag existed (persisted across an upgrade) are still
-  // recognized without a metadata migration.
-  const noCodeOutput = isTruthyMeta(task.metadata?.noCodeOutput) || isCreativeDirectorTask;
-  // A tool-free public-review stage has no sentinel, API, or command to reach
-  // for: its reply IS the deliverable. Wins over every other completion contract.
-  const toolFreeReasoning = isPublicReviewNoToolProfile(task.metadata?.executionProfile);
-  // The sandboxed review stage has tools and a discarded worktree; its output
-  // is the JSON payload in the sentinel, not an API action — so it takes the
-  // programmatic-output contract ahead of the no-code one.
-  const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
-  const noChangeSuccess = permitsNoChangeCompletion(task);
-  const isReadOnly = isTruthyMeta(task.metadata?.readOnly);
-  // The review-loop follow-up that addresses PR feedback and merges (spawned by
-  // the previous agent's cleanup hook). Its own procedure section renders far
-  // below; the flag is read up here because it is an input to the mode decision.
-  const isReviewLoopFollowUp = isTruthyMeta(task.metadata?.reviewLoopFollowUp);
-  const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
 
   // Build pipeline context section if this is a pipeline stage
   const pipelineCtx = task.metadata?.pipeline;
@@ -471,7 +448,6 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // only commit (not push) — keep this wording aligned with the worktree
   // section above. TUI agents own the full simplify+push+PR sequence in the
   // Completion Workflow section below, so this section is suppressed for TUI.
-  const simplifyEnabled = isTruthyMeta(task.metadata?.simplify);
   // `/simplify` is a Claude Code built-in slash command — only a Claude session
   // that loaded its commands can run it. Everyone else (API/CLI) gets the inline
   // equivalent describing the same reuse/quality/efficiency self-review so the
@@ -560,23 +536,6 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     leavePrOpen: leavesPrForHuman(task),
   });
   const completionBullet = guidelineBullet ? `- ${guidelineBullet}` : '';
-  // Unreachable today — every `tui`/`cli` provider returns early at the
-  // LIGHT_CONTEXT gate above, so `isTui` is always false on this path (the
-  // light path's `buildTuiCompletionSection` call is the live one). Kept
-  // provider-aware anyway so this can't become the ONE call site that silently
-  // promises `/do:pr` to a host that can't type it if the routing ever changes
-  // — this arm previously passed no slashdo-capability signal at all, which is
-  // how gates like it drift (#3114).
-  const buildFullPathTuiCompletion = () => buildTuiCompletionSection({
-    willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, portosMergesBranch,
-    mode: completionMode,
-    branchName: worktreeInfo?.branchName || null,
-    baseBranch: worktreeInfo?.baseBranch || null,
-    sentinelPath,
-    leavePrOpen: leavesPrForHuman(task),
-    reviewPolicy
-  });
-
   // Which completion section this mode gets. A mode with no entry renders
   // nothing HERE because the full path carries its contract elsewhere: the
   // review-loop follow-up has its own procedure section below, read-only and
@@ -595,8 +554,6 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => buildReconcileFlowCompletionSection({ sentinelPath }),
     [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, sentinelPath }),
-    [COMPLETION_MODES.TUI_SLASHDO_FREE]: buildFullPathTuiCompletion,
-    [COMPLETION_MODES.TUI]: buildFullPathTuiCompletion,
   }[completionMode] || (() => ''))();
   const tuiCompletionSection = [completionSection, buildAuditOutputCompletionSection(task, sentinelPath)]
     .filter(Boolean).join('\n\n');
@@ -632,6 +589,41 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     toolsSection, planningContextSection, uiAuditRuntimeSection,
     completionBullet, completionInstructions, noChangeSuccess,
   });
+}
+
+/**
+ * The task-metadata flags both prompt paths (`buildAgentPrompt`'s API path and
+ * `buildLightContextSections`) derive before resolving the completion mode.
+ * Derived once here so the two paths cannot drift.
+ *
+ * - `portosMergesBranch`: worktree with no PR — PortOS merges the branch back
+ *   on exit, so commit/push guidance is commit-only.
+ * - `noCodeOutput`: an API-action task (e.g. Creative Director) whose deliverable
+ *   is an HTTP PATCH, not a commit. Also derived from the `creativeDirector`
+ *   marker so tasks queued before the flag existed need no migration.
+ * - `toolFreeReasoning` wins over every other completion contract;
+ *   `sentinelPayloadOutput` (sandboxed review stage) outranks `noCodeOutput`.
+ * - `isReviewLoopFollowUp`: the follow-up that addresses PR feedback and merges.
+ */
+function resolveTaskMetadataFlags(task, worktreeInfo) {
+  const meta = task.metadata;
+  const willOpenPR = isTruthyMeta(meta?.openPR);
+  const toolFreeReasoning = isPublicReviewNoToolProfile(meta?.executionProfile);
+  return {
+    willOpenPR,
+    claimFlow: isClaimFlowTask(task),
+    portosMergesBranch: portosMergesBranchOnExit({ worktreeInfo, willOpenPR }),
+    prCompletion: resolvePrCompletion(meta),
+    simplifyEnabled: isTruthyMeta(meta?.simplify),
+    isReadOnly: isTruthyMeta(meta?.readOnly),
+    discardWorktree: isTruthyMeta(meta?.discardWorktree),
+    noCodeOutput: isTruthyMeta(meta?.noCodeOutput) || !!meta?.creativeDirector,
+    toolFreeReasoning,
+    sentinelPayloadOutput: isPublicReviewRestrictedProfile(meta?.executionProfile) && !toolFreeReasoning,
+    noChangeSuccess: permitsNoChangeCompletion(task),
+    isReviewLoopFollowUp: isTruthyMeta(meta?.reviewLoopFollowUp),
+    isWorktreeOnExistingBranch: isPrBranchWorktree(task, worktreeInfo),
+  };
 }
 
 /** Load independent developer context concurrently, unless this is a content-only task. */
@@ -901,26 +893,11 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   // Idempotent with the reconcile in buildAgentPrompt; also protects the
   // directly-exported buildLightContextPrompt/Parts entry points.
   task = reconcileSplitContext(task);
-  const willOpenPR = isTruthyMeta(task.metadata?.openPR);
-  const claimFlow = isClaimFlowTask(task);
-  // Worktree with no PR: PortOS merges the branch back on exit, so the commit
-  // guidance and completion workflow are commit-only (portosMergesBranchOnExit).
-  const portosMergesBranch = portosMergesBranchOnExit({ worktreeInfo, willOpenPR });
-  const prCompletion = resolvePrCompletion(task.metadata);
-  const simplifyEnabled = isTruthyMeta(task.metadata?.simplify);
-  const isReadOnly = isTruthyMeta(task.metadata?.readOnly);
-  const discardWorktree = isTruthyMeta(task.metadata?.discardWorktree);
-  // A no-code / API-action task (e.g. a Creative Director plan/treatment/evaluate
-  // agent): its deliverable is an HTTP PATCH, not a commit — suppress the
-  // /do:push completion workflow (see buildActionOutputCompletionSection). Also
-  // derive from a CD task's `creativeDirector` marker so pre-upgrade `pending`
-  // tasks (queued before this flag existed) are recognized without a migration.
-  const noCodeOutput = isTruthyMeta(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
-  const toolFreeReasoning = isPublicReviewNoToolProfile(task.metadata?.executionProfile);
-  const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
-  const noChangeSuccess = permitsNoChangeCompletion(task);
-  const isReviewLoopFollowUp = isTruthyMeta(task.metadata?.reviewLoopFollowUp);
-  const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
+  const {
+    willOpenPR, claimFlow, portosMergesBranch, prCompletion, simplifyEnabled, isReadOnly,
+    discardWorktree, noCodeOutput, toolFreeReasoning, sentinelPayloadOutput, noChangeSuccess,
+    isReviewLoopFollowUp, isWorktreeOnExistingBranch,
+  } = resolveTaskMetadataFlags(task, worktreeInfo);
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else
   // the install's configured Code Review Defaults threaded from buildAgentPrompt;
   // else `[]`). Flows as `/do:pr --review-with a,b,c [--review-stop-on-*]
