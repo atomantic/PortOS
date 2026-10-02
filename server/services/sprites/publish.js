@@ -31,11 +31,12 @@
  * posture) nested inside the record's walk write tail.
  */
 
-import { join, resolve } from 'path';
-import { readFile, stat } from 'fs/promises';
+import { dirname, join, relative, resolve, sep } from 'path';
+import { lstat, mkdir, readFile, realpath, stat } from 'fs/promises';
 import {
   atomicWrite, isPathInsideDir, readJSONFile, safeJSONParse, sha256File, pathExists,
 } from '../../lib/fileUtils.js';
+import { isPathAtOrInsideDir } from '../../lib/pathContainment.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { getAppById } from '../apps.js';
@@ -58,8 +59,7 @@ import {
   presentationIdleSidecarPath,
 } from './presentationIdle.js';
 
-// Per-repo serialization: keyed by the resolved repoPath (matching
-// appDeployer's `deployingApps` key), so two app records pointing at the
+// Per-repo serialization: keyed by the real repoPath, so two app records pointing at the
 // same checkout — or two characters publishing into one game — queue behind
 // each other instead of interleaving writes to the same tree.
 const repoPublishTail = createKeyCachedQueue();
@@ -68,16 +68,36 @@ const bindingError = (message, code) => new ServerError(message, { status: 400, 
 
 /**
  * Anchor a repo-relative path under a managed app's repoPath, refusing
- * absolute paths, traversal, and the repo root itself.
+ * absolute paths, traversal, the repo root itself, and symlink components.
+ * Missing tails are allowed only below a verified existing directory.
  */
-function anchorRepoPath(repoRoot, relPath, label) {
-  if (typeof relPath !== 'string' || !relPath || relPath.startsWith('/') || relPath.includes('\\')) {
+async function anchorRepoPath(repoRoot, relPath, label) {
+  if (typeof relPath !== 'string' || !relPath || relPath.startsWith('/') || relPath.includes('\\') || relPath.includes('\0')) {
     throw bindingError(`${label} must be a repo-relative path`, 'INVALID_PUBLISH_PATH');
   }
   const abs = resolve(repoRoot, relPath);
   if (abs === resolve(repoRoot) || !isPathInsideDir(repoRoot, abs)) {
     throw bindingError(`${label} escapes the app repository: ${relPath}`, 'INVALID_PUBLISH_PATH');
   }
+  const invalid = () => bindingError(`${label} must stay inside the app repository without symlinks: ${relPath}`, 'INVALID_PUBLISH_PATH');
+  // Walk from the real root so even dangling or contained symlinks are refused,
+  // rather than mistaken for a missing destination or silently followed.
+  const rootStat = await lstat(repoRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw invalid();
+  let existing = repoRoot;
+  const parts = relative(repoRoot, abs).split(sep);
+  for (const [index, part] of parts.entries()) {
+    const next = join(existing, part);
+    const info = await lstat(next).catch((err) => {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    });
+    if (!info) break;
+    if (info.isSymbolicLink()
+      || (index < parts.length - 1 ? !info.isDirectory() : !info.isFile())) throw invalid();
+    existing = next;
+  }
+  if (!isPathAtOrInsideDir(repoRoot, await realpath(existing))) throw invalid();
   return abs;
 }
 
@@ -93,7 +113,7 @@ async function requireAppRepo(appId, status) {
   if (!repoStat?.isDirectory()) {
     throw new ServerError(`App ${app.name || appId} has no accessible repoPath`, { status, code: 'APP_REPO_MISSING' });
   }
-  return { app, repoRoot: app.repoPath };
+  return { app, repoRoot: await realpath(app.repoPath) };
 }
 
 /**
@@ -135,19 +155,20 @@ export async function validatePublishBinding(binding) {
     appId, atlasDestPath, portraitDestPath, presentationIdleDestPath,
     codeBinding, runtimeContract,
   } = binding;
-  const { app } = await requireAppRepo(appId, 400);
-  anchorRepoPath(app.repoPath, atlasDestPath, 'atlasDestPath');
+  const { repoRoot } = await requireAppRepo(appId, 400);
+  await anchorRepoPath(repoRoot, atlasDestPath, 'atlasDestPath');
   // The sidecar lands beside the atlas, so its path must anchor too — catch a
   // destination whose sidecar would escape the repo at SAVE time, not mid-publish.
-  anchorRepoPath(app.repoPath, layoutSidecarPath(atlasDestPath), 'atlas layout sidecar');
+  await anchorRepoPath(repoRoot, layoutSidecarPath(atlasDestPath), 'atlas layout sidecar');
   if (portraitDestPath) {
-    anchorRepoPath(app.repoPath, portraitDestPath, 'portraitDestPath');
+    await anchorRepoPath(repoRoot, portraitDestPath, 'portraitDestPath');
   }
   if (presentationIdleDestPath) {
-    anchorRepoPath(app.repoPath, presentationIdleDestPath, 'presentationIdleDestPath');
+    await anchorRepoPath(repoRoot, presentationIdleDestPath, 'presentationIdleDestPath');
+    await anchorRepoPath(repoRoot, presentationIdleSidecarPath(presentationIdleDestPath), 'picker animation sidecar');
   }
   if (codeBinding) {
-    anchorRepoPath(app.repoPath, codeBinding.path, 'codeBinding.path');
+    await anchorRepoPath(repoRoot, codeBinding.path, 'codeBinding.path');
     if (typeof codeBinding.resourcePath !== 'string' || !codeBinding.resourcePath.trim()) {
       throw bindingError('codeBinding.resourcePath is required', 'INVALID_CODE_BINDING');
     }
@@ -191,17 +212,16 @@ export async function validatePublishBinding(binding) {
  */
 export async function setPublishBinding(recordId, binding) {
   const record = await requireAnimatable(recordId);
-  const validated = await validatePublishBinding(binding);
   const stored = record.publishBinding;
-  if (validated && binding.runtimeContract === undefined && validated.appId === stored?.appId) {
-    validated.runtimeContract = stored.runtimeContract ?? null;
+  const effective = binding ? { ...binding } : null;
+  if (effective && effective.appId === stored?.appId) {
+    // Validate inherited paths too: a symlink may have appeared since the
+    // previous save, even when an older client omits optional destinations.
+    for (const field of ['runtimeContract', 'portraitDestPath', 'presentationIdleDestPath']) {
+      if (effective[field] === undefined) effective[field] = stored[field] ?? null;
+    }
   }
-  if (validated && binding.portraitDestPath === undefined && validated.appId === stored?.appId) {
-    validated.portraitDestPath = stored.portraitDestPath ?? null;
-  }
-  if (validated && binding.presentationIdleDestPath === undefined && validated.appId === stored?.appId) {
-    validated.presentationIdleDestPath = stored.presentationIdleDestPath ?? null;
-  }
+  const validated = await validatePublishBinding(effective);
   return updateRecord(recordId, { publishBinding: validated });
 }
 
@@ -237,7 +257,7 @@ const countOccurrences = (text, needle) => (needle ? text.split(needle).length -
  * Returns the publication's codeBinding summary; throws on drift.
  */
 async function applyCodeBinding(repoRoot, codeBinding, previousResourcePath) {
-  const abs = anchorRepoPath(repoRoot, codeBinding.path, 'codeBinding.path');
+  const abs = await anchorRepoPath(repoRoot, codeBinding.path, 'codeBinding.path');
   const required = codeBinding.requiredOccurrenceCount ?? 1;
   const text = await readFile(abs, 'utf8').catch(() => null);
   if (text === null) {
@@ -252,6 +272,7 @@ async function applyCodeBinding(repoRoot, codeBinding, previousResourcePath) {
   if (previousResourcePath && previousResourcePath !== codeBinding.resourcePath) {
     const previousCount = countOccurrences(text, previousResourcePath);
     if (previousCount === required) {
+      await anchorRepoPath(repoRoot, codeBinding.path, 'codeBinding.path');
       await atomicWrite(abs, text.split(previousResourcePath).join(codeBinding.resourcePath));
       return { ...codeBinding, rewritten: true, previousResourcePath };
     }
@@ -348,23 +369,52 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     // Don't mutate a tree a deploy is currently building from — appDeployer
     // keys its lock by repoPath, so honor it here (the reverse direction —
     // deploy checking publishes — isn't needed; publishes are sub-second).
-    if (isDeploying(repoRoot)) {
+    if (isDeploying(app.repoPath)) {
       throw new ServerError(`App ${appLabel} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
     }
-    const destAbs = anchorRepoPath(repoRoot, binding.atlasDestPath, 'atlasDestPath');
+    const destAbs = await anchorRepoPath(repoRoot, binding.atlasDestPath, 'atlasDestPath');
     // The sidecar is repo-anchored and written inside this same per-repo tail
     // as the PNG, so the pair is never interleaved with another publish into
     // the same checkout.
-    const layoutAbs = anchorRepoPath(repoRoot, layoutDestPath, 'atlas layout sidecar');
+    const layoutAbs = await anchorRepoPath(repoRoot, layoutDestPath, 'atlas layout sidecar');
     const portraitAbs = portrait
-      ? anchorRepoPath(repoRoot, binding.portraitDestPath, 'portraitDestPath')
+      ? await anchorRepoPath(repoRoot, binding.portraitDestPath, 'portraitDestPath')
       : null;
     const presentationIdleAbs = presentationIdle
-      ? anchorRepoPath(repoRoot, binding.presentationIdleDestPath, 'presentationIdleDestPath')
+      ? await anchorRepoPath(repoRoot, binding.presentationIdleDestPath, 'presentationIdleDestPath')
       : null;
     const presentationIdleLayoutAbs = presentationIdle
-      ? anchorRepoPath(repoRoot, presentationIdleLayoutDestPath, 'picker animation sidecar')
+      ? await anchorRepoPath(repoRoot, presentationIdleLayoutDestPath, 'picker animation sidecar')
       : null;
+    const destinations = [
+      [binding.atlasDestPath, 'atlasDestPath'],
+      [layoutDestPath, 'atlas layout sidecar'],
+      ...(portrait ? [[binding.portraitDestPath, 'portraitDestPath']] : []),
+      ...(presentationIdle ? [
+        [binding.presentationIdleDestPath, 'presentationIdleDestPath'],
+        [presentationIdleLayoutDestPath, 'picker animation sidecar'],
+      ] : []),
+      ...(binding.codeBinding ? [[binding.codeBinding.path, 'codeBinding.path']] : []),
+    ];
+    const preflightDestinations = async () => {
+      for (const [path, label] of destinations) await anchorRepoPath(repoRoot, path, label);
+    };
+    // Media paths were checked above; check source before any app-file reads.
+    if (binding.codeBinding) await anchorRepoPath(repoRoot, binding.codeBinding.path, 'codeBinding.path');
+    // Repeat the complete preflight after creating output parents, before
+    // either branch can rewrite source.
+    const prepareDestinations = async () => {
+      for (const [path, label] of destinations) {
+        const abs = await anchorRepoPath(repoRoot, path, label);
+        await mkdir(dirname(abs), { recursive: true });
+        await anchorRepoPath(repoRoot, path, label);
+      }
+      await preflightDestinations();
+    };
+    const writeDestination = async (path, label, buffer) => {
+      const abs = await anchorRepoPath(repoRoot, path, label);
+      await atomicWrite(abs, buffer);
+    };
     const existingLayout = await readFile(layoutAbs).catch(() => null);
     const layoutUpToDate = Boolean(existingLayout?.equals(layoutBuffer));
     // Occupied-destination guard, mirroring the atlas's: PortOS owns files it
@@ -392,7 +442,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     // so the two can never be permanently out of step.
     const writeLayoutSidecar = async () => {
       if (layoutUpToDate) return false;
-      await atomicWrite(layoutAbs, layoutBuffer);
+      await writeDestination(layoutDestPath, 'atlas layout sidecar', layoutBuffer);
       return true;
     };
     const atlasBuffer = await readFile(join(dir, compiled.atlasPath)).catch(() => null);
@@ -483,7 +533,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     };
     const writePortrait = async () => {
       if (!portrait || portraitUpToDate) return false;
-      await atomicWrite(portraitAbs, portrait.buffer);
+      await writeDestination(binding.portraitDestPath, 'portraitDestPath', portrait.buffer);
       return true;
     };
     const presentationIdleDestSha256 = presentationIdle && await pathExists(presentationIdleAbs)
@@ -513,7 +563,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     };
     const writePresentationIdle = async () => {
       if (!presentationIdle || presentationIdleUpToDate) return false;
-      await atomicWrite(presentationIdleAbs, presentationIdle.buffer);
+      await writeDestination(binding.presentationIdleDestPath, 'presentationIdleDestPath', presentationIdle.buffer);
       return true;
     };
     const existingPresentationIdleLayout = presentationIdle
@@ -537,7 +587,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     };
     const writePresentationIdleLayout = async () => {
       if (!presentationIdle || presentationIdleLayoutUpToDate) return false;
-      await atomicWrite(presentationIdleLayoutAbs, presentationIdleLayoutBuffer);
+      await writeDestination(presentationIdleLayoutDestPath, 'picker animation sidecar', presentationIdleLayoutBuffer);
       return true;
     };
 
@@ -547,6 +597,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
       assertPortraitDestWritable();
       assertPresentationIdleDestWritable();
       assertPresentationIdleLayoutWritable();
+      await prepareDestinations();
       // Verify the code binding even on a no-op so drift never hides.
       const codeBinding = binding.codeBinding
         ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
@@ -613,6 +664,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     assertPortraitDestWritable();
     assertPresentationIdleDestWritable();
     assertPresentationIdleLayoutWritable();
+    await prepareDestinations();
     const codeBinding = binding.codeBinding
       ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
       : null;
@@ -626,7 +678,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     const portraitWritten = await writePortrait();
     const presentationIdleLayoutWritten = await writePresentationIdleLayout();
     const presentationIdleWritten = await writePresentationIdle();
-    await atomicWrite(destAbs, atlasBuffer);
+    await writeDestination(binding.atlasDestPath, 'atlasDestPath', atlasBuffer);
 
     const publication = await recordPublication({
       destPreviousSha256: destSha256, codeBinding, layoutDestPath, layoutSha256,
