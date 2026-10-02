@@ -16,20 +16,21 @@ const NEW_B = '33333333-3333-3333-3333-333333333333';
 const noSleep = async () => {};
 
 /** A just-enough Playwright page: tracks fills/clicks and exposes song links that appear after Create. */
-function fakePage({ url = 'https://suno.com/create', hasForm = true, afterCreate = [NEW_A, NEW_B] } = {}) {
+function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, afterCreate = [NEW_A, NEW_B] } = {}) {
   const fills = {};
   let created = false;
   const locator = (selector) => {
     const handle = {
-      count: async () => (selector === 'textarea' ? (hasForm ? 1 : 0) : 1),
+      count: async () => selector === 'textarea' ? (hasForm ? 1 : 0) : selector === '[role="textbox"][aria-label="Lyrics editor"]' ? (modern ? 1 : 0) : 1,
+      waitFor: async () => {},
       fill: async (v) => { fills[selector] = v; },
       click: async () => {},
     };
     return { ...handle, first: () => handle };
   };
-  const button = () => ({
-    count: async () => 1,
-    first: () => ({ click: async () => {} }),
+  const button = (role, options) => ({
+    count: async () => role === 'textbox' || role === 'tab' ? (modern ? 1 : 0) : /instrumental|custom/.test(String(options.name)) ? (modern ? 0 : 1) : 1,
+    first: () => ({ click: async () => {}, fill: async v => { fills[options.name] = v; } }),
     last: () => ({ click: async () => { created = true; } }),
   });
   return {
@@ -50,15 +51,22 @@ describe('submitSunoSong', () => {
     const page = fakePage();
     const ids = await submitSunoSong(page, fields, { sleep: noSleep });
     expect(ids).toEqual([NEW_A, NEW_B]);
-    expect(page.fills['textarea[placeholder*="lyrics" i]']).toBe('[verse]\nrain');
-    expect(page.fills['textarea[placeholder*="style" i]']).toBe('synthwave');
-    expect(page.fills['input[placeholder*="title" i]']).toBe('Neon Rain');
+    expect(page.fills['[role="textbox"][aria-label="Lyrics editor"],textarea[placeholder*="lyrics" i]']).toBe('[verse]\nrain');
+    expect(page.fills['textarea:not([aria-label]):not([placeholder="Describe the sound you want"])']).toBe('synthwave');
+    expect(page.fills['input[placeholder*="title" i]:visible']).toBe('Neon Rain');
   });
 
   it('leaves the lyrics empty for an instrumental song', async () => {
     const page = fakePage();
     await submitSunoSong(page, { ...fields, instrumental: true, lyrics: '' }, { sleep: noSleep });
-    expect(page.fills['textarea[placeholder*="lyrics" i]']).toBeUndefined();
+    expect(page.fills['[role="textbox"][aria-label="Lyrics editor"],textarea[placeholder*="lyrics" i]']).toBe('');
+  });
+
+  it('keeps the older Custom form compatible', async () => {
+    const page = fakePage({ modern: false });
+    await submitSunoSong(page, fields, { sleep: noSleep });
+    expect(page.fills['[role="textbox"][aria-label="Lyrics editor"],textarea[placeholder*="lyrics" i]']).toBe(fields.lyrics);
+    expect(page.fills['textarea[placeholder*="style" i]']).toBe(fields.style);
   });
 
   it('reports a signed-out page as login-required so the run parks for the operator', async () => {

@@ -48,31 +48,42 @@ const songLinks = (page) => page.evaluate(() => [...document.querySelectorAll('a
  */
 async function submitSunoSong(page, fields, { sleep = defaultSleep } = {}) {
   await step(LABEL, 'open the create page', () => page.goto(SUNO_CREATE_URL, { waitUntil: 'domcontentloaded', timeout: T }));
-  await sleep(4000);
+  await page.locator('textarea').first().waitFor({ state: 'visible', timeout: T }).catch(() => {});
   // A signed-out visitor is bounced to a sign-in page or sees no create form.
   const url = typeof page.url === 'function' ? page.url() : '';
   const hasForm = await page.locator('textarea').count();
   if (/sign-?in|login|accounts\./i.test(url) || !hasForm) throw loginRequired(LABEL, SUNO_CREATE_URL);
 
   await step(LABEL, 'switch to custom mode', async () => {
+    // Current Suno calls custom mode Advanced and exposes it as a tab.
+    // Keep the former Custom button for installations seeing the older UI.
+    const advanced = page.getByRole('tab', { name: /^advanced$/i });
     const custom = page.getByRole('button', { name: /^custom$/i });
-    if (await custom.count()) await custom.first().click({ timeout: T });
+    if (await advanced.count()) await advanced.first().click({ timeout: T });
+    else if (await custom.count()) await custom.first().click({ timeout: T });
   });
   await step(LABEL, 'fill the lyrics', async () => {
-    const box = page.locator('textarea[placeholder*="lyrics" i]').first();
-    if (fields.instrumental || !fields.lyrics) return;
-    await box.fill(fields.lyrics, { timeout: T });
+    const box = page.locator('[role="textbox"][aria-label="Lyrics editor"],textarea[placeholder*="lyrics" i]').first();
+    // Clear stored lyrics too: a previous form draft must not turn an
+    // instrumental request into a vocal song.
+    await box.fill(fields.instrumental ? '' : fields.lyrics || '', { timeout: T });
   });
   await step(LABEL, 'fill the style', async () => {
-    await page.locator('textarea[placeholder*="style" i]').first().fill(fields.style, { timeout: T });
+    // Advanced's Styles textarea uses rotating style examples as its
+    // placeholder. Cowriter, Speech and Sounds are separate editors.
+    const modern = await page.locator('[role="textbox"][aria-label="Lyrics editor"]').count();
+    const styles = modern ? page.locator('textarea:not([aria-label]):not([placeholder="Describe the sound you want"])') : page.locator('textarea[placeholder*="style" i]');
+    await styles.first().fill(fields.style, { timeout: T });
   });
   await step(LABEL, 'fill the title', async () => {
-    const title = page.locator('input[placeholder*="title" i]').first();
+    const title = page.locator('input[placeholder*="title" i]:visible').first();
     if (await title.count()) await title.fill(fields.title, { timeout: T });
   });
   if (fields.instrumental) {
     await step(LABEL, 'turn instrumental on', async () => {
-      await page.getByRole('button', { name: /^instrumental$/i }).first().click({ timeout: T });
+      const instrumental = page.getByRole('button', { name: /^instrumental$/i });
+      // Advanced uses an empty lyrics editor for instrumental music.
+      if (await instrumental.count()) await instrumental.first().click({ timeout: T });
     });
   }
 
