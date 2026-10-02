@@ -340,7 +340,7 @@ router.post('/:id/analyze/manual', asyncHandler(async (req, res) => {
   if (!analysis) {
     throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
   }
-  const updated = await setProjectAnalysis(project.id, analysis);
+  const updated = await setProjectAnalysis(project.id, analysis, project);
   res.json(updated);
 }));
 
@@ -508,6 +508,13 @@ router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, 
 router.get('/:id/production-review', asyncHandler(async (req, res) => {
   res.json(await getProductionReview(req.params.id));
 }));
+router.post('/:id/production-review/document-shots', asyncHandler(async (req, res) => {
+  const { musicVideoDocumentShotsSchema } = await import('../lib/musicVideoValidation.js');
+  const input = validateRequest(musicVideoDocumentShotsSchema, req.body);
+  const { importDocumentShots } = await import('../services/musicVideo/productionReviewService.js');
+  res.json(await importDocumentShots(req.params.id, input));
+}));
+
 router.post('/:id/production-review/import', asyncHandler(async (req, res) => {
   const { source } = validateRequest(musicVideoProductionImportSchema, req.body);
   res.json(await importProductionPlanning(req.params.id, source));

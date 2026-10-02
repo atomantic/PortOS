@@ -18,7 +18,11 @@ function requireRevision(project, id) {
   return project.songRevision;
 }
 async function mutate(id, fn) {
-  const out = await mutateProjectRecord(id, fn);
+  const out = await mutateProjectRecord(id, (current) => {
+    const next = fn(current);
+    return { ...next, project: { ...next.project, updatedAt: new Date().toISOString(),
+      songRevision: { ...next.project.songRevision, sequence: (current.songRevision?.sequence || 0) + 1 } } };
+  });
   musicVideoEvents.emit('song-revision', { projectId: id, project: out.project });
   return out;
 }
@@ -30,7 +34,7 @@ const patch = (id, revisionId, fn) => mutate(id, (project) => {
 export async function saveSongRevision(projectId, fields) {
   return mutate(projectId, (project) => {
     if (!project.parentProjectId) fail('Fork a version before revising its song');
-    if (inflight.has(projectId) || ['generating', 'review'].includes(project.songRevision?.status)) fail('Select or cancel the current candidates before starting another revision');
+    if (inflight.has(projectId) || ['generating', 'review', 'selected'].includes(project.songRevision?.status)) fail('Select or cancel the current candidates; fork again after selecting a song');
     const previous = project.songRevision;
     const revision = { id: `mvsr-${randomUUID()}`, fields, status: 'draft', songIds: [], candidates: [], createdAt: new Date().toISOString() };
     return { project: { ...project, songRevision: revision,
@@ -41,6 +45,7 @@ export async function saveSongRevision(projectId, fields) {
 
 async function generate(projectId, revisionId, controller) {
   try {
+    controller.signal.throwIfAborted();
     let revision = (await getProject(projectId)).songRevision;
     const persist = async (update) => {
       const out = await patch(projectId, revisionId, (r) => update(r));
@@ -110,6 +115,10 @@ export async function selectSongRevision(projectId, revisionId, songId) {
     if (!candidate) fail('Import and listen to a candidate before selecting it');
     const { cues, markers } = parseLyricCues(revision.fields.instrumental ? '' : revision.fields.lyrics);
     const next = applyProjectPatch(project, { trackId: null, uploadedAudioFilename: candidate.filename, lyricCues: cues, lyricMarkers: markers, phrases: [] });
+    if (next.productionReview) next.productionReview = { ...next.productionReview,
+      draft: { ...next.productionReview.draft, timingStatus: 'provisional' }, alignmentBasis: null,
+      approvals: next.productionReview.approvals?.art ? { art: next.productionReview.approvals.art } : {}, proof: null,
+    };
     return { project: { ...next, songRevision: { ...revision, status: 'selected', selectedSongId: songId, selectedAt: new Date().toISOString() } } };
   });
 }

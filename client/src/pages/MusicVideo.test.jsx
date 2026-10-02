@@ -347,6 +347,7 @@ beforeEach(() => {
   // Keep the real artifact iframe and src assertions without navigating to its API URL.
   window.happyDOM.settings.navigation.disableChildFrameNavigation = true;
   vi.clearAllMocks();
+  getMusicVideoProject.mockImplementation(async id => (await listMusicVideoProjects()).find(project => project.id === id));
   sseState.latest = null;
   sseState.closed = false;
   ytSseStates.clear();

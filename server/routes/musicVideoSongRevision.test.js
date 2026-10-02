@@ -6,6 +6,8 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/m
 
 vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-song-revision-test-') }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+const analyzers = vi.hoisted(() => ({ auto: vi.fn(), manual: vi.fn() }));
+vi.mock('../services/musicVideo/audioAnalysis.js', async (original) => ({ ...(await original()), analyzeAudioFile: analyzers.auto, analyzeAudioFileManual: analyzers.manual }));
 const { default: routes } = await import('./musicVideo.js');
 const store = await import('../services/musicVideo/projects.js');
 const service = await import('../services/musicVideo/songRevision.js');
@@ -65,6 +67,27 @@ describe('fork song revision through HTTP', () => {
     expect(next.songRevision).toBeNull();
     expect(next.songRevisionHistory.at(-1).selectedSongId).toBe('take-a');
     expect(stripMusicVideoLocalRenderPins(pending)).not.toHaveProperty('songRevision');
+  });
+
+  it.each(['auto', 'manual'])('rejects %s analysis completing after a new candidate is selected', async (kind) => {
+    const { fork, revisionId } = await fixture();
+    await store.mutateProjectRecord(fork.id, (p) => ({ project: { ...p, audioAnalysis: null } }));
+    service.__setSongRevisionDepsForTests({ generate: async (_fields, opts) => {
+      await opts.onSubmitted(['take-new']);
+      return { songId: 'take-new', filename: 'take-new.m4a' };
+    } });
+    await post(fork.id, 'generate', { revisionId }); await service.__testing.settle();
+    const entered = Promise.withResolvers();
+    const held = Promise.withResolvers();
+    analyzers[kind].mockImplementationOnce(async () => { entered.resolve(); return held.promise; });
+    const analysisRequest = Promise.resolve(request(app).post(`/api/music-video/${fork.id}/analyze${kind === 'manual' ? '/manual' : ''}`).send({ bpm: 120 }));
+    await entered.promise;
+    expect((await post(fork.id, 'select', { revisionId, songId: 'take-new' })).status).toBe(200);
+    held.resolve({ bpm: 120, beats: [0], downbeats: [0], sections: [], durationSec: 20 });
+    const stale = await analysisRequest;
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('MUSIC_VIDEO_AUDIO_CHANGED');
+    expect((await store.getProject(fork.id)).audioAnalysis).toBeNull();
   });
 
   it('retries downloads without repeating Create and cancels without changing master', async () => {

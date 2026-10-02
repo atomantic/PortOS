@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
+import { importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
   approveMusicVideoProductionReview, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
   cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
@@ -52,6 +52,7 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
   return { readiness: state?.owner === project ? state.readiness : null, busy, error, proof,
     feedback: body => call(() => addMusicVideoProductionFeedback(project.id, { ...body, basis: state?.readiness.basis[body.stage] }, { silent: true })),
     resolveFeedback: (feedbackId, resolution, password) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution, password }, { silent: true })),
+    importDocumentShots: body => call(() => importMusicVideoDocumentShots(project.id, body, { silent: true })),
     importPlanning: source => call(() => importMusicVideoProductionPlanning(project.id, source, { silent: true })),
     bindShot: shotId => call(() => bindMusicVideoProductionShot(project.id, shotId, { silent: true })),
     save: draft => call(() => saveMusicVideoProductionDraft(project.id, draft, { silent: true })),

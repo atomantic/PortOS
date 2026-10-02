@@ -18,6 +18,8 @@ vi.mock('../services/promptRunner.js', () => ({
 const ROOT = () => lazyTempDataRoot('mv-production-review-');
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+const planner = vi.hoisted(() => vi.fn());
+vi.mock('../services/musicVideo/planner.js', () => ({ planProject: planner }));
 const auth = vi.hoisted(() => ({ enabled: true }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => auth.enabled, verifyPassword: async password => password === 'synthetic-operator-password' }));
 vi.mock('../services/musicVideo/excerptRender.js', async original => ({ ...await original(),
@@ -277,5 +279,70 @@ describe('human-reviewed Music Video workflow', () => {
     expect(result.status).toBe(403);
     expect(result.body.code).toBe('PUBLISH_MANUAL_REQUIRED');
     expect((await request(app).post(`${base}/publish/youtube/prepare`).send({ approved: true })).status).toBe(403);
+  });
+});
+
+describe('document-bound storyboard revision', () => {
+  it('preserves a document manifest imported while Board preparation is in flight', async () => {
+    const { importDocumentTemplate } = await import('../services/musicVideo/compositionDocument.js');
+    const imported = await importDocumentTemplate(project.id, 'layered');
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current, scenes: [] } }));
+    await approve('art');
+    const entered = Promise.withResolvers();
+    const held = Promise.withResolvers();
+    planner.mockImplementationOnce(async () => {
+      await store.addProjectScene(project.id, { label: 'Board row', startSec: 0, endSec: 20 });
+      entered.resolve(); await held.promise;
+    });
+    const preparing = Promise.resolve(request(app).post(`${base}/production-review/prepare`).send({}));
+    await entered.promise;
+    const shots = [{ id: 'authored-shot', sceneId: null, startSec: 0, endSec: 20, lyricCueIds: ['line-a'],
+      action: 'Open door', staging: 'Left', camera: 'Track', transition: 'Cut' }];
+    const audioBasis = (await read()).body.readiness.documentShotImport.audioBasis;
+    expect((await request(app).post(`${base}/production-review/document-shots`).send({
+      documentDirectory: imported.document.directory, audioBasis, sourceFile: 'engine.js', shots,
+    })).status).toBe(200);
+    held.resolve();
+    expect((await preparing).body.project.productionReview.draft.storyboard).toEqual(shots);
+  });
+  it('requires real source shots, preserves Board rows, and invalidates document, shot and master changes', async () => {
+    const { importDocumentTemplate } = await import('../services/musicVideo/compositionDocument.js');
+    const imported = await importDocumentTemplate(project.id, 'layered');
+    const documentDirectory = imported.document.directory;
+    const shots = [
+      { id: 'authored-intro', sceneId: null, startSec: 0, endSec: 10, lyricCueIds: ['line-a'], action: 'Open doorway', staging: 'Figure left', camera: 'Dolly', transition: 'Cut' },
+      { id: 'authored-outro', sceneId: null, startSec: 10, endSec: 20, lyricCueIds: [], action: 'Cross doorway', staging: 'Figure center', camera: 'Track', transition: 'Fade' },
+    ];
+    const audioBasis = (await read()).body.readiness.documentShotImport.audioBasis;
+    const bind = body => request(app).post(`${base}/production-review/document-shots`).send({ audioBasis, ...body });
+    await save({ ...draft, storyboardSource: 'document', storyboard: [] });
+    await approve('art');
+    expect((await approve('storyboard')).status).toBe(409);
+    expect((await bind({ documentDirectory, sourceFile: 'missing.js', shots })).status).toBe(404);
+    expect((await bind({ documentDirectory, sourceFile: 'engine.js', shots: [shots[0], shots[0]] })).status).toBe(400);
+    const bound = await bind({ documentDirectory, sourceFile: 'engine.js', shots });
+    expect(bound.status).toBe(200);
+    expect(bound.body.project.scenes).toHaveLength(1);
+    expect(bound.body.project.productionReview.draft.storyboard).toHaveLength(2);
+    const prepared = await request(app).post(`${base}/production-review/prepare`).send({});
+    expect(prepared.body.project.productionReview.draft.storyboard).toEqual(shots);
+    expect((await request(app).post(`${base}/production-review/shots/authored-intro/bind`).send({})).status).toBe(409);
+    expect((await approve('storyboard')).status).toBe(200);
+    const accepted = await read();
+    const oldBasis = accepted.body.readiness.basis.storyboard;
+    await save({ ...bound.body.project.productionReview.draft, storyboard: shots.map((s, i) => i ? s : { ...s, camera: 'New track' }) });
+    expect((await approve('storyboard')).status).toBe(409);
+    await bind({ documentDirectory, sourceFile: 'engine.js', shots });
+    expect((await approve('storyboard')).status).toBe(200);
+    await importDocumentTemplate(project.id, 'layered');
+    expect((await approve('storyboard')).status).toBe(409);
+    expect((await bind({ documentDirectory, sourceFile: 'engine.js', shots })).status).toBe(409);
+    const latest = await store.getProject(project.id);
+    await bind({ documentDirectory: latest.composition.document.directory, sourceFile: 'engine.js', shots });
+    await store.updateProject(project.id, { uploadedAudioFilename: 'new-master.wav' });
+    expect((await approve('storyboard', { basis: oldBasis })).status).toBe(409);
+    expect((await bind({ documentDirectory: latest.composition.document.directory, sourceFile: 'engine.js', shots })).status).toBe(409);
+    expect((await read()).body.readiness.storyboard.problems.join(' ')).toContain('current authored document');
+    expect((await request(app).post(`${base}/render`).send({})).status).toBe(409);
   });
 });

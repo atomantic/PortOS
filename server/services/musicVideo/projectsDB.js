@@ -43,8 +43,8 @@ export async function cloneProject(id, options = {}) {
   });
 }
 
-export async function setProjectAnalysis(id, analysis) {
-  const { project } = await withLockedProject(id, (current) => ({ project: logic.setAudioAnalysis(current, analysis) }));
+export async function setProjectAnalysis(id, analysis, sourceProject) {
+  const { project } = await withLockedProject(id, (current) => ({ project: logic.setAudioAnalysis(current, analysis, sourceProject) }));
   return project;
 }
 

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
-import { productionReadiness, productionReviewBasis, productionAlignmentBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback } from './productionReview.js';
+import { productionReadiness, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback } from './productionReview.js';
 
 const reviewProcessId = randomUUID();
 
@@ -57,11 +57,35 @@ export async function importProductionPlanning(id, source) {
   return changed(project);
 }
 
+/** A director supplies source-authored shot IDs/times; never infer shots from a generic Board row. */
+export async function importDocumentShots(id, input) {
+  const before = await requireProject(id);
+  if (!before.productionReview?.draft) throw new ServerError('Save a planning draft before importing document shots.', { status: 409, code: 'PLANNING_DRAFT_REQUIRED' });
+  if (before.composition?.mode !== 'document' || before.composition.document?.directory !== input.documentDirectory || productionAlignmentBasis(before) !== input.audioBasis) {
+    throw new ServerError('The composition version changed. Export its source and import a matching shot manifest.', { status: 409, code: 'DOCUMENT_STORYBOARD_STALE' });
+  }
+  const { resolveDocumentFile } = await import('./compositionDocument.js');
+  await resolveDocumentFile(before, input.sourceFile);
+  const alignment = productionAlignmentBasis(before);
+  const { project } = await mutateProjectRecord(id, current => {
+    if (current.composition?.document?.directory !== input.documentDirectory || productionAlignmentBasis(current) !== alignment) {
+      throw new ServerError('Document or audio changed during import.', { status: 409, code: 'DOCUMENT_STORYBOARD_STALE' });
+    }
+    const next = { ...current, productionReview: { ...current.productionReview,
+      draft: { ...current.productionReview?.draft, storyboardSource: 'document', storyboard: input.shots } } };
+    next.productionReview.documentStoryboard = { directory: input.documentDirectory, sourceFile: input.sourceFile,
+      basis: documentStoryboardBasis(next), importedAt: new Date().toISOString() };
+    return { project: next };
+  });
+  return changed(project);
+}
+
 /** Explicitly create and bind an unbound draft shot, under the project write lock. */
 export async function bindProductionShot(id, shotId) {
   const { addScene } = await import('./projectsLogic.js');
   const { project } = await mutateProjectRecord(id, current => {
     const draft = current.productionReview?.draft;
+    if (draft?.storyboardSource === 'document') throw new ServerError('Document shots are edited in their authored source, not bound to Board scenes.', { status: 409, code: 'DOCUMENT_STORYBOARD' });
     const shot = draft?.storyboard.find(s => s.id === shotId);
     if (!shot) throw new ServerError('Draft shot not found', { status: 404, code: 'NOT_FOUND' });
     if (shot.sceneId) throw new ServerError('This draft shot is already bound. Edit its existing Board scene.', { status: 409, code: 'SHOT_ALREADY_BOUND' });
@@ -136,6 +160,7 @@ async function validateGuideSelection(project, selectedId) {
 /** Prepare ordinary editable artifacts; never mark any stage approved. */
 export async function prepareProductionReview(id, options = {}) {
   let project = await requireProject(id);
+  if (project.productionReview?.draft?.storyboardSource === 'document') return present(project);
   const stage = project.castAndSets;
   const hasManualGuide = !productionReadiness(project).art.problems.length;
   if (!hasManualGuide && (!stage?.direction || !stage.artifactId)) {
@@ -157,6 +182,7 @@ export async function prepareProductionReview(id, options = {}) {
   // Merge against the latest draft while holding the write lock: a guide job
   // may finish while the operator is editing its text.
   await mutateProjectRecord(id, current => {
+    if (current.productionReview?.draft?.storyboardSource === 'document') return { project: current };
     const prior = current.productionReview?.draft || {};
     const draft = { lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [], ...prior,
       cast: prior.cast || describe(d.protagonist), environments: prior.environments || describe(d.sets),
@@ -166,7 +192,7 @@ export async function prepareProductionReview(id, options = {}) {
     return { project: { ...current, productionReview: { ...current.productionReview, draft } } };
   });
   project = await requireProject(id);
-  if (!productionReadiness(project).art.approved) return present(project);
+  if (project.productionReview?.draft?.storyboardSource === 'document' || !productionReadiness(project).art.approved) return present(project);
   if (!project.scenes?.length) {
     const { planProject } = await import('./planner.js');
     await planProject(id, { ...options, seedPrompts: true });
@@ -191,6 +217,7 @@ export async function prepareProductionReview(id, options = {}) {
   }
   const { project: planned } = await mutateProjectRecord(id, current => {
     const latest = current.productionReview.draft;
+    if (latest.storyboardSource === 'document') return { project: current };
     const storyboard = [...latest.storyboard, ...current.scenes.filter(scene => !latest.storyboard.some(shot => shot.sceneId === scene.sceneId)).map(scene => ({
       sceneId: scene.sceneId,
       lyricCueIds: (current.lyricCues || []).filter(c => c.startSec < scene.endSec && c.endSec > scene.startSec).map(c => c.id),

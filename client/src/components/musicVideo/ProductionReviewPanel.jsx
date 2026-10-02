@@ -23,7 +23,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
   const [endSec, setEndSec] = useState(project.productionReview?.proof?.endSec || Math.min(20, project.audioAnalysis?.durationSec || 20));
   const ready = review.readiness;
   const set = (key, value) => setLocal({ ...draft, [key]: value });
-  const shots = [...draft.storyboard, ...(project.scenes || []).filter(scene => !draft.storyboard.some(s => s.sceneId === scene.sceneId)).map(scene => ({
+  const documentShots = draft.storyboardSource === 'document';
+  const shots = documentShots ? draft.storyboard : [...draft.storyboard, ...(project.scenes || []).filter(scene => !draft.storyboard.some(s => s.sceneId === scene.sceneId)).map(scene => ({
     id: scene.sceneId, sceneId: scene.sceneId, lyricCueIds: [], action: '', staging: '', camera: '', transition: '',
   }))];
   const shotKey = shot => shot.id || shot.sceneId;
@@ -108,9 +109,26 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
               catch (error) { setImportError(error.message); }
             }} />
         </label>
+        {project.composition?.mode === 'document' && <div className="space-y-2 rounded border border-port-border p-2">
+          <p className="text-sm">Document shot manifest</p>
+          <p className="text-xs text-port-text-muted">Export the composition in Compose. Have its author extract the actual shot IDs, timings and choreography from the source (for example timeline.js) into the JSON format below, keeping its documentDirectory and audioBasis from when that source was authored. A generic document section or Board row is not a shot list. Reauthor and reimport the composition after changing lyrics or timing, then import its matching manifest here.</p>
+          <label htmlFor={fieldId('document-shots')} className="block text-sm">Import document shot manifest
+            <input id={fieldId('document-shots')} type="file" accept=".json,application/json" disabled={dirty || review.busy || !project.productionReview?.draft || !project.composition.document} className={fieldClass}
+              onChange={async e => {
+                const file = e.target.files?.[0]; e.target.value = ''; setImportError(null);
+                if (!file) return;
+                try {
+                  const input = JSON.parse(await file.text());
+                  if (await review.importDocumentShots(input)) setLocal(null);
+                } catch (error) { setImportError(error.message); }
+              }} />
+          </label>
+          <details><summary className="cursor-pointer py-2 text-sm">Shot manifest format</summary><pre className="overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify({ ...ready?.documentShotImport, sourceFile: 'timeline.js', shots: [{ id: 'source-shot-id', sceneId: null, startSec: 0, endSec: 10, lyricCueIds: [], action: 'Source action', staging: 'Source staging', camera: 'Source camera', transition: 'Source transition' }] }, null, 2)}</pre></details>
+          <p className="text-xs">{project.productionReview?.documentStoryboard ? `Bound source: ${project.productionReview.documentStoryboard.sourceFile}. Reimporting a document, changing audio or editing these shots requires a new matching manifest.` : 'No document shot manifest bound. Board scenes do not stand in for source shots.'}</p>
+        </div>}
         {importError && <p role="alert">{importError}</p>}
         {draft.sourceArtifactId && <button type="button" className={buttonClass} onClick={() => onOpenArtifact(draft.sourceArtifactId)}>Read preserved original planning draft</button>}
-        <button type="button" className={buttonClass} disabled={dirty || review.busy} onClick={review.prepare}>Prepare planning draft with autopilot</button>
+        <button type="button" className={buttonClass} disabled={dirty || review.busy || documentShots} onClick={review.prepare}>Prepare planning draft with autopilot</button>
         <p className="text-xs text-port-text-muted">Uses the saved authoring provider and allowed tools. Builds Cast & Sets first, then pauses for art approval before planning shots. Existing edits are retained.</p>
         <div className="grid gap-3 sm:grid-cols-2">
           {Object.entries({ cast: 'Cast guide', environments: 'Environment guide', visualLanguage: 'Visual language and mood board' }).map(([key, label]) =>
@@ -145,18 +163,26 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
           </select>
         </label>
         <label htmlFor={fieldId('alignment-notes')} className="block text-sm">Alignment notes / instrumental rationale<textarea id={fieldId('alignment-notes')} rows={2} value={draft.timingNotes} onChange={e => set('timingNotes', e.target.value)} className={fieldClass} /></label>
+        <label htmlFor={fieldId('storyboard-source')} className="block text-sm">Storyboard source
+          <select id={fieldId('storyboard-source')} value={draft.storyboardSource || 'board'} onChange={e => set('storyboardSource', e.target.value)} className={fieldClass}>
+            <option value="board">Board scenes</option><option value="document">Authored document shot manifest</option>
+          </select>
+        </label>
         {shots.map(shot => {
-          const scene = project.scenes?.find(s => s.sceneId === shot.sceneId);
+          const scene = documentShots ? shot : project.scenes?.find(s => s.sceneId === shot.sceneId);
           return <details key={shotKey(shot)} className="rounded border border-port-border p-2">
-            <summary className="cursor-pointer min-h-[44px] text-sm">{scene?.label || shot.id || 'Unbound shot'} — {scene ? 'edit choreography' : 'bind to a Board scene'}</summary>
-            <label htmlFor={fieldId(`scene-${shotKey(shot)}`)} className="block text-sm">Board scene
+            <summary className="cursor-pointer min-h-[44px] text-sm">{scene?.label || shot.id || 'Unbound shot'} — {documentShots ? 'document source shot' : scene ? 'edit choreography' : 'bind to a Board scene'}</summary>
+            {!documentShots && <label htmlFor={fieldId(`scene-${shotKey(shot)}`)} className="block text-sm">Board scene
               <select id={fieldId(`scene-${shotKey(shot)}`)} value={shot.sceneId || ''} onChange={e => setShot(shot, 'sceneId', e.target.value || null)} className={fieldClass}>
                 <option value="">Unbound draft — no scene selected</option>
                 {(project.scenes || []).map(s => <option key={s.sceneId} value={s.sceneId}>{s.label || s.sceneId}</option>)}
               </select>
-            </label>
-            {!scene && <button type="button" className={buttonClass} disabled={dirty || review.busy || !shot.id} onClick={() => review.bindShot(shot.id)}>Create Board scene from this draft shot</button>}
-            <p className="text-xs text-port-text-muted">{scene && Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) ? `Shot window ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)}. ` : ''}Review exact start/end in Board. Imported timings remain provisional.</p>
+            </label>}
+            {!documentShots && !scene && <button type="button" className={buttonClass} disabled={dirty || review.busy || !shot.id} onClick={() => review.bindShot(shot.id)}>Create Board scene from this draft shot</button>}
+            {documentShots ? <div className="flex flex-wrap gap-2">
+              {['startSec', 'endSec'].map(key => <label key={key} htmlFor={fieldId(`${shotKey(shot)}-${key}`)} className="text-sm">{key === 'startSec' ? 'Shot start (seconds)' : 'Shot end (seconds)'}<input id={fieldId(`${shotKey(shot)}-${key}`)} type="number" min="0" step="0.01" value={shot[key] ?? ''} onChange={e => setShot(shot, key, e.target.value === '' ? null : Number(e.target.value))} className={fieldClass} /></label>)}
+              <p className="text-xs text-port-text-muted">Planning edits do not rewrite source code. Reauthor or reimport in Compose, then import its matching shot manifest before approval.</p>
+            </div> : <p className="text-xs text-port-text-muted">{scene && Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) ? `Shot window ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)}. ` : ''}Review exact start/end in Board. Imported timings remain provisional.</p>}
             {['action', 'staging', 'camera', 'transition'].map(key => <label key={key} htmlFor={fieldId(`${shotKey(shot)}-${key}`)} className="block text-sm capitalize">{key}
               <textarea id={fieldId(`${shotKey(shot)}-${key}`)} rows={2} value={shot[key]} placeholder={({ action: 'At a beat or word: subject and prop action; pose, travel and energy change.', staging: 'Depth, blocking, prop trajectory and typography placement through the shot.', camera: 'Timed camera path, framing changes and motivated holds.', transition: 'Exact entry/exit anchor, visual handoff and escalation into the next section.' })[key]} onChange={e => setShot(shot, key, e.target.value)} className={fieldClass} />
             </label>)}

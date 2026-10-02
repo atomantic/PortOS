@@ -19,6 +19,12 @@ const source = p => {
 };
 export const productionAlignmentBasis = project => hash(source(project));
 
+/** A shot manifest belongs to one immutable authored document and one master timeline. */
+export const documentStoryboardBasis = project => hash({
+  document: project.composition?.document?.directory, source: source(project),
+  shots: project.productionReview?.draft?.storyboard,
+});
+
 export function productionReviewBasis(project) {
   const draft = project.productionReview?.draft || {};
   const art = hash({ projectId: project.id, mediaMode: project.mediaMode, authoringRenderer: project.composition?.authoringRenderer, mode: project.composition?.mode, policy: project.productionPolicy,
@@ -28,6 +34,8 @@ export function productionReviewBasis(project) {
     motionLanguage: draft.motionLanguage, implementationPlan: draft.implementationPlan, guide: artifactBasis(artifact(project, draft.guideArtifactId)) });
   const storyboard = hash({ art, source: source(project), lyricsMode: draft.lyricsMode,
     timingStatus: draft.timingStatus, timingNotes: draft.timingNotes, storyboard: draft.storyboard,
+    storyboardSource: draft.storyboardSource || 'board', documentStoryboard: project.productionReview?.documentStoryboard,
+    document: draft.storyboardSource === 'document' ? project.composition?.document : null,
     scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt }) =>
       ({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt })), treatment: project.treatment });
   const window = project.productionReview?.proof;
@@ -71,9 +79,18 @@ export function productionReadiness(project) {
       boardProblems.push('Every lyric line needs bounded, positive-duration word timings; repair zero-length or missing words.');
     }
   }
-  const scenes = project.scenes || [];
-  if (draft.storyboard?.some(shot => !shot.sceneId || !scenes.some(s => s.sceneId === shot.sceneId))) boardProblems.push('Bind every draft shot to a real Board scene.');
-  if (new Set((draft.storyboard || []).map(s => s.sceneId)).size !== draft.storyboard?.length) boardProblems.push('Each storyboard shot must bind to its own Board scene.');
+  const documentShots = draft.storyboardSource === 'document';
+  const scenes = documentShots ? (draft.storyboard || []).map(shot => ({ ...shot, sceneId: shot.id, label: shot.id })) : project.scenes || [];
+  if (documentShots) {
+    if (project.composition?.mode !== 'document' || !project.composition.document?.directory
+      || review.documentStoryboard?.basis !== documentStoryboardBasis(project)) {
+      boardProblems.push('Import a shot manifest from the current authored document and master audio. Reauthor or reimport after source, timing or shot changes.');
+    }
+    if (new Set(scenes.map(s => s.id)).size !== scenes.length || scenes.some(s => !text(s.id))) boardProblems.push('Document shots need unique source IDs.');
+  } else {
+    if (draft.storyboard?.some(shot => !shot.sceneId || !scenes.some(s => s.sceneId === shot.sceneId))) boardProblems.push('Bind every draft shot to a real Board scene.');
+    if (new Set((draft.storyboard || []).map(s => s.sceneId)).size !== draft.storyboard?.length) boardProblems.push('Each storyboard shot must bind to its own Board scene.');
+  }
   if (!scenes.length) boardProblems.push('Create a timed shot storyboard.');
   const timedScenes = scenes.filter(s => Number.isFinite(s.startSec) && s.endSec > s.startSec).sort((a, b) => a.startSec - b.startSec);
   if (timedScenes.length && (timedScenes[0].startSec > 1 / 24
@@ -82,7 +99,7 @@ export function productionReadiness(project) {
     boardProblems.push('Storyboard shots must cover the master without unintended gaps or overlaps.');
   }
   for (const scene of scenes) {
-    const shot = draft.storyboard?.find(s => s.sceneId === scene.sceneId);
+    const shot = documentShots ? scene : draft.storyboard?.find(s => s.sceneId === scene.sceneId);
     if (!(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec && scene.endSec <= duration)
       || !shot || ['action', 'staging', 'camera', 'transition'].some(key => !text(shot[key]))) {
       boardProblems.push(`Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`);
@@ -100,7 +117,7 @@ export function productionReadiness(project) {
     proofProblems.push('Render and watch a current animated chorus proof with the master song.');
   }
   const proofApproved = !proofProblems.length && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
-  return { basis, art: { approved: artApproved, problems: [...new Set(artProblems)] },
+  return { basis, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: productionAlignmentBasis(project) }, art: { approved: artApproved, problems: [...new Set(artProblems)] },
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)] },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null },
     readyForProduction: proofApproved };

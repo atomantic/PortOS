@@ -444,7 +444,7 @@ describe('musicVideo routes', () => {
       const r = await request(app).post('/api/music-video/mv-1/analyze');
       expect(r.status).toBe(200);
       expect(r.body.audioAnalysis).toEqual(analysis);
-      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis);
+      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis, { id: 'mv-1', trackId: 't1' });
     });
   });
 
@@ -480,7 +480,7 @@ describe('musicVideo routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.audioAnalysis).toEqual(analysis);
       expect(analyzeAudioFileManual).toHaveBeenCalledWith(expect.stringContaining('song.wav'), { bpm: 128, offsetSec: 0.25 });
-      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis);
+      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis, { id: 'mv-1', trackId: 't1' });
     });
 
     it('skips the ffmpeg decode and reuses cached sections/durationSec when a prior analysis exists', async () => {

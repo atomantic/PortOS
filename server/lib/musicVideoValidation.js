@@ -983,6 +983,7 @@ export const musicVideoProjectCloneSchema = z.object({
 
 // Review content is editable; approval records are server-owned and never PATCHable.
 export const musicVideoProductionDraftSchema = z.object({
+  storyboardSource: z.enum(['board', 'document']).optional(),
   cast: z.string().max(12000), environments: z.string().max(12000),
   visualLanguage: z.string().max(12000), motionLanguage: z.string().max(12000),
   implementationPlan: z.string().max(16000).optional(),
@@ -997,6 +998,20 @@ export const musicVideoProductionDraftSchema = z.object({
     camera: z.string().max(4000), transition: z.string().max(4000),
   }).strict()).max(2000),
 }).strict();
+export const musicVideoDocumentShotsSchema = z.object({
+  documentDirectory: z.string().min(1).max(500), audioBasis: z.string().min(1).max(128),
+  sourceFile: z.string().min(1).max(200),
+  shots: musicVideoProductionDraftSchema.shape.storyboard.min(1),
+}).strict().superRefine((value, ctx) => {
+  const ids = new Set();
+  for (const shot of value.shots) {
+    if (!shot.id?.trim() || ids.has(shot.id) || shot.sceneId != null
+      || !Number.isFinite(shot.startSec) || !(shot.endSec > shot.startSec)) {
+      ctx.addIssue({ code: 'custom', message: 'Document shots need unique source IDs, positive timing and no Board scene binding' });
+    }
+    ids.add(shot.id);
+  }
+});
 export const musicVideoProductionImportSchema = z.object({ source: z.string().min(2).max(250000) }).strict();
 export const musicVideoProductionApprovalSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),

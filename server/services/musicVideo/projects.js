@@ -191,8 +191,8 @@ export async function deleteProject(id) {
   return result;
 }
 
-export async function setProjectAnalysis(id, analysis) {
-  const next = await (await selectBackend()).setProjectAnalysis(id, analysis);
+export async function setProjectAnalysis(id, analysis, sourceProject) {
+  const next = await (await selectBackend()).setProjectAnalysis(id, analysis, sourceProject);
   emitRecordUpdated('musicVideoProject', id);
   return next;
 }
