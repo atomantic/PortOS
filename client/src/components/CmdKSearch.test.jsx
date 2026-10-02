@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -31,6 +32,7 @@ vi.mock('./ui/Toast', () => ({ default: toast }));
 
 import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 import CmdKSearch from './CmdKSearch.jsx';
+import Drawer from './Drawer.jsx';
 
 const NAV = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Home', aliases: [], keywords: [] },
@@ -351,6 +353,34 @@ describe('CmdKSearch dialog accessibility', () => {
     fireEvent.keyDown(input, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(opener).toHaveFocus();
+  });
+
+  it('closes only the palette on the first Escape when opened over a Drawer', async () => {
+    const user = userEvent.setup();
+    const Harness = () => {
+      const [open, setOpen] = useState(true);
+      return (
+        <MemoryRouter>
+          <Drawer open={open} onClose={() => setOpen(false)} title="Settings">
+            <button type="button">Drawer control</button>
+          </Drawer>
+          <CmdKSearch />
+        </MemoryRouter>
+      );
+    };
+    render(<Harness />);
+    const control = screen.getByRole('button', { name: 'Drawer control' });
+    control.focus();
+    await user.keyboard('{Meta>}k{/Meta}');
+    await screen.findByRole('dialog', { name: 'Command palette' });
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument());
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+    expect(control).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument());
   });
 
   it('opens when the shared command-palette event is dispatched', async () => {
