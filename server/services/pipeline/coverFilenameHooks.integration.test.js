@@ -57,14 +57,31 @@ const updateStageWithLatestMock = vi.fn(async (issueId, _stageId, computeFn) => 
   return issue;
 });
 
+// The real refreshSeriesCoverImage runs after each cover stamp, so the series
+// mock exposes the owned seasons and persists coverImage like the real store.
+const seasonsOf = (seriesId) => [...seasonStore.entries()]
+  .filter(([key]) => key.startsWith(`${seriesId}::`))
+  .map(([key, season]) => ({ id: key.split('::')[1], ...season }));
+
 vi.mock('./series.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
-  getSeries: vi.fn(async (id) => seriesStore.get(id) || null),
+  getSeries: vi.fn(async (id) => {
+    const series = seriesStore.get(id);
+    return series ? { ...series, seasons: seasonsOf(id) } : null;
+  }),
+  setSeriesCoverImage: vi.fn(async (id, coverImage) => {
+    const series = seriesStore.get(id);
+    if (!series) return null;
+    series.coverImage = coverImage;
+    return series;
+  }),
   updateSeasonOnSeries: updateSeasonOnSeriesMock,
 }));
 
 vi.mock('./issues.js', () => ({
   getIssue: vi.fn(async (id) => issuesStore.get(id) || null),
+  listIssues: vi.fn(async ({ seriesId } = {}) => [...issuesStore.values()]
+    .filter((i) => !i.deleted && (!seriesId || i.seriesId === seriesId))),
   updateStageWithLatest: updateStageWithLatestMock,
 }));
 
@@ -134,6 +151,7 @@ describe('seasonCoverFilenameHook — universe collection auto-file', () => {
 
     await drainHooks();
     expect(await refsIn(universeId)).toEqual(['cover-final.png']);
+    expect(seriesStore.get(seriesId).coverImage).toBe('cover-final.png');
   });
 
   it('does NOT file when the slot jobId no longer matches (stale render lands after a re-render)', async () => {
@@ -232,6 +250,7 @@ describe('comicPagesFilenameHook — universe collection auto-file', () => {
 
     await drainHooks();
     expect(await refsIn(universeId)).toEqual(['issue-cover.png']);
+    expect(seriesStore.get(seriesId).coverImage).toBe('issue-cover.png');
   });
 
   it('files the issue back-cover on completion (separate target from cover)', async () => {
@@ -239,12 +258,13 @@ describe('comicPagesFilenameHook — universe collection auto-file', () => {
     const seriesId = 'ser-comic-2';
     const issueId = 'iss-2';
     universeStore.set(universeId, { id: universeId, name: 'Baz' });
-    seriesStore.set(seriesId, { id: seriesId, universeId });
+    seriesStore.set(seriesId, { id: seriesId, universeId, coverImage: 'issue-front.png' });
     issuesStore.set(issueId, {
       id: issueId,
       seriesId,
       stages: {
         comicPages: {
+          cover: { proofImage: { jobId: 'job-front', filename: 'issue-front.png' } },
           backCover: { proofImage: { jobId: 'job-back-active' } },
         },
       },
@@ -259,6 +279,8 @@ describe('comicPagesFilenameHook — universe collection auto-file', () => {
 
     await drainHooks();
     expect(await refsIn(universeId)).toEqual(['issue-back.png']);
+    // Back covers never replace the front-cover thumbnail.
+    expect(seriesStore.get(seriesId).coverImage).toBe('issue-front.png');
   });
 
   it('reset waits for a held post-stamp collection filing before teardown can proceed', async () => {
