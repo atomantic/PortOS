@@ -4,6 +4,7 @@ import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, Archi
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { isStandardizable, NON_PM2_TYPES, isLaunchVideoDisabled } from '../constants';
+import { PORTOS_APP_ID } from '../../../lib/appIdentity.js';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
 import Banner from '../../ui/Banner';
@@ -143,7 +144,7 @@ export default function OverviewTab({ app, onRefresh }) {
     }
   };
 
-  const showLaunchVideoCard = !isLaunchVideoDisabled(app) && !launchVideoCardDismissed;
+  const showLaunchVideoCard = app.id !== PORTOS_APP_ID && !isLaunchVideoDisabled(app) && !launchVideoCardDismissed;
 
   return (
     <div className="space-y-6">

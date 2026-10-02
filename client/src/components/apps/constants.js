@@ -166,10 +166,9 @@ export const isAppFeatureEnabled = (app, featureId, globalEnabled) => {
   return legacy ?? (globalEnabled !== false);
 };
 
-/** Whether launch videos are disabled for an app (PortOS baseline app or Eidoverse Worlds app). */
+/** Whether launch videos are disabled for an Eidoverse Worlds app. */
 export const isLaunchVideoDisabled = (app) => {
   if (!app) return false;
-  if (app.id === PORTOS_APP_ID) return true;
   if (app.id === 'eidoverse-worlds' || app.id === 'eidoverse') return true;
   if (Array.isArray(app.pm2ProcessNames) && app.pm2ProcessNames.includes('eidoverse-worlds')) return true;
   return false;
