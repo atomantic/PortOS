@@ -82,7 +82,7 @@
  */
 
 import { join } from 'path';
-import { readdir, lstat, rm } from 'fs/promises';
+import { readdir, rm } from 'fs/promises';
 import { atomicWrite, readJSONFile, readJSONFileStrict, unreadableStoreError, ensureDir } from './fileUtils.js';
 import { createFileWriteQueue, createRecordWriteQueue } from './fileWriteQueue.js';
 import { isPlainObject, POLLUTING_KEYS } from './objects.js';
@@ -243,27 +243,18 @@ export function createCollectionStore({
    * anything that doesn't match `idPattern` or isn't a directory.
    */
   async function listIds() {
-    const entries = await readdir(dir).catch((err) => {
+    const entries = await readdir(dir, { withFileTypes: true }).catch((err) => {
       if (err?.code === 'ENOENT') return null;
       throw err;
     });
     if (entries === null) return [...knownIds].filter(isValidId);
-    const candidates = entries.filter((name) =>
-      name !== 'index.json'
-      && !name.startsWith('.')
-      && isValidId(name)
-    );
-    // lstat (not stat) so symlinks are NOT followed — a symlink whose target
-    // is a directory would otherwise be accepted as a valid record dir, with
-    // future deleteOne calls rm-rf'ing the symlink AND its target's contents.
-    // PortOS is single-user/Tailscale-private so this is defense-in-depth
-    // rather than a real attack vector, but it closes the foot-gun where a
-    // user symlinks a record dir to external storage. lstat rejects the
-    // symlink as non-directory; legitimate same-volume directories pass.
-    const stats = await Promise.all(candidates.map((name) =>
-      lstat(join(dir, name)).then((s) => (s.isDirectory() ? name : null), () => null)
-    ));
-    return stats.filter(Boolean);
+    // Dirent types exclude symlinks without an explicit lstat per record.
+    return entries.filter((entry) =>
+      entry.name !== 'index.json'
+      && !entry.name.startsWith('.')
+      && isValidId(entry.name)
+      && entry.isDirectory()
+    ).map((entry) => entry.name);
   }
 
   /**
