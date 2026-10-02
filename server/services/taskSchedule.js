@@ -20,6 +20,7 @@
  */
 
 import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
+import { randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
 import { TASK_READINESS_REASON } from '../lib/taskReadinessReasons.js';
@@ -1208,7 +1209,7 @@ export async function triggerOnDemandTask(taskType, appId = null, {
     }
 
     const request = {
-      id: `demand-${Date.now().toString(36)}`,
+      id: `demand-${randomUUID()}`,
       taskType,
       appId,
       origin,
