@@ -14,6 +14,9 @@ import { BLENDER_DRIVER } from './blenderDriver.js';
 
 const fail = message => new ServerError(message, { status: 422, code: 'CODE_ANIMATION_BLENDER_RENDER_FAILED' });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+// A measured full 1080p EEVEE Next/Metal pilot peaked near 9.7 GiB resident, over the 8 GiB worker default
+// (CPU Cycles stays under it), so only the GPU engine gets headroom; the watchdog still applies.
+const GPU_ENGINE_LIMITS = { BLENDER_EEVEE_NEXT: { memoryBytes: 16 * 1024 ** 3 } };
 const frameName = frame => `frame-${String(frame).padStart(6, '0')}.png`;
 
 /** Validate every image and persist the baked scene, report and real sequence. */
@@ -48,7 +51,7 @@ export async function renderBlenderSequence({ revision, runtime, projectId, runI
     tool: { executable: checked.executable, argv: entry => ['--background', '--factory-startup', '--disable-autoexec', '--threads', '2', '--python-exit-code', '1', '--python', entry] },
     workspaceRoot: join(PATHS.data, 'code-animation-workspaces'), entrypoint: 'portos-driver.py', signal,
     files: [...revision.files, { path: 'portos-driver.py', content: BLENDER_DRIVER }, { path: 'portos-render.json', content: JSON.stringify(config) }],
-    limits: { wallSeconds: Math.max(1, Math.min(86400, Math.ceil(wallSeconds))), diskBytes: Math.max(1024, diskBytes) },
+    limits: { wallSeconds: Math.max(1, Math.min(86400, Math.ceil(wallSeconds))), diskBytes: Math.max(1024, diskBytes), ...GPU_ENGINE_LIMITS[config.engine] },
     onOutput: async (directory, outputs) => {
       signal?.throwIfAborted();
       const metadata = outputs.find(file => file.path === 'report.json');

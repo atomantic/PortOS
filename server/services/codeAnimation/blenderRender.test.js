@@ -48,6 +48,16 @@ describe('Blender production artifact boundary', () => {
     expect(reserve).toHaveBeenCalledTimes(3);
     expect(worker.mock.calls[0][0].files.find(file => file.path === 'scene.py').content).toBe(options.revision.files[0].content);
   });
+  it('gives only the GPU engine memory headroom over the worker default', async () => {
+    const cycles = await fixture();
+    await renderBlenderSequence(cycles.options, cycles.deps);
+    expect(cycles.worker.mock.calls[0][0].limits).not.toHaveProperty('memoryBytes');
+    const eevee = await fixture({ report: { engine: 'BLENDER_EEVEE_NEXT', device: 'GPU', backend: 'METAL' } });
+    const gpu = { ...provenance, engine: 'BLENDER_EEVEE_NEXT', device: 'GPU', backend: 'METAL' };
+    eevee.deps.resolveRuntime.mockResolvedValue({ executable: '/example/Blender', worker: eevee.worker, provenance: gpu });
+    await renderBlenderSequence({ ...eevee.options, runtime: gpu }, eevee.deps);
+    expect(eevee.worker.mock.calls[0][0].limits.memoryBytes).toBe(16 * 1024 ** 3);
+  });
   it.each([
     ['missing frame', { missing: 'frame-000001.png' }], ['corrupt image', { corrupt: true }],
     ['wrong runtime', { report: { version: '4.3.0' } }], ['failed worker', { failed: true }],
