@@ -1,3 +1,6 @@
+import { execFileSync } from '../../lib/childProcess.js';
+import { existsSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 
 // These owned browsers render on explicit seek(t), not wall/display time.
@@ -14,12 +17,47 @@ export function _testChromeCaptureArgs(profile) {
   ];
 }
 
+// First existing candidate wins, as before, but the winner's source is an enum
+// that startup diagnostics can report without printing any path.
+export function _selectTestChrome(candidates) {
+  return candidates.find(({ path }) => path && existsSync(path));
+}
+
+function executableKind(executable) {
+  const name = basename(executable).toLowerCase();
+  if (name.includes('headless_shell') || name.includes('headless-shell')) return 'headless-shell';
+  if (name.includes('google chrome') || name.includes('google-chrome')) return 'google-chrome';
+  if (name.includes('chromium')) return 'chromium';
+  return name === 'chrome' ? 'chrome' : 'other';
+}
+
+// Redacted facts that separate "wrapper never reached Chrome" from "Chrome ran
+// but never published CDP": enums, booleans and a dotted version only, never
+// paths or process output. --version is bounded so a hung wrapper is itself
+// reported (version=unavailable) instead of stalling the diagnostic.
+export function _describeTestChromeStartup(proc, { source = 'unknown', executable, profile } = {}) {
+  let version = 'unavailable';
+  if (executable) {
+    try {
+      const out = execFileSync(executable, ['--version'], { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+      version = out.match(/\b\d+(?:\.\d+){1,3}\b/)?.[0] ?? 'unrecognized';
+    } catch { /* hung, crashed or missing: keep 'unavailable' */ }
+  }
+  const state = proc.exitCode !== null ? 'exited' : proc.signalCode !== null ? 'signaled' : 'running';
+  const port = profile ? existsSync(join(profile, 'DevToolsActivePort')) : 'unknown';
+  return `source=${source} kind=${executable ? executableKind(executable) : 'unknown'} version=${version}`
+    + ` spawned=${proc.spawnedSeen ? 'yes' : 'no'} pid=${proc.pid ? 'yes' : 'no'} state=${state}`
+    + ` profile=${profile ? (existsSync(profile) ? 'created' : 'missing') : 'unknown'} devToolsActivePort=${port}`;
+}
+
 // Chrome writes its CDP address to stderr. Keep only a bounded tail and report
 // known failure categories: raw stderr can contain the user's profile path.
-export function _waitForTestChrome(proc, timeoutMs = 20000) {
+export function _waitForTestChrome(proc, timeoutMs = 20000, startup) {
   return new Promise((resolve, reject) => {
     let stderr = '';
     let timer;
+    let spawned = false;
+    const onSpawn = () => { spawned = true; };
     const diagnostic = () => {
       const categories = [
         ['sandbox', /sandbox/i],
@@ -29,10 +67,14 @@ export function _waitForTestChrome(proc, timeoutMs = 20000) {
         ['disk full', /no space left|ENOSPC/i],
         ['crashpad', /crashpad/i],
       ].filter(([, pattern]) => pattern.test(stderr)).map(([name]) => name);
-      return categories.length ? `; stderr: ${categories.join(', ')}` : stderr ? '; Chrome emitted stderr' : '; no stderr';
+      const base = categories.length ? `; stderr: ${categories.join(', ')}` : stderr ? '; Chrome emitted stderr' : '; no stderr';
+      if (!startup) return base;
+      proc.spawnedSeen = spawned;
+      return `${base}; startup: ${_describeTestChromeStartup(proc, startup)}`;
     };
     const cleanup = () => {
       clearTimeout(timer);
+      proc.removeListener('spawn', onSpawn);
       proc.removeListener('error', onError);
       proc.removeListener('exit', onExit);
       proc.stderr.removeListener('data', onData);
@@ -55,6 +97,7 @@ export function _waitForTestChrome(proc, timeoutMs = 20000) {
     const onExit = (code, signal) => finish(null, new Error(
       `Test Chrome exited before startup (code ${Number.isInteger(code) ? code : 'none'}, signal ${/^[A-Z0-9]{1,32}$/.test(signal) ? signal : 'none'}${diagnostic()})`,
     ));
+    proc.once('spawn', onSpawn);
     proc.once('error', onError);
     proc.once('exit', onExit);
     proc.stderr.on('data', onData);

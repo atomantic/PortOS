@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _cleanupTestBrowser, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
@@ -24,6 +27,7 @@ function startingChild() {
 }
 
 function expectStartupClean(proc) {
+  expect(proc.listenerCount('spawn')).toBe(0);
   expect(proc.listenerCount('error')).toBe(0);
   expect(proc.listenerCount('exit')).toBe(0);
   expect(proc.stderr.listenerCount('data')).toBe(0);
@@ -63,6 +67,22 @@ describe('test Chrome startup', () => {
     await expect(ready).rejects.toThrow('failed to spawn (ENOENT; no stderr)');
     await expect(ready).rejects.not.toThrow('example-secret');
     expectStartupClean(proc);
+  });
+
+  it('reports redacted startup facts on a silent timeout without paths or output', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'example-secret-'));
+    const proc = startingChild();
+    proc.pid = 123;
+    const ready = _waitForTestChrome(proc, 20000, { source: 'playwright', executable: join(root, 'missing', 'chrome-headless-shell'), profile: join(root, 'profile') });
+    const rejected = expect(ready).rejects.toThrow(
+      'no stderr; startup: source=playwright kind=headless-shell version=unavailable spawned=yes pid=yes state=running profile=missing devToolsActivePort=false',
+    );
+    proc.emit('spawn');
+    await vi.advanceTimersByTimeAsync(20000);
+    await rejected;
+    await expect(ready).rejects.not.toThrow('example-secret');
+    expectStartupClean(proc);
+    rmSync(root, { recursive: true });
   });
 
   it('keeps the startup deadline and clears listeners on timeout', async () => {
