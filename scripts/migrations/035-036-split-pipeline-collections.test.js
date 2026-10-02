@@ -101,7 +101,7 @@ describe.each(cases)('migration split pipeline $name', (cfg) => {
     expect(existsSync(join(typeDir, cfg.otherId, 'index.json'))).toBe(true);
   });
 
-  it('skips invalid ids and reports unreadable legacy files', async () => {
+  it('skips invalid ids and rejects unreadable legacy files', async () => {
     writeJson(legacyPath, { [cfg.key]: [{ id: cfg.validId }, { id: cfg.invalidId }, null] });
     const split = await cfg.migration.up({ rootDir });
     expect(split.written).toBe(1);
@@ -110,7 +110,6 @@ describe.each(cases)('migration split pipeline $name', (cfg) => {
     rmSync(rootDir, { recursive: true, force: true });
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(legacyPath, 'not json');
-    const unreadable = await cfg.migration.up({ rootDir });
-    expect(unreadable).toEqual({ ok: false, reason: 'unreadable' });
+    await expect(cfg.migration.up({ rootDir })).rejects.toThrow(/unreadable/);
   });
 });
