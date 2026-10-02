@@ -57,6 +57,7 @@ const short = (id) => String(id).slice(0, 8);
 const defaults = {
   createProject: async (input) => (await import('./projects.js')).createProject(input),
   updateProject: async (id, patch) => (await import('./projects.js')).updateProject(id, patch),
+  resolveLlm: async (pin) => (await import('./llmRoute.js')).resolveMusicVideoLlm(pin),
   draftCreativeBrief: async (args) => (await import('./autonomousBrief.js')).draftCreativeBrief(args),
   writeLyrics: async (args) => (await import('../musicDesigner.js')).writeLyrics(args),
   createMoodBoard: async (spec) => (await import('./autonomousBoard.js')).createAutonomousMoodBoard(spec),
@@ -122,7 +123,22 @@ const stagePatch = (run, stage, patch) => ({ stages: { [stage]: { ...run.stages[
 // Each returns `{ output }` (merged into run.output) or `{ output, wait: true }`
 // when the stage's completion arrives later (production).
 
-const llmOf = (run) => ({ providerId: run.brief.llm?.providerId, model: run.brief.llm?.model || undefined });
+/**
+ * The direction LLM for a run's text stages, resolved once per stage: the run's
+ * pin, else an eligible TUI provider, else the active one (llmRoute.js). The
+ * resolved route rides along (`route`) so the stage can record it on the run;
+ * a failed registry read degrades to the plain pin rather than failing the stage.
+ */
+async function llmOf(run) {
+  const pin = { providerId: run.brief.llm?.providerId, model: run.brief.llm?.model || undefined, effort: run.brief.llm?.effort || undefined };
+  const resolved = await deps.resolveLlm(pin).catch((err) => {
+    console.warn(`⚠️ Autonomous music video: LLM route resolution failed: ${err.message}`);
+    return null;
+  });
+  const route = resolved?.route;
+  if (!route) return { ...pin, route: null };
+  return { providerId: route.providerId, model: route.model || undefined, effort: route.effort || undefined, route };
+}
 
 /**
  * The local song source: the track is created first (its id is stored at once),
@@ -159,20 +175,22 @@ async function localSong({ project, run, save }) {
 
 const STAGES = {
   async brief({ project, run }) {
+    const { route, ...llm } = await llmOf(run);
     const { brief } = await deps.draftCreativeBrief({
-      prompt: run.brief.prompt, guidance: run.brief.guidance, instrumental: run.brief.instrumental, ...llmOf(run),
+      prompt: run.brief.prompt, guidance: run.brief.guidance, instrumental: run.brief.instrumental, ...llm,
     });
     // A blank project name from the prompt gives way to the song title.
     if (!run.brief.name) await deps.updateProject(project.id, { name: trimTo(brief.title, 200) });
-    return { output: brief };
+    return { output: { ...brief, ...(route ? { briefRoute: route } : {}) } };
   },
 
   async lyrics({ run }) {
     if (run.brief.instrumental) return { output: { lyrics: '' } };
+    const { route, ...llm } = await llmOf(run);
     const { lyrics } = await deps.writeLyrics({
-      description: run.output.musicalDescription, guidance: run.brief.guidance || undefined, ...llmOf(run),
+      description: run.output.musicalDescription, guidance: run.brief.guidance || undefined, ...llm,
     });
-    return { output: { lyrics } };
+    return { output: { lyrics, ...(route ? { lyricsRoute: route } : {}) } };
   },
 
   async style({ project, run }) {
@@ -239,8 +257,10 @@ const STAGES = {
     const medium = autonomousMedium(run.brief.tools);
     if (medium === 'code') {
       await deps.updateProject(project.id, { composition: { mode: 'code' } });
-      const authoring = run.brief.authoring || (run.brief.llm ? { providerId: run.brief.llm.providerId, model: run.brief.llm.model } : {});
-      await deps.generateCode(project.id, { providerId: authoring.providerId, model: authoring.model || undefined });
+      const authoring = run.brief.authoring || (run.brief.llm ? { providerId: run.brief.llm.providerId, model: run.brief.llm.model, effort: run.brief.llm.effort } : {});
+      await deps.generateCode(project.id, {
+        providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}),
+      });
       const render = await deps.renderVideo(project.id);
       return { output: { renderJobId: render?.jobId || null } };
     }
@@ -341,6 +361,8 @@ export async function startAutonomousVideo(input) {
       guidance: brief.guidance,
       budgetUsd: brief.budgetUsd,
       checkins: { castAndSets: brief.checkpoints.includes('cast') ? 'review' : 'auto' },
+      // The run's LLM pin also steers the stages production starts later (Cast & Sets, shot planning).
+      ...(brief.llm ? { llm: brief.llm } : {}),
     },
   });
   const run = {

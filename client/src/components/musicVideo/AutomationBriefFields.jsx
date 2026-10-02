@@ -1,10 +1,11 @@
 import ToggleChip from '../ui/ToggleChip.jsx';
+import MusicVideoLlmPicker from './MusicVideoLlmPicker.jsx';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideoAutomation.js';
 
 const GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
-/** Tool picker + guidance + budget for an automation-first music video. */
+/** Tool picker + guidance + direction LLM + budget for an automation-first music video. */
 export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
   const picked = new Set(draft.tools);
   const allPicked = picked.size === MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length;
@@ -57,6 +58,7 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
           className={inputClass}
         />
       </div>
+      <MusicVideoLlmPicker idPrefix={idPrefix} value={draft.llm} onChange={(llm) => onChange({ llm })} />
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),18rem))] gap-3">
       <div>
         <label htmlFor={`${idPrefix}-checkin`} className="block text-xs text-port-text-muted mb-1">Cast &amp; Sets check-in</label>

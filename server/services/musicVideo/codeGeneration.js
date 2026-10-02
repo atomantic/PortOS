@@ -14,6 +14,8 @@ import { universeStyleLines } from '../../lib/styleSourcePrompt.js';
 import { buildMusicVideoCodePrompt, extractCodeSections } from '../codeAnimation/prompt.js';
 import { normalizeComposition } from './composition.js';
 import { getProject, mutateProjectRecord } from './projects.js';
+import { musicVideoLlmRouteLabel } from '../../lib/musicVideoAutomation.js';
+import { effortArg, resolveMusicVideoLlm } from './llmRoute.js';
 import { buildCodeTimeline, buildSongDocument, paletteFromProject } from './codeTimeline.js';
 
 export async function styleLinesFor(project) {
@@ -42,20 +44,26 @@ function acceptSources(parsed, ids) {
   return accepted;
 }
 
-export async function runModel({ providerId, model, prompt, source = 'music-video-code', beforeSubmit = null }) {
-  const { assertProvider, resolveProviderAndModel, runPromptThroughProvider } = await import('../promptRunner.js');
-  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
+/**
+ * Run one code-authoring prompt. The provider resolves through llmRoute.js —
+ * request pin > the brief's saved LLM (`automation`) > an eligible TUI provider
+ * > the active one — and `effort` rides the run when the provider has one.
+ */
+export async function runModel({ providerId, model, effort, automation = null, prompt, source = 'music-video-code', beforeSubmit = null }) {
+  const { assertProvider, runPromptThroughProvider } = await import('../promptRunner.js');
+  const { provider, selectedModel, route } = await resolveMusicVideoLlm({ providerId, model, effort, automation });
   assertProvider(provider, { message: 'No AI provider available to write the code video', code: 'PROVIDER_UNAVAILABLE', status: 400 });
-  console.log(`🎬 Music-video code generation on ${provider.id}/${selectedModel || 'default'}`);
+  console.log(`🎬 Music-video code generation on ${musicVideoLlmRouteLabel(route)}`);
   const { text } = await runPromptThroughProvider({
     provider,
     model: selectedModel || undefined,
+    ...effortArg(route),
     prompt,
     source,
     cwd: PATHS.data,
     ...(beforeSubmit ? { allowFallback: false, toolFree: true, beforeExecute: beforeSubmit } : {}),
   });
-  return { text, providerId: provider.id, model: selectedModel || null };
+  return { text, providerId: provider.id, model: selectedModel || null, route };
 }
 
 function storeCodeVideo(project, { providerId, model, sections, timelineIds }) {
@@ -87,7 +95,7 @@ async function writeComposition(projectId, run, sections, timelineIds) {
  * Generate every section. Replaces stored functions for the sections the
  * model returned; a section it omitted keeps its previous function.
  */
-export async function generateMusicVideoCode(projectId, { providerId, model } = {}) {
+export async function generateMusicVideoCode(projectId, { providerId, model, effort } = {}) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const timeline = buildCodeTimeline(project);
@@ -102,7 +110,7 @@ export async function generateMusicVideoCode(projectId, { providerId, model } = 
     song,
     styleLines: await styleLinesFor(project),
   });
-  const run = await runModel({ providerId, model, prompt });
+  const run = await runModel({ providerId, model, effort, automation: project.automation, prompt });
   const parsed = extractCodeSections(run.text);
   const sections = acceptSources(parsed, timeline.sections.map((section) => section.id));
   if (!sections.length) {
@@ -114,7 +122,7 @@ export async function generateMusicVideoCode(projectId, { providerId, model } = 
 }
 
 /** Replace one section function. Every other stored function stays. */
-export async function regenerateMusicVideoCodeSection(projectId, sectionId, { providerId, model } = {}) {
+export async function regenerateMusicVideoCodeSection(projectId, sectionId, { providerId, model, effort } = {}) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const timeline = buildCodeTimeline(project);
@@ -129,7 +137,7 @@ export async function regenerateMusicVideoCodeSection(projectId, sectionId, { pr
     styleLines: await styleLinesFor(project),
     onlySectionId: sectionId,
   });
-  const run = await runModel({ providerId, model, prompt });
+  const run = await runModel({ providerId, model, effort, automation: project.automation, prompt });
   const sections = acceptSources(extractCodeSections(run.text), [sectionId]);
   if (!sections.length) {
     throw new ServerError('The model did not return that section', { status: 422, code: 'NO_SECTION_SOURCE' });

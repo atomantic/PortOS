@@ -8,7 +8,7 @@ import ToggleChip from '../ui/ToggleChip.jsx';
 import MediumPlanSummary from './MediumPlanSummary.jsx';
 import { codeFirstProductionAssets } from '../../../../server/lib/musicVideoMediumPlan.js';
 import {
-  DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft,
+  DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft, llmRouteLabel,
 } from '../../lib/musicVideoAutomation.js';
 import { RESUMABLE_RUN_STATUSES, currentProductionRun } from '../../lib/musicVideoStages.js';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
@@ -33,6 +33,12 @@ const toolLabel = new Map(POOL_TOOLS.map((t) => [t.id, t.label]));
 const briefToolLabel = new Map(MUSIC_VIDEO_AUTOMATION_TOOLS.map((t) => [t.id, t.label]));
 const actionClass = 'text-sm text-port-accent min-h-[44px] sm:min-h-0 px-1';
 const routeLabel = (route) => `${toolLabel.get(`${route.kind}:${route.mode}`) || `${route.kind} ${route.mode}`}${route.model ? ` · ${route.model}` : ''}`;
+
+// Code authoring runs one-shot and tool-free (server: isToolFreeOneShotProvider), which a
+// TUI provider never is — offering one here only sets up a refusal at Start.
+const AUTHORING_PROVIDERS = (provider) => provider.enabled !== false && provider.type !== 'tui';
+
+const ROUTE_LABELS = [['plan', 'Shot planning'], ['castAndSets', 'Cast & Sets direction']];
 
 const initialPool = (project) => {
   const fromBrief = (project?.automation?.tools || []).filter((id) => POOL_TOOL_IDS.has(id));
@@ -75,7 +81,7 @@ function RunView({ run, production, codeFirst, project }) {
         </span>
       </div>
       {run.directive && <p className="text-port-text-muted break-words">Directive: {run.directive}</p>}
-      {run.authoring && <p className="text-port-text-muted">Authoring: {run.authoring.providerId} · {run.authoring.model} · {run.authoring.costUsd == null ? 'unknown dollar cost (generation count still bounded)' : 'no per-call dollar charge; local compute or quota may apply'}</p>}
+      {run.authoring && <p className="text-port-text-muted">Authoring: {run.authoring.providerId} · {run.authoring.model}{run.authoring.effort ? ` · ${run.authoring.effort}` : ''} · {run.authoring.costUsd == null ? 'unknown dollar cost (generation count still bounded)' : 'no per-call dollar charge; local compute or quota may apply'}</p>}
       {steps.some((step) => step.kind === 'plate') && <p className="text-port-text-muted">Plate preflight calls consume the generation limit. {steps.some((step) => step.kind === 'plate' && step.costUsd == null) ? 'Their dollar cost is unpriced; use a free vision API reviewer for dollar-capped runs.' : 'Their reserved dollar cost is included in the run total.'}</p>}
       {run.authoring && <p className="text-port-text-muted">{['author', 'frame', 'clip'].map((kind) => {
         const used = steps.filter((step) => step.kind === kind && step.status !== 'refused');
@@ -152,7 +158,8 @@ function RunView({ run, production, codeFirst, project }) {
 
 function StartForm({ project, production }) {
   const assets = codeFirstProductionAssets(project);
-  const author = useProviderModels({ allowDefault: false, silent: true });
+  const author = useProviderModels({ allowDefault: false, silent: true, withEffort: true, filter: AUTHORING_PROVIDERS });
+  const [authorEffort, setAuthorEffort] = useState('');
   const [pool, setPool] = useState(() => initialPool(project));
   const [directive, setDirective] = useState('');
   const [maxGenerations, setMaxGenerations] = useState(12);
@@ -179,7 +186,7 @@ function StartForm({ project, production }) {
       const [kind, mode] = t.id.split(':');
       return { kind, mode };
     }),
-    ...(assets ? { authoring: { providerId: author.selectedProviderId, model: author.selectedModel } } : {}),
+    ...(assets ? { authoring: { providerId: author.selectedProviderId, model: author.selectedModel, ...(authorEffort ? { effort: authorEffort } : {}) } } : {}),
     limits: { maxGenerations, maxReviewAttempts, ...(capValue != null ? { spendCapUsd: capValue } : {}) },
     ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
     ...(selectedModel ? { model: selectedModel } : {}),
@@ -234,8 +241,10 @@ function StartForm({ project, production }) {
           selectedProviderId={author.selectedProviderId}
           selectedModel={author.selectedModel}
           availableModels={author.availableModels}
-          onProviderChange={author.setSelectedProviderId}
+          onProviderChange={(id) => { author.setSelectedProviderId(id); setAuthorEffort(''); }}
           onModelChange={author.setSelectedModel}
+          effort={authorEffort}
+          onEffortChange={setAuthorEffort}
           label="Code authoring"
           disabled={production.busy}
           modelDisabled={author.availableModels.length === 0}
@@ -273,7 +282,10 @@ function BriefSection({ project, onSave, onKickoff, kickoffBusy, kickoffStep, ki
 
   const save = () => {
     setSaving(true);
-    onSave(automationFromDraft(draft))
+    const payload = automationFromDraft(draft);
+    // Back to Auto clears the saved pin explicitly: an absent key keeps it server-side.
+    if (!payload.llm && automation?.llm) payload.llm = null;
+    onSave(payload)
       .then(() => setDraft(null))
       // A failed save keeps the brief open for another try.
       .catch(() => {})
@@ -328,6 +340,15 @@ function BriefSection({ project, onSave, onKickoff, kickoffBusy, kickoffStep, ki
         <p className="text-xs text-port-text-muted break-words line-clamp-3">
           {automation.guidance || 'No guidance yet — the agent plans from the song, universe and board alone.'}
         </p>
+        <p className="text-xs text-port-text-muted break-words">
+          Direction LLM: {automation.llm?.providerId ? llmRouteLabel(automation.llm) : 'Auto — a TUI provider when one is eligible'}
+        </p>
+        {ROUTE_LABELS.map(([stage, label]) => automation.routes?.[stage] && (
+          <p key={stage} className="text-xs text-port-text-muted break-words">
+            {label} ran on {llmRouteLabel(automation.routes[stage])}
+            {automation.routes[stage].requestedProviderId ? ` — replaced the unavailable ${automation.routes[stage].requestedProviderId}` : ''}
+          </p>
+        ))}
         {kickoffStep && <p className="text-xs text-port-accent" role="status">{kickoffStep}</p>}
         {kickoffBlockedReason && <p className="text-xs text-port-warning">{kickoffBlockedReason}</p>}
       </>

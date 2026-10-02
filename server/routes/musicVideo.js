@@ -324,8 +324,8 @@ router.post('/:id/analyze/manual', asyncHandler(async (req, res) => {
 // a missing provider or parse failure degrades to plain scenes rather than
 // failing the request (see `promptsSeeded`/`promptsSkippedReason` in the body).
 router.post('/:id/plan', asyncHandler(async (req, res) => {
-  const { seedPrompts, providerId, model } = validateRequest(musicVideoPlanRequestSchema, req.body || {});
-  const result = await planProject(req.params.id, { seedPrompts, providerId, model });
+  const { seedPrompts, providerId, model, effort } = validateRequest(musicVideoPlanRequestSchema, req.body || {});
+  const result = await planProject(req.params.id, { seedPrompts, providerId, model, effort });
   res.json(result);
 }));
 

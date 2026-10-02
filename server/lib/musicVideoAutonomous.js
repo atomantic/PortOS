@@ -26,7 +26,7 @@
  * the run is fully unattended.
  */
 
-import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from './musicVideoAutomation.js';
+import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS, normalizeMusicVideoEffort, normalizeMusicVideoLlm } from './musicVideoAutomation.js';
 import { isStr, trimTo } from './textUtils.js';
 
 export const AUTONOMOUS_STAGES = Object.freeze([
@@ -108,10 +108,12 @@ function normalizeAutonomousSettings(raw = {}) {
   }
   const checkpoints = AUTONOMOUS_CHECKPOINT_IDS.filter((id) => Array.isArray(raw.checkpoints) && raw.checkpoints.includes(id));
   const budget = Number(raw.budgetUsd);
-  const llmProvider = clean(raw.providerId, 200);
-  const llmModel = clean(raw.model, 200);
+  // The direction LLM is a top-level providerId/model/effort on a start request but a
+  // nested `llm` on a stored brief or the scheduled task's params (#9545 added effort).
+  const llm = normalizeMusicVideoLlm(raw.providerId ? raw : raw.llm);
   const authoringProvider = clean(raw.authoring?.providerId, 200);
   const authoringModel = clean(raw.authoring?.model, 200);
+  const authoringEffort = normalizeMusicVideoEffort(raw.authoring?.effort);
   return {
     songSource: AUTONOMOUS_SONG_SOURCES.includes(raw.songSource) ? raw.songSource : AUTONOMOUS_SONG_SOURCES[0],
     // Suno only: when it cannot even take the request (signed out, no credits,
@@ -129,8 +131,9 @@ function normalizeAutonomousSettings(raw = {}) {
     checkpoints,
     // An existing mood board to reuse instead of generating one (blank = generate).
     moodBoardId: clean(raw.moodBoardId, 64) || null,
-    llm: llmProvider ? { providerId: llmProvider, model: llmModel || null } : null,
-    authoring: authoringProvider && authoringModel ? { providerId: authoringProvider, model: authoringModel } : null,
+    llm: llm ? { providerId: llm.providerId, model: llm.model, ...(llm.effort ? { effort: llm.effort } : {}) } : null,
+    authoring: authoringProvider && authoringModel
+      ? { providerId: authoringProvider, model: authoringModel, ...(authoringEffort ? { effort: authoringEffort } : {}) } : null,
   };
 }
 

@@ -76,12 +76,13 @@ function sanitizeBrief(parsed, { prompt }) {
   };
 }
 
-export async function draftCreativeBrief({ prompt, guidance = '', instrumental = false, providerId, model } = {}) {
+export async function draftCreativeBrief({ prompt, guidance = '', instrumental = false, providerId, model, effort } = {}) {
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to draft the music video brief', code: 'NO_PROVIDER' });
   const result = await runPromptThroughProvider({
     provider,
     model: selectedModel,
+    ...(effort ? { effort } : {}),
     prompt: buildBriefPrompt({ prompt, guidance, instrumental }),
     source: 'music-video-autonomous-brief',
   });

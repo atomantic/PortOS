@@ -331,6 +331,29 @@ describe('applyProjectPatch', () => {
     expect(applyProjectPatch(edited, { automation: null }).automation).toBeNull();
   });
 
+  it('keeps the brief LLM pin through other edits, clears it with null, never takes a patch-written route, and loads a pre-#9545 record unchanged', () => {
+    const llm = { providerId: 'claude-tui', model: 'opus', effort: 'high' };
+    const created = buildProjectRecord({ name: 'Auto', mode: 'autonomous', automation: { tools: ['image:codex'], llm } }, { id: 'mv-a', now: 'n' });
+    expect(created.automation.llm).toEqual(llm);
+
+    // Another sub-field edit keeps it; a route a patch tries to smuggle in is dropped.
+    const edited = applyProjectPatch(created, { automation: { guidance: 'darker', routes: { plan: { providerId: 'forged' } } } });
+    expect(edited.automation.llm).toEqual(llm);
+    expect(edited.automation.routes).toBeUndefined();
+
+    // The server-written route survives later brief edits.
+    const withRoute = { ...edited, automation: { ...edited.automation, routes: { plan: { providerId: 'claude-tui', transport: 'tui', source: 'brief' } } } };
+    expect(applyProjectPatch(withRoute, { automation: { budgetUsd: 3 } }).automation.routes.plan).toMatchObject({ providerId: 'claude-tui', transport: 'tui' });
+
+    // null returns to Auto; a model/effort without a provider is dropped.
+    expect('llm' in applyProjectPatch(edited, { automation: { llm: null } }).automation).toBe(false);
+    expect('llm' in applyProjectPatch(edited, { automation: { llm: { model: 'orphan', effort: 'high' } } }).automation).toBe(false);
+
+    // A record saved before the pin existed carries neither field.
+    const legacy = applyProjectPatch({ ...created, automation: { tools: ['image:codex'], guidance: 'g', budgetUsd: null, checkins: { castAndSets: 'review' } } }, { automation: { guidance: 'h' } });
+    expect(legacy.automation).toEqual({ tools: ['image:codex'], guidance: 'h', budgetUsd: null, checkins: { castAndSets: 'review' } });
+  });
+
   it('persists explicit renderer settings and merges later partial changes', () => {
     const project = buildProjectRecord({
       name: 'A',

@@ -164,7 +164,7 @@ async function priorManifest(project) {
   return { pointer, manifest };
 }
 
-async function runAuthoring(projectId, { providerId, model, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
+async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
   const project = await getProject(projectId);
   if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
   const context = await authoringContext(project);
@@ -194,7 +194,7 @@ async function runAuthoring(projectId, { providerId, model, sectionId = null, ev
     onlySectionId: sectionId, sharedStyle,
   });
   const directedPrompt = feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt;
-  const run = await runModel({ providerId, model, prompt: directedPrompt, source: 'music-video-document', beforeSubmit });
+  const run = await runModel({ providerId, model, effort, automation: project.automation, prompt: directedPrompt, source: 'music-video-document', beforeSubmit });
   const updated = acceptedSections(run.text, ids);
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
   for (const [id, source] of updated) merged.set(id, source);

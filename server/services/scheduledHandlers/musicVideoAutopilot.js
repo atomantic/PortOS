@@ -60,9 +60,10 @@ export async function run({ params } = {}) {
   const { project } = await startAutonomousVideo({
     ...runSettings,
     // The LLM pin is stored as `llm` on the normalized settings; the start
-    // request takes it as providerId/model.
+    // request takes it as providerId/model/effort.
     providerId: settings.llm?.providerId,
     model: settings.llm?.model || undefined,
+    effort: settings.llm?.effort || undefined,
     prompt: ideaToPrompt(idea),
     origin: { kind: 'schedule', ideaId: idea.id, ideaTitle: idea.title },
   });

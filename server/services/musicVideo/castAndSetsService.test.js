@@ -147,17 +147,20 @@ beforeEach(() => {
   imageParamsOverrides = {};
   vi.clearAllMocks();
   runPrompt.mockResolvedValue({ text: `Here you go:\n\`\`\`json\n${JSON.stringify(DIRECTION)}\n\`\`\`` });
-  service.__setCastAndSetsDepsForTests({
-    resolveProvider: async () => ({ provider: { id: 'example-provider', enabled: true }, selectedModel: 'example-model' }),
-    runPrompt,
-    getSettings: async () => ({}),
-    enqueue,
-    imageParams: async (_settings, route, common) => ({ mode: route.mode, ...common, ...imageParamsOverrides }),
-    resolveRoute: async () => ({ mode: 'codex', model: null }),
-    loadBoard: async () => board,
-    boardItemImage: async () => (item) => (item.type === 'image' ? { kind: 'image', filename: item.file } : null),
-    loadTrack: async () => null,
-  });
+  service.__setCastAndSetsDepsForTests(testDeps());
+});
+
+const testDeps = (overrides = {}) => ({
+  resolveProvider: async () => ({ provider: { id: 'example-provider', enabled: true }, selectedModel: 'example-model' }),
+  runPrompt,
+  getSettings: async () => ({}),
+  enqueue,
+  imageParams: async (_settings, route, common) => ({ mode: route.mode, ...common, ...imageParamsOverrides }),
+  resolveRoute: async () => ({ mode: 'codex', model: null }),
+  loadBoard: async () => board,
+  boardItemImage: async () => (item) => (item.type === 'image' ? { kind: 'image', filename: item.file } : null),
+  loadTrack: async () => null,
+  ...overrides,
 });
 afterAll(cleanupTempDataRoots);
 
@@ -348,6 +351,22 @@ describe('Cast & Sets check-in', () => {
     const skipped = await request(app).post(`/api/music-video/${bare.id}/cast-and-sets/skip`).send({});
     expect(skipped.body.stage.status).toBe('skipped');
   });
+});
+
+it('directs on the resolved LLM route: the brief and request pins reach the resolver, effort reaches the run, and the route is recorded (#9545)', async () => {
+  const route = { providerId: 'claude-tui', model: 'opus', effort: 'high', transport: 'tui', source: 'brief' };
+  const resolveProvider = vi.fn(async () => ({ provider: { id: 'claude-tui', enabled: true }, selectedModel: 'opus', route }));
+  service.__setCastAndSetsDepsForTests(testDeps({ resolveProvider }));
+  const llm = { providerId: 'claude-tui', model: 'opus', effort: 'high' };
+  const project = await seed({ automation: { tools: ['image:codex'], llm } });
+
+  const started = await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({ effort: 'low' });
+  expect(started.status).toBe(202);
+  await runTo(project.id, 'review');
+
+  expect(resolveProvider).toHaveBeenCalledWith(expect.objectContaining({ effort: 'low', automation: expect.objectContaining({ llm }) }));
+  expect(runPrompt).toHaveBeenCalledWith(expect.objectContaining({ source: 'music-video-cast-sets', model: 'opus', effort: 'high' }));
+  expect((await current(project.id)).automation.routes.castAndSets).toMatchObject({ providerId: 'claude-tui', transport: 'tui', effort: 'high' });
 });
 
 it('uses project moodboard style images for Cast & Sets without a linked board', async () => {

@@ -3,14 +3,15 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-const h = vi.hoisted(() => ({ calls: 0, prompt: '', response: '', onSubmit: null }));
+const h = vi.hoisted(() => ({ calls: 0, prompt: '', response: '', onSubmit: null, provider: { id: 'stub-provider' }, args: null }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-author-'),
 }));
 vi.mock('../promptRunner.js', () => ({
   assertProvider: () => {},
-  resolveProviderAndModel: async () => ({ provider: { id: 'stub-provider' }, selectedModel: 'fixture-model' }),
-  runPromptThroughProvider: async ({ prompt, beforeExecute }) => {
+  resolveProviderAndModel: async () => ({ provider: h.provider, selectedModel: 'fixture-model' }),
+  runPromptThroughProvider: async ({ prompt, beforeExecute, ...args }) => {
+    h.args = args;
     if (beforeExecute) await beforeExecute({ provider: { id: 'stub-provider' }, model: 'fixture-model' });
     h.calls += 1; h.prompt = prompt;
     if (h.onSubmit) await h.onSubmit();
@@ -28,7 +29,7 @@ const response = (colors) => JSON.stringify({ sections: Object.entries(colors).m
 const manifestAt = async (document) => JSON.parse(await readFile(join(PATHS.data, document.directory, 'manifest.json'), 'utf8'));
 
 afterAll(() => cleanupTempDataRoots());
-beforeEach(() => { h.onSubmit = null; h.calls = 0; h.prompt = ''; h.response = response({ intro: '#112233', still: '#445566', clip: '#778899' }); });
+beforeEach(() => { h.provider = { id: 'stub-provider' }; h.args = null; h.onSubmit = null; h.calls = 0; h.prompt = ''; h.response = response({ intro: '#112233', still: '#445566', clip: '#778899' }); });
 
 async function fixture() {
   await mkdir(PATHS.images, { recursive: true });
@@ -64,6 +65,17 @@ async function fixture() {
 }
 
 describe('treatment-driven mixed-media document authoring', () => {
+  it('runs authoring on the pinned provider with its effort, and drops effort for a provider that has none (#9545)', async () => {
+    const id = await fixture();
+    h.provider = { id: 'stub-provider', type: 'cli', command: 'claude' };
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider', effort: 'high' });
+    expect(h.args).toMatchObject({ provider: { id: 'stub-provider' }, model: 'fixture-model', effort: 'high', source: 'music-video-document' });
+
+    h.provider = { id: 'stub-provider', type: 'api' };
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider', effort: 'high' });
+    expect(h.args).not.toHaveProperty('effort');
+  });
+
   it('accepts a legacy generated manifest and upgrades it through an event-only revision', async () => {
     const id = await fixture();
     const first = (await generateMixedMediaDocument(id)).document;

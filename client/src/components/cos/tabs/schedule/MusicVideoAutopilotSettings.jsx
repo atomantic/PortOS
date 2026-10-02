@@ -21,7 +21,8 @@ const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded 
 export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate, updating, setUpdating }) {
   const saved = config.taskMetadata?.musicVideoAutopilot;
   const [draft, setDraft] = useState(() => autopilotDraftFromParams(saved));
-  const llm = useProviderModels({ allowDefault: true, silent: true });
+  const llm = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
+  const [effort, setEffort] = useState(saved?.llm?.effort || '');
   const [llmSeeded, setLlmSeeded] = useState(false);
   const patch = (next) => setDraft((d) => ({ ...d, ...next }));
 
@@ -48,8 +49,8 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
     // Until the catalog has seeded the picker, "no selection" means "not loaded
     // yet", not "use the install default" — keep the saved pin untouched.
     const pin = llmSeeded
-      ? { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined }
-      : { providerId: saved?.llm?.providerId, model: saved?.llm?.model || undefined };
+      ? { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined, effort: effort || undefined }
+      : { providerId: saved?.llm?.providerId, model: saved?.llm?.model || undefined, effort: saved?.llm?.effort || undefined };
     const params = autopilotParamsFromDraft(draft, saved, pin);
     await onUpdate(taskType, { taskMetadata: { ...config.taskMetadata, musicVideoAutopilot: params } }).catch(() => {});
     setUpdating(false);
@@ -105,8 +106,12 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
           selectedProviderId={llm.selectedProviderId}
           selectedModel={llm.selectedModel}
           availableModels={llm.availableModels}
-          onProviderChange={llm.setSelectedProviderId}
+          onProviderChange={(id) => { llm.setSelectedProviderId(id); setEffort(''); }}
           onModelChange={llm.setSelectedModel}
+          effort={effort}
+          onEffortChange={setEffort}
+          emptyProviderOption="Auto — a TUI provider when one is eligible"
+          emptyModelOption="Provider default"
           label="Writes the brief and lyrics"
           disabled={updating}
           modelDisabled={llm.availableModels.length === 0}

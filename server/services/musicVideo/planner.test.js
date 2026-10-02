@@ -417,6 +417,37 @@ Here is my answer:
     expect(result.promptsSkippedReason).toBe('unparsable-response');
   });
 
+  it('runs the saved brief LLM pin with its effort and records the effective route on the brief (#9545)', async () => {
+    const automation = { tools: [], guidance: '', budgetUsd: null, llm: { providerId: 'claude-tui', model: 'opus', effort: 'high' } };
+    getProject.mockResolvedValue(makeProject({ automation }));
+    addProjectScenes.mockResolvedValue(freshProjectResult({ automation }));
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'claude-tui', type: 'tui', command: 'claude' }, selectedModel: 'opus' });
+    runPromptThroughProvider.mockResolvedValue({ text: '[]' });
+    mutateProjectRecord.mockImplementation(async (_id, transform) => transform({ automation }));
+
+    const result = await planProject('mv-1');
+
+    expect(resolveProviderAndModel).toHaveBeenCalledWith({ providerId: 'claude-tui', model: 'opus' });
+    expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+      provider: expect.objectContaining({ id: 'claude-tui' }), model: 'opus', effort: 'high', source: 'music-video-plan',
+    }));
+    expect(result.llmRoute).toMatchObject({ providerId: 'claude-tui', model: 'opus', effort: 'high', transport: 'tui', source: 'brief' });
+    expect(result.project.automation.routes.plan).toMatchObject({ providerId: 'claude-tui', transport: 'tui', effort: 'high' });
+  });
+
+  it('lets a request pin outrank the brief pin, and sends no effort to an API provider', async () => {
+    const automation = { tools: [], guidance: '', budgetUsd: null, llm: { providerId: 'claude-tui', effort: 'high' } };
+    getProject.mockResolvedValue(makeProject({ automation }));
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'cloud', type: 'api' }, selectedModel: 'gpt' });
+    runPromptThroughProvider.mockResolvedValue({ text: '[]' });
+
+    const result = await planProject('mv-1', { providerId: 'cloud', model: 'gpt', effort: 'low' });
+
+    expect(runPromptThroughProvider.mock.calls[0][0]).not.toHaveProperty('effort');
+    expect(result.llmRoute).toMatchObject({ providerId: 'cloud', transport: 'api', source: 'pinned', effort: null });
+  });
+
   it('skips prompt-seeding when the resolved provider is disabled', async () => {
     getProject.mockResolvedValue(makeProject());
     addProjectScenes.mockResolvedValue(freshProjectResult());
