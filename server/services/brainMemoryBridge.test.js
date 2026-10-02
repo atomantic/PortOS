@@ -443,6 +443,58 @@ describe('brainMemoryBridge — journal re-embed debounce (daily-log autosave)',
   });
 });
 
+describe('brainMemoryBridge — migration preview safety', () => {
+  afterEach(() => {
+    getAll.mockResolvedValue([]);
+    listJournals.mockResolvedValue({ records: [] });
+    getDigests.mockResolvedValue([]);
+    getReviews.mockResolvedValue([]);
+    getById.mockReset();
+    getJournal.mockReset();
+  });
+
+  it('previews every source without writes or embeddings, even when refresh would archive an orphan', async () => {
+    const bridge = await loadBridge();
+    const person = { id: 'preview-person', name: 'Example Person' };
+    const journal = { id: '2026-01-01', date: '2026-01-01', content: 'Example daily log' };
+    getAll.mockImplementation(async type => type === 'people' ? [person] : []);
+    listJournals.mockResolvedValue({ records: [journal] });
+    getDigests.mockResolvedValue([{ id: 'preview-digest', digestText: 'Example digest' }]);
+    getReviews.mockResolvedValue([]);
+    getById.mockImplementation(async (_type, id) => id === person.id ? person : null);
+    getJournal.mockResolvedValue(journal);
+    const originalMap = JSON.stringify({
+      [bridge.bridgeKey('people', 'deleted-person')]: 'mem-orphan',
+    });
+    bridgeFileContents = originalMap;
+
+    expect(await bridge.syncAllBrainData({ dryRun: true, refresh: true })).toEqual({
+      synced: 3, skipped: 0, errors: 0, archived: 0,
+    });
+    for (const write of [createMemory, updateMemory, purgeMemory, updateMemoryEmbedding,
+      generateMemoryEmbedding, atomicWrite]) {
+      expect(write).not.toHaveBeenCalled();
+    }
+    const { writeFile } = await import('fs/promises');
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(bridgeFileContents).toBe(originalMap);
+
+    // Execute the same fixture to prove the adapters and orphan are reachable.
+    expect(await bridge.syncAllBrainData({ dryRun: false, refresh: true })).toEqual({
+      synced: 3, skipped: 0, errors: 0, archived: 1,
+    });
+    expect(createMemory).toHaveBeenCalledTimes(3);
+    expect(generateMemoryEmbedding).toHaveBeenCalledTimes(3);
+    expect(updateMemory).toHaveBeenCalledWith('mem-orphan', { status: 'archived' });
+    expect(atomicWrite).toHaveBeenCalled();
+    expect(JSON.parse(bridgeFileContents)).toMatchObject({
+      [bridge.bridgeKey('people', person.id)]: expect.any(String),
+      [bridge.bridgeKey('journals', journal.id)]: expect.any(String),
+      [bridge.bridgeKey('digests', 'preview-digest')]: expect.any(String),
+    });
+  });
+});
+
 describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recovery)', () => {
   it('persists all newly created mappings once after a bulk sync', async () => {
     const bridge = await loadBridge();
