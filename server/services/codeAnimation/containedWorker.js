@@ -3,7 +3,9 @@
  * workspace, run one operator-configured executable under the enforced OS
  * sandbox with a from-scratch environment, enforce wall-time / disk / file /
  * memory limits, own the process group through cancellation, and validate
- * what the worker left behind. No uncontained fallback exists.
+ * what the worker left behind. No uncontained fallback exists. The separate
+ * trusted-local entry point requires explicit server-side operator authorization;
+ * it reuses supervision but provides no host filesystem/network boundary.
  */
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, readdir, realpath, rm } from 'node:fs/promises';
@@ -111,7 +113,7 @@ async function measure(dirs, { maxFiles }) {
   return { bytes, files, outputs, invalid };
 }
 
-async function residentBytes(pid) {
+async function residentBytes(pid, processGroup = false) {
   if (process.platform === 'linux') {
     // bwrap supervises a separate PID namespace; its own RSS is not the tool's.
     // Walk host-visible descendants, including the namespace init and worker.
@@ -125,6 +127,13 @@ async function residentBytes(pid) {
     const own = Number(status.match(/^VmRSS:\s+(\d+)/m)?.[1] || 0) * 1024;
     const descendants = await Promise.all(children.trim().split(/\s+/).filter(Boolean).map((child) => residentBytes(Number(child))));
     return own + descendants.reduce((sum, bytes) => sum + bytes, 0);
+  }
+  if (processGroup) {
+    const { stdout } = await execFileAsync('/bin/ps', ['-axo', 'pgid=,rss=']);
+    return stdout.trim().split('\n').reduce((sum, line) => {
+      const [group, rss] = line.trim().split(/\s+/).map(Number);
+      return sum + (group === pid && Number.isFinite(rss) ? rss * 1024 : 0);
+    }, 0);
   }
   const { stdout } = await execFileAsync('/bin/ps', ['-o', 'rss=', '-p', String(pid)]).catch(() => ({ stdout: '' }));
   const kib = Number.parseInt(stdout.trim(), 10);
@@ -148,14 +157,30 @@ const tail = () => {
  * completed, valid result, before the workspace is removed. Resolves with the
  * run's evidence; refuses (503) when no enforced mechanism is available.
  */
-export async function runContainedWorker({
-  tool, files = [], entrypoint = null, limits: requested = {}, signal, workspaceRoot,
-  onOutput, tickMs = 1000, seatbeltPath = CODE_ANIMATION_SEATBELT, bubblewrapPath = CODE_ANIMATION_BUBBLEWRAP,
-}) {
-  const mechanism = await currentContainmentMechanism(seatbeltPath, bubblewrapPath);
+export async function runContainedWorker(options) {
+  const mechanism = await currentContainmentMechanism(options.seatbeltPath, options.bubblewrapPath);
   if (!mechanism.supported) {
     throw new ServerError(`Contained execution refused: ${mechanism.reason}`, { status: 503, code: 'CODE_ANIMATION_CONTAINMENT_UNAVAILABLE' });
   }
+  return runOwnedWorker(options, mechanism);
+}
+
+/**
+ * Explicit trusted-local entry point. Only execution.js selects it after checking
+ * machine-local operator configuration. This is NOT containment: trusted code
+ * can access the host, network and subprocesses, including outside supervision.
+ */
+export async function runTrustedLocalWorker(options) {
+  if (!['darwin', 'linux'].includes(process.platform)) {
+    throw new ServerError('Trusted-local worker process supervision requires macOS or Linux', { status: 503, code: 'CODE_ANIMATION_WORKER_UNSUPPORTED' });
+  }
+  return runOwnedWorker(options, { id: 'trusted-local', supported: true });
+}
+
+async function runOwnedWorker({
+  tool, files = [], entrypoint = null, limits: requested = {}, signal, workspaceRoot,
+  onOutput, tickMs = 1000, seatbeltPath = CODE_ANIMATION_SEATBELT, bubblewrapPath = CODE_ANIMATION_BUBBLEWRAP,
+}, mechanism) {
   const limits = codeAnimationWorkerLimitsSchema.parse(requested);
   if (entrypoint !== null && !files.some((file) => file.path === entrypoint)) {
     throw new ServerError('The worker entrypoint is not a staged file', { status: 400, code: 'CODE_ANIMATION_STAGE_PATH' });
@@ -178,12 +203,13 @@ export async function runContainedWorker({
     const sandboxWorkspace = linux ? '/workspace' : workspace;
     const argv = tool.argv(entrypoint === null ? null : join(sandboxWorkspace, 'input', entrypoint), sandboxWorkspace);
     const config = { executable, toolRoots: codeAnimationToolRoots(executable), workspace, sandboxWorkspace, argv };
-    const wrapper = linux
-      ? [bubblewrapPath, ...codeAnimationBubblewrapArgs(config)]
-      : [seatbeltPath, '-p', codeAnimationSeatbeltProfile(config), executable, ...argv];
+    const trustedLocal = mechanism.id === 'trusted-local';
+    const wrapper = trustedLocal ? [executable, ...argv]
+      : linux ? [bubblewrapPath, ...codeAnimationBubblewrapArgs(config)]
+        : [seatbeltPath, '-p', codeAnimationSeatbeltProfile(config), executable, ...argv];
     // Explicit bash on Linux avoids /bin/sh's distro-dependent ulimit units.
     // Both this bash invocation and macOS sh count KiB; limits survive exec.
-    const child = spawn(linux ? '/bin/bash' : '/bin/sh', ['-c', 'ulimit -c 0 && ulimit -n "$1" && ulimit -f "$2" && shift 2 && exec "$@"',
+    const child = spawn(process.platform === 'linux' ? '/bin/bash' : '/bin/sh', ['-c', 'ulimit -c 0 && ulimit -n "$1" && ulimit -f "$2" && shift 2 && exec "$@"',
       'portos-contained-worker', String(limits.openFiles), String(Math.max(1, Math.floor(limits.diskBytes / 1024))),
       ...wrapper], {
       cwd: join(workspace, 'tmp'), env: withSpawnCwdEnv(codeAnimationWorkerEnv(workspace), join(workspace, 'tmp')),
@@ -218,7 +244,7 @@ export async function runContainedWorker({
         const usage = await measure(writable, limits);
         if (usage.bytes > limits.diskBytes) kill('disk');
         else if (usage.files > limits.maxFiles) kill('files');
-        else if (await residentBytes(child.pid) > limits.memoryBytes) kill('memory');
+        else if (await residentBytes(child.pid, trustedLocal) > limits.memoryBytes) kill('memory');
       } catch (error) {
         console.error(`❌ Code Animation worker watchdog failed: ${error.message}`);
         kill('watchdog');
@@ -231,9 +257,10 @@ export async function runContainedWorker({
     clearTimeout(timer);
     clearInterval(watchdog);
     signal?.removeEventListener('abort', onAbort);
-    // The worker cannot fork; bwrap also owns its PID namespace and uses
+    // Contained workers cannot fork; bwrap also owns its PID namespace and uses
     // die-with-parent. The outer group is still verified empty, and any
-    // straggler is killed before the run is reported.
+    // straggler is killed before the run is reported. Trusted-local code can
+    // escape its group; supervision is not a hostile-code security guarantee.
     // --new-session moves the namespace child out of the outer process group.
     // bwrap's info fd names that host PID before allowing it to run; verify it
     // too, so an empty launcher group cannot masquerade as completed teardown.
@@ -256,7 +283,7 @@ export async function runContainedWorker({
     else if (usage.invalid.length) { status = 'failed'; reason = 'output-invalid'; }
     else if (!processGroupClear || (linux && !namespacePid)) { status = 'failed'; reason = 'containment-status'; }
     const result = {
-      status, reason, mechanism: mechanism.id, exitCode: exit.code, signal: exit.signal,
+      status, reason, mechanism: mechanism.id, contained: !trustedLocal, exitCode: exit.code, signal: exit.signal,
       processGroupClear, durationMs: Date.now() - started, limits,
       usage: { bytes: usage.bytes, files: usage.files },
       outputs: status === 'completed' ? usage.outputs : [], invalidOutputs: usage.invalid,

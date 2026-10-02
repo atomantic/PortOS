@@ -40,6 +40,9 @@ function StageRun({ run, busy, resumeDisabled, onResume, onCancel, currentRevisi
       </li>)}
     </ol>
     {reviewer && <p className="text-xs text-gray-400">Reviewed by {reviewer.providerId} · {reviewer.model || 'default model'}</p>}
+    {data.renderer && <p className="text-xs text-gray-400">Blender {data.renderer.version} · {data.renderer.engine} · {data.renderer.device} · {data.renderer.executionMode}{data.renderer.contained === false ? ' — host access is not contained' : ''}</p>}
+    {data.stages.filter(stage => stage.sequence?.artifact).map(stage => <a key={stage.stageRunId} href={`/data/${stage.sequence.artifact.relativePath}`} target="_blank" rel="noreferrer" className="block text-xs underline">Open rendered {stage.key} sequence</a>)}
+    {data.stages.filter(stage => stage.key === 'final').flatMap(stage => stage.artifacts || []).filter(artifact => artifact.name === 'scene.blend').map(artifact => <a key={artifact.relativePath} href={`/data/${artifact.relativePath}`} download className="block text-xs underline">Download baked Blender scene and packed textures</a>)}
     <Verdict verdict={data.verdict} verified={inspect?.verified} />
     {data.findings?.length > 0 && <ul className="space-y-1 text-xs" aria-label="Findings">
       {data.findings.map((finding, index) => <li key={index} className={finding.severity === 'error' ? 'text-port-error' : 'text-port-warning'}>

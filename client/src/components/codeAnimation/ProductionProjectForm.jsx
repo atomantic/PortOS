@@ -50,10 +50,16 @@ export default function ProductionProjectForm({ project, onSave, busy, onDirtyCh
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label htmlFor="cap-renderer" className="mb-1 block text-xs text-gray-400">Renderer</label>
-          <select id="cap-renderer" className={inputClass} value={manifest.renderer.kind} onChange={event => setManifest(previous => ({ ...previous, renderer: { ...previous.renderer, kind: event.target.value } }))}>
+          <select id="cap-renderer" className={inputClass} value={manifest.renderer.kind} onChange={event => setManifest(previous => ({ ...previous, renderer: { kind: event.target.value, version: event.target.value === 'blender' ? '4.2.0' : 'code-animation-html-v1', engine: event.target.value === 'blender' ? 'CYCLES' : null } }))}>
             <option value="browser">Browser</option><option value="blender">Blender</option>
           </select>
         </div>
+        {manifest.renderer.kind === 'blender' && <div>
+          <label htmlFor="cap-project-engine" className="mb-1 block text-xs text-gray-400">Blender engine</label>
+          <select id="cap-project-engine" className={inputClass} value={manifest.renderer.engine || 'CYCLES'} onChange={event => setManifest(previous => ({ ...previous, renderer: { ...previous.renderer, engine: event.target.value } }))}>
+            <option value="CYCLES">Cycles CPU</option><option value="BLENDER_EEVEE_NEXT">EEVEE GPU</option>
+          </select>
+        </div>}
         {field('version', 'Renderer version', manifest.renderer.version, version => setManifest(previous => ({ ...previous, renderer: { ...previous.renderer, version } })), 'text', { required: true, maxLength: 128 })}
         {Object.entries({ width: 'Width (pixels)', height: 'Height (pixels)', fps: 'Frames per second', durationSeconds: 'Duration (seconds)' }).map(([name, label]) =>
           field(name, label, manifest.format[name], value => setManifest(previous => ({ ...previous, format: { ...previous.format, [name]: value } })), 'number', { required: true, min: name === 'width' || name === 'height' ? 2 : 1, step: name === 'width' || name === 'height' ? 2 : 1 }))}
@@ -79,7 +85,7 @@ export default function ProductionProjectForm({ project, onSave, busy, onDirtyCh
       <p className="text-xs text-gray-400">Saved on this machine. Renderer selection does not change the authoring agent. Reasoning effort is independent of the budgets below.</p>
       <h3 className="text-sm font-medium">Independent budgets</h3>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {Object.entries({ iterations: 'Iterations', timeSeconds: 'Elapsed time (seconds)', tokens: 'Tokens', renderSeconds: 'Render time (seconds)', diskBytes: 'Retained source disk (bytes)' }).map(([name, label]) =>
+        {Object.entries({ iterations: 'Iterations', timeSeconds: 'Elapsed time (seconds)', tokens: 'Tokens', renderSeconds: 'Render time (seconds)', diskBytes: 'Retained source and render disk (bytes)' }).map(([name, label]) =>
           field(name, label, limits[name], value => setLimits(previous => ({ ...previous, [name]: value })), 'number', { required: true, min: 1, step: 1 }))}
       </div>
       <button type="submit" className="rounded bg-port-accent px-3 py-2 text-sm text-white disabled:opacity-50">{busy ? 'Saving…' : project ? 'Save project settings' : 'Create Production project'}</button>

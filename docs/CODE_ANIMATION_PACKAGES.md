@@ -95,11 +95,17 @@ import remain available for external authoring.
 
 ## Contained production execution
 
-A job directory is not a boundary. Production package code (a Blender scene
-script, a generated renderer) runs only through the contained worker in
+A job directory is not a boundary. Production package code defaults to the contained worker in
 `server/services/codeAnimation/containedWorker.js`, under an enforced OS
 mechanism. Where no mechanism is available the worker refuses with 503
-`CODE_ANIMATION_CONTAINMENT_UNAVAILABLE`; there is no uncontained fallback.
+`CODE_ANIMATION_CONTAINMENT_UNAVAILABLE`; there is no automatic fallback.
+An operator may instead explicitly select **Trusted local**, acknowledge host
+access, save the setting, and pass a new execution check. This opt-in mode is
+available on macOS and Linux. It runs trusted scene code with the account's
+host filesystem, network and process access: environment scrubbing and process
+supervision are **not containment**. Source can escape the supervised group or
+write outside its workspace. Only run source you trust in that mode. Packages,
+imports, project manifests and stage-run request bodies cannot grant this authority.
 Authoring stays outside the worker: provider transport, credentials and any
 research access belong to the authoring route, never to execution.
 
@@ -124,7 +130,7 @@ private `home/`. The Seatbelt profile allows:
 Everything else is denied, including all network (loopback and Unix sockets
 too, so PortOS's API and local services are unreachable), Mach/XPC services
 (keychain, pasteboard, launchd) and IPC. The environment is built from scratch
-(paths only), so no `PORTOS_API_TOKEN`, provider key, cloud credential or proxy
+(worker paths and a synthetic worker identity only), so no `PORTOS_API_TOKEN`, provider key, cloud credential or proxy
 setting is inherited. The process runs in its own process group: cancellation
 and every limit `SIGKILL` the group, and the result reports whether the group
 was verified empty. Limits: wall time, total bytes and file count of the
@@ -161,13 +167,16 @@ when it lives in a `bin/` directory, or otherwise its own directory — and none
 of those may contain PortOS data or the home directory.
 
 - `GET /api/code-animation/execution` reports the platform mechanism, the
-  configured tools, the last containment check and each lane's readiness.
-  Readiness fails closed: the Blender lane is ready only after a containment
-  check has passed in this server process with the currently configured
-  executable, and its fixed test scene has rendered successfully. This is a
-  runtime probe, not readiness of the pending Blender production-stage adapter.
-- `PUT /api/code-animation/execution/tools` sets `{ blender: { executable } }`
-  (`null` clears it). Host control: it chooses what a worker runs.
+  configured tools, selected execution mode, last check and each lane's readiness.
+  Readiness fails closed: the Blender lane is ready only after the selected
+  mode's check has passed in this server process for the configured executable
+  and engine, and its fixed test scene has rendered successfully. Every save
+  revokes the check. Stage evidence binds its executable fingerprint, version,
+  engine, mode and check timestamp; changing readiness prevents reuse.
+- `PUT /api/code-animation/execution/tools` sets `{ blender: { executable,
+  executionMode, engine, acknowledgeHostAccess } }`. Defaults preserve
+  `contained` / `CYCLES`; `trusted-local` requires acknowledgement. `null`
+  clears the executable. This remains an operator-only host-control route.
 - `POST /api/code-animation/execution/probe` runs the containment check on
   demand (host control; never at boot; no provider call). PortOS's own Node
   interpreter runs synthetic hostile scripts through the same staging, profile,
@@ -179,30 +188,83 @@ of those may contain PortOS data or the home directory.
   or to the network. Positive control: the worker must still write its report.
   Separate runs must be terminated by the wall-time, disk, memory and
   cancellation limits with an empty process group. A configured Blender is then
-  asked to build and render a fixed 64 × 64 cube scene under containment using
+  asked to build and render a fixed 64 × 64 cube scene in the saved mode using
   `--background --factory-startup --disable-autoexec --python-exit-code 1`.
   The baseline is Blender 4.2.0, matching the existing pinned rigging runtime,
-  with Cycles / CPU, eight samples and seed zero. Other versions remain
+  with the selected Cycles / CPU or EEVEE / GPU engine, eight samples and seed zero. Other versions remain
   unverified and fail this probe. The check decodes the PNG, requires the exact
   dimensions and nonblank pixels, validates the runtime/engine/device report,
   and records its image SHA-256 and elapsed time. A version banner, successful
   exit or `bpy` import alone cannot pass. No generated project code runs here;
   no dependency installation is attempted.
 
-Known limits: Blender is granted CPU rendering only — no GPU/Metal device or
-window-server access — and has not been verified under this profile on a
-machine with Blender installed; a Blender that cannot render the fixed scene
-contained keeps its lane refused. CPU rendering can be substantially slower
-than GPU rendering; this check does not measure final-film render cost.
-EEVEE/GPU profiles, production scene building, pilot/final sequences, cadence,
-artifacts and the independently authored painterly starter remain tracked in
-#9390. Actual repeatable 10–15 second 1080p/24fps acceptance is still required;
-synthetic protocol tests are not renderer acceptance. Seatbelt (`sandbox-exec`) is deprecated by Apple but remains the
-mechanism Chromium and the private security assessment harness use. A host
-that already runs PortOS inside another sandbox may be unable to apply a nested
-profile; the check then fails and execution stays refused. Memory and total
-disk are watchdog-enforced (1 s interval in production), so a worker can
-briefly exceed them before it is killed.
+In trusted-local mode the check runs wall-time, workspace-disk, memory and
+cancellation controls plus the fixed Blender scene; it does **not** report the
+host-access adversarial checks as passing. Contained mode still requires all
+adversarial checks. Cycles CPU can be substantially slower than GPU rendering.
+EEVEE availability must be established by its own actual render; no engine or
+execution mode is substituted silently. Seatbelt is deprecated by Apple and a
+host or Blender build may not work inside its profile; that lane stays refused.
+Memory and disk limits are watchdog-enforced, so brief overshoots are possible.
+
+## Blender production adapter
+
+**Create painterly Blender starter** creates a data-only package containing the
+original `build_scene(config)` Python source for *Lantern in a Painted Garden*:
+a deterministic pigment atlas, faceted paper forms, a subject animated on twos,
+baked sparks on threes, and a continuously keyed camera. No external assets,
+downloads, add-ons, provider calls or rendering occur on import. The default
+format is 10 seconds at 1920 × 1080 / 24 fps, Blender 4.2.0 / Cycles CPU. The
+project's authoring provider remains independent from its renderer.
+
+After an explicit production start, the existing stage controller runs native
+style frames, a complete low-sample pilot, evidence inspection, optional repair
+through the saved authoring route, soundtrack, and final render. Preview uses
+four samples; final uses sixteen. Both use a fixed seed and two CPU threads.
+PortOS owns the Blender driver and loads the package's scene entrypoint; it
+forces the requested format, renderer and quality settings. The driver rejects
+live physics/particle simulations, requires constant subject/FX keys on the
+declared cadence, measures evaluated transforms across every frame, and checks
+that camera transforms vary continuously. Cycles excludes held subjects and
+their children from motion blur; EEVEE disables blur to preserve the holds.
+These are transform/cadence checks, not a claim that arbitrary mesh deformation
+or semantic visual quality was independently reviewed.
+
+The baked `.blend` packs original textures. Scene, report, every decoded PNG,
+pilot MP4 and final sequence are immutable run artifacts, separate from accepted
+source revisions. Missing frames, malformed output, unsupported runtime/engine,
+revoked readiness, worker failure and cancellation cannot pass. PNG geometry
+and complete decoding are checked before shared ffmpeg encoding; the result is
+probed for geometry and frame count. Final output uses the existing media
+history and soundtrack mux flow. Run records display engine/device/mode and
+link the pilot, final movie and baked scene. Project time/render/disk budgets
+apply throughout; cancellation keeps earlier accepted artifacts. Failed native
+workers never fall back to browser rendering or a different engine.
+
+Runtime/format/cadence fixtures test these contracts but do not constitute real
+Blender acceptance. A bounded native run on 2026-10-01 rendered frames 25, 121
+and 217 (seconds 1, 5 and 9) from package
+`e9cb67e74f33291ea444cfa79dc8648120b7359596a95cf4d8b7149a7958febf`
+at 1920 × 1080 / 24 fps in explicit trusted-local mode: Blender 4.2.0,
+Cycles CPU, four samples, seed 17, two threads. It took 68.12 seconds end to
+end (67.42 seconds in the worker), retained 11,883,500 artifact bytes, decoded
+all three PNGs and saved a packed `.blend`. The driver measured all 240
+frames' object/camera transforms; **only three images were rendered**.
+
+Decoded RGBA SHA-256 values:
+
+| Frame | SHA-256 |
+|---|---|
+| 25 | `fe18b712637f3bcb8259a46383ef8058cbe4d59aa70a3a29c9da233f2bbdd930` |
+| 121 | `61a864e4cb370d9dd1e00135c75c8f9271ffb2b24865c876289e988da74c10a6` |
+| 217 | `bfe102954770c5dc0b1a2a145c23f36dbfe466a31a8fa5d52532462babbc2e1c` |
+
+The native stills are a rough, faceted and noisy study, **not polished painterly
+acceptance**. #9390 remains open for the full 10–15 second 1080p/24fps pilot
+and final sequence, repeated sampled-frame comparison, actual EEVEE/GPU
+validation, and visual-quality refinement/review. The measured CPU cost did
+not justify silently starting a long full-sequence run during this bounded
+validation. No synthetic fixture substitutes for those remaining checks.
 
 The browser lane does not use this worker. It reuses the HTML-composition
 renderer sandbox (`server/services/htmlComposition/browser.js`): an in-memory

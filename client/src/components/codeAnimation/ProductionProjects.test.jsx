@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [{ id: 'example-provider', name: 'Example agent', type: 'cli', command: 'claude', models: ['example-model'] }] }) }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../../services/apiCodeAnimation', () => ({
-  preflightCodeAnimationProject: vi.fn(),
+  preflightCodeAnimationProject: vi.fn(), getCodeAnimationBlenderStarter: vi.fn(),
   getCodeAnimationExecution: vi.fn(), updateCodeAnimationExecutionTools: vi.fn(), probeCodeAnimationExecution: vi.fn(),
   listCodeAnimationProjects: vi.fn(), createCodeAnimationProject: vi.fn(), getCodeAnimationProject: vi.fn(),
   updateCodeAnimationProject: vi.fn(), importCodeAnimationPackage: vi.fn(), acceptCodeAnimationSource: vi.fn(),
@@ -178,30 +178,45 @@ describe('Production project rendered interactions', () => {
     expect(api.getCodeAnimationProject).toHaveBeenCalledWith(project.id, expect.objectContaining({ silent: true }));
   });
 
+  it('requires host-access acknowledgement and saving before a trusted-local check', async () => {
+    const user = userEvent.setup();
+    api.getCodeAnimationExecution.mockResolvedValue(execution({ mechanism: { supported: false, reason: 'Unavailable' } }));
+    renderPage('/code-animation/production');
+    await screen.findByLabelText('Execution mode');
+    expect(screen.getByRole('button', { name: 'Run execution check' })).toBeDisabled();
+    await user.selectOptions(screen.getByLabelText('Execution mode'), 'trusted-local');
+    expect(screen.getByRole('button', { name: 'Save tool' })).toBeDisabled();
+    expect(screen.getByText(/Environment scrubbing and process supervision are not containment/)).toBeInTheDocument();
+    await user.click(screen.getByLabelText(/I understand the host access/));
+    expect(screen.getByRole('button', { name: 'Save tool' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Run execution check' })).toBeDisabled();
+    expect(api.probeCodeAnimationExecution).not.toHaveBeenCalled();
+  });
+
   it('reports refused containment and checks only a saved operator tool path', async () => {
     const user = userEvent.setup();
     renderPage('/code-animation/production');
     expect(await screen.findByText('Blender: Not configured.')).toBeInTheDocument();
     const path = '/Applications/Example.app/Contents/MacOS/Blender';
     await user.type(screen.getByLabelText('Blender executable (operator-owned)'), path);
-    expect(screen.getByRole('button', { name: 'Run containment check' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run execution check' })).toBeDisabled();
     const saved = execution({ tools: { blender: { executable: path, problem: null } }, lanes: { browser: { mechanism: 'chromium-cdp-sandbox' }, blender: { ready: false, reason: 'Run the containment check.' } } });
     api.updateCodeAnimationExecutionTools.mockResolvedValue(saved);
     await user.click(screen.getByRole('button', { name: 'Save tool' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Run containment check' })).toBeEnabled());
-    expect(api.updateCodeAnimationExecutionTools).toHaveBeenCalledWith({ blender: { executable: path } }, { silent: true });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run execution check' })).toBeEnabled());
+    expect(api.updateCodeAnimationExecutionTools).toHaveBeenCalledWith({ blender: { executable: path, executionMode: 'contained', engine: 'CYCLES', acknowledgeHostAccess: false } }, { silent: true });
     api.probeCodeAnimationExecution.mockResolvedValue({ ...saved,
       probe: { passed: true, refused: null, checks: [{ id: 'network', passed: true, detail: 'Outbound network was refused by the sandbox.' }],
         tools: { blender: { passed: false, detail: 'Blender did not start under containment (failed: exit).' } } },
       lanes: { ...saved.lanes, blender: { ready: false, reason: 'Blender did not start under containment.' } } });
-    await user.click(screen.getByRole('button', { name: 'Run containment check' }));
+    await user.click(screen.getByRole('button', { name: 'Run execution check' }));
     expect(await screen.findByText(/Containment proven: 1 of 1 checks/)).toBeInTheDocument();
     expect(screen.getByText('Blender did not start under containment.')).toBeInTheDocument();
     api.probeCodeAnimationExecution.mockResolvedValue({ ...saved,
       probe: { passed: true, refused: null, checks: [], tools: { blender: { passed: true, detail: 'Cycles / CPU test scene rendered.' } } },
       lanes: { ...saved.lanes, blender: { ready: true, reason: null } } });
-    await user.click(screen.getByRole('button', { name: 'Run containment check' }));
-    expect(await screen.findByText(/Test scene rendered \(production adapter pending\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Run execution check' }));
+    expect(await screen.findByText(/Ready for production rendering/)).toBeInTheDocument();
     expect(screen.getByText('Cycles / CPU test scene rendered.')).toBeInTheDocument();
   });
 });
