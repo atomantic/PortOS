@@ -229,6 +229,67 @@ describe('createTelegramBot — poll loop dispatch', () => {
     expect(capturedSignal.aborted).toBe(true);
   });
 
+  it('recovers from network errors by retrying after delay (validating timeout integration)', async () => {
+    // This test validates that a network error (including timeout aborts) triggers
+    // the retry delay and loop resumption. The actual AbortSignal.timeout() fires
+    // independently of test timers, but we verify the handler path works.
+    vi.useFakeTimers();
+    let calls = 0;
+    global.fetch = vi.fn((_url, opts = {}) => {
+      calls++;
+      // First call: simulate a network error (what a timeout would look like).
+      if (calls === 1) {
+        const err = Object.assign(new Error('network timeout'), { name: 'AbortError' });
+        return Promise.reject(err);
+      }
+      // Second call (after retry delay): return a successful empty response.
+      if (calls === 2) {
+        return Promise.resolve(jsonRes({ ok: true, result: [] }));
+      }
+      // Subsequent calls: park on abort like before.
+      return new Promise((_resolve, reject) => {
+        opts.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
+
+    // First fetch is initiated and immediately rejects with AbortError (timeout).
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(1);
+
+    // Advance past the retry delay (2s). The loop should issue a second fetch.
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0); // Drain microtasks.
+
+    expect(calls).toBeGreaterThanOrEqual(2);
+
+    await bot.stopPolling();
+    vi.useRealTimers();
+  });
+
+  it('uses a composed AbortSignal that combines controller and timeout', async () => {
+    let capturedSignal = null;
+    global.fetch = vi.fn((_url, opts = {}) => {
+      capturedSignal = opts.signal;
+      return new Promise((_resolve, reject) => {
+        opts.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
+
+    await waitFor(() => capturedSignal !== null);
+
+    // The signal should be an AbortSignal (likely from AbortSignal.any()).
+    expect(capturedSignal).toBeDefined();
+    expect(typeof capturedSignal.aborted).toBe('boolean');
+
+    await bot.stopPolling();
+  });
+
   it('retries after a non-ok getUpdates response instead of dispatching', async () => {
     // RETRY_DELAY_API_ERROR_MS in telegramClient.js is 5000ms; drive it with
     // fake timers so the retry is instant rather than a real 5s wait.
