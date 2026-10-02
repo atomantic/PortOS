@@ -240,6 +240,43 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
   }
 });
 
+it('resolves local client imports of present untracked modules and still fails closed on missing ones', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-untracked-deps-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const leaf = 'server/lib/shared/leaf.js';
+  const inspect = () => {
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [leaf], cwd: root });
+    return buildCiTestPlan(inputs.changedFiles, inputs);
+  };
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write('client/src/lib/consumer.js', "import { widget } from './newWidget.js';\nexport { value } from '../../../server/lib/shared/leaf.js';\n");
+    write('client/src/lib/consumer.test.js', "import './consumer.js';\n");
+    git('add', '--all');
+
+    // newWidget.js exists but is not yet staged: still a resolvable local import.
+    write('client/src/lib/newWidget.js', 'export const widget = 1;\n');
+    expect(git('status', '--porcelain')).toContain('?? client/src/lib/newWidget.js');
+    const plan = inspect();
+    expect(plan.full).toBe(false);
+    expect(plan.client.mode).toBe('related');
+    expect(plan.client.sources).toContain(leaf);
+
+    // Control: a genuinely missing import still widens to a full plan.
+    rmSync(join(root, 'client/src/lib/newWidget.js'));
+    const missing = inspect();
+    expect(missing.full).toBe(true);
+    expect(missing.reason).toBe('client dependency discovery unresolved');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 describe('CI test impact planner', () => {
   it('selects executable documentation tests, including contracts outside the always-run list', () => {
     const paths = ['docs/features/product-surfaces.test.js', 'docs/example.test.js'];
