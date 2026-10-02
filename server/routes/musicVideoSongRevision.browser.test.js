@@ -52,8 +52,11 @@ describe.skipIf(!chrome || !bundler)('song revision in Chrome (client dependenci
     } } } }));
     const before = await store.getProject(original.id);
     let creates = 0;
+    let generationMode = 'success';
     songs.__setSongRevisionDepsForTests({ generate: async (_fields, opts) => {
       if (!opts.songIds) { creates++; await opts.onSubmitted(['candidate-a', 'candidate-b']); }
+      if (generationMode === 'failed') throw new Error('Synthetic download failure');
+      if (generationMode === 'held') await new Promise((_, reject) => opts.signal.addEventListener('abort', () => reject(new Error('Canceled')), { once: true }));
       return { songId: opts.songIds?.[0] || 'candidate-b', filename: 'synthetic.wav' };
     } });
     const ui = join(PATHS.data, 'ui'); await mkdir(ui, { recursive: true });
@@ -102,6 +105,36 @@ describe.skipIf(!chrome || !bundler)('song revision in Chrome (client dependenci
     await upload();
     await page.getByRole('alert').filter({ hasText: 'composition version changed' }).waitFor();
     expect((await store.getProject(selected.id)).productionReview.documentStoryboard.directory).toBe(doc.document.directory);
+
+    const priorVersion = await store.getProject(selected.id);
+    await page.getByRole('button', { name: 'Fork & revise song' }).click();
+    await page.getByLabel('Revision lyrics').fill('Another revision');
+    await page.getByRole('button', { name: 'Save song draft' }).click();
+    await page.getByText('Song revision: draft', { exact: true }).waitFor();
+    generationMode = 'failed';
+    await page.getByRole('button', { name: 'Generate with Suno — uses credits' }).click();
+    await page.getByText('Song revision: failed', { exact: true }).waitFor();
+    expect(creates).toBe(2);
+    generationMode = 'success';
+    await page.getByRole('button', { name: 'Resume candidate downloads' }).click();
+    await page.getByText('Song revision: review', { exact: true }).waitFor();
+    expect(creates).toBe(2);
+    await page.getByRole('button', { name: 'Cancel song revision' }).click();
+    await page.getByText('Song revision: canceled', { exact: true }).waitFor();
+    await page.getByLabel('Revision lyrics').fill('Cancel this pending generation');
+    await page.getByRole('button', { name: 'Save song draft' }).click();
+    await page.getByText('Song revision: draft', { exact: true }).waitFor();
+    generationMode = 'held';
+    await page.getByRole('button', { name: 'Generate with Suno — uses credits' }).click();
+    await page.getByText('Song revision: generating', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Cancel song revision' }).click();
+    await page.getByText('Song revision: canceled', { exact: true }).waitFor();
+    await songs.__testing.settle();
+    const lastVersion = await store.getProject(new URL(page.url()).pathname.split('/')[2]);
+    expect(lastVersion.uploadedAudioFilename).toBe('synthetic.wav');
+    expect(lastVersion.songRevisionHistory.at(-1).status).toBe('canceled');
+    expect(await store.getProject(selected.id)).toEqual(priorVersion);
+    expect(await store.getProject(original.id)).toEqual(before);
 
     for (const width of [1000, 360]) {
       await page.setViewportSize({ width, height: 900 });
