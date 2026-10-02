@@ -85,7 +85,15 @@ export function parseAuditQualityReport(summary, category) {
   if (typeof summary !== 'string') return null;
   const lines = summary.split(/\r?\n/).filter(line => line.startsWith(REPORT_PREFIX));
   if (lines.length !== 1) return null;
-  const parsed = auditQualityReportSchema.safeParse(safeJSONParse(lines[0].slice(REPORT_PREFIX.length), null));
+  const raw = safeJSONParse(lines[0].slice(REPORT_PREFIX.length), null);
+  // An agent that scanned only part of the inventory but labelled it "broad"
+  // (the common slip) still measured something real. Record it as the partial
+  // assessment it honestly is rather than dropping the whole run's measurement.
+  const claim = raw && typeof raw === 'object' && raw.coverage === 'broad' && raw.score !== null
+    && Number.isFinite(raw.scannedFiles) && Number.isFinite(raw.totalFiles)
+    && raw.scannedFiles > 0 && raw.scannedFiles < raw.totalFiles
+    ? { ...raw, coverage: 'partial' } : raw;
+  const parsed = auditQualityReportSchema.safeParse(claim);
   return parsed.success && parsed.data.category === normalizeAuditTaskType(category) ? parsed.data : null;
 }
 

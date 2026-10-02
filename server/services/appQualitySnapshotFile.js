@@ -27,7 +27,7 @@ import {
   APP_QUALITY_LEGACY_SNAPSHOT_FILENAME,
   APP_QUALITY_SNAPSHOT_FILENAME,
   classifyQualitySnapshot,
-  qualityFileFromWireSnapshot,
+  serializeQualitySnapshot,
 } from './appQualitySnapshotFormat.js';
 
 export { APP_QUALITY_SNAPSHOT_FILENAME };
@@ -189,6 +189,22 @@ function hasOrigin(remote) {
   return Boolean(remote?.origin && (remote.origin.fetch || remote.origin.push || remote.origin['']));
 }
 
+const SNAPSHOT_WINDOW_DAYS = 30;
+
+/**
+ * Canonical text for the fresh evidence UNIONED with the rows already on the
+ * default branch (same 30-day window). The fresh build only sees this install's
+ * database plus whichever peers answer right now; a rewrite from that alone
+ * silently deleted every row a peer (or an expired local row) had contributed
+ * whenever the peer was offline. Fresh rows still win a same-day collision.
+ */
+function mergeWithPublished(snapshot, onDefault, now) {
+  const cutoff = new Date(now - SNAPSHOT_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
+  const kept = (onDefault.records || []).filter(record => record.assessedAt.slice(0, 10) >= cutoff);
+  const fresh = snapshot.measurements.map(({ measurementId, assessedAt, report }) => ({ ...report, assessedAt, measurementId }));
+  return serializeQualitySnapshot(snapshot.repository, [...kept, ...fresh]);
+}
+
 async function publishNow(app, deps) {
   const git = deps.git || await import('./git.js');
   // Evidence is resolved before any remote check so a repo that is not a
@@ -198,16 +214,15 @@ async function publishNow(app, deps) {
   const snapshot = await build(app, 30, deps);
   if (!snapshot?.measurements?.length) return skipped(app, 'no-evidence');
 
-  const next = qualityFileFromWireSnapshot(snapshot);
-  if (!next) return skipped(app, 'invalid-evidence');
-  if (lastPublishedBody.get(app.repoPath) === next) return skipped(app, 'no-changes');
-
   const base = await repoBase(app, git);
   if (base.skip) return base.skip;
   const onDefault = await readGitSnapshot(
     git, app.repoPath, `origin/${base.defaultBranch}:${APP_QUALITY_SNAPSHOT_FILENAME}`,
   );
   if (REWRITE_BLOCKED.has(onDefault.status)) return untouched(app, onDefault.status);
+  const next = mergeWithPublished(snapshot, onDefault, deps.now ?? Date.now());
+  if (!next) return skipped(app, 'invalid-evidence');
+  if (lastPublishedBody.get(app.repoPath) === next) return skipped(app, 'no-changes');
   // v1 bytes are a real migration even when the scores match. Only v2 that
   // already canonicalizes to `next` is "no changes".
   if (sameSnapshot(onDefault, next)) {
