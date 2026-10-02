@@ -28,7 +28,7 @@ import { withMusicVideoStyle } from './styleReferences.js';
 
 import { randomUUID } from 'crypto';
 import { readFile } from 'fs/promises';
-import { extname } from 'path';
+import { basename, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
@@ -73,6 +73,8 @@ import { findProductionRun, haltProduction, rebaseProductionAfterCheckin, reserv
 const PROCESS_ID = `proc-${randomUUID()}`;
 const short = (id) => String(id || '').slice(3, 11);
 const MAX_KEY_NOTES = 8;
+const MAX_SUBMITTED_PROMPT = 20_000;
+const MAX_SUBMITTED_REFERENCES = 16;
 
 // Test seam: provider, queue, settings and mood-board access are swappable.
 const defaults = {
@@ -266,7 +268,25 @@ async function enqueueImage(project, stage, key) {
   const settings = await deps.getSettings();
   const baseParams = await deps.imageParams(settings, stage.route, common);
   const params = await withMusicVideoStyle(project, baseParams, stage.route.mode, stage.route.model, settings);
-  return deps.enqueue({ kind: 'image', params, owner: `music-video-cast-sets:${project.id}` });
+  // Persist the actual styled queue input, with only served local references.
+  // Never expose the absolute host paths used by the provider transport.
+  const submittedReferences = (params.referenceImagePaths || []).flatMap((path) => {
+    if (typeof path !== 'string') return [];
+    const filename = basename(path);
+    if (resolveGalleryImage(filename, { mustExist: false }) === path) return [{ kind: 'image', filename }];
+    if (resolveImageRef(filename, { mustExist: false }) === path) return [{ kind: 'image-ref', filename }];
+    return [];
+  });
+  const prompt = String(params.prompt || '');
+  const submission = {
+    submittedPrompt: prompt.slice(0, MAX_SUBMITTED_PROMPT),
+    submittedPromptTruncated: prompt.length > MAX_SUBMITTED_PROMPT,
+    submittedReferences: submittedReferences.slice(0, MAX_SUBMITTED_REFERENCES),
+    submittedReferencesTruncated: submittedReferences.length > MAX_SUBMITTED_REFERENCES,
+    submittedRevision: stage.revision,
+  };
+  const sent = await deps.enqueue({ kind: 'image', params, owner: `music-video-cast-sets:${project.id}` });
+  return { ...sent, submission };
 }
 
 // Check-in slots use the existing production ledger; the revision separates
@@ -335,7 +355,7 @@ async function dispatchKey(projectId, key) {
     const reason = sent?.error?.message || 'The image job was not queued';
     const out = await mutateProjectRecord(projectId, (current) => {
       const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'refused', error: reason }).project : current;
-      const settled = settleCastAndSetsImage(next, key, { error: reason });
+      const settled = settleCastAndSetsImage(next, key, { error: reason, revision: reserved.stage.revision });
       if (settled.stage?.status === 'failed') settled.project = refundUnusedCheckinSteps(settled.project);
       return settled;
     });
@@ -343,10 +363,11 @@ async function dispatchKey(projectId, key) {
     publish(projectId, out.project);
     return;
   }
-  await mutateProjectRecord(projectId, (current) => {
+  const linked = await mutateProjectRecord(projectId, (current) => {
     const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'queued', jobId: sent.jobId }).project : current;
-    return linkCastAndSetsJob(next, key, sent.jobId);
+    return linkCastAndSetsJob(next, key, sent.jobId, sent.submission);
   });
+  publish(projectId, linked.project);
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} ${key} → ${reserved.stage.route.mode} job ${String(sent.jobId).slice(0, 8)}`);
 }
 
@@ -603,15 +624,16 @@ export async function getCastAndSets(projectId) {
  * Settles its key (idempotent) and, when the stage is dispatching in this
  * process, continues. Returns true when the record changed.
  */
-export async function onCastAndSetsImageSettled({ projectId, key, jobId = null, filename = null, error = null, productionRunId = null, productionStepKey = null, status = null }) {
+export async function onCastAndSetsImageSettled({ projectId, key, jobId = null, filename = null, error = null, revision = null, productionRunId = null, productionStepKey = null, status = null }) {
   const project = await getProject(projectId);
   if (!project?.castAndSets?.images?.[key]) return false;
   const out = await mutateProjectRecord(projectId, (current) => {
+    if (revision != null && revision !== current.castAndSets?.revision) return { project: current, changed: false };
     const next = productionRunId && productionStepKey
       ? settleProductionStep(current, productionRunId, productionStepKey, {
         status: filename ? 'completed' : status === 'canceled' ? 'canceled' : 'failed', jobId, error,
       }).project : current;
-    const settled = settleCastAndSetsImage(next, key, { jobId, filename, error });
+    const settled = settleCastAndSetsImage(next, key, { jobId, filename, error, revision });
     if (settled.stage?.status === 'failed') settled.project = refundUnusedCheckinSteps(settled.project);
     return settled;
   });

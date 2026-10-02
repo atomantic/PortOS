@@ -8,12 +8,12 @@ import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
 export default function CastSetsStage({ board }) {
   const { project, locked, castSets, kickoff } = board;
   return (
-    <fieldset disabled={locked} className="min-w-0 space-y-3">
+    <div className="min-w-0 space-y-3">
       {project.castAndSets ? (
         <div className="rounded-lg border border-port-border bg-port-card p-3">
           <CastAndSetsCheckin
             project={project}
-            busy={castSets.busy || kickoff.running}
+            busy={locked || castSets.busy || kickoff.running}
             onOpenSheet={board.openArtifact}
             onApprove={board.approveCastAndSets}
             onRegenerate={() => castSets.regenerate()}
@@ -35,6 +35,6 @@ export default function CastSetsStage({ board }) {
         title="Cast & Sets sheets"
         emptyText="The check-in sheet appears here once the cast and sets are built"
       />
-    </fieldset>
+    </div>
   );
 }
