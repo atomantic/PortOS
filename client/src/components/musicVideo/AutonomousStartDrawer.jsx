@@ -103,7 +103,15 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
             <div>
               <label htmlFor="mv-auto-suno-model" className="block text-xs text-port-text-muted mb-1">Suno model</label>
               <input id="mv-auto-suno-model" type="text" maxLength={10} value={draft.suno.model} onChange={(e) => patchSuno({ model: e.target.value })} placeholder="Current (e.g. v6)" aria-invalid={!sunoModelValid} className={inputClass} />
-              {!sunoModelValid && <p className="text-[11px] text-port-error mt-1">Use a version such as v6 or v4.5.</p>}
+              {!sunoModelValid && <p className="text-[11px] text-port-error mt-1">Use a version such as v6 or v6-wild.</p>}
+            </div>
+            <div>
+              <label htmlFor="mv-auto-suno-max" className="block text-xs text-port-text-muted mb-1">Max Mode</label>
+              <select id="mv-auto-suno-max" value={draft.suno.maxMode} onChange={(e) => patchSuno({ maxMode: e.target.value })} className={inputClass}>
+                <option value="">Suno decides</option>
+                <option value="on">On (higher quality, more credits)</option>
+                <option value="off">Off</option>
+              </select>
             </div>
           </div>
         )}
