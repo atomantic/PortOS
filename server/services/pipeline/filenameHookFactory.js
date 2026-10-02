@@ -21,16 +21,46 @@
  * universe bucket. The callback is awaited inside the same outer
  * try/catch frame as the hook, so a thrown error is logged and swallowed
  * the same way as other hook failures (bookkeeping must not fail renders).
+ *
+ * **Completion ownership.** The mediaJobEvents listener can't return the
+ * handler's promise to anyone, so each run — stage write AND `onStamped`
+ * side effect — is registered with a run tracker. `__testing.drain()`
+ * resolves once every run in flight (including runs started while draining)
+ * has settled, and `__testing.reset()` detaches the listener and THEN
+ * drains, so a test fixture can't wipe shared stores underneath a prior
+ * test's still-running write (#9634).
  */
 
 import { mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateStageWithLatest } from './issues.js';
 
+/**
+ * Owned completion boundary for fire-and-forget hook runs. `track(promise)`
+ * registers a run (the promise must never reject — hook runs end in their
+ * own `.catch`); `drain()` resolves when no tracked run is in flight,
+ * looping so a run that starts mid-drain is awaited too. Shared with
+ * `seasonCoverFilenameHook.js`, which can't use the issue-scoped factory.
+ */
+export function createHookRunTracker() {
+  const inFlight = new Set();
+  const track = (promise) => {
+    inFlight.add(promise);
+    const settle = () => { inFlight.delete(promise); };
+    promise.then(settle, settle);
+    return promise;
+  };
+  const drain = async () => {
+    while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
+  };
+  return { track, drain };
+}
+
 export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, applyFilename, onStamped = null }) {
   let registeredHandler = null;
+  const runs = createHookRunTracker();
 
   const handler = (job) => {
-    void (async () => {
+    void runs.track((async () => {
       if (!job || job.kind !== kind) return;
       const filename = job.result?.filename;
       if (typeof filename !== 'string' || !filename) return;
@@ -68,7 +98,7 @@ export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, 
       }
     })().catch((err) => {
       console.error(`❌ ${name} filename hook crashed: ${err?.message || err}`);
-    });
+    }));
   };
 
   function init() {
@@ -78,12 +108,15 @@ export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, 
     console.log(`📎 ${name} filename hook initialized`);
   }
 
-  function reset() {
+  // Detach first so no new run can start, then wait out the runs already in
+  // flight — callers reset shared fixture state right after this resolves.
+  async function reset() {
     if (registeredHandler) {
       mediaJobEvents.off('completed', registeredHandler);
       registeredHandler = null;
     }
+    await runs.drain();
   }
 
-  return { init, __testing: { reset } };
+  return { init, __testing: { reset, drain: runs.drain } };
 }
