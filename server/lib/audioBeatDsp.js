@@ -33,6 +33,10 @@ export const ANALYSIS_SAMPLE_RATE = 22050;
 // discarding) the rest of the stream.
 export const MAX_ANALYSIS_SEC = 300;
 
+// Hard wall-clock cap on one ffmpeg decode. Without it a wedged ffmpeg (bad
+// container, pipe backpressure) never settles and pins callers forever.
+export const AUDIO_DECODE_TIMEOUT_MS = 60_000;
+
 // Frame hop for the onset envelope. 512 samples @ 22.05kHz → ~43 frames/sec,
 // which gives ~1 BPM tempo resolution across the musical range and ~23ms beat
 // placement granularity — both well within what beat-snapping needs.
@@ -147,10 +151,12 @@ export function fftInPlace(real, imaginary, plan) {
  *   truncation path can be exercised against a short fixture rather than a
  *   real multi-minute file; real callers should not pass it. Clamped to
  *   MAX_ANALYSIS_SEC — it can only shrink the decode window, never grow it,
- *   so it can't be used to defeat the memory bound.
+ *   so it can't be used to defeat the memory bound. `timeoutMs` overrides
+ *   AUDIO_DECODE_TIMEOUT_MS (test seam); on expiry ffmpeg is killed and the
+ *   result is `null`.
  * @returns {Promise<{ samples: Float32Array, sampleRate: number } | null>}
  */
-export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX_ANALYSIS_SEC } = {}) {
+export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX_ANALYSIS_SEC, timeoutMs = AUDIO_DECODE_TIMEOUT_MS } = {}) {
   if (typeof audioPath !== 'string' || !audioPath) return null;
   // A listener added to an already-aborted signal never fires, so without this
   // guard a pre-cancelled request (plausible off the request lifecycle, under a
@@ -184,7 +190,11 @@ export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX
       onAbort = () => proc.kill('SIGTERM');
       signal.addEventListener('abort', onAbort, { once: true });
     }
-    const cleanup = () => { if (signal && onAbort) signal.removeEventListener('abort', onAbort); };
+    const watchdog = setTimeout(() => proc.kill('SIGKILL'), timeoutMs);
+    const cleanup = () => {
+      clearTimeout(watchdog);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+    };
 
     proc.stdout.on('data', (c) => chunks.push(c));
     proc.on('error', () => { cleanup(); resolve(null); });

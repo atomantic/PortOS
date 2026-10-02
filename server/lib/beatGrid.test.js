@@ -190,6 +190,15 @@ describe('decodeAudioToPcm (ffmpeg round-trip)', () => {
     expect(await decodeAudioToPcm(join(tmpDir, 'whatever.wav'), { signal: controller.signal })).toBeNull();
   });
 
+  // Issue #9652: a wedged ffmpeg must not hang the caller forever.
+  it('kills ffmpeg and resolves null when the decode exceeds timeoutMs (skipped without ffmpeg)', async () => {
+    if (!ffmpeg) { console.log('⏭️  ffmpeg not found — skipping decode-timeout test'); return; }
+    const wavSampleRate = 44100;
+    const wavPath = join(tmpDir, 'timeout.wav');
+    await writeFile(wavPath, encodeWav(clickTrack({ bpm: 120, durationSec: 10, sampleRate: wavSampleRate }), wavSampleRate));
+    expect(await decodeAudioToPcm(wavPath, { timeoutMs: 1 })).toBeNull();
+  });
+
   it('decodes a synthesized WAV to PCM at BEAT_GRID_SAMPLE_RATE (skipped without ffmpeg)', async () => {
     if (!ffmpeg) { console.log('⏭️  ffmpeg not found — skipping beat-grid decode round-trip'); return; }
     const wavSampleRate = 44100;
@@ -293,4 +302,46 @@ describe('getBeatGrid (mtime-keyed cache)', () => {
     expect(a).not.toBeNull();
     expect(b).toBe(a);
   });
+
+  // Issue #9652: the shared in-flight analysis used to run on the FIRST
+  // caller's signal, so that caller aborting nulled the grid for every other
+  // waiter. Caller A is the first to start (it owns the analysis) and aborts
+  // while B is still waiting; B must still get a real grid.
+  it('does not let the first caller aborting cancel the shared analysis for another caller (skipped without ffmpeg)', async () => {
+    if (!ffmpeg) { console.log('⏭️  ffmpeg not found — skipping abort-isolation test'); return; }
+    const wavSampleRate = 44100;
+    const wavPath = join(tmpDir, 'abort-isolation.wav');
+    await writeFile(wavPath, encodeWav(clickTrack({ bpm: 120, durationSec: 6, sampleRate: wavSampleRate }), wavSampleRate));
+
+    const controllerA = new AbortController();
+    const pA = getBeatGrid(wavPath, { signal: controllerA.signal });
+    // Let A register the shared analysis (stat resolved, decode starting)
+    // before B joins, so A is deterministically the analysis owner.
+    await new Promise((r) => setTimeout(r, 10));
+    const pB = getBeatGrid(wavPath);
+    controllerA.abort();
+    const [a, b] = await Promise.all([pA, pB]);
+    expect(a).toBeNull();
+    expect(b).not.toBeNull();
+    expect(b.bpm).toBeGreaterThan(120 - BPM_TOLERANCE);
+    expect(b.bpm).toBeLessThan(120 + BPM_TOLERANCE);
+  });
+
+  it('returns null for every caller when all of them abort, and leaves nothing wedged in flight (skipped without ffmpeg)', async () => {
+    if (!ffmpeg) { console.log('⏭️  ffmpeg not found — skipping all-abort test'); return; }
+    const wavSampleRate = 44100;
+    const wavPath = join(tmpDir, 'abort-all.wav');
+    await writeFile(wavPath, encodeWav(clickTrack({ bpm: 120, durationSec: 6, sampleRate: wavSampleRate }), wavSampleRate));
+
+    const c1 = new AbortController();
+    const c2 = new AbortController();
+    const p1 = getBeatGrid(wavPath, { signal: c1.signal });
+    const p2 = getBeatGrid(wavPath, { signal: c2.signal });
+    c1.abort();
+    c2.abort();
+    expect(await Promise.all([p1, p2])).toEqual([null, null]);
+    // A later, healthy caller measures fresh rather than inheriting the abort.
+    expect(await getBeatGrid(wavPath)).not.toBeNull();
+  });
 });
+

@@ -166,21 +166,53 @@ export async function getBeatGrid(audioPath, { signal } = {}) {
   if (cached && cached.mtimeMs === stats.mtimeMs) return cached.result;
 
   const key = inFlightKey(audioPath, stats.mtimeMs);
-  const inFlight = beatGridInFlight.get(key);
-  if (inFlight) return inFlight;
+  let entry = beatGridInFlight.get(key);
+  if (!entry) {
+    // The shared analysis runs on its OWN controller, never a single caller's
+    // signal: one caller aborting must not null the grid out from under the
+    // others awaiting the same promise. The decode is only aborted once every
+    // waiting caller has aborted.
+    const controller = new AbortController();
+    const promise = (async () => {
+      const analyzed = await analyzeBeatGridFile(audioPath, { signal: controller.signal });
+      if (!analyzed) return null;
+      const result = { bpm: analyzed.bpm, beats: analyzed.beats, downbeats: analyzed.downbeats, hits: analyzed.hits };
+      beatGridCache.set(audioPath, { mtimeMs: stats.mtimeMs, result });
+      return result;
+    })().finally(() => {
+      if (beatGridInFlight.get(key) === entry) beatGridInFlight.delete(key);
+    });
+    entry = { promise, controller, waiters: 0 };
+    beatGridInFlight.set(key, entry);
+  }
 
-  const analysis = (async () => {
-    const analyzed = await analyzeBeatGridFile(audioPath, { signal });
-    if (!analyzed) return null;
-    const result = { bpm: analyzed.bpm, beats: analyzed.beats, downbeats: analyzed.downbeats, hits: analyzed.hits };
-    beatGridCache.set(audioPath, { mtimeMs: stats.mtimeMs, result });
-    return result;
-  })();
-  beatGridInFlight.set(key, analysis);
+  if (signal?.aborted) return null;
+  entry.waiters += 1;
+  const shared = entry;
+  if (!signal) {
+    try { return await shared.promise; } finally { shared.waiters -= 1; }
+  }
+  // This caller's own abort resolves ITS call to null immediately and drops it
+  // from the waiter count; the shared decode is cancelled only at zero.
+  let onAbort;
+  const aborted = new Promise((resolve) => {
+    onAbort = () => {
+      shared.waiters -= 1;
+      if (shared.waiters <= 0) {
+        shared.controller.abort();
+        if (beatGridInFlight.get(key) === shared) beatGridInFlight.delete(key);
+      }
+      resolve(null);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
   try {
-    return await analysis;
+    return await Promise.race([shared.promise, aborted]);
   } finally {
-    beatGridInFlight.delete(key);
+    if (!signal.aborted) {
+      signal.removeEventListener('abort', onAbort);
+      shared.waiters -= 1;
+    }
   }
 }
 
