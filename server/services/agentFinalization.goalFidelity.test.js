@@ -472,7 +472,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       unrequested: ['an unrelated logging refactor'],
     }));
     const finalized = await finalize({ runId: 'fidelity-held-run', prExpected: true });
-    expect(finalized).toMatchObject({ success: false, prVerdict: { ok: true } });
+    expect(finalized).toMatchObject({ success: false, cleanupEvidence: { ok: true } });
     expect(completeAgentRun).toHaveBeenCalledWith('fidelity-held-run', 'done', 0, 1000,
       expect.objectContaining({ category: GOAL_FIDELITY_CATEGORY }), false);
 
@@ -497,7 +497,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     });
     findPullRequestForBranch.mockResolvedValueOnce({ status: 'none' });
     const finished = await finalize({ prExpected: true, runId: 'drift-and-pr' });
-    expect(finished).toMatchObject({ success: false, prVerdict: { ok: false } });
+    expect(finished).toMatchObject({ success: false, cleanupEvidence: { ok: false } });
     expect(completion()).toMatchObject({
       error: 'Primary checkout changed', completionReason: PRIMARY_CHECKOUT_MUTATED_REASON,
     });
@@ -518,7 +518,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       success: false, terminatedByUser, runId: 'failed-run', errorAnalysis: analysis,
       completionReason: terminatedByUser ? 'user-terminated' : 'failed',
     });
-    expect(finished).toMatchObject({ success: false, prVerdict: { ok: true } });
+    expect(finished).toMatchObject({ success: false, cleanupEvidence: { ok: true } });
     expect(completeAgentRun).toHaveBeenCalledWith('failed-run', 'done', 0, 1000, analysis, false);
     expect(completion()).toMatchObject({
       success: false, completionReason: terminatedByUser ? 'user-terminated' : 'failed',

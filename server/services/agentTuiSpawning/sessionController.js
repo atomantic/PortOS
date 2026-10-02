@@ -34,7 +34,6 @@ import { emitLog } from '../cosEvents.js';
 import { HOST_SHUTDOWN_REASON } from '../../lib/hostShutdown.js';
 import { missingSentinelLogMessage, parseSentinelPayload } from '../../lib/agentSentinel.js';
 import { SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
-import { prClaimWasVerified } from '../../lib/prDisposition.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
 import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector } from '../../lib/aiToolkit/errorDetection.js';
@@ -1150,8 +1149,8 @@ export function createTuiSessionController({
         startedAt: agentData?.startedAt ?? null,
       });
       if (finalizeVerdict && typeof finalizeVerdict.success === 'boolean') cleanupSuccess = finalizeVerdict.success;
-      prClaimVerified = prClaimWasVerified(finalizeVerdict?.prVerdict);
-      branchProvenEmpty = finalizeVerdict?.prVerdict?.branchProvenEmpty === true;
+      if (finalizeVerdict?.prClaimVerified === true) prClaimVerified = true;
+      if (finalizeVerdict?.branchProvenEmpty === true) branchProvenEmpty = true;
     } finally {
       await releaseRunResources({ agentData, cleanupSuccess, prClaimVerified, branchProvenEmpty });
     }
