@@ -80,7 +80,7 @@ function makeController({
     rawFile: '/tmp/workspace/raw.txt',
     executionId: 'exec-1',
     laneName: 'lane-1',
-    directLaunch: true,
+    launchShape: 'direct',
     prOwnership: { prOpenedBy: 'agent-inline', prClaimExpected: true, taskOpenPR: true },
     mergeGateIsOwed,
     spooler: {

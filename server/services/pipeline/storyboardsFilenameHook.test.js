@@ -6,8 +6,8 @@
  * queue, and must still attach jobs queued under the LEGACY index-only owner
  * format (no ids) so an upgrade doesn't strand in-flight renders.
  *
- * The hook's handler runs inside a `void (async () => {})` IIFE, so each test
- * waits for the side effect rather than awaiting the emit.
+ * The hook's handler runs fire-and-forget, so each test awaits the hook's
+ * owned completion boundary (`__testing.drain()`) before asserting (#9634).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -31,29 +31,20 @@ const { mediaJobEvents } = await import('../mediaJobQueue/index.js');
 const hook = await import('./storyboardsFilenameHook.js');
 const { buildStoryboardsShotOwner } = await import('./owners.js');
 
-async function waitFor(predicate, { timeoutMs = 1000, intervalMs = 5 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  throw new Error('waitFor: predicate never became true');
-}
-
 const seedIssue = (scenes) => {
   issuesStore.set('iss-1', { id: 'iss-1', stages: { storyboards: { scenes } } });
 };
 const shotsOf = (sceneIndex) => issuesStore.get('iss-1').stages.storyboards.scenes[sceneIndex].shots;
 
-beforeEach(() => {
+beforeEach(async () => {
+  await hook.__testing.reset();
   issuesStore.clear();
   updateStageWithLatestMock.mockClear();
-  hook.__testing.reset();
   hook.initStoryboardsFilenameHook();
 });
 
-afterEach(() => {
-  hook.__testing.reset();
+afterEach(async () => {
+  await hook.__testing.reset();
 });
 
 describe('storyboardsFilenameHook', () => {
@@ -74,7 +65,8 @@ describe('storyboardsFilenameHook', () => {
       }),
     });
 
-    await waitFor(() => shotsOf(1)[0].startFrameFilename === 'shot.png');
+    await hook.__testing.drain();
+    expect(shotsOf(1)[0].startFrameFilename).toBe('shot.png');
     expect(shotsOf(0)[0].startFrameFilename).toBeUndefined();
   });
 
@@ -90,7 +82,8 @@ describe('storyboardsFilenameHook', () => {
       owner: 'pipeline:iss-1:storyboards:scene0:shot0',
     });
 
-    await waitFor(() => shotsOf(0)[0].startFrameFilename === 'legacy.png');
+    await hook.__testing.drain();
+    expect(shotsOf(0)[0].startFrameFilename).toBe('legacy.png');
   });
 
   it('skips when the shot is no longer pointing at this job (stale re-render)', async () => {
@@ -105,7 +98,8 @@ describe('storyboardsFilenameHook', () => {
       }),
     });
 
-    await waitFor(() => updateStageWithLatestMock.mock.calls.length > 0);
+    await hook.__testing.drain();
+    expect(updateStageWithLatestMock).toHaveBeenCalledTimes(1);
     expect(shotsOf(0)[0].startFrameFilename).toBeUndefined();
   });
 
@@ -121,7 +115,8 @@ describe('storyboardsFilenameHook', () => {
       }),
     });
 
-    await waitFor(() => updateStageWithLatestMock.mock.calls.length > 0);
+    await hook.__testing.drain();
+    expect(updateStageWithLatestMock).toHaveBeenCalledTimes(1);
     expect(shotsOf(0)[0].startFrameFilename).toBeUndefined();
   });
 });

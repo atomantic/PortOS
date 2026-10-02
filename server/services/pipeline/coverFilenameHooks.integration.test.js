@@ -75,20 +75,21 @@ vi.mock('../universeBuilder.js', () => ({
 // Real imports below — these read through the mocks above.
 const { mediaJobEvents } = await import('../mediaJobQueue/index.js');
 const collections = await import('../mediaCollections.js');
+const universeSvc = await import('../universeBuilder.js');
 const seasonHook = await import('./seasonCoverFilenameHook.js');
 const comicHook = await import('./comicPagesFilenameHook.js');
 const { buildSeasonCoverOwner, buildComicPagesOwner } = await import('./owners.js');
 
-async function waitFor(predicate, { timeoutMs = 1000, intervalMs = 5 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  throw new Error('waitFor: predicate never became true');
-}
+// Settle every hook run the emit started, including its collection write.
+const drainHooks = () => Promise.all([seasonHook.__testing.drain(), comicHook.__testing.drain()]);
+const resetHooks = () => Promise.all([seasonHook.__testing.reset(), comicHook.__testing.reset()]);
+const refsIn = async (universeId) => {
+  const linked = await collections.findCollectionByUniverseId(universeId);
+  return linked ? linked.items.map((it) => it.ref) : null;
+};
 
-beforeEach(() => {
+beforeEach(async () => {
+  await resetHooks();
   rmSync(tempData, { recursive: true, force: true });
   mkdirSync(tempData, { recursive: true });
   seriesStore.clear();
@@ -97,15 +98,12 @@ beforeEach(() => {
   seasonStore.clear();
   updateSeasonOnSeriesMock.mockClear();
   updateStageWithLatestMock.mockClear();
-  seasonHook.__testing.reset();
-  comicHook.__testing.reset();
   seasonHook.initSeasonCoverFilenameHook();
   comicHook.initComicPagesFilenameHook();
 });
 
-afterEach(() => {
-  seasonHook.__testing.reset();
-  comicHook.__testing.reset();
+afterEach(async () => {
+  await resetHooks();
 });
 
 // tempData is minted once (module scope) and reused across every test in
@@ -134,12 +132,8 @@ describe('seasonCoverFilenameHook — universe collection auto-file', () => {
       owner: buildSeasonCoverOwner({ seriesId, seasonId, target: 'cover', variant: 'proof' }),
     });
 
-    await waitFor(async () => {
-      const linked = await collections.findCollectionByUniverseId(universeId);
-      return linked?.items?.some((it) => it.ref === 'cover-final.png');
-    });
-    const linked = await collections.findCollectionByUniverseId(universeId);
-    expect(linked.items.map((it) => it.ref)).toEqual(['cover-final.png']);
+    await drainHooks();
+    expect(await refsIn(universeId)).toEqual(['cover-final.png']);
   });
 
   it('does NOT file when the slot jobId no longer matches (stale render lands after a re-render)', async () => {
@@ -160,10 +154,7 @@ describe('seasonCoverFilenameHook — universe collection auto-file', () => {
       owner: buildSeasonCoverOwner({ seriesId, seasonId, target: 'cover', variant: 'proof' }),
     });
 
-    // Give the IIFE time to run; verify the universe collection never gets
-    // the stale filename. A small wait is enough — the handler's path is
-    // synchronous through await microtasks once the mocks resolve.
-    await new Promise((r) => setTimeout(r, 60));
+    await drainHooks();
     const linked = await collections.findCollectionByUniverseId(universeId);
     expect(linked).toBeNull();
   });
@@ -190,7 +181,7 @@ describe('seasonCoverFilenameHook — universe collection auto-file', () => {
       owner: buildSeasonCoverOwner({ seriesId, seasonId, target: 'cover', variant: 'proof' }),
     });
 
-    await new Promise((r) => setTimeout(r, 60));
+    await drainHooks();
     const linked = await collections.findCollectionByUniverseId(universeId);
     expect(linked).toBeNull();
   });
@@ -209,7 +200,7 @@ describe('seasonCoverFilenameHook — universe collection auto-file', () => {
       owner: 'pipeline:other:not-a-season-cover',
     });
 
-    await new Promise((r) => setTimeout(r, 60));
+    await drainHooks();
     const linked = await collections.findCollectionByUniverseId(universeId);
     expect(linked).toBeNull();
   });
@@ -239,10 +230,8 @@ describe('comicPagesFilenameHook — universe collection auto-file', () => {
       owner: buildComicPagesOwner({ issueId, target: 'cover', variant: 'proof' }),
     });
 
-    await waitFor(async () => {
-      const linked = await collections.findCollectionByUniverseId(universeId);
-      return linked?.items?.some((it) => it.ref === 'issue-cover.png');
-    });
+    await drainHooks();
+    expect(await refsIn(universeId)).toEqual(['issue-cover.png']);
   });
 
   it('files the issue back-cover on completion (separate target from cover)', async () => {
@@ -268,10 +257,58 @@ describe('comicPagesFilenameHook — universe collection auto-file', () => {
       owner: buildComicPagesOwner({ issueId, target: 'backCover', variant: 'proof' }),
     });
 
-    await waitFor(async () => {
-      const linked = await collections.findCollectionByUniverseId(universeId);
-      return linked?.items?.some((it) => it.ref === 'issue-back.png');
+    await drainHooks();
+    expect(await refsIn(universeId)).toEqual(['issue-back.png']);
+  });
+
+  it('reset waits for a held post-stamp collection filing before teardown can proceed', async () => {
+    const universeId = 'u-comic-held';
+    const seriesId = 'ser-comic-held';
+    const issueId = 'iss-held';
+    universeStore.set(universeId, { id: universeId, name: 'Held' });
+    seriesStore.set(seriesId, { id: seriesId, universeId });
+    issuesStore.set(issueId, {
+      id: issueId,
+      seriesId,
+      stages: { comicPages: { backCover: { proofImage: { jobId: 'job-back-held' } } } },
     });
+
+    // Hold the filer's universe lookup — reached only after the stage write
+    // committed and onStamped began — until the test releases it.
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    let entered;
+    const reachedHold = new Promise((r) => { entered = r; });
+    vi.mocked(universeSvc.getUniverse).mockImplementationOnce(async (id) => {
+      entered();
+      await gate;
+      return universeStore.get(id) || null;
+    });
+
+    mediaJobEvents.emit('completed', {
+      id: 'job-back-held',
+      kind: 'image',
+      result: { filename: 'issue-back-held.png' },
+      owner: buildComicPagesOwner({ issueId, target: 'backCover', variant: 'proof' }),
+    });
+    await reachedHold;
+    expect(issuesStore.get(issueId).stages.comicPages.backCover.proofImage.filename).toBe('issue-back-held.png');
+
+    let resetSettled = false;
+    const resetDone = comicHook.__testing.reset().then(() => { resetSettled = true; });
+    try {
+      // A full event-loop turn: a reset that doesn't own the in-flight run
+      // would have settled by now; one that does stays parked on the gate.
+      await new Promise((r) => setImmediate(r));
+      expect(resetSettled).toBe(false);
+      expect(await refsIn(universeId)).toBeNull();
+    } finally {
+      // Always release so a failed assertion can't wedge later teardown.
+      release();
+    }
+    await resetDone;
+    // Teardown proceeds only after the filing landed — nothing left to race.
+    expect(await refsIn(universeId)).toEqual(['issue-back-held.png']);
   });
 
   it('does NOT file an interior PAGE render — only cover/backCover get universe-bucketed', async () => {
@@ -297,7 +334,7 @@ describe('comicPagesFilenameHook — universe collection auto-file', () => {
       owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex: 0, variant: 'proof' }),
     });
 
-    await new Promise((r) => setTimeout(r, 60));
+    await drainHooks();
     const linked = await collections.findCollectionByUniverseId(universeId);
     expect(linked).toBeNull();
   });
@@ -325,7 +362,7 @@ describe('comicPagesFilenameHook — universe collection auto-file', () => {
       owner: buildComicPagesOwner({ issueId, target: 'cover', variant: 'proof' }),
     });
 
-    await new Promise((r) => setTimeout(r, 60));
+    await drainHooks();
     const linked = await collections.findCollectionByUniverseId(universeId);
     expect(linked).toBeNull();
   });

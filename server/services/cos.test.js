@@ -1359,14 +1359,14 @@ describe('cos.js source — priority + capacity invariants', () => {
     //
     //   Priority 0 (onDemand)    — spawnDequeuePriority0OnDemand(ctx)
     //   Priority 1 (user)        — spawnDequeuePriority1UserTasks(ctx)
-    //   Priority 2 (autoSystem)  — spawnDequeuePriority2AutoApproved(ctx)
-    //   Priority 3 (idle)        — spawnDequeuePriority3IdleReview(ctx)
+    //   Priority 2 (autoSystem)  — spawnDequeuePriority2AutoApproved(ctx, { taskSchedule })
+    //   Priority 3 (idle)        — spawnDequeuePriority3IdleReview(ctx, { ... })
     const fnBody = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
 
     const onDemandIdx = fnBody.indexOf('spawnDequeuePriority0OnDemand(ctx)');
     const userIdx     = fnBody.indexOf('spawnDequeuePriority1UserTasks(ctx)');
-    const autoSysIdx  = fnBody.indexOf('spawnDequeuePriority2AutoApproved(ctx)');
-    const idleIdx     = fnBody.indexOf('spawnDequeuePriority3IdleReview(ctx)');
+    const autoSysIdx  = fnBody.indexOf('spawnDequeuePriority2AutoApproved(ctx, { taskSchedule })');
+    const idleIdx     = fnBody.indexOf('spawnDequeuePriority3IdleReview(ctx, {');
 
     expect(onDemandIdx, 'spawnDequeuePriority0OnDemand must be invoked').toBeGreaterThan(-1);
     expect(userIdx, 'spawnDequeuePriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);
@@ -1384,10 +1384,10 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     const onDemandIdx = fnBody.indexOf('spawnPriority0OnDemand(ctx)');
     const userIdx     = fnBody.indexOf('spawnPriority1UserTasks(ctx)');
-    const autoSysIdx  = fnBody.indexOf('spawnPriority2AutoApproved(ctx)');
+    const autoSysIdx  = fnBody.indexOf('spawnPriority2AutoApproved(ctx,');
     const queueIdx    = fnBody.indexOf('maybeQueueImprovementTasks(ctx)');
-    const featureIdx  = fnBody.indexOf('spawnPriority36FeatureAgents(ctx)');
-    const idleIdx     = fnBody.indexOf('spawnPriority4IdleReview(ctx)');
+    const featureIdx  = fnBody.indexOf('spawnPriority36FeatureAgents(ctx,');
+    const idleIdx     = fnBody.indexOf('spawnPriority4IdleReview(ctx,');
 
     expect(onDemandIdx, 'spawnPriority0OnDemand must be invoked').toBeGreaterThan(-1);
     expect(userIdx, 'spawnPriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);

@@ -467,18 +467,37 @@ const OBSERVE_TAIL_MAX_LEN = 4000;
 // rolling tail. When supplied, `ready` also requires that marker to have been
 // seen (see AGY_INPUT_READY_PATTERN).
 //
-// directLaunch: the TUI was pty.spawn'd DIRECTLY — there is no launch shell on
-// the PTY, so the shell's paste-mode OFF (`ESC[?2004l`) that normally proves
-// "the command is now running" never occurs; the first `ESC[?2004h` in the
-// stream comes from the TUI itself and IS the ready signal. Without this flag a
-// direct-launch session can never become ready (the durable-runner regression:
-// every runner-tui claude agent died `tui-not-ready` at the 45s deadline while
-// its input box sat live on screen).
-export function createInputReadyTracker({ readyTextPattern = null, directLaunch = false } = {}) {
+/**
+ * Test whether a launch shape owns its own PTY process.
+ * 'runner' and 'direct' shapes own their PTY; 'login-shell' is hosted in a shell.
+ */
+function shapeHasOwnPty(launchShape) {
+  return launchShape === 'runner' || launchShape === 'direct';
+}
+
+/**
+ * Test whether a launch shape has a login shell to fall back to.
+ * Only 'login-shell' has a persistent shell; 'runner' and 'direct' do not.
+ */
+export function shapeHasLoginShell(launchShape) {
+  return launchShape === 'login-shell';
+}
+
+// launchShape: which PTY shape this TUI runs in. 'runner' and 'direct' shapes
+// own their PTY from byte zero and have no launch shell, so the shell's
+// paste-mode OFF (`ESC[?2004l`) that normally proves "the command is now
+// running" never occurs; the first `ESC[?2004h` in the stream comes from the
+// TUI itself and IS the ready signal. Without this knowledge a runner/direct
+// session can never become ready (the durable-runner regression: every
+// runner-tui claude agent died `tui-not-ready` at the 45s deadline while its
+// input box sat live on screen). 'login-shell' has a persistent shell that
+// handles paste-mode negotiation.
+export function createInputReadyTracker({ readyTextPattern = null, launchShape = 'login-shell' } = {}) {
   let pasteModeOn = false;   // LIVE bracketed-paste mode state from the stream
-  // Shell turned paste mode OFF to run the command. Pre-latched for direct
-  // launches, where the TUI owns the PTY from byte zero and no shell OFF exists.
-  let sawCommandRun = directLaunch;
+  // Shell turned paste mode OFF to run the command. Pre-latched when the TUI
+  // owns its own PTY (runner/direct shapes), where no shell OFF exists.
+  const hasOwnPty = shapeHasOwnPty(launchShape);
+  let sawCommandRun = hasOwnPty;
   let needsTrust = false;
   let trustAnswered = false;
   let trustChoiceReady = false;
@@ -1136,7 +1155,7 @@ export function createMcpBootTracker() {
 // overflow as a fault — see `outputBufferTruncated` tracking in
 // `tuiPromptRunner.js`.
 // Cap on the spawner's post-paste accumulator (agentTuiSpawning.js's
-// `postPasteBuffer`), which retains stripped output from a paste attempt until
+// `pasteState.buffer`), which retains stripped output from a paste attempt until
 // the commit resolves. Both signals it carries are LOCAL — a paste-commit chip
 // and a ~40-char prompt prefix — so a few screens of tail is everything the
 // predicate can use, while a codex booting for the full PASTE_COMMIT_PATIENCE_MS

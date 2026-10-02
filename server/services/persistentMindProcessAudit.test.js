@@ -1,4 +1,4 @@
-import { beforeEach, afterAll, expect, it, vi } from 'vitest';
+import { beforeEach, afterAll, expect, it as vitestIt, vi } from 'vitest';
 import { join } from 'node:path';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 const mocks = vi.hoisted(() => ({ root: {}, apps: [], records: {}, dir: null, file: vi.fn(), list: vi.fn(), git: vi.fn() }));
@@ -43,7 +43,24 @@ beforeEach(async () => {
   mocks.git.mockImplementation(async args => ({ stdout: args.slice(3).join('\0') + '\0', exitCode: 0 }));
   await addJob('agent-example');
 });
-afterAll(() => rm(mocks.dir, { recursive: true, force: true }));
+// Vitest's fail-fast cancellation rejects a test's wrapper while its async body
+// keeps writing into the shared fixture root. Own each body until it settles so
+// afterAll removes the root only after every write, and surface a body that
+// failed after vitest stopped listening instead of dropping it.
+const pendingBodies = new Set();
+const orphanedFailures = [];
+const it = (name, body) => vitestIt(name, context => {
+  const run = Promise.resolve().then(() => body(context));
+  const settled = run.then(() => {}, error => { if (context.signal.aborted) orphanedFailures.push(error); });
+  pendingBodies.add(settled);
+  settled.then(() => pendingBodies.delete(settled));
+  return run;
+});
+afterAll(async () => {
+  while (pendingBodies.size) await Promise.all(pendingBodies);
+  await rm(mocks.dir, { recursive: true, force: true });
+  if (orphanedFailures.length) throw new AggregateError(orphanedFailures, 'Cancelled process-audit test failed after cancellation');
+});
 const next = (context = turn) => audit.nextProcessAuditBatch({ appId: 'example' }, context);
 const finding = receipt => ({ appId: 'example', receiptId: receipt, outcome: 'finding', template: 'wrong-tool', targetAppId: 'slashdo', anchors: ['commands/next.md'] });
 
