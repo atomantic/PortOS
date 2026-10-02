@@ -1,0 +1,139 @@
+name: SuperCollider live containment
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/supercollider-live.yml'
+      - 'docker/supercollider/**'
+      - 'scripts/setup-supercollider.js'
+      - 'server/lib/superColliderRuntime.js'
+      - 'server/lib/wavAudioFile.js'
+      - 'server/services/superColliderRuntime.js'
+      - 'server/services/superColliderRender.js'
+      - 'server/services/superColliderRender.live.test.js'
+      - 'server/vitest*.js'
+      - 'server/package*.json'
+      - 'package*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supercollider-live-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  native:
+    name: SuperCollider native ${{ matrix.arch }}
+    # Native runners only: emulation cannot prove either host's boundary.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            nodeArch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            nodeArch: arm64
+    runs-on: ${{ matrix.runner }}
+    # The product build has a 90-minute cap; reserve time for installs and the
+    # six real render/containment cases, including the bounded timeout case.
+    timeout-minutes: 120
+    env:
+      PORTOS_DATA_ROOT: ${{ runner.temp }}/portos-supercollider-live
+      EXPECTED_DOCKER_ARCH: ${{ matrix.arch }}
+      EXPECTED_NODE_ARCH: ${{ matrix.nodeArch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - name: Verify the native Docker host
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          const server = JSON.parse(execFileSync('docker', ['version', '--format', '{{json .Server}}'], { encoding: 'utf8' }));
+          assert.equal(process.platform, 'linux');
+          assert.equal(process.arch, process.env.EXPECTED_NODE_ARCH);
+          assert.equal(server.Os, 'linux');
+          assert.equal(server.Arch, process.env.EXPECTED_DOCKER_ARCH);
+          console.log(`Docker ${server.Version}: ${server.Os}/${server.Arch}; Node ${process.version}: ${process.arch}`);
+          NODE
+          mkdir -p "$PORTOS_DATA_ROOT"
+          touch "$PORTOS_DATA_ROOT/.portos-disposable-root"
+
+      - name: Install test dependencies without lifecycle scripts
+        run: |
+          npm ci --ignore-scripts
+          npm ci --ignore-scripts --prefix server
+
+      - name: Build and prove the shipped runtime
+        run: |
+          npm run setup:supercollider -- --yes | tee "$RUNNER_TEMP/supercollider-first-setup.log"
+          cp "$PORTOS_DATA_ROOT/data/supercollider/runtime-evidence.json" "$RUNNER_TEMP/supercollider-first-evidence.json"
+
+      - name: Repeat setup and prove it skipped build and probe
+        run: |
+          npm run setup:supercollider -- --yes | tee "$RUNNER_TEMP/supercollider-second-setup.log"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const firstLog = readFileSync(join(process.env.RUNNER_TEMP, 'supercollider-first-setup.log'), 'utf8');
+          const secondLog = readFileSync(join(process.env.RUNNER_TEMP, 'supercollider-second-setup.log'), 'utf8');
+          const before = readFileSync(join(process.env.RUNNER_TEMP, 'supercollider-first-evidence.json'), 'utf8');
+          const after = readFileSync(join(process.env.PORTOS_DATA_ROOT, 'data/supercollider/runtime-evidence.json'), 'utf8');
+          assert.match(firstLog, /^✅ Image built$/m);
+          assert.match(firstLog, /^✅ Synthetic render probe passed$/m);
+          assert.match(secondLog, /^✅ Image already current — skipped the build$/m);
+          assert.doesNotMatch(secondLog, /^✅ Image built$|^.*Synthetic render probe/m);
+          assert.equal(after, before, 'The second setup must retain the first probe evidence unchanged');
+          const evidence = JSON.parse(after);
+          assert.equal(evidence.ok, true);
+          assert.equal(evidence.platform.os, 'linux');
+          assert.equal(evidence.platform.arch, process.env.EXPECTED_DOCKER_ARCH);
+          console.log('Both setup runs passed; the second built no image and ran no probe.');
+          NODE
+
+      - name: Exercise real synthesis and containment
+        working-directory: server
+        env:
+          PORTOS_SUPERCOLLIDER_LIVE: '1'
+        run: npx --no-install vitest run services/superColliderRender.live.test.js
+
+      - name: Record the proven platform
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const evidence = JSON.parse(readFileSync(join(process.env.PORTOS_DATA_ROOT, 'data/supercollider/runtime-evidence.json'), 'utf8'));
+          const release = readFileSync('/etc/os-release', 'utf8');
+          const os = release.match(/^PRETTY_NAME="([^"]+)"$/m)?.[1] ?? 'Linux';
+          const lines = [
+            `### ${os} / ${evidence.platform.arch}`,
+            '',
+            `Docker Engine: ${evidence.platform.dockerVersion}`,
+            `Runtime: ${evidence.runtimeVersion}; containment policy: ${evidence.policyVersion}`,
+            `Image: ${evidence.imageId}`,
+            'Setup: first build and probe passed; second skipped both with unchanged evidence.',
+            'Live suite: all six synthesis and containment cases passed.',
+            '',
+          ];
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'));
+          for (const line of lines.filter(Boolean)) console.log(line);
+          NODE
