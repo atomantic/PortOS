@@ -280,6 +280,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Motion toolkit: executes the downloaded installer and writes agent skills user-wide.
   'POST /api/html-composition/toolkit/skills/install',
 
+  // Media runtime setup installs executable dependencies or builds a Docker
+  // image; authorize before opening SSE or probing runtime readiness.
+  'POST /api/music/setup/runtime-install',
+  'POST /api/video-gen/setup/runtime-install',
+  'POST /api/music/supercollider/setup',
+
   // Media authoring can launch a coding CLI/TUI agent, including via provider
   // fallback. Gate the whole operation even when the initial provider is API;
   // runtime-data cwd and later render containment do not sandbox authoring.
