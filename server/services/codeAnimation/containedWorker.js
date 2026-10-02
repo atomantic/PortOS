@@ -6,7 +6,7 @@
  * what the worker left behind. No uncontained fallback exists.
  */
 import { constants } from 'node:fs';
-import { access, lstat, mkdir, open, readdir, realpath, rm } from 'node:fs/promises';
+import { access, lstat, mkdir, open, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -14,7 +14,8 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { execFile, spawn } from '../../lib/childProcess.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import {
-  CODE_ANIMATION_SEATBELT, codeAnimationContainmentMechanism, codeAnimationSeatbeltProfile,
+  CODE_ANIMATION_SEATBELT, CODE_ANIMATION_BUBBLEWRAP, codeAnimationContainmentMechanism, codeAnimationSeatbeltProfile,
+  codeAnimationBubblewrapArgs, codeAnimationSeccompFilter,
   codeAnimationToolRoots, codeAnimationWorkerEnv, codeAnimationWorkerLimitsSchema,
 } from '../../lib/codeAnimationContainment.js';
 
@@ -27,9 +28,32 @@ const swept = new Set();
 
 const canExecute = (path) => access(path, constants.X_OK).then(() => true, () => false);
 
-/** The enforced mechanism for this host, probing only that the sandbox binary is executable. */
-export async function currentContainmentMechanism(seatbeltPath = CODE_ANIMATION_SEATBELT) {
-  return codeAnimationContainmentMechanism(process.platform, process.platform === 'darwin' && await canExecute(seatbeltPath));
+/**
+ * Probe namespaces with trusted system code only. A binary's presence does not
+ * prove that kernel/user-namespace or AppArmor policy allows containment.
+ */
+export async function currentContainmentMechanism(seatbeltPath = CODE_ANIMATION_SEATBELT, bubblewrapPath = CODE_ANIMATION_BUBBLEWRAP) {
+  if (process.platform !== 'linux') {
+    return codeAnimationContainmentMechanism(process.platform, process.platform === 'darwin' && await canExecute(seatbeltPath));
+  }
+  if (!['x64', 'arm64'].includes(process.arch)) {
+    return codeAnimationContainmentMechanism('linux', false, { reason: 'Linux containment unavailable: seccomp requires x64 or arm64.' });
+  }
+  if (!(await canExecute(bubblewrapPath))) {
+    return codeAnimationContainmentMechanism('linux', false, { reason: 'Linux containment unavailable: install bubblewrap (/usr/bin/bwrap).' });
+  }
+  if (!(await canExecute('/bin/bash'))) {
+    return codeAnimationContainmentMechanism('linux', false, { reason: 'Linux containment unavailable: /bin/bash is required for consistent resource-limit units.' });
+  }
+  const supported = await execFileAsync(bubblewrapPath, [
+    '--unshare-all', '--unshare-user', '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
+    '--clearenv', '--ro-bind', '/usr', '/usr', '--ro-bind-try', '/lib', '/lib', '--ro-bind-try', '/lib64', '/lib64',
+    '--', '/usr/bin/true',
+  ], { cwd: '/', env: {}, timeout: 5000, maxBuffer: 4096 }).then(() => true, () => false);
+  return codeAnimationContainmentMechanism('linux', false, {
+    supported,
+    reason: 'Linux containment unavailable: bubblewrap could not create namespaces. Check unprivileged user namespaces and the host AppArmor policy.',
+  });
 }
 
 // A crash leaves its workspace behind; nothing else may own a UUID entry here.
@@ -88,14 +112,29 @@ async function measure(dirs, { maxFiles }) {
 }
 
 async function residentBytes(pid) {
+  if (process.platform === 'linux') {
+    // bwrap supervises a separate PID namespace; its own RSS is not the tool's.
+    // Walk host-visible descendants, including the namespace init and worker.
+    const readProc = (path) => readFile(path, 'utf8').catch((error) => {
+      if (error.code === 'ENOENT' || error.code === 'ESRCH') return '';
+      throw error;
+    });
+    const [status, children] = await Promise.all([
+      readProc(`/proc/${pid}/status`), readProc(`/proc/${pid}/task/${pid}/children`),
+    ]);
+    const own = Number(status.match(/^VmRSS:\s+(\d+)/m)?.[1] || 0) * 1024;
+    const descendants = await Promise.all(children.trim().split(/\s+/).filter(Boolean).map((child) => residentBytes(Number(child))));
+    return own + descendants.reduce((sum, bytes) => sum + bytes, 0);
+  }
   const { stdout } = await execFileAsync('/bin/ps', ['-o', 'rss=', '-p', String(pid)]).catch(() => ({ stdout: '' }));
   const kib = Number.parseInt(stdout.trim(), 10);
   return Number.isFinite(kib) ? kib * 1024 : 0;
 }
 
-function groupAlive(pgid) {
-  try { process.kill(-pgid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 }
+const groupAlive = (pgid) => processAlive(-pgid);
 
 const tail = () => {
   let text = '';
@@ -111,9 +150,9 @@ const tail = () => {
  */
 export async function runContainedWorker({
   tool, files = [], entrypoint = null, limits: requested = {}, signal, workspaceRoot,
-  onOutput, tickMs = 1000, seatbeltPath = CODE_ANIMATION_SEATBELT,
+  onOutput, tickMs = 1000, seatbeltPath = CODE_ANIMATION_SEATBELT, bubblewrapPath = CODE_ANIMATION_BUBBLEWRAP,
 }) {
-  const mechanism = await currentContainmentMechanism(seatbeltPath);
+  const mechanism = await currentContainmentMechanism(seatbeltPath, bubblewrapPath);
   if (!mechanism.supported) {
     throw new ServerError(`Contained execution refused: ${mechanism.reason}`, { status: 503, code: 'CODE_ANIMATION_CONTAINMENT_UNAVAILABLE' });
   }
@@ -135,15 +174,29 @@ export async function runContainedWorker({
     for (const name of ['input', 'output', 'tmp', 'home']) await mkdir(join(workspace, name), { mode: 0o700 });
     await stage(join(workspace, 'input'), files);
     const writable = ['output', 'tmp', 'home'].map((name) => join(workspace, name));
-    const profile = codeAnimationSeatbeltProfile({ executable, toolRoots: codeAnimationToolRoots(executable), workspace });
-    const argv = tool.argv(entrypoint === null ? null : join(workspace, 'input', entrypoint), workspace);
-    // RLIMIT_FSIZE caps any single file (macOS sh counts 1 KiB blocks), no core
-    // dumps, bounded descriptors. `exec` keeps one pid: sh → sandbox-exec → tool.
-    const child = spawn('/bin/sh', ['-c', 'ulimit -c 0 && ulimit -n "$1" && ulimit -f "$2" && shift 2 && exec "$@"',
+    const linux = mechanism.id === 'linux-bubblewrap';
+    const sandboxWorkspace = linux ? '/workspace' : workspace;
+    const argv = tool.argv(entrypoint === null ? null : join(sandboxWorkspace, 'input', entrypoint), sandboxWorkspace);
+    const config = { executable, toolRoots: codeAnimationToolRoots(executable), workspace, sandboxWorkspace, argv };
+    const wrapper = linux
+      ? [bubblewrapPath, ...codeAnimationBubblewrapArgs(config)]
+      : [seatbeltPath, '-p', codeAnimationSeatbeltProfile(config), executable, ...argv];
+    // Explicit bash on Linux avoids /bin/sh's distro-dependent ulimit units.
+    // Both this bash invocation and macOS sh count KiB; limits survive exec.
+    const child = spawn(linux ? '/bin/bash' : '/bin/sh', ['-c', 'ulimit -c 0 && ulimit -n "$1" && ulimit -f "$2" && shift 2 && exec "$@"',
       'portos-contained-worker', String(limits.openFiles), String(Math.max(1, Math.floor(limits.diskBytes / 1024))),
-      seatbeltPath, '-p', profile, executable, ...argv], {
-      cwd: join(workspace, 'tmp'), env: withSpawnCwdEnv(codeAnimationWorkerEnv(workspace), join(workspace, 'tmp')), detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      ...wrapper], {
+      cwd: join(workspace, 'tmp'), env: withSpawnCwdEnv(codeAnimationWorkerEnv(workspace), join(workspace, 'tmp')),
+      detached: true, stdio: linux ? ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
     });
+    const namespaceInfo = tail();
+    if (linux) {
+      child.stdio[4].on('data', namespaceInfo.push);
+      // bwrap consumes/closes fd 3 before tool exec. A refused setup can close
+      // the pipe early; that is reported through the worker's nonzero exit.
+      child.stdio[3].on('error', () => {});
+      child.stdio[3].end(codeAnimationSeccompFilter(process.arch));
+    }
     const stdout = tail();
     const stderr = tail();
     child.stdout.on('data', stdout.push);
@@ -178,13 +231,19 @@ export async function runContainedWorker({
     clearTimeout(timer);
     clearInterval(watchdog);
     signal?.removeEventListener('abort', onAbort);
-    // The worker cannot fork, but the group is still verified empty, and any
+    // The worker cannot fork; bwrap also owns its PID namespace and uses
+    // die-with-parent. The outer group is still verified empty, and any
     // straggler is killed before the run is reported.
-    let processGroupClear = !groupAlive(child.pid);
+    // --new-session moves the namespace child out of the outer process group.
+    // bwrap's info fd names that host PID before allowing it to run; verify it
+    // too, so an empty launcher group cannot masquerade as completed teardown.
+    const namespacePid = linux ? Number(namespaceInfo.get().match(/"child-pid":\s*(\d+)/)?.[1]) : null;
+    const cleared = () => !groupAlive(child.pid) && (!namespacePid || !processAlive(namespacePid));
+    let processGroupClear = cleared();
     for (let attempt = 0; !processGroupClear && attempt < 20; attempt += 1) {
       try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }
       await new Promise((resolve) => setTimeout(resolve, 50));
-      processGroupClear = !groupAlive(child.pid);
+      processGroupClear = cleared();
     }
     if (exit.signal === 'SIGXFSZ') terminated ??= 'file-size';
     const usage = await measure(writable, limits);
@@ -195,6 +254,7 @@ export async function runContainedWorker({
     if (terminated) { status = 'terminated'; reason = terminated; }
     else if (exit.error || exit.code !== 0) { status = 'failed'; reason = exit.error ? 'spawn' : 'exit'; }
     else if (usage.invalid.length) { status = 'failed'; reason = 'output-invalid'; }
+    else if (!processGroupClear || (linux && !namespacePid)) { status = 'failed'; reason = 'containment-status'; }
     const result = {
       status, reason, mechanism: mechanism.id, exitCode: exit.code, signal: exit.signal,
       processGroupClear, durationMs: Date.now() - started, limits,

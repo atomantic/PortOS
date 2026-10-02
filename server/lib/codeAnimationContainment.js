@@ -4,16 +4,16 @@
  * A job directory is not a boundary. Generated or imported package code runs
  * only under an enforced OS mechanism; when none is available execution is
  * refused, never downgraded to an uncontained spawn. The supported mechanism
- * on this release is the macOS Seatbelt kernel sandbox (`sandbox-exec`), the
- * same one the private security assessment harness uses. Linux and Windows
- * report no mechanism and refuse.
+ * is macOS Seatbelt or Linux bubblewrap with a process-denying seccomp
+ * filter. Windows and hosts missing the prerequisites refuse.
  *
  * Pure: no filesystem, process or settings access.
  */
-import { basename, dirname, isAbsolute, join, normalize, parse } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, parse, posix } from 'node:path';
 import { z } from 'zod';
 
 export const CODE_ANIMATION_SEATBELT = '/usr/bin/sandbox-exec';
+export const CODE_ANIMATION_BUBBLEWRAP = '/usr/bin/bwrap';
 
 /** Upper bounds a caller may request; defaults suit one preview render. */
 export const codeAnimationWorkerLimitsSchema = z.object({
@@ -40,11 +40,16 @@ export const codeAnimationExecutionToolsSchema = z.object({
  * The enforced mechanism for `platform`, or a refusal reason. `seatbeltAvailable`
  * is whether `/usr/bin/sandbox-exec` is executable on this host.
  */
-export function codeAnimationContainmentMechanism(platform, seatbeltAvailable) {
+export function codeAnimationContainmentMechanism(platform, seatbeltAvailable, bubblewrap = null) {
   if (platform === 'darwin') {
     return seatbeltAvailable
       ? { id: 'macos-seatbelt', supported: true, reason: null }
       : { id: null, supported: false, reason: 'macOS Seatbelt (/usr/bin/sandbox-exec) is unavailable on this host.' };
+  }
+  if (platform === 'linux') {
+    return bubblewrap?.supported
+      ? { id: 'linux-bubblewrap', supported: true, reason: null }
+      : { id: null, supported: false, reason: bubblewrap?.reason || 'Linux containment unavailable: bubblewrap and unrestricted user namespaces are required.' };
   }
   return {
     id: null, supported: false,
@@ -124,17 +129,84 @@ export function codeAnimationSeatbeltProfile({ executable, toolRoots, workspace 
  * setting can be inherited.
  */
 export function codeAnimationWorkerEnv(workspace) {
-  const home = join(workspace, 'home');
-  const tmp = join(workspace, 'tmp');
+  const home = posix.join(workspace, 'home');
+  const tmp = posix.join(workspace, 'tmp');
   return {
     PATH: '/usr/bin:/bin', HOME: home, TMPDIR: tmp, TMP: tmp, TEMP: tmp,
     LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8',
-    XDG_CONFIG_HOME: join(home, 'config'), XDG_CACHE_HOME: join(home, 'cache'), XDG_DATA_HOME: join(home, 'data'),
+    XDG_CONFIG_HOME: posix.join(home, 'config'), XDG_CACHE_HOME: posix.join(home, 'cache'), XDG_DATA_HOME: posix.join(home, 'data'),
     // Blender reads user add-ons/startup files from here; keep them private and empty.
-    BLENDER_USER_RESOURCES: join(home, 'blender'),
+    BLENDER_USER_RESOURCES: posix.join(home, 'blender'),
     // Workers have no network; an OpenSSL build's config outside the sandbox is not needed.
     OPENSSL_CONF: '/dev/null',
-    PORTOS_WORKER_INPUT: join(workspace, 'input'),
-    PORTOS_WORKER_OUTPUT: join(workspace, 'output'),
+    PORTOS_WORKER_INPUT: posix.join(workspace, 'input'),
+    PORTOS_WORKER_OUTPUT: posix.join(workspace, 'output'),
   };
+}
+
+/**
+ * Classic BPF seccomp program, using Linux UAPI syscall/audit constants.
+ * Native threads remain possible; fork/vfork and non-thread clone are denied.
+ * clone3 returns ENOSYS so libc can fall back to the inspectable clone flags.
+ * Unknown ABIs (including x32) fail closed instead of bypassing syscall checks.
+ * Applied by bwrap after its supervisor/namespace setup, before tool exec.
+ */
+export function codeAnimationSeccompFilter(arch) {
+  const abi = {
+    x64: { audit: 0xc000003e, clone: 56, denied: [57, 58, 41, 272, 308] },
+    arm64: { audit: 0xc00000b7, clone: 220, denied: [198, 97, 268] },
+  }[arch];
+  if (!abi) throw new Error('Linux worker seccomp supports only x64 and arm64.');
+  const ALLOW = 0x7fff0000, KILL = 0x80000000, EPERM = 0x00050001, ENOSYS = 0x00050026;
+  const instructions = [
+    [0x20, 0, 0, 4],                    // seccomp_data.arch
+    [0x15, 1, 0, abi.audit],
+    [0x06, 0, 0, KILL],
+    [0x20, 0, 0, 0],                    // seccomp_data.nr
+    [0x35, 0, 1, 0x40000000],           // x32/invalid syscall range
+    [0x06, 0, 0, KILL],
+    [0x15, 0, 1, 435],                  // clone3
+    [0x06, 0, 0, ENOSYS],
+    ...abi.denied.flatMap((nr) => [[0x15, 0, 1, nr], [0x06, 0, 0, EPERM]]),
+    [0x15, 1, 0, abi.clone],
+    [0x06, 0, 0, ALLOW],
+    [0x20, 0, 0, 16],                   // clone flags, args[0] low word
+    [0x45, 0, 1, 0x7e020000],           // namespace creation flags
+    [0x06, 0, 0, EPERM],
+    [0x45, 1, 0, 0x00010000],           // CLONE_THREAD: true skips EPERM to ALLOW
+    [0x06, 0, 0, EPERM],
+    [0x06, 0, 0, ALLOW],
+  ];
+  const bytes = Buffer.alloc(instructions.length * 8);
+  instructions.forEach(([code, jt, jf, k], index) => {
+    bytes.writeUInt16LE(code, index * 8);
+    bytes[index * 8 + 2] = jt;
+    bytes[index * 8 + 3] = jf;
+    bytes.writeUInt32LE(k, index * 8 + 4);
+  });
+  return bytes;
+}
+
+/** Empty filesystem with only installed code, staged inputs and owned writes. */
+export function codeAnimationBubblewrapArgs({ executable, toolRoots, workspace, sandboxWorkspace = '/workspace', argv = [] }) {
+  const args = [
+    '--unshare-all', '--unshare-user', '--die-with-parent', '--new-session',
+    '--cap-drop', 'ALL', '--clearenv', '--seccomp', '3', '--info-fd', '4',
+    '--proc', '/proc', '--remount-ro', '/proc',
+  ];
+  // Never bind the host root, /etc, /run, /tmp or the user's home.
+  for (const root of new Set(['/usr/lib', '/usr/lib64', '/usr/share', '/lib', '/lib64', ...toolRoots])) {
+    args.push('--ro-bind-try', root, root);
+  }
+  for (const device of ['null', 'zero', 'random', 'urandom']) {
+    args.push('--dev-bind', `/dev/${device}`, `/dev/${device}`);
+  }
+  args.push('--ro-bind', posix.join(workspace, 'input'), posix.join(sandboxWorkspace, 'input'));
+  for (const name of ['output', 'tmp', 'home']) {
+    args.push('--bind', posix.join(workspace, name), posix.join(sandboxWorkspace, name));
+  }
+  for (const [key, value] of Object.entries(codeAnimationWorkerEnv(sandboxWorkspace))) args.push('--setenv', key, value);
+  // The synthetic root/ancestor directories must not become unmetered scratch.
+  args.push('--remount-ro', '/', '--chdir', posix.join(sandboxWorkspace, 'tmp'), '--', executable, ...argv);
+  return args;
 }

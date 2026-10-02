@@ -106,7 +106,7 @@ research access belong to the authoring route, never to execution.
 | Platform | Mechanism | Status |
 |---|---|---|
 | macOS | Seatbelt kernel sandbox (`/usr/bin/sandbox-exec`, deny-by-default profile) | Supported; proven on demand by the containment check |
-| Linux | None implemented (bubblewrap/user namespaces are the candidate) | Refused |
+| Linux x64 / arm64 | bubblewrap namespaces and seccomp | Requires executable `/usr/bin/bwrap`, permitted unprivileged user namespaces and seccomp; proven on demand |
 | Windows | None implemented | Refused |
 
 Each run gets a fresh UUID workspace under `data/code-animation-workspaces/`
@@ -132,6 +132,25 @@ writable directories (watchdog), single-file size (`RLIMIT_FSIZE`), resident
 memory (watchdog), open descriptors, no core dumps. Output that is not a
 regular, singly-linked file (a symlink or hard link the worker made) fails the
 run and is never handed to the caller.
+
+On Linux, bubblewrap starts from an empty filesystem, mounts only system/tool
+code and staged input read-only, and maps the three writable directories under
+`/workspace`. The synthetic root is read-only too, so it cannot become
+unmetered scratch space. PID, network, IPC, UTS and user namespaces isolate the
+worker; all capabilities are dropped. A seccomp filter denies process creation,
+network sockets and namespace changes while permitting native threads. The
+filter rejects unknown ABIs and makes `clone3` fall back to the older, flag-
+checked `clone` syscall. Cancellation kills the wrapper's process group;
+bubblewrap's parent-death handling tears down its PID namespace. Memory
+accounting includes the wrapper's descendants, not just the wrapper itself.
+
+A capability probe runs trusted system code to verify namespaces before any
+package is staged. Missing bubblewrap, unsupported architecture, restricted
+user namespaces (including Ubuntu AppArmor restrictions), or failure of the
+adversarial check keeps execution refused. PortOS never installs bubblewrap,
+changes host policy or falls back to an uncontained worker automatically.
+The dedicated Linux CI job requires a functioning real mechanism: unavailable
+bubblewrap fails that job instead of silently skipping its boundary tests.
 
 Installed tools are operator-owned machine-local settings
 (`codeAnimationExecution` in `data/settings.json`). Packages cannot name an
