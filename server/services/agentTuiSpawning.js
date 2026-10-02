@@ -95,22 +95,6 @@ export function resolveTuiLaunchShape({ useDurableRunner = false, safetyProfile 
 }
 
 /**
- * Test whether a launch shape owns its own PTY process.
- * 'runner' and 'direct' shapes own their PTY; 'login-shell' is hosted in a shell.
- */
-export function shapeHasOwnPty(launchShape) {
-  return launchShape === 'runner' || launchShape === 'direct';
-}
-
-/**
- * Test whether a launch shape has a login shell to fall back to.
- * Only 'login-shell' has a persistent shell; 'runner' and 'direct' do not.
- */
-export function shapeHasLoginShell(launchShape) {
-  return launchShape === 'login-shell';
-}
-
-/**
  * Open the agent TUI's PTY and pair the returned session id with its underlying
  * pty process, so callers don't have to make a second `getSessionProcess` call
  * inline. Centralizes the agent-side defaults (kind, label, initialCommand).

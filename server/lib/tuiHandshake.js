@@ -467,6 +467,22 @@ const OBSERVE_TAIL_MAX_LEN = 4000;
 // rolling tail. When supplied, `ready` also requires that marker to have been
 // seen (see AGY_INPUT_READY_PATTERN).
 //
+/**
+ * Test whether a launch shape owns its own PTY process.
+ * 'runner' and 'direct' shapes own their PTY; 'login-shell' is hosted in a shell.
+ */
+export function shapeHasOwnPty(launchShape) {
+  return launchShape === 'runner' || launchShape === 'direct';
+}
+
+/**
+ * Test whether a launch shape has a login shell to fall back to.
+ * Only 'login-shell' has a persistent shell; 'runner' and 'direct' do not.
+ */
+export function shapeHasLoginShell(launchShape) {
+  return launchShape === 'login-shell';
+}
+
 // launchShape: which PTY shape this TUI runs in. 'runner' and 'direct' shapes
 // own their PTY from byte zero and have no launch shell, so the shell's
 // paste-mode OFF (`ESC[?2004l`) that normally proves "the command is now
@@ -480,7 +496,7 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
   let pasteModeOn = false;   // LIVE bracketed-paste mode state from the stream
   // Shell turned paste mode OFF to run the command. Pre-latched when the TUI
   // owns its own PTY (runner/direct shapes), where no shell OFF exists.
-  const hasOwnPty = launchShape === 'runner' || launchShape === 'direct';
+  const hasOwnPty = shapeHasOwnPty(launchShape);
   let sawCommandRun = hasOwnPty;
   let needsTrust = false;
   let trustAnswered = false;

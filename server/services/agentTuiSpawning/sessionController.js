@@ -41,7 +41,6 @@ import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDe
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
 import { isClaudeCommand } from '../../lib/providerModels.js';
-import { shapeHasLoginShell } from '../agentTuiSpawning.js';
 import { createCodexModelRejectionGate } from './codexModelRejection.js';
 import {
   READY_POLL_INTERVAL_MS,
@@ -69,6 +68,7 @@ import {
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
   createInputReadyTracker,
+  shapeHasLoginShell,
   createStartupDialogAnswers,
   answerStartupDialogs,
   AGY_INPUT_READY_PATTERN,
