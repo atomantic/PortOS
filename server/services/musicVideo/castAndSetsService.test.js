@@ -77,8 +77,12 @@ const board = {
 const keyOf = (job) => job.params.musicVideo.castAndSets.key;
 const current = async (id) => projects.getProject(id);
 
+// Deadline-based, not an iteration count: each check reads from disk, so a slow
+// runner (Windows CI) stretches an iteration far past its 5ms sleep and a fixed
+// 200 passes can expire in about a second.
 async function until(check, label) {
-  for (let i = 0; i < 200; i += 1) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
     if (await check()) return;
     await new Promise((r) => setTimeout(r, 5));
   }

@@ -331,7 +331,7 @@ describe('CustomTasksSection trigger outcomes', () => {
     await screen.findByText('Example Task');
 
     const subject = screen.getByLabelText('Subject *');
-    expect(subject).toHaveValue('Saved subject');
+    await waitFor(() => expect(subject).toHaveValue('Saved subject'));
     await user.clear(subject);
     await user.type(subject, '   ');
     await waitFor(() => expect(subject).toHaveValue('   '));
