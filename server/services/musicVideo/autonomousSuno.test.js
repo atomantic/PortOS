@@ -16,7 +16,7 @@ const NEW_B = '33333333-3333-3333-3333-333333333333';
 const noSleep = async () => {};
 
 /** A just-enough Playwright page: tracks fills/clicks and exposes song links that appear after Create. */
-function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, afterCreate = [NEW_A, NEW_B] } = {}) {
+function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, newTitleMatches = true, afterCreate = [NEW_A, NEW_B] } = {}) {
   const fills = {};
   let created = false;
   const locator = (selector) => {
@@ -39,7 +39,10 @@ function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = tr
     url: () => url,
     locator,
     getByRole: button,
-    evaluate: async () => [`/song/${OLD}`, ...(created ? afterCreate.map((id) => `/song/${id}`) : [])],
+    evaluate: async (_fn, title) => [
+      ...(title === null ? [`/song/${OLD}`] : []),
+      ...(created && (title === null || newTitleMatches) ? afterCreate.map((id) => `/song/${id}`) : []),
+    ],
     close: async () => {},
   };
 }
@@ -60,6 +63,13 @@ describe('submitSunoSong', () => {
     const page = fakePage();
     await submitSunoSong(page, { ...fields, instrumental: true, lyrics: '' }, { sleep: noSleep });
     expect(page.fills['[role="textbox"][aria-label="Lyrics editor"],textarea[placeholder*="lyrics" i]']).toBe('');
+  });
+
+  it('does not accept unrelated workspace rows that load after Create', async () => {
+    let time = 0;
+    await expect(submitSunoSong(fakePage({ newTitleMatches: false }), fields, {
+      sleep: noSleep, now: () => (time += 30_000),
+    })).rejects.toMatchObject({ code: 'SUNO_NO_SONG' });
   });
 
   it('keeps the older Custom form compatible', async () => {

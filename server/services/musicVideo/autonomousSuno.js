@@ -38,7 +38,11 @@ const SUNO_POLL_INTERVAL_MS = 10 * 1000;
 // A real song is megabytes; anything under this is a stub or error body.
 const MIN_AUDIO_BYTES = 100 * 1024;
 
-const songLinks = (page) => page.evaluate(() => [...document.querySelectorAll('a[href*="/song/"]')].map((a) => a.getAttribute('href')));
+const songLinks = (page, title = null) => page.evaluate((wantedTitle) => [...document.querySelectorAll('a[href*="/song/"]')]
+  // Workspace rows may finish loading after Create. A newly seen href alone
+  // is not evidence that this request produced the song.
+  .filter((a) => wantedTitle === null || a.textContent.trim() === wantedTitle)
+  .map((a) => a.getAttribute('href')), title);
 
 /**
  * Fill Suno's custom-song form and press Create. Returns the ids of the songs
@@ -46,7 +50,7 @@ const songLinks = (page) => page.evaluate(() => [...document.querySelectorAll('a
  * the click are excluded, so an older song in the workspace is never mistaken
  * for ours.
  */
-async function submitSunoSong(page, fields, { sleep = defaultSleep } = {}) {
+async function submitSunoSong(page, fields, { sleep = defaultSleep, now = Date.now } = {}) {
   await step(LABEL, 'open the create page', () => page.goto(SUNO_CREATE_URL, { waitUntil: 'domcontentloaded', timeout: T }));
   await page.locator('textarea').first().waitFor({ state: 'visible', timeout: T }).catch(() => {});
   // A signed-out visitor is bounced to a sign-in page or sees no create form.
@@ -93,13 +97,13 @@ async function submitSunoSong(page, fields, { sleep = defaultSleep } = {}) {
   });
 
   // New rows land at the top of the workspace list once Suno accepts the request.
-  const deadline = Date.now() + 90_000;
-  while (Date.now() < deadline) {
+  const deadline = now() + 90_000;
+  while (now() < deadline) {
     await sleep(3000);
-    const fresh = sunoSongIdsFromHrefs(await songLinks(page)).filter((id) => !before.has(id));
+    const fresh = sunoSongIdsFromHrefs(await songLinks(page, fields.title)).filter((id) => !before.has(id));
     if (fresh.length) return fresh;
   }
-  throw new ServerError('Suno: no new song appeared after pressing Create — check the PortOS Browser for a credits, captcha or content-policy prompt', {
+  throw new ServerError('Suno: no matching song appeared after pressing Create — check the PortOS Browser for a credits, captcha or content-policy prompt', {
     status: 502, code: 'SUNO_NO_SONG', context: { platform: LABEL },
   });
 }
