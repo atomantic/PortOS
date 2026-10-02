@@ -94,3 +94,42 @@ describe('code frame contract (#9076)', () => {
     expect(doc.html).toContain('mv-code:seek');
   });
 });
+
+it('executes authored functions and legacy statement bodies with runtime string compilation disabled', async () => {
+  const { runInNewContext } = await import('node:vm');
+  const song = { durationSec: 2, sections: [
+    { id: 'first', startSec: 0, endSec: 1 }, { id: 'second', startSec: 1, endSec: 2 },
+  ], lyrics: [] };
+  const { html } = buildCodeDocument({ song, palette: { background: '#000000', accent: '#ffffff' },
+    sources: {
+      first: "function render(ctx, env) { ctx.fillStyle = '#123456'; ctx.fillRect(0, 0, env.width, env.height); }",
+      second: "ctx.fillStyle = '#abcdef'; ctx.fillRect(0, 0, env.width, env.height);",
+    }, width: 32, height: 18, fps: 24 });
+  const painted = [];
+  const ctx = { fillRect() { painted.push(this.fillStyle); } };
+  const sandbox = {
+    document: { getElementById: () => ({ getContext: () => ctx }) },
+    addEventListener() {}, parent: { postMessage() {} },
+  };
+  const script = html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'));
+  runInNewContext(script, sandbox, { contextCodeGeneration: { strings: false, wasm: false }, timeout: 1000 });
+  expect(painted.at(-1)).toBe('#123456');
+  sandbox.portosComposition.seek(1.25);
+  expect(painted.at(-1)).toBe('#abcdef');
+  sandbox.portosComposition.seek(0);
+  expect(painted.at(-1)).toBe('#123456');
+  expect(html).not.toContain('new Function');
+});
+
+it('rejects section source that would escape the static function/script or use a network call', () => {
+  const input = { song: { durationSec: 1 }, palette: {}, width: 32, height: 18, fps: 24 };
+  for (const source of [
+    "function render(ctx, env) {} }; globalThis.compromised = true; (function () {",
+    "function render(ctx, env) { ctx.fillText('</ScRiPt><script>bad()', 0, 0); }",
+    "function render(ctx, env) { /* <!-- */ }",
+  ]) {
+    expect(() => buildCodeDocument({ ...input, sources: { section: source } })).toThrow(expect.objectContaining({ code: 'INVALID_SECTION_SOURCE' }));
+  }
+  expect(() => buildCodeDocument({ ...input, sources: { section: "fetch('https://example.com')" } }))
+    .toThrow(expect.objectContaining({ code: 'NONDETERMINISTIC_SECTION' }));
+});

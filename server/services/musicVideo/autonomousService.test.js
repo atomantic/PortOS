@@ -1,3 +1,20 @@
+// Existing engine cases isolate the creative review boundary; explicit approval-flow
+// cases below switch to the real model and verify pause/resume without providers.
+const creativeReview = vi.hoisted(() => ({ real: false }));
+vi.mock('./productionReview.js', async (load) => {
+  const actual = await load();
+  return { ...actual,
+    assertProductionApproval: (...args) => creativeReview.real ? actual.assertProductionApproval(...args) : undefined,
+    productionReadiness: (...args) => creativeReview.real ? actual.productionReadiness(...args) : {
+      art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, basis: { proof: 'test-proof' }, readyForProduction: true,
+    },
+  };
+});
+vi.mock('./productionReviewService.js', () => ({
+  prepareProductionReview: vi.fn(async () => {}),
+  renderProductionProof: vi.fn(async () => ({ jobId: 'proof-example' })),
+  attachProductionPilotProof: vi.fn(async () => {}),
+}));
 /**
  * Fully-autonomous Music Video run — orchestration contract. The project store
  * is an in-memory double with the real store's serialized read-modify-write;
@@ -41,11 +58,12 @@ let doubles;
 const stub = (name, impl) => vi.fn(async (...args) => { calls.push(name); return impl(...args); });
 
 beforeEach(() => {
+  creativeReview.real = false;
   store.clear();
   calls = [];
   doubles = {
     createProject: stub('createProject', async (input) => {
-      const project = { id: 'mv-auto', ...input };
+      const project = { id: 'mv-auto', productionReview: { proof: { basis: 'test-proof', excerptId: 'test-proof' } }, excerpts: [{ id: 'test-proof', status: 'complete', filename: 'test-proof.mp4' }], ...input };
       store.set(project.id, clone(project));
       return project;
     }),
@@ -75,7 +93,7 @@ beforeEach(() => {
     startProduction: stub('production', async () => ({ run: { id: 'mvpr-1' } })),
     generateCode: stub('code', async () => ({})),
     generateDocument: stub('document', async () => ({ document: { directory: 'music-video/mv-auto/composition/example' } })),
-    acceptDocument: stub('accept-document', async () => ({})),
+    acceptDocument: stub('accept-document', async (id, directory) => { store.get(id).composition.document = { directory }; return {}; }),
     renderVideo: stub('render', async () => ({ jobId: 'render-1' })),
   };
   service.__setAutonomousDepsForTests(doubles);
@@ -132,7 +150,7 @@ describe('startAutonomousVideo', () => {
     expect(calls).not.toContain('board');
     expect(doubles.acceptDocument).toHaveBeenCalledWith('mv-auto', 'music-video/mv-auto/composition/example');
     expect(doubles.generateDocument).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm' });
-    expect(store.get('mv-auto').composition).toEqual({ mode: 'document', authoringRenderer: 'three' });
+    expect(store.get('mv-auto').composition).toMatchObject({ mode: 'document', authoringRenderer: 'three' });
     await settled('completed');
   });
 
@@ -425,4 +443,73 @@ describe('events and process pinning', () => {
     await service.__testing.advance('mv-auto');
     expect(calls.length).toBe(before);
   });
+});
+
+it('parks standalone code at real human gates and replaces a stale proof before final rendering', async () => {
+  creativeReview.real = true;
+  const { approveProductionStage, productionReviewBasis } = await vi.importActual('./productionReview.js');
+  const { renderProductionProof } = await import('./productionReviewService.js');
+  let proofNumber = 0;
+  doubles.analyzeSong.mockImplementation(async () => {
+    Object.assign(store.get('mv-auto'), {
+      audioAnalysis: { durationSec: 20, sections: [{ id: 'chorus', label: 'Chorus', startSec: 18, endSec: 20 }] },
+      scenes: [{ sceneId: 'shot', startSec: 0, endSec: 20, label: 'Chorus' }],
+      devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+      productionReview: { draft: {
+        cast: 'Paper dancer', environments: 'Theatre', visualLanguage: 'Ink silhouettes', motionLanguage: 'Slow orbit',
+        guideArtifactId: 'guide', lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.',
+        storyboard: [{ sceneId: 'shot', lyricCueIds: [], action: 'Dancer unfolds', staging: 'Wide theatre', camera: 'Orbit', transition: 'Fade' }],
+      } },
+    });
+  });
+  doubles.generateDocument.mockResolvedValue({ document: { directory: 'music-video/mv-auto/composition/example' } });
+  renderProductionProof.mockImplementation(async (_id, window) => {
+    const project = store.get('mv-auto');
+    const id = `proof-${++proofNumber}`;
+    project.excerpts = [{ id, status: 'complete', filename: `${id}.mp4` }];
+    project.productionReview.proof = { ...window, excerptId: id };
+    project.productionReview.proof.basis = productionReviewBasis(project).proof;
+    return { jobId: id };
+  });
+  const approve = stage => {
+    const project = store.get('mv-auto');
+    store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage] }));
+  };
+  await service.startAutonomousVideo({ prompt: 'Synthetic animation', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' } });
+  await settled('needs-human');
+  expect(doubles.generateDocument).not.toHaveBeenCalled();
+  expect(doubles.renderVideo).not.toHaveBeenCalled();
+  approve('art');
+  approve('storyboard');
+  await service.resumeAutonomousVideo('mv-auto');
+  await settled('needs-human');
+  expect(doubles.generateDocument).toHaveBeenCalledOnce();
+  expect(renderProductionProof).toHaveBeenCalledOnce();
+  expect(renderProductionProof).toHaveBeenLastCalledWith('mv-auto', { startSec: 0, endSec: 20 });
+  expect(doubles.renderVideo).not.toHaveBeenCalled();
+  store.get('mv-auto').excerpts[0].status = 'rendering';
+  await service.resumeAutonomousVideo('mv-auto');
+  await settled('needs-human');
+  expect(renderProductionProof).toHaveBeenCalledOnce();
+  for (const status of ['error', 'canceled']) {
+    store.get('mv-auto').excerpts[0].status = status;
+    store.get('mv-auto').excerpts[0].filename = null;
+    const callsBefore = renderProductionProof.mock.calls.length;
+    await service.resumeAutonomousVideo('mv-auto');
+    await settled('needs-human');
+    expect(renderProductionProof).toHaveBeenCalledTimes(callsBefore + 1);
+    expect(doubles.renderVideo).not.toHaveBeenCalled();
+  }
+  approve('proof');
+  store.get('mv-auto').composition.document.directory = 'music-video/mv-auto/composition/revised';
+  await service.resumeAutonomousVideo('mv-auto');
+  await settled('needs-human');
+  expect(renderProductionProof).toHaveBeenCalledTimes(4);
+  expect(doubles.renderVideo).not.toHaveBeenCalled();
+  approve('proof');
+  await service.resumeAutonomousVideo('mv-auto');
+  await settled('completed');
+  expect(doubles.renderVideo).toHaveBeenCalledOnce();
+  expect(doubles.generateDocument).toHaveBeenCalledOnce();
+  expect(doubles.startProduction).not.toHaveBeenCalled();
 });

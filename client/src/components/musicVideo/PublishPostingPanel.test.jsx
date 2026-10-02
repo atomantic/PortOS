@@ -31,19 +31,20 @@ describe('PublishPostingPanel (#9282)', () => {
     const reddit = row('Reddit');
     fireEvent.change(within(reddit).getByLabelText('Subreddit'), { target: { value: 'SunoAI' } });
     fireEvent.change(within(reddit).getByLabelText('Post type'), { target: { value: 'link' } });
+    fireEvent.change(within(reddit).getByLabelText('Instance password to prepare Reddit'), { target: { value: 'synthetic-password' } });
     fireEvent.click(within(reddit).getByRole('button', { name: 'Fill draft' }));
-    expect(publishing.prepare).toHaveBeenCalledWith('reddit', { subreddit: 'SunoAI', kind: 'link' });
+    expect(publishing.prepare).toHaveBeenCalledWith('reddit', { subreddit: 'SunoAI', kind: 'link', password: 'synthetic-password' });
   });
 
-  it('shows the filled draft and posts only when Post is pressed', () => {
+  it('shows the filled draft and requires manual platform publication', () => {
     const publishing = hook({ drafts: { stackerNews: { draftId: 'd1', summary: { title: 'Song', territory: 'art' }, screenshot: 'data:image/jpeg;base64,AA' } } });
     render(<PublishPostingPanel project={project()} publishing={publishing} />);
     const sn = row('Stacker News');
     expect(within(sn).getByAltText('Stacker News draft as filled')).toBeInTheDocument();
     expect(within(sn).getByText('Song')).toBeInTheDocument();
     expect(publishing.submit).not.toHaveBeenCalled();
-    fireEvent.click(within(sn).getByRole('button', { name: /Post to Stacker News/ }));
-    expect(publishing.submit).toHaveBeenCalledWith('stackerNews');
+    expect(within(sn).queryByRole('button', { name: /Post to Stacker News/ })).toBeNull();
+    expect(within(sn).getByText(/PortOS cannot submit this draft/)).toBeInTheDocument();
     fireEvent.click(within(sn).getByRole('button', { name: /Discard/ }));
     expect(publishing.discard).toHaveBeenCalledWith('stackerNews');
   });

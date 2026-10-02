@@ -1,4 +1,5 @@
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { assertProductionApproval, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -42,7 +43,7 @@ import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLaye
 import { renderableCues, sectionCardCues } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
-import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch, renderSongComposition } from './compositionRender.js';
+import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes } from './performanceShot.js';
@@ -627,28 +628,6 @@ export async function planMusicVideoRender(project) {
   return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed };
 }
 
-// An existing HTML composition directory is rendered through the music-video
-// owner (#9075). The caller names the directory; excerpts pass the master's
-// in-point as startSec. This is not the code-rendered project mode below.
-async function renderMusicVideoCode(projectId, { codeDirectory, startSec = 0 }) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const existingJob = projectRenders.get(projectId);
-  if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
-    throw new ServerError('Render already in progress for this project', {
-      status: 409, code: 'RENDER_IN_PROGRESS', context: { jobId: existingJob === PENDING ? null : existingJob },
-    });
-  }
-  projectRenders.set(projectId, PENDING);
-  const jobId = randomUUID();
-  try {
-    const audioPath = await resolveMasterAudioPath(project);
-    return await renderSongComposition({ project, directory: codeDirectory, jobId, audioPath, startSec });
-  } finally {
-    if (projectRenders.get(projectId) === PENDING) projectRenders.delete(projectId);
-  }
-}
-
 // Code-rendered mode (#9076) and the composition-document mode seek a
 // composition instead of concatenating footage. They share this module's job
 // map so the existing SSE and cancel routes apply. Code mode never asks a
@@ -695,7 +674,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
   const renderingOn = await ensureInstanceId();
-  if (options.verifyCurrent) options.verifyCurrent(await getProject(projectId));
+  await assertCurrentRenderApproval(projectId, project, options);
   const jobId = randomUUID();
   const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
   const outputPath = join(PATHS.videos, filename);
@@ -722,7 +701,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     closeJobAfterDelay(jobs, jobId);
   };
   Promise.resolve().then(async () => {
-    if (options.verifyCurrent) options.verifyCurrent(await getProject(projectId));
+    await assertCurrentRenderApproval(projectId, project, options);
     if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
     return renderer.encode({
       plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
@@ -773,13 +752,22 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   return { jobId };
 }
 
-export async function renderMusicVideo(projectId, options = {}) {
-  if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
-    return renderMusicVideoCode(projectId, options);
+async function assertCurrentRenderApproval(projectId, preparedProject, options) {
+  const current = await getProject(projectId);
+  assertProductionApproval(current);
+  if (productionReviewBasis(current).proof !== productionReviewBasis(preparedProject).proof) {
+    throw new ServerError('The reviewed film changed during render preparation.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   }
+  await options.verifyCurrent?.(current);
+}
+
+export async function renderMusicVideo(projectId, options = {}) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-
+  assertProductionApproval(project);
+  if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
+    throw new ServerError('Import and select the composition document, then approve its animated proof before rendering.', { status: 409, code: 'MUSIC_VIDEO_UNREVIEWED_DIRECTORY' });
+  }
   const existingJob = projectRenders.get(projectId);
   if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
     throw new ServerError('Render already in progress for this project', {
@@ -814,6 +802,7 @@ export async function renderMusicVideo(projectId, options = {}) {
       .sort((a, b) => a.startSec - b.startSec);
     const composition = cues.length > 0 ? project.composition : null;
 
+    await assertCurrentRenderApproval(projectId, project, options);
     const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration };
     jobs.set(jobId, job);
     projectRenders.set(projectId, jobId);
@@ -984,7 +973,8 @@ export async function renderMusicVideo(projectId, options = {}) {
     renderTypographyOverlays({
       jobId, cues, style: { ...composition.style, graphicLanguage: project.treatment?.brief?.graphicLanguage }, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
-    }).then((overlays) => {
+    }).then(async (overlays) => {
+      await assertCurrentRenderApproval(projectId, project, options);
       signal.throwIfAborted();
       // Capture is over: from here a cancel kills the encode (job.process).
       job.overlayAbort = null;

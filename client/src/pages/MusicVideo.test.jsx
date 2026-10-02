@@ -35,6 +35,13 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
   };
 });
 
+// This page suite exercises existing controls with production approvals already granted.
+// ProductionReviewPanel and route integration suites exercise the real approval refusals.
+vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: () => ({
+  readiness: { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
+  busy: false, error: null, proof: { active: false }, save: vi.fn(), prepare: vi.fn(), approve: vi.fn(), renderProof: vi.fn(),
+}) }));
+
 vi.mock('../services/apiMusicVideo.js', () => ({
   listMusicVideoProjects: vi.fn(async () => []),
   createMusicVideoProject: vi.fn(),
@@ -929,7 +936,7 @@ describe('MusicVideo project video renderer', () => {
       expect(await screen.findByText(/Split the scene on a lyric or phrase boundary/)).toBeTruthy();
       fireEvent.click(await screen.findByRole('button', { name: /Split on lyric boundaries/ }));
       await waitFor(() => expect(splitMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', 'fal', expect.anything()));
-      expect(await screen.findByText('Verse · 2/2')).toBeTruthy();
+      expect(await screen.findByText('Verse · 2/2', { selector: ':not(option)' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: /Split on lyric boundaries/ })).toBeNull();
     });
 
@@ -1680,8 +1687,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
     await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: reviewing, stage: reviewing.castAndSets });
-    // The check-in lives on the Cast & Sets tab; the header offers its approval.
-    expect(screen.getByRole('button', { name: 'Approve cast & sets' })).toBeEnabled();
+    // Existing Cast & Sets controls still apply references; Production review separately authorizes work.
     await openStage('cast-sets');
     expect(await screen.findByText('Waiting for your check-in.')).toBeTruthy();
     await settle();
@@ -2163,7 +2169,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
     });
 
-    it('approves the Cast & Sets check-in it is waiting on, from any tab', async () => {
+    it('keeps the Cast & Sets reference check-in available from its tab', async () => {
       const waiting = {
         ...PROJECT_ANALYZED, scenes: [], lyricCues: [], automation: { tools: ['image:local'], guidance: '', budgetUsd: null },
         castAndSets: { status: 'review', revision: 1, plan: {}, images: {} },
@@ -2173,7 +2179,8 @@ describe('MusicVideo stage tabs (#9243)', () => {
       importMusicVideoTrackLyrics.mockResolvedValue({ project: approved, imported: 0, markers: 0 });
       planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 1, promptsSeeded: false });
       await openProject(waiting, 'setup');
-      fireEvent.click(screen.getByRole('button', { name: 'Approve cast & sets' }));
+      await openStage('cast-sets');
+      fireEvent.click(screen.getByRole('button', { name: /Approve & continue/ }));
       await waitFor(() => expect(approveMusicVideoCastAndSets).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalled());
     });

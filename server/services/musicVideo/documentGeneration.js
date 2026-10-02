@@ -1,4 +1,5 @@
 import { musicVideoMediaMode, musicVideoDocumentRenderer, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { assertProductionApproval } from './productionReview.js';
 /** User-triggered mixed-media document authoring. No provider runs on read or boot. */
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -52,6 +53,7 @@ function basisFor(project, includeEvents = true) {
     mediaMode: musicVideoMediaMode(project),
     authoringRenderer: musicVideoDocumentRenderer(project),
     name: project.name || null,
+    productionDraft: project.productionReview?.draft || null,
     treatment: project.treatment || null,
     productionPolicy: project.productionPolicy || null,
     visualSpec: project.visualSpec || null,
@@ -172,6 +174,7 @@ async function priorManifest(project) {
 async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
   const project = await getProject(projectId);
   if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
+  assertProductionApproval(project, 'storyboard');
   const context = await authoringContext(project);
   let prior = null;
   if (sectionId || eventRevision) {
@@ -200,7 +203,13 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project),
   });
   const directedPrompt = feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt;
-  const run = await runModel({ providerId, model, effort, automation: project.automation, prompt: directedPrompt, source: 'music-video-document', beforeSubmit });
+  const run = await runModel({ providerId, model, effort, automation: project.automation, prompt: directedPrompt, source: 'music-video-document', beforeSubmit: async (submission) => {
+    const current = await getProject(projectId);
+    assertProductionApproval(current, 'storyboard');
+    verifyCurrent(current);
+    if (basisFor(current) !== context.basis) throw fail('The approved plan changed before authoring', 'COMPOSITION_DRAFT_STALE', 409);
+    await beforeSubmit?.(submission);
+  } });
   const updated = acceptedSections(run.text, ids);
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
   for (const [id, source] of updated) merged.set(id, source);
@@ -218,6 +227,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   const result = await stageGeneratedDocument(projectId, generatedFiles(manifest), {
     renderer: manifest.renderer,
     verifyCurrent: (current) => {
+      assertProductionApproval(current, 'storyboard');
       verifyCurrent(current);
       if (basisFor(current) !== context.basis || (current.composition?.document?.directory || null) !== active
         || (current.composition?.documentDraft?.directory || null) !== draft) {

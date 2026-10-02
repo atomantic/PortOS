@@ -1,3 +1,5 @@
+import { prepareProductionReview, renderProductionProof, attachProductionPilotProof } from './productionReviewService.js';
+import { productionReadiness, productionProofNeedsRender, productionProofWindow } from './productionReview.js';
 import { currentPlateEvidence, plateRequirementBasis, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
 import { ensureSceneTakes, selectSceneTake } from './takes.js';
 /**
@@ -412,7 +414,29 @@ async function takeSteps(projectId, runId) {
   for (let i = 0; i < MAX_STEPS_PER_ADVANCE; i += 1) {
     const project = await requireProject(projectId);
     const run = findProductionRun(project, runId);
+    if (run.status !== 'running' || run.processId !== PROCESS_ID) return { project, run, action: { type: 'idle' } };
+    const readiness = productionReadiness(project);
+    if (!readiness.storyboard.approved) {
+      await prepareProductionReview(projectId);
+      return halt(projectId, runId, { status: 'blocked', reason: 'Production review needs human approval of the current visual guide and lyric-timed storyboard.' });
+    }
     const step = nextProductionStep(project, run, { jobs: await liveJobs(), processId: PROCESS_ID });
+    if (!readiness.proof.approved && run.pilot?.scenes?.length
+      && run.pilot.scenes.every(pilot => currentPilotPass(project, pilot)) && step.type === 'dispatch') {
+      if (productionProofNeedsRender(project, readiness.basis.proof)) {
+        const pilot = run.pilot.scenes[0];
+        const reviewed = project.autoReviews.find(review => review.id === pilot.reviewRunId);
+        await attachProductionPilotProof(projectId, reviewed.attempts.at(-1).excerptId);
+      }
+      return halt(projectId, runId, { status: 'blocked', reason: 'Watch and approve the rendered pilot in Production review before bulk generation.' });
+    }
+    if (step.type === 'review' && !readiness.proof.approved) {
+      if (productionProofNeedsRender(project, readiness.basis.proof)) {
+        await renderProductionProof(projectId, productionProofWindow(project));
+      }
+      return halt(projectId, runId, { status: 'blocked', reason: 'Watch and approve the animated proof in Production review before the full film.' });
+    }
+
 
     if (step.type === 'idle' || step.type === 'wait') return { project, run, action: step };
     if (step.type === 'plan-pilots') {

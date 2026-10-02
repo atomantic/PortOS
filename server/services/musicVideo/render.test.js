@@ -1,3 +1,5 @@
+// Creative approval behavior is covered through production review routes and orchestration.
+vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
 import { productionPilotRenderProject } from './productionPilot.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 

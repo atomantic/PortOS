@@ -271,6 +271,10 @@ export function cloneProjectRecord(source, {
     // & Sets check-in keeps its direction and images, but its dispatch pin and
     // production link belong to the source — a working stage reads as
     // interrupted on the clone and can be resumed there.
+    productionReview: source.productionReview ? { feedback: source.productionReview.feedback || [], reviewedRevisions: source.productionReview.reviewedRevisions || {}, draft: { ...source.productionReview.draft, timingStatus: 'provisional',
+      storyboard: (source.productionReview.draft?.storyboard || []).map(shot => ({ ...shot, sceneId: sceneIdMap.get(shot.sceneId) || shot.sceneId })),
+      ...(videoVariant ? { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null } : {}),
+    }, approvals: {}, proof: null } : null,
     ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
     renderHistoryId: null,
     renderDependencies: null,
@@ -714,6 +718,8 @@ export function mergeProjectRecord(local, remoteRaw) {
   // Development artifacts and the Cast & Sets checkpoint are wire-local too:
   // their files and jobs exist only on this install.
   if (Object.hasOwn(local, 'devArtifacts')) remote.devArtifacts = local.devArtifacts;
+  delete remote.productionReview;
+  if (Object.hasOwn(local, 'productionReview')) remote.productionReview = local.productionReview;
   if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
   if (Object.hasOwn(local, 'autonomousRun')) remote.autonomousRun = local.autonomousRun;
   // The composition document's files live only on this install as well

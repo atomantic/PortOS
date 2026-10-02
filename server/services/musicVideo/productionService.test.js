@@ -1,3 +1,20 @@
+// Existing engine cases isolate the creative review boundary; explicit approval-flow
+// cases below switch to the real model and verify pause/resume without providers.
+const creativeReview = vi.hoisted(() => ({ real: false }));
+vi.mock('./productionReview.js', async (load) => {
+  const actual = await load();
+  return { ...actual,
+    assertProductionApproval: (...args) => creativeReview.real ? actual.assertProductionApproval(...args) : undefined,
+    productionReadiness: (...args) => creativeReview.real ? actual.productionReadiness(...args) : {
+      art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, basis: { proof: 'test-proof' }, readyForProduction: true,
+    },
+  };
+});
+vi.mock('./productionReviewService.js', () => ({
+  prepareProductionReview: vi.fn(async () => {}),
+  renderProductionProof: vi.fn(async () => ({ jobId: 'proof-example' })),
+  attachProductionPilotProof: vi.fn(async () => {}),
+}));
 import { startProductionOnProject, markProductionPlanned, reserveProductionStep } from './production.js';
 import { plateReviewEvidence } from '../../lib/musicVideoPlateEvidence.js';
 import { plateRequirements } from '../../lib/musicVideoPlateEvidence.js';
@@ -124,6 +141,7 @@ async function start(input = {}) {
 }
 
 beforeEach(() => {
+  creativeReview.real = false;
   store.clear();
   jobs = [];
   nextJobId = 0;
@@ -1202,4 +1220,81 @@ describe('budgeted production pilots (#9351)', () => {
     const deferred = deferAttemptReview(begun.project, begun.run.id, { code: 'PRODUCTION_BUDGET_EXHAUSTED', message: 'Raise cap and resume' });
     expect(deferred.run).toMatchObject({ status: 'limit-reached', usage: { reviews: 0 }, attempts: [{ review: null }] });
   });
+});
+
+it('blocks unreviewed production, resumes an approved board, and refuses a revocation before queue submission', async () => {
+  creativeReview.real = true;
+  const { approveProductionStage, productionReviewBasis } = await vi.importActual('./productionReview.js');
+  const seeded = seedProject({
+    devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+  });
+  seeded.productionReview = { draft: {
+    cast: 'Paper dancer', environments: 'Theatre', visualLanguage: 'Ink silhouettes', motionLanguage: 'Slow orbit',
+    guideArtifactId: 'guide', lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.',
+    storyboard: seeded.scenes.map(scene => ({ sceneId: scene.sceneId, lyricCueIds: [], action: 'Dancer unfolds', staging: 'Wide theatre', camera: 'Orbit', transition: 'Fade' })),
+  } };
+  await start();
+  expect(theRun().status).toBe('blocked');
+  expect(dispatch).not.toHaveBeenCalled();
+  for (const stage of ['art', 'storyboard']) {
+    const project = current();
+    store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage] }));
+  }
+  dispatch.mockImplementation(async ({ tag }) => {
+    const project = store.get('mv-example');
+    delete project.productionReview.approvals.art;
+    await service.assertProductionSubmission(project.id, tag.productionRunId, tag.productionStepKey, {
+      sceneId: tag.sceneId, kind: 'image',
+    });
+    return enqueueing({ stepKind: 'frame', tag });
+  });
+  await service.resumeProduction('mv-example', theRun().id);
+  await settle();
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(jobs).toHaveLength(0);
+  expect(theRun().status).toBe('blocked');
+  expect(theRun().steps[0]).toMatchObject({ status: 'refused', errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+});
+
+it('retries canceled proof evidence on Resume and keeps a late chorus window inside the master', async () => {
+  creativeReview.real = true;
+  const { approveProductionStage, productionReviewBasis } = await vi.importActual('./productionReview.js');
+  const { renderProductionProof } = await import('./productionReviewService.js');
+  let proofNumber = 0;
+  renderProductionProof.mockImplementation(async (id, window) => {
+    const project = store.get(id);
+    const excerptId = `proof-${++proofNumber}`;
+    project.excerpts = [{ id: excerptId, status: 'rendering', filename: null }];
+    project.productionReview.proof = { ...window, excerptId };
+    project.productionReview.proof.basis = productionReviewBasis(project).proof;
+  });
+  const seeded = seedProject({
+    composition: { mode: 'document' },
+    scenes: [{ sceneId: 'card', startSec: 0, endSec: 100, visualLayer: 'card' }],
+    audioAnalysis: { durationSec: 100, sections: [{ label: 'Chorus', startSec: 95, endSec: 100 }] },
+    devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+  });
+  seeded.productionReview = { draft: {
+    cast: 'Paper figure', environments: 'Theatre', visualLanguage: 'Ink silhouettes', motionLanguage: 'Slow orbit',
+    guideArtifactId: 'guide', lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.',
+    storyboard: [{ sceneId: 'card', lyricCueIds: [], action: 'Figure unfolds', staging: 'Wide theatre', camera: 'Orbit', transition: 'Fade' }],
+  } };
+  for (const stage of ['art', 'storyboard']) {
+    const project = current();
+    store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage] }));
+  }
+  await start();
+  expect(theRun().status).toBe('blocked');
+  expect(renderProductionProof).toHaveBeenCalledOnce();
+  expect(renderProductionProof).toHaveBeenLastCalledWith('mv-example', { startSec: 80, endSec: 100 });
+  await service.resumeProduction('mv-example', theRun().id);
+  await settle();
+  expect(renderProductionProof).toHaveBeenCalledOnce();
+  store.get('mv-example').excerpts[0].status = 'canceled';
+  await service.resumeProduction('mv-example', theRun().id);
+  await settle();
+  expect(renderProductionProof).toHaveBeenCalledTimes(2);
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(startAutoReview).not.toHaveBeenCalled();
+  expect(theRun().status).toBe('blocked');
 });
