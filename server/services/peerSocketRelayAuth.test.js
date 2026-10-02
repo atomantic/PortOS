@@ -10,7 +10,7 @@
  * two files this fix touches) and a REAL socket.io-client over a loopback
  * HTTP server, so the handshake and per-event middleware run unmocked.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { io as ioClient } from 'socket.io-client';
@@ -153,6 +153,16 @@ const waitFor = (emitter, event) => new Promise((resolve, reject) => {
   if (event !== 'connect_error') emitter.on('connect_error', onConnectError);
   if (event !== 'disconnect') emitter.on('disconnect', onDisconnect);
 });
+
+// socket.js pulls in nearly the whole server graph. Measured under CPU
+// contention, that cold import alone took ~7.5s on the first test (later
+// tests hit the transform cache in ~0.2s), so under full-suite load it ate the
+// per-test 30s budget before any socket work began (#8484). Pay it once in a
+// hook with its own budget so each test's budget covers only the socket exchange.
+beforeAll(async () => {
+  await import('./authGate.js');
+  await import('./socket.js');
+}, 120_000);
 
 describe('peer socket relay stays connected through cos:subscribe on a password-gated peer (#8386)', () => {
   beforeEach(async () => {
