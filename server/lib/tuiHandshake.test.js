@@ -1144,7 +1144,7 @@ describe('createInputReadyTracker', () => {
   });
 
   it('detects when Claude highlights the decline choice before trust acceptance', () => {
-    const tracker = createInputReadyTracker({ directLaunch: true });
+    const tracker = createInputReadyTracker({ launchShape: 'direct' });
     tracker.observe('', 'Quick safety check: Is this a project you created or one you trust?\n'
       + '❯ No, exit\n'
       + '  Yes, I trust this folder\n'
@@ -1174,7 +1174,7 @@ describe('createInputReadyTracker', () => {
   });
 
   it('suppresses readiness until the trust choice is identified and acknowledged', () => {
-    const tracker = createInputReadyTracker({ directLaunch: true });
+    const tracker = createInputReadyTracker({ launchShape: 'direct' });
     tracker.observe(PASTE_ON, 'Is this a project you trust?');
     expect(tracker.needsTrust).toBe(true);
     expect(tracker.trustChoiceReady).toBe(false);
@@ -1321,14 +1321,14 @@ describe('createInputReadyTracker', () => {
   // is the ready signal (regression: every runner-tui claude agent died
   // `tui-not-ready` at the deadline with a live input box on screen).
   it('directLaunch: ready on the TUI\'s own first paste-mode ON, with no shell OFF ever seen', () => {
-    const tracker = createInputReadyTracker({ directLaunch: true });
+    const tracker = createInputReadyTracker({ launchShape: 'direct' });
     expect(tracker.ready).toBe(false); // banner painting, paste mode not yet on
     tracker.observe(PASTE_ON, '');
     expect(tracker.ready).toBe(true);
   });
 
   it('directLaunch: carries a split bracketed-paste toggle across PTY chunks', () => {
-    const tracker = createInputReadyTracker({ directLaunch: true });
+    const tracker = createInputReadyTracker({ launchShape: 'direct' });
     tracker.observe('\x1b[?2004', '');
     expect(tracker.ready).toBe(false);
     tracker.observe('h', '');
@@ -1336,7 +1336,7 @@ describe('createInputReadyTracker', () => {
   });
 
   it('directLaunch + readyTextPattern: still waits for the composer marker', () => {
-    const tracker = createInputReadyTracker({ readyTextPattern: AGY_INPUT_READY_PATTERN, directLaunch: true });
+    const tracker = createInputReadyTracker({ readyTextPattern: AGY_INPUT_READY_PATTERN, launchShape: 'direct' });
     tracker.observe(PASTE_ON, 'Signing in...');
     expect(tracker.ready).toBe(false);
     tracker.observe('', '? for shortcuts');
