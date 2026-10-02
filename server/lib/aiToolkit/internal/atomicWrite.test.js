@@ -17,7 +17,6 @@ import { atomicWrite } from './atomicWrite.js';
 
 const realFsPromises = await vi.importActual('fs/promises');
 const RETRY_ATTEMPTS = 5;
-const BACKUP_RETRY_ATTEMPTS = 20;
 const lockError = (code) => Object.assign(new Error(`${code}: simulated windows lock`), { code });
 
 let tmpRoot;
@@ -38,30 +37,27 @@ afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-describe('AI Toolkit atomicWrite Windows backup retries', () => {
-  it('recovers from a transient lock while moving the existing destination to backup', async () => {
+describe('AI Toolkit atomicWrite Windows lock retries', () => {
+  it('succeeds when the lock clears within the retry window', async () => {
     const target = join(tmpRoot, 'transient.json');
     writeFileSync(target, '{"v":1}');
-    for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
-    for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
+    for (let i = 0; i < RETRY_ATTEMPTS - 1; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
 
     await atomicWrite(target, { v: 2 });
 
     expect(readFileSync(target, 'utf8')).toBe('{\n  "v": 2\n}');
-    expect(fsPromises.rename.mock.calls.filter(([from]) => from === target)).toHaveLength(RETRY_ATTEMPTS + 1);
-    expect(readdirSync(tmpRoot).filter((name) => name.endsWith('.bak') || name.endsWith('.tmp'))).toEqual([]);
+    expect(readdirSync(tmpRoot)).toEqual(['transient.json']);
   });
 
-  it('keeps the existing destination intact after the backup move stays locked', async () => {
+  it.each(['EPERM', 'EACCES', 'EBUSY'])('keeps the original bytes and removes only the temp file when %s persists', async (code) => {
     const target = join(tmpRoot, 'persistent.json');
     writeFileSync(target, '{"v":1}');
-    for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
-    for (let i = 0; i < BACKUP_RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
+    for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError(code));
 
-    await expect(atomicWrite(target, { v: 2 })).rejects.toMatchObject({ code: 'EBUSY' });
+    await expect(atomicWrite(target, { v: 2 })).rejects.toMatchObject({ code });
 
     expect(readFileSync(target, 'utf8')).toBe('{"v":1}');
-    expect(fsPromises.rename).toHaveBeenCalledTimes(RETRY_ATTEMPTS + BACKUP_RETRY_ATTEMPTS);
+    expect(fsPromises.rename).toHaveBeenCalledTimes(RETRY_ATTEMPTS);
     expect(readdirSync(tmpRoot)).toEqual(['persistent.json']);
   });
 });
