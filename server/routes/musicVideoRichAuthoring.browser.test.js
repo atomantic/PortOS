@@ -23,12 +23,8 @@ vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyPassword: async p => p === 'synthetic-password' }));
 let endpoint;
 vi.mock('../services/browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
-const { PATHS } = await import('../lib/paths.js');
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
 const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser } = await import('../services/htmlComposition/testBrowserCleanup.js');
-const { default: router } = await import('./musicVideo.js');
-const store = await import('../services/musicVideo/projects.js');
-const { saveGeneratedDevArtifact } = await import('../services/musicVideo/devArtifactService.js');
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
 const ffmpeg = await findFfmpeg();
 // Server-only CI intentionally does not install the client workspace. This
@@ -51,6 +47,11 @@ afterAll(async () => {
 
 describe.skipIf(!chrome || !ffmpeg || !clientBundler)('rich document authoring in a real browser (Chrome, ffmpeg and client dependencies required)', () => {
   it('selects code-only, authors and accepts a Three.js world through the real UI and renders its reviewed proof', async () => {
+    // Skipped suites do not run cleanup hooks: load data-owning services only here.
+    const { PATHS } = await import('../lib/paths.js');
+    const { default: router } = await import('./musicVideo.js');
+    const store = await import('../services/musicVideo/projects.js');
+    const { saveGeneratedDevArtifact } = await import('../services/musicVideo/devArtifactService.js');
     await mkdir(PATHS.music, { recursive: true });
     await mkdir(PATHS.videos, { recursive: true });
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=10', join(PATHS.music, 'synthetic-master.wav')]);

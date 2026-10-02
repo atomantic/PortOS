@@ -45,13 +45,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
   dataRoot: () => lazyTempDataRoot('portos-mv-document-browser-'),
 }));
 
-const { PATHS } = await import('../../lib/paths.js');
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { encodeDocumentComposition, prepareDocumentRender, documentRenderClock } = await import('./documentRender.js');
-const { importDocumentTemplate } = await import('./compositionDocument.js');
-const { generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js');
-const { buildDocumentPreview } = await import('./documentPreview.js');
-const projects = await import('./projects.js');
 const { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
 
 afterAll(() => cleanupTempDataRoots());
@@ -65,7 +59,16 @@ const ffmpeg = await findFfmpeg();
 describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpeg', () => {
   let proc;
   let browser;
+  let PATHS, encodeDocumentComposition, prepareDocumentRender, documentRenderClock, importDocumentTemplate;
+  let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, projects;
   beforeAll(async () => {
+    // Keep collection read-only when Chrome/ffmpeg prerequisites skip the suite.
+    ({ PATHS } = await import('../../lib/paths.js'));
+    ({ encodeDocumentComposition, prepareDocumentRender, documentRenderClock } = await import('./documentRender.js'));
+    ({ importDocumentTemplate } = await import('./compositionDocument.js'));
+    ({ generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js'));
+    ({ buildDocumentPreview } = await import('./documentPreview.js'));
+    projects = await import('./projects.js');
     const profile = join(PATHS.data, 'chrome-test-profile');
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
     const ws = await _waitForTestChrome(proc);
