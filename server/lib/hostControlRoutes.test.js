@@ -208,3 +208,35 @@ describe('prompt-feeding store mutation inventory (#9040)', () => {
     expect(isHostControlRoute('PUT', '/api/tools/:id')).toBe(true);
   });
 });
+
+describe('media generation and source publication policy (#9667)', () => {
+  it('classifies agent-capable requests independently of backend and keeps contained operations open', () => {
+    const protectedRoutes = [
+      'POST /api/image-gen/generate',
+      'POST /api/image-gen/avatar',
+      'POST /api/video-gen',
+      'POST /api/sprites/:id/reference/generate',
+      'POST /api/sprites/:id/fork',
+      'POST /api/sprites/:id/walk/generate',
+      'POST /api/sprites/:id/tracks/:trackId/generate',
+      'POST /api/threejs-models',
+      'POST /api/threejs-models/:id/generate',
+      'PUT /api/sprites/:id/publish-binding',
+      'POST /api/sprites/:id/atlas/publish',
+    ];
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+    for (const [method, path] of [
+      ['GET', '/api/threejs-models'],
+      ['GET', '/api/image-gen/status'],
+      ['POST', '/api/image-gen/cancel'],
+      ['POST', '/api/video-gen/cancel'],
+      ['POST', '/api/sprites/:id/atlas/compile'],
+      ['POST', '/api/html-composition/render'],
+    ]) expect(isHostControlRoute(method, path), path).toBe(false);
+  });
+});
