@@ -478,9 +478,9 @@ export default function CmdKSearch() {
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="relative w-full max-w-3xl mx-4 bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
+        className="relative flex flex-col max-h-dvh-cap [--dvh-inset:calc(10vh+1rem)] w-full max-w-3xl mx-4 bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
       >
-        <div className="flex items-center gap-3 px-4 py-4 border-b border-port-border">
+        <div className="flex shrink-0 items-center gap-3 px-4 py-4 border-b border-port-border">
           {captureMode ? <Brain size={18} className="text-port-accent shrink-0" /> : <Search size={18} className="text-gray-400 shrink-0" />}
           <div className="flex-1 min-w-0">
             {captureMode ? (
@@ -534,7 +534,7 @@ export default function CmdKSearch() {
           )}
         </div>
 
-        {!captureMode && <div className="max-h-96 overflow-y-auto p-2">
+        {!captureMode && <div className="min-h-0 max-h-96 overflow-y-auto p-2">
           <div id={listboxId} role="listbox" aria-label="Command palette results">
             {renderGroup(
               <History size={14} />,
@@ -631,12 +631,12 @@ export default function CmdKSearch() {
         </div>}
 
         {captureMode && (
-          <div className="px-4 py-5 text-sm text-gray-400">
+          <div className="min-h-0 overflow-y-auto px-4 py-5 text-sm text-gray-400">
             Capture one unstructured thought or URL without leaving the command palette.
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-2 px-4 py-2 border-t border-port-border text-[11px] text-gray-500">
+        <div className="flex shrink-0 items-center justify-between gap-2 px-4 py-2 border-t border-port-border text-[11px] text-gray-500">
           <span>{captureMode ? '↵ capture · Esc back' : '↑↓ navigate · ↵ run · Esc close'}</span>
           <span>Shared backbone with voice agent</span>
         </div>

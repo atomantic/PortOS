@@ -41,6 +41,7 @@
     "@testing-library/user-event": "14.6.7",
     "@vitejs/plugin-react": "6.1.1",
     "happy-dom": "20.14.5",
+    "playwright-core": "1.63.0",
     "rollup-plugin-visualizer": "7.1.1",
     "tailwindcss": "4.3.3",
     "vite": "8.3.1",
