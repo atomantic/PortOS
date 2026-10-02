@@ -515,6 +515,18 @@ describe('persistent mind supervisor', () => {
       .not.toContain('mind.message.accepted');
   });
 
+  it('keeps the last wake failure separate from a later pause reason', async () => {
+    await supervisor.setPersistentMindEnabled(true);
+    await supervisor.startPersistentMind();
+    mock.root.persistentMind.lastError = 'Provider process was killed (SIGKILL)';
+    await supervisor.pausePersistentMind('Agent API pause: OOM safety');
+    expect(mock.root.persistentMind).toMatchObject({
+      status: 'paused',
+      pauseReason: 'Agent API pause: OOM safety',
+      lastError: 'Provider process was killed (SIGKILL)',
+    });
+  });
+
   it('records pause, stop, and disable boundaries even without an active provider turn', async () => {
     await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();

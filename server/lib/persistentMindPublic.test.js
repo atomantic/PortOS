@@ -230,4 +230,64 @@ describe('public persistent mind state', () => {
     expect(projected.pauseReason).toBe(reason);
     expect(projected.pauseReason).not.toBe('Paused by user');
   });
+
+  it('passes through a non-user pause reason instead of blaming the user', () => {
+    const projected = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(), enabled: true, started: true,
+      status: 'paused',
+      pauseReason: 'Agent API pause: OOM safety',
+    }));
+    expect(projected.pauseReason).toBe('Agent API pause: OOM safety');
+    expect(projected.lastError).toBeNull();
+  });
+
+  it('labels the Mind page and default pauses as user pauses', () => {
+    for (const pauseReason of ['Paused by user', 'Paused from Mind page', 'Paused from the Mind page']) {
+      const projected = publicPersistentMindState(normalizePersistentMindState({
+        ...createDefaultPersistentMindState(), enabled: true, started: true, status: 'paused', pauseReason,
+      }));
+      expect(projected.pauseReason).toBe('Paused by user');
+    }
+  });
+
+  it('scrubs credential-looking text from a passed-through pause reason', () => {
+    const projected = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(), enabled: true, started: true,
+      status: 'paused',
+      pauseReason: 'Held refusal: key=sk-EXAMPLE1234 rejected',
+    }));
+    expect(projected.pauseReason).toContain('Held refusal');
+    expect(JSON.stringify(projected)).not.toContain('sk-EXAMPLE');
+  });
+
+  it('shows both the pause reason and a coarse last-wake failure', () => {
+    const killed = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(), enabled: true, started: true,
+      status: 'paused',
+      pauseReason: 'Agent API pause: OOM safety',
+      lastError: 'codex exited with SIGKILL; token=abc123',
+    }));
+    expect(killed.pauseReason).toBe('Agent API pause: OOM safety');
+    expect(killed.lastError).toMatch(/killed \(possibly out of memory\)/);
+    expect(JSON.stringify(killed)).not.toContain('abc123');
+
+    const canceled = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(), enabled: true, started: true,
+      status: 'paused',
+      pauseReason: 'Paused from Mind page',
+      lastError: 'API run canceled',
+    }));
+    expect(canceled.pauseReason).toBe('Paused by user');
+    expect(canceled.lastError).toBe('The last wake was canceled before it completed');
+  });
+
+  it('does not render a legacy pause copied into lastError as a wake failure', () => {
+    const projected = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(), enabled: true, started: true,
+      status: 'paused',
+      pauseReason: 'Paused from Mind page',
+      lastError: 'Paused from Mind page',
+    }));
+    expect(projected.lastError).toBeNull();
+  });
 });

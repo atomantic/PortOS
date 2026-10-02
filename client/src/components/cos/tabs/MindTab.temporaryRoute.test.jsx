@@ -146,6 +146,22 @@ describe('MindTab temporary thinking sessions', () => {
     expect(api.resumePersistentMind).not.toHaveBeenCalled();
   });
 
+  it('shows a system pause reason alongside the last wake failure', async () => {
+    api.getPersistentMind.mockResolvedValue(response({
+      state: {
+        ...response().state,
+        status: 'paused',
+        pauseReason: 'Agent API pause: OOM safety',
+        lastError: 'The last wake was killed (possibly out of memory); local diagnostics have details',
+      },
+    }));
+    renderTab();
+    await composerLoaded();
+
+    await waitFor(() => expect(screen.getAllByText('Agent API pause: OOM safety').length).toBeGreaterThan(0));
+    expect(screen.getByTestId('mind-last-error').textContent).toMatch(/killed \(possibly out of memory\)/);
+  });
+
   it('keeps previewing inert and explains that sending resumes a paused mind', async () => {
     const user = userEvent.setup();
     api.getPersistentMind.mockResolvedValue(response({

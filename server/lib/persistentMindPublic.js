@@ -8,6 +8,18 @@ import {
   publicContextBudgetReason,
 } from './persistentMindContextBudget.js';
 
+// Pauses the human asked for: the default supervisor reason plus the Mind
+// page's own label. Anything else (an operator/agent API pause for OOM safety,
+// a held policy refusal, ...) is NOT a user pause and must say what it is.
+const USER_PAUSE_REASON = /^paused (?:by user|from (?:the )?mind page)\b/i;
+
+// Pause text is operator/system-authored, but a held refusal can echo provider
+// output, so scrub anything that looks like a credential before it leaves.
+const SECRETISH = /\b(?:sk-[A-Za-z0-9_-]{4,}|bearer\s+\S+|(?:api[_-]?key|token|key|secret|password)\s*[=:]\s*\S+|[A-Za-z0-9+/_-]{32,})/gi;
+const scrubReason = (text) => text.replace(SECRETISH, '[redacted]').replace(/\s+/g, ' ').trim();
+
+export const isUserPersistentMindPauseReason = (reason) => typeof reason === 'string' && USER_PAUSE_REASON.test(reason.trim());
+
 const publicReason = (state) => {
   // A quota autopause is NOT a user action. Saying "Paused by user" there is the
   // exact confusion this projection exists to prevent: the page would blame the
@@ -20,9 +32,36 @@ const publicReason = (state) => {
     || publicContextBudgetReason(state.lastError);
   if (contextBudget) return contextBudget;
   if (!state.pauseReason) return null;
-  if (state.status === 'paused') return 'Paused by user';
+  if (state.status === 'paused') {
+    if (isUserPersistentMindPauseReason(state.pauseReason)) return 'Paused by user';
+    return scrubReason(state.pauseReason) || 'Paused by the system';
+  }
   if (state.status === 'degraded' || state.status === 'interrupted') return 'Provider unavailable or wake failed';
   return 'Waiting for the next eligible wake';
+};
+
+// Coarse, safe classification of why the last wake failed. Free-form provider
+// errors never pass through, but "killed (OOM?)" vs "canceled" vs "generic" is
+// the difference between an operator knowing what to fix and not.
+const WAKE_FAILURE_LABELS = [
+  [/\b(?:SIGKILL|OOM|out of memory|killed|exit(?:ed)? (?:code )?137)\b/i, 'The last wake was killed (possibly out of memory); local diagnostics have details'],
+  [/heartbeat expired/i, 'The last wake stopped sending heartbeats and was interrupted'],
+  [/orphaned .*after restart|daemon stopped/i, 'The last wake was interrupted by a restart'],
+  [/\b(?:cancel(?:l?ed)?|abort(?:ed)?|interrupted)\b/i, 'The last wake was canceled before it completed'],
+];
+
+const publicLastError = (state) => {
+  if (!state.lastError) return null;
+  const contextBudget = publicContextBudgetReason(state.lastError)
+    || publicContextBudgetReason(state.pauseReason);
+  // Safe: only token counts + recovery hint — never prompts or API keys.
+  if (contextBudget) return contextBudget;
+  // Older state stored the pause text as lastError too; a pause is not a wake
+  // failure, so don't render it as one.
+  if (state.status === 'paused' && state.lastError === state.pauseReason
+    && !isUsageLimitPauseReason(state.pauseReason)) return null;
+  const match = WAKE_FAILURE_LABELS.find(([pattern]) => pattern.test(state.lastError));
+  return match ? match[1] : 'The last wake did not complete; local diagnostics have details';
 };
 
 // The route the claimed turn is ACTUALLY running on, which is not always the
@@ -92,13 +131,8 @@ export function publicPersistentMindState(state = {}) {
     nextEligibleWakeAt: typeof state.nextEligibleWakeAt === 'string' ? state.nextEligibleWakeAt : null,
     nextWakeAt: nextWakeAt == null ? null : new Date(nextWakeAt).toISOString(),
     failureCount: Number.isInteger(state.failureCount) ? state.failureCount : 0,
-    lastError: (() => {
-      if (!state.lastError) return null;
-      const contextBudget = publicContextBudgetReason(state.lastError)
-        || publicContextBudgetReason(state.pauseReason);
-      // Safe: only token counts + recovery hint — never prompts or API keys.
-      if (contextBudget) return contextBudget;
-      return 'The last wake did not complete; local diagnostics have details';
-    })(),
+    // Kept independent of pauseReason: a pause must not hide why the last
+    // wake failed, and a failed wake must not be mistaken for the pause cause.
+    lastError: publicLastError(state),
   };
 }
