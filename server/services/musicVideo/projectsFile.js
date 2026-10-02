@@ -50,9 +50,9 @@ async function cloneProjectUnqueued(id, options = {}) {
   return clone;
 }
 
-async function setProjectAnalysisUnqueued(id, analysis) {
+async function setProjectAnalysisUnqueued(id, analysis, sourceProject) {
   const { all, idx } = await loadAllAndIndex(id);
-  all[idx] = logic.setAudioAnalysis(all[idx], analysis);
+  all[idx] = logic.setAudioAnalysis(all[idx], analysis, sourceProject);
   await saveAll(all);
   return all[idx];
 }

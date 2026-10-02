@@ -60,6 +60,7 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
     autonomousRun: _autonomousRun,
     // Render diagnostics describe a job on this machine, never a peer job.
     renderError: _renderError,
+    songRevision: _songRevision, songRevisionHistory: _songRevisionHistory,
     ...shared
   } = record;
   // A composition document names a folder on this install only

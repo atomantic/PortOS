@@ -1,3 +1,4 @@
+import SongRevisionPanel from '../SongRevisionPanel.jsx';
 import StyleReferencesPanel from '../StyleReferencesPanel.jsx';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
 import CreativeSetupPanel from '../CreativeSetupPanel.jsx';
@@ -20,6 +21,7 @@ export default function SetupStage({ board }) {
   } = board;
   return (
     <>
+      <SongRevisionPanel key={`song-${project.id}`} project={project} tracks={tracks} onUpdated={board.replaceProject} onFork={board.onForkSong} disabled={locked || renderBound || midiBound} />
       <CreativeSetupPanel
         key={`creative-${project.id}`}
         project={project}

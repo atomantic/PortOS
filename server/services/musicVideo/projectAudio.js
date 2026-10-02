@@ -46,5 +46,5 @@ export async function analyzeProjectSong(projectId) {
   if (!analysis) {
     throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
   }
-  return setProjectAnalysis(project.id, relabelAnalysisSections(analysis, project.lyricCues, project.lyricMarkers));
+  return setProjectAnalysis(project.id, relabelAnalysisSections(analysis, project.lyricCues, project.lyricMarkers), project);
 }

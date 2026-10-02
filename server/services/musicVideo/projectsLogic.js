@@ -259,6 +259,8 @@ export function cloneProjectRecord(source, {
     // A revision is in-progress work against the SOURCE's takes; the clone
     // starts with none (its carried-over notes can open a fresh one).
     revisions: [],
+    songRevision: null,
+    songRevisionHistory: [...(source.songRevisionHistory || []), ...(source.songRevision ? [source.songRevision] : [])],
     audioTimingRevisions: [],
     // #9102: an auto-review run is tied to the SOURCE's revisions/excerpts, so a
     // clone starts with none (terminal runs too — their links are source-scoped).
@@ -432,7 +434,10 @@ export function applyProjectPatch(project, patch) {
  * ready/rendering project shouldn't regress its lifecycle). The analysis shape
  * is validated so a hand-edited/legacy record can't store a malformed map.
  */
-export function setAudioAnalysis(project, analysis) {
+export function setAudioAnalysis(project, analysis, sourceProject) {
+  if (sourceProject && (project.trackId !== sourceProject.trackId || project.uploadedAudioFilename !== sourceProject.uploadedAudioFilename)) {
+    throw new ServerError('The audio changed during analysis. Analyze the selected master again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
+  }
   const validated = musicVideoAudioAnalysisSchema.parse(analysis);
   const status = project.status === 'draft' ? 'analyzed' : project.status;
   return touch(project, { audioAnalysis: validated, status });
