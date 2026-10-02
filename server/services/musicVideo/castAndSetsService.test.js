@@ -8,7 +8,7 @@
  * what a note touched.
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll, onTestFinished } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll, onTestFinished } from 'vitest';
 import express from 'express';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -63,6 +63,7 @@ const queueJob = async ({ params }) => {
 };
 const enqueue = vi.fn(queueJob);
 let imageParamsOverrides;
+const heldQueueReleases = new Set();
 const runPrompt = vi.fn();
 const board = {
   id: 'mb-1',
@@ -81,7 +82,7 @@ const current = async (id) => projects.getProject(id);
 // immediately when fired, rather than polling. Slow runners (Windows CI) stay
 // responsive because the event triggers a check instead of spinning on elapsed time.
 // The deadline (60s) bounds any stuck state and re-check delays for slow CI.
-async function until(check, label) {
+async function until(check, label, diagnostics) {
   let changes = 0;
   let wake;
   const changed = () => {
@@ -95,7 +96,10 @@ async function until(check, label) {
     const deadline = Date.now() + 60_000;
     for (;;) {
       if (await check()) return;
-      if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}`);
+      if (Date.now() >= deadline) {
+        const details = diagnostics ? `: ${JSON.stringify(await diagnostics())}` : '';
+        throw new Error(`timed out waiting for ${label}${details}`);
+      }
       const observed = changes;
       const remaining = deadline - Date.now();
       // Wait for event with a small timeout to re-check the condition
@@ -115,7 +119,7 @@ async function until(check, label) {
 
 /** Land every queued job whose key is in `keys` (all when omitted), as the image hook does. */
 async function land(projectId, keys = null) {
-  const pending = jobs.filter((j) => !j.landed && (!keys || keys.includes(keyOf(j))));
+  const pending = jobs.filter((j) => j.params.musicVideo.projectId === projectId && !j.landed && (!keys || keys.includes(keyOf(j))));
   for (const job of pending) {
     job.landed = true;
     const filename = `${job.id}.png`;
@@ -174,6 +178,7 @@ beforeEach(() => {
   jobs = [];
   imageParamsOverrides = {};
   vi.clearAllMocks();
+  enqueue.mockReset().mockImplementation(queueJob);
   runPrompt.mockResolvedValue({ text: `Here you go:\n\`\`\`json\n${JSON.stringify(DIRECTION)}\n\`\`\`` });
   service.__setCastAndSetsDepsForTests(testDeps());
 });
@@ -189,6 +194,11 @@ const testDeps = (overrides = {}) => ({
   boardItemImage: async () => (item) => (item.type === 'image' ? { kind: 'image', filename: item.file } : null),
   loadTrack: async () => null,
   ...overrides,
+});
+afterEach(async () => {
+  for (const release of heldQueueReleases) release();
+  heldQueueReleases.clear();
+  await service.__settleCastAndSetsForTests();
 });
 afterAll(cleanupTempDataRoots);
 
@@ -309,7 +319,15 @@ describe('Cast & Sets check-in', () => {
     expect(test1.params.referenceImagePaths.map((p) => p.split(/[\\/]/).pop())).toEqual([`${plateLab.id}.png`, `${character.id}.png`, `${looks.id}.png`]);
 
     await land(project.id);
-    await until(async () => (await current(project.id)).castAndSets?.status === 'review', 'the check-in');
+    await until(async () => (await current(project.id)).castAndSets?.status === 'review', 'the check-in', async () => {
+      const stage = (await current(project.id)).castAndSets;
+      return {
+        status: stage?.status, revision: stage?.revision, error: stage?.error, stopReason: stage?.stopReason,
+        images: Object.fromEntries(Object.entries(stage?.images || {}).map(([key, image]) => [key, { status: image.status, jobId: image.jobId }])),
+        jobs: jobs.filter(job => job.params.musicVideo.projectId === project.id)
+          .map(job => ({ key: keyOf(job), id: job.id, landed: !!job.landed })),
+      };
+    });
     const reviewing = await current(project.id);
     const artifact = reviewing.devArtifacts.find((a) => a.id === reviewing.castAndSets.artifactId);
     expect(artifact).toMatchObject({ kind: 'cast-sets', status: 'pending', version: 1 });
@@ -447,7 +465,7 @@ it('ignores a previous revision completion while regeneration has reserved a key
   let release;
   const held = new Promise((resolve) => { release = resolve; });
   enqueue.mockImplementationOnce(async (job) => { await held; return queueJob(job); });
-  onTestFinished(release);
+  heldQueueReleases.add(release);
   await service.regenerateCastAndSets(project.id, { notes: [{ target: 'character', text: 'Shorter braid' }] });
   await until(async () => (await current(project.id)).castAndSets.images.character.status === 'queued', 'the reserved regeneration');
   const before = (await current(project.id)).castAndSets;
@@ -649,4 +667,48 @@ it('carries unresolved targeted production feedback into regeneration without re
   expect(prompt).not.toContain('Obsolete resolved direction');
   const revised = await current(project.id);
   expect(revised.productionReview.feedback[0].resolvedAt).toBeUndefined();
+});
+
+
+it('keeps concurrent check-in completions owned by the project that queued them', async () => {
+  const first = await seed();
+  const second = await seed();
+  await service.startCastAndSets(first.id);
+  await until(() => jobs.filter(job => job.params.musicVideo.projectId === first.id).length === 4, 'first project images');
+  await service.startCastAndSets(second.id);
+  await until(() => jobs.filter(job => job.params.musicVideo.projectId === second.id).length === 4, 'second project images');
+  await land(second.id, ['character']);
+  expect(jobs.filter(job => job.params.musicVideo.projectId === first.id).some(job => job.landed)).toBe(false);
+  await Promise.all([runTo(first.id, 'review'), runTo(second.id, 'review')]);
+  for (const project of [first, second]) {
+    const stage = (await current(project.id)).castAndSets;
+    const character = jobs.find(job => job.params.musicVideo.projectId === project.id && keyOf(job) === 'character');
+    expect(stage.images.character.imageId).toBe(`${character.id}.png`);
+    expect(stage.status).toBe('review');
+  }
+});
+
+
+it('drains a held background submission before shared queue and project fixtures can be reset', async () => {
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  heldQueueReleases.add(release.resolve);
+  enqueue.mockImplementationOnce(async job => {
+    entered.resolve();
+    await release.promise;
+    return queueJob(job);
+  });
+  const project = await seed();
+  await service.startCastAndSets(project.id);
+  await entered.promise;
+  let drained = false;
+  const drain = service.__settleCastAndSetsForTests().then(() => { drained = true; });
+  await Promise.resolve();
+  expect(drained).toBe(false);
+  release.resolve();
+  await drain;
+  expect(drained).toBe(true);
+  expect(jobs).toHaveLength(4);
+  expect((await current(project.id)).castAndSets.images.character.jobId).toBe(jobs[0].id);
+  await runTo(project.id, 'review');
 });
