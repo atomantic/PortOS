@@ -2280,3 +2280,101 @@ it('waits for a grade save before rendering and keeps the saved look when a late
   await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Grade save unavailable'));
   expect(screen.getByLabelText('Default section look').value).toBe('teal-night');
 });
+
+describe('MusicVideo main page project cards', () => {
+  it('renders richly detailed cards for each project below the new project card', async () => {
+    const projectWithRender = {
+      ...PROJECT_WITH_CLIP,
+      id: 'mv-render-1',
+      name: 'Electric Skyline',
+      status: 'complete',
+      renderHistoryId: 'rh-final-1',
+      audioAnalysis: { bpm: 124, durationSec: 210 },
+      videoSettings: { backend: 'fal', modelId: 'hunyuan_video', generationMode: 'image', audioReactiveLora: 'reactive.safetensors' },
+      concept: { universeId: 'cyber-tokyo', style: 'hyper-detailed synthwave' },
+      visualSpec: { palette: ['#ff0055', '#00ffee'], references: [] },
+      vocalStemFilename: 'electric-vocals.wav',
+      midiTranscription: 'electric-midi.mid',
+    };
+    listMusicVideoProjects.mockResolvedValueOnce([projectWithRender, PROJECT_NO_CLIP]);
+    renderMV();
+
+    // New project card exists
+    expect(await screen.findByRole('button', { name: /New music video/i })).toBeInTheDocument();
+
+    // Project cards grid exists below new project card
+    const grid = await screen.findByTestId('mv-project-grid');
+    expect(grid).toBeInTheDocument();
+
+    // Richly detailed cards rendered
+    expect(within(grid).getByText('Electric Skyline')).toBeInTheDocument();
+    expect(within(grid).getByText('No Clips')).toBeInTheDocument();
+
+    // Rich configuration options and status on Electric Skyline card
+    const card = screen.getByTestId('mv-project-card-mv-render-1');
+    expect(within(card).getByText('complete')).toBeInTheDocument();
+    expect(within(card).getByText('124 BPM')).toBeInTheDocument();
+    expect(within(card).getByText('fal')).toBeInTheDocument();
+    expect(within(card).getByText('hunyuan_video')).toBeInTheDocument();
+    expect(within(card).getByText('I2V')).toBeInTheDocument();
+    expect(within(card).getByText('Reactive')).toBeInTheDocument();
+    expect(within(card).getByText('Vocal Stem')).toBeInTheDocument();
+    expect(within(card).getByText('MIDI')).toBeInTheDocument();
+    expect(within(card).getByText('cyber-tokyo')).toBeInTheDocument();
+    expect(within(card).getByText(/hyper-detailed synthwave/i)).toBeInTheDocument();
+    expect(within(card).getByText('Final video')).toBeInTheDocument();
+  });
+
+  it('navigates to project when clicking Open on its card', async () => {
+    listMusicVideoProjects.mockResolvedValueOnce([PROJECT_WITH_CLIP]);
+    renderMV();
+
+    const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);
+    const openBtn = within(card).getByRole('button', { name: /^Open$/i });
+
+    await act(async () => {
+      fireEvent.click(openBtn);
+    });
+
+    // Navigates and loads the project board
+    expect(await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+  });
+
+  it('handles forking a project directly from its card', async () => {
+    cloneMusicVideoProject.mockResolvedValueOnce({
+      ...PROJECT_WITH_CLIP,
+      id: 'mv-cloned-1',
+      name: 'Neon Run (v2)',
+      version: 2,
+    });
+    listMusicVideoProjects.mockResolvedValueOnce([PROJECT_WITH_CLIP]);
+    renderMV();
+
+    const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);
+
+    const forkBtn = within(card).getByRole('button', { name: /Fork/i });
+    await act(async () => {
+      fireEvent.click(forkBtn);
+    });
+    expect(cloneMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, {}, { silent: true });
+  });
+
+  it('handles deleting a project directly from its card with confirmation', async () => {
+    deleteMusicVideoProject.mockResolvedValueOnce({ ok: true });
+    listMusicVideoProjects.mockResolvedValueOnce([PROJECT_WITH_CLIP]);
+    renderMV();
+
+    const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);
+
+    const deleteBtn = within(card).getByRole('button', { name: `Delete project ${PROJECT_WITH_CLIP.name}` });
+    fireEvent.click(deleteBtn);
+    expect(within(card).getByText('Delete?')).toBeInTheDocument();
+
+    const confirmBtn = within(card).getByRole('button', { name: `Confirm delete project ${PROJECT_WITH_CLIP.name}` });
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+    expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
+  });
+});
+
