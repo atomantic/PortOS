@@ -78,7 +78,6 @@ const board = {
 const keyOf = (job) => job.params.musicVideo.castAndSets.key;
 const current = async (id) => projects.getProject(id);
 
-<<<<<<< HEAD
 // Event-driven with deadline fallback: subscribes to state changes and re-checks
 // immediately when fired, rather than polling. Slow runners (Windows CI) stay
 // responsive because the event triggers a check instead of spinning on elapsed time.
@@ -116,18 +115,6 @@ async function until(check, label, diagnostics) {
   } finally {
     cleanup();
   }
-=======
-// Deadline-based, not an iteration count: each check reads from disk, so a slow
-// runner (Windows CI) stretches an iteration far past its 5ms sleep and a fixed
-// 200 passes can expire in about a second.
-async function until(check, label) {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    if (await check()) return;
-    await new Promise((r) => setTimeout(r, 5));
-  }
-  throw new Error(`timed out waiting for ${label}`);
->>>>>>> 2f03cf704 (test: await owned cast-and-set artifact assembly before check-in assertions)
 }
 
 /** Land every queued job whose key is in `keys` (all when omitted), as the image hook does. */
