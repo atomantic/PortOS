@@ -148,7 +148,7 @@ function createPasteRetryController({
   // Memoized on buffer identity because the marker poll re-asks every
   // PASTE_MARKER_POLL_MS for up to PASTE_COMMIT_PATIENCE_MS — ~300 ticks — while
   // a booting codex is silent, and the predicate is three full-buffer regex
-  // scans plus two whitespace-stripped copies of it. `postPasteBuffer` is only
+  // scans plus two whitespace-stripped copies of it. `pasteState.buffer` is only
   // ever rebound when output actually arrives, so an idle tick is a pointer
   // compare.
   let lastCommitBuffer = null;
@@ -161,11 +161,23 @@ function createPasteRetryController({
     return lastCommitVerdict;
   };
 
-  // Bounded post-paste accumulator. Lives from an attempt through its marker /
-  // verification windows and any bounded retry backoff, so delayed TUI output
-  // can still confirm the paste. Set to '' when an attempt fires; nulled when
-  // paste detection resolves, the next attempt replaces it, or the run ends.
-  let postPasteBuffer = null;
+  // Paste-confirmation state: which protocol window an attempt is in, plus the
+  // bounded post-paste output accumulated across it.
+  //   idle            no attempt in flight; incoming output is ignored
+  //   awaiting-marker attempt fired; waiting for the TUI's commit evidence
+  //   awaiting-verify commit wait elapsed with no evidence; short window for a
+  //                   late marker / prompt echo before declaring it swallowed
+  //   backoff         verification failed; waiting out the retry delay
+  // The buffer deliberately survives every phase change except `idle`, so
+  // delayed TUI output can still confirm a paste that looked failed. The
+  // transition helpers below are the ONLY writers of this object.
+  const pasteState = { phase: 'idle', buffer: '' };
+  const armAttempt = () => { pasteState.phase = 'awaiting-marker'; pasteState.buffer = ''; };
+  const beginVerify = () => { pasteState.phase = 'awaiting-verify'; };
+  // Retains the buffer: a marker painted after the verify window closes must
+  // still confirm this paste instead of letting the retry duplicate it.
+  const enterBackoff = () => { pasteState.phase = 'backoff'; };
+  const clearPaste = () => { pasteState.phase = 'idle'; pasteState.buffer = ''; };
   let pasteEnterTimer = null;
   let pasteVerifyTimer = null;
   let pasteRetryTimer = null;
@@ -265,10 +277,9 @@ function createPasteRetryController({
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
     if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     if (pasteRetryTimer) { clearTimeout(pasteRetryTimer); pasteRetryTimer = null; }
-    // Start capturing post-paste output. Set BEFORE writing the paste so
-    // every chunk that arrives in response gets appended. A failed verification
-    // deliberately keeps it through retry backoff so late output is not lost.
-    postPasteBuffer = '';
+    // Start capturing post-paste output. Armed BEFORE writing the paste so
+    // every chunk that arrives in response gets appended.
+    armAttempt();
     write(`\x1b[200~${prompt}\x1b[201~`);
     const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}/${PASTE_RETRY_MAX_ATTEMPTS}]` : '';
     appendLine(`📟 Prompt pasted into TUI session ${sessionLabel} (${reason})${attemptSuffix}`);
@@ -304,15 +315,16 @@ function createPasteRetryController({
           ? ` (waiting for ${tuiConfig.command} MCP servers to finish booting)`
           : '';
         appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms${bootNote}`);
-        // Keep the failed attempt's buffer live during the backoff. A busy TUI
-        // can paint its authoritative paste marker only after the verification
-        // window closes; dropping output in this gap made Codex stack duplicate
-        // prompt chips, then falsely report that none had rendered.
+        // The failed attempt's buffer stays live during the backoff (see
+        // enterBackoff). A busy TUI can paint its authoritative paste marker
+        // only after the verification window closes; dropping output in this
+        // gap made Codex stack duplicate prompt chips, then falsely report that
+        // none had rendered.
         pasteRetryTimer = setTimeout(() => {
           pasteRetryTimer = null;
           if (isFinalized()) return;
-          if (pasteConfirmed(postPasteBuffer || '')) {
-            postPasteBuffer = null;
+          if (pasteConfirmed(pasteState.buffer)) {
+            clearPaste();
             submitPaste();
             return;
           }
@@ -349,7 +361,7 @@ function createPasteRetryController({
       if (isFinalized()) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
-        postPasteBuffer = null;
+        clearPaste();
         return;
       }
       const elapsed = Date.now() - pasteSentAt;
@@ -358,49 +370,45 @@ function createPasteRetryController({
       // marker). Waiting on the full commit evidence rather than the marker
       // alone is what lets codex's patient first attempt (PASTE_COMMIT_PATIENCE_MS)
       // exit in ~200ms when the composer was live all along.
-      if ((pasteCommitted(postPasteBuffer || '') && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
+      if ((pasteCommitted(pasteState.buffer) && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
         || elapsed >= commitWaitMs()) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
-        // Capture the buffer before clearing, then confirm the paste (issue #2192).
-        const commitBuffer = postPasteBuffer || '';
-        postPasteBuffer = null;
+        // Confirm the paste (issue #2192).
+        const commitBuffer = pasteState.buffer;
         // Marker present (or text already visible, or nothing to verify) → the
         // paste landed; submit now. Trusting the marker here is what fixes the
         // multi-line-collapse false negative — Claude hides the pasted body text.
         // pasteConfirmed is a superset of the pasteCommitted exit above, so only
         // the commitWaitMs timeout can fall through to the verification window.
         if (pasteConfirmed(commitBuffer)) {
+          clearPaste();
           submitPaste();
           return;
         }
         // Markerless AND text not visible yet: give the prompt a short window to
         // render (a late marker also counts as confirmed) before declaring it
-        // swallowed. Resume accumulation for the verification window.
-        let verifyBuffer = commitBuffer;
+        // swallowed. Keep accumulating through the verification window.
         const verifyStartedAt = Date.now();
-        postPasteBuffer = commitBuffer;
+        beginVerify();
         pasteVerifyTimer = setInterval(() => {
           if (isFinalized()) {
             clearInterval(pasteVerifyTimer);
             pasteVerifyTimer = null;
-            postPasteBuffer = null;
+            clearPaste();
             return;
           }
-          verifyBuffer = postPasteBuffer || verifyBuffer;
           const verifyElapsed = Date.now() - verifyStartedAt;
-          const confirmed = pasteConfirmed(verifyBuffer);
+          const confirmed = pasteConfirmed(pasteState.buffer);
           // Submit once confirmed, or give up and retry/fail when the window expires.
           if (confirmed || verifyElapsed >= PASTE_VERIFY_WINDOW_MS) {
             clearInterval(pasteVerifyTimer);
             pasteVerifyTimer = null;
             if (confirmed) {
-              postPasteBuffer = null;
+              clearPaste();
               submitPaste();
             } else {
-              // Preserve the buffer through retry backoff so a delayed marker
-              // can still confirm this paste instead of triggering a duplicate.
-              postPasteBuffer = verifyBuffer;
+              enterBackoff();
               retryOrFailPaste();
             }
           }
@@ -410,21 +418,21 @@ function createPasteRetryController({
   };
 
   // handleData's own hook: accumulates PTY output while a paste attempt is
-  // awaiting its marker, verification, or retry backoff (see postPasteBuffer
-  // above). A no-op the rest of the time.
+  // awaiting its marker, verification, or retry backoff (see pasteState
+  // above). A no-op while idle.
   const ingestChunk = (stripped) => {
-    if (postPasteBuffer === null || !stripped) return;
+    if (pasteState.phase === 'idle' || !stripped) return;
     // Tail-bounded: see POST_PASTE_BUFFER_CAP for why a few screens is all the
     // commit predicates can use.
-    postPasteBuffer = (postPasteBuffer + stripped).slice(-POST_PASTE_BUFFER_CAP);
+    pasteState.buffer = (pasteState.buffer + stripped).slice(-POST_PASTE_BUFFER_CAP);
     // The retry backoff used to be a blind spot: output was discarded after
     // verification failed and before the next attempt began. A late marker or
     // prompt echo still proves the existing paste landed, so submit it now and
     // cancel the duplicate retry.
-    if (pasteRetryTimer && pasteConfirmed(postPasteBuffer)) {
+    if (pasteState.phase === 'backoff' && pasteRetryTimer && pasteConfirmed(pasteState.buffer)) {
       clearTimeout(pasteRetryTimer);
       pasteRetryTimer = null;
-      postPasteBuffer = null;
+      clearPaste();
       submitPaste();
     }
   };
@@ -438,7 +446,7 @@ function createPasteRetryController({
     if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     if (pasteRetryTimer) { clearTimeout(pasteRetryTimer); pasteRetryTimer = null; }
     if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
-    postPasteBuffer = null;
+    clearPaste();
   };
 
   return { sendPrompt, resubmit, ingestChunk, cancel };
@@ -673,7 +681,7 @@ export function createTuiSessionController({
   // only as a recovery path, never duplicated into raw.txt.
   let receivedTuiOutput = false;
 
-  // The paste-attempt / submit-Enter machinery (postPasteBuffer, pasteEnterTimer,
+  // The paste-attempt / submit-Enter machinery (pasteState, pasteEnterTimer,
   // pasteVerifyTimer, submitEnterTimer) lives in createPasteRetryController
   // rather than this closure — see its own comment for why that cluster is
   // separated out. Created by attachSession() once sessionId/pid are known, and
