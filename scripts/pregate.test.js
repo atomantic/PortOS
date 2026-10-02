@@ -118,7 +118,7 @@ describe('pregate hidden-content invocation', () => {
     // No runners or test files: docs-only changes produce an empty test plan.
     for (const path of [
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
-      'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js',
+      'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -397,7 +397,7 @@ describe('the gate end to end', () => {
       git('config', 'user.email', 'contributor@example.com');
       for (const path of [
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
-        'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js',
+        'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',

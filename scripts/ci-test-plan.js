@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'child_process';
-import { existsSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { join, posix } from 'path';
+import { staticImportSpecifiersFromSource } from '../server/lib/staticImportGraph.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
+const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
 // `git grep` pathspecs matching every extension TEST_FILE_RE recognizes. A
 // hardcoded `*.test.js`/`.jsx` pair would silently stop finding a `.test.ts(x)`
 // or `.spec.*` contract test added later, reopening the exact under-selection
@@ -602,6 +604,9 @@ export function buildCiTestPlan(changedFiles, {
   // sourceReferencePattern). Covers every changed source, not only python
   // scripts — see rule 1 of issue #6363.
   pathContractTests = {},
+  // Repository-derived browser dependencies; null means discovery failed and
+  // a shared-source change must retain conservative full coverage.
+  clientDependencies = [],
 } = {}) {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
@@ -723,6 +728,12 @@ export function buildCiTestPlan(changedFiles, {
   // scoping below.
   const pythonSources = sourceFiles.filter(isPythonScript);
   const jsSources = sourceFiles.filter((path) => !isPythonScript(path));
+  if (clientDependencies === null && jsSources.some((path) => path.startsWith('server/lib/'))) {
+    return fullPlan(changed, 'client dependency discovery unresolved', { appRouteOnly, trackedSet });
+  }
+  const clientDependencySet = new Set(clientDependencies || []);
+  const isClientSource = (path) => path.startsWith('client/') || clientDependencySet.has(path);
+  const sharedClientSources = jsSources.filter((path) => clientDependencySet.has(path));
   const features = uniqueSorted(jsSources.map(featureDirectory).filter(Boolean));
   const unscopedSources = jsSources.filter((path) => !featureDirectory(path));
   const selectedTests = [
@@ -765,16 +776,16 @@ export function buildCiTestPlan(changedFiles, {
   }
 
   const hasServerSource = jsSources.some(isServerRunnerFile);
-  const hasClientSource = jsSources.some((path) => path.startsWith('client/'));
+  const hasClientSource = jsSources.some(isClientSource);
   const hasUnscopedServer = unscopedSources.some(isServerRunnerFile);
-  const hasUnscopedClient = unscopedSources.some((path) => path.startsWith('client/'));
+  const hasUnscopedClient = sharedClientSources.length > 0 || unscopedSources.some(isClientSource);
 
   const serverSources = jsSources
     .filter(isServerRunnerFile)
     .filter((path) => !isStructuralBarrel(path));
   const clientSources = jsSources
-    .filter((path) => path.startsWith('client/'))
-    .filter((path) => !isStructuralBarrel(path));
+    .filter(isClientSource)
+    .filter((path) => clientDependencySet.has(path) || !isStructuralBarrel(path));
 
   // Feature-directory plans already enumerate their boundary tests. Flat and
   // shared modules use Vitest's import graph, except a barrel-only edit whose
@@ -938,6 +949,39 @@ export function forceFullReasonFor({ forceFull, baseRef }) {
   return null;
 }
 
+// Start from every browser source, including lazy-loaded pages, then follow
+// relative static imports and re-exports across directory boundaries. Parsing
+// is shared with the structural graph guards, but unresolved edges must widen
+// CI instead of disappearing as they do in that helper's negative graph walk.
+function collectClientDependencies(trackedFiles, cwd) {
+  const known = new Set(trackedFiles);
+  const pending = trackedFiles.filter((path) => path.startsWith('client/src/')
+    && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
+  const seen = new Set();
+  const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
+  try {
+    for (let index = 0; index < pending.length; index++) {
+      const file = pending[index];
+      if (seen.has(file)) continue;
+      seen.add(file);
+      if (!MODULE_SOURCE_RE.test(file)) continue;
+      for (const specifier of staticImportSpecifiersFromSource(readFileSync(join(cwd, file), 'utf8'))) {
+        if (!specifier.startsWith('.')) continue;
+        const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
+        // Keep every resolvable candidate when extensions collide rather than
+        // guessing a bundler-specific precedence and dropping a real consumer.
+        const dependencies = [path, ...extensions.map((extension) => `${path}${extension}`),
+          ...extensions.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
+        if (dependencies.length === 0) return null;
+        pending.push(...dependencies);
+      }
+    }
+  } catch {
+    return null;
+  }
+  return uniqueSorted([...seen].filter((path) => path.startsWith('server/lib/')));
+}
+
 /**
  * Collect the repository-derived inputs that surround the pure plan builder.
  *
@@ -984,7 +1028,12 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     .filter((path) => isExecutable(path) && !isTestFile(path))
     .map((path) => [path, gitGrepFiles(sourceReferencePattern(path), TEST_FILE_GLOBS, cwd)]));
 
-  return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests };
+  const clientDependencies = collectedChangedFiles.some((path) => path.startsWith('server/lib/')
+    && isExecutable(path) && !isTestFile(path))
+    ? collectClientDependencies(presentFiles, cwd)
+    : [];
+
+  return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests, clientDependencies };
 }
 
 function main() {
@@ -1008,7 +1057,7 @@ function main() {
     && (!Array.isArray(changedFilesOverride) || changedFilesOverride.some((path) => typeof path !== 'string'))) {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
-  const { changedFiles, trackedFiles, appDiff, pathContractTests } = collectPlanInputs({
+  const { changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies } = collectPlanInputs({
     baseSha: base,
     forceFull,
     changedFiles: changedFilesOverride,
@@ -1019,6 +1068,7 @@ function main() {
     forceFullReason,
     appRouteOnly: isRouteOnlyAppDiff(appDiff),
     pathContractTests,
+    clientDependencies,
   }));
 }
 

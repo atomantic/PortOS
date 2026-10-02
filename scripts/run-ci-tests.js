@@ -102,8 +102,7 @@ export function requiresSourceFiles(mode, repoSources) {
 export function toRunnerPath(scope, path) {
   // Prefix in-root selectors so a contributor-controlled filename beginning
   // with "-" cannot be interpreted as another Vitest CLI option.
-  if (scope === 'client') return `./${path.replace(/^client\//, '')}`;
-  if (path.startsWith('server/')) return `./${path.replace(/^server\//, '')}`;
+  if (path.startsWith(`${scope}/`)) return `./${path.slice(scope.length + 1)}`;
   return `../${path}`;
 }
 
