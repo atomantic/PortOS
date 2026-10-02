@@ -1624,15 +1624,17 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
   });
 
-  it('plans a code-first board without starting a Cast & Sets image batch when no selected shot needs references', async () => {
+  it('keeps the Cast & Sets check-in for a code-first board and waits for it before planning', async () => {
     const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [],
       composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
       automation: { tools: ['code:render'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
-    planMusicVideoProject.mockResolvedValue({ project, scenesAdded: 1, promptsSeeded: true });
+    const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
+    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     await openProject(project, 'produce');
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
-    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalled());
-    expect(startMusicVideoCastAndSets).not.toHaveBeenCalled();
+    // The server directs it procedurally (no image backend for a code-only brief); the run still gates on it.
+    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    expect(planMusicVideoProject).not.toHaveBeenCalled();
   });
 
   it('autopilot stops at the Cast & Sets check-in in review mode, and Approve & continue plans', async () => {
