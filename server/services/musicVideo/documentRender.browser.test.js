@@ -14,6 +14,9 @@ import { chromium } from 'playwright-core';
 import sharp from 'sharp';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
+// This suite measures encoder pixels; the actual operator boundary is exercised in musicVideoProductionReview.browser.test.js.
+vi.mock('./productionReview.js', async original => ({ ...await original(), assertProductionApproval: () => {} }));
+
 const author = vi.hoisted(() => ({ calls: 0, response: null }));
 vi.mock('../promptRunner.js', () => ({
   assertProvider: () => {},

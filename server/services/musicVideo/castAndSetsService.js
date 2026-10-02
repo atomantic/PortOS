@@ -1,3 +1,4 @@
+import { productionFeedbackContext } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
@@ -177,7 +178,7 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   // silently re-cast into the other medium.
   // A saved direction without a medium predates the procedural one: photographic.
   const medium = notes.length && previous ? (previous.medium || 'photographic') : castAndSetsMedium(project);
-  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium });
+  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium }) + productionFeedbackContext(project);
   let text;
   try {
     ({ text } = await deps.runPrompt({ provider, model: selectedModel, ...effortArg(route), prompt, source: 'music-video-cast-sets' }));
@@ -386,6 +387,14 @@ async function dispatchKey(projectId, key) {
 }
 
 const advancing = new Map();
+const backgroundWork = new Set();
+
+/** Drain owned work before a test replaces its queue/provider/store fixtures. */
+export async function __settleCastAndSetsForTests() {
+  while (backgroundWork.size || advancing.size) {
+    await Promise.allSettled([...backgroundWork, ...[...advancing.values()].map(entry => entry.promise)]);
+  }
+}
 
 /**
  * Dispatch every image whose inputs are ready; assemble the sheet once every
@@ -440,10 +449,11 @@ async function advanceOnce(projectId) {
 }
 
 function inBackground(label, projectId, fn) {
-  Promise.resolve().then(fn).catch(async (err) => {
+  const work = Promise.resolve().then(fn).catch(async (err) => {
     console.error(`❌ Music Video Cast & Sets ${short(projectId)} ${label} failed: ${err.message}`);
     await fail(projectId, `${label} failed: ${err.message}`).catch(() => {});
-  });
+  }).finally(() => backgroundWork.delete(work));
+  backgroundWork.add(work);
 }
 
 // ---- sheet ----------------------------------------------------------------------------
@@ -584,7 +594,9 @@ export async function regenerateCastAndSets(projectId, { notes = null, providerI
   const stage = project.castAndSets;
   if (!stage?.direction) throw new ServerError('There is no Cast & Sets sheet to regenerate yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
   const artifact = stage.artifactId ? (() => { try { return findDevArtifact(project, stage.artifactId); } catch { return null; } })() : null;
-  const source = Array.isArray(notes) ? notes : (artifact?.notes || []).filter((n) => !n.resolvedAt);
+  const reviewNotes = (project.productionReview?.feedback || []).filter(n => n.stage === 'art' && !n.resolvedAt)
+    .map(n => ({ target: `production-review:${n.target}`, text: n.text }));
+  const source = [...(Array.isArray(notes) ? notes : (artifact?.notes || []).filter((n) => !n.resolvedAt)), ...reviewNotes];
   if (!source.length) throw new ServerError('Add a note first — nothing says what to change', { status: 422, code: 'CAST_SETS_NO_NOTES' });
   const imageNotes = {};
   const directionNotes = [];

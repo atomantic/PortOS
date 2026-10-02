@@ -76,21 +76,15 @@ export function drawCodeFrame({ ctx, song, palette, sources, t, width, height, f
     }),
   }));
   const env = { t: time, localT, frame, width, height, song, palette, section, safe, karaoke };
-  // The page uses this when the caller does not pass its own compiler.
-  // It stays inside this function so the embedded page has it too.
-  function defaultCompile(source) {
-    const wrapped = source.includes('function render') ? source : `function render(ctx, env) {\n${source}\n}`;
-    return new Function('ctx', 'env', `${wrapped}\nreturn typeof render === 'function' ? render(ctx, env) : undefined;`);
-  }
   const source = sources && sources[section.id];
   if (typeof source === 'string' && source) {
     const restore = lockClock();
     try {
       if (!drawCodeFrame.compiled) drawCodeFrame.compiled = new Map();
-      const key = `${typeof compile === 'function' ? 'custom' : 'page'}:${source}`;
+      const key = source;
       let fn = drawCodeFrame.compiled.get(key);
       if (!fn) {
-        fn = (typeof compile === 'function' ? compile : defaultCompile)(source);
+        fn = compile(source);
         drawCodeFrame.compiled.set(key, fn);
       }
       fn(ctx, env);
@@ -212,7 +206,7 @@ function createSoftwareCanvas(width, height) {
 }
 
 // Section source under test runs in a context with no process, require, or
-// network. The page compiler is the browser's, after network globals are removed.
+// network. Browser pages instead provide statically declared section functions.
 function sandboxCompile(source) {
   const wrapped = source.includes('function render') ? source : `function render(ctx, env) {\n${source}\n}`;
   const sandbox = {

@@ -1277,6 +1277,10 @@ async function runJobLifecycle(job, markDispatched) {
         cancelRequested: job.params?.remoteMedia?.cancelRequested === true,
       };
     }
+    if (job.params?.musicVideo?.sceneId && !(job.cancelRequested && isRemoteMediaJob(job))) {
+      const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
+      await assertMusicVideoSceneReview(job.params.musicVideo);
+    }
     // Remote recovery must still reach its adapter to cancel an existing render.
     // Local cancellation before dispatch owns no provider process to stop.
     if (job.cancelRequested && !isRemoteMediaJob(job)) {
@@ -1354,6 +1358,10 @@ export function assertMediaQueueRoom(count = 1) {
 // entry, no SSE entry, no snapshot write. The check and the push below run in
 // one synchronous stretch, so concurrent submissions cannot overshoot it.
 export async function enqueueJob({ kind, params, owner = null }) {
+  if (params?.musicVideo?.sceneId) {
+    const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
+    await assertMusicVideoSceneReview(params.musicVideo);
+  }
   if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);
   }
