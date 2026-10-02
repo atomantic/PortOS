@@ -3,12 +3,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { renderBlenderSequence } from '../server/services/codeAnimation/blenderRender.js';
 import { getBlenderStarterPackage } from '../server/services/codeAnimation/blenderStarter.js';
 import { runContainedWorker, runTrustedLocalWorker } from '../server/services/codeAnimation/containedWorker.js';
 import { codeAnimationManifestSchema } from '../server/lib/codeAnimationPackage.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
@@ -120,7 +120,7 @@ export async function runAcceptance(options, { render = renderBlenderSequence } 
   return evidence;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   try {
     const options = parseAcceptanceArgs(process.argv.slice(2));
     if (options.mode === 'trusted-local') console.log('⚠️ Explicit trusted-local acceptance: bundled scene code has host filesystem/network access; no containment.');
