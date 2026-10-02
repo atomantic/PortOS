@@ -51,9 +51,9 @@ async function fixture(failure = '') {
       return nextResolve(specifier, context);
     } });
   `);
-  const run = async (args = []) => execFileAsync(process.execPath, ['--import', loader, script, ...args], { timeout: 15000 })
+  const run = async (args = []) => execFileAsync(process.execPath, ['--import', pathToFileURL(loader).href, script, ...args], { timeout: 15000 })
     .then(result => ({ ...result, code: 0 }), error => ({ stdout: error.stdout, stderr: error.stderr, code: error.code }));
-  const importModule = () => execFileAsync(process.execPath, ['--import', loader, '--input-type=module', '-e',
+  const importModule = () => execFileAsync(process.execPath, ['--import', pathToFileURL(loader).href, '--input-type=module', '-e',
     `await import(${JSON.stringify(pathToFileURL(script).href)})`], { timeout: 15000 });
   return { dir, sources, run, importModule };
 }
@@ -62,7 +62,7 @@ describe('memory migration CLI', () => {
   it('defaults to a dry run without writes or source changes', async () => {
     const { dir, sources, run } = await fixture();
     const result = await run(['--clear']);
-    expect(result.code).toBe(0);
+    expect(result.code, result.stderr || result.stdout).toBe(0);
     expect(result.stdout).toContain('DRY RUN');
     expect(result.stdout).not.toContain('DB_WRITE');
     expect(result.stdout).toContain('DB_CLOSED');
@@ -74,7 +74,7 @@ describe('memory migration CLI', () => {
     const memoryFile = Object.keys(sources).find(name => name.endsWith('/memory.json'));
     await writeFile(join(dir, memoryFile), '{ malformed');
     const result = await run(['--execute', '--clear']);
-    expect(result.code).toBe(1);
+    expect(result.code, result.stderr || result.stdout).toBe(1);
     expect(result.stdout).not.toContain('DB_WRITE');
     expect(result.stdout).toContain('DB_CLOSED');
   });
@@ -87,7 +87,7 @@ describe('memory migration CLI', () => {
   it.each(['record', 'link'])('fails the process and closes the pool on a %s write failure', async failure => {
     const { run } = await fixture(failure);
     const result = await run(['--execute', '--clear']);
-    expect(result.code).toBe(1);
+    expect(result.code, result.stderr || result.stdout).toBe(1);
     expect(result.stderr).toContain(`injected ${failure} failure`);
     expect(result.stdout).toContain('DB_CLOSED');
     expect(result.stdout).not.toContain('Migration Summary');
