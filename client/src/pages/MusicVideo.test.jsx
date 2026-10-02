@@ -1456,6 +1456,25 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     expect(deleteMusicVideoProject).not.toHaveBeenCalled();
   });
 
+  it('asks for confirmation before deleting a project and allows cancelling or confirming', async () => {
+    deleteMusicVideoProject.mockResolvedValue({});
+    await openProject(PROJECT_NO_CLIP, 'setup');
+
+    fireEvent.click(screen.getByTitle('Delete project'));
+    expect(deleteMusicVideoProject).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete?')).toBeTruthy();
+
+    // Cancel deletion
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(deleteMusicVideoProject).not.toHaveBeenCalled();
+    expect(screen.getByTitle('Delete project')).toBeTruthy();
+
+    // Arm confirmation again and confirm
+    fireEvent.click(screen.getByTitle('Delete project'));
+    fireEvent.click(screen.getByRole('button', { name: `Confirm delete project ${PROJECT_NO_CLIP.name}` }));
+    await waitFor(() => expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_NO_CLIP.id, { silent: true }));
+  });
+
   it('pressing Enter in the create-form URL input starts the import instead of submitting the form', async () => {
     listMusicVideoProjects.mockResolvedValue([]);
     renderMV();
