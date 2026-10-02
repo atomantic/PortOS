@@ -36,8 +36,11 @@ describe('standalone Blender acceptance verdicts', () => {
   });
   it('does not mistake an unrelated error after abort for proved cancellation/process cleanup', async () => {
     const config = await options(['--cancel-after', '0.001']);
+    // The 1ms timer can fire before render is invoked, so honor an already-aborted signal too.
     const render = ({ signal }) => new Promise((_, reject) => {
-      signal.addEventListener('abort', () => reject(new Error('unrelated failure')), { once: true });
+      const fail = () => reject(new Error('unrelated failure'));
+      if (signal.aborted) fail();
+      else signal.addEventListener('abort', fail, { once: true });
     });
     expect(await runAcceptance(config, { render })).toMatchObject({ accepted: false,
       cancel: { aborted: true, rejected: true, abortError: false } });
