@@ -93,6 +93,21 @@ const skipped = (control) => console.warn(`⚠️ ${LABEL}: ${control} not found
  * vocal gender). Each is a no-op when unset and is skipped with a warning when
  * the page has no such control; none of them blocks the song.
  */
+// Suno's option rows ("Vocal Gender", "Max Mode", "Duration") are a label span
+// beside a few plain buttons; the chosen one carries the `standard` button
+// variant, the rest the `tertiary` one. Clicking the chosen button again may
+// toggle it off, so only click when it is not already selected.
+const optionRow = (page, label) => page.locator(`div:has(> div > span:text-is("${label}"))`).last();
+const isSelected = async (button) => /hxc-btn-variant-standard/.test((await button.getAttribute('class')) || '');
+async function chooseInRow(page, label, name) {
+  const row = optionRow(page, label);
+  if (!await row.count()) return skipped(`the ${label} row`);
+  const button = row.getByRole('button', { name });
+  if (!await button.count()) return skipped(`the ${label} buttons`);
+  if (await isSelected(button.first())) return;
+  await button.first().click({ timeout: T });
+}
+
 async function setSunoOptions(page, fields) {
   if (fields.model) {
     await step(LABEL, 'choose the model version', async () => {
@@ -102,7 +117,11 @@ async function setSunoOptions(page, fields) {
       const current = (await version.first().innerText({ timeout: T })).trim();
       if (current.toLowerCase() === fields.model.toLowerCase()) return;
       await version.first().click({ timeout: T });
-      const item = page.getByRole('menuitem', { name: new RegExp(`^${escapeRegExp(fields.model)}$`, 'i') });
+      // Menu entries are radio items whose accessible name starts with the version
+      // and goes on with a tier and blurb ("v6 Pro Powerful. Versatile. …",
+      // "v6-wild Pro Best for experimental ideas."): match the leading token only.
+      const name = new RegExp(`^${escapeRegExp(fields.model)}(\\s|$)`, 'i');
+      const item = page.getByRole('menuitemradio', { name }).or(page.getByRole('menuitem', { name }));
       await item.first().waitFor({ state: 'visible', timeout: SUNO_MENU_WAIT_MS }).catch(() => {});
       if (!await item.count()) {
         await page.keyboard.press('Escape');
@@ -111,8 +130,8 @@ async function setSunoOptions(page, fields) {
       await item.first().click({ timeout: T });
     });
   }
-  // Exclude styles and vocal gender sit in the collapsible "More Options" section.
-  if (fields.excludeStyles != null || fields.vocalGender) {
+  // Exclude styles, vocal gender and Max Mode sit in the collapsible "More Options" section.
+  if (fields.excludeStyles != null || fields.vocalGender || fields.maxMode != null) {
     await step(LABEL, 'open More Options', async () => {
       if (await page.locator('input[placeholder="Exclude styles"]:visible').count()) return;
       const more = page.getByText(/^more options$/i);
@@ -129,12 +148,10 @@ async function setSunoOptions(page, fields) {
     });
   }
   if (fields.vocalGender) {
-    await step(LABEL, 'choose the vocal gender', async () => {
-      // Plain Male / Female buttons; Suno exposes no pressed state to check.
-      const gender = page.getByRole('button', { name: fields.vocalGender === 'female' ? /^female$/i : /^male$/i });
-      if (!await gender.count()) return skipped('the vocal gender buttons');
-      await gender.first().click({ timeout: T });
-    });
+    await step(LABEL, 'choose the vocal gender', () => chooseInRow(page, 'Vocal Gender', fields.vocalGender === 'female' ? /^female$/i : /^male$/i));
+  }
+  if (fields.maxMode != null) {
+    await step(LABEL, `turn Max Mode ${fields.maxMode ? 'on' : 'off'}`, () => chooseInRow(page, 'Max Mode', fields.maxMode ? /^on$/i : /^off$/i));
   }
 }
 

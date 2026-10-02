@@ -767,7 +767,8 @@ export const musicVideoProductionResumeSchema = z.object({
 const musicVideoSunoOptionsSchema = z.object({
   excludeStyles: z.string().trim().max(SUNO_LIMITS.excludeStyles).nullable().optional(),
   vocalGender: z.enum(SUNO_VOCAL_GENDERS).nullable().optional(),
-  model: z.string().trim().regex(SUNO_MODEL_PATTERN, 'A Suno model version such as v6').nullable().optional(),
+  model: z.string().trim().regex(SUNO_MODEL_PATTERN, 'A Suno model version such as v6 or v6-wild').nullable().optional(),
+  maxMode: z.boolean().nullable().optional(),
 }).strict();
 
 // The alternate entry point: no track, style or board is picked up front. Tool

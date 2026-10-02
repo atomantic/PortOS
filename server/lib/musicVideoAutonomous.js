@@ -71,7 +71,7 @@ export const SUNO_LIMITS = Object.freeze({ title: 80, style: 1000, lyrics: 5000,
 // The Advanced form's optional controls a brief may set (`brief.suno`): the
 // "Exclude styles" field, the vocal gender buttons and the model version menu.
 export const SUNO_VOCAL_GENDERS = Object.freeze(['male', 'female']);
-export const SUNO_MODEL_PATTERN = /^v\d+(\.\d+)?$/i;
+export const SUNO_MODEL_PATTERN = /^v\d+(\.\d+)?(-[a-z]+)?$/i;
 
 // Free (local, un-metered) tools only, the same default a hand-made autopilot
 // brief starts from — nothing paid is spent unless the operator opts in.
@@ -91,7 +91,9 @@ export function normalizeSunoOptions(raw) {
   const excludeStyles = isStr(raw.excludeStyles) ? clean(raw.excludeStyles, SUNO_LIMITS.excludeStyles) : null;
   const vocalGender = SUNO_VOCAL_GENDERS.includes(raw.vocalGender) ? raw.vocalGender : null;
   const model = isStr(raw.model) && SUNO_MODEL_PATTERN.test(raw.model.trim()) ? raw.model.trim() : null;
-  return excludeStyles === null && !vocalGender && !model ? null : { excludeStyles, vocalGender, model };
+  // Max Mode is Suno's higher-quality (more credits) render tier: true/false, or null to leave the form's default.
+  const maxMode = typeof raw.maxMode === 'boolean' ? raw.maxMode : null;
+  return excludeStyles === null && !vocalGender && !model && maxMode === null ? null : { excludeStyles, vocalGender, model, maxMode };
 }
 
 /**
@@ -207,6 +209,7 @@ export function sunoSongFields({ title, style, lyrics, instrumental = false, sun
     excludeStyles: options?.excludeStyles ?? null,
     vocalGender: instrumental ? null : options?.vocalGender ?? null,
     model: options?.model ?? null,
+    maxMode: options?.maxMode ?? null,
   };
 }
 

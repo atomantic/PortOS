@@ -316,7 +316,7 @@ describe('retaking the song at the song checkpoint', () => {
     await settled('awaiting-approval');
     await service.resumeAutonomousVideo('mv-auto', { suno: { model: null, vocalGender: 'female' } });
     await vi.waitFor(() => expect(calls).toContain('production'));
-    expect(runOf().brief.suno).toEqual({ excludeStyles: 'metal', vocalGender: 'female', model: null });
+    expect(runOf().brief.suno).toEqual({ excludeStyles: 'metal', vocalGender: 'female', model: null, maxMode: null });
     expect(doubles.generateSunoSong).toHaveBeenCalledWith(expect.objectContaining({ excludeStyles: 'metal', vocalGender: 'female', model: null }), expect.any(Object));
   });
 });

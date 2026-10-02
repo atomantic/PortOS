@@ -41,7 +41,7 @@ export const emptyAutonomousDraft = () => ({
   checkpoints: [],
   moodBoardId: '',
   // Suno's Advanced-form options; blank leaves that control as Suno has it.
-  suno: { excludeStyles: '', vocalGender: '', model: '' },
+  suno: { excludeStyles: '', vocalGender: '', model: '', maxMode: '' },
 });
 
 /** A blank model is fine (Suno's current one); anything else must name a version such as v6. */
@@ -55,6 +55,7 @@ function sunoRequestFromDraft(suno = {}) {
     ...(excludeStyles ? { excludeStyles } : {}),
     ...(suno.vocalGender ? { vocalGender: suno.vocalGender } : {}),
     ...(model ? { model } : {}),
+    ...(suno.maxMode === 'on' || suno.maxMode === 'off' ? { maxMode: suno.maxMode === 'on' } : {}),
   };
   return Object.keys(out).length ? out : null;
 }

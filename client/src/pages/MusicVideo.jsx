@@ -1089,25 +1089,8 @@ export default function MusicVideo() {
         )}
         {!selected && (loading || !routeProjectId) && (
           <div className="space-y-6">
-            <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
-              <p className="text-sm text-port-text-muted mb-3">Pick a project in the header, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
-              <div className="flex flex-wrap justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className="inline-flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
-                >
-                  <Plus size={15} /> New music video
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAutonomousOpen(true)}
-                  className="inline-flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
-                >
-                  <Wand2 size={15} /> Autonomous
-                </button>
-              </div>
-            </div>
+            {/* The header already carries New project / Autonomous: keep the hint, not a second pair of buttons. */}
+            <p className="text-sm text-port-text-muted">Pick a project above, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
 
             {loading ? (
               <div className="text-center py-8 text-sm text-port-text-muted">

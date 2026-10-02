@@ -36,6 +36,24 @@ function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = tr
     return 1;
   };
   const locator = (selector) => {
+    const row = /span:text-is\("([^"]+)"\)/.exec(selector);
+    if (row) {
+      const label = row[1];
+      const present = options && (label === 'Vocal Gender' ? options.gender !== undefined : label === 'Max Mode' ? options.maxMode !== undefined : false);
+      const rowHandle = {
+        count: async () => (present ? 1 : 0),
+        getByRole: (_role, { name }) => {
+          const choice = ['male', 'female', 'on', 'off'].find((c) => name.test(c));
+          const selected = () => (label === 'Vocal Gender' ? options.gender : options.maxMode) === choice;
+          const btn = {
+            getAttribute: async () => (selected() ? 'hxc-btn-base hxc-btn-variant-standard-legacy' : 'hxc-btn-base hxc-btn-variant-tertiary-legacy'),
+            click: async () => { if (label === 'Vocal Gender') options.gender = choice; else options.maxMode = choice; actions.push(`${label === 'Vocal Gender' ? 'gender' : 'max'}:${choice}`); },
+          };
+          return { count: async () => 1, first: () => btn };
+        },
+      };
+      return { ...rowHandle, last: () => rowHandle };
+    }
     const handle = {
       count: async () => count(selector),
       waitFor: async () => {},
@@ -46,14 +64,16 @@ function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = tr
     return { ...handle, first: () => handle, filter: () => ({ ...handle, first: () => handle }) };
   };
   const button = (role, options_) => {
-    if (role === 'menuitem') {
-      const match = () => (options?.menuItems || []).find((name) => options_.name.test(name));
-      const item = { waitFor: async () => { if (!match()) throw new Error('menu item timeout'); }, click: async () => { options.version = match(); actions.push(`model:${match()}`); } };
-      return { count: async () => (match() ? 1 : 0), first: () => item };
+    if (role === 'menuitemradio' || role === 'menuitem') {
+      // Real entries read "v6 Pro Powerful. Versatile. Refined." / "v6-wild Pro Best for experimental ideas.".
+      const match = () => role === 'menuitemradio' ? (options?.menuItems || []).find((name) => options_.name.test(name)) : undefined;
+      const item = { waitFor: async () => { if (!match()) throw new Error('menu item timeout'); }, click: async () => { options.version = match().split(' ')[0]; actions.push(`model:${options.version}`); } };
+      const handle = { count: async () => (match() ? 1 : 0), first: () => item };
+      return { ...handle, or: () => handle };
     }
     return {
-      count: async () => role === 'textbox' || role === 'tab' ? (modern ? 1 : 0) : /instrumental|custom/.test(String(options_.name)) ? (modern ? 0 : 1) : /male/.test(String(options_.name)) ? (options ? 1 : 0) : 1,
-      first: () => ({ click: async () => { if (/male/.test(String(options_.name))) actions.push(`gender:${options_.name}`); }, fill: async v => { fills[options_.name] = v; } }),
+      count: async () => role === 'textbox' || role === 'tab' ? (modern ? 1 : 0) : /instrumental|custom/.test(String(options_.name)) ? (modern ? 0 : 1) : 1,
+      first: () => ({ click: async () => {}, fill: async v => { fills[options_.name] = v; } }),
       last: () => ({ click: async () => { created = true; actions.push('create'); onCreate?.(events); } }),
     };
   };
@@ -150,23 +170,29 @@ describe('submitSunoSong', () => {
     expect(page.fills['textarea[placeholder*="style" i]']).toBe(fields.style);
   });
 
-  it('sets the model version, exclude styles and vocal gender, opening More Options for the hidden exclude field', async () => {
-    const options = { version: 'v5', menuItems: ['v4.5', 'v5', 'v6'], expanded: false };
+  it('sets the model version, exclude styles, vocal gender and Max Mode, opening More Options for the hidden exclude field', async () => {
+    // Menu entries carry a tier and blurb; "v6" must pick "v6 Pro …", never "v6-wild Pro …". Nothing is selected yet.
+    const options = { version: 'v5', menuItems: ['v6-wild Pro Best for experimental ideas.', 'v6 Pro Powerful. Versatile. Refined.', 'v5 Pro'], expanded: false, gender: null, maxMode: 'off' };
     const page = fakePage({ options });
-    const ids = await submitSunoSong(page, { ...fields, excludeStyles: 'metal, screamo', vocalGender: 'female', model: 'V6' }, { sleep: noSleep });
+    const ids = await submitSunoSong(page, { ...fields, excludeStyles: 'metal, screamo', vocalGender: 'female', model: 'V6', maxMode: true }, { sleep: noSleep });
     expect(ids).toEqual([NEW_A, NEW_B]);
-    expect(page.actions).toEqual(['open-version-menu', 'model:v6', 'more-options', 'gender:/^female$/i', 'create']);
+    expect(page.actions).toEqual(['open-version-menu', 'model:v6', 'more-options', 'gender:female', 'max:on', 'create']);
     expect(page.fills['input[placeholder="Exclude styles"]']).toBe('metal, screamo');
+
+    // Plain buttons toggle, so an already-selected choice is left alone (clicking again could deselect it).
+    const chosen = fakePage({ options: { version: 'v6', menuItems: ['v6 Pro'], expanded: true, gender: 'female', maxMode: 'on' } });
+    await submitSunoSong(chosen, { ...fields, vocalGender: 'female', maxMode: true, model: 'v6-wild' }, { sleep: noSleep });
+    expect(chosen.actions).toEqual(['open-version-menu', 'key:Escape', 'create']);
   });
 
   it('touches none of the options when the brief sets none, and clears exclusions only when asked', async () => {
-    const page = fakePage({ options: { version: 'v5', menuItems: ['v5', 'v6'], expanded: false } });
-    await submitSunoSong(page, { ...fields, excludeStyles: null, vocalGender: null, model: null }, { sleep: noSleep });
+    const page = fakePage({ options: { version: 'v5', menuItems: ['v5 Pro', 'v6 Pro'], expanded: false, gender: null, maxMode: 'off' } });
+    await submitSunoSong(page, { ...fields, excludeStyles: null, vocalGender: null, model: null, maxMode: null }, { sleep: noSleep });
     expect(page.actions).toEqual(['create']);
     expect(page.fills).not.toHaveProperty('input[placeholder="Exclude styles"]');
 
     // Already on the wanted version and already expanded: no menu, no toggle; '' clears Suno's remembered draft.
-    const cleared = fakePage({ options: { version: 'v6', menuItems: ['v6'], expanded: true } });
+    const cleared = fakePage({ options: { version: 'v6', menuItems: ['v6 Pro'], expanded: true } });
     await submitSunoSong(cleared, { ...fields, excludeStyles: '', model: 'v6' }, { sleep: noSleep });
     expect(cleared.actions).toEqual(['create']);
     expect(cleared.fills['input[placeholder="Exclude styles"]']).toBe('');
@@ -175,18 +201,18 @@ describe('submitSunoSong', () => {
   it('warns and still creates the song when the version menu lacks the model or an older UI lacks the controls', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const page = fakePage({ options: { version: 'v5', menuItems: ['v4.5', 'v5'], expanded: true } });
+      const page = fakePage({ options: { version: 'v5', menuItems: ['v4.5 Pro', 'v5 Pro'], expanded: true, gender: null } });
       await submitSunoSong(page, { ...fields, model: 'v9', vocalGender: 'male' }, { sleep: noSleep });
-      expect(page.actions).toEqual(['open-version-menu', 'key:Escape', 'gender:/^male$/i', 'create']);
+      expect(page.actions).toEqual(['open-version-menu', 'key:Escape', 'gender:male', 'create']);
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/model v9 in the version menu/));
 
       warn.mockClear();
       const older = fakePage();
-      await submitSunoSong(older, { ...fields, model: 'v6', excludeStyles: 'metal', vocalGender: 'female' }, { sleep: noSleep });
+      await submitSunoSong(older, { ...fields, model: 'v6', excludeStyles: 'metal', vocalGender: 'female', maxMode: true }, { sleep: noSleep });
       expect(older.actions).toEqual(['create']);
       expect(warn.mock.calls.map(([line]) => line)).toEqual([
         expect.stringMatching(/model version menu/), expect.stringMatching(/More Options/),
-        expect.stringMatching(/Exclude styles/), expect.stringMatching(/vocal gender/),
+        expect.stringMatching(/Exclude styles/), expect.stringMatching(/Vocal Gender row/), expect.stringMatching(/Max Mode row/),
       ]);
     } finally {
       warn.mockRestore();
