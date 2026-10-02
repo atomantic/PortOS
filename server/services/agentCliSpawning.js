@@ -43,7 +43,6 @@ import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
-import { prClaimWasVerified } from '../lib/prDisposition.js';
 import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
 import { doneSentinelPath } from '../lib/agentSentinel.js';
 import { isHostShuttingDown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
@@ -812,8 +811,8 @@ export async function spawnDirectly({
         startedAt: agentData?.startedAt ?? null,
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
-      prClaimVerified = prClaimWasVerified(finalized?.prVerdict);
-      branchProvenEmpty = finalized?.prVerdict?.branchProvenEmpty === true;
+      if (finalized?.prClaimVerified === true) prClaimVerified = true;
+      if (finalized?.branchProvenEmpty === true) branchProvenEmpty = true;
     } finally {
       // Pipeline progression → worktree cleanup with the PR disposition →
       // retry-hold release, in the one owner both in-process spawners share.

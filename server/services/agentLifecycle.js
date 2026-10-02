@@ -42,7 +42,6 @@ import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
 import { providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
-import { prClaimWasVerified } from '../lib/prDisposition.js';
 import { composeProviderEnv } from '../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
 import { isClaudeCliProvider, getClaudeSettingsEnv } from './agentCliSpawning.js';
@@ -665,8 +664,8 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         startedAt: Number.isFinite(runStartedAt) ? runStartedAt : null,
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
-      runnerPrClaimVerified = prClaimWasVerified(finalized?.prVerdict);
-      runnerNoChangesToShip = finalized?.prVerdict?.branchProvenEmpty === true;
+      if (finalized?.prClaimVerified === true) runnerPrClaimVerified = true;
+      if (finalized?.branchProvenEmpty === true) runnerNoChangesToShip = true;
     } catch (err) {
       finalizeError = err;
       emitLog('error', `finalizeAgent threw for ${agentId} (continuing cleanup): ${err.message}`, { agentId, error: err.message });

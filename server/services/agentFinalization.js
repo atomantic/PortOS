@@ -1,4 +1,4 @@
-import { PR_MISSING_CATEGORY } from '../lib/prDisposition.js';
+import { PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
@@ -1846,7 +1846,12 @@ export async function finalizeAgent({
   // downgraded to `pr-missing` would still be cleaned up as a success — worktree
   // removed, local branch deleted, and no resume pointer recorded — destroying
   // the state the retry needs to open the PR that is missing.
-  return { success: verdict.success, prVerdict: prEvidence.cleanupEvidence };
+  return {
+    success: verdict.success,
+    prClaimVerified: prClaimWasVerified(prEvidence.cleanupEvidence),
+    branchProvenEmpty: prEvidence.branchProvenEmpty,
+    cleanupEvidence: prEvidence.cleanupEvidence,
+  };
 }
 
 // Tail of the agent's transcript scanned by the rescue. The deliverable, when
