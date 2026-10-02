@@ -64,9 +64,25 @@ let clients = [];
 // Host-control handlers the stand-ins below actually reached (#8708).
 let reached = [];
 
+// Names the setup phase that stalls. A failure before the server exists (module
+// import / password hashing under suite load) otherwise surfaces only as an
+// opaque test timeout, which the socket-stage waiters below cannot name (#8484).
+// The deadline sits inside the unchanged 30s test budget.
+const STAGE_DEADLINE_MS = 25_000;
+const stage = (name, work) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error(`setup stage "${name}" exceeded ${STAGE_DEADLINE_MS}ms`)), STAGE_DEADLINE_MS);
+  Promise.resolve(work).then(resolve, reject).finally(() => clearTimeout(timer));
+});
+
+const setInstancePassword = async () => {
+  const auth = await stage('import auth.js', import('./auth.js'));
+  await stage('set instance password', auth.setPassword({ newPassword: 'instance-secret' }));
+  return auth;
+};
+
 const startServer = async () => {
-  const { socketAuthGate } = await import('./authGate.js');
-  const { __testing } = await import('./socket.js');
+  const { socketAuthGate } = await stage('import authGate.js', import('./authGate.js'));
+  const { __testing } = await stage('import socket.js', import('./socket.js'));
   httpServer = createServer();
   ioServer = new Server(httpServer);
   ioServer.use(socketAuthGate);
@@ -97,8 +113,12 @@ const stopServer = async () => {
   for (const client of clients) client.close();
   clients = [];
   reached = [];
-  await new Promise((resolve) => ioServer.close(resolve));
-  await new Promise((resolve) => httpServer.close(resolve));
+  // Tolerate partial setup (a stage failed before the server existed) so the
+  // teardown error does not mask the original failure.
+  if (ioServer) await new Promise((resolve) => ioServer.close(resolve));
+  else if (httpServer) await new Promise((resolve) => httpServer.close(resolve));
+  ioServer = undefined;
+  httpServer = undefined;
 };
 
 const connectClient = (extraHeaders) => {
@@ -146,10 +166,9 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
   });
 
   it('a peer-token-authenticated socket survives cos:subscribe but is disconnected by a shell:* event', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'instance-secret' });
+    await setInstancePassword();
     instanceRegistry.data.peers = [{ id: 'peer-record', name: 'Example Peer', instanceId: PEER_ID, enabled: true, syncSecret: PAIR_SECRET }];
-    const { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } = await import('../lib/peerHttpClient.js');
+    const { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } = await stage('import peerHttpClient.js', import('../lib/peerHttpClient.js'));
 
     await startServer();
     const client = connectClient({
@@ -170,8 +189,7 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
   });
 
   it('a Basic-authenticated socket also survives cos:subscribe but is disconnected by a shell:* event', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'instance-secret' });
+    await setInstancePassword();
 
     await startServer();
     const client = connectClient({
@@ -191,8 +209,7 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
   });
 
   it('an unauthenticated socket is rejected at the handshake', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'instance-secret' });
+    await setInstancePassword();
 
     await startServer();
     const client = connectClient({});
@@ -256,8 +273,8 @@ describe('host-control socket events need operator authority (#8708)', () => {
   });
 
   it('auth on: a session socket keeps the shell; a remote connection does not change that', async () => {
-    const auth = await import('./auth.js');
-    const { token } = await auth.setPassword({ newPassword: 'instance-secret' });
+    const auth = await stage('import auth.js', import('./auth.js'));
+    const { token } = await stage('set instance password', auth.setPassword({ newPassword: 'instance-secret' }));
     await startServer();
     const client = connectClient({ cookie: `portos_auth=${token}`, ...REMOTE_VIA_DEV_PROXY });
     await waitFor(client, 'connect');
@@ -268,8 +285,7 @@ describe('host-control socket events need operator authority (#8708)', () => {
   });
 
   it('auth on: a Basic-authenticated relay socket never reaches a host-control handler', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'instance-secret' });
+    await setInstancePassword();
     await startServer();
     const client = connectClient({ Authorization: `Basic ${Buffer.from(':instance-secret').toString('base64')}` });
     await waitFor(client, 'connect');
