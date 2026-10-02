@@ -13,12 +13,16 @@
  * human request or commit cooldown/marker state. The two engines retain only
  * their trigger ordering and dispatch adapters.
  *
- * Priority-tier order (pinned by the source-order regression test in
- * cos.test.js): 0 on-demand (bypasses pause) → 1 user → 2 auto-approved →
- * 3 idle review.
+ * Priority-tier order, shared by BOTH engines (`dequeueNextTask` in cos.js and
+ * `evaluateTasks` in cosTaskGenerator.js; pinned by the source-order regression
+ * tests in cos.test.js): 0 on-demand (bypasses pause) → 1 user → 2 auto-approved
+ * → 3.6 feature agents → 4 idle review. The evaluator additionally runs `maybeQueueImprovementTasks` between 2 and
+ * 3.6, which only WRITES queue rows (batch regeneration) and never spawns, so the
+ * event-driven dequeue deliberately has no counterpart.
  */
 
 import { hasActiveTaskOwner } from './agentState.js';
+import { emitLog } from './cosEvents.js';
 
 /**
  * Per-cycle spawn-capacity tracker. Owns the running `spawned` count and the
@@ -151,7 +155,45 @@ export function countRunningAgentsByLocalEndpoint(agents, endpointForAgent) {
 }
 
 /**
- * Priority 3 (idle-review) tier eligibility. The idle task only fires when the
+ * Priority 3.6 (feature agents) tier. Shared by both spawn engines: due feature
+ * agents are autonomous work, so they yield to pending user tasks, need CoS
+ * auto-run in `execute`, and spend only the autonomous ceiling. Each admitted
+ * agent is marked as holding a pending task so a second cycle cannot re-spawn it.
+ *
+ * Priority 3.5 (autonomous jobs) has no inline tier: those are handled by
+ * registerJobSchedules(), which sets up one-shot timers per job via
+ * executeScheduledJob(). Spawning them here as well caused duplicate agent spawns
+ * on startup when both paths fired for the same past-due job.
+ *
+ * `spawnedCount()` reads the engine's live spawn total (it grows as agents are
+ * admitted); `canSpawn`/`emitSpawn`/`trackSpawn` are the engine's own hooks.
+ */
+export async function admitFeatureAgentTasks({
+  spawnedCount,
+  hasPendingUserTasks,
+  cosAutonomyMode,
+  autonomousSlotCeiling,
+}, { canSpawn, emitSpawn, trackSpawn }) {
+  if (spawnedCount() >= autonomousSlotCeiling || hasPendingUserTasks || cosAutonomyMode !== 'execute') return;
+
+  const { getDueFeatureAgents, generateTaskFromFeatureAgent, setCurrentAgent } = await import('./featureAgents.js');
+  const dueAgents = await getDueFeatureAgents().catch(err => {
+    emitLog('debug', `Feature agents check failed: ${err.message}`);
+    return [];
+  });
+  for (const fa of dueAgents) {
+    if (spawnedCount() >= autonomousSlotCeiling) break;
+    const task = generateTaskFromFeatureAgent(fa);
+    if (!canSpawn(task, autonomousSlotCeiling)) continue;
+    emitSpawn(task);
+    trackSpawn(task);
+    await setCurrentAgent(fa.id, task.id).catch(() => {});
+    emitLog('info', `Feature agent due: ${fa.name}`, { featureAgentId: fa.id });
+  }
+}
+
+/**
+ * Priority 4 (idle-review) tier eligibility. The idle task only fires when the
  * daemon is COMPLETELY idle this cycle — nothing else spawned (`spawned === 0`),
  * no pending user tasks, idle review enabled, and CoS auto-run in `execute`.
  * The `spawned === 0` fence is stricter than the auto-approved tier's `< ceiling`

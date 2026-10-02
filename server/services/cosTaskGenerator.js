@@ -52,7 +52,7 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
-import { admitIdleReviewTask, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { admitFeatureAgentTasks, admitIdleReviewTask, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
@@ -1087,33 +1087,15 @@ async function maybeQueueImprovementTasks(ctx) {
 /**
  * Priority 3.6: Feature Agents (after autonomous jobs, yield to user tasks).
  * Autonomous — gated by the CoS auto-run domain and capped by
- * `autonomousSlotCeiling`.
- *
- * Priority 3.5 (autonomous jobs) has no inline tier: those are handled by
- * registerJobSchedules(), which sets up individual one-shot timers per job via
- * executeScheduledJob(). It used to also check getDueJobs() and spawn here,
- * which caused duplicate agent spawns on startup when both paths fired for the
- * same past-due job within seconds of each other.
+ * `autonomousSlotCeiling`. The admission pass is shared with dequeueNextTask.
  */
 async function spawnPriority36FeatureAgents(ctx, { autonomousSlotCeiling }) {
-  const { hasPendingUserTasks, cosAutonomyMode, tasksToSpawn, spawnAdapter } = ctx;
-
-  if (tasksToSpawn.length < autonomousSlotCeiling && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
-    const { getDueFeatureAgents, generateTaskFromFeatureAgent, setCurrentAgent } = await import('./featureAgents.js');
-    const dueAgents = await getDueFeatureAgents().catch(err => {
-      emitLog('debug', `Feature agents check failed: ${err.message}`);
-      return [];
-    });
-    for (const fa of dueAgents) {
-      if (tasksToSpawn.length >= autonomousSlotCeiling) break;
-      const task = generateTaskFromFeatureAgent(fa);
-      if (!spawnAdapter.canSpawn(task, autonomousSlotCeiling)) continue;
-      spawnAdapter.emitSpawn(task);
-      // Mark agent as having a pending task to prevent duplicate spawns
-      await setCurrentAgent(fa.id, task.id).catch(() => {});
-      emitLog('info', `Feature agent due: ${fa.name}`, { featureAgentId: fa.id });
-    }
-  }
+  return admitFeatureAgentTasks({
+    spawnedCount: () => ctx.tasksToSpawn.length,
+    hasPendingUserTasks: ctx.hasPendingUserTasks,
+    cosAutonomyMode: ctx.cosAutonomyMode,
+    autonomousSlotCeiling,
+  }, ctx.spawnAdapter);
 }
 
 /**
