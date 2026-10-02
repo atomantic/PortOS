@@ -35,6 +35,8 @@
  *     double the federation identity leaf instead of the real data file.
  *   - `mockNoPeerSync(actual?, overrides?)` — shared `peerSync.js` mock guard
  *     that makes fire-and-forget record auto-subscribe a clean no-op in tests.
+ *   - `ownTestBodies(it)` — owns each test body until it settles so teardown
+ *     can drain a fail-fast-cancelled body before removing its temp root.
  *
  * Every `PATHS` member that lives under the real `data/` is re-rooted at the
  * temp dir automatically, so a suite that only wants the standard layout
@@ -134,6 +136,49 @@ export async function sweepStrayTempRoots(prefix) {
   sweepOnce();
   await new Promise((resolve) => { setTimeout(resolve, 300); });
   sweepOnce();
+}
+
+/**
+ * Own every test body until it settles, so fixture teardown cannot run under it.
+ *
+ * Vitest's fail-fast cancellation (`--bail`, triggered by a failure in ANOTHER
+ * worker) settles a running test's wrapper while its async body keeps going. A
+ * suite whose `afterAll`/`afterEach` removes a temp data root then deletes the
+ * directory underneath that body, and the body's next store write recreates it
+ * — the run-level guard reports it as `test temp leak:` (#9497, #9622, #9635).
+ *
+ * Pass vitest's `it`; use the returned `it` for every test that writes into the
+ * fixture, and `await drain()` in teardown BEFORE removing it. A body that
+ * failed after cancellation (vitest is no longer listening) is rethrown from
+ * `drain()` rather than dropped; a failure vitest already reported is not.
+ *
+ *     const owned = ownTestBodies(vitestIt);
+ *     const it = owned.it;
+ *     afterAll(async () => {
+ *       try { await owned.drain(); } finally { rmSync(root, { recursive: true, force: true }); }
+ *     });
+ *
+ * @param {Function} it - vitest's `it`/`test`
+ * @returns {{ it: Function, drain: () => Promise<void> }}
+ */
+export function ownTestBodies(it) {
+  const pending = new Set();
+  const orphanedFailures = [];
+  const ownedIt = (name, body, ...rest) => it(name, (context) => {
+    const run = Promise.resolve().then(() => body(context));
+    const settled = run.then(() => {}, (error) => { if (context.signal.aborted) orphanedFailures.push(error); });
+    pending.add(settled);
+    settled.then(() => pending.delete(settled));
+    return run;
+  }, ...rest);
+  const drain = async () => {
+    while (pending.size) await Promise.all(pending);
+    if (orphanedFailures.length) {
+      const failures = orphanedFailures.splice(0);
+      throw new AggregateError(failures, 'Cancelled test body failed after cancellation');
+    }
+  };
+  return { it: ownedIt, drain };
 }
 
 /**
