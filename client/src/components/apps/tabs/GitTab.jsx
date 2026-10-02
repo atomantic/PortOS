@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { GitBranch, Plus, Minus, FileText, RefreshCw, Download, Rocket, Upload, ArrowUpDown, Check, Trash2, GitMerge, Globe, RotateCcw, Terminal } from 'lucide-react';
+import { GitBranch, Plus, Minus, FileText, RefreshCw, Download, Rocket, Upload, ArrowUpDown, Check, Trash2, GitMerge, Globe, RotateCcw, Terminal, Loader2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -554,7 +554,7 @@ export default function GitTab({ appId, appName, repoPath }) {
               disabled={pushingAll}
               className="flex items-center gap-1.5 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-success disabled:opacity-50"
             >
-              <Upload size={16} className={pushingAll ? 'animate-bounce' : ''} />
+              {pushingAll ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
               {pushingAll ? 'Pushing...' : 'Push'}
             </button>
           )}
@@ -564,7 +564,7 @@ export default function GitTab({ appId, appName, repoPath }) {
             title="Have an agent commit, push, review, and merge the current repository work through a pull request"
             className="flex items-center gap-1.5 px-3 py-2 bg-port-accent/20 border border-port-accent/40 rounded-lg text-sm text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
           >
-            <Rocket size={16} className={openingPullRequest ? 'animate-pulse' : ''} />
+            {openingPullRequest ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />}
             {openingPullRequest ? 'Queuing PR agent...' : 'Open PR with agent'}
           </button>
           <button
@@ -572,7 +572,7 @@ export default function GitTab({ appId, appName, repoPath }) {
             disabled={updating}
             className="flex items-center gap-1.5 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50"
           >
-            <Download size={16} className={updating ? 'animate-bounce' : ''} />
+            {updating ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
             {updating ? 'Fetching...' : 'Fetch branches'}
           </button>
           <button
@@ -889,8 +889,9 @@ export default function GitTab({ appId, appName, repoPath }) {
                               <button
                                 onClick={() => handleMerge(branch.name)}
                                 disabled={merging === branch.name}
-                                className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50`}
+                                className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50 inline-flex items-center gap-1`}
                               >
+                                {merging === branch.name ? <Loader2 size={12} className="animate-spin" /> : null}
                                 {merging === branch.name ? 'Merging...' : 'Confirm'}
                               </button>
                               <button

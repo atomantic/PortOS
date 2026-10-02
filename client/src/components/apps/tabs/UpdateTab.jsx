@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Download, XCircle, Check, Loader, AlertTriangle, Trash2, ExternalLink, Tag, GitFork, GitBranch } from 'lucide-react';
+import { RefreshCw, Download, XCircle, Check, Loader, Loader2, AlertTriangle, Trash2, ExternalLink, Tag, GitFork, GitBranch } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
@@ -421,7 +421,7 @@ export default function UpdateTab() {
                   className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
                   title="Skip the fork sync and pull from your fork's origin as-is, then sync pinned submodules. Use this if you already merged upstream into your fork via your own workflow."
                 >
-                  <Download size={14} className={updating ? 'animate-bounce' : ''} />
+                  {updating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                   Update from Fork As-Is
                 </button>
               )}
@@ -434,7 +434,7 @@ export default function UpdateTab() {
                 className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
                 title="Pull PortOS, sync pinned submodules, install dependencies, rebuild, run migrations, and restart."
               >
-                <Download size={14} className={updating ? 'animate-bounce' : ''} />
+                {updating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                 {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
               </button>
             )
