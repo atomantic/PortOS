@@ -38,6 +38,17 @@ describe('normalizeAutonomousBrief', () => {
     expect(brief.llm).toEqual({ providerId: 'prov', model: 'm' });
   });
 
+  it('carries effort on the direction LLM and the authoring pin, reads a nested saved `llm`, and drops an unknown effort (#9545)', () => {
+    const body = musicVideoAutonomousStartSchema.parse({ prompt: 'p', providerId: 'prov', model: 'm', effort: 'high', authoring: { providerId: 'a', model: 'b', effort: 'low' } });
+    expect(normalizeAutonomousBrief(body)).toMatchObject({ llm: { providerId: 'prov', model: 'm', effort: 'high' }, authoring: { providerId: 'a', model: 'b', effort: 'low' } });
+    expect(() => musicVideoAutonomousStartSchema.parse({ prompt: 'p', providerId: 'prov', effort: 'turbo' })).toThrow();
+    // The scheduled task stores the pin nested as `llm`; it must survive a re-normalize.
+    expect(normalizeAutopilotParams({ llm: { providerId: 'prov', model: 'm', effort: 'medium' } }).llm).toEqual({ providerId: 'prov', model: 'm', effort: 'medium' });
+    // No effort stays absent (older records and tests keep their exact shape).
+    expect(normalizeAutonomousBrief({ prompt: 'p', providerId: 'prov' }).llm).toEqual({ providerId: 'prov', model: null });
+    expect(normalizeAutonomousBrief({ prompt: 'p', providerId: 'prov', effort: 'turbo' }).llm).toEqual({ providerId: 'prov', model: null });
+  });
+
   it('keeps Suno the default song source, accepts local, and only honors the fallback opt-in as a boolean', () => {
     expect(normalizeAutonomousBrief({ prompt: 'p' })).toMatchObject({ songSource: 'suno', localFallback: false });
     expect(normalizeAutonomousBrief({ prompt: 'p', songSource: 'local', localFallback: true })).toMatchObject({ songSource: 'local', localFallback: true });

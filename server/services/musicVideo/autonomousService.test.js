@@ -54,6 +54,8 @@ beforeEach(() => {
       store.set(id, clone(next));
       return next;
     }),
+    // Registry doubles: no provider configured → llmOf falls back to the run's own pin.
+    resolveLlm: vi.fn(async () => ({ provider: null, selectedModel: null, route: null })),
     draftCreativeBrief: stub('brief', async () => ({ brief: BRIEF })),
     writeLyrics: stub('lyrics', async () => ({ lyrics: '[verse]\nrain on glass' })),
     createMoodBoard: stub('board', async () => ({ id: 'board-1' })),
@@ -128,6 +130,34 @@ describe('startAutonomousVideo', () => {
     expect(doubles.generateCode).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm' });
     expect(store.get('mv-auto').composition).toEqual({ mode: 'code' });
     await settled('completed');
+  });
+
+  it('resolves the direction LLM once per text stage: brief and lyrics run on the resolved TUI route, effort included, and the route is recorded (#9545)', async () => {
+    const route = { providerId: 'claude-tui', model: 'opus', effort: 'high', transport: 'tui', source: 'tui-preferred' };
+    doubles.resolveLlm.mockResolvedValue({ provider: { id: 'claude-tui' }, selectedModel: 'opus', route });
+    const { project } = await service.startAutonomousVideo({ prompt: 'p', providerId: 'cloud', model: 'big', effort: 'low' });
+    expect(project.automation.llm).toEqual({ providerId: 'cloud', model: 'big', effort: 'low' });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+
+    // The run's pin is what gets resolved; what the resolver returns is what runs.
+    expect(doubles.resolveLlm).toHaveBeenCalledWith({ providerId: 'cloud', model: 'big', effort: 'low' });
+    expect(doubles.draftCreativeBrief).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'claude-tui', model: 'opus', effort: 'high' }));
+    expect(doubles.writeLyrics).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'claude-tui', model: 'opus', effort: 'high' }));
+    expect(runOf().output).toMatchObject({ briefRoute: route, lyricsRoute: route });
+  });
+
+  it('falls back to the run\'s own pin when the provider registry cannot be read', async () => {
+    doubles.resolveLlm.mockRejectedValue(new Error('registry down'));
+    await service.startAutonomousVideo({ prompt: 'p', providerId: 'cloud', model: 'big' });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(doubles.draftCreativeBrief).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'cloud', model: 'big' }));
+    expect(runOf().output.briefRoute).toBeUndefined();
+  });
+
+  it('threads the authoring effort into code generation for a code-only brief', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'prov', model: 'm', effort: 'medium' } });
+    await vi.waitFor(() => expect(calls).toContain('render'));
+    expect(doubles.generateCode).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm', effort: 'medium' });
   });
 
   it('sends the Cast & Sets check-in to review only when the cast checkpoint is chosen', async () => {

@@ -36,6 +36,7 @@ import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
+import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import {
   allCastAndSetsImagesDone,
   assertCastAndSetsApprovable,
@@ -80,7 +81,7 @@ const MAX_SUBMITTED_REFERENCES = 16;
 
 // Test seam: provider, queue, settings and mood-board access are swappable.
 const defaults = {
-  resolveProvider: async (opts) => (await import('../promptRunner.js')).resolveProviderAndModel(opts),
+  resolveProvider: async (opts) => resolveMusicVideoLlm(opts),
   runPrompt: async (opts) => (await import('../promptRunner.js')).runPromptThroughProvider(opts),
   getSettings: async () => (await import('../settings.js')).getSettings(),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
@@ -161,11 +162,12 @@ async function loadContext(project) {
  * plan. `notes` (a revision) are sent with the current direction; `forceKeys`
  * are image keys the director flagged directly.
  */
-async function runDirection(projectId, { providerId, model, notes = [], forceKeys = [] } = {}) {
+async function runDirection(projectId, { providerId, model, effort, notes = [], forceKeys = [] } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const { board, moodImages, track } = await loadContext(project);
-  const { provider, selectedModel } = await deps.resolveProvider({ providerId, model }).catch(() => ({ provider: null }));
+  // Request pin > the brief's saved LLM > an eligible TUI provider > the active one (llmRoute.js).
+  const { provider, selectedModel, route } = await deps.resolveProvider({ providerId, model, effort, automation: project.automation }).catch(() => ({ provider: null }));
   if (!provider) return fail(projectId, 'No AI provider is available for the creative direction');
   if (provider.enabled === false) return fail(projectId, `The ${provider.name || provider.id} provider is disabled`);
   const previous = stage?.direction || null;
@@ -177,10 +179,11 @@ async function runDirection(projectId, { providerId, model, notes = [], forceKey
   const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium });
   let text;
   try {
-    ({ text } = await deps.runPrompt({ provider, model: selectedModel, prompt, source: 'music-video-cast-sets' }));
+    ({ text } = await deps.runPrompt({ provider, model: selectedModel, ...effortArg(route), prompt, source: 'music-video-cast-sets' }));
   } catch (err) {
     return fail(projectId, 'The creative direction call failed', err.message);
   }
+  await recordLlmRoute(projectId, 'castAndSets', route);
   const parsed = parseCastAndSetsResponse(text);
   if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
@@ -556,7 +559,7 @@ export async function skipCastAndSets(projectId) {
 // ---- director actions ------------------------------------------------------------------
 
 /** Start the check-in (explicit request). The work continues in the background. */
-export async function startCastAndSets(projectId, { providerId, model, productionRunId = null } = {}) {
+export async function startCastAndSets(projectId, { providerId, model, effort, productionRunId = null } = {}) {
   const project = await requireProject(projectId);
   if (!Array.isArray(project.audioAnalysis?.sections) || !project.audioAnalysis.sections.length) {
     throw new ServerError('Analyze the song before the Cast & Sets check-in', { status: 409, code: 'NOT_ANALYZED' });
@@ -564,7 +567,7 @@ export async function startCastAndSets(projectId, { providerId, model, productio
   const out = await mutateProjectRecord(projectId, (current) => startCastAndSetsOnProject(current, { processId: PROCESS_ID, productionRunId }));
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} started (r${out.stage.revision})`);
   publish(projectId, out.project);
-  inBackground('The creative direction', projectId, () => runDirection(projectId, { providerId, model }));
+  inBackground('The creative direction', projectId, () => runDirection(projectId, { providerId, model, effort }));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
@@ -575,7 +578,7 @@ export async function startCastAndSets(projectId, { providerId, model, productio
  * note revises the direction, and only images whose prompt changed re-render.
  * The consumed notes are resolved on the sheet. Returns `{ project, stage }`.
  */
-export async function regenerateCastAndSets(projectId, { notes = null, providerId, model } = {}) {
+export async function regenerateCastAndSets(projectId, { notes = null, providerId, model, effort } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   if (!stage?.direction) throw new ServerError('There is no Cast & Sets sheet to regenerate yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
@@ -603,18 +606,18 @@ export async function regenerateCastAndSets(projectId, { notes = null, providerI
   publish(projectId, out.project);
   const forceKeys = Object.keys(imageNotes);
   inBackground('The regeneration', projectId, () => (redirect
-    ? runDirection(projectId, { providerId, model, notes: directionNotes, forceKeys })
+    ? runDirection(projectId, { providerId, model, effort, notes: directionNotes, forceKeys })
     : writePlan(projectId, { forceKeys })));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
 /** Resume an interrupted (restart) or failed stage in this process. */
-export async function resumeCastAndSets(projectId, { providerId, model } = {}) {
+export async function resumeCastAndSets(projectId, { providerId, model, effort } = {}) {
   const out = await mutateProjectRecord(projectId, (current) => resumeCastAndSetsOnProject(current, { processId: PROCESS_ID }));
   console.log(`▶️ Music Video Cast & Sets ${short(projectId)} resumed (${out.stage.status})`);
   publish(projectId, out.project);
   inBackground('The resume', projectId, () => {
-    if (out.stage.status === 'directing') return runDirection(projectId, { providerId, model, notes: out.stage.notesApplied || [] });
+    if (out.stage.status === 'directing') return runDirection(projectId, { providerId, model, effort, notes: out.stage.notesApplied || [] });
     if (out.stage.status === 'assembling') return assemble(projectId);
     return advance(projectId);
   });

@@ -43,7 +43,7 @@ const optionalInt = (raw) => {
 };
 
 /** The start request for a draft: blank optional fields are omitted so the server defaults apply. */
-export function autonomousRequestFromDraft(draft, { providerId, model } = {}) {
+export function autonomousRequestFromDraft(draft, { providerId, model, effort } = {}) {
   const budget = Number.parseFloat(draft.budget);
   const maxGenerations = optionalInt(draft.maxGenerations);
   const models = Object.fromEntries(Object.entries(draft.models || {})
@@ -61,7 +61,7 @@ export function autonomousRequestFromDraft(draft, { providerId, model } = {}) {
     ...(maxGenerations ? { limits: { maxGenerations } } : {}),
     checkpoints: draft.checkpoints,
     ...(draft.moodBoardId ? { moodBoardId: draft.moodBoardId } : {}),
-    ...(providerId ? { providerId, ...(model ? { model } : {}) } : {}),
+    ...(providerId ? { providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) } : {}),
   };
 }
 
@@ -102,7 +102,7 @@ export function autopilotDraftFromParams(params) {
  * The `musicVideoAutopilot` params a draft saves. Starts from the saved params
  * so fields the form does not edit (review attempts, authoring provider) survive a save; the server re-normalizes it all on write.
  */
-export function autopilotParamsFromDraft(draft, saved, { providerId, model } = {}) {
+export function autopilotParamsFromDraft(draft, saved, { providerId, model, effort } = {}) {
   const { prompt: _prompt, ...request } = autonomousRequestFromDraft({ ...draft, prompt: '' }, {});
   const { llm: _llm, ...kept } = saved && typeof saved === 'object' ? saved : {};
   return {
@@ -112,6 +112,6 @@ export function autopilotParamsFromDraft(draft, saved, { providerId, model } = {
     limits: { ...(kept.limits || {}), ...(request.limits || {}) },
     moodBoardId: draft.moodBoardId || null,
     ideaTags: String(draft.ideaTags || '').split(',').map((t) => t.trim()).filter(Boolean),
-    ...(providerId ? { llm: { providerId, model: model || null } } : {}),
+    ...(providerId ? { llm: { providerId, model: model || null, ...(effort ? { effort } : {}) } } : {}),
   };
 }

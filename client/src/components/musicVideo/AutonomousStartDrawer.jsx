@@ -25,7 +25,8 @@ const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded 
 export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   const [draft, setDraft] = useState(emptyAutonomousDraft);
   const [submitting, setSubmitting] = useState(false);
-  const llm = useProviderModels({ allowDefault: true, silent: true });
+  const llm = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
+  const [effort, setEffort] = useState('');
   const patch = (next) => setDraft((d) => ({ ...d, ...next }));
   const toggleCheckpoint = (id) => patch({
     checkpoints: AUTONOMOUS_CHECKPOINT_IDS.filter((c) => (c === id ? !draft.checkpoints.includes(c) : draft.checkpoints.includes(c))),
@@ -37,7 +38,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
     if (!valid || submitting) return;
     setSubmitting(true);
     startAutonomousMusicVideo(
-      autonomousRequestFromDraft(draft, { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined }),
+      autonomousRequestFromDraft(draft, { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined, effort: effort || undefined }),
       { silent: true },
     )
       .then(({ project }) => {
@@ -130,8 +131,12 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
             selectedProviderId={llm.selectedProviderId}
             selectedModel={llm.selectedModel}
             availableModels={llm.availableModels}
-            onProviderChange={llm.setSelectedProviderId}
+            onProviderChange={(id) => { llm.setSelectedProviderId(id); setEffort(''); }}
             onModelChange={llm.setSelectedModel}
+            effort={effort}
+            onEffortChange={setEffort}
+            emptyProviderOption="Auto — a TUI provider when one is eligible"
+            emptyModelOption="Provider default"
             label="Writes the brief and lyrics"
             disabled={submitting}
             modelDisabled={llm.availableModels.length === 0}
