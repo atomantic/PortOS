@@ -13,7 +13,7 @@
  *     processId,            // the server process that may dispatch for it
  *     productionRunId,      // the production run that started it, if any
  *     route: { mode, model },
- *     direction,            // castAndSetsDirection.js shape
+ *     direction,            // castAndSetsDirection.js shape (`medium`: absent = photographic)
  *     moodImages: [{ kind, filename }],
  *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, moodRefs?, setId?, testIndex? } },
  *     images: { [key]: { status, jobId, imageId, history, failures, error, updatedAt,
@@ -171,8 +171,14 @@ export function dispatchableImageKeys(stage) {
     .map((item) => item.key);
 }
 
-export const allCastAndSetsImagesDone = (stage) => Object.keys(stage?.plan || {}).length > 0
-  && Object.keys(stage.plan).every((key) => stage.images?.[key]?.status === 'done');
+// A procedural direction with no planned images (a code-only project) has
+// nothing to render: its characters and worlds are code, so the sheet can go
+// straight to review.
+export const allCastAndSetsImagesDone = (stage) => {
+  const keys = Object.keys(stage?.plan || {});
+  if (!keys.length) return stage?.direction?.medium === 'procedural';
+  return keys.every((key) => stage.images?.[key]?.status === 'done');
+};
 
 /**
  * Reserve one key for dispatch in a serialized write, so two advances cannot

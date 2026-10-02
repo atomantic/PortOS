@@ -16,6 +16,12 @@
  *                     character, so they render alongside it.
  *   - `test:<n>`    — the protagonist in a set: conditioned on that set's plate,
  *                     the character sheet and the looks sheet.
+ *
+ * A `procedural` direction (see castAndSetsDirection.js) plans none of the
+ * photographic sheets, expression/looks sheets or tests: the characters are
+ * built in code, so the only images are the set plates, each with an
+ * intentional `role` (background, texture, decoration or cutout) that shapes
+ * its prompt. A code-only project plans no images at all.
  */
 
 import { trimTo } from '../../lib/textUtils.js';
@@ -57,8 +63,9 @@ export function setCoverage(project, direction) {
   return cover;
 }
 
-/** The in-set tests to render: the direction's own, topped up to two from the most-used sets. */
+/** The in-set tests to render: the direction's own, topped up to two from the most-used sets. A procedural direction has none. */
 export function plannedTests(project, direction) {
+  if (direction?.medium === 'procedural') return [];
   const tests = (direction?.tests || []).slice(0, 4);
   if (tests.length >= 2) return tests;
   const cover = setCoverage(project, direction);
@@ -72,6 +79,42 @@ export function plannedTests(project, direction) {
   return tests;
 }
 
+const PROCEDURAL_ROLE_PROMPTS = {
+  background: (set) => join('Layered illustration background plate for a code-animated music video, flat graphic shading, no characters, no text', set.description),
+  texture: (set) => join('Seamless tileable surface texture, flat even light, no objects, no characters, no text', set.description),
+  decoration: (set) => join('A single isolated decorative element centered on a plain flat backdrop with generous margin, no text', set.description),
+  cutout: (set) => join('A single isolated subject on a plain flat backdrop with clean edges, ready to cut out and composite, no text', set.description),
+};
+
+/** The procedural plan: one role-prompted plate per set, no photographic character work. */
+function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
+  const style = trimTo(direction.look, 500);
+  const world = direction.world || {};
+  const plan = {};
+  for (const set of direction.sets || []) {
+    const key = `set:${set.id}`;
+    const role = set.imageRole || 'background';
+    plan[key] = {
+      key,
+      kind: 'plate',
+      role,
+      label: set.name,
+      setId: set.id,
+      deps: [],
+      refKeys: [],
+      moodRefs: true,
+      prompt: join(
+        (PROCEDURAL_ROLE_PROMPTS[role] || PROCEDURAL_ROLE_PROMPTS.background)(set),
+        set.lighting && `Lighting: ${set.lighting}`,
+        role === 'background' && world.depth && `Depth: ${world.depth}`,
+        style && `Look: ${style}`,
+        revisionNotes[key] && `Revision: ${revisionNotes[key]}`,
+      ),
+    };
+  }
+  return plan;
+}
+
 /**
  * Build the full image plan for a direction: `{ [key]: { key, kind, label,
  * prompt, deps, refKeys, setId?, testIndex? } }`. `refKeys` name other plan
@@ -79,6 +122,7 @@ export function plannedTests(project, direction) {
  * chosen mood-board images. A revision note for a key is appended to its prompt.
  */
 export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {} } = {}) {
+  if (direction.medium === 'procedural') return buildProceduralImagePlan(direction, { revisionNotes });
   const p = direction.protagonist || {};
   const looks = direction.looks || [];
   const firstLook = looks[0];
@@ -252,7 +296,9 @@ export function castAndSetsReferences(project, stage) {
   const cover = setCoverage(project, direction);
   const plates = [...(direction.sets || [])].sort((a, b) => (cover.get(b.id) || 0) - (cover.get(a.id) || 0));
   for (const set of plates) {
-    push({ id: `${CAST_SETS_REF_PREFIX}set-${set.id}`.slice(0, 64), imageId: images[`set:${set.id}`]?.imageId, role: 'set', label: trimTo(set.name, 120), note: trimTo([set.description, set.lighting].filter(Boolean).join(' — '), 1000) }, true);
+    // A procedural texture, decoration or cutout is a loose asset, not a look to condition frames on.
+    const conditions = direction.medium !== 'procedural' || (set.imageRole || 'background') === 'background';
+    push({ id: `${CAST_SETS_REF_PREFIX}set-${set.id}`.slice(0, 64), imageId: images[`set:${set.id}`]?.imageId, role: 'set', label: trimTo(set.name, 120), note: trimTo([set.description, set.lighting].filter(Boolean).join(' — '), 1000) }, conditions);
   }
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: 'Expression sheet', note: trimTo(p.gesture, 1000) }, false);
@@ -276,7 +322,7 @@ export function castAndSetsSubjects(project, stage) {
       id: `${CAST_SETS_SUBJECT_PREFIX}protagonist`,
       kind: 'character',
       name: trimTo(p.name, 120),
-      description: trimTo([p.description, p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000),
+      description: trimTo([p.description, p.construction, p.shapeLanguage, p.materials, p.palette, p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000),
       role: 'protagonist',
     });
   }

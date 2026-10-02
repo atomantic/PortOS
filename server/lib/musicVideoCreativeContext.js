@@ -39,12 +39,30 @@ export function musicVideoCreativeContext(concept, { moodBoard = true } = {}) {
 export function musicVideoDirectionContext(direction) {
   if (!direction) return '';
   const p = direction.protagonist || {};
+  // A procedural direction (castAndSetsDirection.js) carries how the cast is
+  // built and moves in code and how the world behaves; the same lines reach
+  // the planner and any code-authoring prompt that includes this context.
+  const procedural = direction.medium === 'procedural';
+  const w = direction.world || {};
+  const lines = (label, pairs) => {
+    const body = pairs.filter(([, v]) => v).map(([k, v]) => `${k}: ${trimTo(v, 300)}`).join('; ');
+    return body ? [`${label} ${body}`] : [];
+  };
   return [
-    'Cast & Sets direction (authoritative locations and wardrobe):',
+    procedural
+      ? 'Cast & Sets direction (authoritative characters, environments, motion and camera; characters and scenes are authored in code, never photographed):'
+      : 'Cast & Sets direction (authoritative locations and wardrobe):',
     'The mood board is LOOK-ONLY: borrow palette, lighting and texture, never its literal locations, objects or narrative. Use the assigned set for each shot.',
     `Story: ${trimTo(direction.logline, 400)} ${trimTo(direction.interpretation, 600)}`,
     `Protagonist: ${[p.name, p.description, p.face, p.hair, p.signature, p.gesture, ...(p.rules || [])].filter(Boolean).map((s) => trimTo(s, 300)).join('; ')}`,
+    ...(procedural ? lines('Character build:', [
+      ['construction', p.construction], ['shape language', p.shapeLanguage], ['materials', p.materials], ['palette', p.palette],
+      ['expressions', (p.expressions || []).join(' | ')], ['movement', p.movement],
+    ]) : []),
+    ...(procedural ? lines('World rules:', [
+      ['layout', w.layout], ['depth', w.depth], ['lighting', w.lighting], ['camera', w.camera], ['transitions', w.transitions],
+    ]) : []),
     ...((direction.looks || []).slice(0, 8).map((l) => `Look ${trimTo(l.name, 80)}: ${trimTo(l.description, 300)}; chapters: ${trimTo(l.chapters, 120)}`)),
-    ...((direction.sets || []).slice(0, 8).map((s) => `Set ${trimTo(s.name, 80)}: ${trimTo(s.description, 300)}; lighting: ${trimTo(s.lighting, 120)}`)),
+    ...((direction.sets || []).slice(0, 8).map((s) => `Set ${trimTo(s.name, 80)}: ${trimTo(s.description, 300)}; lighting: ${trimTo(s.lighting, 120)}${procedural ? `; image role: ${s.imageRole || 'background'}` : ''}`)),
   ].join('\n').slice(0, 6000);
 }

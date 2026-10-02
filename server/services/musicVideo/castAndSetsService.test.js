@@ -414,3 +414,103 @@ it('ignores a previous revision completion while regeneration has reserved a key
   await runTo(project.id, 'review');
   expect((await current(project.id)).castAndSets.images.character.imageId).not.toBe(`${previous.id}.png`);
 });
+
+describe('Cast & Sets procedural check-in', () => {
+  const PROCEDURAL = {
+    logline: 'A paper boat crosses a neon city.',
+    interpretation: 'The song reads as a small thing carried by a big current.',
+    protagonist: {
+      name: 'Boat', description: 'a folded paper boat', construction: 'three triangles hinged at the keel', shapeLanguage: 'sharp, folded',
+      materials: 'flat fills with a soft glow', palette: '#f5f0e6, #ff5a1f', expressions: ['proud: bow lifts'], movement: 'bobs on every beat',
+    },
+    world: { layout: 'a river through stacked streets', depth: 'three parallax planes', camera: 'slow dolly with a beat-synced push', transitions: 'wipe through reflections' },
+    looks: [],
+    sets: [
+      { id: 'river', name: 'River', description: 'a neon river', lighting: 'magenta', imageRole: 'background', sections: [0] },
+      { id: 'bridge', name: 'Bridge', description: 'an iron span', lighting: 'cyan', imageRole: 'decoration', sections: [1] },
+      { id: 'quay', name: 'Quay', description: 'wet stone', lighting: 'amber', imageRole: 'texture', sections: [2] },
+    ],
+    songMap: [{ section: 0, setId: 'river' }, { section: 1, setId: 'bridge' }, { section: 2, setId: 'quay' }],
+    overlayConcept: { summary: 'A tide clock.', elements: [] },
+    moodRefs: [],
+    questions: [],
+  };
+  const seedProcedural = (tools) => seed({
+    productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+    automation: { tools, checkins: { castAndSets: 'review' } },
+  });
+
+  beforeEach(() => {
+    runPrompt.mockResolvedValue({ text: JSON.stringify(PROCEDURAL) });
+  });
+
+  it('directs an image+code project with role-planned plates and no photographic batch, then carries the rules into the planner context', async () => {
+    const project = await seedProcedural(['image:codex', 'code:render']);
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+
+    const prompt = runPrompt.mock.calls[0][0].prompt;
+    expect(prompt).toContain('PROCEDURAL music video');
+    // Only role-prompted set plates: no character, looks, expression or test photography.
+    expect(jobs.map(keyOf).sort()).toEqual(['set:bridge', 'set:quay', 'set:river']);
+    const byKey = Object.fromEntries(jobs.map((j) => [keyOf(j), j.params.prompt]));
+    expect(byKey['set:river']).toMatch(/background plate/);
+    expect(byKey['set:bridge']).toMatch(/isolated decorative element/);
+    expect(byKey['set:quay']).toMatch(/Seamless tileable/);
+    expect(Object.values(byKey).join(' ')).not.toMatch(/photoreal|person|FRONT/i);
+
+    const reviewing = await current(project.id);
+    expect(reviewing.castAndSets.direction).toMatchObject({ medium: 'procedural', world: { camera: 'slow dolly with a beat-synced push' } });
+    const artifact = reviewing.devArtifacts.find((a) => a.id === reviewing.castAndSets.artifactId);
+    const html = readFileSync(join(ROOT(), artifact.file), 'utf8');
+    expect(html).toContain('three triangles hinged at the keel');
+    expect(html).toContain('Role: decoration');
+    expect(html).not.toContain('Character reference sheet');
+
+    await service.approveCastAndSets(project.id);
+    const done = await current(project.id);
+    // Only the background plate conditions frame generation; texture and decoration stay loose references.
+    expect(done.visualSpec.references.filter((r) => r.id.startsWith('mvr-cs-')).map((r) => [r.id, r.condition]).sort()).toEqual([
+      ['mvr-cs-set-bridge', false], ['mvr-cs-set-quay', false], ['mvr-cs-set-river', true],
+    ]);
+    expect(done.concept.subjects.find((s) => s.id === 'cs-protagonist').description).toContain('three triangles hinged at the keel');
+
+    // The approved motion, camera and construction reach the planner request.
+    const { buildScenePlanPrompt } = await import('./planner.js');
+    const planPrompt = buildScenePlanPrompt(done, [{ startSec: 0, endSec: 8, sectionIndex: 0, shotIndex: 0, shotCount: 1, sectionLabel: 'Intro', lyricText: '', delivery: [] }]);
+    expect(planPrompt).toContain('slow dolly with a beat-synced push');
+    expect(planPrompt).toContain('bobs on every beat');
+    expect(planPrompt).toContain('image role: decoration');
+  });
+
+  it('directs a code-only project without any image backend and still waits for the director', async () => {
+    const resolveRoute = vi.fn(async () => null);
+    service.__setCastAndSetsDepsForTests({
+      resolveProvider: async () => ({ provider: { id: 'example-provider', enabled: true }, selectedModel: 'example-model' }),
+      runPrompt, getSettings: async () => ({}), enqueue, resolveRoute,
+      loadBoard: async () => null, loadTrack: async () => null,
+    });
+    const project = await seedProcedural(['code:render']);
+    await service.startCastAndSets(project.id);
+    await until(async () => (await current(project.id)).castAndSets?.status === 'review', 'the code-only check-in');
+    const stage = (await current(project.id)).castAndSets;
+    expect(jobs).toEqual([]);
+    expect(resolveRoute).not.toHaveBeenCalled();
+    expect(stage.plan).toEqual({});
+    expect(stage.direction.protagonist.construction).toBe('three triangles hinged at the keel');
+    const html = readFileSync(join(ROOT(), (await current(project.id)).devArtifacts[0].file), 'utf8');
+    expect(html).toContain('No raster image: drawn in code');
+  });
+
+  it('keeps the medium of a saved direction when the project settings change before a revision', async () => {
+    const project = await seedProcedural(['image:codex', 'code:render']);
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, productionPolicy: { strategy: 'legacy', maxGeneratedVideoPercent: 100 }, automation: { ...p.automation, tools: ['image:codex'] } } }));
+    await service.regenerateCastAndSets(project.id, { notes: [{ text: 'make the camera slower' }] });
+    await until(async () => runPrompt.mock.calls.length === 2, 'the revision call');
+    expect(runPrompt.mock.calls[1][0].prompt).toContain('PROCEDURAL music video');
+    await runTo(project.id, 'review');
+    expect((await current(project.id)).castAndSets.direction.medium).toBe('procedural');
+  });
+});

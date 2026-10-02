@@ -28,7 +28,8 @@ const castAndSetsDone = (project) => ['approved', 'skipped'].includes(project?.c
  * planned without sections — while a failed lyric, vocal or alignment step
  * leaves the plan to work with what exists.
  *
- * The check-in is a gate: `castAndSets` resolves once the stage reaches a
+ * The check-in runs for every project, code-first ones included (the server
+ * picks its medium from the production policy and tools). It is a gate: `castAndSets` resolves once the stage reaches a
  * checkpoint, and the run plans only when that checkpoint is approved or
  * skipped. In review mode the stage stops at `review`, so the run ends there
  * ("Waiting for your check-in"); the director approves and runs the kickoff
@@ -67,10 +68,10 @@ export default function useMusicVideoKickoff({ analyze, importLyrics, separateVo
         enter('align');
         project = (await attempt(alignLyrics, project)) || project;
       }
-      const codeFirst = project.productionPolicy?.strategy === 'code-first';
-      const needsPerformanceReference = (project.scenes || []).some((scene) => scene.shotMode === 'performance' && !scene.referenceImageId && !scene.videoHistoryId
-        && project.treatment?.shotDirections?.some((direction) => direction.sceneId === scene.sceneId && direction.medium === 'generated-footage'));
-      if (castAndSets && (!codeFirst || needsPerformanceReference) && !castAndSetsDone(project)) {
+      // Code-first projects keep the check-in: the server directs it in the
+      // procedural medium (how the characters are built and move, how the
+      // world behaves), not as a photographic cast.
+      if (castAndSets && !castAndSetsDone(project)) {
         enter('castAndSets');
         const checked = await attempt(castAndSets, project);
         // Waiting for the director (review), or the check-in failed: stop here.
