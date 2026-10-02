@@ -161,6 +161,7 @@ export * from './universeBibleCompleteness.js';
 export * from './universeBibleLimits.js';
 export * from './universeMarkdown.js';
 export * from './universePromptRenderers.js';
+export * from './universeExpandMerge.js';
 export * from './universeVisualStyle.js';
 export * from './writersRoomPresets.js';
 export * from './writersRoomStylePresets.js';
