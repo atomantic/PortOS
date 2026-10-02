@@ -37,6 +37,9 @@ import {
   AUTONOMOUS_ORIGINS,
   AUTONOMOUS_PROMPT_MAX,
   AUTONOMOUS_SONG_SOURCES,
+  SUNO_LIMITS,
+  SUNO_MODEL_PATTERN,
+  SUNO_VOCAL_GENDERS,
 } from './musicVideoAutonomous.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
@@ -759,6 +762,14 @@ export const musicVideoProductionResumeSchema = z.object({
 }).strict();
 
 // ---- Fully-autonomous run: one prompt → lyrics → Suno song → video --------------
+// Suno's Advanced-form options. `excludeStyles: ''` clears the field Suno keeps
+// from its last draft; null (resume only) clears a stored option.
+const musicVideoSunoOptionsSchema = z.object({
+  excludeStyles: z.string().trim().max(SUNO_LIMITS.excludeStyles).nullable().optional(),
+  vocalGender: z.enum(SUNO_VOCAL_GENDERS).nullable().optional(),
+  model: z.string().trim().regex(SUNO_MODEL_PATTERN, 'A Suno model version such as v6').nullable().optional(),
+}).strict();
+
 // The alternate entry point: no track, style or board is picked up front. Tool
 // ids are the same catalog the autopilot brief uses; `checkpoints` names the
 // stages that park for approval (none = fully unattended).
@@ -793,6 +804,7 @@ export const musicVideoAutonomousStartSchema = z.object({
     ideaId: z.string().max(80).nullable().optional(),
     ideaTitle: z.string().max(200).nullable().optional(),
   }).strict().optional(),
+  suno: musicVideoSunoOptionsSchema.nullable().optional(),
 }).strict();
 
 // Resume a parked/failed run, or approve the checkpoint it is waiting on.
@@ -800,6 +812,10 @@ export const musicVideoAutonomousResumeSchema = z.object({
   // Replace the stage output the director edited at a checkpoint.
   lyrics: z.string().max(20000).optional(),
   style: z.string().max(AUTONOMOUS_PROMPT_MAX).optional(),
+  // Patch the brief's Suno options, key by key (null clears one).
+  suno: musicVideoSunoOptionsSchema.optional(),
+  // At the song checkpoint: discard the song and generate a new one.
+  retakeSong: z.boolean().optional(),
 }).strict();
 
 // A generation kickoff that failed before reaching the queue (#9011) — names

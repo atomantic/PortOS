@@ -66,7 +66,12 @@ export const AUTONOMOUS_LIMIT_BOUNDS = Object.freeze({
 
 // Suno's custom-song form fields (v4.5+). Shaping text to these keeps a long
 // LLM caption from being silently truncated — or rejected — by the page.
-export const SUNO_LIMITS = Object.freeze({ title: 80, style: 1000, lyrics: 5000 });
+export const SUNO_LIMITS = Object.freeze({ title: 80, style: 1000, lyrics: 5000, excludeStyles: 500 });
+
+// The Advanced form's optional controls a brief may set (`brief.suno`): the
+// "Exclude styles" field, the vocal gender buttons and the model version menu.
+export const SUNO_VOCAL_GENDERS = Object.freeze(['male', 'female']);
+export const SUNO_MODEL_PATTERN = /^v\d+(\.\d+)?$/i;
 
 // Free (local, un-metered) tools only, the same default a hand-made autopilot
 // brief starts from — nothing paid is spent unless the operator opts in.
@@ -75,6 +80,19 @@ export const AUTONOMOUS_DEFAULT_TOOLS = Object.freeze(['image:local', 'video:loc
 // Normalize line endings, then trim and cap (non-strings become '').
 const clean = (v, max) => trimTo(isStr(v) ? v.replace(/\r\n?/g, '\n') : v, max);
 const int = (v, { min, max }, fallback) => (Number.isInteger(v) && v >= min && v <= max ? v : fallback);
+
+/**
+ * The brief's Suno form options, or null when none is set. `excludeStyles` keeps
+ * an explicit '' (a director clearing the field Suno remembers from its last
+ * draft) apart from absent (null = leave the field alone).
+ */
+export function normalizeSunoOptions(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const excludeStyles = isStr(raw.excludeStyles) ? clean(raw.excludeStyles, SUNO_LIMITS.excludeStyles) : null;
+  const vocalGender = SUNO_VOCAL_GENDERS.includes(raw.vocalGender) ? raw.vocalGender : null;
+  const model = isStr(raw.model) && SUNO_MODEL_PATTERN.test(raw.model.trim()) ? raw.model.trim() : null;
+  return excludeStyles === null && !vocalGender && !model ? null : { excludeStyles, vocalGender, model };
+}
 
 /**
  * How the video is produced, derived from the tool picks:
@@ -136,6 +154,7 @@ function normalizeAutonomousSettings(raw = {}) {
     llm: llm ? { providerId: llm.providerId, model: llm.model, ...(llm.effort ? { effort: llm.effort } : {}) } : null,
     authoring: authoringProvider && authoringModel
       ? { providerId: authoringProvider, model: authoringModel, ...(authoringEffort ? { effort: authoringEffort } : {}) } : null,
+    suno: normalizeSunoOptions(raw.suno),
   };
 }
 
@@ -175,14 +194,19 @@ export function nextAutonomousStage(stage) {
 /**
  * Shape the generated text into what the Suno form accepts. Section tags in
  * the lyrics pass through unchanged (Suno reads `[Verse]` style tags); an
- * instrumental song sends no lyrics at all.
+ * instrumental song sends no lyrics at all, and no vocal gender. The brief's
+ * `suno` options ride along; null means "leave that control alone".
  */
-export function sunoSongFields({ title, style, lyrics, instrumental = false } = {}) {
+export function sunoSongFields({ title, style, lyrics, instrumental = false, suno = null } = {}) {
+  const options = normalizeSunoOptions(suno);
   return {
     title: clean(title, SUNO_LIMITS.title) || 'Untitled',
     style: clean(style, SUNO_LIMITS.style),
     lyrics: instrumental ? '' : clean(lyrics, SUNO_LIMITS.lyrics),
     instrumental,
+    excludeStyles: options?.excludeStyles ?? null,
+    vocalGender: instrumental ? null : options?.vocalGender ?? null,
+    model: options?.model ?? null,
   };
 }
 

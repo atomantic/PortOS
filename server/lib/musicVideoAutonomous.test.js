@@ -12,7 +12,7 @@ import {
   sunoSongIdsFromHrefs,
 } from './musicVideoAutonomous.js';
 import { sanitizeTaskMetadata } from './cosValidation.js';
-import { musicVideoAutonomousStartSchema } from './musicVideoValidation.js';
+import { musicVideoAutonomousResumeSchema, musicVideoAutonomousStartSchema } from './musicVideoValidation.js';
 
 describe('normalizeAutonomousBrief', () => {
   it('defaults to the free local tools, no checkpoints, no budget — nothing metered unless opted in', () => {
@@ -57,6 +57,23 @@ describe('normalizeAutonomousBrief', () => {
     expect(() => musicVideoAutonomousStartSchema.parse({ prompt: 'p', songSource: 'spotify' })).toThrow();
   });
 
+  it('carries the Suno form options: absent or blank is null, an explicit empty exclusion is kept, junk is dropped', () => {
+    expect(normalizeAutonomousBrief({ prompt: 'p' }).suno).toBeNull();
+    expect(normalizeAutonomousBrief({ prompt: 'p', suno: {} }).suno).toBeNull();
+    const body = musicVideoAutonomousStartSchema.parse({ prompt: 'p', suno: { excludeStyles: '  metal, screamo ', vocalGender: 'female', model: 'v4.5' } });
+    expect(normalizeAutonomousBrief(body).suno).toEqual({ excludeStyles: 'metal, screamo', vocalGender: 'female', model: 'v4.5' });
+    // '' asks the driver to clear the exclusions Suno remembers; it is not "unset".
+    expect(normalizeAutonomousBrief({ prompt: 'p', suno: { excludeStyles: '' } }).suno).toEqual({ excludeStyles: '', vocalGender: null, model: null });
+    expect(normalizeAutonomousBrief({ prompt: 'p', suno: { vocalGender: 'robot', model: 'latest' } }).suno).toBeNull();
+    for (const suno of [{ model: 'latest' }, { vocalGender: 'robot' }, { excludeStyles: 'x'.repeat(501) }, { extra: 1 }]) {
+      expect(() => musicVideoAutonomousStartSchema.parse({ prompt: 'p', suno })).toThrow();
+    }
+    // A resume patches per key and may clear one with null; retakeSong rides the same request.
+    expect(musicVideoAutonomousResumeSchema.parse({ suno: { vocalGender: null }, retakeSong: true })).toEqual({ suno: { vocalGender: null }, retakeSong: true });
+    // The scheduled task stores the same options and they survive a re-normalize.
+    expect(normalizeAutopilotParams({ suno: { model: 'v6' } }).suno).toEqual({ excludeStyles: null, vocalGender: null, model: 'v6' });
+  });
+
   it('agrees with the start schema: whatever the schema accepts normalizes to a brief the run can use', () => {
     const body = musicVideoAutonomousStartSchema.parse({
       prompt: 'p', tools: ['video:local'], checkpoints: ['lyrics'], models: { 'video:local': 'ltx' }, budgetUsd: 5,
@@ -88,8 +105,16 @@ describe('Suno field shaping', () => {
     expect(fields.title.length).toBe(SUNO_LIMITS.title);
     expect(fields.style.length).toBe(SUNO_LIMITS.style);
     expect(fields.lyrics.length).toBe(SUNO_LIMITS.lyrics);
-    expect(sunoSongFields({ title: 't', style: 's', lyrics: 'words', instrumental: true })).toEqual({ title: 't', style: 's', lyrics: '', instrumental: true });
+    expect(sunoSongFields({ title: 't', style: 's', lyrics: 'words', instrumental: true })).toEqual({
+      title: 't', style: 's', lyrics: '', instrumental: true, excludeStyles: null, vocalGender: null, model: null,
+    });
     expect(sunoSongFields({}).title).toBe('Untitled');
+  });
+
+  it('passes the brief\'s Suno options to the form, with no vocal gender for an instrumental', () => {
+    const suno = { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' };
+    expect(sunoSongFields({ title: 't', style: 's', lyrics: 'l', suno })).toMatchObject({ excludeStyles: 'metal', vocalGender: 'male', model: 'v6' });
+    expect(sunoSongFields({ title: 't', style: 's', instrumental: true, suno })).toMatchObject({ excludeStyles: 'metal', vocalGender: null, model: 'v6' });
   });
 
   it('reads song ids out of workspace links, ignoring everything else and repeats', () => {

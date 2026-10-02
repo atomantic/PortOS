@@ -29,7 +29,19 @@ State lives on the project as `autonomousRun` — install-local like `production
 - `song` — listen to the Suno song before the image/video quota is spent.
 - `cast` — flips the existing Cast & Sets check-in to *review* (the production run owns it).
 
-Approving can carry edits (`POST /api/music-video/:id/autonomous/resume` with `{ lyrics }` or `{ style }`).
+Approving can carry edits (`POST /api/music-video/:id/autonomous/resume` with `{ lyrics }`, `{ style }` or a `{ suno }` options patch).
+
+**Retake song.** At the `song` checkpoint the run panel also offers **Retake song** (`{ retakeSong: true }` on resume, combinable with the lyrics, style and `suno` edits). It discards the song from the run — its track link, Suno song ids, source and any local render — resets the `song` stage, makes a new song (a new Suno generation spends credits again) and parks at the `song` checkpoint once more. The rejected track stays in the music library; only the project's link to it is cleared, which keeps the lyric cues' text and clears their timings until the new song re-seeds them. A retake anywhere else is refused with 409 `NOT_AT_SONG_CHECKPOINT`.
+
+## Suno form options
+
+A start request (and the scheduled task's settings) may carry an optional `suno` object for Suno's Advanced form, stored on the run's brief:
+
+- `excludeStyles` — Suno's **Exclude styles** field (up to 500 characters). An explicit empty string clears whatever Suno kept from its previous draft; omitting it leaves the field as Suno has it.
+- `vocalGender` — `male` or `female`; clicks Suno's matching button. Not sent for an instrumental.
+- `model` — a model version such as `v6`; the driver opens the version menu only when the current version differs.
+
+All three live under Suno's **More Options** section (expanded on demand) or its version menu. Each is a no-op when unset. When the page has no such control (an older Suno UI) or the version menu does not list the requested model, the driver logs a warning and continues with Suno's current setting rather than failing the song. The start drawer shows these fields when Suno is the song source; a resume may patch them key by key (`null` clears one).
 
 ## Production review
 
@@ -90,16 +102,16 @@ The Suno adapter fills the form through `placeholder` / role selectors and reads
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/api/music-video/autonomous` | Start (202 `{ project, run }`). Body: `prompt` plus optional `songSource` (`suno` default, or `local`), `localFallback`, `tools`, `models` (per-tool model pin), `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model` (brief + lyrics LLM), `authoring` (code-rendered video). |
+| `POST` | `/api/music-video/autonomous` | Start (202 `{ project, run }`). Body: `prompt` plus optional `songSource` (`suno` default, or `local`), `localFallback`, `suno` (Suno form options), `tools`, `models` (per-tool model pin), `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model` (brief + lyrics LLM), `authoring` (code-rendered video). |
 | `GET` | `/api/music-video/:id/autonomous` | The run. |
-| `POST` | `/api/music-video/:id/autonomous/resume` | Approve the checkpoint, retry the stage that stopped, or resume an interrupted run. |
+| `POST` | `/api/music-video/:id/autonomous/resume` | Approve the checkpoint, retry the stage that stopped, or resume an interrupted run. Optional `lyrics`, `style`, `suno` edits; `retakeSong: true` at the song checkpoint. |
 | `POST` | `/api/music-video/:id/autonomous/stop` / `cancel` | Pause / cancel (also stops/cancels its production run). |
 
 Progress is pushed over the `music-video:autonomous` socket event (`{ projectId, runId, run, project }`).
 
 ## Scheduled task: `music-video-autopilot`
 
-A programmatic scheduled task (no agent). Each run picks the **oldest active Brain idea no earlier run used** (optionally only ideas carrying one of `ideaTags`), turns it into the prompt and starts an autonomous run with the task's saved settings (`taskMetadata.musicVideoAutopilot`: `songSource`, `localFallback`, `tools`, `models`, `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model`, `authoring`, `ideaTags`). Set a cadence on its Schedule card; Run Now fires it once.
+A programmatic scheduled task (no agent). Each run picks the **oldest active Brain idea no earlier run used** (optionally only ideas carrying one of `ideaTags`), turns it into the prompt and starts an autonomous run with the task's saved settings (`taskMetadata.musicVideoAutopilot`: `songSource`, `localFallback`, `suno`, `tools`, `models`, `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model`, `authoring`, `ideaTags`). Set a cadence on its Schedule card; Run Now fires it once.
 
 - It declines while a previous scheduled run is still live, so videos never pile up behind a slow Suno login or a long production.
 - An idea counts as used once its run is live or finished; a failed or canceled run leaves the idea available for the next fire.

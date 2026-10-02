@@ -6,6 +6,7 @@ import { musicVideoMediaMode } from '../../../server/lib/musicVideoMediaPolicy.j
 
 import {
   AUTONOMOUS_DEFAULT_LIMITS, AUTONOMOUS_DEFAULT_TOOLS, AUTONOMOUS_LIVE_STATUSES, AUTONOMOUS_SONG_SOURCES, AUTONOMOUS_STAGES,
+  SUNO_MODEL_PATTERN,
 } from '../../../server/lib/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
@@ -13,7 +14,7 @@ export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
   local: 'Local engine (Music Studio)',
 });
 
-export { AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, autonomousMedium } from '../../../server/lib/musicVideoAutonomous.js';
+export { AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousMedium } from '../../../server/lib/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
   ...Object.fromEntries(AUTONOMOUS_STAGES.map((stage) => [stage.id, stage.label])),
@@ -39,7 +40,24 @@ export const emptyAutonomousDraft = () => ({
   maxGenerations: String(AUTONOMOUS_DEFAULT_LIMITS.maxGenerations),
   checkpoints: [],
   moodBoardId: '',
+  // Suno's Advanced-form options; blank leaves that control as Suno has it.
+  suno: { excludeStyles: '', vocalGender: '', model: '' },
 });
+
+/** A blank model is fine (Suno's current one); anything else must name a version such as v6. */
+export const isSunoModelValid = (model) => !String(model || '').trim() || SUNO_MODEL_PATTERN.test(String(model).trim());
+
+// The draft's Suno options as the request's `suno` object, or null when none is set.
+function sunoRequestFromDraft(suno = {}) {
+  const excludeStyles = String(suno.excludeStyles || '').trim();
+  const model = String(suno.model || '').trim();
+  const out = {
+    ...(excludeStyles ? { excludeStyles } : {}),
+    ...(suno.vocalGender ? { vocalGender: suno.vocalGender } : {}),
+    ...(model ? { model } : {}),
+  };
+  return Object.keys(out).length ? out : null;
+}
 
 const optionalInt = (raw) => {
   const n = Number.parseInt(raw, 10);
@@ -50,6 +68,7 @@ const optionalInt = (raw) => {
 export function autonomousRequestFromDraft(draft, { providerId, model, effort } = {}) {
   const budget = Number.parseFloat(draft.budget);
   const maxGenerations = optionalInt(draft.maxGenerations);
+  const suno = draft.songSource === 'suno' ? sunoRequestFromDraft(draft.suno) : null;
   const models = Object.fromEntries(Object.entries(draft.models || {})
     .filter(([id, value]) => draft.tools.includes(id) && typeof value === 'string' && value.trim())
     .map(([id, value]) => [id, value.trim()]));
@@ -63,6 +82,7 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
     songSource: draft.songSource,
     localFallback: draft.songSource === 'suno' && draft.localFallback === true,
     instrumental: draft.instrumental === true,
+    ...(suno ? { suno } : {}),
     tools: draft.tools,
     ...(Object.keys(models).length ? { models } : {}),
     ...(draft.guidance.trim() ? { guidance: draft.guidance.trim() } : {}),
