@@ -4,14 +4,13 @@
 // (portos_test) holds the project and run records; no provider is called.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _selectTestChrome, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -35,10 +34,15 @@ const health = await checkHealth().catch(error => ({ connected: false, error: er
 const dbReady = requireDbOrSkip('codeAnimation/stages.realBrowser.db.test', health.connected, health.error);
 if (dbReady) await ensureSchema();
 
-const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-].find(path => path && existsSync(path));
+const selected = _selectTestChrome([
+  { source: 'env', path: process.env.CHROME_PATH },
+  { source: 'playwright', path: chromium.executablePath() },
+  { source: 'mac-app', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+  { source: 'system-google-chrome', path: '/usr/bin/google-chrome' },
+  { source: 'system-chromium', path: '/usr/bin/chromium' },
+  { source: 'system-chromium-browser', path: '/usr/bin/chromium-browser' },
+]);
+const chrome = selected?.path;
 const ffmpeg = await findFfmpeg();
 const ffprobe = await findFfprobe();
 
@@ -72,7 +76,7 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
     const profile = join(lazyTempDataRoot('portos-code-animation-stages-'), 'chrome-test-profile');
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
     try {
-      const ws = await _waitForTestChrome(proc);
+      const ws = await _waitForTestChrome(proc, 20000, { source: selected.source, executable: chrome, profile });
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
       browser = await chromium.connectOverCDP(endpoint);
     } catch (error) {
