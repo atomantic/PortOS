@@ -156,6 +156,55 @@ describe('human-reviewed Music Video workflow', () => {
     expect((await approve('storyboard')).status).toBe(200);
   });
 
+  it('invalidates musical choreography evidence when analysis or the applied timing map changes, not receipt metadata', async () => {
+    const current = await store.getProject(project.id);
+    await store.setProjectAnalysis(project.id, { ...current.audioAnalysis, features: {
+      envelopes: { fps: 1, rms: [0.2, 0.8], low: [0.1, 0.7], mid: [0.2, 0.4], high: [0.1, 0.3] },
+      onsets: { low: [1], mid: [2], high: [3] },
+    } });
+    await store.mutateProjectRecord(project.id, p => ({ project: { ...p, audioTimingRevisions: [{
+      version: 1, basis: 'synthetic-timing-revision', appliedAt: '2026-01-01T00:00:00.000Z',
+      input: { targetTrackId: 'synthetic-track', intervals: [{ oldStartSec: 0, oldEndSec: 20, newStartSec: 0 }] },
+    }] } }));
+    // Explicitly reconfirm the alignment after the analysis change.
+    await save({ ...draft, timingStatus: 'provisional' });
+    await save(draft);
+    await approve('art'); await approve('storyboard');
+    await request(app).post(`${base}/production-review/proof`).send({ startSec: 0, endSec: 20 });
+    expect((await approve('proof')).status).toBe(200);
+    const accepted = await store.getProject(project.id);
+    const acceptedStatus = (await read()).body.readiness;
+    expect(acceptedStatus.readyForProduction).toBe(true);
+
+    const changes = {
+      onset: p => { p.audioAnalysis.features.onsets.low = [4]; },
+      envelope: p => { p.audioAnalysis.features.envelopes.rms = [0.8, 0.2]; },
+      downbeat: p => { p.audioAnalysis.downbeats = [1]; },
+      timingMap: p => { p.audioTimingRevisions[0].input.intervals[0].newStartSec = 1; },
+    };
+    for (const [label, change] of Object.entries(changes)) {
+      const revised = structuredClone(accepted);
+      change(revised);
+      await store.mutateProjectRecord(project.id, () => ({ project: revised }));
+      const readiness = (await read()).body.readiness;
+      expect(readiness.art.approved, label).toBe(true);
+      expect(readiness.storyboard.problems.join(' '), label).toContain('Lyric alignment is provisional or changed');
+      expect(readiness.basis.storyboard, label).not.toBe(acceptedStatus.basis.storyboard);
+      expect(readiness.basis.proof, label).not.toBe(acceptedStatus.basis.proof);
+      expect(readiness.readyForProduction, label).toBe(false);
+      expect((await approve('proof')).status, label).toBe(409);
+    }
+
+    const metadataOnly = structuredClone(accepted);
+    metadataOnly.name = 'Renamed example animation';
+    metadataOnly.audioTimingRevisions[0].appliedAt = '2026-01-02T00:00:00.000Z';
+    metadataOnly.audioAnalysis.waveform = [0.1, 0.3]; // Timeline display, not authored motion input.
+    await store.mutateProjectRecord(project.id, () => ({ project: metadataOnly }));
+    const retained = (await read()).body.readiness;
+    expect(retained.basis).toEqual(acceptedStatus.basis);
+    expect(retained.readyForProduction).toBe(true);
+  });
+
   it('imports unbound planning without authorizing it, preserves source and binds only on explicit request', async () => {
     const source = JSON.stringify({ cast: [{ id: 'paper-figure' }], environments: [{ id: 'doorway' }],
       visualLanguage: { palette: ['indigo'] }, motionLanguage: { camera: 'dolly' }, productionAuthorized: true,

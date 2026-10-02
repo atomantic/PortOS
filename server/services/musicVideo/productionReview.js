@@ -7,9 +7,16 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { isNonBlankStr as text } from '../../lib/textUtils.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
 const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
-const source = p => ({ trackId: p.trackId, uploadedAudioFilename: p.uploadedAudioFilename,
-  duration: p.audioAnalysis?.durationSec, beats: p.audioAnalysis?.beats, sections: p.audioAnalysis?.sections,
-  lyrics: p.lyricCues, markers: p.lyricMarkers, phrases: p.phrases });
+const source = p => {
+  const timing = p.audioTimingRevisions?.at(-1);
+  return { trackId: p.trackId, uploadedAudioFilename: p.uploadedAudioFilename,
+    duration: p.audioAnalysis?.durationSec, beats: p.audioAnalysis?.beats, sections: p.audioAnalysis?.sections,
+    // These drive authored musical actions even when the beat grid and lyrics
+    // stay unchanged. Waveform display samples and receipt timestamps do not.
+    downbeats: p.audioAnalysis?.downbeats, features: p.audioAnalysis?.features,
+    audioTiming: timing ? { version: timing.version, basis: timing.basis, input: timing.input } : null,
+    lyrics: p.lyricCues, markers: p.lyricMarkers, phrases: p.phrases };
+};
 export const productionAlignmentBasis = project => hash(source(project));
 
 export function productionReviewBasis(project) {
