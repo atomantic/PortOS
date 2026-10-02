@@ -27,8 +27,13 @@ function CountCard({ label, value, tone = 'text-white' }) {
 
 export default function QueuesPanel() {
   const [spawningId, setSpawningId] = useState(null);
+  // `view: 'queue'` keeps every non-completed task whole and drops the completed
+  // history. The bare endpoint returns that history twice (`tasks` and
+  // `grouped`) with each task's full prompt — ~144 MB on an install with a few
+  // thousand finished tasks — and this resource refetches on every task/agent
+  // event. The panel only reads pending, running and spawning tasks.
   const { data, loading, error: queueError, refetch, updateData } = useSocketResource(
-    () => api.getCosTasks({ silent: true }),
+    () => api.getCosTasks({ view: 'queue', silent: true }),
     { namespace: 'cos', events: QUEUE_EVENTS },
   );
   const tasks = useMemo(() => {
