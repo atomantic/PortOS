@@ -12,11 +12,6 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/m
 import { errorMiddleware } from '../lib/errorHandler.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-song-browser-') }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
-const { PATHS } = await import('../lib/paths.js');
-const { default: router } = await import('./musicVideo.js');
-const store = await import('../services/musicVideo/projects.js');
-const songs = await import('../services/musicVideo/songRevision.js');
-const { musicVideoEvents } = await import('../services/musicVideo/events.js');
 const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser } = await import('../services/htmlComposition/testBrowserCleanup.js');
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
 const client = resolve(import.meta.dirname, '../../client');
@@ -24,19 +19,28 @@ const requireClient = createRequire(join(client, 'package.json'));
 let bundler;
 try { bundler = ['vite', '@vitejs/plugin-react', '@tailwindcss/postcss'].map(name => requireClient.resolve(name)); }
 catch (err) { if (err.code !== 'MODULE_NOT_FOUND') throw err; }
-let browser, proc, server, io;
+const canRun = Boolean(chrome && bundler);
+// Prerequisite discovery may initialize mocked paths; skipped suites have no cleanup hooks.
+if (!canRun) cleanupTempDataRoots();
+let browser, proc, server, io, songs, musicVideoEvents;
 const broadcast = event => io.emit('music-video:song-revision', event);
 afterAll(async () => {
-  musicVideoEvents.off('song-revision', broadcast);
-  await songs.__testing.settle(); songs.__setSongRevisionDepsForTests();
+  musicVideoEvents?.off('song-revision', broadcast);
+  await songs?.__testing.settle(); songs?.__setSongRevisionDepsForTests();
   await _cleanupTestBrowser({ browser, proc, cleanup: () => {} });
   if (io) await new Promise(resolve => io.close(resolve));
   else if (server) await new Promise(resolve => server.close(resolve));
   cleanupTempDataRoots();
 });
 
-describe.skipIf(!chrome || !bundler)('song revision in Chrome (client dependencies required)', () => {
+describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)', () => {
   it('forks, edits, generates, listens and selects without altering the previous version', async () => {
+    // Load data-owning modules only when this browser workflow will actually run.
+    const { PATHS } = await import('../lib/paths.js');
+    const { default: router } = await import('./musicVideo.js');
+    const store = await import('../services/musicVideo/projects.js');
+    songs = await import('../services/musicVideo/songRevision.js');
+    ({ musicVideoEvents } = await import('../services/musicVideo/events.js'));
     await mkdir(PATHS.music, { recursive: true });
     const wav = Buffer.alloc(44 + 32000);
     wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
