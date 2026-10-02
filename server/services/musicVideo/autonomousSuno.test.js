@@ -204,6 +204,19 @@ describe('generateSunoSong M4A export', () => {
     await expect(stat(w.savedPath())).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('reports each sub-step in order, skips generating on a resume, and survives a throwing reporter', async () => {
+    const steps = [];
+    await generateSunoSong(fields, { ...workflow(), sleep: noSleep, onProgress: (step) => steps.push(step) });
+    expect(steps).toEqual(['opening', 'generating', 'exporting', 'validating', 'importing']);
+
+    const resumed = [];
+    await generateSunoSong(fields, { ...workflow(), songIds: [NEW_A], onProgress: (step) => resumed.push(step) });
+    expect(resumed).toEqual(['opening', 'exporting', 'validating', 'importing']);
+
+    const out = await generateSunoSong(fields, { ...workflow(), songIds: [NEW_A], onProgress: () => { throw new Error('reporter broke'); } });
+    expect(out.filename).toBe('music-example.m4a');
+  });
+
   it('imports an M4A the PortOS Browser saved to its download directory when Playwright emits no download event', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'portos-suno-test-'));
     try {

@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { MemoryRouter, useSearchParams } from 'react-router';
 
 const listeners = vi.hoisted(() => new Map());
 vi.mock('../../services/socket', () => ({
@@ -43,10 +44,22 @@ const baseRun = (over = {}) => ({
   brief: { origin: { kind: 'manual' } }, stages: stages(), output: { lyrics: '[verse]\nrain', sunoStyle: 'synthwave' }, ...over,
 });
 
-function Harness({ initial }) {
+// The page owns `?run-stage=`; the harness does the same so the panel's rows drive a real URL.
+function PanelWithUrl({ project, auto }) {
+  const [params, setParams] = useSearchParams();
+  const onSelectStage = (id) => setParams((prev) => { const next = new URLSearchParams(prev); if (id) next.set('run-stage', id); else next.delete('run-stage'); return next; });
+  return (
+    <>
+      <AutonomousRunPanel project={project} auto={auto} selectedStage={params.get('run-stage')} onSelectStage={onSelectStage} />
+      <div data-testid="search">{params.toString()}</div>
+    </>
+  );
+}
+
+function Harness({ initial, url = '/music-video/mv-1' }) {
   const [project, setProject] = useState({ id: 'mv-1', autonomousRun: initial });
   const auto = useAutonomousMusicVideo({ project, replaceProject: setProject });
-  return <AutonomousRunPanel project={project} auto={auto} />;
+  return <MemoryRouter initialEntries={[url]}><PanelWithUrl project={project} auto={auto} /></MemoryRouter>;
 }
 
 beforeEach(() => {
@@ -102,6 +115,76 @@ describe('AutonomousRunPanel', () => {
     expect(screen.getByText(/interrupted — resume to continue/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: /resume/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /pause/i })).toBeNull();
+  });
+});
+
+describe('AutonomousRunPanel stage output', () => {
+  const finished = (over = {}) => baseRun({
+    status: 'running', stage: 'song',
+    stages: stages({ style: { status: 'done' }, song: { status: 'done' } }),
+    output: {
+      title: 'Neon Rain', musicalDescription: 'Slow synthwave.', concept: { prompt: 'A courier in rain', style: 'Teal and magenta' },
+      lyrics: '[verse]\nrain on glass', sunoStyle: 'synthwave, 90 bpm', moodBoardId: 'board-1', moodBoard: { name: 'Neon Rain board' },
+      sunoSongIds: ['song-a', 'song-b'], songSource: 'suno',
+    },
+    ...over,
+  });
+
+  it('opens a finished stage’s output read-only from its row and writes the choice to the URL', () => {
+    render(<Harness initial={finished()} />);
+    expect(screen.queryByRole('region', { name: /lyrics output/i })).toBeNull();
+    const row = screen.getByRole('button', { name: /lyrics/i });
+    expect(row.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(row);
+    const region = screen.getByRole('region', { name: /lyrics output/i });
+    expect(region.textContent).toContain('rain on glass');
+    expect(row.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('search').textContent).toBe('run-stage=lyrics');
+    // Read-only: the stage output is text, not a form field.
+    expect(region.querySelector('textarea, input')).toBeNull();
+
+    fireEvent.click(row);
+    expect(screen.queryByRole('region', { name: /lyrics output/i })).toBeNull();
+    expect(screen.getByTestId('search').textContent).toBe('');
+  });
+
+  it('deep-links: a ?run-stage= URL opens that stage, and the style and song outputs stay viewable after the run moved on', () => {
+    const { unmount } = render(<Harness initial={finished()} url="/music-video/mv-1?run-stage=style" />);
+    const style = screen.getByRole('region', { name: /mood board & style output/i });
+    expect(style.textContent).toContain('synthwave, 90 bpm');
+    expect(style.textContent).toContain('Teal and magenta');
+    // The run's mood board is a link to the board page.
+    expect(screen.getByRole('link', { name: /neon rain board/i }).getAttribute('href')).toBe('/mood-boards/board-1');
+    unmount();
+
+    render(<Harness initial={finished({ status: 'completed', stage: 'produce' })} url="/music-video/mv-1?run-stage=song" />);
+    expect(screen.getByRole('region', { name: /song output/i }).textContent).toContain('song-a, song-b');
+  });
+
+  it('opens nothing for a stage that has not finished, is not viewable, or is not a stage at all', () => {
+    render(<Harness initial={finished({ stages: stages({ lyrics: { status: 'running' } }) })} url="/music-video/mv-1?run-stage=lyrics" />);
+    expect(screen.queryByRole('region', { name: / output$/i })).toBeNull();
+    // Unfinished and non-viewable rows are plain text, not buttons.
+    expect(screen.queryByRole('button', { name: /produce video/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /analyze song/i })).toBeNull();
+  });
+
+  it('points a checkpoint stage at the approval box instead of offering a second editor', () => {
+    render(<Harness initial={finished({ status: 'awaiting-approval', awaiting: 'lyrics', stage: 'style', stages: stages({ style: { status: 'pending' } }) })} url="/music-video/mv-1?run-stage=lyrics" />);
+    expect(screen.getByRole('region', { name: /lyrics output/i }).textContent).toMatch(/edit this in the approval box/i);
+    expect(screen.getAllByLabelText(/lyrics \(edit before continuing\)/i)).toHaveLength(1);
+  });
+
+  it('shows the Song stage’s current sub-step while it runs and updates it from a pushed event', async () => {
+    const running = (step) => baseRun({ stage: 'song', stages: stages({ style: { status: 'done' }, song: { status: 'running', step } }) });
+    render(<Harness initial={running('generating')} />);
+    expect(screen.getByRole('status').textContent).toContain('Generating the song on Suno');
+
+    await act(async () => {
+      listeners.get('music-video:autonomous')({ projectId: 'mv-1', run: running('exporting'), project: { id: 'mv-1', autonomousRun: running('exporting') } });
+    });
+    expect(screen.getByRole('status').textContent).toContain('Exporting the M4A');
   });
 });
 

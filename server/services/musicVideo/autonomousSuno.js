@@ -228,7 +228,7 @@ async function watchDownloadsDir(listDownloads, baseline, signal, pollMs) {
 /** One bounded export, including waiting for the browser to finish saving. */
 async function downloadSunoAudio(page, songId, path, {
   timeoutMs = SUNO_AUDIO_TIMEOUT_MS, signal, validateAudio = validateSunoAudio,
-  listDownloads = defaultListDownloads, downloadPollMs = DOWNLOAD_POLL_MS,
+  listDownloads = defaultListDownloads, downloadPollMs = DOWNLOAD_POLL_MS, onProgress,
 } = {}) {
   const controller = new AbortController();
   const deadline = Date.now() + timeoutMs;
@@ -297,6 +297,7 @@ async function downloadSunoAudio(page, songId, path, {
       await bounded('save-download', () => download.saveAs(path));
       if (await bounded('check-download', () => download.failure())) throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'browser-download-failed');
     }
+    onProgress?.('validating');
     if (!await bounded('validate-audio', () => validateAudio(path, { signal: controller.signal, timeoutMs: remaining() }))) throw error('SUNO_AUDIO_INVALID', 'invalid-audio');
   } catch (err) {
     if (err instanceof ServerError) throw err;
@@ -334,8 +335,15 @@ async function closeSunoBrowser(page, browser) {
 // A single-id resume (or a one-render result) falls back to the only id.
 const pickRender = (ids) => ids[1] ?? ids[0];
 
-/** Generate (or resume) a song and import its completed, validated M4A. */
+/**
+ * Generate (or resume) a song and import its completed, validated M4A.
+ * `deps.onProgress(step)` reports the long stage's sub-steps — `opening`,
+ * `generating`, `exporting`, `validating`, `importing` — so the run can show
+ * where a ten-minute stage is; a throwing reporter never fails the song.
+ */
 export async function generateSunoSong(fields, deps = {}) {
+  const report = (name) => { try { deps.onProgress?.(name); } catch { /* progress is advisory */ } };
+  const exportDeps = { ...deps, onProgress: report };
   const connect = deps.connect || connectPortosBrowser;
   const importAudio = deps.importAudio || (async (path, name) => {
     const { importUploadedTrack } = await import('../pipeline/musicLibrary.js');
@@ -346,19 +354,23 @@ export async function generateSunoSong(fields, deps = {}) {
   try {
     const songIds = await serialize(async () => {
       deps.signal?.throwIfAborted();
+      report('opening');
       const { browser, context } = await connect();
       let page;
       try {
         page = await context.newPage();
+        if (!deps.songIds?.length) report('generating');
         const ids = deps.songIds?.length ? deps.songIds : await submitSunoSong(page, fields, deps);
         if (!deps.songIds?.length) await deps.onSubmitted?.(ids);
-        await downloadSunoAudio(page, pickRender(ids), path, deps);
+        report('exporting');
+        await downloadSunoAudio(page, pickRender(ids), path, exportDeps);
         return ids;
       } finally {
         await closeSunoBrowser(page, browser); // disconnect; keep the shared browser running
       }
     });
     deps.signal?.throwIfAborted();
+    report('importing');
     const { filename, sizeBytes } = await importAudio(path, 'song.m4a');
     return { songId: pickRender(songIds), songIds, filename, sizeBytes };
   } finally {

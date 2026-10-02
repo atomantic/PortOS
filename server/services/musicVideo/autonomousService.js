@@ -223,6 +223,8 @@ const STAGES = {
       song = await deps.generateSunoSong(fields, {
         songIds: run.output.sunoSongIds,
         signal: controller.signal,
+        // The long stage's sub-step rides the run record (and its socket event) so the page can show it.
+        onProgress: (step) => { patchRun(project.id, (r) => stagePatch(r, 'song', { step })).catch(() => {}); },
         // Stored the moment Suno accepts the request, so a failed download retries
         // the same songs instead of spending credits on another generation.
         onSubmitted: (ids) => { submitted = true; return save({ output: { sunoSongIds: ids } }); },
@@ -300,7 +302,7 @@ async function advance(projectId) {
         await park(projectId, 'failed', { error: `Unknown stage "${stage}"`, errorCode: 'UNKNOWN_STAGE' });
         return;
       }
-      await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'running', startedAt: new Date().toISOString(), error: null }));
+      await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'running', startedAt: new Date().toISOString(), error: null, step: null }));
       let result;
       try {
         result = await executor({ project, run, save: (patch) => patchRun(projectId, () => patch) });
@@ -308,7 +310,7 @@ async function advance(projectId) {
         // A stop/cancel mid-stage (it cancels the song operation) must not become a failure.
         const latest = projectAutonomousRun(await getProject(projectId));
         if (latest?.status !== 'running' || latest.processId !== PROCESS_ID) return;
-        await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500) }));
+        await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500), step: null }));
         await park(projectId, isLoginRequired(err) ? 'needs-human' : 'failed', { error: trimTo(err.message, 500), errorCode: err.code || null });
         return;
       }
@@ -322,7 +324,7 @@ async function advance(projectId) {
       const checkpoint = run.brief.checkpoints.includes(stage);
       await patchRun(projectId, (r) => ({
         output: result.output,
-        ...stagePatch(r, stage, { status: 'done', finishedAt }),
+        ...stagePatch(r, stage, { status: 'done', finishedAt, step: null }),
         ...(checkpoint ? { status: 'awaiting-approval', awaiting: stage, stage: next } : next ? { stage: next } : { status: 'completed', stage }),
       }));
       console.log(`🎬 Autonomous music video ${short(run.id)} finished ${stage}${checkpoint ? ' — waiting for approval' : ''}`);

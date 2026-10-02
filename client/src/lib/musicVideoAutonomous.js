@@ -71,8 +71,49 @@ export function autonomousStageRows(run) {
   return AUTONOMOUS_STAGES.map((stage) => {
     const state = run.stages?.[stage.id] || {};
     const current = run.stage === stage.id;
-    return { id: stage.id, label: stage.label, status: state.status || 'pending', current, error: state.error || null };
+    return { id: stage.id, label: stage.label, status: state.status || 'pending', current, error: state.error || null, step: state.step || null };
   });
+}
+
+/** The stages whose output stays viewable on the run panel, in pipeline order. */
+export const AUTONOMOUS_VIEWABLE_STAGES = Object.freeze(['brief', 'lyrics', 'style', 'song']);
+
+/** What the Song stage is doing right now (the server's `stages.song.step`). */
+export const AUTONOMOUS_SONG_STEP_LABELS = Object.freeze({
+  opening: 'Opening Suno in the PortOS Browser',
+  generating: 'Generating the song on Suno',
+  exporting: 'Exporting the M4A',
+  validating: 'Validating the audio',
+  importing: 'Importing into the music library',
+});
+
+/**
+ * What a completed stage produced, read-only: `[{ key, label, text?, href? }]`
+ * (empty when the stage stored nothing). A text field carries `multiline` when
+ * it should keep its line breaks (lyrics).
+ */
+export function autonomousStageOutput(run, stageId) {
+  const out = run?.output || {};
+  const fields = [];
+  const add = (key, label, text, extra = {}) => {
+    if (typeof text === 'string' && text.trim()) fields.push({ key, label, text, ...extra });
+  };
+  if (stageId === 'brief') {
+    add('title', 'Title', out.title);
+    add('musicalDescription', 'Musical description', out.musicalDescription);
+    add('concept', 'Visual concept', out.concept?.prompt);
+  } else if (stageId === 'lyrics') {
+    add('lyrics', 'Lyrics', out.lyrics, { multiline: true });
+  } else if (stageId === 'style') {
+    add('sunoStyle', 'Suno style prompt', out.sunoStyle);
+    add('conceptStyle', 'Visual style', out.concept?.style);
+    if (out.moodBoardId) fields.push({ key: 'moodBoard', label: 'Mood board', href: `/mood-boards/${encodeURIComponent(out.moodBoardId)}`, text: out.moodBoard?.name || 'Open mood board' });
+  } else if (stageId === 'song') {
+    add('songSource', 'Source', out.songSource ? AUTONOMOUS_SONG_SOURCE_LABELS[out.songSource] || out.songSource : null);
+    add('songFallbackReason', 'Why Suno was skipped', out.songFallbackReason);
+    add('sunoSongIds', 'Suno song ids', Array.isArray(out.sunoSongIds) ? out.sunoSongIds.join(', ') : null, { mono: true });
+  }
+  return fields;
 }
 
 /** True while the run can still move (or be nudged): the project page keeps its panel prominent. */
