@@ -1,5 +1,6 @@
 import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Users } from 'lucide-react';
 import Pill from '../ui/Pill.jsx';
+import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
 
 const WORKING = new Set(['directing', 'imaging', 'assembling']);
 const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -47,6 +48,7 @@ export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onAppro
         {stage.revision > 1 && <span className="text-[11px] text-port-text-muted">revision {stage.revision}</span>}
       </div>
       <p className={`text-xs ${stage.status === 'review' ? 'text-port-warning' : 'text-port-text-muted'}`} role="status">{statusLine(stage)}</p>
+      <CastAndSetsReferenceProgress stage={stage} />
       <div className="flex flex-wrap gap-2">
         {sheet && (
           <button type="button" onClick={() => onOpenSheet(sheet.id)} className={`${buttonClass} border border-port-border`}>

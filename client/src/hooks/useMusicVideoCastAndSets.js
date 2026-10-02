@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
+import { subscribeVisibility } from './useVisibilityEvent';
 import {
+  getMusicVideoProject,
   startMusicVideoCastAndSets,
   regenerateMusicVideoCastAndSets,
   resumeMusicVideoCastAndSets,
@@ -31,30 +33,60 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const projectId = project?.id || null;
   const [busy, setBusy] = useState(false);
   const replaceRef = useRef(replaceProject);
+  const snapshotRevision = useRef(0);
   const waiter = useRef(null);
   useEffect(() => {
     replaceRef.current = replaceProject;
-  });
+  }, [replaceProject]);
+  useEffect(() => {
+    snapshotRevision.current += 1;
+  }, [project]);
 
   useEffect(() => {
     if (!projectId) return undefined;
-    const onStage = (data) => {
-      if (data?.projectId !== projectId || !data.project) return;
-      replaceRef.current?.(data.project);
+    let active = true;
+    let pending = null;
+    const applyProject = (next) => {
+      snapshotRevision.current += 1;
+      replaceRef.current?.(next);
       const w = waiter.current;
-      if (w && w.projectId === projectId && CHECKPOINTS.has(data.project.castAndSets?.status)) {
+      if (w && w.projectId === projectId && CHECKPOINTS.has(next.castAndSets?.status)) {
         waiter.current = null;
-        w.resolve(data.project);
+        w.resolve(next);
       }
     };
+    const onStage = (data) => {
+      if (data?.projectId !== projectId || !data.project) return;
+      applyProject(data.project);
+    };
     const onArtifact = (data) => {
-      if (data?.projectId === projectId && data.project) replaceRef.current?.(data.project);
+      if (data?.projectId === projectId && data.project) applyProject(data.project);
+    };
+    // Recover events missed while disconnected or hidden, once per transition.
+    // A newer socket snapshot or a project switch wins over an in-flight read.
+    const refresh = () => {
+      if (pending) return pending;
+      const revision = snapshotRevision.current;
+      pending = getMusicVideoProject(projectId, { silent: true }).then((next) => {
+        if (active && next?.id === projectId && revision === snapshotRevision.current) applyProject(next);
+      }).catch(() => {}).finally(() => { pending = null; });
+      return pending;
     };
     socket.on('music-video:cast-and-sets', onStage);
     socket.on('music-video:dev-artifact', onArtifact);
+    socket.on('connect', refresh);
+    let visibility = document.visibilityState;
+    const unsubscribeVisibility = subscribeVisibility((next) => {
+      const changed = visibility !== next;
+      visibility = next;
+      if (changed && next === 'visible') refresh();
+    });
     return () => {
+      active = false;
+      unsubscribeVisibility();
       socket.off('music-video:cast-and-sets', onStage);
       socket.off('music-video:dev-artifact', onArtifact);
+      socket.off('connect', refresh);
       // A kickoff waiting on this project ends rather than hanging.
       if (waiter.current?.projectId === projectId) {
         waiter.current.resolve(null);

@@ -56,11 +56,13 @@ const DIRECTION = {
 };
 
 let jobs;
-const enqueue = vi.fn(async ({ params }) => {
+const queueJob = async ({ params }) => {
   const id = `job-${jobs.length + 1}`;
   jobs.push({ id, params });
   return { jobId: id };
-});
+};
+const enqueue = vi.fn(queueJob);
+let imageParamsOverrides;
 const runPrompt = vi.fn();
 const board = {
   id: 'mb-1',
@@ -90,7 +92,7 @@ async function land(projectId, keys = null) {
     job.landed = true;
     const filename = `${job.id}.png`;
     writeFileSync(join(IMAGES(), filename), PNG);
-    await service.onCastAndSetsImageSettled({ projectId, key: keyOf(job), jobId: job.id, filename, productionRunId: job.params.musicVideo.productionRunId, productionStepKey: job.params.musicVideo.productionStepKey });
+    await service.onCastAndSetsImageSettled({ projectId, key: keyOf(job), revision: job.params.musicVideo.castAndSets.revision, jobId: job.id, filename, productionRunId: job.params.musicVideo.productionRunId, productionStepKey: job.params.musicVideo.productionStepKey });
   }
 }
 
@@ -142,6 +144,7 @@ beforeEach(() => {
   rmSync(join(ROOT(), 'music-video'), { recursive: true, force: true });
   mkdirSync(IMAGES(), { recursive: true });
   jobs = [];
+  imageParamsOverrides = {};
   vi.clearAllMocks();
   runPrompt.mockResolvedValue({ text: `Here you go:\n\`\`\`json\n${JSON.stringify(DIRECTION)}\n\`\`\`` });
   service.__setCastAndSetsDepsForTests({
@@ -149,7 +152,7 @@ beforeEach(() => {
     runPrompt,
     getSettings: async () => ({}),
     enqueue,
-    imageParams: async (_settings, route, common) => ({ mode: route.mode, ...common }),
+    imageParams: async (_settings, route, common) => ({ mode: route.mode, ...common, ...imageParamsOverrides }),
     resolveRoute: async () => ({ mode: 'codex', model: null }),
     loadBoard: async () => board,
     boardItemImage: async () => (item) => (item.type === 'image' ? { kind: 'image', filename: item.file } : null),
@@ -349,10 +352,65 @@ describe('Cast & Sets check-in', () => {
 
 it('uses project moodboard style images for Cast & Sets without a linked board', async () => {
   const project = await seed({ visualSpec: null, styleReferences: [{ imageId: 'style.png', caption: 'silver grain' }] });
+  const snapshots = [];
+  const onStage = (event) => { if (event.projectId === project.id) snapshots.push(event.project.castAndSets); };
+  musicVideoEvents.on('cast-and-sets', onStage);
+  onTestFinished(() => musicVideoEvents.off('cast-and-sets', onStage));
   await service.startCastAndSets(project.id);
   await runTo(project.id, 'review');
   expect(jobs[0].params.referenceImagePaths.some((p) => p.endsWith('style.png'))).toBe(true);
   expect(jobs[0].params.prompt).toContain('silver grain');
   const dependent = jobs.find((j) => j.params.referenceImagePaths?.length > 1);
   expect(dependent.params.referenceImagePaths.at(-1)).toMatch(/style.png$/);
+  const firstDispatch = snapshots.find((stage) => Object.values(stage.images).filter((image) => image.jobId).length === 1);
+  expect(firstDispatch.images.character).toMatchObject({
+    status: 'queued', submittedPrompt: jobs[0].params.prompt, submittedPromptTruncated: false,
+    submittedReferences: [{ kind: 'image', filename: 'style.png' }], submittedRevision: 1,
+  });
+  const saved = (await current(project.id)).castAndSets.images.character;
+  expect(saved.submittedPrompt).toBe(jobs[0].params.prompt);
+  expect(saved.submittedPrompt).toContain('silver grain');
+});
+
+it('bounds submitted diagnostics and records only references served from approved image roots', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  imageParamsOverrides = {
+    prompt: 'x'.repeat(20_010),
+    referenceImagePaths: [join(ROOT(), 'private', 'unserved.png'), join(PATHS.imageRefs, 'uploaded.png'),
+      ...Array.from({ length: 17 }, (_, i) => join(IMAGES(), `example-${i}.png`))],
+  };
+  const project = await seed({ visualSpec: null });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const saved = (await current(project.id)).castAndSets.images.character;
+  expect(saved.submittedPrompt).toHaveLength(20_000);
+  expect(saved.submittedPromptTruncated).toBe(true);
+  expect(saved.submittedReferences).toHaveLength(16);
+  expect(saved.submittedReferences[0]).toEqual({ kind: 'image-ref', filename: 'uploaded.png' });
+  expect(saved.submittedReferencesTruncated).toBe(true);
+  expect(JSON.stringify(saved)).not.toContain(ROOT());
+  expect(JSON.stringify(saved)).not.toContain('unserved.png');
+});
+
+it('ignores a previous revision completion while regeneration has reserved a key but has no job id yet', async () => {
+  const project = await seed();
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const previous = jobs.find((job) => keyOf(job) === 'character');
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  enqueue.mockImplementationOnce(async (job) => { await held; return queueJob(job); });
+  onTestFinished(release);
+  await service.regenerateCastAndSets(project.id, { notes: [{ target: 'character', text: 'Shorter braid' }] });
+  await until(async () => (await current(project.id)).castAndSets.images.character.status === 'queued', 'the reserved regeneration');
+  const before = (await current(project.id)).castAndSets;
+  expect(before.images.character).toMatchObject({ status: 'queued', jobId: null, imageId: `${previous.id}.png` });
+  expect(await service.onCastAndSetsImageSettled({
+    projectId: project.id, key: 'character', revision: previous.params.musicVideo.castAndSets.revision,
+    jobId: previous.id, filename: 'obsolete.png',
+  })).toBe(false);
+  expect((await current(project.id)).castAndSets).toEqual(before);
+  release();
+  await runTo(project.id, 'review');
+  expect((await current(project.id)).castAndSets.images.character.imageId).not.toBe(`${previous.id}.png`);
 });
