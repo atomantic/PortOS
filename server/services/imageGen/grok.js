@@ -21,15 +21,12 @@
  * the dispatcher rejects up front; this module assumes it's enabled by the
  * time generateImage() is called.
  *
- * Containment: grok is a general coding agent and headless runs bypass its
- * approval prompts, so a prompt-injected render could try to reach beyond
- * image generation. Grok exposes no image-tool-only permission mode, so the
- * child is confined the ways we can: it runs with cwd set to a throwaway
- * per-job scratch directory (relative-path tool ops and default file writes
- * land there, and the whole dir is removed on every terminal path), the staged
- * output is signature-sniffed before it is accepted into the gallery, and that
- * scratch dir is scanned for the script residue that betrays an image the agent
- * drew itself rather than generated (see fabricationGuard.js).
+ * Authority: grok is a general coding agent and headless runs bypass its
+ * approval prompts. Grok exposes no image-tool-only permission mode, so HTTP
+ * generation requires operator authority before dispatch. The throwaway cwd
+ * organizes output; it does not restrict host tools or absolute-path access.
+ * Scratch cleanup, signature checks and fabrication checks constrain accepted
+ * gallery output, not what the agent can do before returning it.
  */
 
 import { spawn } from '../../lib/childProcess.js';

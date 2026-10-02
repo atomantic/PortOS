@@ -309,6 +309,23 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/autonomous',
   'POST /api/music-video/:id/autonomous/resume',
 
+  // Media agents retain host tools; scratch cwd and output validation are not
+  // execution containment (#9667). Gate before uploads, stores or queue writes,
+  // including inference-first requests that can fall back to CLI/TUI.
+  'POST /api/image-gen/generate',
+  'POST /api/image-gen/avatar',
+  'POST /api/video-gen',
+  'POST /api/sprites/:id/reference/generate',
+  // Fork creates a record and immediately queues reference generation too.
+  'POST /api/sprites/:id/fork',
+  'POST /api/sprites/:id/walk/generate',
+  'POST /api/sprites/:id/tracks/:trackId/generate',
+  'POST /api/threejs-models',
+  'POST /api/threejs-models/:id/generate',
+  // Publication chooses and rewrites managed-app source.
+  'PUT /api/sprites/:id/publish-binding',
+  'POST /api/sprites/:id/atlas/publish',
+
   // Code Animation contained execution (#9388): choosing the installed tool a
   // worker runs, and the containment check that spawns sandboxed processes.
   'PUT /api/code-animation/execution/tools',

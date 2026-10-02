@@ -10,9 +10,9 @@
  * source image (i2v from the gallery or an upload), step 1 is skipped and
  * `image_to_video` runs on it directly.
  *
- * Mirrors the imageGen/grok.js provider's lifecycle (scratch-cwd
- * confinement, signature sniff, tree-kill on cancel — see that module's
- * containment note) and hands the harvested file to the shared
+ * Mirrors the imageGen/grok.js provider's lifecycle (scratch cleanup,
+ * signature sniff, tree-kill on cancel — see that module's authority note)
+ * and hands the harvested file to the shared
  * `finalizeGeneratedVideo` helper so streaming optimization, thumbnailing,
  * the history entry, and the completed events all match local renders.
  *
@@ -105,8 +105,8 @@ const isMp4Header = (buf) =>
   && buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70;
 
 // Build the single-turn agent prompt for the image-first flow. Explicit about
-// the tools, the save path, and staying out of everything else (the child is
-// additionally cwd-confined to the scratch dir).
+// the tools, the save path, and staying out of everything else. Scratch cwd
+// organizes output, not host authority; HTTP generation is operator-gated.
 export function buildGrokVideoPrompt({ prompt, negativePrompt, aspectRatio, duration, stagingPath, sourceImagePath, scratchDir }) {
   const avoid = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
   const ratio = aspectRatio ? `\nUse aspect_ratio "${aspectRatio}" for the base image.` : '';
