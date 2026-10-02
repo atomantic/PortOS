@@ -389,6 +389,14 @@ async function dispatchKey(projectId, key) {
 }
 
 const advancing = new Map();
+const backgroundWork = new Set();
+
+/** Drain owned work before a test replaces its queue/provider/store fixtures. */
+export async function __settleCastAndSetsForTests() {
+  while (backgroundWork.size || advancing.size) {
+    await Promise.allSettled([...backgroundWork, ...[...advancing.values()].map(entry => entry.promise)]);
+  }
+}
 
 /**
  * Dispatch every image whose inputs are ready; assemble the sheet once every
@@ -443,10 +451,11 @@ async function advanceOnce(projectId) {
 }
 
 function inBackground(label, projectId, fn) {
-  Promise.resolve().then(fn).catch(async (err) => {
+  const work = Promise.resolve().then(fn).catch(async (err) => {
     console.error(`❌ Music Video Cast & Sets ${short(projectId)} ${label} failed: ${err.message}`);
     await fail(projectId, `${label} failed: ${err.message}`).catch(() => {});
-  });
+  }).finally(() => backgroundWork.delete(work));
+  backgroundWork.add(work);
 }
 
 // ---- sheet ----------------------------------------------------------------------------

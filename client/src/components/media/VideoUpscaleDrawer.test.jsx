@@ -123,7 +123,7 @@ describe('VideoUpscaleDrawer', () => {
 
     const radio = await screen.findByLabelText(/LTX-2\.5 generative/i);
     await waitFor(() => expect(radio).toBeDisabled());
-    expect(screen.getByText(/adapter is not downloaded yet/i)).toBeTruthy();
+    expect(await screen.findByText(/adapter is not downloaded yet/i)).toBeTruthy();
   });
 
   it('disables the generative option with a reason when the runtime is unready', async () => {
@@ -132,7 +132,7 @@ describe('VideoUpscaleDrawer', () => {
 
     const radio = await screen.findByLabelText(/LTX-2\.5 generative/i);
     await waitFor(() => expect(radio).toBeDisabled());
-    expect(screen.getByText(/no generative upscale backend exists/i)).toBeTruthy();
+    expect(await screen.findByText(/no generative upscale backend exists/i)).toBeTruthy();
   });
 
   it('renders nothing when no item is open', () => {
@@ -150,7 +150,7 @@ describe('VideoUpscaleDrawer', () => {
     await waitFor(() => expect(getUpscalePlan).toHaveBeenCalled());
 
     expect(screen.getByLabelText(/LTX-2\.5 generative/i).disabled).toBe(true);
-    expect(screen.getByText(/is not downloaded/i)).toBeTruthy();
+    expect(await screen.findByText(/is not downloaded/i)).toBeTruthy();
   });
 
   // #6537: the host is a fourth axis. Every download can be present on a machine
@@ -175,8 +175,10 @@ describe('VideoUpscaleDrawer', () => {
     render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
     await waitFor(() => expect(getUpscalePlan).toHaveBeenCalled());
 
+    // The radio starts disabled while loading; wait for the actual plan
+    // disclosure before checking the host refusal. A mock call is not a render.
+    expect(await screen.findByText(/unavailable on this machine/i)).toBeTruthy();
     expect(screen.getByLabelText(/LTX-2\.5 generative/i).disabled).toBe(true);
-    expect(screen.getByText(/unavailable on this machine/i)).toBeTruthy();
     // The adapter IS cached here, so the inline download button would be a
     // pointless offer — a 327 MB pull that changes nothing about the refusal.
     expect(screen.queryByText(/Download adapter/i)).toBeNull();
