@@ -851,6 +851,9 @@ jobs:
     # AppArmor policy. Restricted hosts must remain fail-closed in the product.
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -871,6 +874,12 @@ jobs:
           PORTOS_REQUIRE_LINUX_CONTAINMENT: '1'
         run: npm test --prefix server -- --run lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js
 
+      - name: Report the failure, then cancel sibling CI jobs
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          CI_FAILED_SHARD: ${{ matrix.shard }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
 
   gate:
     name: CI Gate
