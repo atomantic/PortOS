@@ -175,7 +175,7 @@ const syncStatusQuerySchema = z.object({
   )
 });
 router.get('/sync-status', asyncHandler(async (req, res) => {
-  const { forPeer } = syncStatusQuerySchema.parse(req.query);
+  const { forPeer } = validateRequest(syncStatusQuerySchema, req.query);
   const status = await getSyncStatus({ includeChecksums: true, forPeer });
   res.json({
     brainSeq: status.local.brainSeq,
@@ -228,7 +228,7 @@ const updateSelfSchema = z.object({
   message: 'Provide name and/or defaultPeerFullSync'
 });
 router.put('/self', asyncHandler(async (req, res) => {
-  const data = updateSelfSchema.parse(req.body);
+  const data = validateRequest(updateSelfSchema, req.body);
   const updated = await updateSelf(data.name, { defaultPeerFullSync: data.defaultPeerFullSync });
   if (!updated) throw new ServerError('Self identity not initialized', { status: 500 });
   res.json(updated);
@@ -236,7 +236,7 @@ router.put('/self', asyncHandler(async (req, res) => {
 
 // POST /api/instances/peers/announce — receive announcement from remote peer
 router.post('/peers/announce', asyncHandler(async (req, res) => {
-  const data = announceSchema.parse(req.body);
+  const data = validateRequest(announceSchema, req.body);
   // Derive caller IP from req.ip, stripping ::ffff: prefix for IPv4-mapped addresses
   const rawIp = req.ip || req.socket.remoteAddress || '';
   const address = rawIp.replace(/^::ffff:/, '');
@@ -487,7 +487,7 @@ router.get('/peers/:id/full-sync-coverage', asyncHandler(async (req, res) => {
 
 // GET /api/instances/peers/:id/query — proxy GET to peer
 router.get('/peers/:id/query', asyncHandler(async (req, res) => {
-  const { path } = querySchema.parse(req.query);
+  const { path } = validateRequest(querySchema, req.query);
   const result = await instances.queryPeer(req.params.id, path);
   if (result.error) throw new ServerError(result.error, { status: 502 });
   res.json(result.data);

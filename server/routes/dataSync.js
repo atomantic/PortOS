@@ -42,6 +42,7 @@ import { sweepTombstones, getSweepStatus, TOMBSTONE_GRACE_MS } from '../services
 import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
 import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -130,7 +131,7 @@ const slotsOf = (req) => {
 // 404 an older peer returns for the whole route) as "no manifest" and falls
 // back to the whole snapshot.
 router.get('/:category/manifest', asyncHandler(async (req, res) => {
-  const category = categoryParam.parse(req.params.category);
+  const category = validateRequest(categoryParam, req.params.category);
   // Same gate as the other two reads — a manifest is a fingerprint of the same
   // payload, so it must never become the weaker door.
   await authorizeSyncPull(req, category);
@@ -141,7 +142,7 @@ router.get('/:category/manifest', asyncHandler(async (req, res) => {
 
 // GET /api/sync/:category/checksum — return checksum only (lightweight)
 router.get('/:category/checksum', asyncHandler(async (req, res) => {
-  const category = categoryParam.parse(req.params.category);
+  const category = validateRequest(categoryParam, req.params.category);
   await authorizeSyncPull(req, category);
   const result = await dataSync.getChecksum(category, { forPeerId: forPeerOf(req) });
   if (!result) throw new ServerError('Category not found', { status: 404 });
@@ -150,7 +151,7 @@ router.get('/:category/checksum', asyncHandler(async (req, res) => {
 
 // GET /api/sync/:category/snapshot — return category data + checksum
 router.get('/:category/snapshot', asyncHandler(async (req, res) => {
-  const category = categoryParam.parse(req.params.category);
+  const category = validateRequest(categoryParam, req.params.category);
   await authorizeSyncPull(req, category);
   const snapshot = await dataSync.getSnapshot(category, { forPeerId: forPeerOf(req), slots: slotsOf(req) });
   if (!snapshot) throw new ServerError('Category not found', { status: 404 });
@@ -173,7 +174,7 @@ const applyBodySchema = z.object({
   }).passthrough().optional(),
 });
 router.post('/:category/apply', asyncHandler(async (req, res) => {
-  const category = categoryParam.parse(req.params.category);
+  const category = validateRequest(categoryParam, req.params.category);
   const parsed = applyBodySchema.safeParse(req.body || {});
   if (!parsed.success) {
     throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });

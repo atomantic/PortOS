@@ -2,6 +2,7 @@ import express from 'express';
 import { z } from 'zod';
 import mediaService from '../services/mediaService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
 
 const router = express.Router();
 
@@ -29,7 +30,7 @@ router.get('/status', (req, res) => {
 
 // Start media streaming
 router.post('/start', asyncHandler(async (req, res) => {
-  const { videoDeviceId = '0', audioDeviceId = '0', video = true, audio = true } = startMediaSchema.parse(req.body);
+  const { videoDeviceId = '0', audioDeviceId = '0', video = true, audio = true } = validateRequest(startMediaSchema, req.body);
 
   if (video) {
     mediaService.startVideoStream(videoDeviceId);
