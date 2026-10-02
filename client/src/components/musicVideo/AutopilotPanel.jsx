@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Bot, Clapperboard, Pause, Play, X } from 'lucide-react';
 import AutomationBriefFields from './AutomationBriefFields.jsx';
 import Pill from '../ui/Pill.jsx';
+import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
@@ -33,10 +34,6 @@ const toolLabel = new Map(POOL_TOOLS.map((t) => [t.id, t.label]));
 const briefToolLabel = new Map(MUSIC_VIDEO_AUTOMATION_TOOLS.map((t) => [t.id, t.label]));
 const actionClass = 'text-sm text-port-accent min-h-[44px] sm:min-h-0 px-1';
 const routeLabel = (route) => `${toolLabel.get(`${route.kind}:${route.mode}`) || `${route.kind} ${route.mode}`}${route.model ? ` · ${route.model}` : ''}`;
-
-// Code authoring runs one-shot and tool-free (server: isToolFreeOneShotProvider), which a
-// TUI provider never is — offering one here only sets up a refusal at Start.
-const AUTHORING_PROVIDERS = (provider) => provider.enabled !== false && provider.type !== 'tui';
 
 const ROUTE_LABELS = [['plan', 'Shot planning'], ['castAndSets', 'Cast & Sets direction']];
 
@@ -158,7 +155,7 @@ function RunView({ run, production, codeFirst, project }) {
 
 function StartForm({ project, production }) {
   const assets = codeFirstProductionAssets(project);
-  const author = useProviderModels({ allowDefault: false, silent: true, withEffort: true, filter: AUTHORING_PROVIDERS });
+  const author = useProviderModels({ allowDefault: false, silent: true, withEffort: true, filter: Boolean });
   const [authorEffort, setAuthorEffort] = useState('');
   const [pool, setPool] = useState(() => initialPool(project));
   const [directive, setDirective] = useState('');
@@ -174,7 +171,7 @@ function StartForm({ project, production }) {
   const hasImage = pool.some((id) => id.startsWith('image:'));
   const hasVideo = pool.some((id) => id.startsWith('video:'));
   const routesValid = assets ? (!assets.requiredRoutes.image || hasImage) && (!assets.requiredRoutes.video || hasVideo) : hasImage && hasVideo;
-  const valid = routesValid && (!assets || (project.scenes?.length > 0 && assets.conflicts.length === 0 && author.selectedProviderId && author.selectedModel))
+  const valid = routesValid && (!assets || (project.scenes?.length > 0 && assets.conflicts.length === 0 && supportsToolFreeOneShot(author.selectedProvider || author.providers.find((entry) => entry.id === author.selectedProviderId)) && author.selectedProviderId && author.selectedModel))
     && Number.isInteger(maxGenerations) && maxGenerations >= 1 && maxGenerations <= 500
     && Number.isInteger(maxReviewAttempts) && maxReviewAttempts >= 1 && maxReviewAttempts <= 10
     && (capValue == null || (Number.isFinite(capValue) && capValue >= 0));
@@ -245,12 +242,12 @@ function StartForm({ project, production }) {
           onModelChange={author.setSelectedModel}
           effort={authorEffort}
           onEffortChange={setAuthorEffort}
-          label="Code authoring"
+          selectionPolicy={toolFreeOneShotSelectionPolicy} label="Code authoring"
           disabled={production.busy}
           modelDisabled={author.availableModels.length === 0}
           compact
         />}
-        {assets && <p className="text-port-text-muted">Authoring calls consume the generation limit. Unknown authoring prices require no dollar cap; a free/local authoring provider can use a cap. Reviews have a separate call limit.</p>}
+        {assets && <p className="text-port-text-muted">Choose an API provider or a server-verified tool-free CLI; TUI sessions cannot author. Authoring calls consume the generation limit. Unknown authoring prices require no dollar cap; a free/local authoring provider can use a cap. Reviews have a separate call limit.</p>}
         {providers.length > 0 && (
           <ProviderModelSelector
             providers={providers}

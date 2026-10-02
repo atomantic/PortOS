@@ -30,6 +30,52 @@ function hasUnsafeReference(node) {
   return Object.entries(node).some(([key, value]) => key !== 'loc' && key !== 'start' && key !== 'end' && hasUnsafeReference(value));
 }
 
+// Three's convenience random functions hide Math.random or module-level RNG
+// state behind the namespace we supply. Track only that namespace and its
+// static aliases, so unrelated local methods with these names remain usable.
+function hasAmbientThreeRandom(fn) {
+  const random = new Set(['randInt', 'randFloat', 'randFloatSpread', 'seededRandom', 'generateUUID']);
+  const aliases = new Map([['ctx', new Set(['context'])]]);
+  const nodes = [];
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (node.type) nodes.push(node);
+    for (const [key, value] of Object.entries(node)) if (!['loc', 'start', 'end'].includes(key)) visit(value);
+  };
+  visit(fn.body);
+  const property = (node) => node.computed ? node.property?.value : node.property?.name;
+  const member = (kind, key) => kind === 'context' && key === 'THREE' ? 'three'
+    : kind === 'three' && key === 'MathUtils' ? 'math'
+      : kind === 'math' && random.has(key) ? 'random' : null;
+  const resolve = (node) => {
+    if (node?.type === 'Identifier') return aliases.get(node.name) || new Set();
+    if (['MemberExpression', 'OptionalMemberExpression'].includes(node?.type)) {
+      return new Set([...resolve(node.object)].map(kind => member(kind, property(node))).filter(Boolean));
+    }
+    return new Set();
+  };
+  const bind = (pattern, kinds) => {
+    if (pattern?.type === 'Identifier') {
+      const current = aliases.get(pattern.name) || new Set();
+      for (const kind of kinds) current.add(kind);
+      aliases.set(pattern.name, current);
+    } else if (pattern?.type === 'ObjectPattern') {
+      for (const field of pattern.properties) {
+        if (field.type !== 'ObjectProperty') continue;
+        const key = field.computed ? field.key.value : field.key.name || field.key.value;
+        bind(field.value, new Set([...kinds].map(kind => member(kind, key)).filter(Boolean)));
+      }
+    }
+  };
+  const bindings = nodes.filter(node => node.type === 'VariableDeclarator' || node.type === 'AssignmentExpression' && node.operator === '=');
+  // A bounded fixed point also covers aliases assigned after their declaration.
+  for (let pass = 0; pass <= bindings.length; pass++) {
+    for (const node of bindings) bind(node.id || node.left, resolve(node.init || node.right));
+  }
+  return nodes.some(node => resolve(node).has('random'));
+}
+
 // Only an exact function declaration is embedded as a literal in generated.js.
 // In particular, no model-supplied top-level statement ever runs in the page.
 function checkedFunction(source) {
@@ -42,6 +88,7 @@ function checkedFunction(source) {
     || fn.params.length !== 2 || fn.params[0]?.name !== 'ctx' || fn.params[1]?.name !== 'env') {
     throw fail('Return exactly function render(ctx, env) for each section', 'INVALID_SECTION_SOURCE');
   }
+  if (hasAmbientThreeRandom(fn)) throw fail('Three.js MathUtils random helpers depend on ambient state. Use deterministic arithmetic from env.t or env.frame instead.', 'NONDETERMINISTIC_SECTION');
   if (hasUnsafeReference(fn.body)) throw fail('A section must use only its drawing context and song-time inputs', 'NONDETERMINISTIC_SECTION');
   return source;
 }

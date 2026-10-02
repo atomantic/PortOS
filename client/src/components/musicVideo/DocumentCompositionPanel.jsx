@@ -1,3 +1,4 @@
+import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
 import MediaModePicker from './MediaModePicker.jsx';
 import { musicVideoMediaMode, musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { useEffect, useState } from 'react';
@@ -138,7 +139,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   const {
     providers, selectedProviderId, selectedModel, availableModels, selectedProvider,
     setSelectedProviderId, setSelectedModel,
-  } = useProviderModels({ preselectDefaults: true, silent: true });
+  } = useProviderModels({ preselectDefaults: true, silent: true, filter: Boolean });
 
   useEffect(() => {
     let active = true;
@@ -174,6 +175,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   });
   const detach = confirmFirst('detach', () => run('detach', () => detachMusicVideoCompositionDocument(project.id, { silent: true }), 'Composition document detached'));
   const effectiveModel = selectedModel || selectedProvider?.defaultModel || '';
+  const authoringValid = supportsToolFreeOneShot(selectedProvider || providers.find((entry) => entry.id === selectedProviderId)) && Boolean(selectedProviderId && effectiveModel);
   const provider = { providerId: selectedProviderId, model: effectiveModel };
   const selectedSectionValid = candidate?.sections?.some((section) => section.id === selectedSection) || false;
   const generate = () => run('generate', () => generateMusicVideoMixedMediaDocument(project.id, provider, { silent: true }), 'Candidate ready to review');
@@ -241,12 +243,13 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         {providers.length > 0 && <ProviderModelSelector
           providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel}
           availableModels={availableModels} onProviderChange={setSelectedProviderId} onModelChange={setSelectedModel}
-          label="Mixed-media code provider" disabled={!!busy} modelDisabled={availableModels.length === 0}
+          selectionPolicy={toolFreeOneShotSelectionPolicy} label="Mixed-media code provider" disabled={!!busy} modelDisabled={availableModels.length === 0}
           compact alwaysShowModel
         />}
-        <p className="text-xs text-port-text-muted">Code authoring uses {selectedProvider?.name || selectedProviderId || 'no provider selected'} / {effectiveModel || 'no model selected'}. Nothing is sent until you click.</p>
+        <p className="text-xs text-port-text-muted">Code authoring uses {selectedProvider?.name || selectedProviderId || 'no provider selected'} / {effectiveModel || 'no model selected'}. Nothing is sent until you click. API providers and server-verified tool-free CLIs can author; TUI sessions cannot.</p>
+        {!authoringValid && <p className="text-xs text-port-warning" role="status">Choose a compatible code authoring provider and model before generation.</p>}
         <div className="flex flex-wrap items-end gap-2">
-          <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || eventPending || !selectedProviderId || !effectiveModel} onClick={generate}>
+          <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || eventPending || !authoringValid} onClick={generate}>
             <Film size={14} /> {busy === 'generate' ? 'Generating…' : musicVideoDocumentRenderer(project) === 'three' ? 'Generate authored 3D composition' : 'Generate mixed-media composition'}
           </button>
           {candidate?.source && <>
@@ -257,10 +260,10 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
                 {candidate.sections.map((section) => <option key={section.id} value={section.id}>{section.label || section.id} · {section.startSec}s</option>)}
               </select>
             </div>
-            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !selectedSectionValid || candidate.stale || !selectedProviderId || !effectiveModel} onClick={regenerate}>
+            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !selectedSectionValid || candidate.stale || !authoringValid} onClick={regenerate}>
               <RotateCcw size={14} /> {busy === 'regenerate' ? 'Regenerating…' : 'Regenerate section'}
             </button>
-            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !candidate.eventRevisionAvailable || !selectedProviderId || !effectiveModel} onClick={reviseEvents}>
+            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !candidate.eventRevisionAvailable || !authoringValid} onClick={reviseEvents}>
               {busy === 'event-revision' ? 'Revising events…' : 'Revise events only'}
             </button>
           </>}

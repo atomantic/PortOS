@@ -251,3 +251,35 @@ it('refuses a changed production draft after provider preparation and before pai
   await expect(generateMixedMediaDocument(id)).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
   expect(h.calls).toBe(0);
 });
+
+it('refuses ambient Three.js random helpers and their aliases while allowing deterministic local helpers', async () => {
+  const created = await projects.createProject({ name: 'Example deterministic world', mediaMode: 'code-only' });
+  await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+    audioAnalysis: { durationSec: 1, beats: [], downbeats: [], sections: [{ id: 'world', startSec: 0, endSec: 1 }] },
+    composition: { mode: 'document', authoringRenderer: 'three' },
+  } }));
+  // Library helpers hide the ambient RNG from the existing Math.random guard;
+  // namespace aliases and destructured calls must not bypass admission either.
+  const bodies = [
+    'ctx.THREE.MathUtils.randFloat(0, 1)',
+    'ctx.THREE.MathUtils.randInt(0, 10)',
+    'ctx.THREE.MathUtils.randFloatSpread(10)',
+    'ctx.THREE.MathUtils.seededRandom()',
+    'ctx.THREE.MathUtils.generateUUID()',
+    'const { THREE } = ctx; const utils = THREE.MathUtils; utils["randFloat"](0, 1)',
+    'const { MathUtils: { seededRandom: sample } } = ctx.THREE; sample()',
+    'let utils; utils = ctx.THREE.MathUtils; const { randInt: sample } = utils; sample(0, 10)',
+  ];
+  for (const body of bodies) {
+    h.response = JSON.stringify({ sections: [{ id: 'world', source: `function render(ctx, env) { ${body}; }` }] });
+    await expect(generateMixedMediaDocument(created.id), body).rejects.toMatchObject({ code: 'NONDETERMINISTIC_SECTION' });
+    expect((await projects.getProject(created.id)).composition.documentDraft).toBeUndefined();
+  }
+  h.response = JSON.stringify({ sections: [{ id: 'world', source: `function render(ctx, env) {
+    const local = { randFloat: (seed) => (Math.sin(seed * 123.45) + 1) / 2 };
+    const { THREE } = ctx;
+    ctx.scene.background = new THREE.Color(local.randFloat(env.frame), 0.5, 0.2);
+  }` }] });
+  const candidate = await generateMixedMediaDocument(created.id);
+  expect((await manifestAt(candidate.document)).renderer).toBe('three');
+});

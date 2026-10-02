@@ -17,10 +17,11 @@ const api = vi.hoisted(() => ({
   updateMusicVideoProject: vi.fn(),
 }));
 vi.mock('../../services/apiMusicVideo.js', () => api);
+const authorProvider = vi.hoisted(() => ({ type: 'api', toolFreeOneShot: true }));
 vi.mock('../../hooks/useProviderModels.js', () => ({ default: () => ({
-  providers: [{ id: 'stub-provider', name: 'Stub Provider', models: ['fixture-model'] }],
+  providers: [{ id: 'stub-provider', name: 'Stub Provider', models: ['fixture-model'], ...authorProvider }],
   selectedProviderId: 'stub-provider', selectedModel: 'fixture-model', availableModels: ['fixture-model'],
-  selectedProvider: { id: 'stub-provider', name: 'Stub Provider' },
+  selectedProvider: { id: 'stub-provider', name: 'Stub Provider', ...authorProvider },
   setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(),
 }) }));
 vi.mock('./CompositionPreviewPlayer.jsx', () => ({ default: () => <div>Candidate preview</div> }));
@@ -35,12 +36,34 @@ const generated = { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-ge
 const withCandidate = { ...bare, composition: { mode: 'document', document: DOCUMENT, documentDraft: generated } };
 
 beforeEach(() => {
+  Object.assign(authorProvider, { type: 'api', toolFreeOneShot: true });
   for (const fn of Object.values(api)) fn.mockReset();
   api.startMusicVideoCompositionTemplate.mockResolvedValue({ project: attached, document: DOCUMENT });
   api.detachMusicVideoCompositionDocument.mockResolvedValue({ project: bare });
 });
 
 describe('DocumentCompositionPanel', () => {
+  it('keeps an unsupported selected author visible but blocks generation until its CLI capability is verified', async () => {
+    Object.assign(authorProvider, { type: 'cli', toolFreeOneShot: false });
+    const props = { project: bare, onProject: vi.fn(), onSave: vi.fn() };
+    const view = render(<DocumentCompositionPanel {...props} />);
+    expect(screen.getByRole('option', { name: 'Stub Provider (not permitted here)' }).disabled).toBe(true);
+    expect(screen.queryByRole('option', { name: /Custom combination/ })).toBeNull();
+    const generate = screen.getByRole('button', { name: 'Generate mixed-media composition' });
+    expect(generate.disabled).toBe(true);
+    fireEvent.click(generate);
+    expect(api.generateMusicVideoMixedMediaDocument).not.toHaveBeenCalled();
+    Object.assign(authorProvider, { type: 'tui', toolFreeOneShot: true });
+    view.rerender(<DocumentCompositionPanel {...props} />);
+    expect(generate.disabled).toBe(true);
+    authorProvider.type = 'cli';
+    view.rerender(<DocumentCompositionPanel {...props} />);
+    expect(generate.disabled).toBe(false);
+    api.generateMusicVideoMixedMediaDocument.mockResolvedValue({ project: bare });
+    fireEvent.click(generate);
+    await waitFor(() => expect(api.generateMusicVideoMixedMediaDocument).toHaveBeenCalledWith('mv-1', { providerId: 'stub-provider', model: 'fixture-model' }, { silent: true }));
+  });
+
   it('selects code-only and authors, previews and accepts a Three.js scene candidate', async () => {
     const saved = { ...bare, mediaMode: 'code-only' };
     api.updateMusicVideoProject.mockResolvedValue(saved);
