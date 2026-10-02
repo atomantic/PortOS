@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { AlertTriangle, CheckCircle2, Circle, CircleDot, Loader2, Pause, Play, Wand2, X, XCircle } from 'lucide-react';
+import { Link } from 'react-router';
+import { AlertTriangle, CheckCircle2, Circle, CircleDot, ExternalLink, Loader2, Pause, Play, Wand2, X, XCircle } from 'lucide-react';
 import {
-  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_STATUS_LABELS, autonomousStageRows, isAutonomousLive,
+  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
+  autonomousStageOutput, autonomousStageRows, isAutonomousLive,
 } from '../../lib/musicVideoAutonomous.js';
 
 const STATUS_TONES = {
@@ -17,14 +19,39 @@ const STAGE_MARKS = {
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const buttonClass = 'flex items-center gap-1 rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
+/** The read-only output of one stage the director opened from the checklist. */
+function StageOutput({ run, row, editableBelow }) {
+  const fields = autonomousStageOutput(run, row.id);
+  return (
+    <div id={`mv-run-stage-${row.id}`} role="region" aria-label={`${row.label} output`} className="rounded border border-port-border bg-port-bg p-2 space-y-2 min-w-0">
+      {fields.length === 0 && <p className="text-xs text-port-text-muted">This stage did not store anything to show.</p>}
+      {fields.map((field) => (
+        <div key={field.key} className="min-w-0">
+          <div className="text-xs text-port-text-muted">{field.label}</div>
+          {field.href ? (
+            <Link to={field.href} className="inline-flex items-center gap-1 text-sm text-port-accent hover:underline min-h-[44px] sm:min-h-0">
+              {field.text} <ExternalLink size={12} aria-hidden="true" />
+            </Link>
+          ) : (
+            <p className={`text-sm break-words ${field.multiline ? 'whitespace-pre-wrap' : ''} ${field.mono ? 'font-mono text-xs' : ''}`}>{field.text}</p>
+          )}
+        </div>
+      ))}
+      {editableBelow && <p className="text-xs text-port-text-muted">Edit this in the approval box below before continuing.</p>}
+    </div>
+  );
+}
+
 /**
  * The fully-autonomous run on a project: where it is in the pipeline, what it is
  * waiting for, and the few things the director can do — approve a checkpoint
  * (optionally with edited lyrics or Suno style), retry the stage that stopped,
- * pause, or cancel. Progress arrives over `music-video:autonomous` through
+ * pause, or cancel. A finished stage's output (brief, lyrics, style, song) opens
+ * read-only from its checklist row; the open row is the caller's URL state
+ * (`selectedStage` / `onSelectStage`). Progress arrives over `music-video:autonomous` through
  * `useAutonomousMusicVideo`; this panel only renders the run it is given.
  */
-export default function AutonomousRunPanel({ project, auto }) {
+export default function AutonomousRunPanel({ project, auto, selectedStage = null, onSelectStage }) {
   const run = project?.autonomousRun;
   const [edit, setEdit] = useState(null); // { for: stage, value } — the director's edit at a checkpoint
   if (!run) return null;
@@ -39,6 +66,9 @@ export default function AutonomousRunPanel({ project, auto }) {
   const changed = editable && draft !== editable.value;
   const canRetry = ['needs-human', 'failed', 'stopped'].includes(run.status) || run.interrupted;
   const tone = STATUS_TONES[run.status] || '';
+  // A stale or hand-edited `?run-stage=` that names no finished, viewable stage opens nothing.
+  const selectedRow = rows.find((row) => row.id === selectedStage && row.status === 'done' && AUTONOMOUS_VIEWABLE_STAGES.includes(row.id)) || null;
+  const selected = selectedRow?.id || null;
 
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0" aria-label="Autonomous run">
@@ -53,15 +83,41 @@ export default function AutonomousRunPanel({ project, auto }) {
       <ol aria-label="Autonomous stages" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,11rem),1fr))] gap-x-3 gap-y-1 text-xs">
         {rows.map((row) => {
           const { Icon, cls, label } = STAGE_MARKS[row.status] || STAGE_MARKS.pending;
-          return (
-            <li key={row.id} aria-current={row.current ? 'step' : undefined} className={`flex min-w-0 items-center gap-1 ${row.current ? 'font-medium text-port-text' : 'text-port-text-muted'}`}>
-              {row.current && row.status === 'pending' ? <CircleDot size={13} className="shrink-0 text-port-accent" aria-hidden="true" /> : <Icon size={13} className={`shrink-0 ${cls}`} aria-hidden="true" />}
+          const mark = row.current && row.status === 'pending' ? <CircleDot size={13} className="shrink-0 text-port-accent" aria-hidden="true" /> : <Icon size={13} className={`shrink-0 ${cls}`} aria-hidden="true" />;
+          const content = (
+            <>
+              {mark}
               <span className="truncate">{row.label}</span>
               <span className="sr-only">({label})</span>
+            </>
+          );
+          const tone = row.current ? 'font-medium text-port-text' : 'text-port-text-muted';
+          // Only a stage that finished and keeps something to show opens.
+          const openable = row.status === 'done' && AUTONOMOUS_VIEWABLE_STAGES.includes(row.id) && onSelectStage;
+          return (
+            <li key={row.id} aria-current={row.current ? 'step' : undefined} className="min-w-0">
+              {openable ? (
+                <button
+                  type="button"
+                  aria-expanded={selected === row.id}
+                  aria-controls={`mv-run-stage-${row.id}`}
+                  onClick={() => onSelectStage(selected === row.id ? null : row.id)}
+                  className={`flex w-full min-w-0 items-center gap-1 rounded px-1 -mx-1 min-h-[44px] sm:min-h-0 hover:bg-port-bg ${selected === row.id ? 'bg-port-bg' : ''} ${tone}`}
+                >
+                  {content}
+                </button>
+              ) : (
+                <span className={`flex min-w-0 items-center gap-1 ${tone}`}>{content}</span>
+              )}
+              {row.id === 'song' && row.status === 'running' && row.step && (
+                <p role="status" className="pl-[17px] text-port-accent break-words">{AUTONOMOUS_SONG_STEP_LABELS[row.step] || row.step}…</p>
+              )}
             </li>
           );
         })}
       </ol>
+
+      {selectedRow && <StageOutput run={run} row={selectedRow} editableBelow={!!editable && awaiting === selectedRow.id} />}
 
       {run.error && (
         <p role="status" className="flex items-start gap-1 text-xs text-port-warning break-words min-w-0">

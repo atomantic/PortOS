@@ -37,6 +37,8 @@ import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
 import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
 import useMusicVideoProduction from '../hooks/useMusicVideoProduction.js';
 import useAutonomousMusicVideo from '../hooks/useAutonomousMusicVideo.js';
+import useDrawerTab from '../hooks/useDrawerTab.js';
+import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
@@ -209,6 +211,8 @@ export default function MusicVideo() {
   const autoReview = useMusicVideoAutoReview({ project: selected, replaceProject, submitSections: revisions.submitSections });
   const production = useMusicVideoProduction({ project: selected, replaceProject });
   const autonomous = useAutonomousMusicVideo({ project: selected, replaceProject });
+  // Which finished autonomous stage's output is open (`?run-stage=lyrics`).
+  const [runStage, setRunStage] = useDrawerTab('run-stage', null, AUTONOMOUS_VIEWABLE_STAGES);
   // Cast & Sets check-in (before the plan) and the development files it saves.
   const castSets = useMusicVideoCastAndSets({ project: selected, replaceProject });
   const devArtifacts = useMusicVideoDevArtifacts({ project: selected, replaceProject });
@@ -1068,7 +1072,7 @@ export default function MusicVideo() {
             ) : null}
           >
             <div className="space-y-3 min-w-0">
-              <AutonomousRunPanel key={`autonomous-${selected.id}`} project={selected} auto={autonomous} />
+              <AutonomousRunPanel key={`autonomous-${selected.id}`} project={selected} auto={autonomous} selectedStage={runStage} onSelectStage={setRunStage} />
               <StageView key={selected.id} board={board} />
             </div>
           </MusicVideoLayout>

@@ -195,6 +195,28 @@ describe('checkpoints', () => {
   });
 });
 
+describe('song sub-step', () => {
+  it('records the Suno sub-step on the run, pushes it over the autonomous event, and clears it when the stage settles', async () => {
+    const pushed = [];
+    const onEvent = (event) => pushed.push(event.run.stages.song.step);
+    musicVideoEvents.on('autonomous', onEvent);
+    try {
+      doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+        await opts.onSubmitted(['song-a', 'song-b']);
+        opts.onProgress('exporting');
+        await vi.waitFor(() => expect(runOf().stages.song.step).toBe('exporting'));
+        return { songId: 'song-a', songIds: ['song-a', 'song-b'], filename: 'music-song-a.mp3' };
+      });
+      await service.startAutonomousVideo({ prompt: 'p' });
+      await vi.waitFor(() => expect(calls).toContain('production'));
+    } finally {
+      musicVideoEvents.off('autonomous', onEvent);
+    }
+    expect(pushed).toContain('exporting');
+    expect(runOf().stages.song).toMatchObject({ status: 'done', step: null });
+  });
+});
+
 describe('failure and retry', () => {
   it('parks needs-human on a signed-out Suno, then retries that stage with the same inputs', async () => {
     doubles.generateSunoSong.mockImplementationOnce(async () => {

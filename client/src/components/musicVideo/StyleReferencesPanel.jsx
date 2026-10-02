@@ -1,8 +1,49 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router';
+import { ExternalLink } from 'lucide-react';
 import useMounted from '../../hooks/useMounted.js';
+import { getMoodBoard } from '../../services/apiMoodBoard.js';
+import { moodBoardItemSrc } from '../../lib/moodBoardItemSrc.js';
 import { uploadGalleryImage } from '../../services/apiSystem.js';
 import { IMAGE_ACCEPT, readFileAsBase64, validateImageFile } from '../../utils/fileUpload.js';
 import toast from '../ui/Toast';
+
+const LINKED_THUMBS = 6;
+
+/**
+ * The mood board linked to the project (`visualSpec.moodBoardId` — the one an
+ * autonomous run creates or the creative setup picks): its name, a few pinned
+ * images and a link to the board, so an empty uploader below is not read as
+ * "no moodboard". Read-only; the board page is where it is edited.
+ */
+function LinkedMoodBoard({ boardId }) {
+  const [board, setBoard] = useState(null); // null = not loaded (or failed), else the full board
+  useEffect(() => {
+    let active = true;
+    setBoard(null);
+    getMoodBoard(boardId, { silent: true }).then((data) => { if (active) setBoard(data || null); }, () => {});
+    return () => { active = false; };
+  }, [boardId]);
+  const thumbs = useMemo(() => (Array.isArray(board?.items) ? board.items : [])
+    .map((item) => ({ id: item.id, src: moodBoardItemSrc(item) })).filter((t) => t.src).slice(0, LINKED_THUMBS), [board]);
+  return (
+    <div className="rounded border border-port-border bg-port-bg p-2 space-y-2" data-testid="linked-mood-board">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <span className="text-port-text-muted">Linked mood board</span>
+        <Link to={`/mood-boards/${encodeURIComponent(boardId)}`} className="inline-flex items-center gap-1 text-port-accent hover:underline min-h-[44px] sm:min-h-0">
+          {board?.name || 'Open mood board'} <ExternalLink size={12} aria-hidden="true" />
+        </Link>
+      </div>
+      {thumbs.length > 0 && (
+        <ul className="flex flex-wrap gap-1">
+          {thumbs.map((t, i) => (
+            <li key={t.id || i}><img src={t.src} alt={`Mood board image ${i + 1}`} loading="lazy" className="h-12 w-12 rounded object-cover" /></li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 /** Project-owned moodboard; uploads do not invoke an AI provider. */
 export default function StyleReferencesPanel({ project, onSave, onPendingChange }) {
@@ -59,6 +100,7 @@ export default function StyleReferencesPanel({ project, onSave, onPendingChange 
     <section aria-label="Project moodboard" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2">
       <h3 className="text-sm font-medium">Project moodboard</h3>
       <p className="text-xs text-port-text-muted">Up to eight style images. Add captions describing palette, lighting, lens and grain. Identity references take priority; models use as many style images as their remaining slots allow, or caption text when references are unsupported.</p>
+      {project.visualSpec?.moodBoardId && <LinkedMoodBoard boardId={project.visualSpec.moodBoardId} />}
       <fieldset disabled={busy} className="space-y-2">
         <label htmlFor={`mv-style-upload-${project.id}`} className="block text-xs">Upload style images
           <input id={`mv-style-upload-${project.id}`} type="file" aria-label="Upload style images" accept={IMAGE_ACCEPT} multiple disabled={references.length >= 8 || busy}
