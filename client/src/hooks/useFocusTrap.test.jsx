@@ -36,6 +36,20 @@ function HeaderFocusDialog() {
   );
 }
 
+// Initial focus aimed at an ordinary TABBABLE input (a capture box) followed by
+// a button — the CmdK capture shape.
+function InputFocusDialog() {
+  const ref = useRef(null);
+  const inputRef = useRef(null);
+  useFocusTrap(true, ref, { initialFocusRef: inputRef });
+  return (
+    <div ref={ref} data-testid="dialog">
+      <input ref={inputRef} aria-label="thought" />
+      <button>capture</button>
+    </div>
+  );
+}
+
 function Harness({ active }) {
   return (
     <>
@@ -70,6 +84,24 @@ describe('useFocusTrap', () => {
       render(<HeaderFocusDialog />);
       fireEvent.keyDown(screen.getByTestId('dialog'), { key: 'Tab' });
       expect(document.activeElement).toBe(screen.getByText('first'));
+    });
+  });
+
+  describe('with an initialFocusRef aimed at a tabbable input', () => {
+    it('lets forward Tab reach the next control', () => {
+      render(<InputFocusDialog />);
+      expect(document.activeElement).toBe(screen.getByLabelText('thought'));
+      const dialog = screen.getByTestId('dialog');
+      expect(fireEvent.keyDown(dialog, { key: 'Tab' })).toBe(true); // not prevented → browser advances
+      screen.getByText('capture').focus();
+      fireEvent.keyDown(dialog, { key: 'Tab' });
+      expect(document.activeElement).toBe(screen.getByLabelText('thought'));
+    });
+
+    it('wraps Shift+Tab from the first control to the last', () => {
+      render(<InputFocusDialog />);
+      fireEvent.keyDown(screen.getByTestId('dialog'), { key: 'Tab', shiftKey: true });
+      expect(document.activeElement).toBe(screen.getByText('capture'));
     });
   });
 
