@@ -190,7 +190,7 @@ function PersistentMindStatus({ mind, loaded, error }) {
       </div>
       {(error || state?.lastError || state?.pauseReason) && (
         <p role="status" className="mt-3 rounded-md border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
-          {error || state.lastError || state.pauseReason}
+          {error || [state.pauseReason, state.lastError && state.lastError !== state.pauseReason ? `Last wake: ${state.lastError}` : null].filter(Boolean).join(' · ')}
         </p>
       )}
       <p className="mt-3 text-xs leading-relaxed text-port-text-muted">

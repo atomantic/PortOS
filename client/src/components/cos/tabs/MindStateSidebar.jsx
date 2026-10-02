@@ -42,6 +42,9 @@ export default function MindStateSidebar({
               : turnProgress.phase === 'thinking' ? `${turnProgress.stage || 'Working through the current turn'}.`
                 : state?.pauseReason || (state?.started ? 'Listening for messages and scheduled wakes.' : 'Configure the AI profile to begin.')}
         </p>
+        {state?.lastError && state.lastError !== state.pauseReason && !state?.contextBudgetBlocked && (
+          <p data-testid="mind-last-error" className="mt-1 text-xs text-port-warning">Last wake: {state.lastError}</p>
+        )}
         {state?.contextBudgetBlocked && (
           <div data-testid="mind-context-budget-actions" className="mt-2 flex flex-wrap gap-2 text-xs">
             <button

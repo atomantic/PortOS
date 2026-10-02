@@ -397,7 +397,9 @@ async function interruptActiveTurn(reason, status, { retry = false, expectedTurn
         status,
         pauseReason: reason,
         failureCount,
-        lastError: reason,
+        // A pause or global hold is not a wake failure: keep the real last
+        // error (OOM kill, canceled run, ...) visible next to the pause reason.
+        lastError: status === 'paused' || status === 'waiting' ? next.lastError : reason,
         nextEligibleWakeAt: retry
           ? new Date(Date.now() + persistentMindBackoffMs(failureCount)).toISOString()
           : null,
