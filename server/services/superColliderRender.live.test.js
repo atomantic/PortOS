@@ -31,6 +31,17 @@ Ppar([
 ])`;
 const INFINITE_SOURCE = 'inf.do { 1 + 1 };\nPbind(\\dur, 1)';
 
+// sclang also prints the error text inside Error(...); that closing delimiter
+// is not part of the last probe value.
+const parseProbeReport = (message) => Object.fromEntries(
+  [...message.matchAll(/(\w+)=([^\s)]+)/g)].map(([, key, value]) => [key, value]),
+);
+
+it('reads the final containment value from sclang Error(...) output without masking a successful connection', () => {
+  expect(parseProbeReport('Error(PROBE hostFixture=false netGateway=false)')).toEqual({ hostFixture: 'false', netGateway: 'false' });
+  expect(parseProbeReport('Error(PROBE hostFixture=false netGateway=true)')).toEqual({ hostFixture: 'false', netGateway: 'true' });
+});
+
 describe.skipIf(!LIVE)('SuperCollider renders under real containment', () => {
   let docker;
   let dataDir;
@@ -92,11 +103,12 @@ Error("PROBE" +
     const error = await render({ source: probe }).catch((err) => err);
     delete process.env.PORTOS_LIVE_PROBE_SECRET;
     expect(error.code).toBe('SUPERCOLLIDER_SOURCE_ERROR');
-    const report = Object.fromEntries([...error.message.matchAll(/(\w+)=(\S+)/g)].map(([, key, value]) => [key, value]));
+    const report = parseProbeReport(error.message);
     expect(report).toMatchObject({
       hostFixture: 'false', env: 'false', home: '/tmp', writeIn: 'false', writeRoot: 'false',
       shellIn: 'false', shellRoot: 'false', startup: 'false', netHost: 'false', netGateway: 'false',
     });
+    expect(report.uid).toMatch(/^\d+$/);
     expect(report.uid).not.toBe('0');
     expect(connections).toBe(0);
     expect(scratchLeft()).toEqual([]);

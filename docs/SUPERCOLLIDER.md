@@ -173,7 +173,14 @@ Re-rendering the same source with the same seed and settings reproduces the take
 
 The recipe targets Linux `amd64` and `arm64` Docker engines. Readiness is per machine: a host is `ready` only after the probe has passed on that host's engine with the current image. The probe result records the engine version, OS and architecture, so the evidence names the platform it was proven on. Any other configuration stays visibly unavailable.
 
-As of this change, the recipe has not been built in CI. Docker was not available on the machine where it was authored. The first successful `npm run setup:supercollider -- --yes` on each architecture provides the evidence. Record the outcome in the epic (#9407).
+The [native Docker workflow](../.github/workflows/supercollider-live.yml) builds the shipped recipe, runs setup twice, and executes the opt-in live suite on both architectures. On 2026-10-02, runtime `3.14.1-portos.1` with containment policy `1` passed on these fresh GitHub-hosted runners at commit `1e2b89bfb5a65941d9ed6a38cbf806182b79b36e`:
+
+| Host OS | Docker Engine | Native architecture | Evidence |
+| --- | --- | --- | --- |
+| Ubuntu 24.04.5 LTS | 28.0.4 | `amd64` | [Passing job](https://github.com/atomantic/PortOS/actions/runs/36961931442/job/110697287482) |
+| Ubuntu 24.04.5 LTS | 28.0.4 | `arm64` | [Passing job](https://github.com/atomantic/PortOS/actions/runs/36961931442/job/110697287272) |
+
+Both first setup runs built the image and passed the stock-synth probe. Both second runs skipped the build and probe with byte-identical readiness evidence. All six live cases passed on each host: audible stereo 48 kHz rendering, host/environment/filesystem/network/startup isolation with a non-root uid, syntax rejection, timeout cleanup, cancellation cleanup, and overlapping renders. The suite also runs a parser regression for the real `sclang` error delimiter exposed by the initial runs. No recipe, wrapper, or policy change was needed. These results cover the listed Linux Docker hosts; Docker Desktop on macOS and Windows remains unverified.
 
 ## Troubleshooting
 
