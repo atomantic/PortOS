@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { normalizeDefinitions, renderCharacterSvg, renderDefinitionsSection } from './castAndSetsDefinitions.js';
+import { normalizeDefinitions, renderDefinitionsSection } from './castAndSetsDefinitions.js';
 
 const character = () => ({
   id: 'Boat',
@@ -51,15 +51,15 @@ describe('normalizeDefinitions', () => {
   });
 });
 
-describe('renderCharacterSvg / renderDefinitionsSection', () => {
+describe('renderDefinitionsSection', () => {
   it('draws the base pose and applies a named expression to the right part', () => {
-    const base = renderCharacterSvg(character());
-    const proud = renderCharacterSvg(character(), 'proud');
+    const tiles = renderDefinitionsSection({ characters: [character()] }).split('<figure').slice(1);
+    const [base, proud] = tiles;
     expect(base).toContain('<svg viewBox="0 0 200 200"');
     expect(base).toContain('fill="#f5f0e6"');
     expect(base).not.toContain('rotate(-10');
     expect(proud).toContain('rotate(-10 100 120)');
-    // The hidden part is not drawn in that expression.
+    // The part the expression hides is not drawn in it.
     expect(base).toContain('<circle');
     expect(proud).not.toContain('<circle');
   });

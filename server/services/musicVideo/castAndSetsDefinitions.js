@@ -294,7 +294,7 @@ function partMarkup(part, character, override = {}) {
  * named expression or pose applied. Input is re-validated, so a hand-edited or
  * stale record can never smuggle markup into the sheet.
  */
-export function renderCharacterSvg(character, stateName = null, { size = 160 } = {}) {
+function renderCharacterSvg(character, stateName = null, { size = 160 } = {}) {
   const safe = normalizeDefinitions({ characters: [character] })?.characters?.[0];
   if (!safe) return '';
   const key = slug(stateName);
