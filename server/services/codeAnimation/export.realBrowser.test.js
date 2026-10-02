@@ -78,7 +78,7 @@ const meanAbsDiff = (a, b) => {
 describe.skipIf(!chrome || !ffmpeg || !ffprobe)('Code Animation frame-exact export with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const profile = join(lazyTempDataRoot('portos-code-animation-export-'), 'chrome-test-profile');
-    proc = spawn(chrome, ['--headless=new', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
     try {
       const ws = await _waitForTestChrome(proc);
       endpoint = new URL(ws).origin.replace('ws:', 'http:');

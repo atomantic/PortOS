@@ -56,7 +56,7 @@ function assertInsideSafeArea(path, width, height) {
 describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Chrome and ffmpeg (#8984)', () => {
   beforeAll(async () => {
     const profile = join(PATHS.data, 'chrome-test-profile');
-    proc = spawn(chrome, ['--headless=new', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
     const ws = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Test Chrome did not start')), 20000);
       proc.once('error', reject);
