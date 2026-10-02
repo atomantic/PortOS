@@ -70,7 +70,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
         <p className="text-sm"><strong>{item.target}</strong> · {item.decision} · {item.resolvedAt ? 'Resolved' : 'Open'}</p>
         <p className="text-sm whitespace-pre-wrap">{item.text}</p>
         <p className="text-xs text-port-text-muted">Reviewed revision {item.basis.slice(0, 12)}{ready?.basis[item.stage] !== item.basis ? ' · content has changed since review' : ' · current revision'}</p>
-        <details><summary className="cursor-pointer py-2 text-sm">Original reviewed content</summary><pre className="max-h-60 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(project.productionReview.reviewedRevisions?.[item.basis]?.draft, null, 2)}</pre></details>
+        <details><summary className="cursor-pointer py-2 text-sm">Original reviewed content</summary><pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(project.productionReview.reviewedRevisions?.[item.basis]?.draft, null, 2)}</pre></details>
         {item.resolvedAt ? <p className="text-sm">Resolution: {item.resolution}</p> : <>
           <label htmlFor={fieldId(`resolution-${item.id}`)} className="block text-sm">Resolution for {item.target}<textarea id={fieldId(`resolution-${item.id}`)} className={fieldClass} value={resolutions[item.id] || ''} onChange={e => setResolutions({ ...resolutions, [item.id]: e.target.value })} /></label>
           <button type="button" className={buttonClass} disabled={blocked || !password || !resolutions[item.id]?.trim()} onClick={async () => {
