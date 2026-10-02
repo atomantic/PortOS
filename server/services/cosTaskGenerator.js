@@ -948,24 +948,25 @@ export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, ad
 /**
  * Priority 0: On-demand task requests (highest priority — user explicitly
  * requested these). Reads the live schedule's `onDemandRequests`, clears each
- * as it is processed, and pushes any produced task (deduped) into the spawn set.
- * Runs against the global slot cap — on-demand work never counts against the
- * autonomous action budget.
+ * as it is processed, and admits any produced task (deduped) through the
+ * cycle's shared `spawnAdapter`. Runs against the global slot cap — on-demand
+ * work never counts against the autonomous action budget.
+ *
+ * Returns the schedule the drain loaded so `evaluateTasks` can hand it to
+ * Priority 2 explicitly (its disabled-analysis-type gate) instead of a second
+ * load.
  */
 async function spawnPriority0OnDemand(ctx) {
-  const { state, availableSlots, perProjectLimit, spawnProjectCounts, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
+  const { state, availableSlots, perProjectLimit, spawnProjectCounts, tasksToSpawn, spawnAdapter } = ctx;
 
   const { schedule } = await drainOnDemandRequests({ state }, {
     capacityExhausted: () => tasksToSpawn.length >= availableSlots,
     projectCapacityExhausted: (appId) =>
       (spawnProjectCounts[appId || '_self'] || 0) >= perProjectLimit,
-    canSpawn: (task) => canSpawnTask(task),
-    emitSpawn: (task) => {
-      tasksToSpawn.push(task);
-      trackSpawn(task);
-    },
+    canSpawn: spawnAdapter.canSpawn,
+    emitSpawn: spawnAdapter.emitSpawn,
   });
-  ctx.taskSchedule = schedule;
+  return { schedule };
 }
 
 /**
@@ -974,12 +975,10 @@ async function spawnPriority0OnDemand(ctx) {
  * autonomous action budget.
  */
 async function spawnPriority1UserTasks(ctx) {
-  const { pendingUserTasks, availableSlots, perProjectLimit, tasksToSpawn, canSpawnTask, trackSpawn, instanceId } = ctx;
+  const { pendingUserTasks, availableSlots, perProjectLimit, tasksToSpawn, spawnAdapter, instanceId } = ctx;
   await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
+    ...spawnAdapter,
     capacityExhausted: () => tasksToSpawn.length >= availableSlots,
-    canSpawn: (task) => canSpawnTask(task),
-    emitSpawn: (task) => tasksToSpawn.push(task),
-    trackSpawn,
     onDefer: (task) => recordPendingUserDeferral(task, perProjectLimit),
   });
 }
@@ -1000,12 +999,12 @@ async function recordPendingUserDeferral(task, perProjectLimit) {
  * what would have run so the user can see the plan without it executing. Capped
  * by `autonomousSlotCeiling` (the CoS action budget, #711).
  */
-async function spawnPriority2AutoApproved(ctx) {
-  const { state, cosTaskData, cosAutonomyMode, autonomousSlotCeiling, perProjectLimit, spawnProjectCounts, tasksToSpawn, canSpawnTask, trackSpawn, instanceId } = ctx;
+async function spawnPriority2AutoApproved(ctx, { taskSchedule, autonomousSlotCeiling }) {
+  const { state, cosTaskData, cosAutonomyMode, perProjectLimit, spawnProjectCounts, tasksToSpawn, spawnAdapter, instanceId } = ctx;
   return admitAutoApprovedSystemTasks({
     state,
     cosTaskData,
-    taskSchedule: ctx.taskSchedule,
+    taskSchedule,
     cosAutonomyMode,
     autonomousSlotCeiling,
     alreadySpawned: tasksToSpawn.length,
@@ -1013,9 +1012,7 @@ async function spawnPriority2AutoApproved(ctx) {
     spawnProjectCounts,
     instanceId,
   }, {
-    canSpawn: canSpawnTask,
-    trackSpawn,
-    emitSpawn: (task) => tasksToSpawn.push(task),
+    ...spawnAdapter,
     onDefer: (decision) => recordAutoApprovedDeferral(decision, state, perProjectLimit),
   });
 }
@@ -1044,8 +1041,8 @@ async function maybeQueueImprovementTasks(ctx) {
  * which caused duplicate agent spawns on startup when both paths fired for the
  * same past-due job within seconds of each other.
  */
-async function spawnPriority36FeatureAgents(ctx) {
-  const { hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
+async function spawnPriority36FeatureAgents(ctx, { autonomousSlotCeiling }) {
+  const { hasPendingUserTasks, cosAutonomyMode, tasksToSpawn, spawnAdapter } = ctx;
 
   if (tasksToSpawn.length < autonomousSlotCeiling && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
     const { getDueFeatureAgents, generateTaskFromFeatureAgent, setCurrentAgent } = await import('./featureAgents.js');
@@ -1056,9 +1053,8 @@ async function spawnPriority36FeatureAgents(ctx) {
     for (const fa of dueAgents) {
       if (tasksToSpawn.length >= autonomousSlotCeiling) break;
       const task = generateTaskFromFeatureAgent(fa);
-      if (!canSpawnTask(task, autonomousSlotCeiling)) continue;
-      tasksToSpawn.push(task);
-      trackSpawn(task);
+      if (!spawnAdapter.canSpawn(task, autonomousSlotCeiling)) continue;
+      spawnAdapter.emitSpawn(task);
       // Mark agent as having a pending task to prevent duplicate spawns
       await setCurrentAgent(fa.id, task.id).catch(() => {});
       emitLog('info', `Feature agent due: ${fa.name}`, { featureAgentId: fa.id });
@@ -1073,25 +1069,23 @@ async function spawnPriority36FeatureAgents(ctx) {
  * 3. No system tasks queued
  * Autonomous — gated by the CoS auto-run domain.
  */
-async function spawnPriority4IdleReview(ctx) {
+async function spawnPriority4IdleReview(ctx, { autonomousSlotCeiling }) {
   return admitIdleReviewTask({
     state: ctx.state,
     alreadySpawned: ctx.tasksToSpawn.length,
     hasPendingUserTasks: ctx.hasPendingUserTasks,
     cosAutonomyMode: ctx.cosAutonomyMode,
-    autonomousSlotCeiling: ctx.autonomousSlotCeiling,
-  }, {
-    canSpawn: ctx.canSpawnTask,
-    emitSpawn: (task) => ctx.tasksToSpawn.push(task),
-    trackSpawn: ctx.trackSpawn,
-  });
+    autonomousSlotCeiling,
+  }, ctx.spawnAdapter);
 }
 
 /**
  * Evaluate tasks and decide what to spawn.
  *
  * Orchestrates the spawn-priority tiers in sequence, each extracted into a named
- * private function that mutates a shared spawn context (`ctx`):
+ * private function that reads a frozen spawn context (`ctx`), admits through its
+ * shared `spawnAdapter`, and receives anything an earlier tier produced (the
+ * Priority-0 schedule, the autonomous ceiling) as an explicit argument:
  *   - Priority 0 — on-demand requests       (`spawnPriority0OnDemand`)
  *   - Priority 1 — pending user tasks        (`spawnPriority1UserTasks`)
  *   - Priority 2 — auto-approved system tasks (`spawnPriority2AutoApproved`)
@@ -1203,23 +1197,31 @@ export async function evaluateTasks(options) {
     const project = task.metadata?.app || '_self';
     return (spawnProjectCounts[project] || 0) < perProjectLimit;
   };
-  // Helper: track a spawned task's project
-  const trackSpawn = (task) => {
+  // The ONE admission sink every tier uses: queue the pick for the spawn loop
+  // below AND count it against its project's cap, together, so no tier can do
+  // one without the other (#9609).
+  const admitSpawn = (task) => {
+    tasksToSpawn.push(task);
     const project = task.metadata?.app || '_self';
     spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
   };
+  // The adapter every tier hands to its shared admission pass, unchanged. Those
+  // passes also serve dequeueNextTask (cos.js), which dispatches and counts
+  // through different objects, so they take emit and track as separate hooks;
+  // here `admitSpawn` already does both, so the track hook is inert.
+  const spawnAdapter = Object.freeze({ canSpawn: canSpawnTask, emitSpawn: admitSpawn, trackSpawn: () => {} });
 
   // Check if there are pending user tasks (even if on cooldown). If user tasks
   // exist, don't run self-improvement — wait for user tasks to be ready.
   const pendingUserTasks = userTaskData.grouped?.pending || [];
   const hasPendingUserTasks = pendingUserTasks.length > 0;
 
-  // Shared spawn context threaded through each priority tier. The tiers mutate
-  // `tasksToSpawn` / `spawnProjectCounts` through the helpers; `canSpawnTask`
-  // and `trackSpawn` close over those same references so the running totals stay
-  // consistent across tiers. `autonomousSlotCeiling` is filled in after the
-  // global-slot tiers (0–1) settle, below.
-  const ctx = {
+  // Read-only spawn context shared by every priority tier (#9609). Frozen so a
+  // tier cannot pass a value to a later tier by writing into it — a tier that
+  // produces something a later tier needs RETURNS it, and the sequence below
+  // threads it as a named argument. Spawning goes through `spawnAdapter`, whose
+  // closures own the running `tasksToSpawn` / `spawnProjectCounts` totals.
+  const ctx = Object.freeze({
     state,
     cosTaskData,
     instanceId,
@@ -1231,15 +1233,12 @@ export async function evaluateTasks(options) {
     initialStartup,
     pendingUserTasks,
     hasPendingUserTasks,
-    canSpawnTask,
-    trackSpawn,
-    taskSchedule: null,
-    autonomousSlotCeiling: availableSlots
-  };
+    spawnAdapter,
+  });
 
   // Priority 0 (on-demand) spends against the global slot cap and runs even when
   // paused — an explicit user "Run" bypasses the global pause.
-  await spawnPriority0OnDemand(ctx);
+  const { schedule: taskSchedule } = await spawnPriority0OnDemand(ctx);
 
   // Every tier below is scheduled/autonomous/user work that the global pause
   // stops. When paused we skip them and let the shared spawn loop below emit just
@@ -1253,13 +1252,13 @@ export async function evaluateTasks(options) {
     // so the autonomous sections below may add at most `autonomousActionsRemaining`
     // more. With no action cap this equals `availableSlots`, so the default path is
     // unchanged. The autonomous tiers use this in place of `availableSlots`.
-    ctx.autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
+    const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
 
     // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
-    await spawnPriority2AutoApproved(ctx);
+    await spawnPriority2AutoApproved(ctx, { taskSchedule, autonomousSlotCeiling });
     await maybeQueueImprovementTasks(ctx);
-    await spawnPriority36FeatureAgents(ctx);
-    await spawnPriority4IdleReview(ctx);
+    await spawnPriority36FeatureAgents(ctx, { autonomousSlotCeiling });
+    await spawnPriority4IdleReview(ctx, { autonomousSlotCeiling });
   }
 
   // Emit evaluation status

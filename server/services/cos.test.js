@@ -1384,10 +1384,10 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     const onDemandIdx = fnBody.indexOf('spawnPriority0OnDemand(ctx)');
     const userIdx     = fnBody.indexOf('spawnPriority1UserTasks(ctx)');
-    const autoSysIdx  = fnBody.indexOf('spawnPriority2AutoApproved(ctx)');
+    const autoSysIdx  = fnBody.indexOf('spawnPriority2AutoApproved(ctx,');
     const queueIdx    = fnBody.indexOf('maybeQueueImprovementTasks(ctx)');
-    const featureIdx  = fnBody.indexOf('spawnPriority36FeatureAgents(ctx)');
-    const idleIdx     = fnBody.indexOf('spawnPriority4IdleReview(ctx)');
+    const featureIdx  = fnBody.indexOf('spawnPriority36FeatureAgents(ctx,');
+    const idleIdx     = fnBody.indexOf('spawnPriority4IdleReview(ctx,');
 
     expect(onDemandIdx, 'spawnPriority0OnDemand must be invoked').toBeGreaterThan(-1);
     expect(userIdx, 'spawnPriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);
