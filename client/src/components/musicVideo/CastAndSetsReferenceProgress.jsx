@@ -56,7 +56,7 @@ function ReferenceCard({ item, stage }) {
           {(previous || retained) && <figcaption className="text-[11px] text-port-text-muted">{previous ? 'Previous revision — replacement pending' : `Retained from revision ${formatCount(image.submittedRevision)}`}</figcaption>}
         </figure>
       )}
-      {error && <p className="text-xs text-port-error break-words [overflow-wrap:anywhere]">{error}</p>}
+      {error && <p role="alert" className="text-xs text-port-error break-words [overflow-wrap:anywhere]">{error}</p>}
       {live.status === 'running' && <progress aria-label={`${item.label || item.key} rendering progress`} className="w-full" max={1} value={Math.max(0, Math.min(1, live.progress || 0))} />}
       {live.status === 'running' && live.statusMsg && <p className="text-[11px] text-port-text-muted break-words">{live.statusMsg}</p>}
       <details className="min-w-0 text-xs">
