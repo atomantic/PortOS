@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { acceptanceEvidence, acceptanceFreshness, acceptanceProblem } from './codeAnimationAcceptance.js';
+import { acceptanceFreshness, acceptanceProblem, freezeAcceptance } from './codeAnimationAcceptance.js';
 
-describe('acceptanceEvidence', () => {
+describe('freezeAcceptance', () => {
   it('keeps the four dimensions apart and never turns an unmeasured dimension into a pass', () => {
-    const evidence = acceptanceEvidence({
-      verified: ['frame-size', 'timing', 'visual-motion'],
-      unverified: [{ dimension: 'semantic-visual', reason: 'No reviewer ran.' }],
-      findings: [{ kind: 'frozen-span', severity: 'error', detail: 'x' }],
-    });
+    const run = { id: 'r', data: { findings: [{ kind: 'frozen-span', severity: 'error', detail: 'x' }], output: { revisionId: 'v', sourceHash: 'h', packageHash: 'p', videoId: 'x', filename: 'a.mp4',
+      verifiedDimensions: ['frame-size', 'timing', 'visual-motion'], unverified: [{ dimension: 'semantic-visual', reason: 'No reviewer ran.' }] } } };
+    const { evidence } = freezeAcceptance({ run, project: { title: 't', manifest: { format: {} } }, renderHash: 'r' });
     expect(evidence.technical.status).toBe('verified');
     expect(evidence.visual.status).toBe('partial');
     expect(evidence.temporal.status).toBe('failed');

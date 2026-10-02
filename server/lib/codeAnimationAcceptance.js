@@ -29,7 +29,7 @@ const ALWAYS_UNVERIFIED = [
 ];
 
 /** `{ technical, visual, temporal, sound }`, each `{ status, verified, unverified, findings }`. */
-export function acceptanceEvidence({ findings = [], verified = [], unverified = [] }) {
+function acceptanceEvidence({ findings = [], verified = [], unverified = [] }) {
   const result = Object.fromEntries(ACCEPTANCE_DIMENSIONS.map(key => [key, { status: 'unverified', verified: [], unverified: [], findings: [] }]));
   for (const check of verified) result[dimensionOfCheck(check)].verified.push(check);
   for (const item of [...unverified, ...ALWAYS_UNVERIFIED]) {
