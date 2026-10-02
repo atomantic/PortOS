@@ -132,10 +132,12 @@ export {
 export { buildSecurityScanPipelineOutput } from './prReviewerPipeline.js';
 
 /**
- * Block a task that has exceeded the max spawn limit. Returns true if blocked.
+ * Persist a `blocked` status on a task that has hit the max-total-spawns
+ * ceiling. Unconditional: the caller has already established `exceedsMaxSpawns`.
+ * The name carries the side effect — dry-run planning must only ever call the
+ * pure `exceedsMaxSpawns` predicate.
  */
-export async function blockIfExceedsMaxSpawns(task, taskType) {
-  if (!exceedsMaxSpawns(task)) return false;
+async function blockMaxSpawnsExceeded(task, taskType) {
   const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
   emitLog('info', `🚫 Blocking task ${task.id} — exceeded max spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS})`, { taskId: task.id });
   await updateTask(task.id, {
@@ -144,13 +146,12 @@ export async function blockIfExceedsMaxSpawns(task, taskType) {
   }, taskType).catch(err => {
     emitLog('warn', `Failed to block task ${task.id}: ${err.message}`, { taskId: task.id });
   });
-  return true;
 }
 
 /**
- * Non-mutating sibling of `blockIfExceedsMaxSpawns` — true when a task has hit
- * the max-total-spawns ceiling, WITHOUT blocking/persisting it. Used by the
- * dry-run eligibility pass, which must predict execute's skip without mutating.
+ * Pure predicate — true when a task has hit the max-total-spawns ceiling.
+ * Never blocks or persists; the execute passes pair it with
+ * `blockMaxSpawnsExceeded`, and the dry-run pass uses it alone.
  */
 export function exceedsMaxSpawns(task) {
   return (Number(task.metadata?.totalSpawnCount) || 0) >= MAX_TOTAL_SPAWNS;
@@ -236,9 +237,67 @@ export async function recordDeferredPerpetualDispatch(pendingPerpetualDispatch, 
 }
 
 /**
+ * The ordered per-task admission gates for auto-approved system tasks — the ONE
+ * place their order lives. `selectDryRunAutoApproved` walks it for the plan
+ * (never calling `onReject`); `admitAutoApprovedSystemTasks` walks it for the
+ * real pass and runs the first rejecting gate's `onReject` effect. Adding or
+ * reordering a gate here changes both passes at once, so the dry-run plan cannot
+ * drift from what execute does.
+ *
+ * `rejects(task, hooks)` is pure (it may await a read-only probe); every side
+ * effect (logging, persisting a block, deferral records) belongs to `onReject`.
+ * `hooks` carries the engine-specific predicates: `notRunnableHere` (pinned to
+ * another instance #4520, or a peer's live lease #1650 — returns a truthy
+ * reason), `extraSkip` (disabled analysis type), `cooldownExempt`, `isOnCooldown`.
+ */
+const AUTO_APPROVED_GATES = Object.freeze([
+  {
+    name: 'not-runnable-here',
+    rejects: (task, hooks) => hooks.notRunnableHere(task),
+    onReject: async (task, { detail }) => {
+      emitLog('debug', `Skipping system task ${task.id} — ${detail}`, { taskId: task.id });
+    },
+  },
+  {
+    name: 'max-spawns',
+    rejects: (task) => exceedsMaxSpawns(task),
+    onReject: (task) => blockMaxSpawnsExceeded(task, 'internal'),
+  },
+  {
+    name: 'disabled-analysis-type',
+    rejects: (task, hooks) => hooks.extraSkip(task),
+    onReject: async (task) => {
+      emitLog('info', `System task skipped — task type '${analysisTypeForTask(task)}' is disabled`, { taskId: task.id });
+    },
+  },
+  {
+    name: 'cooldown',
+    rejects: async (task, hooks) => {
+      const appId = task.metadata?.app;
+      return Boolean(appId) && !hooks.cooldownExempt(task) && (await hooks.isOnCooldown(appId));
+    },
+    onReject: (task, { onDefer }) => onDefer({ type: 'cooldown', task, appId: task.metadata?.app }),
+  },
+]);
+
+/**
+ * First gate in `AUTO_APPROVED_GATES` that rejects `task`, as `{ gate, detail }`
+ * (`detail` is the gate's truthy verdict, e.g. the not-runnable-here reason), or
+ * null when the task clears them all. Pure — runs no `onReject` effect.
+ */
+async function firstRejectingGate(task, hooks) {
+  for (const gate of AUTO_APPROVED_GATES) {
+    const detail = await gate.rejects(task, hooks);
+    if (detail) return { gate, detail };
+  }
+  return null;
+}
+
+/**
  * Dry-run eligibility pass over auto-approved system tasks. Walks the tasks in
- * file order applying the SAME gates execute mode uses — global slot cap,
- * max-total-spawns, app cooldown, per-project cap — while tracking virtual
+ * file order applying the SAME gates execute mode uses — global slot cap, then
+ * the shared `AUTO_APPROVED_GATES` table (one declarative list that
+ * `admitAutoApprovedSystemTasks` also iterates), then per-project cap — while tracking virtual
  * capacity, and returns the ordered subset execute mode WOULD spawn. It never
  * blocks, persists, or emits anything, so a dry-run can log exactly the set
  * execute would spawn instead of over-reporting (logging tasks execute would
@@ -274,6 +333,7 @@ export async function selectDryRunAutoApproved(autoApproved, ctx) {
     extraSkip = () => false,
     notRunnableHere = () => false
   } = ctx;
+  const hooks = { isOnCooldown, cooldownExempt, extraSkip, notRunnableHere };
 
   const counts = { ...spawnProjectCounts };
   let spawned = alreadySpawned;
@@ -281,12 +341,8 @@ export async function selectDryRunAutoApproved(autoApproved, ctx) {
 
   for (const task of autoApproved) {
     if (spawned >= availableSlots) break;
-    if (notRunnableHere(task)) continue;
-    if (exceedsMaxSpawns(task)) continue;
-    if (extraSkip(task)) continue;
-    const appId = task.metadata?.app;
-    if (appId && !cooldownExempt(task) && (await isOnCooldown(appId))) continue;
-    const project = appId || '_self';
+    if (await firstRejectingGate(task, hooks)) continue;
+    const project = task.metadata?.app || '_self';
     if ((counts[project] || 0) >= perProjectLimit) continue;
     counts[project] = (counts[project] || 0) + 1;
     spawned++;
@@ -830,7 +886,14 @@ export async function admitAutoApprovedSystemTasks(ctx, adapter) {
       ? (cosTaskData.grouped?.pending || []).filter((task) => isAutoApprovableInvestigation(task, state.config))
       : [])
   ];
-  const disabledAnalysisType = (task) => isDisabledAnalysisType(task, taskSchedule);
+  // One hook set feeds both walks, so the dry-run plan and the execute pass
+  // cannot disagree about what each gate means.
+  const gateHooks = {
+    isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
+    cooldownExempt: isCooldownExemptTask,
+    extraSkip: (task) => isDisabledAnalysisType(task, taskSchedule),
+    notRunnableHere: (task) => getSkipReason(task.metadata, instanceId)
+  };
 
   if (cosAutonomyMode !== 'execute') {
     if (cosAutonomyMode !== 'dry-run') return [];
@@ -839,10 +902,7 @@ export async function admitAutoApprovedSystemTasks(ctx, adapter) {
       alreadySpawned,
       perProjectLimit,
       spawnProjectCounts,
-      isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
-      cooldownExempt: isCooldownExemptTask,
-      extraSkip: disabledAnalysisType,
-      notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null
+      ...gateHooks
     });
     for (const task of wouldSpawn) {
       emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
@@ -854,21 +914,12 @@ export async function admitAutoApprovedSystemTasks(ctx, adapter) {
   let spawned = alreadySpawned;
   for (const task of autoApproved) {
     if (spawned >= autonomousSlotCeiling) break;
-    const skipReason = getSkipReason(task.metadata, instanceId);
-    if (skipReason) {
-      emitLog('debug', `Skipping system task ${task.id} — ${skipReason}`, { taskId: task.id });
-      continue;
-    }
-    if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
-    if (disabledAnalysisType(task)) {
-      emitLog('info', `System task skipped — task type '${analysisTypeForTask(task)}' is disabled`, { taskId: task.id });
+    const rejection = await firstRejectingGate(task, gateHooks);
+    if (rejection) {
+      await rejection.gate.onReject(task, { detail: rejection.detail, onDefer });
       continue;
     }
     const appId = task.metadata?.app;
-    if (appId && !isCooldownExemptTask(task) && (await isAppOnCooldown(appId, state.config.appReviewCooldownMs))) {
-      await onDefer({ type: 'cooldown', task, appId });
-      continue;
-    }
     const sysTask = { ...task, taskType: 'internal' };
     if (!canSpawn(sysTask, autonomousSlotCeiling)) {
       await onDefer({ type: 'capacity', task, project: appId || '_self' });
@@ -932,7 +983,10 @@ export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, ad
       emitLog('debug', `Skipping user task ${task.id} — recovered row is not auto-approved`, { taskId: task.id });
       continue;
     }
-    if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
+    if (exceedsMaxSpawns(task)) {
+      await blockMaxSpawnsExceeded(task, 'user');
+      continue;
+    }
     const userTask = { ...task, taskType: 'user' };
     if (!canSpawn(userTask)) {
       await onDefer(userTask);

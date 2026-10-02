@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
 import * as taskStore from './cosTaskStore.js';
+import * as appActivity from './appActivity.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -68,6 +69,7 @@ vi.mock('./github.js', async (importActual) => ({
 
 import {
   selectDryRunAutoApproved,
+  admitAutoApprovedSystemTasks,
   admitPendingUserTasks,
   exceedsMaxSpawns,
   shouldParkUnchangedPerpetualWork,
@@ -226,25 +228,6 @@ describe('dry-run hook wiring matches the shared execute path', () => {
     return src.slice(start, end);
   };
 
-  const callSite = () => {
-    // Anchor on the CALL (`await selectDryRunAutoApproved(`), not the function
-    // definition (`export async function selectDryRunAutoApproved(`).
-    const start = GEN_SRC.indexOf('await selectDryRunAutoApproved(');
-    expect(start, 'selectDryRunAutoApproved must be called').toBeGreaterThan(-1);
-    const end = GEN_SRC.indexOf('});', start);
-    expect(end, 'selectDryRunAutoApproved call must close').toBeGreaterThan(start);
-    return GEN_SRC.slice(start, end + 3);
-  };
-
-  it('the shared pass applies cooldown exemption and disabled-analysis-type gates', () => {
-    const site = callSite();
-    expect(site).toContain('extraSkip: disabledAnalysisType');
-    // dequeue must exempt perpetual/pipeline tasks from cooldown in its dry-run
-    // plan too, mirroring its execute gate — otherwise the plan over-reports a
-    // perpetual drain as "would skip (cooldown)" that execute actually spawns.
-    expect(site).toContain('cooldownExempt: isCooldownExemptTask');
-  });
-
   it('both engines delegate Priority 2 to admitAutoApprovedSystemTasks', () => {
     expect(between(COS_SRC, 'async function spawnDequeuePriority2AutoApproved', '/**\n * Priority 3'))
       .toContain('admitAutoApprovedSystemTasks(');
@@ -262,17 +245,6 @@ describe('dry-run hook wiring matches the shared execute path', () => {
       .toContain('admitPendingUserTasks(');
     expect(between(GEN_SRC, 'async function spawnPriority1UserTasks', 'async function recordPendingUserDeferral'))
       .toContain('admitPendingUserTasks(');
-  });
-
-  it('the shared EXECUTE loop gates cooldown on isCooldownExemptTask', () => {
-    // The spawn gate (not just the dry-run planner) must consult the shared
-    // predicate, or a perpetual task the refill queued is skipped at spawn time
-    // until the 30-min window expires — the manually-triggered-drain stall.
-    const sharedPass = GEN_SRC.slice(
-      GEN_SRC.indexOf('export async function admitAutoApprovedSystemTasks'),
-      GEN_SRC.indexOf('async function recordAutoApprovedDeferral')
-    );
-    expect(sharedPass).toMatch(/appId\s*&&\s*!isCooldownExemptTask\(task\)/);
   });
 });
 
@@ -403,19 +375,12 @@ describe('not-runnable-here skip during candidate selection (#1650, #4520)', () 
     expect(GEN_SRC).toContain('const instanceId = await ensureInstanceId();');
   });
 
-  it('the two shared admission passes keep the not-runnable-here skip', () => {
-    // Both Priority-1 (admitPendingUserTasks) and Priority-2
-    // (admitAutoApprovedSystemTasks) consult getSkipReason exactly once, in
-    // cosTaskGenerator.js — the ONE place either spawn engine can drift this
-    // guard now that both delegate here instead of hand-mirroring it (#7523).
-    const genSkips = GEN_SRC.match(/getSkipReason\(task\.metadata,\s*instanceId\);\n\s*if \(skipReason\)/g) || [];
+  it('the Priority-1 pass keeps its not-runnable-here skip; Priority-2 gets it from the shared gate table', () => {
+    // Priority-1 (admitPendingUserTasks) consults getSkipReason inline; Priority-2
+    // reaches it through AUTO_APPROVED_GATES (behaviorally pinned by the
+    // dry-run/execute parity test below), so a second inline call must not return.
+    const genSkips = GEN_SRC.match(/getSkipReason\(task\.metadata,\s*instanceId\)/g) || [];
     expect(genSkips.length).toBe(2);
-  });
-
-  it('the shared pass supplies notRunnableHere so both dry-run adapters match execute', () => {
-    // Covers BOTH reasons this instance passes over a task at spawn time: a
-    // peer's live lease (#1650) and a pin to another instance (#4520).
-    expect(GEN_SRC).toContain('notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null');
   });
 });
 
@@ -2120,5 +2085,58 @@ describe('resolveAppClaimReviewers', () => {
     expect(result.reviewers).toEqual([]);
     expect(result.csv).toBe('');
     expect(result.overridden).toBe(true);
+  });
+});
+
+// The dry-run plan and the execute pass iterate ONE gate table
+// (AUTO_APPROVED_GATES), so for identical inputs the plan must equal what execute
+// emits. Driving both through admitAutoApprovedSystemTasks means any gate added to
+// the table is covered here without a new assertion.
+describe('admitAutoApprovedSystemTasks dry-run/execute parity', () => {
+  const ctxFor = (cosAutonomyMode, tasks) => ({
+    state: { config: { appReviewCooldownMs: 60000 } },
+    cosTaskData: { exists: true, autoApproved: tasks },
+    taskSchedule: { tasks: { 'enabled-type': { enabled: true } } },
+    cosAutonomyMode,
+    autonomousSlotCeiling: 4,
+    alreadySpawned: 0,
+    perProjectLimit: 1,
+    spawnProjectCounts: {},
+    instanceId: 'local',
+  });
+  const makeTasks = () => [
+    task('pinned-elsewhere', { targetInstanceId: 'other-instance' }),
+    task('exhausted', { totalSpawnCount: MAX_TOTAL_SPAWNS }),
+    task('disabled-type', { analysisType: 'disabled-type' }),
+    task('cooling', { app: 'coolApp' }),
+    task('perpetual-exempt', { app: 'coolApp', perpetual: true }),
+    task('enabled-type', { analysisType: 'enabled-type', app: 'appB' }),
+    task('same-project-over-cap', { app: 'appB' }),
+    task('plain'),
+  ];
+
+  const execAdapter = (limit) => {
+    const counts = {};
+    return {
+      canSpawn: (t) => (counts[t.metadata?.app || '_self'] || 0) < limit,
+      trackSpawn: (t) => { const k = t.metadata?.app || '_self'; counts[k] = (counts[k] || 0) + 1; },
+      emitSpawn: () => {},
+    };
+  };
+
+  it('plans exactly the tasks execute admits, and only execute persists the max-spawns block', async () => {
+    vi.spyOn(appActivity, 'isAppOnCooldown').mockImplementation(async (appId) => appId === 'coolApp');
+    const persist = vi.spyOn(taskStore, 'updateTask').mockResolvedValue({});
+
+    const planned = await admitAutoApprovedSystemTasks(ctxFor('dry-run', makeTasks()), execAdapter(1));
+    expect(persist).not.toHaveBeenCalled();
+
+    const admitted = await admitAutoApprovedSystemTasks(ctxFor('execute', makeTasks()), execAdapter(1));
+    expect(admitted.map(t => t.id)).toEqual(['perpetual-exempt', 'enabled-type', 'plain']);
+    expect(planned.map(t => t.id)).toEqual(admitted.map(t => t.id));
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist).toHaveBeenCalledWith('exhausted', expect.objectContaining({ status: 'blocked' }), 'internal');
+
+    vi.restoreAllMocks();
   });
 });
