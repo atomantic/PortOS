@@ -145,7 +145,8 @@ of those may contain PortOS data or the home directory.
   configured tools, the last containment check and each lane's readiness.
   Readiness fails closed: the Blender lane is ready only after a containment
   check has passed in this server process with the currently configured
-  executable.
+  executable, and its fixed test scene has rendered successfully. This is a
+  runtime probe, not readiness of the pending Blender production-stage adapter.
 - `PUT /api/code-animation/execution/tools` sets `{ blender: { executable } }`
   (`null` clears it). Host control: it chooses what a worker runs.
 - `POST /api/code-animation/execution/probe` runs the containment check on
@@ -159,12 +160,25 @@ of those may contain PortOS data or the home directory.
   or to the network. Positive control: the worker must still write its report.
   Separate runs must be terminated by the wall-time, disk, memory and
   cancellation limits with an empty process group. A configured Blender is then
-  started contained with `--background --factory-startup --version`.
+  asked to build and render a fixed 64 × 64 cube scene under containment using
+  `--background --factory-startup --disable-autoexec --python-exit-code 1`.
+  The baseline is Blender 4.2.0, matching the existing pinned rigging runtime,
+  with Cycles / CPU, eight samples and seed zero. Other versions remain
+  unverified and fail this probe. The check decodes the PNG, requires the exact
+  dimensions and nonblank pixels, validates the runtime/engine/device report,
+  and records its image SHA-256 and elapsed time. A version banner, successful
+  exit or `bpy` import alone cannot pass. No generated project code runs here;
+  no dependency installation is attempted.
 
 Known limits: Blender is granted CPU rendering only — no GPU/Metal device or
 window-server access — and has not been verified under this profile on a
-machine with Blender installed; a Blender that cannot start contained keeps its
-lane refused. Seatbelt (`sandbox-exec`) is deprecated by Apple but remains the
+machine with Blender installed; a Blender that cannot render the fixed scene
+contained keeps its lane refused. CPU rendering can be substantially slower
+than GPU rendering; this check does not measure final-film render cost.
+EEVEE/GPU profiles, production scene building, pilot/final sequences, cadence,
+artifacts and the independently authored painterly starter remain tracked in
+#9390. Actual repeatable 10–15 second 1080p/24fps acceptance is still required;
+synthetic protocol tests are not renderer acceptance. Seatbelt (`sandbox-exec`) is deprecated by Apple but remains the
 mechanism Chromium and the private security assessment harness use. A host
 that already runs PortOS inside another sandbox may be unable to apply a nested
 profile; the check then fails and execution stays refused. Memory and total

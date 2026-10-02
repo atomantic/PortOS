@@ -197,5 +197,11 @@ describe('Production project rendered interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Run containment check' }));
     expect(await screen.findByText(/Containment proven: 1 of 1 checks/)).toBeInTheDocument();
     expect(screen.getByText('Blender did not start under containment.')).toBeInTheDocument();
+    api.probeCodeAnimationExecution.mockResolvedValue({ ...saved,
+      probe: { passed: true, refused: null, checks: [], tools: { blender: { passed: true, detail: 'Cycles / CPU test scene rendered.' } } },
+      lanes: { ...saved.lanes, blender: { ready: true, reason: null } } });
+    await user.click(screen.getByRole('button', { name: 'Run containment check' }));
+    expect(await screen.findByText(/Test scene rendered \(production adapter pending\)/)).toBeInTheDocument();
+    expect(screen.getByText('Cycles / CPU test scene rendered.')).toBeInTheDocument();
   });
 });
