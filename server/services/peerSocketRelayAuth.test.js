@@ -116,7 +116,7 @@ const stopServer = async () => {
   // Tolerate partial setup (a stage failed before the server existed) so the
   // teardown error does not mask the original failure.
   if (ioServer) await new Promise((resolve) => ioServer.close(resolve));
-  else if (httpServer) await new Promise((resolve) => httpServer.close(resolve));
+  if (httpServer) await new Promise((resolve) => httpServer.close(resolve));
   ioServer = undefined;
   httpServer = undefined;
 };
