@@ -1007,6 +1007,14 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     ]).filter((path) => existsSync(join(cwd, path)))
     : trackedFiles;
 
+  // Present, non-ignored untracked sources are real local imports: without them
+  // a tracked importer of a not-yet-staged module looks unresolved and the
+  // dependency walk fails closed to a full plan. Local override mode only —
+  // committed CI inputs stay tracked-only.
+  const untrackedFiles = hasChangedFilesOverride
+    ? gitPaths(['ls-files', '-z', '--others', '--exclude-standard'], cwd).filter((path) => existsSync(join(cwd, path)))
+    : [];
+
   let appDiff = null;
   if (!forceFull && collectedChangedFiles.includes('client/src/App.jsx')) {
     const committedDiff = execFileSync(
@@ -1032,7 +1040,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
 
   const clientDependencies = collectedChangedFiles.some((path) => path.startsWith('server/lib/')
     && isExecutable(path) && !isTestFile(path))
-    ? collectClientDependencies(presentFiles, cwd)
+    ? collectClientDependencies(hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles, cwd)
     : [];
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests, clientDependencies };
