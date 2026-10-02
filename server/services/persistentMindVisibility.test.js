@@ -58,6 +58,25 @@ beforeEach(() => {
 });
 
 describe('persistent mind visibility', () => {
+  it('distinguishes granted permission groups from callable semantic tools in the mind prompt', async () => {
+    const visibility = await readPersistentMindVisibility({
+      root: { config: { persistentMindCapabilities: { readPortos: true, auditReports: true } } },
+      apps: [],
+    });
+    const before = structuredClone(visibility);
+    const prompt = buildPersistentMindVisibilityPrompt(visibility);
+    const projection = JSON.parse(prompt.slice(prompt.indexOf('\n{') + 1));
+    expect(projection.actions.tools).toBeUndefined();
+    expect(projection.actions.capabilityGroups).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'portos.read', granted: true }),
+      expect.objectContaining({ id: 'reports.audit', granted: true }),
+    ]));
+    expect(prompt).toContain('NOT callable tools');
+    expect(prompt).toContain('tools.activate');
+    expect(prompt).toContain('reports.next');
+    expect(visibility).toEqual(before);
+  });
+
   it('counts busy agents from the root and passes actual mind state to runtime inspection', async () => {
     const root = {
       config: { maxConcurrentAgents: 2 },
