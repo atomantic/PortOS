@@ -13,7 +13,7 @@ brief → lyrics → style → song → analyze → produce
 | `brief` | One LLM call turns the prompt into a title, a musical description, a compact Suno style line, a visual concept and a mood-board spec. The project is renamed to the title. | one provider call |
 | `lyrics` | Original lyrics written against the musical description (skipped for an instrumental). | one provider call |
 | `style` | A **Mood Board** (text notes + a composite look prompt and an avoid list) is created and linked as the project's mood board; the concept is set from the brief. No images are generated. | free |
-| `song` | The PortOS Browser submits a Suno song (custom mode: lyrics, style, title). CDN downloads are bounded and decoded before import, but the current adapter cannot verify generation completion and stops before importing (see [Suno completion evidence](#suno-completion-evidence)). | Suno credits |
+| `song` | The PortOS Browser drives the Suno web UI (custom mode: lyrics, style, title), only M4A is selected in Suno's Download UI and the completed audio is validated and imported directly into the music library, a Track is created, the take is recorded with `source: 'suno'`, and the project is linked to it. | Suno credits |
 | `song` (local) | `songSource: 'local'` renders the song with the on-device Music Designer engines instead (see [Local song source](#local-song-source)). | free (GPU time) |
 | `analyze` | The usual offline beat / tempo / section analysis. | free |
 | `produce` | **Footage** (any image/video tool picked): the existing server-owned production run (`/production-runs`) with a pool built from the picks, then the final render once it completes. **Code** (only `code:render`): a code-rendered video is authored and rendered directly. | per tool |
@@ -44,37 +44,31 @@ Approving can carry edits (`POST /api/music-video/:id/autonomous/resume` with `{
 
 ## Suno completion evidence
 
-The CDN exposes playable partial files. Two equal byte counts, an audio MIME
-header, a duration, or successful decoding cannot prove that generation ended.
-As required by [#9525](https://github.com/atomantic/PortOS/issues/9525), the adapter
-preserves that uncertainty explicitly until a reliable completion signal is
-available. **Automatic Suno import is currently unavailable**: a stable,
-decodable candidate returns `SUNO_AUDIO_COMPLETION_UNVERIFIED` instead of
-silently importing potentially partial audio. Choosing the local song source
-remains the complete unattended path.
+The CDN exposes playable partial files. Equal byte counts, an audio MIME header,
+a duration, or successful decoding cannot prove that generation ended. The
+adapter uses Suno's Download UI and waits for the browser to finish saving the
+M4A export before validating and importing it. It never downloads a CDN preview.
 
-The downloader aborts stalled headers and body reads within the overall budget
-(`SUNO_AUDIO_TIMEOUT`). It rejects known non-audio content and uses ffmpeg to
-decode candidate audio in a temporary directory, removed on success or failure.
-Diagnostics carry fixed reasons and bounded HTTP status, never response bodies
-or song URLs.
+Validation checks the container signature and uses ffmpeg to decode every audio
+frame with file-only access, the MOV/M4A demuxer, a bounded process deadline, and
+positive decoded-frame evidence. Original AAC or Opus audio and optional
+subtitles remain unchanged. Invalid content, missing ffmpeg, timeout, or
+cancellation prevents import. Temporary files are removed on success or failure;
+diagnostics contain fixed reasons rather than decoder output or private paths.
 
-A future integration must verify the exact song's completion before returning
-`complete` from the internal completion adapter; `pending` keeps polling, and
-missing/unrecognized evidence remains unknown. The injected completed fixture
-tests this admission contract; it is not evidence of live Suno support.
-[#9474](https://github.com/atomantic/PortOS/issues/9474) owns live Suno acceptance.
-Retry retains already-submitted IDs and does not press Create or spend more
-credits. Repeating Retry cannot resolve unknown completion until the integration
-provides that evidence.
+[#9474](https://github.com/atomantic/PortOS/issues/9474) owns live acceptance of
+the new browser export driver. Deterministic browser fixtures and real synthetic
+decoder tests do not establish that live acceptance. Retry retains submitted IDs
+and does not press Create or spend credits on a second generation.
 
 ## Failure handling
 
 - A signed-out Suno parks the run **`needs-human`** (`PUBLISH_LOGIN_REQUIRED`): sign in to Suno in the PortOS Browser, then Resume.
 - Any other stage failure parks **`failed`** with the error; Retry re-runs that stage only. Songs already submitted to Suno are stored the moment Suno accepts the request, so a failed download retries the same songs and never spends credits on a second generation.
+- Resume after Stop waits for the prior stage attempt to settle before restarting. A Cancel while Resume waits remains canceled.
 - A parked or failed delegated production run parks this run `needs-human`; Resume resumes the production run.
 
-The Suno adapter fills the form through `placeholder` / role selectors and reads the new `/song/<id>` links; everything after Create is plain HTTP against the CDN. If Suno redesigns the page, the failing step is named in the error (`Suno: fill the lyrics (…)`).
+The Suno adapter fills the form through `placeholder` / role selectors and reads the new `/song/<id>` links. It opens the first take in the same signed-in PortOS Browser, selects only M4A, and presses Download (or Unlock & Download) once. It waits for the browser download to finish saving, checks the container and decodes the complete audio to reject damaged files, and imports the original M4A without conversion. The export has a ten-minute deadline; timeout, cancellation, or invalid audio removes staging files and never imports a partial/error response. Failures identify the export stage using bounded reason metadata. A retry reopens the existing song rather than pressing Create again.
 
 ## API
 

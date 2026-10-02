@@ -47,7 +47,8 @@ import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 
 const PROCESS_ID = `proc-${randomUUID()}`;
-const inflight = new Set();
+const inflight = new Map();
+const sunoControllers = new Map();
 const short = (id) => String(id).slice(0, 8);
 
 // Lazy imports keep this module's static closure small: it is reached by the
@@ -195,9 +196,15 @@ const STAGES = {
     });
     let submitted = run.output.sunoSongIds?.length > 0;
     let song;
+    const controller = new AbortController();
+    sunoControllers.set(run.id, controller);
     try {
+      const latest = projectAutonomousRun(await getProject(project.id));
+      if (latest?.id !== run.id || latest.status !== 'running') controller.abort();
+      controller.signal.throwIfAborted();
       song = await deps.generateSunoSong(fields, {
         songIds: run.output.sunoSongIds,
+        signal: controller.signal,
         // Stored the moment Suno accepts the request, so a failed download retries
         // the same songs instead of spending credits on another generation.
         onSubmitted: (ids) => { submitted = true; return save({ output: { sunoSongIds: ids } }); },
@@ -205,11 +212,14 @@ const STAGES = {
     } catch (err) {
       // Only before Suno accepted a request: after that, credits are spent and a
       // retry reuses those songs rather than paying for a second render.
-      if (!run.brief.localFallback || submitted) throw err;
+      if (controller.signal.aborted || !run.brief.localFallback || submitted) throw err;
       console.warn(`⚠️ Autonomous music video ${short(run.id)} could not use Suno (${trimTo(err.message, 200)}) — rendering the song locally`);
       await save({ output: { songSource: 'local', songFallbackReason: trimTo(err.message, 500) } });
       return localSong({ project, run, save });
+    } finally {
+      sunoControllers.delete(run.id);
     }
+    controller.signal.throwIfAborted();
     const track = await deps.createTrack({
       title: fields.title, concept: run.brief.prompt, lyrics: fields.lyrics, prompt: fields.style,
     });
@@ -257,7 +267,8 @@ async function park(projectId, status, patch) {
 
 async function advance(projectId) {
   if (inflight.has(projectId)) return;
-  inflight.add(projectId);
+  const settlement = Promise.withResolvers();
+  inflight.set(projectId, settlement.promise);
   try {
     for (;;) {
       const project = await getProject(projectId);
@@ -274,7 +285,7 @@ async function advance(projectId) {
       try {
         result = await executor({ project, run, save: (patch) => patchRun(projectId, () => patch) });
       } catch (err) {
-        // A stop/cancel mid-stage (it cancels the local render) must not become a failure.
+        // A stop/cancel mid-stage (it cancels the song operation) must not become a failure.
         const latest = projectAutonomousRun(await getProject(projectId));
         if (latest?.status !== 'running' || latest.processId !== PROCESS_ID) return;
         await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500) }));
@@ -301,6 +312,7 @@ async function advance(projectId) {
     console.error(`❌ Autonomous music video advance failed for ${short(projectId)}: ${err.message}`);
   } finally {
     inflight.delete(projectId);
+    settlement.resolve();
   }
 }
 
@@ -362,12 +374,21 @@ export async function getAutonomousRun(projectId) {
  * approve the checkpoint it is waiting on (optionally replacing the stage
  * output the director edited). Returns `{ project, run }`.
  */
-export async function resumeAutonomousVideo(projectId, edits = {}) {
-  const { run } = await requireRun(projectId);
+const assertResumable = (run) => {
   const resumable = AUTONOMOUS_LIVE_STATUSES.includes(run.status) || run.status === 'failed';
   if (!resumable) throw runError(409, 'NOT_RESUMABLE', `A ${run.status} run cannot be resumed`);
   if (run.status === 'running' && run.processId === PROCESS_ID) throw runError(409, 'ALREADY_RUNNING', 'This run is already running');
+};
+
+export async function resumeAutonomousVideo(projectId, edits = {}) {
+  const { run } = await requireRun(projectId);
+  assertResumable(run);
+  // Stop changes the record immediately, but its stage may still be settling.
+  // Let that attempt release ownership before marking a new attempt running.
+  await inflight.get(projectId);
   const out = await patchRun(projectId, (r) => {
+    // Cancel or another Resume may have won while the old attempt settled.
+    assertResumable(r);
     // A run waiting on production resumes by resuming that run, not by redoing
     // the stage — the stage re-runs only when production never started.
     const stage = r.stage;
@@ -407,6 +428,7 @@ export async function stopAutonomousVideo(projectId) {
     const { stopProduction } = await import('./productionService.js');
     await stopProduction(projectId, run.output.productionRunId).catch(() => {});
   }
+  sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(out.run);
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }
@@ -419,6 +441,7 @@ export async function cancelAutonomousVideo(projectId) {
     const { cancelProduction } = await import('./productionService.js');
     await cancelProduction(projectId, run.output.productionRunId).catch(() => {});
   }
+  sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(out.run);
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }

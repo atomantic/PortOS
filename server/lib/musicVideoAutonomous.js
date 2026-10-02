@@ -192,8 +192,6 @@ export function sunoSongIdsFromHrefs(hrefs) {
   return ids;
 }
 
-/** The public CDN URL Suno serves a finished song's audio from. */
-export const sunoAudioUrl = (songId) => `https://cdn1.suno.ai/${encodeURIComponent(songId)}.mp3`;
 export const sunoSongUrl = (songId) => `https://suno.com/song/${encodeURIComponent(songId)}`;
 
 /**

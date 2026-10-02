@@ -263,6 +263,54 @@ describe('local song source (#9473)', () => {
     expect(runOf().output.sunoSongIds).toEqual(['song-a']);
   });
 
+  it.each(['stopAutonomousVideo', 'cancelAutonomousVideo'])('aborts a Suno export through %s and preserves its submitted ids without attaching audio', async (action) => {
+    let signal;
+    let ended = false;
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      signal = opts.signal;
+      await opts.onSubmitted(['song-a', 'song-b']);
+      try {
+        await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+      } finally { ended = true; }
+    });
+    await service.startAutonomousVideo({ prompt: 'p', localFallback: true });
+    await vi.waitFor(() => expect(runOf()?.output.sunoSongIds).toEqual(['song-a', 'song-b']));
+    await service[action]('mv-auto');
+    await vi.waitFor(() => expect(ended).toBe(true));
+    expect(signal.aborted).toBe(true);
+    expect(runOf()).toMatchObject({ status: action === 'stopAutonomousVideo' ? 'stopped' : 'canceled', output: { sunoSongIds: ['song-a', 'song-b'] } });
+    expect(doubles.createTrack).not.toHaveBeenCalled();
+    expect(doubles.generateLocalSong).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('settles a stopped Suno attempt before resuming, honoring a later Cancel (%s)', async (cancelWhileWaiting) => {
+    let rejectPending;
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      await opts.onSubmitted(['song-a', 'song-b']);
+      return new Promise((_, reject) => { rejectPending = reject; });
+    });
+    await service.startAutonomousVideo({ prompt: 'example' });
+    await vi.waitFor(() => expect(rejectPending).toBeTypeOf('function'));
+    await service.stopAutonomousVideo('mv-auto');
+    const resumed = service.resumeAutonomousVideo('mv-auto');
+    const result = cancelWhileWaiting
+      ? expect(resumed).rejects.toMatchObject({ code: 'NOT_RESUMABLE' })
+      : expect(resumed).resolves.toMatchObject({ run: { status: 'running' } });
+    if (cancelWhileWaiting) await service.cancelAutonomousVideo('mv-auto');
+    expect(doubles.generateSunoSong).toHaveBeenCalledTimes(1);
+    rejectPending(new Error('Export cancelled by earlier Stop'));
+    await result;
+    if (cancelWhileWaiting) {
+      expect(runOf().status).toBe('canceled');
+      expect(doubles.generateSunoSong).toHaveBeenCalledTimes(1);
+    } else {
+      await vi.waitFor(() => expect(calls).toContain('production'));
+      expect(doubles.generateSunoSong).toHaveBeenCalledTimes(2);
+      expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.any(Object), expect.objectContaining({ songIds: ['song-a', 'song-b'] }));
+      expect(runOf()).toMatchObject({ status: 'running', error: null });
+    }
+  });
+
   it('cancels the queued render on stop and leaves the run stopped, not failed', async () => {
     let release;
     doubles.generateLocalSong.mockImplementationOnce(async ({ onSubmitted }) => {
