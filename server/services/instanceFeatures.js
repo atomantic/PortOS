@@ -57,8 +57,8 @@ const DETECTORS = {
   },
   facetime: async () => {
     if (process.platform !== 'darwin') return false;
-    const { checkSetup } = await import('./voice/facetimeBridge.js');
-    const report = await checkSetup();
+    const { checkLocalSetup } = await import('./voice/facetimeBridge.js');
+    const report = await checkLocalSetup();
     return report.helper?.ok === 'ok' && report.identity?.ok === 'ok';
   },
   // Cheap and fail-closed: platform, app bundle and the EnableAPIServer pref —

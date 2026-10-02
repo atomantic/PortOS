@@ -82,15 +82,24 @@ const identityReady = (config) => Boolean(config?.facetime?.targetHandle?.trim()
 
 const fact = (ok, message) => ({ ok: ok ? 'ok' : 'missing', message });
 
+// The two setup facts that need no subprocess (a file check and a config read).
+// Feature detection reads only these, so it must not pay for the audio probe.
+export async function checkLocalSetup(config) {
+  const voiceConfig = config || await getVoiceConfig();
+  return {
+    helper: fact(existsSync(facetimeHelperPath()), 'Run npm run setup:facetime to compile the FaceTime helper.'),
+    identity: fact(identityReady(voiceConfig), 'Set a target name and E.164 phone number or email address.'),
+  };
+}
+
 export async function checkSetup(config) {
   const voiceConfig = config || await getVoiceConfig();
   const facetime = voiceConfig.facetime || {};
-  const helper = facetimeHelperPath();
-  const devices = await listAudioDevices();
+  const [{ helper, identity }, devices] = await Promise.all([checkLocalSetup(voiceConfig), listAudioDevices()]);
   return {
     platform: fact(process.platform === 'darwin', 'FaceTime Audio control requires macOS.'),
-    helper: fact(existsSync(helper), 'Run npm run setup:facetime to compile the FaceTime helper.'),
-    identity: fact(identityReady(voiceConfig), 'Set a target name and E.164 phone number or email address.'),
+    helper,
+    identity,
     accessibility: fact(false, 'Grant Accessibility access to facetime-ax in System Settings > Privacy & Security > Accessibility.'),
     blackHole2ch: checkAudioDevice(devices, facetime.blackHole2chLabel || 'BlackHole 2ch', 2),
     blackHole16ch: checkAudioDevice(devices, facetime.blackHole16chLabel || 'BlackHole 16ch', 16),
