@@ -59,6 +59,7 @@ import AutonomousRunPanel from '../components/musicVideo/AutonomousRunPanel.jsx'
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import MusicVideoLayout from '../components/musicVideo/MusicVideoLayout.jsx';
+import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
 import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
@@ -132,7 +133,8 @@ export default function MusicVideo() {
   const [compositionSavePending, setCompositionSavePending] = useState(0);
   useEffect(() => { setStyleReferencesPending(false); }, [selectedId]);
   const [planning, setPlanning] = useState(false);
-  const [cloning, setCloning] = useState(false);
+  const [cloningId, setCloningId] = useState(null);
+  const cloning = !!cloningId;
   const [importingLyrics, setImportingLyrics] = useState(false);
   const [aligningLyrics, setAligningLyrics] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -342,17 +344,21 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to delete project'));
   };
 
-  const handleClone = (options = {}) => {
-    if (!selected || cloning) return;
-    setCloning(true);
-    cloneMusicVideoProject(selected.id, options, { silent: true })
+  const handleClone = (optionsOrTarget = {}, maybeOptions = {}) => {
+    const isTarget = optionsOrTarget && typeof optionsOrTarget.id === 'string';
+    const target = isTarget ? optionsOrTarget : selected;
+    const options = isTarget ? maybeOptions : (optionsOrTarget || {});
+
+    if (!target || cloningId) return;
+    setCloningId(target.id);
+    cloneMusicVideoProject(target.id, options, { silent: true })
       .then((project) => {
         setProjects((prev) => [...prev, project]);
         navigate(`/music-video/${project.id}`);
         toast.success(`Created ${project.name}`);
       })
       .catch((err) => toast.error(err?.message || 'Failed to clone project'))
-      .finally(() => setCloning(false));
+      .finally(() => setCloningId(null));
   };
 
   // Resolves with the analyzed project, or null when analysis failed (toasted).
@@ -1047,24 +1053,60 @@ export default function MusicVideo() {
           </p>
         )}
         {!selected && (loading || !routeProjectId) && (
-          <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
-            <p className="text-sm text-port-text-muted mb-3">Pick a project in the header, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
-            <div className="flex flex-wrap justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => setCreateOpen(true)}
-                className="inline-flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
-              >
-                <Plus size={15} /> New music video
-              </button>
-              <button
-                type="button"
-                onClick={() => setAutonomousOpen(true)}
-                className="inline-flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
-              >
-                <Wand2 size={15} /> Autonomous
-              </button>
+          <div className="space-y-6">
+            <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
+              <p className="text-sm text-port-text-muted mb-3">Pick a project in the header, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCreateOpen(true)}
+                  className="inline-flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+                >
+                  <Plus size={15} /> New music video
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutonomousOpen(true)}
+                  className="inline-flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+                >
+                  <Wand2 size={15} /> Autonomous
+                </button>
+              </div>
             </div>
+
+            {loading ? (
+              <div className="text-center py-8 text-sm text-port-text-muted">
+                Loading projects…
+              </div>
+            ) : projects.length === 0 ? (
+              <div className="text-center py-6 text-sm text-port-text-muted">
+                No music video projects yet. Create your first project above to get started.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-port-text-muted">
+                    Projects ({projects.length})
+                  </h2>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="mv-project-grid">
+                  {projects.map((project) => (
+                    <MusicVideoProjectCard
+                      key={project.id}
+                      project={project}
+                      trackLabel={trackName(project.trackId)}
+                      onSelect={() => selectProject(project.id)}
+                      onClone={(options) => handleClone(project, options)}
+                      isConfirmingDelete={isConfirmingDelete(project.id)}
+                      onRequestDelete={() => handleDeleteRequest(project.id)}
+                      onConfirmDelete={() => confirmDelete(() => handleDelete(project.id))}
+                      onCancelDelete={cancelDelete}
+                      cloning={cloningId === project.id}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
         {selected && (
