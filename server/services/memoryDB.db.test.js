@@ -25,8 +25,9 @@
  * table, and the run targets a throwaway database.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+import pg from 'pg';
+import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { mockNoPeers, mockTestIdentity, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
@@ -707,4 +708,239 @@ describe.skipIf(!runDb)('memoryDB getGraphData (#3447)', () => {
     // explicit link.
     expect(byPair[[spoke.id, neighbour.id].sort().join('-')]).toBeUndefined();
   });
+});
+
+// Observe real graph statements on their pool connection; do not replace SQL
+// results. This also checks settings immediately after COMMIT/ROLLBACK, before
+// that same connection is released.
+function observeGraph({ afterNodes, failSimilarity = false } = {}) {
+  const original = pg.Client.prototype.query;
+  const observation = { statements: [], settings: null, restored: null, directed: [] };
+  let graphClient;
+  const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function (...args) {
+    const sql = args[0];
+    if (typeof sql === 'string' && sql.startsWith('SET TRANSACTION ISOLATION LEVEL')) graphClient = this;
+    if (this !== graphClient || typeof sql !== 'string') return original.apply(this, args);
+    observation.statements.push(sql);
+    return (async () => {
+      if (sql.includes('CROSS JOIN LATERAL')) {
+        observation.settings = (await original.call(this, `SELECT
+          current_setting('work_mem') AS work_mem,
+          current_setting('transaction_isolation') AS isolation,
+          current_setting('transaction_read_only') AS read_only`)).rows[0];
+        if (failSimilarity) await original.call(this, 'SELECT 1 / 0');
+      }
+      const result = await original.apply(this, args);
+      if (sql.includes('SELECT id, type, category, summary, importance')) await afterNodes?.();
+      if (sql.includes('CROSS JOIN LATERAL')) observation.directed = result.rows;
+      if (sql === 'COMMIT' || sql === 'ROLLBACK') {
+        observation.restored = (await original.call(this, `SELECT
+          current_setting('work_mem') AS work_mem,
+          current_setting('transaction_isolation') AS isolation,
+          current_setting('transaction_read_only') AS read_only`)).rows[0];
+      }
+      return result;
+    })();
+  });
+  return { observation, restore: () => spy.mockRestore() };
+}
+
+// The pre-optimization query is the compatibility oracle, including its
+// intentionally unspecified choice among equal-distance cutoff candidates.
+const legacyGraphSimilarity = `
+  SELECT a.id AS source_id, b.id AS target_id,
+         1 - (a.embedding <=> b.embedding) AS similarity
+  FROM memories a
+  CROSS JOIN LATERAL (
+    SELECT id, embedding FROM memories
+    WHERE id != a.id AND embedding IS NOT NULL AND status = 'active'
+    ORDER BY embedding <=> a.embedding LIMIT 3
+  ) b
+  WHERE a.embedding IS NOT NULL AND a.status = 'active'
+    AND 1 - (a.embedding <=> b.embedding) >= 0.8
+`;
+
+const sortedDirected = rows => [...rows].sort((a, b) =>
+  a.source_id.localeCompare(b.source_id) || a.target_id.localeCompare(b.target_id));
+
+const undirected = rows => {
+  const edges = new Map();
+  for (const row of rows) {
+    edges.set([row.source_id, row.target_id].sort().join('/'), row.similarity);
+  }
+  return [...edges].sort(([a], [b]) => a.localeCompare(b));
+};
+
+async function seedGraphVectors(count) {
+  // Synthetic full-dimensional float32 vectors; no live records. The row
+  // offset breaks the modulo formula's 997-row repetition (and cutoff ties).
+  await query(`
+    INSERT INTO memories (id, type, content, summary, embedding)
+    SELECT md5(i::text)::uuid, 'fact', 'Synthetic graph fixture', 'Synthetic graph fixture',
+      ARRAY(SELECT ((i * 17 + j * 31) % 997)::real / 997 + i::real / 10000
+            FROM generate_series(1, $2::int) j)::vector
+    FROM generate_series(1, $1::int) i
+  `, [count, DIM]);
+}
+
+describe.skipIf(!runDb)('memoryDB bounded graph snapshot (#9526)', () => {
+  beforeEach(resetMemories);
+
+  it('returns an empty graph, and retains null-vector nodes without similarity edges', async () => {
+    expect(await memoryDB.getGraphData()).toEqual({ nodes: [], edges: [] });
+    const note = await memoryDB.createMemory({ type: 'fact', content: 'No embedding.' });
+    const graph = await memoryDB.getGraphData();
+    expect(graph.nodes.map(n => n.id)).toEqual([note.id]);
+    expect(graph.edges).toEqual([]);
+  });
+
+  it('preserves exact vector values, top-three weights, threshold and explicit-link precedence', async () => {
+    await seedGraphVectors(12);
+    const nullNode = await memoryDB.createMemory({ type: 'fact', content: 'No vector.' });
+    const archived = await memoryDB.createMemory({ type: 'fact', content: 'Archived.', status: 'archived' }, VEC_A);
+    const distant = await memoryDB.createMemory({ type: 'fact', content: 'Orthogonal.' }, VEC_UNSEEN);
+    const legacy = (await query(legacyGraphSimilarity)).rows;
+    expect(legacy.length).toBeGreaterThan(3);
+    expect(legacy.some(r => [nullNode.id, archived.id, distant.id].includes(r.target_id))).toBe(false);
+    const { source_id: source, target_id: target } = legacy[0];
+    await memoryDB.linkMemories(source, target);
+    await memoryDB.linkMemories(source, archived.id);
+    const roundTrip = await query(`SELECT bool_and(embedding = embedding::real[]::vector) AS identical
+      FROM memories WHERE embedding IS NOT NULL`);
+    expect(roundTrip.rows[0].identical).toBe(true);
+    const probe = observeGraph();
+    try {
+      const graph = await memoryDB.getGraphData();
+      expect(sortedDirected(probe.observation.directed)).toEqual(sortedDirected(legacy));
+      expect(graph.nodes).toHaveLength(14);
+      expect(graph.nodes.some(n => n.id === archived.id)).toBe(false);
+      expect(graph.nodes.every(n => Object.keys(n).sort().join() === 'category,id,importance,summary,type')).toBe(true);
+      const expected = new Map(undirected(legacy));
+      expected.set([source, target].sort().join('/'), 1);
+      expect(graph.edges).toHaveLength(expected.size);
+      for (const edge of graph.edges) {
+        expect(edge.source).not.toBe(edge.target);
+        const key = [edge.source, edge.target].sort().join('/');
+        expect(edge.weight).toBe(expected.get(key));
+        expect(edge.type).toBe(key === [source, target].sort().join('/') ? 'linked' : 'similar');
+      }
+    } finally {
+      probe.restore();
+    }
+  });
+
+  it.each([2048, 2049])('returns all %i active nodes and valid tied top-three neighbors', async count => {
+    // Count ALL active nodes, including null vectors. Only six embeddings keep
+    // this admission-boundary regression cheap while exercising cutoff ties.
+    await query(`INSERT INTO memories (id, type, content, summary, embedding)
+      SELECT md5(i::text)::uuid, 'fact', 'Boundary fixture', 'Boundary fixture',
+        CASE WHEN i <= 6 THEN $2::vector ELSE NULL END
+      FROM generate_series(1, $1::int) i`, [count, JSON.stringify(VEC_A)]);
+    const probe = observeGraph();
+    try {
+      const graph = await memoryDB.getGraphData();
+      expect(graph.nodes).toHaveLength(count);
+      expect(probe.observation.statements.some(sql => sql.includes('AS MATERIALIZED'))).toBe(count === 2048);
+      expect(probe.observation.statements.some(sql => sql.includes('SET LOCAL work_mem'))).toBe(count === 2048);
+      expect(probe.observation.directed).toHaveLength(18);
+      const bySource = Map.groupBy(probe.observation.directed, row => row.source_id);
+      expect(bySource.size).toBe(6);
+      for (const [source, neighbors] of bySource) {
+        expect(new Set(neighbors.map(n => n.target_id)).size).toBe(3);
+        expect(neighbors.every(n => n.target_id !== source && n.similarity === 1)).toBe(true);
+      }
+      expect(graph.edges).toHaveLength(undirected(probe.observation.directed).length);
+      expect(graph.edges.every(e => e.type === 'similar' && e.weight === 1)).toBe(true);
+    } finally {
+      probe.restore();
+    }
+  });
+
+  it('keeps concurrent inserts outside the admitted snapshot and restores connection settings', async () => {
+    await query(`INSERT INTO memories (id, type, content, summary, embedding)
+      SELECT md5(i::text)::uuid, 'fact', 'Snapshot fixture', 'Snapshot fixture',
+        CASE WHEN i = 1 THEN $1::vector ELSE NULL END
+      FROM generate_series(1, 2048) i`, [JSON.stringify(VEC_A)]);
+    const before = (await query(`SELECT current_setting('work_mem') AS work_mem,
+      current_setting('transaction_isolation') AS isolation,
+      current_setting('transaction_read_only') AS read_only`)).rows[0];
+    let inserted;
+    const probe = observeGraph({ afterNodes: async () => {
+      inserted = await memoryDB.createMemory({ type: 'fact', content: 'Concurrent insert.' }, VEC_A);
+      const first = (await query('SELECT id FROM memories WHERE id != $1 LIMIT 1', [inserted.id])).rows[0];
+      await memoryDB.linkMemories(first.id, inserted.id);
+    } });
+    try {
+      const graph = await memoryDB.getGraphData();
+      expect(graph.nodes).toHaveLength(2048);
+      expect(graph.edges).toEqual([]);
+      expect(probe.observation.settings).toEqual({ work_mem: '32MB', isolation: 'repeatable read', read_only: 'on' });
+      expect(probe.observation.restored).toEqual(before);
+      expect((await query("SELECT count(*)::int AS count FROM memories WHERE status = 'active'")).rows[0].count).toBe(2049);
+    } finally {
+      probe.restore();
+    }
+    expect((await memoryDB.getGraphData()).nodes).toHaveLength(2049);
+  });
+
+  it('rolls back a failed similarity statement and restores settings before releasing its connection', async () => {
+    const before = (await query(`SELECT current_setting('work_mem') AS work_mem,
+      current_setting('transaction_isolation') AS isolation,
+      current_setting('transaction_read_only') AS read_only`)).rows[0];
+    const probe = observeGraph({ failSimilarity: true });
+    try {
+      await expect(memoryDB.getGraphData()).rejects.toThrow('division by zero');
+      expect(probe.observation.statements).toContain('ROLLBACK');
+      expect(probe.observation.restored).toEqual(before);
+    } finally {
+      probe.restore();
+    }
+    expect(await memoryDB.getGraphData()).toEqual({ nodes: [], edges: [] });
+  });
+
+  // Explicit opt-in experiment: no machine-dependent timing assertions.
+  it.skipIf(!process.env.MEMORY_GRAPH_BENCHMARK)('compares stored-vector EXPLAIN plans at 512 and 1024 rows', async () => {
+    for (const count of [512, 1024]) {
+      await resetMemories();
+      await seedGraphVectors(count);
+      await query('ANALYZE memories');
+      const probe = observeGraph();
+      let optimized;
+      try {
+        await memoryDB.getGraphData();
+        optimized = probe.observation.statements.find(sql => sql.includes('CROSS JOIN LATERAL'));
+      } finally {
+        probe.restore();
+      }
+      await withTransaction(async client => {
+        await client.query("SET LOCAL work_mem = '32MB'");
+        const cutoffs = await client.query(`
+          WITH active_embeddings AS MATERIALIZED (
+            SELECT id, embedding::real[]::vector AS embedding FROM memories
+          )
+          SELECT count(*)::int AS ties FROM active_embeddings a
+          CROSS JOIN LATERAL (
+            SELECT array_agg(distance ORDER BY distance) AS distances FROM (
+              SELECT embedding <=> a.embedding AS distance FROM active_embeddings
+              WHERE id != a.id ORDER BY distance LIMIT 4
+            ) nearest
+          ) b WHERE b.distances[3] = b.distances[4]
+        `);
+        expect(cutoffs.rows[0].ties).toBe(0);
+        const oldRows = (await client.query(legacyGraphSimilarity)).rows;
+        const newRows = (await client.query(optimized)).rows;
+        expect(sortedDirected(newRows)).toEqual(sortedDirected(oldRows));
+        for (const [strategy, sql] of [['legacy', legacyGraphSimilarity], ['unpacked', optimized]]) {
+          const result = await client.query('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ' + sql);
+          const plan = result.rows[0]['QUERY PLAN'][0];
+          const root = plan.Plan;
+          if (strategy === 'unpacked') {
+            expect(root['Temp Read Blocks']).toBe(0);
+            expect(root['Temp Written Blocks']).toBe(0);
+          }
+          console.log(`Graph fixture rows=${count} strategy=${strategy} ms=${plan['Execution Time']} sharedHits=${root['Shared Hit Blocks']} tempRead=${root['Temp Read Blocks']} tempWritten=${root['Temp Written Blocks']} directed=${newRows.length}`);
+        }
+      });
+    }
+  }, 60000);
 });

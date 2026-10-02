@@ -784,69 +784,85 @@ export async function getRelatedMemories(id, limit = 10) {
  * Get graph data for visualization
  */
 export async function getGraphData() {
-  // Build nodes
-  const nodesResult = await query(`
-    SELECT id, type, category, summary, importance
-    FROM memories WHERE status = 'active'
-  `);
+  return withTransaction(async (client) => {
+    // Admission and all graph reads must share a snapshot: a concurrent insert
+    // cannot grow the optimized projection beyond the node count checked here.
+    await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+    // Build nodes
+    const nodesResult = await client.query(`
+      SELECT id, type, category, summary, importance
+      FROM memories WHERE status = 'active'
+    `);
 
-  const nodes = nodesResult.rows.map(r => ({
-    id: r.id,
-    type: r.type,
-    category: r.category,
-    summary: r.summary,
-    importance: r.importance
-  }));
+    const nodes = nodesResult.rows.map(r => ({
+      id: r.id,
+      type: r.type,
+      category: r.category,
+      summary: r.summary,
+      importance: r.importance
+    }));
 
-  // Build edges from explicit links
-  const linksResult = await query(`
-    SELECT DISTINCT ON (LEAST(source_id, target_id), GREATEST(source_id, target_id))
-      source_id AS source, target_id AS target
-    FROM memory_links ml
-    JOIN memories ms ON ms.id = ml.source_id AND ms.status = 'active'
-    JOIN memories mt ON mt.id = ml.target_id AND mt.status = 'active'
-  `);
+    // Build edges from explicit links
+    const linksResult = await client.query(`
+      SELECT DISTINCT ON (LEAST(source_id, target_id), GREATEST(source_id, target_id))
+        source_id AS source, target_id AS target
+      FROM memory_links ml
+      JOIN memories ms ON ms.id = ml.source_id AND ms.status = 'active'
+      JOIN memories mt ON mt.id = ml.target_id AND mt.status = 'active'
+    `);
 
-  const edges = linksResult.rows.map(r => ({
-    source: r.source,
-    target: r.target,
-    type: 'linked',
-    weight: 1.0
-  }));
+    const edges = linksResult.rows.map(r => ({
+      source: r.source,
+      target: r.target,
+      type: 'linked',
+      weight: 1.0
+    }));
 
-  // Add similarity edges (top 3 per node, > 0.8 similarity)
-  // Using a limited approach to avoid O(n^2) for large graphs
-  const seenEdges = new Set(edges.map(e => [e.source, e.target].sort().join('-')));
+    // Add similarity edges (top 3 per node, >= 0.8 similarity)
+    // Exact top-three scoring still does O(n²) distance work. For bounded graphs,
+    // unpack each stored vector once, avoiding repeated TOAST reads per candidate.
+    // A bare materialized embedding retains its external storage pointer; the
+    // real[] round trip forces an inline vector without changing its float values.
+    const materialize = nodes.length <= 2048;
+    if (materialize) await client.query("SET LOCAL work_mem = '32MB'");
+    const relation = materialize ? 'active_embeddings' : 'memories';
+    const seenEdges = new Set(edges.map(e => [e.source, e.target].sort().join('-')));
 
-  const simResult = await query(`
-    SELECT a.id AS source_id, b.id AS target_id,
-           1 - (a.embedding <=> b.embedding) AS similarity
-    FROM memories a
-    CROSS JOIN LATERAL (
-      SELECT id, embedding
-      FROM memories
-      WHERE id != a.id AND embedding IS NOT NULL AND status = 'active'
-      ORDER BY embedding <=> a.embedding
-      LIMIT 3
-    ) b
-    WHERE a.embedding IS NOT NULL AND a.status = 'active'
-      AND 1 - (a.embedding <=> b.embedding) >= 0.8
-  `);
+    const simResult = await client.query(`
+      ${materialize ? `WITH active_embeddings AS MATERIALIZED (
+        SELECT id, embedding::real[]::vector AS embedding
+        FROM memories WHERE embedding IS NOT NULL AND status = 'active'
+      )` : ''}
+      SELECT a.id AS source_id, b.id AS target_id,
+             1 - (a.embedding <=> b.embedding) AS similarity
+      FROM ${relation} a
+      CROSS JOIN LATERAL (
+        SELECT id, embedding
+        FROM ${relation}
+        WHERE id != a.id
+          ${materialize ? '' : "AND embedding IS NOT NULL AND status = 'active'"}
+        ORDER BY embedding <=> a.embedding
+        LIMIT 3
+      ) b
+      WHERE 1 - (a.embedding <=> b.embedding) >= 0.8
+        ${materialize ? '' : "AND a.embedding IS NOT NULL AND a.status = 'active'"}
+    `);
 
-  for (const row of simResult.rows) {
-    const edgeKey = [row.source_id, row.target_id].sort().join('-');
-    if (!seenEdges.has(edgeKey)) {
-      seenEdges.add(edgeKey);
-      edges.push({
-        source: row.source_id,
-        target: row.target_id,
-        type: 'similar',
-        weight: parseFloat(row.similarity)
-      });
+    for (const row of simResult.rows) {
+      const edgeKey = [row.source_id, row.target_id].sort().join('-');
+      if (!seenEdges.has(edgeKey)) {
+        seenEdges.add(edgeKey);
+        edges.push({
+          source: row.source_id,
+          target: row.target_id,
+          type: 'similar',
+          weight: parseFloat(row.similarity)
+        });
+      }
     }
-  }
 
-  return { nodes, edges };
+    return { nodes, edges };
+  });
 }
 
 /**
