@@ -1,7 +1,7 @@
 /**
  * Posting state machine (#9282) with a fake browser and adapters: prepare
- * fills a draft in a new tab and returns its screenshot, submit posts only a
- * live draft and records the link, discard and re-prepare close the old tab.
+ * fills a draft in a new tab and returns its screenshot. Submit always refuses;
+ * manual links persist, and discard/re-prepare close the old tab.
  */
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -51,7 +51,7 @@ async function readyProject() {
 }
 
 describe('publish drafts (#9282)', () => {
-  it('fills a draft, then posts it only on submit and records the link', async () => {
+  it('fills a reviewable draft but never submits it; records a manually published link', async () => {
     const id = await readyProject();
     const { connect, pages } = fakeBrowser();
     const adapters = { stackerNews: adapter() };
@@ -60,11 +60,12 @@ describe('publish drafts (#9282)', () => {
     expect(draft.screenshot).toMatch(/^data:image\/jpeg;base64,/);
     expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
 
-    const { project, post } = await submitPublishDraft(id, draft.draftId, { adapters });
+    await expect(submitPublishDraft(id, draft.draftId, { adapters })).rejects.toMatchObject({ status: 403, code: 'PUBLISH_MANUAL_REQUIRED' });
+    expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
+    expect(pages[0].closed).toBe(false);
+    const { project, post } = await recordPublishPost(id, 'stackerNews', { url: 'https://stacker.news/items/1' });
     expect(post.url).toBe('https://stacker.news/items/1');
-    expect(project.publishKit.posts.stackerNews.url).toBe('https://stacker.news/items/1');
-    expect(pages[0].closed).toBe(true);
-    await expect(submitPublishDraft(id, draft.draftId, { adapters })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_DRAFT_MISSING' });
+    expect(project.publishKit.posts.stackerNews.url).toBe(post.url);
   });
 
   it('closes the earlier draft when the same target is filled again, and discards on request', async () => {
@@ -74,7 +75,7 @@ describe('publish drafts (#9282)', () => {
     const first = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms });
     const second = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms });
     expect(pages[0].closed).toBe(true);
-    await expect(submitPublishDraft(id, first.draftId, { adapters })).rejects.toMatchObject({ code: 'PUBLISH_DRAFT_MISSING' });
+    await expect(submitPublishDraft(id, first.draftId, { adapters })).rejects.toMatchObject({ code: 'PUBLISH_MANUAL_REQUIRED' });
     expect(await discardPublishDraft(id, second.draftId)).toBe(true);
     expect(pages[1].closed).toBe(true);
     expect(await discardPublishDraft(id, second.draftId)).toBe(false);
@@ -86,7 +87,7 @@ describe('publish drafts (#9282)', () => {
     const adapters = { stackerNews: adapter() };
     const draft = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms });
     pages[0].closed = true;
-    await expect(submitPublishDraft(id, draft.draftId, { adapters })).rejects.toMatchObject({ code: 'PUBLISH_DRAFT_MISSING' });
+    await expect(submitPublishDraft(id, draft.draftId, { adapters })).rejects.toMatchObject({ code: 'PUBLISH_MANUAL_REQUIRED' });
     expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
   });
 

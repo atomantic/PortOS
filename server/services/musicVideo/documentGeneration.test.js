@@ -1,9 +1,11 @@
+// Creative approval behavior is covered through production review routes and orchestration.
+vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-const h = vi.hoisted(() => ({ calls: 0, prompt: '', response: '', onSubmit: null, provider: { id: 'stub-provider' }, args: null }));
+const h = vi.hoisted(() => ({ calls: 0, prompt: '', response: '', onSubmit: null, onPrepare: null, provider: { id: 'stub-provider' }, args: null }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-author-'),
 }));
@@ -12,6 +14,7 @@ vi.mock('../promptRunner.js', () => ({
   resolveProviderAndModel: async () => ({ provider: h.provider, selectedModel: 'fixture-model' }),
   runPromptThroughProvider: async ({ prompt, beforeExecute, ...args }) => {
     h.args = args;
+    await h.onPrepare?.();
     if (beforeExecute) await beforeExecute({ provider: { id: 'stub-provider' }, model: 'fixture-model' });
     h.calls += 1; h.prompt = prompt;
     if (h.onSubmit) await h.onSubmit();
@@ -29,7 +32,7 @@ const response = (colors) => JSON.stringify({ sections: Object.entries(colors).m
 const manifestAt = async (document) => JSON.parse(await readFile(join(PATHS.data, document.directory, 'manifest.json'), 'utf8'));
 
 afterAll(() => cleanupTempDataRoots());
-beforeEach(() => { h.provider = { id: 'stub-provider' }; h.args = null; h.onSubmit = null; h.calls = 0; h.prompt = ''; h.response = response({ intro: '#112233', still: '#445566', clip: '#778899' }); });
+beforeEach(() => { h.provider = { id: 'stub-provider' }; h.args = null; h.onSubmit = null; h.onPrepare = null; h.calls = 0; h.prompt = ''; h.response = response({ intro: '#112233', still: '#445566', clip: '#778899' }); });
 
 async function fixture() {
   await mkdir(PATHS.images, { recursive: true });
@@ -213,7 +216,7 @@ it('checks production authorization before provider submission and again before 
   await expect(generateMixedMediaDocument(id, { verifyCurrent: () => { if (!active) blocked(); } })).rejects.toMatchObject({ code: 'PRODUCTION_STEP_CLOSED' });
   expect(h.calls).toBe(1);
   expect((await projects.getProject(id)).composition?.documentDraft).toBeUndefined();
-  h.onSubmit = null;
+  h.onSubmit = null; h.onPrepare = null;
   const staged = (await generateMixedMediaDocument(id)).document;
   await expect(acceptMixedMediaDocument(id, staged.directory, { verifyCurrent: blocked })).rejects.toMatchObject({ code: 'PRODUCTION_STEP_CLOSED' });
   expect((await projects.getProject(id)).composition.documentDraft.directory).toBe(staged.directory);
@@ -237,4 +240,14 @@ it('hands the approved procedural definitions and rules to the document author, 
   expect(h.prompt).toContain('camera: locked wide, slow push');
   expect(h.prompt).toContain('movement: sways on the downbeat');
   expect(h.prompt).toContain('"shape":"polygon"');
+});
+
+
+it('refuses a changed production draft after provider preparation and before paid authoring', async () => {
+  const id = await fixture();
+  h.onPrepare = () => projects.mutateProjectRecord(id, project => ({ project: { ...project,
+    productionReview: { draft: { motionLanguage: 'Revised choreography' } },
+  } }));
+  await expect(generateMixedMediaDocument(id)).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
+  expect(h.calls).toBe(0);
 });

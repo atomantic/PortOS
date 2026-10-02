@@ -161,7 +161,7 @@ export function RenderStyleSelect({ project, onRenderStyle }) {
 }
 
 /** Render the complete video, or cancel the render in flight for this project. */
-export function RenderFinalButton({ project, renderJob }) {
+export function RenderFinalButton({ project, renderJob, readiness }) {
   const scenes = project.scenes || [];
   const sceneCount = scenes.length;
   const mode = project.composition?.mode || 'concat';
@@ -191,8 +191,8 @@ export function RenderFinalButton({ project, renderJob }) {
     );
   }
   return (
-    <button onClick={() => renderJob.start(project.id)} disabled={renderJob.active || (documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount))}
-      title={renderJob.active
+    <button onClick={() => renderJob.start(project.id)} disabled={!readiness?.readyForProduction || renderJob.active || (documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount))}
+      title={!readiness?.readyForProduction ? 'Approve the current visual guide, timed storyboard and animated proof first' : renderJob.active
         ? 'Wait for the other project render to finish, or return to it to cancel'
         : documentMode
           ? (documentBlocked || 'Render the composition document over the song')

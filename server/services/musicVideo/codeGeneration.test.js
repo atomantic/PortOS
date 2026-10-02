@@ -1,7 +1,9 @@
+// Creative approval behavior is covered through production review routes and orchestration.
+vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fixtureSectionSource = (color) => `function render(ctx, env) {\n  ctx.fillStyle = ${JSON.stringify(color)};\n  ctx.fillRect(env.safe.x, env.safe.y, 12 + (env.frame % 3), 12);\n}`;
 
-const h = vi.hoisted(() => ({ project: null, calls: 0, response: '', prompts: [] }));
+const h = vi.hoisted(() => ({ project: null, calls: 0, response: '', prompts: [], beforeExecute: null }));
 
 vi.mock('../promptRunner.js', () => ({
   assertProvider: () => {},
@@ -9,7 +11,9 @@ vi.mock('../promptRunner.js', () => ({
     provider: { id: providerId || 'stub-provider' },
     selectedModel: model || 'fixture-model',
   })),
-  runPromptThroughProvider: vi.fn(async ({ prompt }) => {
+  runPromptThroughProvider: vi.fn(async ({ prompt, beforeExecute }) => {
+    await h.beforeExecute?.();
+    await beforeExecute?.({ provider: { id: 'stub-provider' }, model: 'fixture-model' });
     h.calls += 1;
     h.prompts.push(prompt);
     return { text: h.response };
@@ -51,6 +55,7 @@ const base = () => ({
 
 beforeEach(() => {
   h.project = base();
+  h.beforeExecute = null;
   h.calls = 0;
   h.response = '';
   h.prompts = [];
@@ -139,4 +144,13 @@ describe('music video code generation (#9076)', () => {
       for (const prompt of h.prompts) expect(prompt).not.toContain('APPROVED CAST & SETS');
     });
   });
+});
+
+
+it('refuses standalone authoring when a lyric changes during provider preparation, before spending', async () => {
+  h.beforeExecute = () => {
+    h.project = { ...h.project, lyricCues: [{ ...h.project.lyricCues[0], text: 'changed lyric' }] };
+  };
+  await expect(generateMusicVideoCode('mv-code')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_REVIEW_STALE' });
+  expect(h.calls).toBe(0);
 });

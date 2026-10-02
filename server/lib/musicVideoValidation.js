@@ -968,6 +968,32 @@ export const musicVideoProjectCloneSchema = z.object({
   variant: z.enum(['revision', 'video-generation']).optional(),
 }).strict();
 
+// Review content is editable; approval records are server-owned and never PATCHable.
+export const musicVideoProductionDraftSchema = z.object({
+  cast: z.string().max(12000), environments: z.string().max(12000),
+  visualLanguage: z.string().max(12000), motionLanguage: z.string().max(12000),
+  implementationPlan: z.string().max(16000).optional(),
+  guideArtifactId: z.string().max(64).nullable(),
+  sourceArtifactId: z.string().max(64).nullable().optional(),
+  lyricsMode: z.enum(['vocal', 'instrumental']), timingStatus: z.enum(['provisional', 'verified']),
+  timingNotes: z.string().max(4000),
+  storyboard: z.array(z.object({
+    id: z.string().max(64).optional(), startSec: timedSec, endSec: timedSec,
+    sceneId: z.string().max(64).nullable(), lyricCueIds: z.array(z.string().max(64)).max(2000),
+    action: z.string().max(4000), staging: z.string().max(4000),
+    camera: z.string().max(4000), transition: z.string().max(4000),
+  }).strict()).max(2000),
+}).strict();
+export const musicVideoProductionImportSchema = z.object({ source: z.string().min(2).max(250000) }).strict();
+export const musicVideoProductionApprovalSchema = z.object({
+  stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
+  password: z.string().min(1).max(1024),
+}).strict();
+export const musicVideoProductionProofSchema = z.object({
+  kind: z.enum(['proof', 'prototype']).optional(),
+  startSec: z.number().min(0), endSec: z.number().positive(),
+}).strict();
+
 // A scene on the director board. `startSec`/`endSec` place it on the timeline;
 // `prompt` drives the shot's video; `framePrompt`/`referenceImageId` are the
 // reference-frame inputs the i2v generation (Phase 1b) will consume.
@@ -1156,3 +1182,12 @@ export const musicVideoAudioTimingPreviewSchema = z.object({
 export const musicVideoAudioTimingApplySchema = musicVideoAudioTimingPreviewSchema.extend({
   basis: z.string().regex(/^[a-f0-9]{32}$/),
 });
+
+export const musicVideoProductionFeedbackSchema = z.object({
+  stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
+  target: z.string().trim().min(1).max(300), text: z.string().trim().min(1).max(8000),
+  decision: z.enum(['comment', 'structure-accepted', 'request-changes']),
+}).strict();
+export const musicVideoProductionFeedbackResolutionSchema = z.object({
+  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().min(1).max(1024),
+}).strict();

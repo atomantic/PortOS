@@ -1,3 +1,5 @@
+// Engine mechanics are isolated from the review contract, covered in route/orchestration suites.
+vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // #2386 — exactly-once terminal handling for the music-video renderer that
