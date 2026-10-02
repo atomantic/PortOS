@@ -9,8 +9,8 @@
  * Two deliberate choices keep this robust to Suno's UI churn:
  *   - The page is only used to FILL the custom-song form, press Create, and
  *     read back the new `/song/<id>` links. Everything after that — waiting for
- *     the song and fetching the audio — happens over HTTP against the CDN, so a
- *     redesigned player or download menu cannot break it.
+ *     audio — happens over HTTP against the CDN. This transport does not yet
+ *     provide a verified generation-completion signal; import fails closed.
  *   - Every page interaction goes through `step()`, so a failure names the
  *     control that was missing ("Suno: fill the lyrics (...)") and a signed-out
  *     page is reported as PUBLISH_LOGIN_REQUIRED, which the run surfaces as a
@@ -23,8 +23,12 @@
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { promisify } from 'util';
+import { execFile } from '../../lib/childProcess.js';
+import { safeChildProcessOptions } from '../../lib/processEnv.js';
+import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { sunoAudioUrl, sunoSongIdsFromHrefs, sunoSongUrl } from '../../lib/musicVideoAutonomous.js';
+import { sunoAudioUrl, sunoSongIdsFromHrefs } from '../../lib/musicVideoAutonomous.js';
 import { sleep as defaultSleep } from '../../lib/fileCore.js';
 import { PUBLISH_STEP_TIMEOUT_MS as T, connectPortosBrowser, loginRequired, serializeBrowserOperation as serialize, step } from './publish/browser.js';
 
@@ -178,28 +182,105 @@ async function submitSunoSong(page, fields, { sleep = defaultSleep, now = Date.n
   }
 }
 
+// Decoding is a separate boundary from generation completion: a partial MP3
+// can decode perfectly. Never expose ffmpeg stderr (it contains local paths).
+async function validateSunoAudio(bytes, { signal, timeoutMs }) {
+  const { findFfmpeg } = await import('../../lib/ffmpeg.js');
+  const bin = await findFfmpeg();
+  if (!bin) throw new ServerError('Suno: audio validation requires ffmpeg', {
+    status: 503, code: 'SUNO_AUDIO_VALIDATION_UNAVAILABLE', context: { platform: LABEL },
+  });
+  signal.throwIfAborted();
+  const dir = await mkdtemp(join(tmpdir(), 'portos-suno-validation-'));
+  try {
+    const file = join(dir, 'candidate.mp3');
+    await writeFile(file, bytes, { signal });
+    // Force an audio stream and decode the entire candidate; neither MIME nor
+    // a readable container header proves that its audio frames are decodable.
+    const { stdout } = await promisify(execFile)(bin, [
+      '-nostdin', '-v', 'error', '-xerror', '-err_detect', 'explode',
+      '-protocol_whitelist', 'file', '-format_whitelist', 'mp3,wav', '-i', file,
+      '-map', '0:a:0', '-progress', 'pipe:1', '-stats_period', '600', '-f', 'null', '-',
+    ], safeChildProcessOptions({ signal, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }));
+    if (![...stdout.matchAll(/^out_time_us=(\d+)$/gm)].some((match) => Number(match[1]) > 0)) {
+      throw new Error('No decoded audio frames');
+    }
+    return true;
+  } catch (error) {
+    if (signal.aborted) throw signal.reason;
+    throw new ServerError('Suno: downloaded content is not decodable audio', {
+      status: 502, code: 'SUNO_AUDIO_INVALID', context: { platform: LABEL, reason: 'decode_failed' },
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 /**
- * Wait for a song's audio to be fetchable and fully written, then return its
- * bytes. "Fully written" = a 200 whose size is at least MIN_AUDIO_BYTES and
- * unchanged across two polls (Suno streams a partial file while it renders).
+ * Stable sizes are only a polling heuristic. The CDN integration currently
+ * has no verified completion signal, so its default remains explicitly
+ * unknown. A future verified adapter must check this exact song and return
+ * 'complete'; playable audio, a duration, or a 200 response are not evidence.
  */
 async function downloadSunoAudio(songId, {
   fetchImpl = fetch, sleep = defaultSleep, timeoutMs = SUNO_AUDIO_TIMEOUT_MS, intervalMs = SUNO_POLL_INTERVAL_MS, now = Date.now,
+  checkCompletion = async () => 'unknown', validateAudio = validateSunoAudio,
 } = {}) {
   const deadline = now() + timeoutMs;
   let lastSize = -1;
+  let reason = 'not_available';
+  let httpStatus = null;
+  const timeout = () => new ServerError('Suno: audio download did not complete within its time budget', {
+    status: 504, code: 'SUNO_AUDIO_TIMEOUT', context: { platform: LABEL, reason, httpStatus },
+  });
   for (;;) {
-    const res = await fetchImpl(sunoAudioUrl(songId)).catch(() => null);
-    if (res?.ok) {
-      const bytes = Buffer.from(await res.arrayBuffer());
-      if (bytes.length >= MIN_AUDIO_BYTES && bytes.length === lastSize) return bytes;
-      lastSize = bytes.length;
-    }
-    if (now() + intervalMs > deadline) {
-      throw new ServerError(`Suno: the song ${songId} did not finish rendering in time`, {
-        status: 504, code: 'SUNO_AUDIO_TIMEOUT', context: { platform: LABEL, songId, url: sunoSongUrl(songId) },
-      });
-    }
+    const remaining = deadline - now();
+    if (remaining <= 0) throw timeout();
+    const candidate = await withAbortTimeout(remaining, async (signal) => {
+      let res;
+      try {
+        res = await fetchImpl(sunoAudioUrl(songId), { signal });
+        signal.throwIfAborted();
+        httpStatus = Number.isInteger(res.status) && res.status >= 100 && res.status <= 599 ? res.status : null;
+        if (!res.ok) { reason = 'http_status'; return null; }
+        const mime = res.headers?.get('content-type')?.split(';')[0].trim().toLowerCase();
+        if (mime?.startsWith('text/') || /(?:json|xml|html)/.test(mime || '')) {
+          throw new ServerError('Suno: downloaded content is not audio', {
+            status: 502, code: 'SUNO_AUDIO_INVALID', context: { platform: LABEL, reason: 'non_audio_content', httpStatus },
+          });
+        }
+        const bytes = Buffer.from(await res.arrayBuffer());
+        signal.throwIfAborted();
+        const stable = bytes.length >= MIN_AUDIO_BYTES && bytes.length === lastSize;
+        lastSize = bytes.length;
+        if (!stable) { reason = 'size_unstable'; return null; }
+        const valid = await validateAudio(bytes, { signal, timeoutMs: Math.max(1, deadline - now()) });
+        signal.throwIfAborted();
+        if (valid !== true) throw new ServerError('Suno: downloaded content is not decodable audio', {
+          status: 502, code: 'SUNO_AUDIO_INVALID', context: { platform: LABEL, reason: 'decode_failed' },
+        });
+        const completion = await checkCompletion(songId, { signal });
+        signal.throwIfAborted();
+        if (completion === 'complete') return bytes;
+        if (completion === 'pending') { reason = 'generation_pending'; return null; }
+        throw new ServerError('Suno: audio is decodable, but generation completion is unverified; existing song IDs are retained for retry', {
+          status: 502, code: 'SUNO_AUDIO_COMPLETION_UNVERIFIED', context: { platform: LABEL, reason: 'completion_unknown' },
+        });
+      } catch (error) {
+        if (signal.aborted) { reason = 'deadline_exceeded'; throw timeout(); }
+        if (error instanceof ServerError) throw error;
+        reason = 'transport_failed';
+        return null;
+      } finally {
+        // Cancel unconsumed error bodies too. A locked body is owned by the
+        // fetch consumer, which receives the same abort signal. Cancellation
+        // starts immediately; its acknowledgment cannot extend our deadline.
+        if (res?.body && !res.bodyUsed) void res.body.cancel().catch(() => {});
+      }
+    });
+    if (now() >= deadline) throw timeout();
+    if (candidate) return candidate;
+    if (now() + intervalMs >= deadline) throw timeout();
     await sleep(intervalMs);
   }
 }
@@ -217,8 +298,12 @@ export async function generateSunoSong(fields, deps = {}) {
     const { importUploadedTrack } = await import('../pipeline/musicLibrary.js');
     const dir = await mkdtemp(join(tmpdir(), 'portos-suno-'));
     const tmp = join(dir, 'song.mp3');
-    await writeFile(tmp, bytes);
-    return importUploadedTrack(tmp, 'song.mp3').finally(() => rm(dir, { recursive: true, force: true }).catch(() => {}));
+    try {
+      await writeFile(tmp, bytes);
+      return await importUploadedTrack(tmp, 'song.mp3');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
   // A retry after a failed download reuses the songs already submitted rather
   // than spending more Suno credits on a second generation.
@@ -237,7 +322,7 @@ export async function generateSunoSong(fields, deps = {}) {
   const [songId] = songIds;
   const bytes = await downloadSunoAudio(songId, deps);
   const { filename, sizeBytes } = await importAudio(bytes);
-  console.log(`🎵 Suno song ${songId.slice(0, 8)} imported as ${filename} (${Math.round(sizeBytes / 1024)} KB)`);
+  console.log(`🎵 Suno audio imported (${Math.round(sizeBytes / 1024)} KB)`);
   return { songId, songIds, filename, sizeBytes };
 }
 
