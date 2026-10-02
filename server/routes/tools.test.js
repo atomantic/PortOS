@@ -135,6 +135,58 @@ describe('Tools Routes', () => {
       expect(response.status).toBe(400);
       expect(toolsService.registerTool).not.toHaveBeenCalled();
     });
+
+    it('should reject reserved route slug "enabled"', async () => {
+      const response = await request(app)
+        .post('/api/tools')
+        .send({ id: 'enabled', name: 'Bad Tool', category: 'test' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(toolsService.registerTool).not.toHaveBeenCalled();
+    });
+
+    it('should reject reserved route slug "summary"', async () => {
+      const response = await request(app)
+        .post('/api/tools')
+        .send({ id: 'summary', name: 'Bad Tool', category: 'test' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(toolsService.registerTool).not.toHaveBeenCalled();
+    });
+
+    it('should accept valid custom IDs that are not reserved', async () => {
+      const toolData = {
+        id: 'my-tool',
+        name: 'My Tool',
+        category: 'custom',
+        description: 'A custom tool'
+      };
+      toolsService.registerTool.mockResolvedValue({ ...toolData, createdAt: '2026-01-01' });
+
+      const response = await request(app)
+        .post('/api/tools')
+        .send(toolData);
+
+      expect(response.status).toBe(201);
+      expect(toolsService.registerTool).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-tool' }));
+    });
+
+    it('should accept tools with auto-generated IDs', async () => {
+      const toolData = {
+        name: 'Auto Generated Tool',
+        category: 'test'
+      };
+      toolsService.registerTool.mockResolvedValue({ ...toolData, id: 'auto-id-123', createdAt: '2026-01-01' });
+
+      const response = await request(app)
+        .post('/api/tools')
+        .send(toolData);
+
+      expect(response.status).toBe(201);
+      expect(toolsService.registerTool).toHaveBeenCalledWith(expect.objectContaining(toolData));
+    });
   });
 
   describe('PUT /api/tools/:id', () => {
