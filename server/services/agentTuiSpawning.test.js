@@ -1113,7 +1113,10 @@ describe('spawnTuiAgent runtime', () => {
     // finalize asked the forge and got an answer for a real branch — the only
     // shape that lets cleanup skip its own query (see `prClaimWasVerified`).
     vi.mocked(agentLifecycle.finalizeAgent).mockResolvedValueOnce({
-      success: true, prVerdict: { ok: true, branch: 'cos/task-1/agent-1' },
+      success: true,
+      prClaimVerified: true,
+      branchProvenEmpty: false,
+      cleanupEvidence: { ok: true, branch: 'cos/task-1/agent-1' },
     });
     const spawnPromise = runSpawn({
       provider: { id: 'claude-code-tui', name: 'Claude TUI', type: 'tui', command: 'claude', envVars: {} },
