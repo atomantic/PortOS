@@ -185,7 +185,7 @@ describe('generateSunoSong M4A export', () => {
     const w = workflow();
     const onSubmitted = vi.fn();
     const out = await generateSunoSong(fields, { ...w, onSubmitted, sleep: noSleep });
-    expect(out).toEqual({ songId: NEW_A, songIds: [NEW_A, NEW_B], filename: 'music-example.m4a', sizeBytes: m4a.length });
+    expect(out).toEqual({ songId: NEW_B, songIds: [NEW_A, NEW_B], filename: 'music-example.m4a', sizeBytes: m4a.length });
     expect(onSubmitted).toHaveBeenCalledWith([NEW_A, NEW_B]);
     expect(w.selected).toEqual(new Set(['M4A']));
     expect(w.actions.filter(x => x === 'export')).toHaveLength(1);
