@@ -182,8 +182,9 @@ describe('spawnDetached', () => {
       const diagnostic = await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log');
       expect(diagnostic).toMatch(/^pid-written hresult=0 elapsed-ms=\d+; timeline=reading-job@\d+ms>starting-job@\d+ms>job-started@\d+ms>handle-acquired@\d+ms>pid-written@\d+ms$/);
       // Keep passing-run evidence too, using the same bounded projection as
-      // production failures. Never print raw control files or job commands.
-      console.log(`🪟 Windows detached stream launch ${launch}: ${diagnostic}`);
+      // production failures. CI's quiet setup replaces console methods, so
+      // write this bounded evidence directly. Never print raw control files.
+      process.stdout.write(`🪟 Windows detached stream launch ${launch}: ${diagnostic}\n`);
     }
   // Leave room beyond the 30s PID deadline for the handle's bounded error or
   // close event to reach the test, especially on a loaded Windows runner.
@@ -374,7 +375,7 @@ describe('spawnDetached', () => {
     await expect(onClose(handle)).rejects.toThrow(/supervisor-stage=failed hresult=-?\d+/);
     const diagnostic = await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log');
     expect(diagnostic).toMatch(/^failed hresult=-?\d+ elapsed-ms=\d+; timeline=reading-job@\d+ms>starting-job@\d+ms>failed@\d+ms$/);
-    console.log(`🪟 Windows detached expected refusal ${launch}: ${diagnostic}`);
+    process.stdout.write(`🪟 Windows detached expected refusal ${launch}: ${diagnostic}\n`);
   }, 45_000);
 
   it.runIf(!IS_POSIX)('cancels a cold supervisor after PID acquisition times out', async () => {
