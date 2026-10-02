@@ -9,7 +9,7 @@
  *
  * Pure: no filesystem, process or settings access.
  */
-import { basename, dirname, isAbsolute, join, normalize, parse } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, parse, posix } from 'node:path';
 import { z } from 'zod';
 
 export const CODE_ANIMATION_SEATBELT = '/usr/bin/sandbox-exec';
@@ -129,18 +129,18 @@ export function codeAnimationSeatbeltProfile({ executable, toolRoots, workspace 
  * setting can be inherited.
  */
 export function codeAnimationWorkerEnv(workspace) {
-  const home = join(workspace, 'home');
-  const tmp = join(workspace, 'tmp');
+  const home = posix.join(workspace, 'home');
+  const tmp = posix.join(workspace, 'tmp');
   return {
     PATH: '/usr/bin:/bin', HOME: home, TMPDIR: tmp, TMP: tmp, TEMP: tmp,
     LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8',
-    XDG_CONFIG_HOME: join(home, 'config'), XDG_CACHE_HOME: join(home, 'cache'), XDG_DATA_HOME: join(home, 'data'),
+    XDG_CONFIG_HOME: posix.join(home, 'config'), XDG_CACHE_HOME: posix.join(home, 'cache'), XDG_DATA_HOME: posix.join(home, 'data'),
     // Blender reads user add-ons/startup files from here; keep them private and empty.
-    BLENDER_USER_RESOURCES: join(home, 'blender'),
+    BLENDER_USER_RESOURCES: posix.join(home, 'blender'),
     // Workers have no network; an OpenSSL build's config outside the sandbox is not needed.
     OPENSSL_CONF: '/dev/null',
-    PORTOS_WORKER_INPUT: join(workspace, 'input'),
-    PORTOS_WORKER_OUTPUT: join(workspace, 'output'),
+    PORTOS_WORKER_INPUT: posix.join(workspace, 'input'),
+    PORTOS_WORKER_OUTPUT: posix.join(workspace, 'output'),
   };
 }
 
@@ -201,12 +201,12 @@ export function codeAnimationBubblewrapArgs({ executable, toolRoots, workspace, 
   for (const device of ['null', 'zero', 'random', 'urandom']) {
     args.push('--dev-bind', `/dev/${device}`, `/dev/${device}`);
   }
-  args.push('--ro-bind', join(workspace, 'input'), join(sandboxWorkspace, 'input'));
+  args.push('--ro-bind', posix.join(workspace, 'input'), posix.join(sandboxWorkspace, 'input'));
   for (const name of ['output', 'tmp', 'home']) {
-    args.push('--bind', join(workspace, name), join(sandboxWorkspace, name));
+    args.push('--bind', posix.join(workspace, name), posix.join(sandboxWorkspace, name));
   }
   for (const [key, value] of Object.entries(codeAnimationWorkerEnv(sandboxWorkspace))) args.push('--setenv', key, value);
   // The synthetic root/ancestor directories must not become unmetered scratch.
-  args.push('--remount-ro', '/', '--chdir', join(sandboxWorkspace, 'tmp'), '--', executable, ...argv);
+  args.push('--remount-ro', '/', '--chdir', posix.join(sandboxWorkspace, 'tmp'), '--', executable, ...argv);
   return args;
 }
