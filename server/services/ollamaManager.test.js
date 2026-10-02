@@ -1625,3 +1625,54 @@ describe('ollamaManager context window — launch-at-login daemons', () => {
     expect(calls.some((c) => c.includes('disable'))).toBe(false)
   })
 })
+
+describe('ollamaManager service status cache (homebrew)', () => {
+  let restorePlatform = () => {}
+  let listCalls
+  let listOutput
+  let ollamaManager
+
+  beforeEach(async () => {
+    vi.useFakeTimers()
+    restorePlatform = pinPlatform('darwin')
+    listCalls = 0
+    listOutput = 'ollama started testuser plist\n'
+    execMock.impl = (cmd, args, opts, cb) => {
+      const a = (args || []).join(' ')
+      if (cmd === 'brew' && a === '--version') return cb(null, { stdout: 'Homebrew 4.0.0', stderr: '' })
+      if (cmd === 'brew' && a === 'services list') { listCalls++; return cb(null, { stdout: listOutput, stderr: '' }) }
+      if (cmd === 'brew' && a === 'services stop ollama') { listOutput = 'ollama none\n'; return cb(null, { stdout: '', stderr: '' }) }
+      return cb(new Error(`unexpected ${cmd} ${a}`))
+    }
+    ollamaManager = await loadManager()
+  })
+  afterEach(() => {
+    restorePlatform()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    execMock.impl = () => {}
+  })
+
+  it('spawns brew services list once within the TTL and again after it expires', async () => {
+    const [a, b] = await Promise.all([ollamaManager.getServiceStatus(), ollamaManager.getServiceStatus()])
+    await ollamaManager.getServiceStatus()
+    expect(a.running).toBe(true)
+    expect(b).toBe(a)
+    expect(listCalls).toBe(1)
+
+    vi.advanceTimersByTime(10_001)
+    await ollamaManager.getServiceStatus()
+    expect(listCalls).toBe(2)
+  })
+
+  it('reads live when forced and drops the cache after stopPersistentService', async () => {
+    await ollamaManager.getServiceStatus()
+    await ollamaManager.getServiceStatus(true)
+    expect(listCalls).toBe(2)
+
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED') }))
+    const result = await ollamaManager.stopPersistentService()
+    expect(result.service.running).toBe(false)
+    expect((await ollamaManager.getServiceStatus()).running).toBe(false)
+  })
+})
