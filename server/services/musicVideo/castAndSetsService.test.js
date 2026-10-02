@@ -77,16 +77,40 @@ const board = {
 const keyOf = (job) => job.params.musicVideo.castAndSets.key;
 const current = async (id) => projects.getProject(id);
 
-// Deadline-based, not an iteration count: each check reads from disk, so a slow
-// runner (Windows CI) stretches an iteration far past its 5ms sleep and a fixed
-// 200 passes can expire in about a second.
+// Event-driven with deadline fallback: subscribes to state changes and re-checks
+// immediately when fired, rather than polling. Slow runners (Windows CI) stay
+// responsive because the event triggers a check instead of spinning on elapsed time.
+// The deadline (60s) bounds any stuck state and re-check delays for slow CI.
 async function until(check, label) {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    if (await check()) return;
-    await new Promise((r) => setTimeout(r, 5));
+  let changes = 0;
+  let wake;
+  const changed = () => {
+    changes += 1;
+    wake?.();
+  };
+  const cleanup = () => musicVideoEvents.off('cast-and-sets', changed);
+  musicVideoEvents.on('cast-and-sets', changed);
+  onTestFinished(cleanup);
+  try {
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      if (await check()) return;
+      if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}`);
+      const observed = changes;
+      const remaining = deadline - Date.now();
+      // Wait for event with a small timeout to re-check the condition
+      // even if no event fires (e.g., state changed before subscription).
+      await Promise.race([
+        new Promise((resolve) => { wake = resolve; }),
+        new Promise((r) => setTimeout(r, Math.min(250, remaining))),
+      ]);
+      wake = null;
+      // If no change fired, the timeout caused the race to resolve.
+      // Continue to the next check() without further delay.
+    }
+  } finally {
+    cleanup();
   }
-  throw new Error(`timed out waiting for ${label}`);
 }
 
 /** Land every queued job whose key is in `keys` (all when omitted), as the image hook does. */
