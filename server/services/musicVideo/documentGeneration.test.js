@@ -2,6 +2,7 @@
 vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -252,7 +253,10 @@ it('refuses a changed production draft after provider preparation and before pai
   expect(h.calls).toBe(0);
 });
 
-it('refuses ambient Three.js random helpers and their aliases while allowing deterministic local helpers', async () => {
+// The server CI job installs no client dependencies; the vendored Three.js bundle is resolved from the client workspace.
+const threeInstalled = (() => { try { createRequire(new URL('../../../client/package.json', import.meta.url)).resolve('three'); return true; } catch { return false; } })();
+
+it.skipIf(!threeInstalled)('refuses ambient Three.js random helpers and their aliases while allowing deterministic local helpers', async () => {
   const created = await projects.createProject({ name: 'Example deterministic world', mediaMode: 'code-only' });
   await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
     audioAnalysis: { durationSec: 1, beats: [], downbeats: [], sections: [{ id: 'world', startSec: 0, endSec: 1 }] },
