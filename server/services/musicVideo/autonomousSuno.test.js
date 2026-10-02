@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
-import { readFile, writeFile, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 
@@ -130,12 +132,14 @@ describe('submitSunoSong', () => {
 
 // Synthetic container signature; ffmpeg is mocked at its process boundary.
 const m4a = Buffer.from([0, 0, 0, 24, 102, 116, 121, 112, 77, 52, 65, 32]);
-function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = false, readyAfterMs = 0 } = {}) {
+function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = false, readyAfterMs = 0, landsInDir = null } = {}) {
   const page = fakePage();
   const baseRole = page.getByRole;
   const selected = new Set(['MP3', 'WAV', 'MP4 video asset']);
   const actions = [];
   let savedPath;
+  const dirFiles = [];
+  const listDownloads = vi.fn(async () => ({ downloadDir: landsInDir, files: [...dirFiles] }));
   const download = {
     saveAs: vi.fn(async (path) => {
       savedPath = path;
@@ -155,7 +159,10 @@ function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = fals
     if (role === 'button' && String(name) === '/^(Unlock & Download|Download)$/') return { click: async () => {
       actions.push('export');
       expect(page.listenerCount('download')).toBe(1);
-      if (stalled !== 'event') page.emit('download', download);
+      if (landsInDir) {
+        await writeFile(join(landsInDir, 'Example Song.m4a'), bytes);
+        dirFiles.push({ name: 'Example Song.m4a', size: bytes.length, modified: '2026-01-01T00:00:00.000Z' });
+      } else if (stalled !== 'event') page.emit('download', download);
     } };
     if (role === 'menuitem') return { click: async ({ timeout }) => {
       actions.push(name);
@@ -174,7 +181,7 @@ function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = fals
     expect(await readFile(path)).toEqual(m4a);
     return { filename: 'music-example.m4a', sizeBytes: m4a.length };
   });
-  return { page, selected, actions, download, savedPath: () => savedPath, browser, connect, importAudio };
+  return { page, selected, actions, download, savedPath: () => savedPath, browser, connect, importAudio, listDownloads, downloadPollMs: 5 };
 }
 
 describe('generateSunoSong M4A export', () => {
@@ -195,6 +202,20 @@ describe('generateSunoSong M4A export', () => {
     expect(w.page.close).toHaveBeenCalled();
     expect(w.browser.close).toHaveBeenCalled();
     await expect(stat(w.savedPath())).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('imports an M4A the PortOS Browser saved to its download directory when Playwright emits no download event', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'portos-suno-test-'));
+    try {
+      const w = workflow({ landsInDir: dir });
+      const out = await generateSunoSong(fields, { ...w, songIds: [NEW_A] });
+      expect(out).toMatchObject({ filename: 'music-example.m4a' });
+      expect(w.download.saveAs).not.toHaveBeenCalled();
+      expect(w.actions.filter(x => x === 'export')).toHaveLength(1);
+      expect(w.page.listenerCount('download')).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('never presses Create or imports when stopped while the form is opening', async () => {

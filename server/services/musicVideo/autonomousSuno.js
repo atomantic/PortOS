@@ -3,7 +3,7 @@
  * through its Download UI, validate the completed file, and import it directly.
  * Retries reuse submitted song ids so a failed export never repeats Create.
  */
-import { mkdtemp, open, rm } from 'fs/promises';
+import { copyFile, mkdtemp, open, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { promisify } from 'util';
@@ -195,9 +195,40 @@ async function validateSunoAudio(path, { signal, timeoutMs }) {
   }
 }
 
+const DOWNLOAD_POLL_MS = 1000;
+const downloadKey = (file) => `${file.name}\0${file.modified}`;
+
+async function defaultListDownloads() {
+  const { getDownloads } = await import('../browserService.js');
+  return getDownloads();
+}
+
+// The PortOS Browser keeps Chrome's native download manager (see
+// browser/server.js), so a CDP-attached Playwright never sees a `download`
+// event: the M4A just lands in the profile's download directory. Detect it
+// there instead — a new .m4a (Chrome lists a file only after its .crdownload
+// rename) whose size held steady across two polls.
+async function watchDownloadsDir(listDownloads, baseline, signal, pollMs) {
+  let lastSize = null;
+  let lastName = null;
+  while (!signal.aborted) {
+    const { downloadDir, files } = await listDownloads().catch(() => ({ files: [] }));
+    const fresh = files.find((f) => /\.m4a$/i.test(f.name) && !baseline.has(downloadKey(f)));
+    if (fresh && fresh.name === lastName && fresh.size === lastSize && fresh.size > 0) return join(downloadDir, fresh.name);
+    lastName = fresh?.name ?? null;
+    lastSize = fresh?.size ?? null;
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, pollMs);
+      signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+  }
+  return null;
+}
+
 /** One bounded export, including waiting for the browser to finish saving. */
 async function downloadSunoAudio(page, songId, path, {
   timeoutMs = SUNO_AUDIO_TIMEOUT_MS, signal, validateAudio = validateSunoAudio,
+  listDownloads = defaultListDownloads, downloadPollMs = DOWNLOAD_POLL_MS,
 } = {}) {
   const controller = new AbortController();
   const deadline = Date.now() + timeoutMs;
@@ -230,6 +261,7 @@ async function downloadSunoAudio(page, songId, path, {
     return Promise.race([Promise.resolve().then(fn), stopPromise]);
   };
   let onDownload;
+  const watch = new AbortController();
   try {
     await bounded('open-song', () => page.goto(sunoSongUrl(songId), { waitUntil: 'domcontentloaded', timeout: remaining() }));
     if (/sign-?in|login|accounts\./i.test(page.url())) throw loginRequired(LABEL, SUNO_CREATE_URL);
@@ -253,10 +285,18 @@ async function downloadSunoAudio(page, songId, path, {
       onDownload = (value) => { download = value; resolve(value); };
       page.once('download', onDownload);
     });
+    const baseline = new Set((await bounded('snapshot-downloads', () => listDownloads().catch(() => ({ files: [] })))).files.map(downloadKey));
     await bounded('start-download', () => page.getByRole('button', { name: /^(Unlock & Download|Download)$/ }).click({ timeout: remaining() }));
-    await bounded('wait-download', () => started);
-    await bounded('save-download', () => download.saveAs(path));
-    if (await bounded('check-download', () => download.failure())) throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'browser-download-failed');
+    const landed = await bounded('wait-download', () => Promise.race([
+      started.then(() => null),
+      watchDownloadsDir(listDownloads, baseline, watch.signal, downloadPollMs),
+    ]));
+    if (landed) {
+      await bounded('save-download', () => copyFile(landed, path));
+    } else {
+      await bounded('save-download', () => download.saveAs(path));
+      if (await bounded('check-download', () => download.failure())) throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'browser-download-failed');
+    }
     if (!await bounded('validate-audio', () => validateAudio(path, { signal: controller.signal, timeoutMs: remaining() }))) throw error('SUNO_AUDIO_INVALID', 'invalid-audio');
   } catch (err) {
     if (err instanceof ServerError) throw err;
@@ -264,6 +304,7 @@ async function downloadSunoAudio(page, songId, path, {
     throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'export-failed');
   } finally {
     clearTimeout(timer);
+    watch.abort();
     signal?.removeEventListener('abort', abort);
     if (onDownload) page.off('download', onDownload);
     // The page owner closes it before removing the staging directory. Cancel
