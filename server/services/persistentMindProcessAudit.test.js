@@ -1,6 +1,7 @@
 import { beforeEach, afterAll, expect, it as vitestIt, vi } from 'vitest';
 import { join } from 'node:path';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 const mocks = vi.hoisted(() => ({ root: {}, apps: [], records: {}, dir: null, file: vi.fn(), list: vi.fn(), git: vi.fn() }));
 vi.mock('../lib/fileUtils.js', async () => {
   const fs = await import('node:fs/promises');
@@ -43,23 +44,16 @@ beforeEach(async () => {
   mocks.git.mockImplementation(async args => ({ stdout: args.slice(3).join('\0') + '\0', exitCode: 0 }));
   await addJob('agent-example');
 });
-// Vitest's fail-fast cancellation rejects a test's wrapper while its async body
-// keeps writing into the shared fixture root. Own each body until it settles so
-// afterAll removes the root only after every write, and surface a body that
-// failed after vitest stopped listening instead of dropping it.
-const pendingBodies = new Set();
-const orphanedFailures = [];
-const it = (name, body) => vitestIt(name, context => {
-  const run = Promise.resolve().then(() => body(context));
-  const settled = run.then(() => {}, error => { if (context.signal.aborted) orphanedFailures.push(error); });
-  pendingBodies.add(settled);
-  settled.then(() => pendingBodies.delete(settled));
-  return run;
-});
+// Fail-fast cancellation can leave a test body writing into the shared fixture
+// root; drain every owned body before removing it (see ownTestBodies).
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
 afterAll(async () => {
-  while (pendingBodies.size) await Promise.all(pendingBodies);
-  await rm(mocks.dir, { recursive: true, force: true });
-  if (orphanedFailures.length) throw new AggregateError(orphanedFailures, 'Cancelled process-audit test failed after cancellation');
+  try {
+    await owned.drain();
+  } finally {
+    await rm(mocks.dir, { recursive: true, force: true });
+  }
 });
 const next = (context = turn) => audit.nextProcessAuditBatch({ appId: 'example' }, context);
 const finding = receipt => ({ appId: 'example', receiptId: receipt, outcome: 'finding', template: 'wrong-tool', targetAppId: 'slashdo', anchors: ['commands/next.md'] });
