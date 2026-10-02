@@ -323,6 +323,23 @@ describe('CoS Routes', () => {
   });
 
   describe('GET /api/cos/tasks', () => {
+    it('bounds the bare form on a large completed history and keeps view=full raw', async () => {
+      const active = { id: 'active', status: 'pending' };
+      const history = Array.from({ length: 2000 }, (_, i) => ({ id: `done-${String(i).padStart(5, '0')}`, status: 'completed', metadata: { prompt: 'x'.repeat(2000) } }));
+      cos.getAllTasks.mockResolvedValue({ user: { tasks: [active, ...history], grouped: { pending: [active], completed: history } }, cos: null });
+      cos.getAgents.mockResolvedValue([]);
+      const bare = await request(app).get('/api/cos/tasks');
+      expect(bare.status).toBe(200);
+      expect(JSON.stringify(bare.body).length).toBeLessThan(1_000_000);
+      expect(bare.body.user.tasks).toHaveLength(26);
+      expect(bare.body.user.tasks[0]).toMatchObject({ id: 'active' });
+      expect(bare.body.user).toMatchObject({ completedCount: 2000, grouped: { pending: [active], completed: [] } });
+      expect(bare.body.user.completedNextCursor).toBe(bare.body.user.tasks[25].id);
+      const full = await request(app).get('/api/cos/tasks?view=full');
+      expect(full.body.user.tasks).toHaveLength(2001);
+      expect(full.body.user.grouped.completed).toHaveLength(2000);
+    });
+
     it('should return all tasks', async () => {
       const mockTasks = {
         user: { tasks: [], grouped: {} },
