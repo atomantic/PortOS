@@ -239,7 +239,18 @@ async function daemonStillLatched() {
 
 const status = { lastError: null, lastSuccessAt: null, consecutiveErrors: 0 }
 
-async function getServiceController() {
+// Whether brew/systemctl exists does not change under a running server, so the
+// probe (a `brew --version` spawn) runs once per platform per process.
+let serviceControllerProbe = null
+
+function getServiceController() {
+  if (serviceControllerProbe?.platform !== process.platform) {
+    serviceControllerProbe = { platform: process.platform, promise: probeServiceController() }
+  }
+  return serviceControllerProbe.promise
+}
+
+async function probeServiceController() {
   if (process.platform === 'darwin' && await commandExists('brew', ['--version'])) {
     return {
       supported: true,
@@ -263,7 +274,38 @@ async function getServiceController() {
   return { supported: false, manager: null }
 }
 
-async function getServiceStatus() {
+// `brew services list` costs ~0.45 s, and a service's state only changes when
+// PortOS runs start/stop/restart (which invalidate this) or the user runs brew
+// themselves, so a short TTL keeps the status endpoint cheap.
+const SERVICE_STATUS_TTL_MS = 10_000
+let serviceStatusCache = null // { at, value } | { inflight, generation }
+let serviceStatusGeneration = 0
+
+function invalidateServiceStatus() {
+  serviceStatusGeneration++
+  serviceStatusCache = null
+}
+
+function getServiceStatus(forceRefresh = false) {
+  const cached = serviceStatusCache
+  if (!forceRefresh && cached) {
+    if (cached.inflight) return cached.inflight
+    if (Date.now() - cached.at < SERVICE_STATUS_TTL_MS) return Promise.resolve(cached.value)
+  }
+  const generation = serviceStatusGeneration
+  const inflight = readServiceStatus().then((value) => {
+    // A mutation that landed while this read was in flight makes it stale.
+    if (generation === serviceStatusGeneration) serviceStatusCache = { at: Date.now(), value }
+    return value
+  }, (err) => {
+    if (serviceStatusCache?.inflight === inflight) serviceStatusCache = null
+    throw err
+  })
+  if (generation === serviceStatusGeneration) serviceStatusCache = { inflight }
+  return inflight
+}
+
+async function readServiceStatus() {
   const controller = await getServiceController()
   if (!controller.supported) {
     return { supported: false, manager: null, running: false, runAtStartup: false, status: null }
@@ -521,6 +563,7 @@ async function startPersistentService() {
   }
 
   const running = await waitForAvailability(true, START_TIMEOUT_MS)
+  invalidateServiceStatus()
   const service = await getServiceStatus().catch(() => ({
     supported: true,
     manager: controller.manager,
@@ -558,6 +601,7 @@ async function stopPersistentService() {
 
   const stopped = await waitForAvailability(false, STOP_TIMEOUT_MS)
   if (stopped) resetAvailabilityCache()
+  invalidateServiceStatus()
   const service = await getServiceStatus().catch(() => ({
     supported: true,
     manager: controller.manager,
@@ -808,6 +852,7 @@ async function bounceService() {
   const restarted = await execFileAsync(cmd, args, { timeout: SERVICE_COMMAND_TIMEOUT_MS })
     .then(() => ({ success: true }))
     .catch((err) => ({ success: false, error: err.stderr?.trim() || err.stdout?.trim() || err.message }))
+  invalidateServiceStatus()
   if (!restarted.success) return { ok: false, failure: { applied: false, reason: 'restart-failed', error: restarted.error } }
 
   if (!(await waitForAvailability(true, START_TIMEOUT_MS))) {
@@ -2049,6 +2094,7 @@ export {
   ensureProviderReady,
   isOllamaProvider,
   getServiceStatus,
+  invalidateServiceStatus,
   getModelsDir,
   listStoredModels,
   getEmbeddings,
