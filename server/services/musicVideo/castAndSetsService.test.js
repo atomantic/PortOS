@@ -63,7 +63,7 @@ const queueJob = async ({ params }) => {
 };
 const enqueue = vi.fn(queueJob);
 let imageParamsOverrides;
-const heldQueueReleases = new Set();
+const heldWorkReleases = new Set();
 const runPrompt = vi.fn();
 const board = {
   id: 'mb-1',
@@ -78,6 +78,7 @@ const board = {
 const keyOf = (job) => job.params.musicVideo.castAndSets.key;
 const current = async (id) => projects.getProject(id);
 
+<<<<<<< HEAD
 // Event-driven with deadline fallback: subscribes to state changes and re-checks
 // immediately when fired, rather than polling. Slow runners (Windows CI) stay
 // responsive because the event triggers a check instead of spinning on elapsed time.
@@ -115,6 +116,18 @@ async function until(check, label, diagnostics) {
   } finally {
     cleanup();
   }
+=======
+// Deadline-based, not an iteration count: each check reads from disk, so a slow
+// runner (Windows CI) stretches an iteration far past its 5ms sleep and a fixed
+// 200 passes can expire in about a second.
+async function until(check, label) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+>>>>>>> 2f03cf704 (test: await owned cast-and-set artifact assembly before check-in assertions)
 }
 
 /** Land every queued job whose key is in `keys` (all when omitted), as the image hook does. */
@@ -196,8 +209,8 @@ const testDeps = (overrides = {}) => ({
   ...overrides,
 });
 afterEach(async () => {
-  for (const release of heldQueueReleases) release();
-  heldQueueReleases.clear();
+  for (const release of heldWorkReleases) release();
+  heldWorkReleases.clear();
   await service.__settleCastAndSetsForTests();
 });
 afterAll(cleanupTempDataRoots);
@@ -319,16 +332,11 @@ describe('Cast & Sets check-in', () => {
     expect(test1.params.referenceImagePaths.map((p) => p.split(/[\\/]/).pop())).toEqual([`${plateLab.id}.png`, `${character.id}.png`, `${looks.id}.png`]);
 
     await land(project.id);
-    await until(async () => (await current(project.id)).castAndSets?.status === 'review', 'the check-in', async () => {
-      const stage = (await current(project.id)).castAndSets;
-      return {
-        status: stage?.status, revision: stage?.revision, error: stage?.error, stopReason: stage?.stopReason,
-        images: Object.fromEntries(Object.entries(stage?.images || {}).map(([key, image]) => [key, { status: image.status, jobId: image.jobId }])),
-        jobs: jobs.filter(job => job.params.musicVideo.projectId === project.id)
-          .map(job => ({ key: keyOf(job), id: job.id, landed: !!job.landed })),
-      };
-    });
+    // Completion hooks schedule assembly in the background. Wait for that owned
+    // work, not a disk-poll performance deadline; Vitest bounds a stuck workflow.
+    await service.__settleCastAndSetsForTests();
     const reviewing = await current(project.id);
+    expect(reviewing.castAndSets.status).toBe('review');
     const artifact = reviewing.devArtifacts.find((a) => a.id === reviewing.castAndSets.artifactId);
     expect(artifact).toMatchObject({ kind: 'cast-sets', status: 'pending', version: 1 });
     const html = readFileSync(join(ROOT(), artifact.file), 'utf8');
@@ -465,7 +473,7 @@ it('ignores a previous revision completion while regeneration has reserved a key
   let release;
   const held = new Promise((resolve) => { release = resolve; });
   enqueue.mockImplementationOnce(async (job) => { await held; return queueJob(job); });
-  heldQueueReleases.add(release);
+  heldWorkReleases.add(release);
   await service.regenerateCastAndSets(project.id, { notes: [{ target: 'character', text: 'Shorter braid' }] });
   await until(async () => (await current(project.id)).castAndSets.images.character.status === 'queued', 'the reserved regeneration');
   const before = (await current(project.id)).castAndSets;
@@ -692,7 +700,7 @@ it('keeps concurrent check-in completions owned by the project that queued them'
 it('drains a held background submission before shared queue and project fixtures can be reset', async () => {
   const entered = Promise.withResolvers();
   const release = Promise.withResolvers();
-  heldQueueReleases.add(release.resolve);
+  heldWorkReleases.add(release.resolve);
   enqueue.mockImplementationOnce(async job => {
     entered.resolve();
     await release.promise;
@@ -711,4 +719,37 @@ it('drains a held background submission before shared queue and project fixtures
   expect(jobs).toHaveLength(4);
   expect((await current(project.id)).castAndSets.images.character.jobId).toBe(jobs[0].id);
   await runTo(project.id, 'review');
+});
+
+
+it('waits for held image embedding and the persisted sheet before assembly settles', async () => {
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  heldWorkReleases.add(release.resolve);
+  service.__setCastAndSetsDepsForTests(testDeps({
+    readImage: async path => {
+      entered.resolve();
+      await release.promise;
+      return readFileSync(path);
+    },
+  }));
+  const project = await seed();
+  await service.startCastAndSets(project.id);
+  const reviewed = runTo(project.id, 'review');
+  await entered.promise;
+  let drained = false;
+  const drain = service.__settleCastAndSetsForTests().then(() => { drained = true; });
+  await Promise.resolve();
+  expect(drained).toBe(false);
+  const assembling = await current(project.id);
+  expect(assembling.castAndSets.status).toBe('assembling');
+  expect(assembling.devArtifacts || []).toHaveLength(0);
+  release.resolve();
+  await drain;
+  await reviewed;
+  const saved = await current(project.id);
+  expect(saved.castAndSets.status).toBe('review');
+  const artifact = saved.devArtifacts.find(item => item.id === saved.castAndSets.artifactId);
+  expect(artifact).toMatchObject({ kind: 'cast-sets', status: 'pending', version: 1 });
+  expect(readFileSync(join(ROOT(), artifact.file), 'utf8')).toContain(`data:image/png;base64,${PNG.toString('base64')}`);
 });
