@@ -152,7 +152,9 @@ const RESERVED_MAP_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 async function splitExistingRecordIds(typeDir) {
   const ids = new Set();
   if (!await splitFileExists(typeDir)) return ids;
-  const entries = await readdir(typeDir, { withFileTypes: true }).catch(() => []);
+  // No catch-to-empty: a failed listing is not proof that no records exist, and
+  // an empty set would let the legacy values overwrite fresher split records.
+  const entries = await readdir(typeDir, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === 'index.json' || entry.name.startsWith('.') || !entry.isDirectory()) continue;
     if (await splitFileExists(join(typeDir, entry.name, 'index.json'))) ids.add(entry.name);
