@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync } from '../../lib/childProcess.js';
 import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
