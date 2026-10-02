@@ -92,6 +92,8 @@ beforeEach(() => {
     analyzeSong: stub('analyze', async () => ({})),
     startProduction: stub('production', async () => ({ run: { id: 'mvpr-1' } })),
     generateCode: stub('code', async () => ({})),
+    generateDocument: stub('document', async () => ({ document: { directory: 'music-video/mv-auto/composition/example' } })),
+    acceptDocument: stub('accept-document', async (id, directory) => { store.get(id).composition.document = { directory }; return {}; }),
     renderVideo: stub('render', async () => ({ jobId: 'render-1' })),
   };
   service.__setAutonomousDepsForTests(doubles);
@@ -121,6 +123,51 @@ describe('startAutonomousVideo', () => {
     expect(doubles.attachAudio).toHaveBeenCalledWith('track-1', 'music-song-a.mp3', expect.objectContaining({ source: 'suno', durationSec: 187 }));
   });
 
+  it.each([
+    { mediaMode: 'code-images', explicit: true },
+    { mediaMode: 'code-images-video', explicit: false },
+  ])('passes the $mediaMode authoring pin through the real production preflight', async ({ mediaMode, explicit }) => {
+    const { buildProjectRecord } = await import('./projectsLogic.js');
+    const production = await import('./productionService.js');
+    const runner = await import('../promptRunner.js');
+    const authoring = { providerId: 'fixture-author', model: 'fixture-model', effort: 'high' };
+    const resolve = vi.spyOn(runner, 'resolveProviderAndModel').mockResolvedValue({
+      provider: { id: authoring.providerId, type: 'api', enabled: true }, selectedModel: authoring.model,
+    });
+    // Exercise actual authoring and pool validation against a synthetic image
+    // backend. The absent approved plan stops the run before any dispatch.
+    const isVideoModeUsable = vi.fn(() => false);
+    const loadEnv = vi.fn(async () => {
+      if (mediaMode === 'code-images') return { settings: { imageGen: { local: { pythonPath: '/opt/example/python' } } },
+        imageModels: [{ id: 'fixture-image' }], isVideoModeUsable };
+      throw Object.assign(new Error('Fixture stopped after authoring validation'), { code: 'FIXTURE_PREFLIGHT_COMPLETE' });
+    });
+    production.__setProductionDepsForTests({ loadEnv });
+    doubles.createProject.mockImplementation(async (input) => {
+      const project = buildProjectRecord(input, { id: 'mv-auto', now: '2026-01-01T00:00:00.000Z' });
+      store.set(project.id, clone(project));
+      return project;
+    });
+    doubles.startProduction.mockImplementation(production.startProduction);
+    doubles.resolveLlm.mockResolvedValue({ route: authoring });
+    try {
+      await service.startAutonomousVideo({ prompt: 'An authored world', mediaMode, models: { 'image:local': 'fixture-image' }, ...(explicit ? { authoring } : {}) });
+      await settled('failed');
+      expect(store.get('mv-auto')).toMatchObject({ composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first' } });
+      expect(resolve).toHaveBeenCalledWith(authoring);
+      expect(loadEnv).toHaveBeenCalledOnce();
+      expect(runOf().errorCode).toBe(mediaMode === 'code-images' ? 'PRODUCTION_MEDIUM_CONFLICT' : 'FIXTURE_PREFLIGHT_COMPLETE');
+      if (mediaMode === 'code-images') {
+        expect(isVideoModeUsable).not.toHaveBeenCalled();
+        expect(doubles.startProduction.mock.calls[0][1].pool).toEqual([{ kind: 'image', mode: 'local', model: 'fixture-image' }]);
+        expect(runOf().brief.tools).toEqual(['image:local', 'video:local']);
+      }
+    } finally {
+      resolve.mockRestore();
+      production.__setProductionDepsForTests({});
+    }
+  });
+
   it('finishes — and starts the final render — when the delegated production run completes', async () => {
     await service.startAutonomousVideo({ prompt: 'p' });
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
@@ -145,8 +192,10 @@ describe('startAutonomousVideo', () => {
     await settled('running').catch(() => {});
     await vi.waitFor(() => expect(calls).toContain('render'));
     expect(calls).not.toContain('production');
-    expect(doubles.generateCode).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm' });
-    expect(store.get('mv-auto').composition).toEqual({ mode: 'code' });
+    expect(calls).not.toContain('board');
+    expect(doubles.acceptDocument).toHaveBeenCalledWith('mv-auto', 'music-video/mv-auto/composition/example');
+    expect(doubles.generateDocument).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm' });
+    expect(store.get('mv-auto').composition).toMatchObject({ mode: 'document', authoringRenderer: 'three' });
     await settled('completed');
   });
 
@@ -175,7 +224,7 @@ describe('startAutonomousVideo', () => {
   it('threads the authoring effort into code generation for a code-only brief', async () => {
     await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'prov', model: 'm', effort: 'medium' } });
     await vi.waitFor(() => expect(calls).toContain('render'));
-    expect(doubles.generateCode).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm', effort: 'medium' });
+    expect(doubles.generateDocument).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm', effort: 'medium' });
   });
 
   it('sends the Cast & Sets check-in to review only when the cast checkpoint is chosen', async () => {
@@ -458,10 +507,7 @@ it('parks standalone code at real human gates and replaces a stale proof before 
       } },
     });
   });
-  doubles.generateCode.mockImplementation(async () => {
-    const project = store.get('mv-auto');
-    project.composition.codeVideo = { sections: [{ id: 'chorus', source: 'function render() {}' }] };
-  });
+  doubles.generateDocument.mockResolvedValue({ document: { directory: 'music-video/mv-auto/composition/example' } });
   renderProductionProof.mockImplementation(async (_id, window) => {
     const project = store.get('mv-auto');
     const id = `proof-${++proofNumber}`;
@@ -472,17 +518,20 @@ it('parks standalone code at real human gates and replaces a stale proof before 
   });
   const approve = stage => {
     const project = store.get('mv-auto');
-    store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage] }));
+    const excerpt = project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId);
+    store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage],
+      proofReview: stage === 'proof' ? { watchedWithAudio: true, excerptId: excerpt.id, filename: excerpt.filename,
+        energyComparison: 'Human fixture reviewed the intended energy.', timecodedNotes: '0:04 the chorus action lands.' } : undefined }));
   };
   await service.startAutonomousVideo({ prompt: 'Synthetic animation', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' } });
   await settled('needs-human');
-  expect(doubles.generateCode).not.toHaveBeenCalled();
+  expect(doubles.generateDocument).not.toHaveBeenCalled();
   expect(doubles.renderVideo).not.toHaveBeenCalled();
   approve('art');
   approve('storyboard');
   await service.resumeAutonomousVideo('mv-auto');
   await settled('needs-human');
-  expect(doubles.generateCode).toHaveBeenCalledOnce();
+  expect(doubles.generateDocument).toHaveBeenCalledOnce();
   expect(renderProductionProof).toHaveBeenCalledOnce();
   expect(renderProductionProof).toHaveBeenLastCalledWith('mv-auto', { startSec: 0, endSec: 20 });
   expect(doubles.renderVideo).not.toHaveBeenCalled();
@@ -500,7 +549,7 @@ it('parks standalone code at real human gates and replaces a stale proof before 
     expect(doubles.renderVideo).not.toHaveBeenCalled();
   }
   approve('proof');
-  store.get('mv-auto').composition.codeVideo.sections[0].source = 'function render() { /* revision */ }';
+  store.get('mv-auto').composition.document.directory = 'music-video/mv-auto/composition/revised';
   await service.resumeAutonomousVideo('mv-auto');
   await settled('needs-human');
   expect(renderProductionProof).toHaveBeenCalledTimes(4);
@@ -509,6 +558,6 @@ it('parks standalone code at real human gates and replaces a stale proof before 
   await service.resumeAutonomousVideo('mv-auto');
   await settled('completed');
   expect(doubles.renderVideo).toHaveBeenCalledOnce();
-  expect(doubles.generateCode).toHaveBeenCalledOnce();
+  expect(doubles.generateDocument).toHaveBeenCalledOnce();
   expect(doubles.startProduction).not.toHaveBeenCalled();
 });

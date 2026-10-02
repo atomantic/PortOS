@@ -11,6 +11,7 @@
  */
 
 import { CODE_FPS } from './codeFrame.js';
+import { musicVideoSongFeaturesSchema } from '../../lib/musicVideoValidation.js';
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
 
@@ -222,6 +223,7 @@ export function buildCodeTimeline(project, { fps = CODE_FPS } = {}) {
 /** The song.json document the composition seeks. Words fall back to the line. */
 export function buildSongDocument(project, timeline = buildCodeTimeline(project)) {
   const quantized = quantizeSongDuration(timeline.durationSec, timeline.fps);
+  const features = musicVideoSongFeaturesSchema.safeParse(project.audioAnalysis?.features);
   const lines = lyricLines(project).map((line) => ({
     id: typeof line.id === 'string' ? line.id : null,
     text: line.text,
@@ -248,6 +250,7 @@ export function buildSongDocument(project, timeline = buildCodeTimeline(project)
     fps: timeline.fps,
     beats: timeline.beats,
     downbeats: timeline.downbeats,
+    features: features.success ? features.data : null,
     sections,
     lyrics: lines,
   };

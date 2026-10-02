@@ -1,3 +1,4 @@
+import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { assertProductionApproval, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
@@ -583,6 +584,7 @@ export function assertCurrentClipDependencies(project) {
 }
 
 export async function planMusicVideoRender(project) {
+  assertMusicVideoMediaSelections(project);
   assertCurrentClipDependencies(project);
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
@@ -685,14 +687,14 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   projectRenders.set(projectId, jobId);
   handOff();
   const priorStatus = project.status && project.status !== 'rendering' ? project.status : 'ready';
-  await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename }).catch((err) => {
+  await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename, renderError: null }).catch((err) => {
     console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
   });
   console.log(`🎬 Rendering ${renderer.label} music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} frames=${Math.round(plan.durationSec * plan.fps)} footage=off`);
   const { signal } = job.overlayAbort;
   const finish = async (patch) => {
     projectRenders.delete(projectId);
-    await updateProject(projectId, settledRender(patch.status, patch.extra || {})).catch((err) => {
+    await updateProject(projectId, settledRender(patch.status, { renderError: patch.status === 'failed' ? job.lastError?.slice(0, 2000) || 'Render failed' : null, ...patch.extra })).catch((err) => {
       console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
     });
     if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null });
@@ -815,7 +817,7 @@ export async function renderMusicVideo(projectId, options = {}) {
     // #9010: stamp this instance on the mark so a peer's boot recovery leaves
     // it alone, and record the output file so OUR boot recovery can delete the
     // partial a restart mid-encode leaves behind.
-    await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename }).catch((err) => {
+    await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename, renderError: null }).catch((err) => {
       console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
     });
 

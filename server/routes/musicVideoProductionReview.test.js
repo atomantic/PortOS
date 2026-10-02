@@ -4,6 +4,17 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
+const author = vi.hoisted(() => ({ sections: [], calls: 0 }));
+vi.mock('../services/promptRunner.js', () => ({
+  assertProvider: () => {},
+  resolveProviderAndModel: async () => ({ provider: { id: 'fixture-author', type: 'api', enabled: true }, selectedModel: 'fixture-model' }),
+  runPromptThroughProvider: async ({ beforeExecute }) => {
+    await beforeExecute?.({ provider: { id: 'fixture-author', type: 'api' }, model: 'fixture-model' });
+    author.calls += 1;
+    return { text: JSON.stringify({ sections: author.sections }) };
+  },
+}));
+
 const ROOT = () => lazyTempDataRoot('mv-production-review-');
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
@@ -31,12 +42,17 @@ const read = () => request(app).get(`${base}/production-review`);
 const save = body => request(app).put(`${base}/production-review`).send(body);
 async function approve(stage, extra = {}) {
   const status = await read();
-  return request(app).post(`${base}/production-review/approve`).send({ stage,
+  const excerpt = status.body.project.excerpts?.find(e => e.id === status.body.project.productionReview?.proof?.excerptId);
+  const proofReview = stage === 'proof' && excerpt ? { watchedWithAudio: true, excerptId: excerpt.id, filename: excerpt.filename,
+    energyComparison: 'The playful energy target reads clearly in the subject and camera action.',
+    timecodedNotes: '0:04 doorway opens on the accent; 0:12 the second gesture grows in scale.' } : undefined;
+  return request(app).post(`${base}/production-review/approve`).send({ stage, proofReview,
     basis: status.body.readiness.basis[stage], password: 'synthetic-operator-password', ...extra });
 }
 
 beforeEach(async () => {
   auth.enabled = true;
+  author.calls = 0; author.sections = [];
   project = await store.createProject({ name: 'Example animation', uploadedAudioFilename: 'synthetic-song.wav', composition: { mode: 'code' } });
   base = `/api/music-video/${project.id}`;
   await store.setProjectAnalysis(project.id, { durationSec: 20, bpm: 120, beats: [0, 1], downbeats: [0], sections: [{ startSec: 0, endSec: 20, label: 'Chorus' }] });
@@ -53,6 +69,38 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 describe('human-reviewed Music Video workflow', () => {
+  it('prepares an absent code-first medium plan before human storyboard approval and real authoring admission', async () => {
+    await store.updateProject(project.id, { mediaMode: 'code-only', composition: { mode: 'document', authoringRenderer: 'canvas' },
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
+    const originalDirection = { camera: 'Keep the authored slow push', medium: 'procedural', mediumPinned: true, mediumRationale: 'Exact code staging' };
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      scenes: current.scenes.map(scene => ({ ...scene, direction: originalDirection })) } }));
+    expect((await approve('art')).status).toBe(200);
+    const prepared = await request(app).post(`${base}/production-review/prepare`).send({});
+    expect(prepared.status).toBe(200);
+    expect(prepared.body.project.treatment).toMatchObject({ revision: 1, appliedRevision: 1,
+      compiledWith: { source: 'deterministic' }, shotDirections: [{ medium: 'procedural' }] });
+    expect(prepared.body.project.scenes[0]).toMatchObject({ direction: originalDirection, prompt: 'A paper figure opens a painted doorway.' });
+    expect(prepared.body.readiness.art.approved).toBe(true);
+    expect(prepared.body.readiness.storyboard.approved).toBe(false);
+    expect(author.calls).toBe(0);
+    const generate = () => request(app).post(`${base}/composition/document/generate`).send({ providerId: 'fixture-author', model: 'fixture-model' });
+    expect((await generate()).body.code).toBe('MUSIC_VIDEO_APPROVAL_REQUIRED');
+    expect((await approve('storyboard')).status).toBe(200);
+    const { buildCodeTimeline } = await import('../services/musicVideo/codeTimeline.js');
+    author.sections = buildCodeTimeline(await store.getProject(project.id)).sections.map(section => ({ id: section.id,
+      source: "function render(ctx, env) { ctx.fillStyle = '#203040'; ctx.fillRect(0, 0, env.width, env.height); }" }));
+    const generated = await generate();
+    expect(generated.status).toBe(201);
+    expect(generated.body.document.source.kind).toBe('generated');
+    expect(author.calls).toBe(1);
+    const beforeRepeat = await store.getProject(project.id);
+    await request(app).post(`${base}/production-review/prepare`).send({});
+    const repeated = await store.getProject(project.id);
+    expect(repeated.treatment).toEqual(beforeRepeat.treatment);
+    expect(repeated.scenes).toEqual(beforeRepeat.scenes);
+  });
+
   it('refuses API credentials, password-free approval, stale revisions and final-render bypasses', async () => {
     const status = await read();
     const body = { stage: 'art', basis: status.body.readiness.basis.art, password: 'synthetic-operator-password' };
@@ -82,8 +130,17 @@ describe('human-reviewed Music Video workflow', () => {
     expect((await approve('art')).status).toBe(200);
     expect((await approve('storyboard')).status).toBe(200);
     expect((await request(app).post(`${base}/production-review/proof`).send({ startSec: 0, endSec: 20 })).status).toBe(202);
+    expect((await approve('proof', { proofReview: undefined })).body.code).toBe('MUSIC_VIDEO_PROOF_REVIEW_REQUIRED');
+    const evidence = { watchedWithAudio: true, excerptId: 'older-proof', filename: 'synthetic-proof.mp4',
+      energyComparison: 'Matches the chosen playful target.', timecodedNotes: '0:04 the subject reaches the doorway.' };
+    expect((await approve('proof', { proofReview: evidence })).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
+    expect((await approve('proof', { proofReview: { ...evidence, timecodedNotes: 'Looks good' } })).status).toBe(400);
     expect((await approve('proof')).status).toBe(200);
     const accepted = await store.getProject(project.id);
+    expect(accepted.productionReview.approvals.proof.proofReview).toMatchObject({
+      watchedWithAudio: true, excerptId: 'proof-fixture', filename: 'synthetic-proof.mp4',
+      timecodedNotes: '0:04 doorway opens on the accent; 0:12 the second gesture grows in scale.',
+    });
     expect(() => assertProductionApproval(accepted)).not.toThrow();
     const fork = await store.cloneProject(project.id, { variant: 'video-generation' });
     expect(fork.productionReview.approvals).toEqual({});
@@ -110,6 +167,60 @@ describe('human-reviewed Music Video workflow', () => {
     expect((await approve('storyboard')).status).toBe(409);
     await save({ ...draft, lyricsMode: 'instrumental', timingNotes: 'This synthetic master contains only instruments.', storyboard: draft.storyboard.map(s => ({ ...s, lyricCueIds: [] })) });
     expect((await approve('storyboard')).status).toBe(200);
+  });
+
+  it('invalidates musical choreography evidence when analysis or the applied timing map changes, not receipt metadata', async () => {
+    const current = await store.getProject(project.id);
+    await store.setProjectAnalysis(project.id, { ...current.audioAnalysis, features: {
+      envelopes: { fps: 1, rms: [0.2, 0.8], low: [0.1, 0.7], mid: [0.2, 0.4], high: [0.1, 0.3] },
+      onsets: { low: [1], mid: [2], high: [3] },
+    } });
+    await store.mutateProjectRecord(project.id, p => ({ project: { ...p, audioTimingRevisions: [{
+      version: 1, basis: 'synthetic-timing-revision', appliedAt: '2026-01-01T00:00:00.000Z',
+      input: { targetTrackId: 'synthetic-track', intervals: [{ oldStartSec: 0, oldEndSec: 20, newStartSec: 0 }] },
+    }] } }));
+    // Explicitly reconfirm the alignment after the analysis change.
+    await save({ ...draft, timingStatus: 'provisional' });
+    await save(draft);
+    await approve('art'); await approve('storyboard');
+    await request(app).post(`${base}/production-review/proof`).send({ startSec: 0, endSec: 20 });
+    expect((await approve('proof', { proofReview: undefined })).body.code).toBe('MUSIC_VIDEO_PROOF_REVIEW_REQUIRED');
+    const evidence = { watchedWithAudio: true, excerptId: 'older-proof', filename: 'synthetic-proof.mp4',
+      energyComparison: 'Matches the chosen playful target.', timecodedNotes: '0:04 the subject reaches the doorway.' };
+    expect((await approve('proof', { proofReview: evidence })).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
+    expect((await approve('proof', { proofReview: { ...evidence, timecodedNotes: 'Looks good' } })).status).toBe(400);
+    expect((await approve('proof')).status).toBe(200);
+    const accepted = await store.getProject(project.id);
+    const acceptedStatus = (await read()).body.readiness;
+    expect(acceptedStatus.readyForProduction).toBe(true);
+
+    const changes = {
+      onset: p => { p.audioAnalysis.features.onsets.low = [4]; },
+      envelope: p => { p.audioAnalysis.features.envelopes.rms = [0.8, 0.2]; },
+      downbeat: p => { p.audioAnalysis.downbeats = [1]; },
+      timingMap: p => { p.audioTimingRevisions[0].input.intervals[0].newStartSec = 1; },
+    };
+    for (const [label, change] of Object.entries(changes)) {
+      const revised = structuredClone(accepted);
+      change(revised);
+      await store.mutateProjectRecord(project.id, () => ({ project: revised }));
+      const readiness = (await read()).body.readiness;
+      expect(readiness.art.approved, label).toBe(true);
+      expect(readiness.storyboard.problems.join(' '), label).toContain('Lyric alignment is provisional or changed');
+      expect(readiness.basis.storyboard, label).not.toBe(acceptedStatus.basis.storyboard);
+      expect(readiness.basis.proof, label).not.toBe(acceptedStatus.basis.proof);
+      expect(readiness.readyForProduction, label).toBe(false);
+      expect((await approve('proof')).status, label).toBe(409);
+    }
+
+    const metadataOnly = structuredClone(accepted);
+    metadataOnly.name = 'Renamed example animation';
+    metadataOnly.audioTimingRevisions[0].appliedAt = '2026-01-02T00:00:00.000Z';
+    metadataOnly.audioAnalysis.waveform = [0.1, 0.3]; // Timeline display, not authored motion input.
+    await store.mutateProjectRecord(project.id, () => ({ project: metadataOnly }));
+    const retained = (await read()).body.readiness;
+    expect(retained.basis).toEqual(acceptedStatus.basis);
+    expect(retained.readyForProduction).toBe(true);
   });
 
   it('imports unbound planning without authorizing it, preserves source and binds only on explicit request', async () => {

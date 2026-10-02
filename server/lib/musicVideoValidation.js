@@ -1,3 +1,4 @@
+import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
@@ -401,6 +402,7 @@ export const musicVideoReactiveSectionSchema = z.object({
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
   mode: z.enum(MUSIC_VIDEO_COMPOSITION_MODES).optional(),
+  authoringRenderer: z.enum(['canvas', 'three']).optional(),
   cutting: z.enum(MUSIC_VIDEO_CUTTING_MODES).optional(),
   grade: z.object({
     preset: z.enum(MUSIC_VIDEO_GRADE_PRESETS).optional(),
@@ -746,6 +748,7 @@ export const musicVideoProductionResumeSchema = z.object({
 export const musicVideoAutonomousStartSchema = z.object({
   prompt: z.string().trim().min(1).max(AUTONOMOUS_PROMPT_MAX),
   name: z.string().trim().min(1).max(AUTONOMOUS_NAME_MAX).optional(),
+  mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   songSource: z.enum(AUTONOMOUS_SONG_SOURCES).optional(),
   localFallback: z.boolean().optional(),
   instrumental: z.boolean().optional(),
@@ -914,6 +917,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
+  mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
@@ -937,6 +941,7 @@ export const musicVideoProjectCreateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
+  mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200).optional(),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
@@ -950,6 +955,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
+  renderError: z.string().max(2000).nullable().optional(),
   lyricCues: lyricCueList.optional(),
   lyricMarkers: lyricMarkerList.optional(),
   phrases: phraseList.optional(),
@@ -988,6 +994,13 @@ export const musicVideoProductionImportSchema = z.object({ source: z.string().mi
 export const musicVideoProductionApprovalSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
   password: z.string().min(1).max(1024),
+  proofReview: z.object({
+    watchedWithAudio: z.literal(true),
+    excerptId: z.string().min(1).max(200), filename: z.string().min(1).max(200),
+    energyComparison: z.string().trim().min(1).max(4000),
+    timecodedNotes: z.string().trim().min(1).max(4000)
+      .regex(/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/, 'Include a playback time such as 0:04 or 4.5s.'),
+  }).strict().optional(),
 }).strict();
 export const musicVideoProductionProofSchema = z.object({
   kind: z.enum(['proof', 'prototype']).optional(),

@@ -21,6 +21,7 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
   'routes/musicVideoProductionReview.browser.test.js',
+  'routes/musicVideoRichAuthoring.browser.test.js',
 ];
 
 // Cutover's real subprocess proof has a four-second test budget. A retained

@@ -1,3 +1,6 @@
+import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
+import { assertDocumentMediaPolicy } from './documentMediaPolicy.js';
 /**
  * Music Video — project composition documents (files on disk).
  *
@@ -141,7 +144,9 @@ function storeVersion(projectId, files, source, options = {}) {
 
 async function storeVersionNow(projectId, files, source, { draft = false, verifyCurrent = () => {} } = {}) {
   assertDocumentShape(files.map((file) => file.rel));
-  if (!(await getProject(projectId))) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const initial = await getProject(projectId);
+  await assertDocumentMediaPolicy(initial, files);
+  if (!initial) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const versionId = `doc-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   const root = projectDocumentRoot(projectId);
   const staging = join(root, `.${versionId}.partial`);
@@ -173,6 +178,7 @@ async function storeVersionNow(projectId, files, source, { draft = false, verify
   try {
     outcome = await mutateProjectRecord(projectId, (current) => {
       verifyCurrent(current);
+      if (current.mediaMode !== initial.mediaMode) throw refuse('Media mode changed during import', 'COMPOSITION_DRAFT_STALE', 409);
       const composition = normalizeComposition({ ...(current.composition || {}), ...(!draft ? { mode: 'document' } : {}) });
       const project = { ...current, composition: { ...composition, [draft ? 'documentDraft' : 'document']: document }, updatedAt: document.updatedAt };
       return { project };
@@ -282,7 +288,24 @@ export async function importDocumentTemplate(projectId, templateId = 'layered') 
 }
 
 /** Stage a host-assembled generated document for review before selection. */
-export async function stageGeneratedDocument(projectId, generatedFiles, { verifyCurrent } = {}) {
+export async function stageGeneratedDocument(projectId, generatedFiles, { verifyCurrent, renderer = 'canvas' } = {}) {
+  if (renderer === 'three') {
+    const { files } = await collectTree(join(TEMPLATE_ROOT, 'spatial'));
+    const fonts = await collectTree(join(TEMPLATE_ROOT, 'layered', 'fonts'));
+    const require = createRequire(new URL('../../../client/package.json', import.meta.url));
+    const packageRoot = dirname(dirname(require.resolve('three')));
+    const pkg = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
+    const dependencies = [];
+    for (const name of ['build/three.module.js', 'build/three.core.js', 'LICENSE']) {
+      const data = await readFile(join(packageRoot, name));
+      const rel = `vendor/${name.split('/').pop()}`;
+      files.push({ rel, data });
+      dependencies.push({ path: rel, sha256: createHash('sha256').update(data).digest('hex') });
+    }
+    files.push(...fonts.files.map((file) => ({ ...file, rel: `fonts/${file.rel}` })), ...generatedFiles,
+      { rel: 'dependencies.json', data: Buffer.from(JSON.stringify({ packages: [{ name: 'three', version: pkg.version, files: dependencies }], network: false })) });
+    return storeVersion(projectId, files, { kind: 'generated', name: 'Authored Three.js world' }, { draft: true, verifyCurrent });
+  }
   const { files } = await collectTree(join(TEMPLATE_ROOT, 'layered'));
   const index = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
   const marker = '<script src="engine.js"></script>';
@@ -387,6 +410,7 @@ export function detachDocument(projectId) {
 
 /** The document folder a render stages; throws COMPOSITION_DOCUMENT_MISSING. */
 export async function documentDirectoryForRender(project) {
+  await readDocumentFiles(project);
   const dir = await requireDocument(project);
   return relative(PATHS.data, dir).split(sep).join('/');
 }
@@ -395,6 +419,7 @@ export async function documentDirectoryForRender(project) {
 export async function readDocumentFiles(project) {
   const dir = await requireDocument(project);
   const { files } = await collectTree(dir);
+  await assertDocumentMediaPolicy(project, files);
   const out = new Map();
   for (const file of files) out.set(file.rel, { abs: file.abs, size: file.size });
   return out;

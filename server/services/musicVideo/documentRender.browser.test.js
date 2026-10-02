@@ -1,3 +1,4 @@
+import { richSceneSource } from './__richSceneFixture.js';
 /**
  * The shipped layered template with real Chrome and ffmpeg: an excerpt of a
  * composition-document project seeks the selected take's <video> on SONG time
@@ -44,13 +45,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
   dataRoot: () => lazyTempDataRoot('portos-mv-document-browser-'),
 }));
 
-const { PATHS } = await import('../../lib/paths.js');
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { encodeDocumentComposition, prepareDocumentRender, documentRenderClock } = await import('./documentRender.js');
-const { importDocumentTemplate } = await import('./compositionDocument.js');
-const { generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js');
-const { buildDocumentPreview } = await import('./documentPreview.js');
-const projects = await import('./projects.js');
 const { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
 
 afterAll(() => cleanupTempDataRoots());
@@ -60,11 +55,23 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
 ].find((path) => path && existsSync(path));
 const ffmpeg = await findFfmpeg();
+// Imported discovery helpers can initialize mocked paths even on a skip.
+const canRun = Boolean(chrome && ffmpeg);
+if (!canRun) cleanupTempDataRoots();
 
-describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpeg', () => {
+describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   let proc;
   let browser;
+  let PATHS, encodeDocumentComposition, prepareDocumentRender, documentRenderClock, importDocumentTemplate;
+  let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, projects;
   beforeAll(async () => {
+    // Keep collection read-only when Chrome/ffmpeg prerequisites skip the suite.
+    ({ PATHS } = await import('../../lib/paths.js'));
+    ({ encodeDocumentComposition, prepareDocumentRender, documentRenderClock } = await import('./documentRender.js'));
+    ({ importDocumentTemplate } = await import('./compositionDocument.js'));
+    ({ generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js'));
+    ({ buildDocumentPreview } = await import('./documentPreview.js'));
+    projects = await import('./projects.js');
     const profile = join(PATHS.data, 'chrome-test-profile');
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
     const ws = await _waitForTestChrome(proc);
@@ -72,6 +79,66 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     browser = await chromium.connectOverCDP(endpoint);
   }, 30000);
   afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: () => {} }));
+
+  // Server-only CI does not install client dependencies; the full local install
+  // exercises this cross-workspace package/render contract alongside the UI proof.
+  it.skipIf(!existsSync(new URL('../../../client/node_modules/three/package.json', import.meta.url)))('authors a local Three.js world and renders the same deterministic scene through module preview and export', async () => {
+    const created = await projects.createProject({ name: 'Synthetic authored world', mediaMode: 'code-only' });
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1, beats: [0, 0.5], downbeats: [0], sections: [{ id: 'world', label: 'World', startSec: 0, endSec: 1 }] },
+      lyricCues: [{ id: 'line', text: 'EXAMPLE LYRIC', startSec: 0, endSec: 1, words: [{ w: 'EXAMPLE', startSec: 0 }, { w: 'LYRIC', startSec: 0.5 }] }],
+      composition: { mode: 'document', authoringRenderer: 'three' },
+    } }));
+    author.response = JSON.stringify({ sections: [{ id: 'world', source: richSceneSource }] });
+    const candidate = await generateMixedMediaDocument(created.id, { providerId: 'stub-provider' });
+    await acceptMixedMediaDocument(created.id, candidate.document.directory);
+    author.response = null;
+    const project = await projects.getProject(created.id);
+    const preview = await buildDocumentPreview(project);
+    expect(preview.assets).toEqual([]);
+    expect(preview.html).toContain("img-src 'none'");
+    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+    const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+    await page.evaluate(() => {
+      const live = new Set();
+      const create = WebGL2RenderingContext.prototype.createTexture;
+      const remove = WebGL2RenderingContext.prototype.deleteTexture;
+      WebGL2RenderingContext.prototype.createTexture = function (...args) { const value = create.apply(this, args); live.add(value); return value; };
+      WebGL2RenderingContext.prototype.deleteTexture = function (value) { live.delete(value); return remove.call(this, value); };
+      window.liveTextureCount = () => live.size;
+    });
+    await page.setContent(preview.html);
+    await page.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+    const transports = await page.evaluate(() => ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport'].map(key => {
+      const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
+      let message; try { new globalThis[key](); } catch (error) { message = error.message; }
+      return { key, configurable: descriptor.configurable, writable: descriptor.writable, message };
+    }));
+    expect(transports).toEqual(['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport'].map(key => ({ key, configurable: false, writable: false, message: `${key} is disabled in compositions` })));
+    const at = (t) => page.evaluate(async (t) => {
+      await window.portosComposition.seek(t);
+      return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
+    }, t);
+    const first = await at(0);
+    const textures = await page.evaluate(() => window.liveTextureCount());
+    const moved = await at(0.5);
+    expect(moved.world).not.toBe(first.world);
+    expect(await at(0)).toEqual(first);
+    expect(await page.evaluate(() => window.liveTextureCount())).toBe(textures);
+    const pixels = await sharp(Buffer.from(first.world.split(',')[1], 'base64')).resize(64,36).removeAlpha().raw().toBuffer();
+    const orange = [...Array(pixels.length / 3).keys()].filter((i) => pixels[i*3] > pixels[i*3+2] * 1.5 && pixels[i*3] > 100).length;
+    expect(orange).toBeGreaterThan(15); // authored character, not a blank backdrop/overlay-only fallback
+    expect(errors).toEqual([]);
+    await page.close();
+    await mkdir(PATHS.music, { recursive: true }); await mkdir(PATHS.videos, { recursive: true });
+    const master = join(PATHS.music, 'world.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', master]);
+    const outputPath = join(PATHS.videos, 'world.mp4');
+    const result = await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'world-proof', audioPath: master, outputPath, windowStart: 0, windowEnd: 2/24 });
+    expect(result).toMatchObject({ width: 1920, height: 1080, fps: 24 });
+    const rendered = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    expect(rendered.reduce((sum, v, i) => sum + Math.abs(v-pixels[i]), 0) / pixels.length).toBeLessThan(15);
+  }, 120000);
 
   it('keeps event frames identical across shuffled seeks, an excerpt and a full render, and freezes silence', async () => {
     const created = await projects.createProject({ name: 'Synthetic event proof' });

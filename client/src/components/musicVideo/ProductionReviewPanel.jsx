@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { formatTimecode } from '../../utils/formatters.js';
 
 const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
@@ -17,7 +18,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
   const [feedback, setFeedback] = useState({ stage: 'art', target: '', text: '', decision: 'request-changes' });
   const [resolutions, setResolutions] = useState({});
   const [importError, setImportError] = useState(null);
-  const [watched, setWatched] = useState(null);
+  const [playbackReview, setPlaybackReview] = useState({ identity: null, watched: false, energyComparison: '', timecodedNotes: '' });
   const [startSec, setStartSec] = useState(project.productionReview?.proof?.startSec || 0);
   const [endSec, setEndSec] = useState(project.productionReview?.proof?.endSec || Math.min(20, project.audioAnalysis?.durationSec || 20));
   const ready = review.readiness;
@@ -30,7 +31,23 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
   const blocked = dirty || review.busy || !ready;
   const prototype = project.excerpts?.find(e => e.id === project.productionReview?.prototype?.excerptId);
   const excerpt = project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId);
-  const approve = stage => { const secret = password; setPassword(''); return review.approve(stage, secret); };
+  const proofIdentity = JSON.stringify([project.id, ready?.basis.proof ?? project.productionReview?.proof?.basis ?? null, excerpt?.id, excerpt?.filename]);
+  const recordedProofReview = project.productionReview?.approvals?.proof?.proofReview;
+  const matchingRecordedReview = ready?.proof.approved && recordedProofReview?.excerptId === excerpt?.id
+    && recordedProofReview?.filename === excerpt?.filename ? recordedProofReview : null;
+  useEffect(() => { setPlaybackReview(current => current.identity === proofIdentity ? current
+    : { identity: proofIdentity, watched: false, energyComparison: '', timecodedNotes: '' }); }, [proofIdentity]);
+  const playback = playbackReview.identity === proofIdentity ? playbackReview : { watched: false, energyComparison: '', timecodedNotes: '' };
+  const setPlayback = patch => setPlaybackReview({ ...playback, identity: proofIdentity, ...patch });
+  const playbackBlocked = blocked || review.proof.active || !!ready?.proof.problems.length || excerpt?.status !== 'complete' || !excerpt.filename;
+  const playbackComplete = playback.watched && !!playback.energyComparison.trim()
+    && /(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(playback.timecodedNotes);
+  const approve = stage => {
+    const secret = password; setPassword('');
+    return review.approve(stage, secret, stage === 'proof' ? { watchedWithAudio: true,
+      energyComparison: playback.energyComparison.trim(), timecodedNotes: playback.timecodedNotes.trim(),
+      excerptId: excerpt.id, filename: excerpt.filename } : undefined);
+  };
 
   return <section id="mv-production-review" aria-label="Production review" className="rounded-lg border border-port-border bg-port-card p-3 space-y-3">
     <h3 className="font-medium">Production review</h3>
@@ -43,7 +60,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
         {(ready?.[key].problems || []).map(problem => <p key={problem} className="mt-1 text-xs text-port-text-muted">{problem}</p>)}
         <button type="button" className={`${buttonClass} mt-2`} onClick={() => approve(key)}
           disabled={blocked || !password || ready?.[key].approved || !!ready?.[key].problems.length
-            || (key === 'proof' && watched !== ready?.basis.proof)}>
+            || (key === 'proof' && (playbackBlocked || !playbackComplete))}>
           Approve {label.toLowerCase()}
         </button>
       </li>)}
@@ -96,12 +113,18 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
         <button type="button" className={buttonClass} disabled={dirty || review.busy} onClick={review.prepare}>Prepare planning draft with autopilot</button>
         <p className="text-xs text-port-text-muted">Uses the saved authoring provider and allowed tools. Builds Cast & Sets first, then pauses for art approval before planning shots. Existing edits are retained.</p>
         <div className="grid gap-3 sm:grid-cols-2">
-          {Object.entries({ cast: 'Cast guide', environments: 'Environment guide', visualLanguage: 'Visual language and mood board', motionLanguage: 'Motion language and choreography' }).map(([key, label]) =>
+          {Object.entries({ cast: 'Cast guide', environments: 'Environment guide', visualLanguage: 'Visual language and mood board' }).map(([key, label]) =>
             <label key={key} htmlFor={fieldId(key)} className="text-sm">{label}<textarea id={fieldId(key)} rows={4} value={draft[key]} onChange={e => set(key, e.target.value)} className={fieldClass} /></label>)}
         </div>
+        <label htmlFor={fieldId('motionLanguage')} className="block text-sm">Timed choreography and energy plan
+          <textarea id={fieldId('motionLanguage')} rows={7} value={draft.motionLanguage || ''} onChange={e => set('motionLanguage', e.target.value)} className={fieldClass}
+            aria-label="Timed choreography and energy plan" aria-describedby={fieldId('motion-help')}
+            placeholder={'Energy target: restrained, driving, explosive, or a described arc.\n0:00–0:08 / first downbeat: subject reaches, prop unfolds; camera pushes in; title lands on the vocal.\n0:08–0:16 / chorus hit: full-body turn and prop release; camera arcs; type expands then clears.\nRepeated chorus: preserve the motif, escalate pose range, travel, camera depth or transition scale.'} />
+        </label>
+        <p id={fieldId('motion-help')} className="text-xs text-port-text-muted">Choose the intended energy explicitly. For each time range and beat, word or section anchor, describe subject and prop actions, pose or travel changes, camera movement, typography and the transition. Name intentional holds and how each repeated chorus develops. The saved plan guides UI authoring and autopilot.</p>
         <label htmlFor={fieldId('implementation')} className="block text-sm">Implementation and feasibility for {project.composition?.mode || 'composed'} rendering
           <textarea id={fieldId('implementation')} rows={5} value={draft.implementationPlan || ''} onChange={e => set('implementationPlan', e.target.value)} className={fieldClass}
-            placeholder="Scene graph and layers; vector/mesh construction; rig joints and pose limits; procedural materials; camera and transition mechanics; typography; frame rate, geometry and draw-call budgets." />
+            placeholder="Map each timed action to scene graph layers, vector/mesh construction, rig joints, pose limits and prop mechanics; specify camera paths and typography timing, transitions, frame rate, geometry and draw-call budgets." />
         </label>
         <p className="text-xs text-port-text-muted">Concept references establish intent. Document how this renderer can build and animate the look; a raster reference is not code-rendered evidence. Changing the plan invalidates prior art approval.</p>
         <label htmlFor={fieldId('guide')} className="block text-sm">Visual cast and environment sheet
@@ -133,9 +156,9 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
               </select>
             </label>
             {!scene && <button type="button" className={buttonClass} disabled={dirty || review.busy || !shot.id} onClick={() => review.bindShot(shot.id)}>Create Board scene from this draft shot</button>}
-            <p className="text-xs text-port-text-muted">Review exact start/end in Board. Imported timings remain provisional.</p>
+            <p className="text-xs text-port-text-muted">{scene && Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) ? `Shot window ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)}. ` : ''}Review exact start/end in Board. Imported timings remain provisional.</p>
             {['action', 'staging', 'camera', 'transition'].map(key => <label key={key} htmlFor={fieldId(`${shotKey(shot)}-${key}`)} className="block text-sm capitalize">{key}
-              <textarea id={fieldId(`${shotKey(shot)}-${key}`)} rows={2} value={shot[key]} onChange={e => setShot(shot, key, e.target.value)} className={fieldClass} />
+              <textarea id={fieldId(`${shotKey(shot)}-${key}`)} rows={2} value={shot[key]} placeholder={({ action: 'At a beat or word: subject and prop action; pose, travel and energy change.', staging: 'Depth, blocking, prop trajectory and typography placement through the shot.', camera: 'Timed camera path, framing changes and motivated holds.', transition: 'Exact entry/exit anchor, visual handoff and escalation into the next section.' })[key]} onChange={e => setShot(shot, key, e.target.value)} className={fieldClass} />
             </label>)}
             <fieldset><legend className="text-sm">Lyric anchors</legend>
               {(project.lyricCues || []).filter(c => c.startSec < scene?.endSec && c.endSec > scene?.startSec).map(cue =>
@@ -150,7 +173,12 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
     </details>
     <details open={ready?.storyboard.approved && !ready?.proof.approved}>
       <summary className="cursor-pointer min-h-[44px] py-2 text-sm">Animated chorus proof</summary>
-      <p className="text-sm">Author the approved storyboard in Compose, then render a 10–45 second chorus with its entry and exit. Watch with sound; check lyric timing, readable type, purposeful action, camera movement and transitions.</p>
+      <p className="text-sm">Author the approved storyboard in Compose, then render a 10–45 second chorus with its entry and exit. Watch with sound at normal speed and compare the chosen energy target and timed choreography below against the actual subject, props, camera, typography and transitions. Check accents against beat and lyric anchors, readable holds and repeated-chorus escalation. A strong static frame does not prove the motion works.</p>
+      <section aria-label="Saved choreography for proof comparison" className="rounded border border-port-border bg-port-bg p-3">
+        <h4 className="text-sm font-medium">Saved energy target and timed choreography</h4>
+        <p className="mt-1 whitespace-pre-wrap text-sm">{saved.motionLanguage || 'Save an energy target and timed choreography in the planning editor before judging the proof.'}</p>
+        <p className="mt-2 text-xs text-port-text-muted">Compare playback with this saved plan. If the chosen energy or actions are missing, record revision feedback with a time range before approving.</p>
+      </section>
       <div className="flex flex-wrap items-end gap-2">
         <label htmlFor={fieldId('proof-start')} className="text-sm">Proof start (seconds)<input id={fieldId('proof-start')} type="number" min="0" step="0.01" value={startSec} onChange={e => setStartSec(Number(e.target.value))} className={fieldClass} /></label>
         <label htmlFor={fieldId('proof-end')} className="text-sm">Proof end (seconds)<input id={fieldId('proof-end')} type="number" min="0" step="0.01" value={endSec} onChange={e => setEndSec(Number(e.target.value))} className={fieldClass} /></label>
@@ -161,8 +189,22 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
       <p className="text-xs text-port-text-muted">A feasibility prototype uses the current authored composition and master audio without approving the look or authorizing production. It can be made before art approval; it never becomes approved proof automatically.</p>
       {prototype?.status === 'complete' && prototype.filename && <figure><video controls className="mt-2 w-full rounded" aria-label="Unapproved feasibility prototype" src={`/data/videos/${encodeURIComponent(prototype.filename)}`} /><figcaption className="text-sm">Unapproved feasibility prototype — separate from production proof</figcaption></figure>}
       {excerpt?.status === 'complete'  && excerpt.filename && <video controls className="mt-2 w-full rounded" aria-label="Animated proof with master audio" src={`/data/videos/${encodeURIComponent(excerpt.filename)}`} />}
-      <label htmlFor={fieldId('watched')} className="flex gap-2 py-2 text-sm"><input id={fieldId('watched')} type="checkbox" checked={!!ready && watched === ready.basis.proof}
-        disabled={!ready || !!ready.proof.problems.length} onChange={e => setWatched(e.target.checked ? ready.basis.proof : null)} />I watched this revision with audio and checked the approved visual direction, motion and lyric timing.</label>
+      {matchingRecordedReview && <section aria-label="Recorded proof review" className="rounded border border-port-border p-3">
+        <h4 className="text-sm font-medium">Recorded proof review</h4>
+        <p className="mt-1 whitespace-pre-wrap text-sm">{matchingRecordedReview.energyComparison}</p>
+        <p className="mt-2 whitespace-pre-wrap text-sm">{matchingRecordedReview.timecodedNotes}</p>
+      </section>}
+      <label htmlFor={fieldId('energy-comparison')} className="block text-sm">Playback energy compared with the saved plan
+        <textarea id={fieldId('energy-comparison')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.energyComparison} onChange={e => setPlayback({ energyComparison: e.target.value })} className={fieldClass}
+          placeholder="Chosen energy target; observed subject, prop and camera activity; where playback matches or misses the intended arc." />
+      </label>
+      <label htmlFor={fieldId('playback-notes')} className="block text-sm">Timecoded playback notes
+        <textarea id={fieldId('playback-notes')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.timecodedNotes} onChange={e => setPlayback({ timecodedNotes: e.target.value })} className={fieldClass}
+          placeholder="0:04 — subject turns on the downbeat; prop opens through 0:06; camera and type clear the lyric. Name any mismatch to revise." />
+      </label>
+      <p className="text-xs text-port-text-muted">Include at least one playback timestamp such as 0:04 or 4.5s. These notes are saved with this exact proof. A replacement proof requires a new comparison and acknowledgement.</p>
+      <label htmlFor={fieldId('watched')} className="flex gap-2 py-2 text-sm"><input id={fieldId('watched')} type="checkbox" checked={playback.watched}
+        disabled={playbackBlocked} onChange={e => setPlayback({ watched: e.target.checked })} />I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.</label>
     </details>
   </section>;
 }

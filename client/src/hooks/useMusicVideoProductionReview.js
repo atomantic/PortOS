@@ -56,8 +56,8 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     bindShot: shotId => call(() => bindMusicVideoProductionShot(project.id, shotId, { silent: true })),
     save: draft => call(() => saveMusicVideoProductionDraft(project.id, draft, { silent: true })),
     prepare: () => call(() => prepareMusicVideoProductionReview(project.id, {}, { silent: true })),
-    approve: (stage, password) => call(() => approveMusicVideoProductionReview(project.id,
-      { stage, password, basis: state?.readiness.basis[stage] }, { silent: true })),
+    approve: (stage, password, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
+      { stage, password, basis: state?.readiness.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
     renderProof: window => proof.start({ id: project.id, window }, project.id),
   };
 }

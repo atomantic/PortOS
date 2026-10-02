@@ -1,3 +1,4 @@
+import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — pure record transforms (issue #1760, Phase 1).
  *
@@ -154,15 +155,17 @@ export function buildProjectRecord(input, { id, now }) {
     pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
     // The document pointer is set only by the import routes, never on create.
-    composition: input.composition ? withStoredCompositionDocument(normalizeComposition(input.composition), null) : null,
+    composition: input.composition || input.mediaMode ? withStoredCompositionDocument(normalizeComposition(input.composition || { mode: 'document' }), null) : null,
     // #8988 — optional sound-design bed mixed under the song.
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
-    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy),
+    mediaMode: musicVideoMediaMode(input),
+    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null)),
     scenes: [],
     renderHistoryId: null,
+    renderError: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
     // is additive rather than a record-shape migration.
     deleted: false,
@@ -275,6 +278,7 @@ export function cloneProjectRecord(source, {
     }, approvals: {}, proof: null } : null,
     ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
     renderHistoryId: null,
+    renderError: null,
     renderDependencies: null,
     // Publishing outputs and posted URLs belong to the source final render.
     ...(source.publishKit ? { publishKit: null } : {}),
@@ -291,6 +295,7 @@ export function cloneProjectRecord(source, {
     medium: 'generated-footage', mediumPinned: false, mediumRationale: '' });
   return {
     ...clone,
+    mediaMode: 'code-images-video',
     composition: { ...clone.composition, mode: 'composed' },
     productionPolicy: normalizeMusicVideoProductionPolicy({ strategy: 'legacy' }),
     castAndSets: null,
@@ -385,6 +390,7 @@ export function applyProjectPatch(project, patch) {
   // the flag set would render the old song's cut points against new audio.
   const trackChanged = ('trackId' in patch && patch.trackId !== project.trackId)
     || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
+  if ('mediaMode' in patch || patch.visualSpec || patch.styleReferences) assertMusicVideoMediaSelections({ ...project, ...mergedPatch });
   if (!trackChanged) return touch(project, mergedPatch);
   // A planned section belongs to the old audio too; clear its provenance so
   // the renderer does not preserve that plan's timing on the replacement song.
@@ -529,6 +535,7 @@ export function applySceneUpdate(project, sceneId, patch) {
   if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {
     throw new ServerError('endSec must be >= startSec', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  assertMusicVideoMediaSelections({ ...project, scenes: [updated], visualSpec: null });
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
   const next = touch(project, { scenes: nextScenes });
@@ -717,6 +724,7 @@ export function mergeProjectRecord(local, remoteRaw) {
   if (Object.hasOwn(local, 'productionReview')) remote.productionReview = local.productionReview;
   if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
   if (Object.hasOwn(local, 'autonomousRun')) remote.autonomousRun = local.autonomousRun;
+  if (Object.hasOwn(local, 'renderError')) remote.renderError = local.renderError;
   // The composition document's files live only on this install as well
   // (compositionDocument.js), so its pointer survives a newer remote body.
   if (local.composition?.document || local.composition?.documentDraft) {

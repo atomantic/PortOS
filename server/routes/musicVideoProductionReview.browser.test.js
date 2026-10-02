@@ -116,11 +116,14 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     await page.locator('video').waitFor({ timeout: 120000 });
     await page.locator('video').evaluate(async video => { await video.play(); await new Promise(r => setTimeout(r, 400)); video.pause(); });
     expect(await page.locator('video').evaluate(v => v.videoWidth)).toBeGreaterThan(0);
-    await page.getByLabel('I watched this revision with audio and checked the approved visual direction, motion and lyric timing.').check();
+    await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
+    await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
+    await page.getByLabel('I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.').check();
     await password.fill('synthetic-password'); await page.getByRole('button', { name: 'Approve animated proof' }).click();
     await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].filter(el => el.textContent === 'Approved for this revision').length === 3);
     const result = await store.getProject(p.id);
     expect(result.productionReview.feedback[0].resolvedAt).toBeTruthy();
+    expect(result.productionReview.approvals.proof.proofReview).toMatchObject({ watchedWithAudio: true, excerptId: result.productionReview.proof.excerptId, timecodedNotes: expect.stringContaining('0:02') });
     expect(errors).toEqual([]);
     const proofFile = join(PATHS.videos, result.excerpts.find(e => e.id === result.productionReview.proof.excerptId).filename);
     const frame = at => execFileSync(ffmpeg, ['-v', 'error', '-ss', String(at), '-i', proofFile, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);

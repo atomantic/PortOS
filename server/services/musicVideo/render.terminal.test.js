@@ -257,7 +257,7 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     prime('stamp-1');
     await renderMusicVideo('stamp-1');
     expect(updateProject).toHaveBeenCalledWith('stamp-1', {
-      status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: expect.stringMatching(/^music-video-stamp-1-\d+\.mp4$/),
+      status: 'rendering', renderingOn: 'inst-self', renderError: null, renderPartialFilename: expect.stringMatching(/^music-video-stamp-1-\d+\.mp4$/),
     });
   });
 

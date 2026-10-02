@@ -1,3 +1,4 @@
+import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { productionFeedbackContext } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
@@ -151,6 +152,7 @@ async function chooseCastAndSetsRoute(project, { preferred = null, settings } = 
 // ---- direction ------------------------------------------------------------------
 
 async function loadContext(project) {
+  assertMusicVideoMediaSelections(project);
   const boardId = project?.visualSpec?.moodBoardId;
   const board = boardId ? await deps.loadBoard(boardId).catch(() => null) : null;
   const resolveItem = board ? await deps.boardItemImage() : null;
@@ -208,7 +210,7 @@ async function writePlan(projectId, { direction = null, moodImages = null, force
   const nextDirection = direction || stage.direction;
   // A procedural project whose brief names no image tool is code-only: nothing
   // is rendered, so no image backend is needed (or consulted).
-  const codeOnly = nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
+  const codeOnly = !musicVideoAllowsMedia(project, 'image') || nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
   const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes) });
   const renderKeys = affectedImageKeys(stage.plan || {}, plan, forceKeys);
   const settings = await deps.getSettings();
@@ -527,6 +529,7 @@ function applyApproval(project, now) {
     },
     concept: { ...(project.concept || {}), subjects: castAndSetsSubjects(project, stage) },
   };
+  assertMusicVideoMediaSelections(next);
   if (stage.artifactId && (next.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted)) {
     next = reviewDevArtifact(next, stage.artifactId, { status: 'approved' }, now).project;
   }

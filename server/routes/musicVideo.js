@@ -500,7 +500,7 @@ router.post('/:id/production-review/prepare', asyncHandler(async (req, res) => {
 router.post('/:id/production-review/approve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionApprovalSchema, req.body);
   await requireProductionOperator(req);
-  res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis }));
+  res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview }));
 }));
 router.post('/:id/production-review/proof', asyncHandler(async (req, res) => {
   res.status(202).json(await renderProductionProof(req.params.id, validateRequest(musicVideoProductionProofSchema, req.body)));

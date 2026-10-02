@@ -23,9 +23,11 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   cancelMusicVideoProduction: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
+const authorProvider = vi.hoisted(() => ({ type: 'api', toolFreeOneShot: true }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: (options) => options.allowDefault === false ? {
-    providers: [{ id: 'local-fixture', name: 'Local fixture', models: ['fixture-model'] }], selectedProviderId: 'local-fixture', selectedModel: 'fixture-model', availableModels: ['fixture-model'],
+    providers: [{ id: 'local-fixture', name: 'Local fixture', models: ['fixture-model'], ...authorProvider }], selectedProviderId: 'local-fixture', selectedModel: 'fixture-model', availableModels: ['fixture-model'],
+    selectedProvider: { providerId: 'local-fixture', model: 'fixture-model' },
     setSelectedProviderId: () => {}, setSelectedModel: () => {},
   } : ({
     providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
@@ -178,7 +180,11 @@ function ProductionHarness({ initial }) {
 }
 
 describe('AutopilotPanel production run', () => {
-  beforeEach(() => { vi.clearAllMocks(); listeners.clear(); });
+  beforeEach(() => {
+    Object.assign(authorProvider, { type: 'api', toolFreeOneShot: true });
+    vi.clearAllMocks();
+    listeners.clear();
+  });
 
   it('shows a zero-allowance plan and requires an approved scene plan before Start', () => {
     render(<ProductionHarness initial={{ id: 'p1', productionRuns: [],
@@ -188,6 +194,21 @@ describe('AutopilotPanel production run', () => {
     expect(screen.getByText(/generated video 0 \/ 0 seconds/)).toBeTruthy();
     expect(screen.getByLabelText('Code-first asset preflight')).toHaveTextContent('Routes needed for selected assets: no image · no video');
     expect(screen.getByRole('button', { name: /Start production/ })).toBeDisabled();
+  });
+
+  it('blocks an unsupported selected CLI before starting production and keeps its pin visible', () => {
+    Object.assign(authorProvider, { type: 'cli', toolFreeOneShot: false });
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [],
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
+      composition: { mode: 'document' }, audioAnalysis: { durationSec: 8 },
+      scenes: [{ sceneId: 'code', startSec: 0, endSec: 8 }],
+      treatment: { revision: 1, appliedRevision: 1, shotDirections: [{ sceneId: 'code', medium: 'procedural', mediumRationale: 'Typography' }] },
+    }} />);
+    expect(screen.getByRole('option', { name: 'Local fixture (not permitted here)' }).disabled).toBe(true);
+    const start = screen.getByRole('button', { name: 'Start production' });
+    expect(start.disabled).toBe(true);
+    fireEvent.click(start);
+    expect(api.startMusicVideoProduction).not.toHaveBeenCalled();
   });
 
   it('starts a code-only plan with a separate authoring model and an empty image/video pool', async () => {

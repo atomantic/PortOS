@@ -451,6 +451,15 @@ describe('MusicVideo render control (#1760)', () => {
     expect(toast.error).toHaveBeenCalledWith('Renderer stopped');
     expect(screen.getByLabelText('Project').querySelector('option[value="mv-1"]')).toHaveTextContent('failed');
     expect(screen.getByLabelText('Project').querySelector('option[value="mv-other"]')).toHaveTextContent('ready');
+    expect(screen.queryByText('Renderer stopped')).not.toBeInTheDocument();
+    await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('review');
+    expect(screen.getByText('Renderer stopped')).toBeInTheDocument();
+    await openStage('compose');
+    expect(screen.getByText('Renderer stopped')).toBeInTheDocument();
+    await selectProject(other.id);
+    await openStage('review');
+
 
     sseState.latest = null;
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
