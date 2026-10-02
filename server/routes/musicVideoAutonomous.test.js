@@ -171,6 +171,31 @@ describe('POST /api/music-video/autonomous', () => {
     expect(startProduction).not.toHaveBeenCalled();
   });
 
+  it('stores the Suno form options, and retakes the song over HTTP only at the song checkpoint', async () => {
+    expect((await request(app).post('/api/music-video/autonomous').send({ prompt: 'p', suno: { model: 'latest' } })).status).toBe(400);
+    const res = await begin({ prompt: 'p', checkpoints: ['lyrics', 'song'], suno: { excludeStyles: 'metal', vocalGender: 'female' } });
+    const id = res.body.project.id;
+    await settle();
+    expect(await get(id)).toMatchObject({ status: 'awaiting-approval', awaiting: 'lyrics', brief: { suno: { excludeStyles: 'metal', vocalGender: 'female', model: null } } });
+    const resume = (body) => request(app).post(`/api/music-video/${id}/autonomous/resume`).send(body);
+    const early = await resume({ retakeSong: true });
+    expect(early.status).toBe(409);
+    expect(early.body.code).toBe('NOT_AT_SONG_CHECKPOINT');
+    expect((await get(id)).awaiting).toBe('lyrics');
+
+    expect((await resume({ suno: { vocalGender: 'robot' } })).status).toBe(400);
+    expect((await resume({ suno: { model: 'v6' } })).status).toBe(200);
+    await settle();
+    expect(await get(id)).toMatchObject({ status: 'awaiting-approval', awaiting: 'song', output: { sunoSongIds: ['song-a'] } });
+
+    expect((await resume({ retakeSong: true, suno: { vocalGender: 'male' } })).status).toBe(200);
+    await settle();
+    expect(await get(id)).toMatchObject({
+      status: 'awaiting-approval', awaiting: 'song', stages: { song: { status: 'done' } },
+      brief: { suno: { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' } },
+    });
+  });
+
   it('cancels a live run, and refuses to cancel or resume one that is finished or absent', async () => {
     const res = await begin({ prompt: 'p', checkpoints: ['lyrics'] });
     const id = res.body.project.id;

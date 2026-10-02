@@ -262,6 +262,65 @@ describe('checkpoints', () => {
   });
 });
 
+describe('retaking the song at the song checkpoint', () => {
+  it('discards the song, re-runs the stage with the edited lyrics, style and Suno options, and parks there again', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['song'], suno: { excludeStyles: 'metal', vocalGender: 'female' } });
+    await settled('awaiting-approval');
+    expect(runOf()).toMatchObject({ awaiting: 'song', stage: 'analyze', output: { trackId: 'track-1', sunoSongIds: ['song-a', 'song-b'] } });
+    expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({ excludeStyles: 'metal', vocalGender: 'female', model: null }), expect.any(Object));
+    expect(store.get('mv-auto').trackId).toBe('track-1');
+
+    doubles.createTrack.mockResolvedValueOnce({ id: 'track-2' });
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      // A fresh request: the rejected take's ids are not offered for reuse.
+      expect(opts.songIds).toBeNull();
+      await opts.onSubmitted(['song-c', 'song-d']);
+      return { songId: 'song-d', songIds: ['song-c', 'song-d'], filename: 'music-song-d.m4a' };
+    });
+    const { run } = await service.resumeAutonomousVideo('mv-auto', {
+      retakeSong: true, lyrics: '[verse]\nnew words', style: 'darker synthwave', suno: { vocalGender: 'male', model: 'v6' },
+    });
+    expect(run).toMatchObject({ status: 'running', stage: 'song', awaiting: null, output: { trackId: null, sunoSongIds: null } });
+    await settled('awaiting-approval');
+    expect(runOf()).toMatchObject({
+      awaiting: 'song', stage: 'analyze',
+      brief: { suno: { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' } },
+      output: { trackId: 'track-2', sunoSongIds: ['song-c', 'song-d'], lyrics: '[verse]\nnew words', sunoStyle: 'darker synthwave' },
+    });
+    expect(runOf().stages.song).toMatchObject({ status: 'done' });
+    expect(doubles.generateSunoSong).toHaveBeenCalledTimes(2);
+    expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({
+      lyrics: '[verse]\nnew words', style: 'darker synthwave', excludeStyles: 'metal', vocalGender: 'male', model: 'v6',
+    }), expect.any(Object));
+    // The project was unlinked from the rejected track, then linked to the new one; analysis has not run.
+    expect(doubles.updateProject).toHaveBeenCalledWith('mv-auto', { trackId: null });
+    expect(store.get('mv-auto').trackId).toBe('track-2');
+    expect(calls).not.toContain('analyze');
+
+    // Approving the new take continues the pipeline as before.
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+  });
+
+  it('refuses a retake anywhere but the song checkpoint, leaving the run untouched', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['lyrics'] });
+    await settled('awaiting-approval');
+    const before = runOf();
+    await expect(service.resumeAutonomousVideo('mv-auto', { retakeSong: true })).rejects.toMatchObject({ status: 409, code: 'NOT_AT_SONG_CHECKPOINT' });
+    expect(runOf()).toEqual(before);
+    expect(calls).not.toContain('suno');
+  });
+
+  it('applies a Suno options patch on a plain approval too', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['lyrics'], suno: { excludeStyles: 'metal', model: 'v5' } });
+    await settled('awaiting-approval');
+    await service.resumeAutonomousVideo('mv-auto', { suno: { model: null, vocalGender: 'female' } });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(runOf().brief.suno).toEqual({ excludeStyles: 'metal', vocalGender: 'female', model: null });
+    expect(doubles.generateSunoSong).toHaveBeenCalledWith(expect.objectContaining({ excludeStyles: 'metal', vocalGender: 'female', model: null }), expect.any(Object));
+  });
+});
+
 describe('song sub-step', () => {
   it('records the Suno sub-step on the run, pushes it over the autonomous event, and clears it when the stage settles', async () => {
     const pushed = [];

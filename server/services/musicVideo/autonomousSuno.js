@@ -11,12 +11,15 @@ import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sunoSongIdsFromHrefs, sunoSongUrl } from '../../lib/musicVideoAutonomous.js';
+import { escapeRegExp } from '../../lib/textUtils.js';
 import { sleep as defaultSleep } from '../../lib/fileCore.js';
 import { PUBLISH_STEP_TIMEOUT_MS as T, connectPortosBrowser, loginRequired, serializeBrowserOperation as serialize, step } from './publish/browser.js';
 
 const LABEL = 'Suno';
 const SUNO_CREATE_URL = 'https://suno.com/create';
 const SUNO_AUDIO_TIMEOUT_MS = 10 * 60 * 1000;
+// How long an opened version menu may take to list its items.
+const SUNO_MENU_WAIT_MS = 5000;
 
 const songLinks = (page, title = null) => page.evaluate((wantedTitle) => [...document.querySelectorAll('a[href*="/song/"]')]
   // Workspace rows may finish loading after Create. A newly seen href alone
@@ -82,6 +85,59 @@ async function sunoRefusalSignals(page) {
   }).catch(() => ({ inspected: false }));
 }
 
+// An older Suno UI may lack one of the Advanced options: skip it, but say so.
+const skipped = (control) => console.warn(`⚠️ ${LABEL}: ${control} not found — continuing without it`);
+
+/**
+ * The brief's optional Advanced-form controls (model version, exclude styles,
+ * vocal gender). Each is a no-op when unset and is skipped with a warning when
+ * the page has no such control; none of them blocks the song.
+ */
+async function setSunoOptions(page, fields) {
+  if (fields.model) {
+    await step(LABEL, 'choose the model version', async () => {
+      // The version picker is the menu button labelled with the current version ("v6").
+      const version = page.locator('button[aria-haspopup="menu"]').filter({ hasText: /^\s*v\d/i });
+      if (!await version.count()) return skipped('the model version menu');
+      const current = (await version.first().innerText({ timeout: T })).trim();
+      if (current.toLowerCase() === fields.model.toLowerCase()) return;
+      await version.first().click({ timeout: T });
+      const item = page.getByRole('menuitem', { name: new RegExp(`^${escapeRegExp(fields.model)}$`, 'i') });
+      await item.first().waitFor({ state: 'visible', timeout: SUNO_MENU_WAIT_MS }).catch(() => {});
+      if (!await item.count()) {
+        await page.keyboard.press('Escape');
+        return skipped(`model ${fields.model} in the version menu (keeping ${current})`);
+      }
+      await item.first().click({ timeout: T });
+    });
+  }
+  // Exclude styles and vocal gender sit in the collapsible "More Options" section.
+  if (fields.excludeStyles != null || fields.vocalGender) {
+    await step(LABEL, 'open More Options', async () => {
+      if (await page.locator('input[placeholder="Exclude styles"]:visible').count()) return;
+      const more = page.getByText(/^more options$/i);
+      if (!await more.count()) return skipped('the More Options section');
+      await more.first().click({ timeout: T });
+    });
+  }
+  // An explicit '' still fills: Suno keeps the previous draft's exclusions.
+  if (fields.excludeStyles != null) {
+    await step(LABEL, 'fill exclude styles', async () => {
+      const exclude = page.locator('input[placeholder="Exclude styles"]');
+      if (!await exclude.count()) return skipped('the Exclude styles field');
+      await exclude.first().fill(fields.excludeStyles, { timeout: T });
+    });
+  }
+  if (fields.vocalGender) {
+    await step(LABEL, 'choose the vocal gender', async () => {
+      // Plain Male / Female buttons; Suno exposes no pressed state to check.
+      const gender = page.getByRole('button', { name: fields.vocalGender === 'female' ? /^female$/i : /^male$/i });
+      if (!await gender.count()) return skipped('the vocal gender buttons');
+      await gender.first().click({ timeout: T });
+    });
+  }
+}
+
 /**
  * Fill Suno's custom-song form and press Create. Returns the ids of the songs
  * that appeared (Suno makes two takes per request) — the links present before
@@ -129,6 +185,8 @@ async function submitSunoSong(page, fields, { sleep = defaultSleep, now = Date.n
       if (await instrumental.count()) await instrumental.first().click({ timeout: T });
     });
   }
+
+  await setSunoOptions(page, fields);
 
   const before = new Set(sunoSongIdsFromHrefs(await songLinks(page)));
   const observer = observeSunoPosts(page);

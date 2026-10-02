@@ -12,7 +12,8 @@ import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { startAutonomousMusicVideo } from '../../services/apiMusicVideo.js';
 import {
-  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, autonomousRequestFromDraft, emptyAutonomousDraft,
+  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousRequestFromDraft, emptyAutonomousDraft,
+  isSunoModelValid,
 } from '../../lib/musicVideoAutonomous.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
@@ -34,7 +35,9 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   const toggleCheckpoint = (id) => patch({
     checkpoints: AUTONOMOUS_CHECKPOINT_IDS.filter((c) => (c === id ? !draft.checkpoints.includes(c) : draft.checkpoints.includes(c))),
   });
-  const valid = draft.prompt.trim().length > 0 && authoringReady;
+  const patchSuno = (next) => setDraft((d) => ({ ...d, suno: { ...d.suno, ...next } }));
+  const sunoModelValid = draft.songSource !== 'suno' || isSunoModelValid(draft.suno.model);
+  const valid = draft.prompt.trim().length > 0 && authoringReady && sunoModelValid;
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -81,6 +84,29 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
         </div>
 
         <SongSourcePicker idPrefix="mv-auto" songSource={draft.songSource} localFallback={draft.localFallback} onChange={patch} />
+
+        {draft.songSource === 'suno' && (
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),16rem))] gap-3">
+            <div>
+              <label htmlFor="mv-auto-suno-exclude" className="block text-xs text-port-text-muted mb-1">Exclude styles</label>
+              <input id="mv-auto-suno-exclude" type="text" maxLength={SUNO_LIMITS.excludeStyles} value={draft.suno.excludeStyles} onChange={(e) => patchSuno({ excludeStyles: e.target.value })} placeholder="metal, screamo" className={inputClass} />
+            </div>
+            {!draft.instrumental && (
+              <div>
+                <label htmlFor="mv-auto-suno-vocal" className="block text-xs text-port-text-muted mb-1">Vocal gender</label>
+                <select id="mv-auto-suno-vocal" value={draft.suno.vocalGender} onChange={(e) => patchSuno({ vocalGender: e.target.value })} className={inputClass}>
+                  <option value="">Suno decides</option>
+                  {SUNO_VOCAL_GENDERS.map((gender) => <option key={gender} value={gender}>{gender === 'male' ? 'Male' : 'Female'}</option>)}
+                </select>
+              </div>
+            )}
+            <div>
+              <label htmlFor="mv-auto-suno-model" className="block text-xs text-port-text-muted mb-1">Suno model</label>
+              <input id="mv-auto-suno-model" type="text" maxLength={10} value={draft.suno.model} onChange={(e) => patchSuno({ model: e.target.value })} placeholder="Current (e.g. v6)" aria-invalid={!sunoModelValid} className={inputClass} />
+              {!sunoModelValid && <p className="text-[11px] text-port-error mt-1">Use a version such as v6 or v4.5.</p>}
+            </div>
+          </div>
+        )}
 
         <ToggleChip id="mv-auto-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 

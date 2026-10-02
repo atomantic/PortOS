@@ -20,7 +20,9 @@ import { assertProductionApproval, productionReadiness, productionProofNeedsRend
  * Policy: no cold-bootstrap work).
  *
  * Checkpoints are optional approval gates after `lyrics` / `style` / `song`:
- * the run parks `awaiting-approval` and continues on approve. A signed-out
+ * the run parks `awaiting-approval` and continues on approve; at the song
+ * checkpoint the director may instead retake the song (`retakeSong`), which
+ * discards it and generates a new one before parking there again. A signed-out
  * Suno parks `needs-human`; any other failure parks `failed`. Both resume at the
  * stage that stopped, reusing Suno songs already submitted. A brief may instead
  * (or as a fallback, `localFallback`) make the song with the on-device Music
@@ -45,6 +47,7 @@ import {
   autonomousPool,
   nextAutonomousStage,
   normalizeAutonomousBrief,
+  normalizeSunoOptions,
   sunoSongFields,
 } from '../../lib/musicVideoAutonomous.js';
 import { getProject, mutateProjectRecord } from './projects.js';
@@ -220,7 +223,7 @@ const STAGES = {
     // `output.songSource` records a fallback already taken, so a resume stays local.
     if ((run.output.songSource || run.brief.songSource) === 'local') return localSong({ project, run, save });
     const fields = sunoSongFields({
-      title: run.output.title, style: run.output.sunoStyle, lyrics: run.output.lyrics, instrumental: run.brief.instrumental,
+      title: run.output.title, style: run.output.sunoStyle, lyrics: run.output.lyrics, instrumental: run.brief.instrumental, suno: run.brief.suno,
     });
     let submitted = run.output.sunoSongIds?.length > 0;
     let song;
@@ -433,27 +436,61 @@ const assertResumable = (run) => {
   if (run.status === 'running' && run.processId === PROCESS_ID) throw runError(409, 'ALREADY_RUNNING', 'This run is already running');
 };
 
+// A retake is only meaningful while the run is parked on the song it would replace.
+const assertAtSongCheckpoint = (run) => {
+  if (run.status !== 'awaiting-approval' || run.awaiting !== 'song') {
+    throw runError(409, 'NOT_AT_SONG_CHECKPOINT', 'A song can only be retaken while the run is waiting for approval of its song');
+  }
+};
+
+// Every key the song stage (and `localSong`) writes; a retake nulls them all so
+// the stage runs from scratch — a new Suno request (the director's explicit,
+// credit-spending choice) or a new local render on a new track.
+const SONG_OUTPUT_KEYS = ['trackId', 'sunoSongIds', 'songSource', 'songFallbackReason', 'localTrackId', 'localSongJobId'];
+
 export async function resumeAutonomousVideo(projectId, edits = {}) {
   const { run } = await requireRun(projectId);
   assertResumable(run);
+  const retake = edits.retakeSong === true;
+  if (retake) assertAtSongCheckpoint(run);
   // Stop changes the record immediately, but its stage may still be settling.
   // Let that attempt release ownership before marking a new attempt running.
   await inflight.get(projectId);
-  const out = await patchRun(projectId, (r) => {
+  let retakenTrackId = null;
+  const out = await patchRun(projectId, (r, current) => {
     // Cancel or another Resume may have won while the old attempt settled.
     assertResumable(r);
+    if (retake) {
+      assertAtSongCheckpoint(r);
+      // Unlink only the track this run linked, never one the director picked since.
+      if (r.output.trackId && current.trackId === r.output.trackId) retakenTrackId = r.output.trackId;
+    }
     // A run waiting on production resumes by resuming that run, not by redoing
     // the stage — the stage re-runs only when production never started.
-    const stage = r.stage;
+    const stage = retake ? 'song' : r.stage;
     return {
       status: 'running', awaiting: null, error: null, errorCode: null, processId: PROCESS_ID,
+      ...(edits.suno ? { brief: { ...r.brief, suno: normalizeSunoOptions({ ...r.brief.suno, ...edits.suno }) } } : {}),
       output: {
+        ...(retake ? Object.fromEntries(SONG_OUTPUT_KEYS.map((key) => [key, null])) : {}),
         ...(typeof edits.lyrics === 'string' ? { lyrics: edits.lyrics } : {}),
         ...(typeof edits.style === 'string' && edits.style.trim() ? { sunoStyle: edits.style.trim() } : {}),
       },
-      ...stagePatch(r, stage, { error: null }),
+      ...(retake
+        ? { stage, ...stagePatch(r, stage, { status: 'pending', startedAt: null, finishedAt: null, error: null, step: null }) }
+        : stagePatch(r, stage, { error: null })),
     };
   });
+  if (retakenTrackId) {
+    // The rejected track stays in the music library (the director may still
+    // want it); only the project's link to it goes. Unlinking keeps the lyric
+    // cues' text and clears their timings (applyProjectPatch → invalidateTimedText),
+    // and the new song's link re-seeds them from its own lyrics. A failed unlink
+    // is not fatal: that same link replaces the old one.
+    await deps.updateProject(projectId, { trackId: null })
+      .catch((err) => console.warn(`⚠️ Autonomous music video ${short(out.run.id)} could not unlink the retaken track: ${err.message}`));
+    console.log(`🎬 Autonomous music video ${short(out.run.id)} retaking its song`);
+  }
   if (out.run.stage === 'produce' && out.run.output.productionRunId) {
     const { resumeProduction } = await import('./productionService.js');
     const failure = await resumeProduction(projectId, out.run.output.productionRunId, { acceptBasis: true }).then(() => null, (err) => err);
