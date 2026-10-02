@@ -180,7 +180,8 @@ const PROCEDURAL_OUTPUT_SHAPE = `{
  * `medium` defaults to the previous direction's, else the project's.
  */
 export function buildCastAndSetsPrompt(project, { moodImages = [], board = null, track = null, previous = null, notes = [], medium = null } = {}) {
-  const procedural = (medium || previous?.medium || castAndSetsMedium(project)) === 'procedural';
+  // A saved direction without a medium predates the procedural one: photographic.
+  const procedural = (medium || (previous ? (previous.medium || 'photographic') : castAndSetsMedium(project))) === 'procedural';
   const concept = project?.concept || {};
   const analysis = project?.audioAnalysis || {};
   const sections = songSections(project);

@@ -132,6 +132,8 @@ describe('Cast & Sets procedural medium', () => {
     expect(prompt).not.toMatch(/"face"|"hair"|"tests"/);
     expect(buildCastAndSetsPrompt(project)).toContain('"face"');
     // A revision keeps the medium the saved direction was made in, whatever the project says now.
+    // ...and a saved photographic direction (no medium) stays photographic under a code-first project.
+    expect(buildCastAndSetsPrompt(procedural, { previous: { protagonist: { name: 'Nova' } }, notes: [{ text: 'x' }] })).toContain('"face"');
     expect(buildCastAndSetsPrompt(project, { previous: { medium: 'procedural' }, notes: [{ text: 'bigger sail' }] })).toContain('PROCEDURAL');
   });
 

@@ -170,7 +170,8 @@ async function runDirection(projectId, { providerId, model, notes = [], forceKey
   // A revision keeps the medium it was directed in; a fresh pass resolves it
   // from the project's policy and tools, so a saved direction is never
   // silently re-cast into the other medium.
-  const medium = (notes.length && previous?.medium) || castAndSetsMedium(project);
+  // A saved direction without a medium predates the procedural one: photographic.
+  const medium = notes.length && previous ? (previous.medium || 'photographic') : castAndSetsMedium(project);
   const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium });
   let text;
   try {
