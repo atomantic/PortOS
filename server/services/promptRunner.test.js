@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./runner.js', () => ({
   createRun: vi.fn(),
@@ -2657,6 +2657,16 @@ describe('promptRunner — context gate on the requested provider', () => {
   // A local provider plans a window-sized reserve instead, and caps generation
   // at the same number so the answer cannot outgrow the room the gate planned.
   describe('local output reserve', () => {
+    beforeEach(() => {
+      vi.stubEnv('OLLAMA_CONTEXT_LENGTH', undefined);
+      vi.stubEnv('OLLAMA_URL', undefined);
+      vi.stubEnv('OLLAMA_HOST', undefined);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     const localOllama = (extra = {}) => apiProvider({
       id: 'ollama',
       name: 'Ollama',
@@ -2726,6 +2736,16 @@ describe('promptRunner — context gate on the requested provider', () => {
       })).resolves.toBeNull();
       observedWindows.withObservedContextWindows.mockImplementation(async (provider) => provider);
       await expect(resolveLocalPromptBudget({ provider: localOllama(), outputReserveTokens: 8_192 })).resolves.toBeNull();
+    });
+
+    it('budgets from the configured Ollama window when no observed window is available', async () => {
+      vi.stubEnv('OLLAMA_CONTEXT_LENGTH', '32768');
+      vi.stubEnv('OLLAMA_URL', 'http://localhost:11434');
+      observedWindows.withObservedContextWindows.mockImplementation(async (provider) => provider);
+
+      await expect(resolveLocalPromptBudget({ provider: localOllama(), outputReserveTokens: 8_192 })).resolves.toEqual({
+        contextWindow: 32_768, outputReserveTokens: 4_096, maxPromptTokens: 28_672,
+      });
     });
 
     it('keeps the declared reserve for a cloud provider', async () => {
