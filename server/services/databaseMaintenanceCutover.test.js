@@ -36,7 +36,15 @@ const { runDatabaseCutover } = await import('./databaseMaintenanceCutover.js');
 
 const native = { mode: 'native', host: 'db.example.invalid', port: 5432, database: 'example_test', user: 'example' };
 const docker = { mode: 'docker', host: 'db.example.invalid', port: 5561, database: 'example_test', user: 'example' };
+// `fast` shortens the proof deadline for a run that is MEANT to hit it. A run
+// that must succeed uses `patient` instead: its restarted server is a real
+// subprocess whose startup is CPU-bound — 1-2s idle, but 4-5s once the host is
+// ~13x oversubscribed, with a valid proof published just AFTER a 4s deadline
+// (#9368). Racing a clock against that startup made recovery flaky without
+// exercising the cutover; `patient` returns the moment the proof lands, so it
+// costs nothing when the host is healthy.
 const fast = { graceMs: 1500, pollMs: 20, proofTimeoutMs: 4000 };
+const patient = { ...fast, proofTimeoutMs: 30_000 };
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const processStart = async pid => process.platform === 'win32' ? null
   : (await snapshotProcesses()).find(row => row.pid === pid)?.startedAt;
@@ -112,9 +120,10 @@ function successor() {
   journal.reserveCoordinatorWorker(operation.id, token);
 }
 
-const run = async () => {
+// Defaults to `patient`; pass `fast` only where the run is expected to time out.
+const run = async (options = patient) => {
   try {
-    return await runDatabaseCutover(operation.id, token, fast);
+    return await runDatabaseCutover(operation.id, token, options);
   } catch (err) {
     err.message += `\n--- cutover evidence ---\n${await evidence()}`;
     throw err;
@@ -199,7 +208,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     begin();
     if (fault === 'wrong pool') cutover.overrideRestartPool(native);
     else cutover.setHealth('unhealthy');
-    await expect(run()).rejects.toThrow(/did not prove the target backend[\s\S]*--- cutover evidence ---[\s\S]*events \(last 80\)[\s\S]*coordinator:[\s\S]*surrogate stderr:/);
+    await expect(run(fast)).rejects.toThrow(/did not prove the target backend[\s\S]*--- cutover evidence ---[\s\S]*events \(last 80\)[\s\S]*coordinator:[\s\S]*surrogate stderr:/);
     await waitForEvent('server refused DATABASE_MAINTENANCE');
     // Mode is committed forward, but PM2 `online`/saved mode is not success.
     expect(journal.read()).toEqual({ ...operation, stage: 'verifying' });
@@ -231,7 +240,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
       }
       return result;
     });
-    await expect(run()).rejects.toThrow(/did not prove the target backend[\s\S]*"state":"T[^"]*"[\s\S]*"targetProof":false/);
+    await expect(run(fast)).rejects.toThrow(/did not prove the target backend[\s\S]*"state":"T[^"]*"[\s\S]*"targetProof":false/);
     expect(journal.read().stage).toBe('verifying');
     expect(() => journal.assertAdmission()).toThrow();
     expect(context.restart).not.toHaveBeenCalledWith('portos-cos');
@@ -243,6 +252,34 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     await waitForProof(pid);
     successor();
     expect(await run()).toMatchObject({ stage: 'released', restartVerified: true });
+    await waitForEvent(`server booted ${docker.port}`);
+    expect(context.restart.mock.calls.filter(([name]) => name === 'portos-server')).toHaveLength(1);
+    expect(stubs.invocations('pg_dump')).toHaveLength(1);
+    expect(stubs.invocations('psql')).toHaveLength(1);
+  }, 60_000);
+
+  it('waits out a restarted server slower than the short proof deadline instead of racing it', async () => {
+    begin();
+    const restart = context.restart.getMockImplementation();
+    let resume;
+    context.restart.mockImplementation(async (...args) => {
+      const result = await restart(...args);
+      if (args[0] === 'portos-server') {
+        // Hold the real process past `fast`'s deadline, as a CPU-starved host
+        // does (#9368): the proof cannot exist until this timer resumes it.
+        const { pid } = rows.find(row => row.name === 'portos-server');
+        process.kill(pid, 'SIGSTOP');
+        resume = setTimeout(() => process.kill(pid, 'SIGCONT'), fast.proofTimeoutMs + 500);
+      }
+      return result;
+    });
+    try {
+      // Regression caught: a success-expected run abandoning a live, merely
+      // slow server at the refusal deadline (the old flaky recovery).
+      expect(await run()).toMatchObject({ stage: 'released', restartVerified: true });
+    } finally {
+      clearTimeout(resume);
+    }
     await waitForEvent(`server booted ${docker.port}`);
     expect(context.restart.mock.calls.filter(([name]) => name === 'portos-server')).toHaveLength(1);
     expect(stubs.invocations('pg_dump')).toHaveLength(1);
@@ -269,7 +306,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
   it('keeps a verified-but-unreleased operation fenced until recovery releases it', async () => {
     begin();
     cutover.setHealth('unhealthy');
-    await expect(run()).rejects.toThrow(/did not prove/);
+    await expect(run(fast)).rejects.toThrow(/did not prove/);
     cutover.setHealth('healthy');
     // A healthy restarted server proves the target and waits at the fence.
     const pid = cutover.launchServer(docker);
@@ -294,7 +331,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
   it('never accepts a proof written by an earlier process whose pid was reused', async () => {
     begin();
     cutover.setHealth('unhealthy');
-    await expect(run()).rejects.toThrow(/did not prove/);
+    await expect(run(fast)).rejects.toThrow(/did not prove/);
     // PM2 now reports a process that never verified anything, holding a pid for
     // which an earlier (verified) process left a proof with its own start time.
     const impostor = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
@@ -304,7 +341,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
       Object.assign(server, { pid: impostor.pid, status: 'online', surrogate: true });
       journal.recordTargetProof(operation.id, impostor.pid, Date.now() - 3_600_000);
       successor();
-      await expect(run()).rejects.toThrow(/did not prove the target backend/);
+      await expect(run(fast)).rejects.toThrow(/did not prove the target backend/);
       expect(journal.read().stage).toBe('verifying');
       expect(() => journal.assertAdmission()).toThrow();
       // The new incarnation can publish its own proof without colliding with
@@ -320,7 +357,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
   it('refuses to release onto a saved configuration edited away from the target', async () => {
     begin();
     cutover.setHealth('unhealthy');
-    await expect(run()).rejects.toThrow(/did not prove/);
+    await expect(run(fast)).rejects.toThrow(/did not prove/);
     cutover.setHealth('healthy');
     const pid = cutover.launchServer(docker);
     rows.find(row => row.name === 'portos-server').pid = pid;
