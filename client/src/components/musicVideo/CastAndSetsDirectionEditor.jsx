@@ -54,11 +54,14 @@ export default function CastAndSetsDirectionEditor({ project, direction, busy, o
   const setField = (group, key, value) => setDraft((d) => ({ ...d, [group]: { ...d[group], [key]: value } }));
 
   const field = (group, [key, label, max, long]) => {
-    const props = { id: idFor(`${group}-${key}`), maxLength: max, className: inputClass, value: draft[group][key], onChange: (e) => setField(group, key, e.target.value) };
+    const id = idFor(`${group}-${key}`);
+    const onChange = (e) => setField(group, key, e.target.value);
     return (
       <div key={`${group}-${key}`} className={long ? 'sm:col-span-2' : ''}>
-        <label htmlFor={props.id} className="text-xs">{label}</label>
-        {long ? <textarea rows={2} {...props} /> : <input type="text" {...props} />}
+        <label htmlFor={id} className="text-xs">{label}</label>
+        {long
+          ? <textarea id={id} rows={2} maxLength={max} className={inputClass} value={draft[group][key]} onChange={onChange} />
+          : <input id={id} type="text" maxLength={max} className={inputClass} value={draft[group][key]} onChange={onChange} />}
       </div>
     );
   };
