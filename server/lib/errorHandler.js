@@ -293,6 +293,16 @@ export function normalizeError(err) {
     return err;
   }
 
+  // Backstop: a raw schema `.parse()` that escaped a route is a client error,
+  // not a server crash. Routes should still use validateRequest().
+  if (err?.name === 'ZodError' && Array.isArray(err.issues)) {
+    return new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: err.issues.map(i => ({ path: i.path.join('.'), message: i.message })) }
+    });
+  }
+
   if (err instanceof Error) {
     const status = err.status || 500;
     const code = err.code || getErrorCode(status);
