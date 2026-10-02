@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -21,6 +24,7 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 describe.skipIf(!chrome)('command palette viewport and keyboard layout', () => {
   let server;
   let browser;
+  let browserTemp;
   let origin;
   beforeAll(async () => {
     server = await createServer({
@@ -55,11 +59,18 @@ describe.skipIf(!chrome)('command palette viewport and keyboard layout', () => {
     });
     await server.listen();
     origin = server.resolvedUrls.local[0];
-    browser = await chromium.launch({ executablePath: chrome, headless: true });
+    browserTemp = await mkdtemp(join(tmpdir(), 'palette-chrome-'));
+    browser = await chromium.launch({ executablePath: chrome, headless: true,
+      env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
+    });
   }, 60000);
   afterAll(async () => {
-    await browser?.close();
-    await server?.close();
+    try {
+      await browser?.close();
+    } finally {
+      await server?.close();
+      if (browserTemp) await rm(browserTemp, { recursive: true, force: true });
+    }
   });
 
   it.each([{ width: 756, height: 412 }, { width: 667, height: 320 }, { width: 1440, height: 1000 }])(
