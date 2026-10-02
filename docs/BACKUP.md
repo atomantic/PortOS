@@ -72,8 +72,9 @@ An explicit endpoint only selects where a standalone transfer runs. Import
 replaces database objects present in the dump: keep recovery copies and stop
 the target's writers before restoring. These commands do not stop PortOS,
 change saved mode, verify a restarted pool, or authorize a backend cutover —
-use the coordinated cutover above (Settings Database tab or
-`scripts/database-maintenance.mjs`) for that.
+use the coordinated cutover above (Settings Database tab, or the
+authenticated `POST /api/database/maintenance/cutover` for automation) for
+that. `scripts/database-maintenance.mjs` is admission-only and does not run it.
 
 ## What gets backed up
 
