@@ -119,6 +119,19 @@ describe('describeMusic', () => {
   });
 });
 
+describe('lyrics length target', () => {
+  it('defaults to a ~3 minute line budget and survives a custom template', () => {
+    const prompt = buildLyricsPrompt({ description: 'x', template: 'Whatever.' });
+    expect(prompt).toContain('about 3 minutes (180 seconds)');
+    expect(prompt).toContain('roughly 30 sung lyric lines');
+  });
+
+  it('scales the line budget to an explicit target', () => {
+    expect(buildLyricsPrompt({ description: 'x', targetSeconds: 120 })).toContain('about 2 minutes (120 seconds)');
+    expect(buildLyricsPrompt({ description: 'x', targetSeconds: 120 })).toContain('roughly 20 sung lyric lines');
+  });
+});
+
 describe('writeLyrics', () => {
   it('returns lyrics + attribution and tags the run source', async () => {
     ai.runPromptThroughProvider.mockResolvedValue({ text: '[verse]\nrain on the window\n', model: 'ran-model' });
