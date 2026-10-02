@@ -18,6 +18,7 @@ import {
 import { getSettings, updateSettings } from '../settings.js';
 import { cdpRequest } from '../browserService.js';
 import { currentContainmentMechanism, runContainedWorker } from './containedWorker.js';
+import { probeBlenderRender } from './blenderProbe.js';
 
 const SETTINGS_KEY = 'codeAnimationExecution';
 const WORKSPACE_DIR = 'code-animation-workspaces';
@@ -83,7 +84,7 @@ function blenderLane(mechanism, blender) {
   if (!evidence || evidence.executable !== blender.executable || evidence.fingerprint !== blender.fingerprint) {
     return { ready: false, reason: 'The configured Blender changed since the last containment check.' };
   }
-  if (!evidence.passed) return { ready: false, reason: 'Blender did not start under containment.' };
+  if (!evidence.passed) return { ready: false, reason: 'Blender did not render the supported test scene under containment.' };
   return { ready: true, reason: null };
 }
 
@@ -208,19 +209,6 @@ async function probeLimit(workspaceRoot, kind, limits, expected) {
   } finally { clearTimeout(timer); }
 }
 
-async function probeBlender({ executable, fingerprint }, workspaceRoot) {
-  if (!executable) return null;
-  const run = await runContainedWorker({
-    tool: { executable, argv: () => ['--background', '--factory-startup', '--version'] }, workspaceRoot,
-    limits: { wallSeconds: 60, diskBytes: 64 * 1024 * 1024, maxFiles: 1000 },
-  }).catch((error) => ({ status: 'failed', reason: error.message, stdout: '' }));
-  const version = /^Blender \d+\.\d+(?:\.\d+)?/m.exec(run.stdout || '')?.[0] ?? null;
-  return {
-    executable, fingerprint, passed: run.status === 'completed' && Boolean(version), version,
-    detail: version ? `${version} started under containment (CPU only; no GPU device access is granted).` : `Blender did not start under containment (${run.status}${run.reason ? `: ${run.reason}` : ''}).`,
-  };
-}
-
 async function runProbe() {
   const started = Date.now();
   // Fail closed while checking, and if the check itself errors.
@@ -238,7 +226,7 @@ async function runProbe() {
     await probeLimit(workspaceRoot, 'memory', { memoryBytes: 128 * 1024 * 1024 }, 'memory'),
     await probeLimit(workspaceRoot, 'cancel', {}, 'canceled'),
   ];
-  const blender = await probeBlender(await inspectExecutable((await configuredTools()).blender.executable), workspaceRoot);
+  const blender = await probeBlenderRender(await inspectExecutable((await configuredTools()).blender.executable), workspaceRoot);
   const browser = await cdpRequest('/json/version', { timeout: 2000 }).then((response) => response.ok, () => false);
   lastProbe = {
     probedAt: new Date().toISOString(), mechanism: mechanism.id, passed: checks.every((check) => check.passed),

@@ -33,7 +33,7 @@ export default function ProductionContainment() {
     <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
       <p>Sandbox: {mechanism.supported ? mechanism.id : <span className="text-port-warning">{mechanism.reason}</span>}</p>
       <p>Browser lane: {lanes.browser.mechanism}</p>
-      <p>Blender lane: {lanes.blender.ready ? 'Ready' : <span className="text-port-warning">{lanes.blender.reason}</span>}</p>
+      <p>Blender lane: {lanes.blender.ready ? 'Test scene rendered (production adapter pending)' : <span className="text-port-warning">{lanes.blender.reason}</span>}</p>
     </div>
     <div className="flex flex-wrap items-end gap-2">
       <div className="min-w-0 flex-1 basis-72">
