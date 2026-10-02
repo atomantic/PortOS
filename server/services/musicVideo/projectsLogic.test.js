@@ -654,6 +654,7 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
       id: 'mv-1',
       updatedAt: '2026-01-01T00:00:00Z',
       name: 'local',
+      renderError: 'Example local document failure',
       imageMode: 'codex',
       imageModelId: 'example-image-model',
       videoSettings: { backend: 'local', modelId: 'local-model', grokDuration: 5 },
@@ -662,6 +663,7 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
       id: 'mv-1',
       updatedAt: '2026-01-05T00:00:00Z',
       name: 'remote edit',
+      renderError: 'Peer failure must stay on peer',
       videoSettings: { modelId: 'shared-model', grokDuration: 10 },
     };
 
@@ -669,6 +671,7 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
 
     expect(r.remoteWins).toBe(true);
     expect(r.next.name).toBe('remote edit');
+    expect(r.next.renderError).toBe('Example local document failure');
     expect(r.next.imageMode).toBe('codex');
     expect(r.next.imageModelId).toBe('example-image-model');
     expect(r.next.videoSettings).toEqual({

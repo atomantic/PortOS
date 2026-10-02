@@ -4,6 +4,17 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
+const author = vi.hoisted(() => ({ sections: [], calls: 0 }));
+vi.mock('../services/promptRunner.js', () => ({
+  assertProvider: () => {},
+  resolveProviderAndModel: async () => ({ provider: { id: 'fixture-author', type: 'api', enabled: true }, selectedModel: 'fixture-model' }),
+  runPromptThroughProvider: async ({ beforeExecute }) => {
+    await beforeExecute?.({ provider: { id: 'fixture-author', type: 'api' }, model: 'fixture-model' });
+    author.calls += 1;
+    return { text: JSON.stringify({ sections: author.sections }) };
+  },
+}));
+
 const ROOT = () => lazyTempDataRoot('mv-production-review-');
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
@@ -37,6 +48,7 @@ async function approve(stage, extra = {}) {
 
 beforeEach(async () => {
   auth.enabled = true;
+  author.calls = 0; author.sections = [];
   project = await store.createProject({ name: 'Example animation', uploadedAudioFilename: 'synthetic-song.wav', composition: { mode: 'code' } });
   base = `/api/music-video/${project.id}`;
   await store.setProjectAnalysis(project.id, { durationSec: 20, bpm: 120, beats: [0, 1], downbeats: [0], sections: [{ startSec: 0, endSec: 20, label: 'Chorus' }] });
@@ -53,6 +65,38 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 describe('human-reviewed Music Video workflow', () => {
+  it('prepares an absent code-first medium plan before human storyboard approval and real authoring admission', async () => {
+    await store.updateProject(project.id, { mediaMode: 'code-only', composition: { mode: 'document', authoringRenderer: 'canvas' },
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
+    const originalDirection = { camera: 'Keep the authored slow push', medium: 'procedural', mediumPinned: true, mediumRationale: 'Exact code staging' };
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      scenes: current.scenes.map(scene => ({ ...scene, direction: originalDirection })) } }));
+    expect((await approve('art')).status).toBe(200);
+    const prepared = await request(app).post(`${base}/production-review/prepare`).send({});
+    expect(prepared.status).toBe(200);
+    expect(prepared.body.project.treatment).toMatchObject({ revision: 1, appliedRevision: 1,
+      compiledWith: { source: 'deterministic' }, shotDirections: [{ medium: 'procedural' }] });
+    expect(prepared.body.project.scenes[0]).toMatchObject({ direction: originalDirection, prompt: 'A paper figure opens a painted doorway.' });
+    expect(prepared.body.readiness.art.approved).toBe(true);
+    expect(prepared.body.readiness.storyboard.approved).toBe(false);
+    expect(author.calls).toBe(0);
+    const generate = () => request(app).post(`${base}/composition/document/generate`).send({ providerId: 'fixture-author', model: 'fixture-model' });
+    expect((await generate()).body.code).toBe('MUSIC_VIDEO_APPROVAL_REQUIRED');
+    expect((await approve('storyboard')).status).toBe(200);
+    const { buildCodeTimeline } = await import('../services/musicVideo/codeTimeline.js');
+    author.sections = buildCodeTimeline(await store.getProject(project.id)).sections.map(section => ({ id: section.id,
+      source: "function render(ctx, env) { ctx.fillStyle = '#203040'; ctx.fillRect(0, 0, env.width, env.height); }" }));
+    const generated = await generate();
+    expect(generated.status).toBe(201);
+    expect(generated.body.document.source.kind).toBe('generated');
+    expect(author.calls).toBe(1);
+    const beforeRepeat = await store.getProject(project.id);
+    await request(app).post(`${base}/production-review/prepare`).send({});
+    const repeated = await store.getProject(project.id);
+    expect(repeated.treatment).toEqual(beforeRepeat.treatment);
+    expect(repeated.scenes).toEqual(beforeRepeat.scenes);
+  });
+
   it('refuses API credentials, password-free approval, stale revisions and final-render bypasses', async () => {
     const status = await read();
     const body = { stage: 'art', basis: status.body.readiness.basis.art, password: 'synthetic-operator-password' };

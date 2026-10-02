@@ -1,3 +1,4 @@
+import CodeAuthoringPicker from './CodeAuthoringPicker.jsx';
 import MediaModePicker from './MediaModePicker.jsx';
 import { useState } from 'react';
 import { Wand2 } from 'lucide-react';
@@ -26,13 +27,14 @@ const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded 
 export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   const [draft, setDraft] = useState(emptyAutonomousDraft);
   const [submitting, setSubmitting] = useState(false);
+  const [authoringReady, setAuthoringReady] = useState(false);
   const llm = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
   const patch = (next) => setDraft((d) => ({ ...d, ...next }));
   const toggleCheckpoint = (id) => patch({
     checkpoints: AUTONOMOUS_CHECKPOINT_IDS.filter((c) => (c === id ? !draft.checkpoints.includes(c) : draft.checkpoints.includes(c))),
   });
-  const valid = draft.prompt.trim().length > 0;
+  const valid = draft.prompt.trim().length > 0 && authoringReady;
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -57,7 +59,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
       onClose={onClose}
       size="md"
       title="Autonomous music video"
-      subtitle="One prompt in — lyrics, a song, a mood board and the video out"
+      subtitle="One prompt in — lyrics, a song, visual direction and an authored video"
       closeOnEsc={false}
       closeOnBackdrop={false}
     >
@@ -74,7 +76,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
             className={inputClass}
           />
           <p className="text-[11px] text-port-text-muted mt-1">
-            The agent also builds its own mood board and visual style from this prompt.
+            The agent develops visual direction from this prompt within your selected media mode.
           </p>
         </div>
 
@@ -83,6 +85,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
         <ToggleChip id="mv-auto-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 
         <MediaModePicker id="mv-auto-media-mode" value={draft.mediaMode} onChange={(mediaMode) => patch({ mediaMode })} />
+        <CodeAuthoringPicker value={draft.authoring} onChange={(authoring) => patch({ authoring })} onValidityChange={setAuthoringReady} disabled={submitting} />
         <ToolPicker tools={draft.tools} models={draft.models} onChange={patch} />
 
         <MoodBoardPicker id="mv-auto-mood-board" value={draft.moodBoardId} onChange={(moodBoardId) => patch({ moodBoardId })} />
@@ -124,7 +127,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
               />
             ))}
           </div>
-          <p className="text-[11px] text-port-text-muted mt-1">With none picked the run is fully unattended.</p>
+          <p className="text-[11px] text-port-text-muted mt-1">Production still pauses for your art, storyboard and animated proof approvals.</p>
         </fieldset>
 
         {llm.providers.length > 0 && (

@@ -1547,6 +1547,31 @@ describe('Audio kind (#1928)', () => {
     await waitFor(() => mediaJobQueue.getJob(id)?.status === 'completed');
   });
 
+  it.each([{ mediaMode: 'code-only' }, null])('recovers an already-submitted remote cancellation after project policy changes: %j', async project => {
+    const { getProject } = await import('../musicVideo/projects.js');
+    getProject.mockResolvedValueOnce(project);
+    const id = '00000000-0000-4000-8000-000000000003';
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
+      id, kind: 'video', status: 'running', queuedAt: new Date().toISOString(),
+      params: { musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' },
+        remoteMedia: { ...remoteVideoMediaParams(), cancelRequested: true } },
+    }] }));
+    stubs.generateVideoRemote.mockImplementation(async params => {
+      videoGenEvents.emit('failed', { generationId: params.jobId, error: 'Canceled remotely' });
+    });
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => mediaJobQueue.getJob(id)?.status === 'canceled');
+    expect(stubs.generateVideoRemote).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: id, remoteMedia: expect.objectContaining({ reconcile: true, cancelRequested: true }),
+    }));
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    // A newly submitted request still passes admission policy, even if it
+    // carries a forged cancellation/reconciliation marker.
+    await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      musicVideo: { projectId: 'mv-example' }, remoteMedia: { ...remoteVideoMediaParams(), reconcile: true, cancelRequested: true },
+    } })).rejects.toThrow();
+  });
+
 
   it('routes an image remote job to the remote adapter and the remote lane, not the GPU', async () => {
     stubs.generateImage.mockImplementation(() => new Promise(() => {}));

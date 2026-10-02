@@ -1,8 +1,12 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-media-policy-') }));
+vi.mock('./devArtifactStore.js', async (original) => {
+  const store = await original();
+  return { ...store, writeDevArtifactFile: vi.fn(store.writeDevArtifactFile) };
+});
 const projects = await import('./projects.js');
 const { importDocumentDirectory } = await import('./compositionDocument.js');
 const { PATHS } = await import('../../lib/paths.js');
@@ -66,5 +70,63 @@ describe('whole-workflow media modes', () => {
 it('rejects embedded raster planning guides through the same policy as final documents', async () => {
   const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
   const project = await projects.createProject({ name: 'Guide example', mediaMode: 'code-only' });
-  await expect(saveGeneratedDevArtifact(project.id, { kind: 'art-guide', title: 'Guide', html: '<img src="/api/images/example.png">' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+  await expect(saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Guide', html: '<img src="/api/images/example.png">' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+});
+
+it('allows AVIF document images only in a mode that permits images', async () => {
+  const project = await projects.createProject({ name: 'AVIF document', mediaMode: 'code-images' });
+  const dir = join(PATHS.data, 'avif-candidate');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'index.html'), '<canvas></canvas>');
+  await writeFile(join(dir, 'photo.avif'), Buffer.from([0, 0, 0, 24, ...Buffer.from('ftypavif'), 0, 0, 0, 0]));
+  await expect(importDocumentDirectory(project.id, 'avif-candidate')).resolves.toHaveProperty('project.composition.mode', 'document');
+  await projects.updateProject(project.id, { mediaMode: 'code-only' });
+  await expect(importDocumentDirectory(project.id, 'avif-candidate')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+});
+
+it('refuses a guide upload when the media mode narrows before its record commit and removes its file', async () => {
+  const { importDevArtifact } = await import('./devArtifactService.js');
+  const store = await import('./devArtifactStore.js');
+  const original = await vi.importActual('./devArtifactStore.js');
+  const project = await projects.createProject({ name: 'Concurrent guide', mediaMode: 'code-images' });
+  const tempPath = join(PATHS.data, 'uploaded-guide.png');
+  await writeFile(tempPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  let storedFile;
+  store.writeDevArtifactFile.mockImplementationOnce(async (input) => {
+    const written = await original.writeDevArtifactFile(input);
+    storedFile = store.resolveDevArtifactFile(written.file);
+    await projects.updateProject(project.id, { mediaMode: 'code-only' });
+    return written;
+  });
+  await expect(importDevArtifact(project.id, { tempPath, originalName: 'guide.png', kind: 'cast-sets' }))
+    .rejects.toMatchObject({ code: 'DEV_ARTIFACT_CONFLICT' });
+  expect((await projects.getProject(project.id)).devArtifacts || []).toEqual([]);
+  await expect(stat(storedFile)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(stat(tempPath)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('blocks reselecting or approving retained raster guides, including embedded HTML, after narrowing', async () => {
+  const { importDevArtifact, saveGeneratedDevArtifact } = await import('./devArtifactService.js');
+  const { saveProductionDraft, approveProductionReview } = await import('./productionReviewService.js');
+  const { productionReadiness, productionReviewBasis } = await import('./productionReview.js');
+  const project = await projects.createProject({ name: 'Retained guide', mediaMode: 'code-images' });
+  const tempPath = join(PATHS.data, 'retained-guide.png');
+  await writeFile(tempPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const { artifact: raster } = await importDevArtifact(project.id, { tempPath, originalName: 'guide.png', kind: 'cast-sets' });
+  const { artifact: embedded } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Embedded guide', html: '<img src="data:image/png;base64,AAAA">' });
+  const draft = { cast: 'Robot', environments: 'City', visualLanguage: 'Orange silhouettes', motionLanguage: 'Walk cycle', guideArtifactId: raster.id };
+  await saveProductionDraft(project.id, draft);
+  await projects.updateProject(project.id, { mediaMode: 'code-only' });
+  expect(productionReadiness(await projects.getProject(project.id)).art.problems).toContain('Code only requires a code-authored visual guide; select a compatible Development artifact.');
+  for (const guide of [raster, embedded]) {
+    await expect(saveProductionDraft(project.id, { ...draft, guideArtifactId: guide.id })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+    // A legacy row may already select either guide before migration/narrowing.
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, productionReview: { ...current.productionReview, draft: { ...draft, guideArtifactId: guide.id } } } }));
+    await expect(approveProductionReview(project.id, { stage: 'art', basis: productionReviewBasis(await projects.getProject(project.id)).art })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+  }
+  const { artifact: authored } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Authored guide', html: '<svg><circle r="20" fill="orange"/></svg>' });
+  await saveProductionDraft(project.id, { ...draft, guideArtifactId: authored.id });
+  const approved = await approveProductionReview(project.id, { stage: 'art', basis: productionReviewBasis(await projects.getProject(project.id)).art });
+  expect(approved.readiness.art.approved).toBe(true);
+  expect(approved.project.devArtifacts.map(artifact => artifact.id)).toEqual(expect.arrayContaining([raster.id, embedded.id]));
 });

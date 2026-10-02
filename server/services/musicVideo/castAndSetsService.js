@@ -520,6 +520,7 @@ function applyApproval(project, now) {
     },
     concept: { ...(project.concept || {}), subjects: castAndSetsSubjects(project, stage) },
   };
+  assertMusicVideoMediaSelections(next);
   if (stage.artifactId && (next.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted)) {
     next = reviewDevArtifact(next, stage.artifactId, { status: 'approved' }, now).project;
   }

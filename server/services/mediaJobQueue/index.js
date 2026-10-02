@@ -1256,7 +1256,11 @@ async function runJobLifecycle(job, markDispatched) {
   watchdogTimer.unref?.();
 
   try {
-    await assertMusicVideoJobPolicy(job.kind, job.params);
+    // A restored remote submission must reach its adapter to deliver an
+    // already-recorded cancellation, even after its project narrows or is deleted.
+    const recoveringRemoteCancellation = isRemoteMediaJob(job) && job.cancelRequested
+      && job.params?.remoteMedia?.reconcile === true && job.params.remoteMedia.cancelRequested === true;
+    if (!recoveringRemoteCancellation) await assertMusicVideoJobPolicy(job.kind, job.params);
     const mod = await getGenModuleForJob(job);
     if (job.params?.videoProduction) {
       const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');

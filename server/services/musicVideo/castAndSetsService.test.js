@@ -438,6 +438,21 @@ it('ignores a previous revision completion while regeneration has reserved a key
   expect((await current(project.id)).castAndSets.images.character.imageId).not.toBe(`${previous.id}.png`);
 });
 
+it('preserves a retained image guide but refuses to activate its references after narrowing to code-only', async () => {
+  const project = await seed({ mediaMode: 'code-images', visualSpec: null, productionPolicy: { strategy: 'legacy' } });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const before = await current(project.id);
+  expect(before.castAndSets.images.character.imageId).toBeTruthy();
+  await projects.updateProject(project.id, { mediaMode: 'code-only' });
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+  const after = await current(project.id);
+  expect(after.visualSpec).toBeNull();
+  expect(after.castAndSets.status).toBe('review');
+  expect(after.castAndSets.images).toEqual(before.castAndSets.images);
+  expect(after.devArtifacts).toEqual(before.devArtifacts);
+});
+
 describe('Cast & Sets procedural check-in', () => {
   const PROCEDURAL = {
     logline: 'A paper boat crosses a neon city.',

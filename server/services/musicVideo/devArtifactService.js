@@ -1,4 +1,5 @@
 import { assertDocumentMediaPolicy } from './documentMediaPolicy.js';
+import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — development artifact workflow: import/upload, generated saves,
  * notes, review and soft delete over the pure transforms in devArtifacts.js
@@ -69,6 +70,9 @@ async function storeVersion(projectId, {
     projectId, artifactId: id, version, ext: ext === 'jpeg' ? 'jpg' : ext, buffer, tempPath,
   });
   const out = await mutateProjectRecord(projectId, (current) => {
+    if (musicVideoMediaMode(current) !== musicVideoMediaMode(project)) {
+      throw new ServerError('Media mode changed during the artifact upload — try again', { status: 409, code: 'DEV_ARTIFACT_CONFLICT' });
+    }
     // A concurrent write took this version number: refuse rather than point
     // two versions at one file.
     if (nextDevArtifactVersion(current, artifactId) !== version) {

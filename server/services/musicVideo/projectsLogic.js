@@ -165,6 +165,7 @@ export function buildProjectRecord(input, { id, now }) {
     productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null)),
     scenes: [],
     renderHistoryId: null,
+    renderError: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
     // is additive rather than a record-shape migration.
     deleted: false,
@@ -277,6 +278,7 @@ export function cloneProjectRecord(source, {
     }, approvals: {}, proof: null } : null,
     ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
     renderHistoryId: null,
+    renderError: null,
     renderDependencies: null,
     // Publishing outputs and posted URLs belong to the source final render.
     ...(source.publishKit ? { publishKit: null } : {}),
@@ -722,6 +724,7 @@ export function mergeProjectRecord(local, remoteRaw) {
   if (Object.hasOwn(local, 'productionReview')) remote.productionReview = local.productionReview;
   if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
   if (Object.hasOwn(local, 'autonomousRun')) remote.autonomousRun = local.autonomousRun;
+  if (Object.hasOwn(local, 'renderError')) remote.renderError = local.renderError;
   // The composition document's files live only on this install as well
   // (compositionDocument.js), so its pointer survives a newer remote body.
   if (local.composition?.document || local.composition?.documentDraft) {

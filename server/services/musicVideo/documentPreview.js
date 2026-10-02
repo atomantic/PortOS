@@ -54,6 +54,11 @@ const cleanRef = (ref) => {
 
 // Runs before any document script: asset bridge, relative-src mapping, seek/layout messages.
 const BOOTSTRAP = `(() => {
+  // CSP does not block ICE/STUN. Match the render host before document code runs.
+  for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport', 'Worker', 'SharedWorker', 'WebSocket']) {
+    Object.defineProperty(globalThis, key, { configurable: false, writable: false,
+      value: function() { throw new Error(key + ' is disabled in compositions'); } });
+  }
   const map = new Map();
   let resolved = false;
   let resolveAssets;

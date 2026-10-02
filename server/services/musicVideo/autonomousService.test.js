@@ -123,6 +123,51 @@ describe('startAutonomousVideo', () => {
     expect(doubles.attachAudio).toHaveBeenCalledWith('track-1', 'music-song-a.mp3', expect.objectContaining({ source: 'suno', durationSec: 187 }));
   });
 
+  it.each([
+    { mediaMode: 'code-images', explicit: true },
+    { mediaMode: 'code-images-video', explicit: false },
+  ])('passes the $mediaMode authoring pin through the real production preflight', async ({ mediaMode, explicit }) => {
+    const { buildProjectRecord } = await import('./projectsLogic.js');
+    const production = await import('./productionService.js');
+    const runner = await import('../promptRunner.js');
+    const authoring = { providerId: 'fixture-author', model: 'fixture-model', effort: 'high' };
+    const resolve = vi.spyOn(runner, 'resolveProviderAndModel').mockResolvedValue({
+      provider: { id: authoring.providerId, type: 'api', enabled: true }, selectedModel: authoring.model,
+    });
+    // Exercise actual authoring and pool validation against a synthetic image
+    // backend. The absent approved plan stops the run before any dispatch.
+    const isVideoModeUsable = vi.fn(() => false);
+    const loadEnv = vi.fn(async () => {
+      if (mediaMode === 'code-images') return { settings: { imageGen: { local: { pythonPath: '/opt/example/python' } } },
+        imageModels: [{ id: 'fixture-image' }], isVideoModeUsable };
+      throw Object.assign(new Error('Fixture stopped after authoring validation'), { code: 'FIXTURE_PREFLIGHT_COMPLETE' });
+    });
+    production.__setProductionDepsForTests({ loadEnv });
+    doubles.createProject.mockImplementation(async (input) => {
+      const project = buildProjectRecord(input, { id: 'mv-auto', now: '2026-01-01T00:00:00.000Z' });
+      store.set(project.id, clone(project));
+      return project;
+    });
+    doubles.startProduction.mockImplementation(production.startProduction);
+    doubles.resolveLlm.mockResolvedValue({ route: authoring });
+    try {
+      await service.startAutonomousVideo({ prompt: 'An authored world', mediaMode, models: { 'image:local': 'fixture-image' }, ...(explicit ? { authoring } : {}) });
+      await settled('failed');
+      expect(store.get('mv-auto')).toMatchObject({ composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first' } });
+      expect(resolve).toHaveBeenCalledWith(authoring);
+      expect(loadEnv).toHaveBeenCalledOnce();
+      expect(runOf().errorCode).toBe(mediaMode === 'code-images' ? 'PRODUCTION_MEDIUM_CONFLICT' : 'FIXTURE_PREFLIGHT_COMPLETE');
+      if (mediaMode === 'code-images') {
+        expect(isVideoModeUsable).not.toHaveBeenCalled();
+        expect(doubles.startProduction.mock.calls[0][1].pool).toEqual([{ kind: 'image', mode: 'local', model: 'fixture-image' }]);
+        expect(runOf().brief.tools).toEqual(['image:local', 'video:local']);
+      }
+    } finally {
+      resolve.mockRestore();
+      production.__setProductionDepsForTests({});
+    }
+  });
+
   it('finishes — and starts the final render — when the delegated production run completes', async () => {
     await service.startAutonomousVideo({ prompt: 'p' });
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));

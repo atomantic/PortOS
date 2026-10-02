@@ -21,12 +21,14 @@ layout({ width, height });
 function drawWords(t) {
   const cue = (mv.lyrics || []).find((line) => t >= line.startSec && t < (line.endSec ?? line.startSec + 4));
   if (!cue) return;
+  text.save();
   text.font = `${Math.round(height * 0.04)}px "MV Mono"`;
   text.textAlign = 'center'; text.textBaseline = 'middle';
   const label = cue.text || (cue.words || []).map((word) => word.w).join(' ');
   text.lineWidth = height * 0.007; text.strokeStyle = '#080b12'; text.fillStyle = '#ffffff';
   text.strokeText(label, width / 2, height * 0.88, width * 0.8);
   text.fillText(label, width / 2, height * 0.88, width * 0.8);
+  text.restore();
 }
 function drawEvents(state) {
   for (const event of state.activeEvents) {
@@ -57,7 +59,7 @@ globalThis.portosComposition = {
     const scene = new THREE.Scene(); scene.background = new THREE.Color('#080b12');
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 200);
     camera.position.set(0, 2, 9); camera.lookAt(0, 1, 0);
-    text.clearRect(0, 0, width, height);
+    text.reset();
     try {
       text.save();
       fn({ THREE, scene, camera, text }, { t, localT: t - section.startSec, frame: Math.floor(t * mv.render.fps),
@@ -69,10 +71,17 @@ globalThis.portosComposition = {
       drawEvents(state);
       drawWords(t);
     } finally {
+      const resources = new Set();
       scene.traverse((object) => {
-        object.geometry?.dispose();
-        for (const material of [object.material].flat().filter(Boolean)) material.dispose();
+        if (object.shadow) resources.add(object.shadow);
+        if (object.geometry) resources.add(object.geometry);
+        for (const material of [object.material].flat().filter(Boolean)) {
+          resources.add(material);
+          for (const value of Object.values(material)) if (value?.isTexture) resources.add(value);
+        }
       });
+      for (const value of [scene.background, scene.environment]) if (value?.isTexture) resources.add(value);
+      for (const resource of resources) resource.dispose();
     }
   },
 };

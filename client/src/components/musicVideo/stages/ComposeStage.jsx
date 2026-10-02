@@ -1,3 +1,4 @@
+import { RenderFailure } from '../RenderStatusPanel.jsx';
 import GradePanel from '../GradePanel.jsx';
 import TypographyPanel from '../TypographyPanel.jsx';
 import CodeVideoPanel from '../CodeVideoPanel.jsx';
@@ -14,6 +15,7 @@ export default function ComposeStage({ board }) {
   const mode = project.composition?.mode;
   return (
     <fieldset disabled={locked} className="min-w-0">
+      <RenderFailure project={project} renderJob={board.renderJob} />
       <div className="space-y-2 rounded-lg border border-port-border bg-port-card p-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-port-text-muted" aria-hidden="true">Render style</span>

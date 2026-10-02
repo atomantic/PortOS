@@ -370,7 +370,7 @@ describe('editable code revisions and footage variants', () => {
   it('forks a document into independent photographic production with song, storyboard and immutable assets', async () => {
     const { castAndSetsMedium } = await import('./castAndSetsDirection.js');
     const { startProductionOnProject, nextProductionStep } = await import('./production.js');
-    const source = await file.createProject({ name: 'Example Film', trackId: 'example-track',
+    const source = await file.createProject({ name: 'Example Film', trackId: 'example-track', mediaMode: 'code-images-video',
       concept: { prompt: 'A journey home', subjects: [{ kind: 'character', name: 'Paper protagonist' }], moodBoardStyle: 'Paper world' },
       visualSpec: { moodBoardId: 'board-original', references: [{ imageId: 'original.png', role: 'character' }] },
       composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first' },

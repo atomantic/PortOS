@@ -1,4 +1,4 @@
-import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
+import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { prepareProductionReview, renderProductionProof } from './productionReviewService.js';
 import { assertProductionApproval, productionReadiness, productionProofNeedsRender, productionProofWindow } from './productionReview.js';
 
@@ -273,9 +273,9 @@ const STAGES = {
     await prepareProductionReview(project.id);
     project = await getProject(project.id);
     assertProductionApproval(project, 'storyboard');
+    const authoring = run.brief.authoring || await llmOf(run);
+    const input = { providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}) };
     if (medium === 'code') {
-      const authoring = run.brief.authoring || (run.brief.llm ? { providerId: run.brief.llm.providerId, model: run.brief.llm.model, effort: run.brief.llm.effort } : {});
-      const input = { providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}) };
       if (project.composition?.mode === 'code') {
         if (!project.composition?.codeVideo?.sections?.length) await deps.generateCode(project.id, input);
       } else if (!project.composition?.document) {
@@ -294,9 +294,10 @@ const STAGES = {
     }
     const started = await deps.startProduction(project.id, {
       directive: trimTo([run.brief.prompt, run.brief.guidance].filter(Boolean).join('\n\n'), 4000),
-      pool: autonomousPool(run.brief.tools, run.brief.models),
+      pool: autonomousPool(run.brief.tools, run.brief.models).filter((route) => musicVideoAllowsMedia(project, route.kind)),
       limits: { ...run.brief.limits, ...(run.brief.budgetUsd != null ? { spendCapUsd: run.brief.budgetUsd } : {}) },
       reviewer: { providerId: run.brief.llm?.providerId || null, model: run.brief.llm?.model || null },
+      authoring: input,
     });
     return { output: { productionRunId: started.run.id }, wait: true };
   },

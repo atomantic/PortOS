@@ -189,9 +189,9 @@ export default function MusicVideo() {
   const renderJob = useMusicVideoRenderJob({
     onRendered: (projectId, result) => patchProject(projectId, (project) => ({
       renderHistoryId: result.id || project.renderHistoryId,
-      status: 'complete',
+      status: 'complete', renderError: null,
     })),
-    onFailed: (projectId) => patchProject(projectId, { status: 'failed' }),
+    onFailed: (projectId, renderError) => patchProject(projectId, { status: 'failed', renderError }),
   });
   // Draft excerpt render (#8986): a fast cue/cut preview of a chosen window,
   // separate from the full-render job/mutex above so a director can preview a

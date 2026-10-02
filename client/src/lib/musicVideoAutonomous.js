@@ -2,6 +2,8 @@
 // vocabulary and brief normalizer (a dependency-light leaf) and owns the start
 // form's draft ↔ wire mapping and the run's display helpers.
 
+import { musicVideoMediaMode } from '../../../server/lib/musicVideoMediaPolicy.js';
+
 import {
   AUTONOMOUS_DEFAULT_LIMITS, AUTONOMOUS_DEFAULT_TOOLS, AUTONOMOUS_LIVE_STATUSES, AUTONOMOUS_SONG_SOURCES, AUTONOMOUS_STAGES,
 } from '../../../server/lib/musicVideoAutonomous.js';
@@ -26,6 +28,7 @@ export const AUTONOMOUS_STATUS_LABELS = Object.freeze({
 export const emptyAutonomousDraft = () => ({
   prompt: '',
   mediaMode: 'code-images-video',
+  authoring: { providerId: '', model: '', effort: '' },
   songSource: AUTONOMOUS_SONG_SOURCES[0],
   localFallback: false,
   instrumental: false,
@@ -53,6 +56,10 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
   return {
     prompt: draft.prompt.trim(),
     mediaMode: draft.mediaMode,
+    ...(draft.authoring?.providerId && draft.authoring?.model ? { authoring: {
+      providerId: draft.authoring.providerId, model: draft.authoring.model,
+      ...(draft.authoring.effort ? { effort: draft.authoring.effort } : {}),
+    } } : {}),
     songSource: draft.songSource,
     localFallback: draft.songSource === 'suno' && draft.localFallback === true,
     instrumental: draft.instrumental === true,
@@ -127,7 +134,8 @@ export function autopilotDraftFromParams(params) {
   const { prompt: _prompt, ...base } = emptyAutonomousDraft();
   return {
     ...base,
-    mediaMode: p.mediaMode || base.mediaMode,
+    mediaMode: musicVideoMediaMode(p),
+    authoring: { ...base.authoring, ...(p.authoring || {}) },
     songSource: AUTONOMOUS_SONG_SOURCES.includes(p.songSource) ? p.songSource : base.songSource,
     localFallback: p.localFallback === true,
     instrumental: p.instrumental === true,
@@ -144,7 +152,7 @@ export function autopilotDraftFromParams(params) {
 
 /**
  * The `musicVideoAutopilot` params a draft saves. Starts from the saved params
- * so fields the form does not edit (review attempts, authoring provider) survive a save; the server re-normalizes it all on write.
+ * so fields the form does not edit (such as review attempts) survive a save; the server re-normalizes it all on write.
  */
 export function autopilotParamsFromDraft(draft, saved, { providerId, model, effort } = {}) {
   const { prompt: _prompt, ...request } = autonomousRequestFromDraft({ ...draft, prompt: '' }, {});
@@ -153,6 +161,7 @@ export function autopilotParamsFromDraft(draft, saved, { providerId, model, effo
     ...kept,
     ...request,
     models: request.models || {},
+    authoring: request.authoring || null,
     limits: { ...(kept.limits || {}), ...(request.limits || {}) },
     moodBoardId: draft.moodBoardId || null,
     ideaTags: String(draft.ideaTags || '').split(',').map((t) => t.trim()).filter(Boolean),

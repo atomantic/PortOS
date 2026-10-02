@@ -1,3 +1,4 @@
+import CodeAuthoringPicker from '../../../musicVideo/CodeAuthoringPicker.jsx';
 import MediaModePicker from '../../../musicVideo/MediaModePicker.jsx';
 import { useEffect, useState } from 'react';
 import ToggleChip from '../../../ui/ToggleChip';
@@ -60,7 +61,7 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
   return (
     <form onSubmit={handleSave} className="space-y-4">
       <p className="text-xs text-gray-500">
-        Each run turns the oldest unused Brain idea into a fully autonomous music video with these settings. Use Run Now under Global defaults to start one immediately.
+        Each run turns the oldest unused Brain idea into an authored music video with these settings, pausing for art, storyboard and animated proof approvals. Use Run Now under Global defaults to start one immediately.
       </p>
 
       <div>
@@ -73,6 +74,7 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
       <ToggleChip id="mv-ap-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 
       <MediaModePicker id="mv-auto-media-mode" value={draft.mediaMode} onChange={(mediaMode) => patch({ mediaMode })} />
+      <CodeAuthoringPicker value={draft.authoring} onChange={(authoring) => patch({ authoring })} disabled={updating} />
       <ToolPicker idPrefix="mv-ap" tools={draft.tools} models={draft.models} onChange={patch} />
 
       <MoodBoardPicker id="mv-ap-mood-board" value={draft.moodBoardId} onChange={(moodBoardId) => patch({ moodBoardId })} />

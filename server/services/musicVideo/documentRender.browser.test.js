@@ -78,6 +78,7 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     const created = await projects.createProject({ name: 'Synthetic authored world', mediaMode: 'code-only' });
     await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
       audioAnalysis: { durationSec: 1, beats: [0, 0.5], downbeats: [0], sections: [{ id: 'world', label: 'World', startSec: 0, endSec: 1 }] },
+      lyricCues: [{ id: 'line', text: 'EXAMPLE LYRIC', startSec: 0, endSec: 1, words: [{ w: 'EXAMPLE', startSec: 0 }, { w: 'LYRIC', startSec: 0.5 }] }],
       composition: { mode: 'document', authoringRenderer: 'three' },
     } }));
     author.response = JSON.stringify({ sections: [{ id: 'world', source: richSceneSource }] });
@@ -90,17 +91,33 @@ describe.skipIf(!chrome || !ffmpeg)('layered template with real Chrome and ffmpe
     expect(preview.html).toContain("img-src 'none'");
     const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
     const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+    await page.evaluate(() => {
+      const live = new Set();
+      const create = WebGL2RenderingContext.prototype.createTexture;
+      const remove = WebGL2RenderingContext.prototype.deleteTexture;
+      WebGL2RenderingContext.prototype.createTexture = function (...args) { const value = create.apply(this, args); live.add(value); return value; };
+      WebGL2RenderingContext.prototype.deleteTexture = function (value) { live.delete(value); return remove.call(this, value); };
+      window.liveTextureCount = () => live.size;
+    });
     await page.setContent(preview.html);
     await page.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+    const transports = await page.evaluate(() => ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport'].map(key => {
+      const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
+      let message; try { new globalThis[key](); } catch (error) { message = error.message; }
+      return { key, configurable: descriptor.configurable, writable: descriptor.writable, message };
+    }));
+    expect(transports).toEqual(['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport'].map(key => ({ key, configurable: false, writable: false, message: `${key} is disabled in compositions` })));
     const at = (t) => page.evaluate(async (t) => {
       await window.portosComposition.seek(t);
-      return document.getElementById('world').toDataURL();
+      return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
     }, t);
     const first = await at(0);
+    const textures = await page.evaluate(() => window.liveTextureCount());
     const moved = await at(0.5);
-    expect(moved).not.toBe(first);
-    expect(await at(0)).toBe(first);
-    const pixels = await sharp(Buffer.from(first.split(',')[1], 'base64')).resize(64,36).removeAlpha().raw().toBuffer();
+    expect(moved.world).not.toBe(first.world);
+    expect(await at(0)).toEqual(first);
+    expect(await page.evaluate(() => window.liveTextureCount())).toBe(textures);
+    const pixels = await sharp(Buffer.from(first.world.split(',')[1], 'base64')).resize(64,36).removeAlpha().raw().toBuffer();
     const orange = [...Array(pixels.length / 3).keys()].filter((i) => pixels[i*3] > pixels[i*3+2] * 1.5 && pixels[i*3] > 100).length;
     expect(orange).toBeGreaterThan(15); // authored character, not a blank backdrop/overlay-only fallback
     expect(errors).toEqual([]);

@@ -17,7 +17,11 @@ export async function assertDocumentMediaPolicy(project, files) {
       || signature.subarray(0, 3).equals(Buffer.from([255, 216, 255]))
       || /^GIF8[79]a/.test(signature.toString('ascii'))
       || signature.toString('ascii', 8, 12) === 'WEBP') assertMusicVideoMedia(project, 'image', 'document asset');
-    if (signature.toString('ascii', 4, 8) === 'ftyp' || signature.subarray(0, 4).equals(Buffer.from([26, 69, 223, 163]))) assertMusicVideoMedia(project, 'video', 'document asset');
+    if (signature.toString('ascii', 4, 8) === 'ftyp') {
+      const kind = ['avif', 'avis'].includes(signature.toString('ascii', 8, 12)) ? 'image' : 'video';
+      assertMusicVideoMedia(project, kind, 'document asset');
+    }
+    if (signature.subarray(0, 4).equals(Buffer.from([26, 69, 223, 163]))) assertMusicVideoMedia(project, 'video', 'document asset');
     if (IMAGES.has(ext)) assertMusicVideoMedia(project, 'image', 'document asset');
     if (VIDEO.has(ext)) assertMusicVideoMedia(project, 'video', 'document asset');
     // Unknown binary assets cannot hide renamed photos or clips in code-only packages.

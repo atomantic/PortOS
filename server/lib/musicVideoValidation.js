@@ -955,6 +955,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
+  renderError: z.string().max(2000).nullable().optional(),
   lyricCues: lyricCueList.optional(),
   lyricMarkers: lyricMarkerList.optional(),
   phrases: phraseList.optional(),

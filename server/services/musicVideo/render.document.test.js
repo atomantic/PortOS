@@ -142,3 +142,17 @@ it('rejects a changed film between preparing its reviewed plan and starting the 
   await vi.waitFor(async () => expect((await projects.getProject(id)).status).toBe('failed'));
   expect(encodeDocumentComposition).not.toHaveBeenCalled();
 });
+
+// The API client can leave before the SSE failure: keep the reason on the record.
+it('persists a document failure for returning operators and clears it after a successful retry', async () => {
+  const id = await documentProject();
+  await importDocumentTemplate(id);
+  const message = 'Edit portosComposition.durationSec to a whole-frame duration and re-import the document.';
+  encodeDocumentComposition.mockRejectedValueOnce(new Error(message));
+  await renderMusicVideo(id);
+  await vi.waitFor(async () => expect(await projects.getProject(id)).toMatchObject({
+    status: 'failed', renderError: `Composition document render failed: ${message}`,
+  }));
+  await renderMusicVideo(id);
+  await vi.waitFor(async () => expect(await projects.getProject(id)).toMatchObject({ status: 'complete', renderError: null }));
+});

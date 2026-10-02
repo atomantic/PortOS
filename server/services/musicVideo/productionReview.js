@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalSnapshotChecksum as hash } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 
 import { isNonBlankStr as text } from '../../lib/textUtils.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
@@ -43,6 +44,7 @@ export function productionReadiness(project) {
     if (!text(draft[key])) artProblems.push(`${label} needs editable direction.`);
   }
   if (!['text/html', 'image/png', 'image/jpeg'].includes(artifact(project, draft.guideArtifactId)?.mimeType)) artProblems.push('Attach a visual cast/environment sheet from Development artifacts.');
+  if (artifact(project, draft.guideArtifactId)?.mimeType?.startsWith('image/') && !musicVideoAllowsMedia(project, 'image')) artProblems.push('Code only requires a code-authored visual guide; select a compatible Development artifact.');
   const artApproved = !artProblems.length && review.approvals?.art?.basis === basis.art;
   const boardProblems = unresolved('storyboard').map(f => `Resolve storyboard feedback for ${f.target}: ${f.text}`);
   if (!artApproved) boardProblems.push('Review and approve the current art direction first.');
