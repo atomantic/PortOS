@@ -47,7 +47,6 @@ jobs:
     # six real render/containment cases, including the bounded timeout case.
     timeout-minutes: 120
     env:
-      PORTOS_DATA_ROOT: ${{ runner.temp }}/portos-supercollider-live
       EXPECTED_DOCKER_ARCH: ${{ matrix.arch }}
       EXPECTED_NODE_ARCH: ${{ matrix.nodeArch }}
     steps:
@@ -74,8 +73,10 @@ jobs:
           assert.equal(server.Arch, process.env.EXPECTED_DOCKER_ARCH);
           console.log(`Docker ${server.Version}: ${server.Os}/${server.Arch}; Node ${process.version}: ${process.arch}`);
           NODE
-          mkdir -p "$PORTOS_DATA_ROOT"
-          touch "$PORTOS_DATA_ROOT/.portos-disposable-root"
+          task_data_root="$RUNNER_TEMP/portos-supercollider-live"
+          mkdir -p "$task_data_root"
+          touch "$task_data_root/.portos-disposable-root"
+          printf 'PORTOS_DATA_ROOT=%s\n' "$task_data_root" >> "$GITHUB_ENV"
 
       - name: Install test dependencies without lifecycle scripts
         run: |
