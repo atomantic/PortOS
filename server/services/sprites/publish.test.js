@@ -14,13 +14,26 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdir, writeFile, readFile, realpath, symlink, unlink } from 'fs/promises';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
 import { trackSpan as fullSpan } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-publish-test-'));
 const APP_REPO = join(TEST_ROOT, 'game-repo');
+
+const filesystemMocks = vi.hoisted(() => ({ afterMkdir: null }));
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    mkdir: async (...args) => {
+      const result = await actual.mkdir(...args);
+      await filesystemMocks.afterMkdir?.(args[0]);
+      return result;
+    },
+  };
+});
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -145,6 +158,8 @@ async function addLockedMainReference(id) {
 
 beforeEach(async () => {
   getAppById.mockClear();
+  APPS['game-app'].repoPath = APP_REPO;
+  filesystemMocks.afterMkdir = null;
   isDeploying.mockReset();
   isDeploying.mockReturnValue(false);
   compileAtlasInTail.mockReset();
@@ -785,6 +800,149 @@ describe('layout sidecar (#2982)', () => {
     await setPublishBinding(id, BINDING);
     await expect(publishAtlas(id)).rejects.toMatchObject({ status: 422, code: 'ATLAS_GEOMETRY_UNKNOWN' });
     expect(await readFile(join(APP_REPO, BINDING.atlasDestPath)).catch(() => null)).toBeNull();
+  });
+});
+
+describe('publication filesystem boundary', () => {
+  const sourcePath = 'src/Hero.cs';
+  const portraitDestPath = 'assets/portraits/hero.png';
+  const presentationIdleDestPath = 'assets/picker/hero.png';
+  const targets = [
+    ['atlas', BINDING.atlasDestPath, {}],
+    ['atlas sidecar', sidecarPath(BINDING.atlasDestPath), {}],
+    ['portrait', portraitDestPath, { portraitDestPath }],
+    ['picker animation', presentationIdleDestPath, { presentationIdleDestPath }],
+    ['picker sidecar', presentationIdleDestPath.replace(/\.png$/, '.presentation.json'), { presentationIdleDestPath }],
+    ['code binding', sourcePath, {}],
+  ];
+
+  // Each destination has its own read/write call site. Both branches can
+  // rewrite source, so this security matrix pins preflight ordering for all.
+  describe.each(['normal', 'up-to-date'])('%s publication', (branch) => {
+    it.each(targets)('rejects a newly symlinked %s before any app-file rewrite', async (_label, target, extra) => {
+      const { id, atlasBytes } = await characterWithAtlas();
+      const oldResource = 'res://old-atlas.png';
+      const newResource = 'res://new-atlas.png';
+      const sourceBefore = `load("${oldResource}");\n`;
+      await mkdir(join(APP_REPO, 'src'), { recursive: true });
+      await writeFile(join(APP_REPO, sourcePath), sourceBefore);
+      await setPublishBinding(id, {
+        ...BINDING,
+        atlasDestPath: 'assets/old-atlas.png',
+        codeBinding: { path: sourcePath, resourcePath: oldResource },
+      });
+      await publishAtlas(id);
+      const historyPath = join(TEST_ROOT, 'sprites', id, 'runtime/publications.json');
+      const historyBefore = await readFile(historyPath);
+      if (extra.portraitDestPath) await addLockedMainReference(id);
+      const strip = Buffer.from('synthetic-picker-strip');
+      presentationIdleMocks.buildPresentationIdle.mockResolvedValue({
+        buffer: strip, sha256: sha256(strip), frameCount: 3, frameRate: 6, cellSize: 512,
+      });
+      const binding = {
+        ...BINDING, ...extra,
+        codeBinding: { path: sourcePath, resourcePath: newResource },
+      };
+      await setPublishBinding(id, binding);
+      await mkdir(join(APP_REPO, 'assets/sprites/hero'), { recursive: true });
+      if (branch === 'up-to-date') await writeFile(join(APP_REPO, BINDING.atlasDestPath), atlasBytes);
+
+      const outsidePath = join(OTHER_APP_REPO, 'outside-target');
+      const outsideBefore = target === sourcePath ? sourceBefore : atlasBytes;
+      await writeFile(outsidePath, outsideBefore);
+      await mkdir(join(APP_REPO, target, '..'), { recursive: true });
+      await unlink(join(APP_REPO, target)).catch((err) => { if (err.code !== 'ENOENT') throw err; });
+      await symlink(outsidePath, join(APP_REPO, target), 'file');
+
+      // Save-time validation and use-time validation share the same refusal.
+      await expect(validatePublishBinding(binding)).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+      await expect(publishAtlas(id, { acknowledgeOverwrite: true })).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+      expect(await readFile(outsidePath, 'utf8')).toBe(outsideBefore);
+      expect(await readFile(join(APP_REPO, sourcePath), 'utf8')).toBe(sourceBefore);
+      expect(await readFile(historyPath)).toEqual(historyBefore);
+      expect(await readFile(join(APP_REPO, 'assets/old-atlas.png'), 'utf8')).toBe(atlasBytes);
+      if (target !== sidecarPath(BINDING.atlasDestPath)) {
+        await expect(readFile(join(APP_REPO, sidecarPath(BINDING.atlasDestPath)))).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    });
+  });
+
+  it('rejects an escaping parent introduced after saving a missing nested output path', async () => {
+    const { id } = await characterWithAtlas();
+    const binding = { ...BINDING, atlasDestPath: 'linked-assets/missing/nested/atlas.png' };
+    await setPublishBinding(id, binding);
+    await writeFile(join(OTHER_APP_REPO, 'sentinel'), 'outside-before');
+    await symlink(OTHER_APP_REPO, join(APP_REPO, 'linked-assets'), 'junction');
+    await expect(validatePublishBinding(binding)).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+    await expect(publishAtlas(id)).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+    expect(await readFile(join(OTHER_APP_REPO, 'sentinel'), 'utf8')).toBe('outside-before');
+    await expect(readFile(join(OTHER_APP_REPO, 'missing/nested/atlas.png'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses contained and dangling symlinks instead of treating them as ordinary destinations', async () => {
+    await writeFile(join(APP_REPO, 'contained.png'), 'contained-before');
+    for (const target of ['contained.png', 'missing.png']) {
+      const link = join(APP_REPO, 'alias.png');
+      await symlink(join(APP_REPO, target), link, 'file');
+      await expect(validatePublishBinding({ ...BINDING, atlasDestPath: 'alias.png' })).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+      await unlink(link);
+    }
+    await mkdir(join(APP_REPO, 'contained-dir'));
+    await symlink(join(APP_REPO, 'contained-dir'), join(APP_REPO, 'alias-dir'), 'junction');
+    await expect(validatePublishBinding({ ...BINDING, atlasDestPath: 'alias-dir/missing/atlas.png' })).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+    expect(await readFile(join(APP_REPO, 'contained.png'), 'utf8')).toBe('contained-before');
+  });
+
+  it('revalidates a completed output parent before rewriting source', async () => {
+    const { id } = await characterWithAtlas();
+    const sourceBefore = 'load("res://old.png");';
+    await mkdir(join(APP_REPO, 'src'));
+    await writeFile(join(APP_REPO, sourcePath), sourceBefore);
+    await setPublishBinding(id, {
+      ...BINDING, codeBinding: { path: sourcePath, resourcePath: 'res://old.png' },
+    });
+    await publishAtlas(id);
+    const atlasDestPath = 'new-output/nested/atlas.png';
+    await setPublishBinding(id, {
+      ...BINDING, atlasDestPath,
+      codeBinding: { path: sourcePath, resourcePath: 'res://new.png' },
+    });
+    await writeFile(join(OTHER_APP_REPO, 'atlas.png'), 'outside-before');
+    const completedParent = join(await realpath(APP_REPO), 'new-output/nested');
+    filesystemMocks.afterMkdir = async (path) => {
+      if (path !== completedParent) return;
+      filesystemMocks.afterMkdir = null;
+      rmSync(path, { recursive: true });
+      await symlink(OTHER_APP_REPO, path, 'junction');
+    };
+    await expect(publishAtlas(id)).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+    expect(await readFile(join(APP_REPO, sourcePath), 'utf8')).toBe(sourceBefore);
+    expect(await readFile(join(OTHER_APP_REPO, 'atlas.png'), 'utf8')).toBe('outside-before');
+    await expect(readFile(join(OTHER_APP_REPO, 'atlas.layout.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('validates inherited optional destinations before saving an older-client binding', async () => {
+    const { id } = await characterWithAtlas();
+    await setPublishBinding(id, { ...BINDING, portraitDestPath });
+    await mkdir(join(APP_REPO, 'assets/portraits'), { recursive: true });
+    const outsidePath = join(OTHER_APP_REPO, 'portrait.png');
+    await writeFile(outsidePath, 'outside-before');
+    await symlink(outsidePath, join(APP_REPO, portraitDestPath), 'file');
+    await expect(setPublishBinding(id, BINDING)).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+    expect(await readFile(outsidePath, 'utf8')).toBe('outside-before');
+  });
+
+  it('publishes through a configured repository alias while creating contained output directories', async () => {
+    const { id, atlasBytes } = await characterWithAtlas();
+    const alias = join(TEST_ROOT, `repo-alias-${id}`);
+    await symlink(APP_REPO, alias, 'junction');
+    APPS['game-app'].repoPath = alias;
+    await setPublishBinding(id, BINDING);
+    const result = await publishAtlas(id);
+    expect(result.published).toBe(true);
+    expect(await readFile(join(APP_REPO, BINDING.atlasDestPath), 'utf8')).toBe(atlasBytes);
+    expect((await readSidecar(BINDING.atlasDestPath)).kind).toBe('portos-sprite-atlas-layout');
+    expect(isDeploying).toHaveBeenCalledWith(alias);
   });
 });
 
