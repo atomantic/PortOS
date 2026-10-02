@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musicVideoMediumPlan.js';
+import { musicVideoToolPolicyConflict, normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { formatCount } from '../../utils/formatters.js';
 import { Link } from 'react-router';
 import { listUniverseNames, getUniverse } from '../../services/apiUniverseBuilder.js';
@@ -19,6 +19,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   const [universe, setUniverse] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [replanning, setReplanning] = useState(false);
   const [error, setError] = useState('');
   const [newKind, setNewKind] = useState('character');
   const [newName, setNewName] = useState('');
@@ -28,6 +29,9 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   const universeReady = !universeId || (!loading && universe?.id === universeId);
   const subjects = editing ? (draft?.subjects || []) : (project.concept?.subjects || []);
   const idFor = (name) => `mv-creative-${project.id}-${name}`;
+  // The saved tools and policy disagree (no video tool, yet generated footage is still planned).
+  // Shown, never auto-fixed: approved plans and sheets stay as saved until the director replans.
+  const conflict = musicVideoToolPolicyConflict(project);
 
   useEffect(() => {
     onPendingChange(editing);
@@ -68,6 +72,13 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     const subject = { id: `mvc-${uuidv4()}`, kind, name: name.trim().slice(0, 120), description: (description || '').slice(0, 1000), ...(kind === 'character' ? { role: subjects.some((s) => s.kind === 'character') ? 'supporting' : 'protagonist' } : {}), ...(canon?.id ? { canonId: canon.id } : {}) };
     setDraft((d) => ({ ...d, subjects: [...d.subjects, subject] }));
     if (canon) setSelectedCanon((items) => [...items, { subjectId: subject.id, kind, entry: canon }]);
+  };
+  const replan = () => {
+    setReplanning(true);
+    setError('');
+    return onSave({ productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } })
+      .catch((err) => setError(err.message || 'Could not replan the production policy'))
+      .finally(() => setReplanning(false));
   };
   const save = async () => {
     if (!universeReady) { setError('Wait for the selected universe to load before saving.'); return; }
@@ -160,6 +171,11 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
       <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!newName.trim() || !!newDescription.trim()} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
     </fieldset>}
     {!editing && project.productionPolicy?.strategy === 'code-first' && <p className="text-xs text-port-text-muted">Code-first plan · generated video allowance {formatCount(project.productionPolicy.maxGeneratedVideoPercent, { maximumFractionDigits: 3 })}% of final song time</p>}
+    {!editing && conflict && <div role="status" className="rounded border border-port-warning/60 p-2 space-y-1">
+      <p className="text-xs text-port-warning">{conflict.message}</p>
+      <p className="text-xs text-port-text-muted">Generated video is not dispatched without a video tool. Existing approved plans and check-in sheets stay as saved until you replan.</p>
+      <button type="button" onClick={replan} disabled={replanning} className="text-sm text-port-accent min-h-[44px] disabled:opacity-50">{replanning ? 'Replanning…' : 'Replan as code-first, no generated video'}</button>
+    </div>}
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
   </section>;
 }

@@ -8,6 +8,7 @@ import { unlink } from 'fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildFederatedMediaRequest } from '../../lib/federatedMediaRequest.js';
 import { asFableLoomRenderSettings } from '../../lib/fableLoomProduction.js';
+import { musicVideoBriefAllowsVideo } from '../../lib/musicVideoMediumPlan.js';
 import { isFullDecode } from '../../lib/videoDraftDecoders.js';
 import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
@@ -215,6 +216,11 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
           import('../musicVideo/projects.js'), import('../../lib/musicVideoActionContract.js'),
         ]);
         const project = await getProject(body.musicVideo.projectId);
+        // A brief that names tools and no video tool never dispatches generated footage;
+        // an approved plan or sheet stays as saved until the director replans.
+        if (project && !musicVideoBriefAllowsVideo(project)) {
+          throw new ServerError('No video tool is selected in this project\'s brief, so generated footage is not dispatched. Add a video tool, or replan the project without generated video.', { status: 409, code: 'MUSIC_VIDEO_NO_VIDEO_TOOL' });
+        }
         const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
         assertShotActionContract(scene);
         params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });

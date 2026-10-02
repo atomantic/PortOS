@@ -366,6 +366,9 @@ export const startMusicVideoCastAndSets = (id, body = {}, options = {}) =>
 // Body: { notes?: [{ text, target? }] } — omitted notes = the sheet's open notes.
 export const regenerateMusicVideoCastAndSets = (id, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Body: { protagonist?, world?, sets?: [{ id, imageRole }] } — the director's direct edits to a procedural direction.
+export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/direction`, { method: 'PATCH', body: JSON.stringify(body), ...options });
 export const resumeMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/resume`, { method: 'POST', body: '{}', ...options });
 export const approveMusicVideoCastAndSets = (id, options = {}) =>

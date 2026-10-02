@@ -66,3 +66,42 @@ export function musicVideoDirectionContext(direction) {
     ...((direction.sets || []).slice(0, 8).map((s) => `Set ${trimTo(s.name, 80)}: ${trimTo(s.description, 300)}; lighting: ${trimTo(s.lighting, 120)}${procedural ? `; image role: ${s.imageRole || 'background'}` : ''}`)),
   ].join('\n').slice(0, 6000);
 }
+
+const CODE_CONTEXT_MAX = 8000;
+
+/**
+ * The approved procedural direction as a code-authoring request needs it: how
+ * each character is built and moves, the world's layout/depth/lighting/camera/
+ * transition rules, and the reusable character definitions (geometry, palette,
+ * expressions, poses, motion) so every scene draws the same figures. '' for a
+ * photographic direction or one with neither rules nor definitions. Whole
+ * characters are included while the budget allows, never a truncated JSON.
+ */
+export function musicVideoCodeDirectionContext(direction) {
+  if (direction?.medium !== 'procedural') return '';
+  const p = direction.protagonist || {};
+  const w = direction.world || {};
+  const rules = (label, pairs) => {
+    const body = pairs.filter(([, v]) => v).map(([k, v]) => `${k}: ${trimTo(v, 300)}`).join('; ');
+    return body ? [`${label} ${body}`] : [];
+  };
+  const head = [
+    'Approved Cast & Sets direction for code (reuse these exact definitions and rules in every scene; never redesign a character, palette or camera language per scene):',
+    ...rules('Character build:', [['construction', p.construction], ['shape language', p.shapeLanguage], ['materials', p.materials], ['palette', p.palette], ['expressions', (p.expressions || []).join(' | ')], ['movement', p.movement]]),
+    ...rules('World rules:', [['layout', w.layout], ['depth', w.depth], ['lighting', w.lighting], ['camera', w.camera], ['transitions', w.transitions]]),
+    ...(direction.sets || []).slice(0, 8).map((s) => `Set ${trimTo(s.name, 80)} (image role ${s.imageRole || 'background'}): ${trimTo(s.description, 200)}`),
+  ];
+  const lines = [...head];
+  const characters = direction.definitions?.characters || [];
+  if (characters.length) {
+    lines.push('Character definitions (JSON; coordinates are in a 200x200 box, origin top-left; expressions and poses override base parts; motion rules are per-beat):');
+    let budget = CODE_CONTEXT_MAX - lines.join('\n').length;
+    for (const character of characters) {
+      const json = JSON.stringify(character);
+      if (json.length > budget) break;
+      lines.push(json);
+      budget -= json.length + 1;
+    }
+  }
+  return lines.length > 1 ? lines.join('\n') : '';
+}

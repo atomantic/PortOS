@@ -64,6 +64,7 @@ import {
   musicVideoDevArtifactReviewSchema,
   musicVideoDevArtifactFileQuerySchema,
   musicVideoCastAndSetsStartSchema,
+  musicVideoCastAndSetsDirectionEditSchema,
   musicVideoCastAndSetsRegenerateSchema,
   musicVideoDocumentDirectoryImportSchema,
   musicVideoDocumentFileQuerySchema,
@@ -171,6 +172,7 @@ import {
 import { devArtifactTypeFor } from '../services/musicVideo/devArtifacts.js';
 import {
   startCastAndSets,
+  editCastAndSetsDirection,
   regenerateCastAndSets,
   resumeCastAndSets,
   approveCastAndSets,
@@ -942,6 +944,11 @@ router.post('/:id/cast-and-sets', asyncHandler(async (req, res) => {
 router.post('/:id/cast-and-sets/regenerate', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsRegenerateSchema, req.body || {});
   res.status(202).json(await regenerateCastAndSets(req.params.id, input));
+}));
+
+router.patch('/:id/cast-and-sets/direction', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsDirectionEditSchema, req.body || {});
+  res.status(202).json(await editCastAndSetsDirection(req.params.id, input));
 }));
 
 router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {

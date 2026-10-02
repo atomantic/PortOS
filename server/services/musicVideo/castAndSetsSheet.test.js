@@ -52,4 +52,27 @@ describe('Cast & Sets sheet', () => {
     // The set with no image yet is a placeholder too.
     expect(html.match(/data:image\/png;base64/g)).toHaveLength(7);
   });
+
+  it('previews the reusable character definitions as inline SVG, still with no network or script', () => {
+    const procedural = {
+      ...direction, medium: 'procedural', looks: [], tests: [],
+      protagonist: { name: 'Boat', description: 'a paper boat', construction: 'three folds' },
+      definitions: { characters: [{
+        id: 'boat', name: 'Paper boat', renderer: 'svg', palette: [{ name: 'cream', hex: '#f5f0e6' }],
+        parts: [{ id: 'hull', shape: 'rect', x: 40, y: 100, width: 120, height: 40, fill: 'cream' }],
+        expressions: [{ name: 'proud', overrides: { hull: { rotate: -5 } } }], poses: [],
+        motion: [{ name: 'Bob', target: 'hull', property: 'translateY', amplitude: 4, periodBeats: 1, easing: 'ease-in-out', trigger: 'beat' }],
+      }] },
+    };
+    const html = renderCastAndSetsSheet({ title: 'Example Song', direction: procedural, sections });
+    expect(html).toContain('Reusable code definitions');
+    // Base pose + the named expression, each its own drawing; palette and motion listed.
+    expect(html.match(/<svg viewBox="0 0 200 200"/g)).toHaveLength(2);
+    expect(html).toContain('rotate(-5 100 120)');
+    expect(html).toContain('Bob');
+    expect(html).not.toMatch(/https?:\/\//);
+    expect(html).not.toMatch(/<(script|link|iframe|image|use)\b/i);
+    // A procedural direction without definitions shows no empty section.
+    expect(renderCastAndSetsSheet({ title: 'Example Song', direction: { ...procedural, definitions: { characters: [] } }, sections })).not.toContain('Character design');
+  });
 });

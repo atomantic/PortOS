@@ -17,6 +17,7 @@ export default function CastSetsStage({ board }) {
             onOpenSheet={board.openArtifact}
             onApprove={board.approveCastAndSets}
             onRegenerate={() => castSets.regenerate()}
+            onEditDirection={castSets.editDirection}
             onResume={() => castSets.resume()}
             onSkip={board.skipCastAndSets}
           />

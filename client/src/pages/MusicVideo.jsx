@@ -827,7 +827,7 @@ export default function MusicVideo() {
     saveVisualSpec,
     saveAutomation,
     saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
-      patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec });
+      patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
     setCreativeSetupPending,
     setStyleReferencesPending,
