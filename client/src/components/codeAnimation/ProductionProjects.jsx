@@ -6,7 +6,7 @@ import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import { usePagedCollection } from '../../hooks/usePagedCollection';
 import socket from '../../services/socket';
 import {
-  listCodeAnimationProjects, createCodeAnimationProject, getCodeAnimationProject,
+  listCodeAnimationProjects, createCodeAnimationProject, getCodeAnimationProject, getCodeAnimationBlenderStarter,
   updateCodeAnimationProject, importCodeAnimationPackage, acceptCodeAnimationSource,
   getCodeAnimationProjectBrief, getCodeAnimationRevisionPackage, listCodeAnimationProjectHistory,
 } from '../../services/apiCodeAnimation';
@@ -59,6 +59,14 @@ export default function ProductionProjects() {
     if (!projectId) navigate(`/code-animation/production/${project.id}`);
     return project;
   });
+  const createBlenderStarter = () => act(async () => {
+    const pkg = await getCodeAnimationBlenderStarter({ silent: true });
+    const created = await createCodeAnimationProject({ manifest: pkg.manifest, budgets: { timeSeconds: 14400, renderSeconds: 14000, diskBytes: 4000000000 } }, { silent: true });
+    applyProject(created);
+    navigate(`/code-animation/production/${created.id}`);
+    const imported = await importCodeAnimationPackage(created.id, pkg, { silent: true });
+    applyProject(imported.project);
+  });
   const importFile = event => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -88,6 +96,8 @@ export default function ProductionProjects() {
         <Link to="/code-animation/production" className={buttonClass}>New Production project</Link>
       </div>
       <p className="text-sm text-gray-400">Keep a film brief, independent budgets and immutable source revisions. Import and source acceptance stage files; rendering and evidence review are separate production stages.</p>
+      <button type="button" className={buttonClass} disabled={busy} onClick={createBlenderStarter}>Create painterly Blender starter</button>
+      <p className="text-xs text-gray-400">Creates original scene source at 1080p, 24 fps, 10 seconds. Importing starts no render or AI call. Check Blender execution before starting production.</p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {projects.items.map(item => <Link key={item.id} to={`/code-animation/production/${item.id}`} className="min-w-0 rounded border border-port-border p-3 hover:border-port-accent" aria-current={item.id === projectId ? 'page' : undefined}>
           <span className="block truncate font-medium">{item.title || 'Untitled production'}</span>

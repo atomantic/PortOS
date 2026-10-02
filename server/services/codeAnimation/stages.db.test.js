@@ -209,6 +209,45 @@ describe.skipIf(!ready)('Production stage runs', () => {
     expect((await patchProductionProject(slow.id, { budgets: { renderSeconds: 60 } })).budgets.renderSeconds).toBe(60);
   }, 20000);
 
+  it('runs Blender stages from immutable Python and rerenders resumed evidence after runtime authority changes', async () => {
+    const blenderManifest = { ...manifest(), renderer: { kind: 'blender', version: '4.2.0', engine: 'CYCLES' }, entrypoints: [{ role: 'scene', path: 'scene.py' }] };
+    const created = await createProductionProject({ manifest: blenderManifest });
+    ids.push(created.id);
+    const imported = createCodeAnimationPackage(blenderManifest, [{ path: 'scene.py', content: 'def build_scene(config): pass' }]);
+    const { revision } = await importProductionPackage(created.id, imported);
+    let binding = 'first-check';
+    const resolveBlender = vi.fn(async () => ({ provenance: { binding, version: '4.2.0', engine: 'CYCLES', device: 'CPU', executionMode: 'trusted-local', contained: false } }));
+    const blender = vi.fn(async options => {
+      expect(options.runtime.binding).toBe(binding);
+      expect(options.revision.entryPath).toBe('scene.py');
+      expect(options.revision.files[0].content).toBe(imported.files[0].content);
+      expect(options.revision.staged).toContain('/revisions/');
+      return { contract: { durationSec: 4, fps: 12, width: 1280, height: 720 },
+        frames: (options.captureTimes || []).map(t => ({ t, bytes: Buffer.from(`synthetic-${t}`) })),
+        samples: Array.from({ length: 48 }, (_, i) => ({ t: i / 12, renderHash: String(i), mean: 80, deviation: 20 })),
+        renderer: options.runtime, artifacts: [] };
+    });
+    const browser = vi.fn();
+    const commit = vi.fn().mockRejectedValueOnce(new Error('Synthetic history failure')).mockResolvedValue(undefined);
+    const cleanup = vi.fn();
+    const publishBlender = vi.fn().mockResolvedValue({ id: 'synthetic-video', filename: 'synthetic.mp4', commit, cleanup });
+    const deps = { resolveBlender, blender, publishBlender, sample: browser, render: browser };
+    await expect(startProductionStageRun(created.id, { executionMode: 'trusted-local' }, deps)).rejects.toThrow();
+    const first = await startProductionStageRun(created.id, {}, deps);
+    expect(await first.done).toBe('failed');
+    binding = 'second-check';
+    const second = await startProductionStageRun(created.id, { resumeFromRunId: first.run.id }, deps);
+    expect(await second.done).toBe('completed');
+    expect(blender.mock.calls.map(([options]) => options.phase)).toEqual(['style', 'pilot', 'final', 'style', 'pilot', 'final']);
+    expect(browser).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledTimes(2);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    const saved = (await getProductionHistory(created.id, { limit: 5, offset: 0 })).items.find(item => item.id === second.run.id);
+    expect(saved.data.renderer).toMatchObject({ binding: 'second-check', contained: false });
+    expect(saved.data.stages.every(stage => !stage.reusedFrom && stage.rendererBinding === 'second-check')).toBe(true);
+    expect((await exportProductionPackage(created.id, revision.id)).revisionHash).toBe(imported.revisionHash);
+  });
+
   it('marks a stranded run interrupted on restart and never calls a provider or render for it', async () => {
     const { id, revision } = await project();
     await query("INSERT INTO code_animation_project_runs (id, project_id, revision_id, status, data) VALUES ($1, $2, $3, 'running', $4)",

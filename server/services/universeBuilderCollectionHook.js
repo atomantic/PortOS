@@ -33,6 +33,12 @@ import { atomicWrite } from '../lib/fileUtils.js';
 // 160-image runs don't re-read universe-builder.json per completion.
 const activeRuns = new Map();
 
+// Completion handlers launched by the sync event listener and not yet finished.
+// EventEmitter never awaits listeners, so this set is the only handle on "the
+// hook's work for the events emitted so far has settled" — the test seam below
+// drains it instead of guessing with sleeps.
+const inFlight = new Set();
+
 export function registerUniverseBuilderRun({ runId, universeId, jobCount }) {
   if (!runId || !universeId || !Number.isFinite(jobCount) || jobCount <= 0) return;
   activeRuns.set(runId, { universeId, pending: jobCount });
@@ -147,7 +153,7 @@ export function initUniverseBuilderCollectionHook() {
   // launches an async IIFE with a top-level catch so this bookkeeping
   // miss can never crash the server or fail the user's render.
   completedHandler = (job) => {
-    void (async () => {
+    const handled = (async () => {
       if (!job || job.kind !== 'image') return;
       const tag = job.params?.universeRun;
       if (!tag) return;
@@ -254,6 +260,8 @@ export function initUniverseBuilderCollectionHook() {
       // Last-resort net for synchronous throws (unexpected job shape, etc).
       console.log(`⚠️ universe-builder collection hook crashed: ${err?.message || err}`);
     });
+    inFlight.add(handled);
+    handled.finally(() => inFlight.delete(handled));
   };
 
   // Failed/canceled jobs still count toward run completion — otherwise a
@@ -289,4 +297,18 @@ export const __testing = {
     activeRuns.clear();
   },
   getActiveRuns: () => new Map(activeRuns),
+  // Resolves once every completion handler launched so far (and any launched
+  // while draining) has finished. Rejects after `timeoutMs` naming how many are
+  // still pending, so a stalled append fails loudly instead of the caller
+  // polling a persisted-state predicate until its own budget runs out.
+  settled: async ({ timeoutMs = 10000 } = {}) => {
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`universe-builder hook: ${inFlight.size} completion handler(s) still pending after ${timeoutMs}ms`)), timeoutMs);
+    });
+    const drain = async () => {
+      while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
+    };
+    await Promise.race([drain(), deadline]).finally(() => clearTimeout(timer));
+  },
 };

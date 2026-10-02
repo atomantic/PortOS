@@ -2,8 +2,9 @@
  * Containment contract for Code Animation production workers (#9388).
  *
  * A job directory is not a boundary. Generated or imported package code runs
- * only under an enforced OS mechanism; when none is available execution is
- * refused, never downgraded to an uncontained spawn. The supported mechanism
+ * under an enforced OS mechanism by default; unavailable containment never
+ * automatically falls back. An explicit operator-owned trusted-local Blender
+ * mode is supervised but is not a security boundary. The supported mechanism
  * is macOS Seatbelt or Linux bubblewrap with a process-denying seccomp
  * filter. Windows and hosts missing the prerequisites refuse.
  *
@@ -33,7 +34,11 @@ export const codeAnimationWorkerLimitsSchema = z.object({
 export const codeAnimationExecutionToolsSchema = z.object({
   blender: z.object({
     executable: z.string().trim().max(4096).nullable(),
-  }).strict(),
+    executionMode: z.enum(['contained', 'trusted-local']).default('contained'),
+    engine: z.enum(['CYCLES', 'BLENDER_EEVEE_NEXT']).default('CYCLES'),
+    acknowledgeHostAccess: z.boolean().default(false),
+  }).strict().refine(value => value.executionMode !== 'trusted-local' || value.acknowledgeHostAccess,
+    'Trusted-local Blender requires explicit acknowledgement of host filesystem, network and process access.'),
 }).strict();
 
 /**
@@ -134,10 +139,13 @@ export function codeAnimationWorkerEnv(workspace) {
   return {
     PATH: '/usr/bin:/bin', HOME: home, TMPDIR: tmp, TMP: tmp, TEMP: tmp,
     LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8',
+    // Fixed synthetic identity: Blender's glog startup otherwise queries the
+    // host account database. This never inherits the operator's username.
+    USER: 'worker', LOGNAME: 'worker',
     XDG_CONFIG_HOME: posix.join(home, 'config'), XDG_CACHE_HOME: posix.join(home, 'cache'), XDG_DATA_HOME: posix.join(home, 'data'),
     // Blender reads user add-ons/startup files from here; keep them private and empty.
     BLENDER_USER_RESOURCES: posix.join(home, 'blender'),
-    // Workers have no network; an OpenSSL build's config outside the sandbox is not needed.
+    // Do not load the host OpenSSL configuration, including in trusted-local mode.
     OPENSSL_CONF: '/dev/null',
     PORTOS_WORKER_INPUT: posix.join(workspace, 'input'),
     PORTOS_WORKER_OUTPUT: posix.join(workspace, 'output'),

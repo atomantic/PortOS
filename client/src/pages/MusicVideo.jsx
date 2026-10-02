@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film, Copy, Trash2, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
 import {
   listMusicVideoProjects,
@@ -303,6 +305,16 @@ export default function MusicVideo() {
       })
       .catch((err) => toast.error(err?.message || 'Failed to create project'))
       .finally(() => setCreating(false));
+  };
+
+  const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+
+  const handleDeleteRequest = (id) => {
+    if (youtube.editJob.active && id === selectedId) {
+      toast.error('Finish or cancel the in-progress YouTube import before deleting this project');
+      return;
+    }
+    requestDelete(id);
   };
 
   const handleDelete = (id) => {
@@ -943,15 +955,26 @@ export default function MusicVideo() {
                 >
                   <Copy size={15} aria-hidden="true" /> <span className="max-sm:sr-only">{cloning ? 'Forking…' : `Fork v${(selected.version || 1) + 1}`}</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleDelete(selected.id)}
-                  title="Delete project"
-                  aria-label="Delete project"
-                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border px-2 py-1.5 text-sm text-port-error sm:min-h-0 sm:min-w-0"
-                >
-                  <Trash2 size={15} />
-                </button>
+                {isConfirmingDelete(selected.id) ? (
+                  <ConfirmButtonPair
+                    prompt="Delete?"
+                    confirmText="Delete"
+                    ariaLabel={`Confirm delete project ${selected.name}`}
+                    confirmAriaLabel={`Confirm delete project ${selected.name}`}
+                    onConfirm={() => confirmDelete(() => handleDelete(selected.id))}
+                    onCancel={cancelDelete}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteRequest(selected.id)}
+                    title="Delete project"
+                    aria-label="Delete project"
+                    className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border px-2 py-1.5 text-sm text-port-error sm:min-h-0 sm:min-w-0"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                )}
               </span>
             )}
             <button

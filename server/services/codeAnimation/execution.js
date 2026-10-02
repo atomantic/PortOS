@@ -5,6 +5,7 @@
  * at boot or calls a provider.
  */
 import { createServer } from 'node:net';
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -17,7 +18,7 @@ import {
 } from '../../lib/codeAnimationContainment.js';
 import { getSettings, updateSettings } from '../settings.js';
 import { cdpRequest } from '../browserService.js';
-import { currentContainmentMechanism, runContainedWorker } from './containedWorker.js';
+import { currentContainmentMechanism, runContainedWorker, runTrustedLocalWorker } from './containedWorker.js';
 import { probeBlenderRender } from './blenderProbe.js';
 
 const SETTINGS_KEY = 'codeAnimationExecution';
@@ -43,6 +44,7 @@ const BROWSER_LANE = {
 
 let lastProbe = null;
 let probing = null;
+let configurationGeneration = 0;
 
 const inside = (root, path) => {
   const rel = relative(root, path);
@@ -51,7 +53,7 @@ const inside = (root, path) => {
 
 /**
  * Validate an operator-supplied executable: `{ executable: realpath, fingerprint, problem: null }`
- * or a problem. The fingerprint ties containment evidence to these exact bytes on disk.
+ * or a problem. The fingerprint ties checks to the file identity and modification metadata.
  */
 async function inspectExecutable(path) {
   if (!path) return { executable: null, problem: 'Not configured.' };
@@ -73,26 +75,33 @@ async function inspectExecutable(path) {
 
 async function configuredTools() {
   const parsed = codeAnimationExecutionToolsSchema.safeParse((await getSettings())?.[SETTINGS_KEY]);
-  return parsed.success ? parsed.data : { blender: { executable: null } };
+  return parsed.success ? parsed.data : codeAnimationExecutionToolsSchema.parse({ blender: { executable: null } });
 }
 
 function blenderLane(mechanism, blender) {
-  if (!mechanism.supported) return { ready: false, reason: mechanism.reason };
+  if (blender.executionMode === 'contained' && !mechanism.supported) return { ready: false, reason: mechanism.reason };
+  if (blender.executionMode === 'trusted-local' && !['darwin', 'linux'].includes(process.platform)) {
+    return { ready: false, reason: 'Trusted-local worker process supervision requires macOS or Linux.' };
+  }
   if (!blender.executable) return { ready: false, reason: `Blender: ${blender.problem}` };
   const evidence = lastProbe?.tools?.blender;
-  if (!lastProbe?.passed) return { ready: false, reason: 'Run the containment check; execution stays refused until it passes on this server process.' };
-  if (!evidence || evidence.executable !== blender.executable || evidence.fingerprint !== blender.fingerprint) {
-    return { ready: false, reason: 'The configured Blender changed since the last containment check.' };
+  if (!lastProbe?.passed) return { ready: false, reason: 'Run the execution check; execution stays refused until it passes on this server process.' };
+  if (!evidence || evidence.executable !== blender.executable || evidence.fingerprint !== blender.fingerprint
+    || evidence.executionMode !== blender.executionMode || evidence.engine !== blender.engine) {
+    return { ready: false, reason: 'The Blender executable, engine or execution mode changed since the last check.' };
   }
-  if (!evidence.passed) return { ready: false, reason: 'Blender did not render the supported test scene under containment.' };
+  if (!evidence.passed) return { ready: false, reason: `Blender did not render the supported test scene in ${blender.executionMode} mode.` };
   return { ready: true, reason: null };
 }
 
 export async function getCodeAnimationExecution() {
   const mechanism = await currentContainmentMechanism();
-  const blender = await inspectExecutable((await configuredTools()).blender.executable);
+  const configuration = (await configuredTools()).blender;
+  const blender = { ...await inspectExecutable(configuration.executable), executionMode: configuration.executionMode, engine: configuration.engine };
   return {
-    platform: process.platform, mechanism, probe: lastProbe,
+    platform: process.platform, mechanism, probe: lastProbe, executionMode: blender.executionMode,
+    contained: blender.executionMode === 'contained',
+    trustedLocalWarning: 'Trusted-local Blender runs with this account’s host filesystem, network and process access. Only run source you trust. Environment scrubbing and process/resource supervision are not containment; code can act outside the supervised workspace or escape its process group.',
     tools: { blender },
     lanes: { browser: BROWSER_LANE, blender: blenderLane(mechanism, blender) },
     defaultLimits: codeAnimationWorkerLimitsSchema.parse({}),
@@ -107,7 +116,9 @@ export async function setCodeAnimationExecutionTools(input) {
     if (inspected.problem) throw new ServerError(inspected.problem, { status: 400, code: 'CODE_ANIMATION_TOOL_INVALID' });
     executable = inspected.executable;
   }
-  await updateSettings({ [SETTINGS_KEY]: { blender: { executable } } });
+  await updateSettings({ [SETTINGS_KEY]: { blender: { ...tools.blender, executable } } });
+  configurationGeneration += 1;
+  lastProbe = null;
   return getCodeAnimationExecution();
 }
 
@@ -195,11 +206,11 @@ async function probeBoundary(workspaceRoot) {
   }
 }
 
-async function probeLimit(workspaceRoot, kind, limits, expected) {
+async function probeLimit(workspaceRoot, kind, limits, expected, worker = runContainedWorker) {
   const controller = new AbortController();
   const timer = kind === 'cancel' ? setTimeout(() => controller.abort(), 300) : null;
   try {
-    const run = await runContainedWorker({
+    const run = await worker({
       tool: probeTool(), workspaceRoot, entrypoint: 'limit.cjs', tickMs: 100, signal: controller.signal,
       files: [{ path: 'limit.cjs', content: LIMIT_SCRIPTS[kind] }],
       limits: { wallSeconds: 20, diskBytes: 1024 * 1024, maxFiles: 10_000, memoryBytes: 1024 * 1024 * 1024, openFiles: 256, ...limits },
@@ -213,29 +224,39 @@ async function probeLimit(workspaceRoot, kind, limits, expected) {
 
 async function runProbe() {
   const started = Date.now();
+  const generation = configurationGeneration;
+  const configuration = (await configuredTools()).blender;
+  const trustedLocal = configuration.executionMode === 'trusted-local';
+  const worker = trustedLocal ? runTrustedLocalWorker : runContainedWorker;
   // Fail closed while checking, and if the check itself errors.
   lastProbe = null;
   const mechanism = await currentContainmentMechanism();
-  if (!mechanism.supported) {
+  if (!trustedLocal && !mechanism.supported) {
     lastProbe = { probedAt: new Date().toISOString(), mechanism: null, passed: false, refused: mechanism.reason, checks: [], tools: {}, browser: null, durationMs: 0 };
     return lastProbe;
   }
   const workspaceRoot = join(PATHS.data, WORKSPACE_DIR);
   const checks = [
-    ...await probeBoundary(workspaceRoot),
-    await probeLimit(workspaceRoot, 'time', { wallSeconds: 1 }, 'time'),
-    await probeLimit(workspaceRoot, 'disk', {}, 'disk'),
-    await probeLimit(workspaceRoot, 'memory', { memoryBytes: 128 * 1024 * 1024 }, 'memory'),
-    await probeLimit(workspaceRoot, 'cancel', {}, 'canceled'),
+    ...trustedLocal ? [] : await probeBoundary(workspaceRoot),
+    await probeLimit(workspaceRoot, 'time', { wallSeconds: 1 }, 'time', worker),
+    await probeLimit(workspaceRoot, 'disk', {}, 'disk', worker),
+    await probeLimit(workspaceRoot, 'memory', { memoryBytes: 128 * 1024 * 1024 }, 'memory', worker),
+    await probeLimit(workspaceRoot, 'cancel', {}, 'canceled', worker),
   ];
-  const blender = await probeBlenderRender(await inspectExecutable((await configuredTools()).blender.executable), workspaceRoot);
+  const blender = await probeBlenderRender(await inspectExecutable(configuration.executable), workspaceRoot, {
+    worker, engine: configuration.engine, executionMode: configuration.executionMode,
+  });
   const browser = await cdpRequest('/json/version', { timeout: 2000 }).then((response) => response.ok, () => false);
+  // A save during a probe revokes its authority, even if the operator later
+  // switches back to the same path. Only the next explicit check can arm it.
+  if (generation !== configurationGeneration) return null;
   lastProbe = {
-    probedAt: new Date().toISOString(), mechanism: mechanism.id, passed: checks.every((check) => check.passed),
+    probedAt: new Date().toISOString(), executionMode: configuration.executionMode, contained: !trustedLocal,
+    mechanism: trustedLocal ? 'trusted-local' : mechanism.id, passed: checks.every((check) => check.passed),
     refused: null, checks, tools: blender ? { blender } : {}, browser: { available: browser }, durationMs: Date.now() - started,
   };
   const log = lastProbe.passed ? console.log : console.error;
-  log(`${lastProbe.passed ? '🛡️' : '❌'} Code Animation containment check ${lastProbe.passed ? 'passed' : 'FAILED'} (${checks.filter((check) => check.passed).length}/${checks.length})`);
+  log(`${lastProbe.passed ? '🛡️' : '❌'} Code Animation ${configuration.executionMode} check ${lastProbe.passed ? 'passed' : 'FAILED'} (${checks.filter((check) => check.passed).length}/${checks.length})`);
   return lastProbe;
 }
 
@@ -244,4 +265,29 @@ export async function probeCodeAnimationExecution() {
   probing ??= runProbe().finally(() => { probing = null; });
   await probing;
   return getCodeAnimationExecution();
+}
+
+/** Resolve only saved operator authority; packages cannot select a worker mode. */
+export async function resolveBlenderExecution(renderer, expected = null) {
+  const execution = await getCodeAnimationExecution();
+  if (!execution.lanes.blender.ready) {
+    throw new ServerError(execution.lanes.blender.reason, { status: 409, code: 'CODE_ANIMATION_BLENDER_NOT_READY' });
+  }
+  const tool = execution.tools.blender;
+  const evidence = execution.probe.tools.blender;
+  if (renderer.version !== evidence.version || (renderer.engine || 'CYCLES') !== tool.engine) {
+    throw new ServerError('The project Blender version and engine must match the successful execution check', { status: 409, code: 'CODE_ANIMATION_BLENDER_RUNTIME_MISMATCH' });
+  }
+  const executableFingerprint = createHash('sha256').update(tool.fingerprint).digest('hex');
+  const binding = createHash('sha256').update(JSON.stringify([executableFingerprint, tool.executionMode, tool.engine, evidence.version, execution.probe.probedAt])).digest('hex');
+  if (expected && expected.binding !== binding) {
+    throw new ServerError('Blender readiness changed during this run. Start a new run after checking the selected executable and mode.', { status: 409, code: 'CODE_ANIMATION_BLENDER_READINESS_CHANGED' });
+  }
+  return {
+    executable: tool.executable,
+    worker: tool.executionMode === 'trusted-local' ? runTrustedLocalWorker : runContainedWorker,
+    provenance: { binding, executableFingerprint, executionMode: tool.executionMode, contained: tool.executionMode === 'contained',
+      version: evidence.version, engine: evidence.render.engine, device: evidence.render.device, backend: evidence.render.backend,
+      mechanism: execution.probe.mechanism, probedAt: execution.probe.probedAt },
+  };
 }

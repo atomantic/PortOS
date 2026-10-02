@@ -33,6 +33,7 @@ import {
   startCodeAnimationGeneration,
 } from '../services/codeAnimation/index.js';
 import { startCodeAnimationExport } from '../services/codeAnimation/export.js';
+import { getBlenderStarterPackage } from '../services/codeAnimation/blenderStarter.js';
 import { exportCodeAnimationPackage } from '../services/codeAnimation/package.js';
 import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../lib/codeAnimationPackage.js';
 import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema, codeAnimationStageRunSchema } from '../lib/codeAnimationProjects.js';
@@ -244,6 +245,8 @@ router.get('/projects/:id/revisions/:revisionId/package', asyncHandler(async (re
 
 // External harness handoff is data-only. Validation grants no execution and
 // neither stages imported files nor changes a saved/accepted animation.
+router.get('/packages/starter/blender', asyncHandler(async (_req, res) => res.json(await getBlenderStarterPackage())));
+
 router.post('/packages/validate', (req, res) => {
   const pkg = validateRequest(codeAnimationPackageSchema, req.body);
   res.json(summarizeCodeAnimationPackage(pkg));

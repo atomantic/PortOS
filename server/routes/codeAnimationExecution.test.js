@@ -69,12 +69,12 @@ describe('Code Animation execution capability', () => {
     const tool = await executableAt(join(dir, 'Blender.app', 'Contents', 'MacOS'));
     const { status, body } = await put(tool);
     expect(status).toBe(200);
-    expect(settings.current.codeAnimationExecution).toEqual({ blender: { executable: await realpath(tool) } });
+    expect(settings.current.codeAnimationExecution).toEqual({ blender: { executable: await realpath(tool), executionMode: 'contained', engine: 'CYCLES', acknowledgeHostAccess: false } });
     expect(body.tools.blender).toMatchObject({ executable: await realpath(tool), problem: null });
     expect(body.lanes.blender.ready).toBe(false);
 
     await put(null);
-    expect(settings.current.codeAnimationExecution).toEqual({ blender: { executable: null } });
+    expect(settings.current.codeAnimationExecution).toEqual({ blender: { executable: null, executionMode: 'contained', engine: 'CYCLES', acknowledgeHostAccess: false } });
   });
 
   it.skipIf(supported)('refuses the containment check where no enforced mechanism exists', async () => {
@@ -102,7 +102,7 @@ describe('Code Animation execution capability', () => {
     });
     expect(body.probe.passed).toBe(true);
     expect(body.probe.tools.blender).toMatchObject({ passed: false, version: null });
-    expect(body.lanes.blender).toEqual({ ready: false, reason: 'Blender did not render the supported test scene under containment.' });
+    expect(body.lanes.blender).toEqual({ ready: false, reason: 'Blender did not render the supported test scene in contained mode.' });
     // Every owned workspace was removed, including the terminated ones.
     expect(await readdir(join(PATHS.data, 'code-animation-workspaces'))).toEqual([]);
   }, 60_000);

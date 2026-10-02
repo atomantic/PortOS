@@ -407,6 +407,9 @@ export default function CmdKSearch() {
       const item = activeResult;
       if (item) dispatchCommand(item);
     } else if (e.key === 'Escape') {
+      // Consume it so an underlying Drawer's window-level Esc listener doesn't also close.
+      e.preventDefault();
+      e.stopPropagation();
       close();
     }
   };

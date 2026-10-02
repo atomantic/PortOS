@@ -6,9 +6,14 @@
  * door, that the run checkpoint survives the real store's read/write path, the
  * checkpoint → approve round trip over HTTP, and that the run never leaves
  * this install (peer-sync wire and clone).
+ *
+ * The route answers 202 while the workflow keeps running in the background, so
+ * every test settles it (`settle`) instead of polling on a wall clock, and
+ * `afterEach` owns whatever a test left running: it cancels the live runs,
+ * releases any held stage and settles before the shared doubles are cleared.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -35,13 +40,36 @@ const BRIEF = {
 };
 const startProduction = vi.fn(async () => ({ run: { id: 'mvpr-1' } }));
 
+const settle = () => service.__testing.settleBackground();
+const projectIds = [];
+let heldStage = null;
+const holdStage = () => {
+  heldStage = Promise.withResolvers();
+  return heldStage;
+};
+const begin = async (body) => {
+  const res = await request(app).post('/api/music-video/autonomous').send(body);
+  if (res.status === 202) projectIds.push(res.body.project.id);
+  return res;
+};
+
 beforeAll(() => sweepStrayTempRoots('mv-autonomous-route-test-'));
 afterAll(() => cleanupTempDataRoots());
+afterEach(async () => {
+  heldStage?.resolve();
+  heldStage = null;
+  // A run still live (or a failed assertion's leftovers) is canceled so nothing keeps advancing into the next test.
+  await Promise.allSettled(projectIds.splice(0).map((id) => service.cancelAutonomousVideo(id)));
+  await settle();
+});
 beforeEach(() => {
   startProduction.mockClear();
   service.__setAutonomousDepsForTests({
     draftCreativeBrief: async () => ({ brief: BRIEF }),
-    writeLyrics: async () => ({ lyrics: '[verse]\nrain on glass' }),
+    writeLyrics: async () => {
+      await heldStage?.promise;
+      return { lyrics: '[verse]\nrain on glass' };
+    },
     createMoodBoard: async () => ({ id: 'board-1' }),
     generateSunoSong: async (_fields, opts) => {
       await opts.onSubmitted(['song-a']);
@@ -68,13 +96,15 @@ describe('POST /api/music-video/autonomous', () => {
   });
 
   it('accepts a prompt, persists the run on the real project record and runs through to production', async () => {
-    const res = await request(app).post('/api/music-video/autonomous').send({ prompt: 'a courier crosses a rainy city', tools: ['image:local'] });
+    const res = await begin({ prompt: 'a courier crosses a rainy city', tools: ['image:local'] });
     expect(res.status).toBe(202);
     const id = res.body.project.id;
     expect(res.body.project).toMatchObject({ mode: 'autonomous', automation: { tools: ['image:local'] } });
 
-    await vi.waitFor(async () => expect((await get(id)).output.productionRunId).toBe('mvpr-1'));
+    await settle();
     const run = await get(id);
+    expect(run.output.productionRunId).toBe('mvpr-1');
+    expect(startProduction).toHaveBeenCalledTimes(1);
     expect(run).toMatchObject({ status: 'running', stage: 'produce', interrupted: false });
     expect(Object.values(run.stages).map((s) => s.status)).toEqual(['done', 'done', 'done', 'done', 'done', 'running']);
     const stored = await projects.getProject(id);
@@ -83,23 +113,26 @@ describe('POST /api/music-video/autonomous', () => {
   });
 
   it('parks at a checkpoint and continues over HTTP, applying the director’s lyric edit', async () => {
-    const res = await request(app).post('/api/music-video/autonomous').send({ prompt: 'p', checkpoints: ['lyrics'] });
+    const res = await begin({ prompt: 'p', checkpoints: ['lyrics'] });
     const id = res.body.project.id;
-    await vi.waitFor(async () => expect((await get(id)).status).toBe('awaiting-approval'));
+    await settle();
+    expect((await get(id)).status).toBe('awaiting-approval');
     expect(startProduction).not.toHaveBeenCalled();
 
     const bad = await request(app).post(`/api/music-video/${id}/autonomous/resume`).send({ lyrics: 5 });
     expect(bad.status).toBe(400);
     const ok = await request(app).post(`/api/music-video/${id}/autonomous/resume`).send({ lyrics: '[verse]\nedited' });
     expect(ok.status).toBe(200);
-    await vi.waitFor(async () => expect((await get(id)).output.lyrics).toBe('[verse]\nedited'));
-    await vi.waitFor(() => expect(startProduction).toHaveBeenCalled());
+    await settle();
+    expect((await get(id)).output.lyrics).toBe('[verse]\nedited');
+    expect(startProduction).toHaveBeenCalledTimes(1);
   });
 
   it('cancels a live run, and refuses to cancel or resume one that is finished or absent', async () => {
-    const res = await request(app).post('/api/music-video/autonomous').send({ prompt: 'p', checkpoints: ['lyrics'] });
+    const res = await begin({ prompt: 'p', checkpoints: ['lyrics'] });
     const id = res.body.project.id;
-    await vi.waitFor(async () => expect((await get(id)).status).toBe('awaiting-approval'));
+    await settle();
+    expect((await get(id)).status).toBe('awaiting-approval');
     expect((await request(app).post(`/api/music-video/${id}/autonomous/cancel`)).body.run.status).toBe('canceled');
     expect((await request(app).post(`/api/music-video/${id}/autonomous/cancel`)).status).toBe(409);
     expect((await request(app).post(`/api/music-video/${id}/autonomous/resume`)).status).toBe(409);
@@ -109,11 +142,44 @@ describe('POST /api/music-video/autonomous', () => {
   });
 });
 
+describe('background workflow ownership', () => {
+  it('a delayed stage is settled inside its own test, never into the next one', async () => {
+    const held = holdStage();
+    const res = await begin({ prompt: 'p' });
+    const id = res.body.project.id;
+    expect(res.status).toBe(202);
+
+    let settled = false;
+    const settling = settle().then(() => { settled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(startProduction).not.toHaveBeenCalled();
+
+    held.resolve();
+    await settling;
+    expect(startProduction).toHaveBeenCalledTimes(1);
+    expect((await get(id)).output.productionRunId).toBe('mvpr-1');
+  });
+
+  it('a canceled run releases its held stage before teardown', async () => {
+    const held = holdStage();
+    const res = await begin({ prompt: 'p' });
+    const id = res.body.project.id;
+    expect((await request(app).post(`/api/music-video/${id}/autonomous/cancel`)).body.run.status).toBe('canceled');
+
+    held.resolve();
+    await settle();
+    expect((await get(id)).status).toBe('canceled');
+    expect(startProduction).not.toHaveBeenCalled();
+  });
+});
+
 describe('the run stays on this install', () => {
   it('is stripped from the peer-sync wire and not carried into a clone', async () => {
-    const res = await request(app).post('/api/music-video/autonomous').send({ prompt: 'p', checkpoints: ['lyrics'] });
+    const res = await begin({ prompt: 'p', checkpoints: ['lyrics'] });
     const id = res.body.project.id;
-    await vi.waitFor(async () => expect((await get(id)).status).toBe('awaiting-approval'));
+    await settle();
+    expect((await get(id)).status).toBe('awaiting-approval');
     const stored = await projects.getProject(id);
     expect(stripMusicVideoLocalRenderPins(stored)).not.toHaveProperty('autonomousRun');
     const clone = await projects.cloneProject(id, {});

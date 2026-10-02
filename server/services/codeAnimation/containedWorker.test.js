@@ -1,8 +1,8 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { currentContainmentMechanism, runContainedWorker } from './containedWorker.js';
+import { currentContainmentMechanism, runContainedWorker, runTrustedLocalWorker } from './containedWorker.js';
 
 // Real-mechanism suite: these run only where the enforced sandbox exists. The
 // adversarial boundary and limit checks run end to end through the probe route
@@ -13,6 +13,7 @@ if (process.env.PORTOS_REQUIRE_LINUX_CONTAINMENT === '1' && mechanism.id !== 'li
   throw new Error(`Real Linux containment is required by this test job: ${mechanism.reason}`);
 }
 const roots = [];
+afterEach(() => vi.unstubAllEnvs());
 const workspaceRoot = async () => {
   const root = await mkdtemp(join(tmpdir(), 'portos-contained-worker-'));
   roots.push(root);
@@ -107,4 +108,41 @@ worker.on('error', () => process.exit(1));
     })).rejects.toMatchObject({ status: 400, code: 'CODE_ANIMATION_STAGE_PATH' });
     expect(await readdir(root)).toEqual([]);
   });
+});
+
+
+describe.skipIf(!['darwin', 'linux'].includes(process.platform))('explicit trusted-local worker supervision', () => {
+  it('scrubs credentials and kills the owned parent and child group on cancel', async () => {
+    vi.stubEnv('PORTOS_API_TOKEN', 'synthetic-worker-token');
+    const root = await workspaceRoot();
+    const controller = new AbortController();
+    // The source announces its child, then requests cancellation through an
+    // output marker observed by this test; no timing assumption about startup.
+    const pending = runTrustedLocalWorker({
+      tool: node(), workspaceRoot: root, entrypoint: 'main.cjs', signal: controller.signal,
+      files: [{ path: 'main.cjs', content: `
+const fs = require('fs');
+const child = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+console.log(JSON.stringify({ child: child.pid, token: !!process.env.PORTOS_API_TOKEN }));
+fs.writeFileSync(process.env.PORTOS_WORKER_OUTPUT + '/ready', 'ready');
+setInterval(() => {}, 1000);
+` }], limits: { wallSeconds: 15 },
+    });
+    let ready = false;
+    for (let attempt = 0; attempt < 150 && !ready; attempt += 1) {
+      for (const directory of await readdir(root)) {
+        ready ||= await readFile(join(root, directory, 'output', 'ready'), 'utf8').then(() => true, () => false);
+      }
+      if (!ready) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    controller.abort();
+    const result = await pending;
+    expect(ready).toBe(true);
+    expect(result).toMatchObject({ status: 'terminated', reason: 'canceled', contained: false, mechanism: 'trusted-local', processGroupClear: true });
+    const evidence = JSON.parse(result.stdout.trim());
+    expect(evidence.child).toBeGreaterThan(0);
+    expect(evidence.token).toBe(false);
+    expect(() => process.kill(evidence.child, 0)).toThrow();
+    expect(await readdir(root)).toEqual([]);
+  }, 20000);
 });

@@ -46,33 +46,17 @@ const writeSidecar = (filename, data) => {
 };
 const readSidecar = (filename) => JSON.parse(readFileSync(sidecarPath(filename), 'utf-8'));
 
-async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 5 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    // `await` so async predicates (e.g. getUniverse reads) resolve to a real
-    // boolean — a bare Promise is always truthy and would short-circuit. Sync
-    // boolean predicates pass through `await` unchanged.
-    //
-    // A throwing predicate counts as "not true yet", not as a failure: the
-    // sidecar predicates below read a file the hook has not written on the
-    // first poll, and letting that ENOENT escape aborted the wait on the very
-    // condition it exists to wait for. Reproduces only when the hook is slower
-    // than the first poll, i.e. under full-suite load.
-    try {
-      if (await predicate()) return;
-    } catch {
-      // fall through to the next poll
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  throw new Error('waitFor: predicate never became true');
-}
-
 describe('universeBuilderCollectionHook', () => {
   let updates;
   let recordListener;
+  let logSpy;
+  // Hook failures are swallowed by design (bookkeeping must never fail a
+  // render) and surface only as a ⚠️ log line — keep them so a missing
+  // persisted ref fails with the reason, not a bare assertion diff.
+  const hookWarnings = () => logSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('⚠️'));
 
   beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     indexedSidecars.length = 0;
     rmSync(tempData, { recursive: true, force: true });
     mkdirSync(tempData, { recursive: true });
@@ -90,9 +74,14 @@ describe('universeBuilderCollectionHook', () => {
     recordEvents.recordEvents.on('updated', recordListener);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Drain the hook's own async work before the shared tempData is wiped by
+    // the next beforeEach, so a still-running append/enrich can't write into
+    // (or recreate) the next test's fixture.
+    await hook.__testing.settled();
     recordEvents.recordEvents.off('updated', recordListener);
     hook.__testing.reset();
+    logSpy.mockRestore();
   });
 
   // tempData is minted once (module scope) and reused across every test in
@@ -139,8 +128,7 @@ describe('universeBuilderCollectionHook', () => {
 
     const forUniverse = () => updates.filter((u) => u.recordKind === 'universe' && u.recordId === universeId);
     const unsuppressed = () => forUniverse().filter((u) => !u.suppressed);
-    await waitFor(() => hook.__testing.getActiveRuns().size === 0 && unsuppressed().length >= 1);
-    await new Promise((r) => setTimeout(r, 50));
+    await hook.__testing.settled();
     expect(unsuppressed()).toHaveLength(1);
     expect(hook.__testing.getActiveRuns().size).toBe(0);
   });
@@ -156,8 +144,7 @@ describe('universeBuilderCollectionHook', () => {
 
     const forUniverse = () => updates.filter((u) => u.recordKind === 'universe' && u.recordId === universeId);
     const unsuppressed = () => forUniverse().filter((u) => !u.suppressed);
-    await waitFor(() => hook.__testing.getActiveRuns().size === 0 && unsuppressed().length >= 1);
-    await new Promise((r) => setTimeout(r, 50));
+    await hook.__testing.settled();
     expect(unsuppressed()).toHaveLength(1);
     expect(hook.__testing.getActiveRuns().size).toBe(0);
   });
@@ -175,7 +162,7 @@ describe('universeBuilderCollectionHook', () => {
     emitCompletion({ runId: 'r-partial', universeId, collectionId: c.id, filename: 'p.png' });
 
     const unsuppressed = () => updates.filter((u) => u.recordKind === 'universe' && u.recordId === universeId && !u.suppressed);
-    await waitFor(() => hook.__testing.getActiveRuns().size === 0 && unsuppressed().length >= 1);
+    await hook.__testing.settled();
     expect(unsuppressed()).toHaveLength(1);
   });
 
@@ -189,7 +176,7 @@ describe('universeBuilderCollectionHook', () => {
 
     const forUniverse = () => updates.filter((u) => u.recordKind === 'universe' && u.recordId === universeId);
     const unsuppressed = () => forUniverse().filter((u) => !u.suppressed);
-    await waitFor(() => unsuppressed().length >= 2);
+    await hook.__testing.settled();
     expect(unsuppressed()).toHaveLength(2);
   });
 
@@ -237,17 +224,14 @@ describe('universeBuilderCollectionHook', () => {
       },
     });
 
-    await waitFor(() => {
-      const sc = readSidecar(filename);
-      return sc.entryName === 'Ash';
-    });
+    await hook.__testing.settled();
     const sc = readSidecar(filename);
     expect(sc.universeId).toBe(seeded.id);
     expect(sc.universeName).toBe(universeName);
     expect(sc.universeRunId).toBe('r-canon');
     expect(sc.entryKind).toBe('canon');
     expect(sc.entryCategory).toBe('characters');
-    await waitFor(() => indexedSidecars.some(row => row.universeId === seeded.id && row.entryCategory === 'characters'));
+    expect(indexedSidecars.some(row => row.universeId === seeded.id && row.entryCategory === 'characters')).toBe(true);
     expect(sc.entryId).toBe(characterId);
     expect(sc.entryName).toBe('Ash');           // canonical name wins
     expect(sc.entryLabel).toBe('Ash — pyromancer cut'); // compiled label preserved
@@ -283,7 +267,7 @@ describe('universeBuilderCollectionHook', () => {
       },
     });
 
-    await waitFor(() => readSidecar(filename).entryKind === 'variation');
+    await hook.__testing.settled();
     const sc = readSidecar(filename);
     expect(sc.entryKind).toBe('variation');
     expect(sc.entryCategory).toBe('characters');
@@ -301,7 +285,7 @@ describe('universeBuilderCollectionHook', () => {
       params: {}, // no universeRun
     });
     // Give the hook a beat to (not) write anything.
-    await new Promise((r) => setTimeout(r, 50));
+    await hook.__testing.settled();
     const sc = readSidecar(filename);
     expect(sc).toEqual({ id: 'plain-render', prompt: 'just a sunset' });
     expect(sc.universeId).toBeUndefined();
@@ -323,9 +307,7 @@ describe('universeBuilderCollectionHook', () => {
       entryName: 'Original',
     });
 
-    // Pre-register the run so the drain-gate below can observe completion —
-    // a fixed 50ms sleep raced the IIFE finally under CI load (gh actions
-    // shared runners) even though the local run was always fast enough.
+    // Registered so the run-drain assertion below can observe completion.
     hook.registerUniverseBuilderRun({ runId: 'r-preserve', universeId: seeded.id, jobCount: 1 });
     mediaJobEvents.emit('completed', {
       kind: 'image',
@@ -341,7 +323,7 @@ describe('universeBuilderCollectionHook', () => {
         },
       },
     });
-    await waitFor(() => hook.__testing.getActiveRuns().size === 0);
+    await hook.__testing.settled();
     const sc = readSidecar(filename);
     // Existing values preserved.
     expect(sc.universeId).toBe('uni-existing');
@@ -378,13 +360,10 @@ describe('universeBuilderCollectionHook', () => {
         },
       });
     }
-    // Gate on the run draining (every IIFE reached its `finally` and
-    // decremented pending → 0), not on batch-4 alone — the 5 IIFEs run in
-    // parallel via `Promise.all` and can complete out of order under CPU or
-    // disk-I/O pressure, so the highest-index file landing first leaves the
-    // assertion racing a still-pending mid-index write. Mirrors the
-    // drain-gate used by the earlier tests in this file.
-    await waitFor(() => hook.__testing.getActiveRuns().size === 0);
+    // The 5 handlers run in parallel and can finish out of order, so wait for
+    // all of them to settle rather than for any one file to land.
+    await hook.__testing.settled();
+    expect(hook.__testing.getActiveRuns().size).toBe(0);
     for (let i = 0; i < 5; i += 1) {
       const sc = readSidecar(`batch-${i}.png`);
       expect(sc.entryName).toBe('Batchy');
@@ -418,17 +397,10 @@ describe('universeBuilderCollectionHook', () => {
       },
     });
 
-    // Untracked run, so synchronize on the observable side effects rather than
-    // activeRuns draining — which is already empty here. Wait on BOTH the
-    // collection add and the sidecar enrich: the hook performs them
-    // independently and in no guaranteed order, so gating on the sidecar alone
-    // let the collection assertion below run before the item had landed (green
-    // locally, red on the Windows CI runner).
-    await waitFor(async () => {
-      if (readSidecar(filename).universeName !== 'StyleVerse') return false;
-      const pending = await collections.getCollection(c.id);
-      return pending.items.some((it) => it.kind === 'image' && it.ref === filename);
-    });
+    // Untracked run (activeRuns is already empty), so settle the handler
+    // itself: it covers the collection add and the sidecar enrich, which run
+    // in parallel in no guaranteed order.
+    await hook.__testing.settled();
     expect(hook.__testing.getActiveRuns().size).toBe(0);
     const col = await collections.getCollection(c.id);
     expect(col.items.some((it) => it.kind === 'image' && it.ref === filename)).toBe(true);
@@ -471,12 +443,7 @@ describe('universeBuilderCollectionHook', () => {
       },
     });
 
-    await waitFor(async () => {
-      const u = await universeBuilder.getUniverse(seeded.id);
-      // Entry persistence and sidecar enrichment run independently in parallel.
-      return u?.characters?.[0]?.imageRefs?.includes(filename)
-        && indexedSidecars.some(row => row.entryId === characterId && row.id === 'section-local');
-    });
+    await hook.__testing.settled();
     const u = await universeBuilder.getUniverse(seeded.id);
     expect(u.characters[0].imageRefs).toEqual([filename]);
     // No collection was created or filed (the hook skipped addItem).
@@ -507,15 +474,14 @@ describe('universeBuilderCollectionHook', () => {
         },
       },
     });
+    const refs = async () => (await universeBuilder.getUniverse(seeded.id)).characters[0].imageRefs;
     emit();
-    await waitFor(async () => {
-      const u = await universeBuilder.getUniverse(seeded.id);
-      return u?.characters?.[0]?.imageRefs?.includes(filename);
-    });
+    await hook.__testing.settled();
+    // Diagnostic message: a swallowed append failure shows up as a ⚠️ line.
+    expect(await refs(), `first completion; hook warnings: ${hookWarnings().join(' | ') || 'none'}`).toEqual([filename]);
     emit(); // duplicate completion (e.g. a re-emit) must not double-stamp
-    await new Promise((r) => setTimeout(r, 50));
-    const u = await universeBuilder.getUniverse(seeded.id);
-    expect(u.characters[0].imageRefs).toEqual([filename]);
+    await hook.__testing.settled();
+    expect(await refs(), `duplicate completion; hook warnings: ${hookWarnings().join(' | ') || 'none'}`).toEqual([filename]);
   });
 
   it('ignores a universeRun tag with neither collectionId nor an entryRef append', async () => {
@@ -527,7 +493,7 @@ describe('universeBuilderCollectionHook', () => {
       // universeId present but no collectionId AND no entryRef → nothing to do.
       params: { universeRun: { universeId: 'uni-noop', category: 'style' } },
     });
-    await new Promise((r) => setTimeout(r, 50));
+    await hook.__testing.settled();
     // Sidecar untouched — the hook bailed before enrich.
     expect(readSidecar(filename)).toEqual({ id: 'noop', prompt: 'just pixels' });
   });

@@ -32,9 +32,9 @@ describe('Blender render readiness (synthetic worker evidence, not real Blender 
     expect(result).toMatchObject({ passed: true, version: '4.2.0', render: { ...report, imageSha256: expect.stringMatching(/^[a-f0-9]{64}$/) }, durationMs: 12 });
     const options = worker.mock.calls[0][0];
     expect(options).toMatchObject({ entrypoint: 'probe.py', workspaceRoot: '/example/workspaces', signal: controller.signal });
-    expect(options.tool.argv('/example/probe.py')).toEqual(['--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1', '--python', '/example/probe.py']);
+    expect(options.tool.argv('/example/probe.py')).toEqual(['--background', '--factory-startup', '--disable-autoexec', '--threads', '2', '--python-exit-code', '1', '--python', '/example/probe.py']);
     expect(options.files[0].content).toContain('bpy.ops.render.render(write_still=True)');
-    expect(result.detail).toContain('production-sequence acceptance remain unverified');
+    expect(result.detail).toContain('production-sequence acceptance remains separate');
   });
 
   // These uniquely guard the native-renderer/API boundary: a successful exit
