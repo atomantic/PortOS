@@ -993,6 +993,16 @@ describe('MusicVideo restricted-model license gate', () => {
 });
 
 describe('MusicVideo project versions', () => {
+  it('forks for video generation without rendering or modifying the source', async () => {
+    cloneMusicVideoProject.mockResolvedValue({ ...PROJECT_WITH_CLIP, id: 'mv-footage', name: 'Footage Variant', version: 2, composition: { mode: 'composed' } });
+    await openProject({ ...PROJECT_WITH_CLIP, composition: { mode: 'document' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Fork for video generation' }));
+    await waitFor(() => expect(cloneMusicVideoProject).toHaveBeenCalledWith('mv-1', { variant: 'video-generation' }, { silent: true }));
+    await screen.findByRole('heading', { level: 2, name: 'Footage Variant' });
+    expect(renderMusicVideoProject).not.toHaveBeenCalled();
+    expect(updateMusicVideoProject).not.toHaveBeenCalled();
+  });
+
   it('forks the open project and navigates to the editable next version', async () => {
     cloneMusicVideoProject.mockResolvedValue({
       ...PROJECT_WITH_CLIP,

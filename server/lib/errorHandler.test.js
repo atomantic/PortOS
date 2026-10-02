@@ -138,6 +138,15 @@ describe('errorHandler.js', () => {
       expect(normalized.originalMessage).toContain('/private/install/data/example.json');
     });
 
+    it('maps a raw ZodError to a 400 VALIDATION_ERROR', async () => {
+      const { z } = await import('zod');
+      const parsed = z.object({ a: z.string() }).safeParse({});
+      const normalized = normalizeError(parsed.error);
+      expect(normalized.status).toBe(400);
+      expect(normalized.code).toBe('VALIDATION_ERROR');
+      expect(normalized.context.details[0].path).toBe('a');
+    });
+
     it('should convert string to ServerError', () => {
       const normalized = normalizeError('String error');
       expect(normalized instanceof ServerError).toBe(true);

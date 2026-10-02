@@ -18,7 +18,7 @@ import { dirname, join } from 'path';
 import { atomicWrite, listDirectoryByExtension } from '../../lib/fileUtils.js';
 import { isGitStageableFilePath } from '../../lib/gitArgs.js';
 import { isPathInsideDir, isSafeFilename, isTopLevelEntryName } from '../../lib/pathSafety.js';
-import { documentUpdateSchema } from '../../lib/validation.js';
+import { documentUpdateSchema, validateRequest } from '../../lib/validation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import * as git from '../../services/git.js';
 import { loadApp, pathExists } from './shared.js';
@@ -190,7 +190,7 @@ router.put('/:id/documents/*docPath', loadApp, asyncHandler(async (req, res) => 
     });
   }
 
-  const { content, commitMessage } = documentUpdateSchema.parse(req.body);
+  const { content, commitMessage } = validateRequest(documentUpdateSchema, req.body);
   const created = !await pathExists(resolved);
 
   await atomicWrite(resolved, content);

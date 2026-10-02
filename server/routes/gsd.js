@@ -12,7 +12,7 @@ import { readFile } from 'fs/promises'
 import { join, resolve } from 'path'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { atomicWrite } from '../lib/fileUtils.js'
-import { documentUpdateSchema } from '../lib/validation.js'
+import { documentUpdateSchema, validateRequest } from '../lib/validation.js'
 import * as gsdService from '../services/gsdService.js'
 import { addTask } from '../services/cos.js'
 import { getActiveApps } from '../services/apps.js'
@@ -102,7 +102,7 @@ router.get('/projects/:appId/phases/:phaseId', asyncHandler(async (req, res) => 
 
 // POST /projects/:appId/concerns/tasks — create CoS tasks from selected concerns
 router.post('/projects/:appId/concerns/tasks', asyncHandler(async (req, res) => {
-  const body = concernIdsSchema.parse(req.body)
+  const body = validateRequest(concernIdsSchema, req.body)
   const allTasks = await gsdService.generateConcernTasks(req.params.appId)
 
   if (allTasks.length === 0) {
@@ -125,7 +125,7 @@ router.post('/projects/:appId/concerns/tasks', asyncHandler(async (req, res) => 
 
 // POST /projects/:appId/phases/:phaseId/action — trigger plan/execute/verify as CoS task
 router.post('/projects/:appId/phases/:phaseId/action', asyncHandler(async (req, res) => {
-  const { action } = phaseActionSchema.parse(req.body)
+  const { action } = validateRequest(phaseActionSchema, req.body)
   const { appId, phaseId } = req.params
 
   const project = await gsdService.getGsdProject(appId)
@@ -194,7 +194,7 @@ router.put('/projects/:appId/documents/:docName', asyncHandler(async (req, res) 
     throw new ServerError('Invalid document path', { status: 400, code: 'PATH_TRAVERSAL' })
   }
 
-  const { content, commitMessage } = documentUpdateSchema.parse(req.body)
+  const { content, commitMessage } = validateRequest(documentUpdateSchema, req.body)
   const created = !existsSync(resolved)
 
   await atomicWrite(resolved, content)
