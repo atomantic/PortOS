@@ -5,6 +5,7 @@
  * is accepted only once it stops growing, and a retry reuses submitted songs.
  */
 
+import { EventEmitter } from 'node:events';
 import { describe, it, expect, vi } from 'vitest';
 import { __testing, generateSunoSong } from './autonomousSuno.js';
 
@@ -16,8 +17,9 @@ const NEW_B = '33333333-3333-3333-3333-333333333333';
 const noSleep = async () => {};
 
 /** A just-enough Playwright page: tracks fills/clicks and exposes song links that appear after Create. */
-function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, newTitleMatches = true, afterCreate = [NEW_A, NEW_B] } = {}) {
+function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, newTitleMatches = true, afterCreate = [NEW_A, NEW_B], onCreate, refusalSignals = { inspected: true, captcha: false, credits: false, signIn: false, contentPolicy: false } } = {}) {
   const fills = {};
+  const events = new EventEmitter();
   let created = false;
   const locator = (selector) => {
     const handle = {
@@ -31,15 +33,18 @@ function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = tr
   const button = (role, options) => ({
     count: async () => role === 'textbox' || role === 'tab' ? (modern ? 1 : 0) : /instrumental|custom/.test(String(options.name)) ? (modern ? 0 : 1) : 1,
     first: () => ({ click: async () => {}, fill: async v => { fills[options.name] = v; } }),
-    last: () => ({ click: async () => { created = true; } }),
+    last: () => ({ click: async () => { created = true; onCreate?.(events); } }),
   });
   return {
     fills,
+    on: events.on.bind(events),
+    off: events.off.bind(events),
+    listenerCount: events.listenerCount.bind(events),
     goto: vi.fn(async () => {}),
     url: () => url,
     locator,
     getByRole: button,
-    evaluate: async (_fn, title) => [
+    evaluate: async (_fn, title) => title === undefined ? refusalSignals : [
       ...(title === null ? [`/song/${OLD}`] : []),
       ...(created && (title === null || newTitleMatches) ? afterCreate.map((id) => `/song/${id}`) : []),
     ],
@@ -54,6 +59,7 @@ describe('submitSunoSong', () => {
     const page = fakePage();
     const ids = await submitSunoSong(page, fields, { sleep: noSleep });
     expect(ids).toEqual([NEW_A, NEW_B]);
+    expect(page.listenerCount('request')).toBe(0);
     expect(page.fills['[role="textbox"][aria-label="Lyrics editor"],textarea[placeholder*="lyrics" i]']).toBe('[verse]\nrain');
     expect(page.fills['textarea:not([aria-label]):not([placeholder="Describe the sound you want"])']).toBe('synthwave');
     expect(page.fills['input[placeholder*="title" i]:visible']).toBe('Neon Rain');
@@ -70,6 +76,41 @@ describe('submitSunoSong', () => {
     await expect(submitSunoSong(fakePage({ newTitleMatches: false }), fields, {
       sleep: noSleep, now: () => (time += 30_000),
     })).rejects.toMatchObject({ code: 'SUNO_NO_SONG' });
+  });
+
+  it('distinguishes a click with no observed POST without inventing a refusal', async () => {
+    let time = 0;
+    const page = fakePage({ afterCreate: [] });
+    await expect(submitSunoSong(page, fields, { sleep: noSleep, now: () => (time += 30_000) }))
+      .rejects.toMatchObject({ code: 'SUNO_NO_SONG', context: {
+        network: { observedPosts: 0, httpStatuses: [], failedPosts: 0, pendingPosts: 0, truncated: false },
+        refusalSignals: { inspected: true, captcha: false, credits: false, signIn: false, contentPolicy: false },
+      } });
+    expect(page.listenerCount('request')).toBe(0);
+    expect(page.listenerCount('response')).toBe(0);
+    expect(page.listenerCount('requestfailed')).toBe(0);
+  });
+
+  it('reports bounded HTTP/failure evidence without private URLs or response bodies', async () => {
+    let time = 0;
+    const request = (url) => ({ method: () => 'POST', resourceType: () => 'fetch', url: () => url });
+    const page = fakePage({ afterCreate: [], refusalSignals: { inspected: true, credits: true }, onCreate: (events) => {
+      events.emit('request', request('https://suno.com.attacker.example/api?token=private-token'));
+      const rejected = request('https://studio-api.prod.suno.com/api/generate/?token=private-token');
+      events.emit('request', rejected);
+      events.emit('response', { request: () => rejected, status: () => 403, text: () => 'private-body' });
+      const failed = request('https://studio-api.prod.suno.com/private-account');
+      events.emit('request', failed);
+      events.emit('requestfailed', failed);
+      for (let i = 0; i < 20; i += 1) events.emit('request', request('https://suno.com/api'));
+    } });
+    const error = await submitSunoSong(page, fields, { sleep: noSleep, now: () => (time += 30_000) }).catch((err) => err);
+    expect(error).toMatchObject({ code: 'SUNO_NO_SONG', context: {
+      network: { observedPosts: 16, httpStatuses: [403], failedPosts: 1, pendingPosts: 14, truncated: true },
+      refusalSignals: { inspected: true, credits: true },
+    } });
+    expect(JSON.stringify({ message: error.message, context: error.context })).not.toMatch(/private-|studio-api|attacker/);
+    expect(page.listenerCount('request')).toBe(0);
   });
 
   it('keeps the older Custom form compatible', async () => {

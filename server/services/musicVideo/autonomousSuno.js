@@ -44,6 +44,64 @@ const songLinks = (page, title = null) => page.evaluate((wantedTitle) => [...doc
   .filter((a) => wantedTitle === null || a.textContent.trim() === wantedTitle)
   .map((a) => a.getAttribute('href')), title);
 
+// Observe only this click's bounded network metadata. A Suno POST may be
+// analytics rather than generation: neither its presence nor a 2xx proves
+// acceptance. Never export URLs, headers, bodies, request errors or account data.
+function observeSunoPosts(page) {
+  const posts = new Map();
+  let truncated = false;
+  const request = (req) => {
+    if (req.method() !== 'POST' || !['xhr', 'fetch'].includes(req.resourceType())) return;
+    const host = new URL(req.url()).hostname;
+    if (!['suno.com', 'suno.ai'].some((domain) => host === domain || host.endsWith(`.${domain}`))) return;
+    if (posts.size >= 16) { truncated = true; return; }
+    posts.set(req, { status: null, failed: false });
+  };
+  const response = (res) => {
+    const post = posts.get(res.request());
+    if (post) post.status = res.status();
+  };
+  const failed = (req) => {
+    const post = posts.get(req);
+    if (post) post.failed = true;
+  };
+  page.on('request', request);
+  page.on('response', response);
+  page.on('requestfailed', failed);
+  return {
+    snapshot: () => ({
+      scope: 'suno-fetch-posts',
+      observedPosts: posts.size,
+      httpStatuses: [...new Set([...posts.values()].map((post) => post.status).filter((status) => status !== null))].sort((a, b) => a - b),
+      failedPosts: [...posts.values()].filter((post) => post.failed).length,
+      pendingPosts: [...posts.values()].filter((post) => post.status === null && !post.failed).length,
+      truncated,
+    }),
+    stop: () => {
+      page.off('request', request);
+      page.off('response', response);
+      page.off('requestfailed', failed);
+      posts.clear();
+    },
+  };
+}
+
+async function sunoRefusalSignals(page) {
+  return page.evaluate(() => {
+    const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+    const text = [...document.querySelectorAll('[role="dialog"],[role="alert"]')]
+      .filter(visible).map((el) => el.textContent.toLowerCase()).join(' ');
+    // Return fixed signal names only, never the page's private text.
+    return {
+      inspected: true,
+      captcha: [...document.querySelectorAll('iframe[src*="captcha"],iframe[src*="challenge"]')].some(visible),
+      credits: /not enough credits|insufficient credits|out of credits/.test(text),
+      signIn: /sign in|log in/.test(text),
+      contentPolicy: /content policy|moderation|copyright/.test(text),
+    };
+  }).catch(() => ({ inspected: false }));
+}
+
 /**
  * Fill Suno's custom-song form and press Create. Returns the ids of the songs
  * that appeared (Suno makes two takes per request) — the links present before
@@ -92,20 +150,32 @@ async function submitSunoSong(page, fields, { sleep = defaultSleep, now = Date.n
   }
 
   const before = new Set(sunoSongIdsFromHrefs(await songLinks(page)));
-  await step(LABEL, 'press Create', async () => {
-    await page.getByRole('button', { name: /^create( song)?$/i }).last().click({ timeout: T });
-  });
+  const observer = observeSunoPosts(page);
+  try {
+    await step(LABEL, 'press Create', async () => {
+      await page.getByRole('button', { name: /^create( song)?$/i }).last().click({ timeout: T });
+    });
 
-  // New rows land at the top of the workspace list once Suno accepts the request.
-  const deadline = now() + 90_000;
-  while (now() < deadline) {
-    await sleep(3000);
-    const fresh = sunoSongIdsFromHrefs(await songLinks(page, fields.title)).filter((id) => !before.has(id));
-    if (fresh.length) return fresh;
+    // New rows land at the top of the workspace list once Suno accepts the request.
+    const deadline = now() + 90_000;
+    while (now() < deadline) {
+      await sleep(3000);
+      const fresh = sunoSongIdsFromHrefs(await songLinks(page, fields.title)).filter((id) => !before.has(id));
+      if (fresh.length) return fresh;
+    }
+    const network = observer.snapshot();
+    const refusalSignals = await sunoRefusalSignals(page);
+    const observed = network.observedPosts
+      ? `${network.observedPosts} Suno POST request(s) observed; HTTP statuses: ${network.httpStatuses.join(', ') || 'none'}`
+      : 'no Suno POST request observed';
+    const signals = ['captcha', 'credits', 'signIn', 'contentPolicy'].filter((key) => refusalSignals[key]);
+    const ui = refusalSignals.inspected ? `visible refusal signals: ${signals.join(', ') || 'none'}` : 'refusal inspection unavailable';
+    throw new ServerError(`Suno: no matching song appeared after pressing Create (${observed}; failed: ${network.failedPosts}; pending: ${network.pendingPosts}${network.truncated ? '; sample capped' : ''}; ${ui}). Request metadata does not prove generation acceptance.`, {
+      status: 502, code: 'SUNO_NO_SONG', context: { platform: LABEL, network, refusalSignals },
+    });
+  } finally {
+    observer.stop();
   }
-  throw new ServerError('Suno: no matching song appeared after pressing Create — check the PortOS Browser for a credits, captcha or content-policy prompt', {
-    status: 502, code: 'SUNO_NO_SONG', context: { platform: LABEL },
-  });
 }
 
 /**
