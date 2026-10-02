@@ -1,3 +1,4 @@
+vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSceneReview: vi.fn(async () => {}) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -245,6 +246,19 @@ afterAll(async () => {
 });
 
 describe('mediaJobQueue', () => {
+  it('rejects an unreviewed music-video scene before queue admission and rechecks delayed dispatch', async () => {
+    const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
+    const request = { kind: 'video', params: { prompt: 'Synthetic scene', musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' } } };
+    assertMusicVideoSceneReview.mockRejectedValueOnce(new Error('Storyboard approval required'));
+    await expect(mediaJobQueue.enqueueJob(request)).rejects.toThrow('Storyboard approval required');
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    assertMusicVideoSceneReview.mockResolvedValueOnce().mockRejectedValueOnce(new Error('Proof changed while queued'));
+    const { jobId } = await mediaJobQueue.enqueueJob(request);
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(jobId).error).toContain('Proof changed while queued');
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+  });
+
   it('invalidates snapshots after enqueue and cancellation so idle clients see changes', async () => {
     const changed = vi.fn();
     mediaJobQueue.mediaJobEvents.on('changed', changed);

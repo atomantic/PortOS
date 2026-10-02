@@ -3,6 +3,7 @@ import {
   MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, resolvePreviewSource, resolveStageParam,
 } from './musicVideoStages.js';
 
+const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
 const ANALYSIS = { bpm: 120, durationSec: 30, sections: [] };
 const scene = (over = {}) => ({ sceneId: 's1', order: 0, prompt: 'a', referenceImageId: 'img', videoHistoryId: 'vid', ...over });
 const run = (over = {}) => ({
@@ -28,7 +29,7 @@ describe('deriveStages / deriveNextAction', () => {
     const waiting = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, automation: {}, castAndSets: { status: 'review' }, scenes: [] };
     expect(deriveStages(waiting).current).toBe('cast-sets');
     expect(stateOf(waiting)).toMatchObject({ setup: 'done', 'cast-sets': 'active', board: 'todo' });
-    expect(deriveNextAction(waiting)).toMatchObject({ id: 'approve-cast-sets', kind: 'run' });
+    expect(deriveNextAction(waiting)).toMatchObject({ id: 'review-production', kind: 'goto', stage: 'cast-sets' });
 
     const interrupted = { ...waiting, castAndSets: { status: 'imaging', interrupted: true } };
     expect(stateOf(interrupted)['cast-sets']).toBe('blocked');
@@ -54,7 +55,7 @@ describe('deriveStages / deriveNextAction', () => {
   });
 
   it('walks Board → Produce → Compose → Review, then reports a finished project', () => {
-    const planned = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
+    const planned = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
     expect(deriveStages(planned).current).toBe('produce');
     expect(deriveNextAction(planned)).toMatchObject({ id: 'goto-produce', kind: 'goto', stage: 'produce' });
 
@@ -78,7 +79,7 @@ describe('deriveStages / deriveNextAction', () => {
   });
 
   it('does not require scene footage for code-rendered or document projects', () => {
-    const bare = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
+    const bare = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
     expect(stateOf({ ...bare, composition: { mode: 'code' } }).produce).toBe('done');
     const doc = { ...bare, composition: { mode: 'document' } };
     expect(deriveStages(doc).current).toBe('compose');
@@ -86,9 +87,17 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages({ ...doc, composition: { mode: 'document', document: { directory: 'd' } } }).current).toBe('review');
   });
 
-  it('treats the check-in as not applicable to a hands-on project', () => {
-    expect(stateOf({ id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [] })['cast-sets']).toBe('done');
+  it('requires art review for hands-on projects too', () => {
+    expect(stateOf({ id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [] })['cast-sets']).toBe('active');
   });
+});
+
+it('never promotes placeholder scenes or imported schematic documents to final production', () => {
+  const project = { id: 'example', trackId: 'song', audioAnalysis: ANALYSIS, scenes: [scene()], composition: { mode: 'document', document: { directory: 'draft' } } };
+  expect(stateOf(project)).toMatchObject({ 'cast-sets': 'active', board: 'todo', produce: 'todo', compose: 'todo' });
+  expect(deriveNextAction(project)).toMatchObject({ id: 'review-production', stage: 'cast-sets' });
+  const planned = { ...project, productionReadiness: { ...APPROVED, proof: { approved: false }, readyForProduction: false } };
+  expect(deriveNextAction(planned)).toMatchObject({ id: 'review-production', stage: 'review' });
 });
 
 describe('projectSpend', () => {

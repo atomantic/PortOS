@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Send, ExternalLink, X as XIcon, LogIn, Link as LinkIcon } from 'lucide-react';
+import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon } from 'lucide-react';
 
 // Where the release goes, in posting order: the full video first so every
 // other post can link to it.
@@ -125,6 +125,7 @@ function TargetRow({ project, kit, entry, publishing }) {
   const { target, label, note } = entry;
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
   const [options, setOptions] = useState({});
+  const [password, setPassword] = useState('');
   const setOption = (key, value) => setOptions((prev) => ({ ...prev, [key]: value }));
   const draft = publishing.drafts[target];
   const busy = publishing.busy[target];
@@ -136,6 +137,10 @@ function TargetRow({ project, kit, entry, publishing }) {
 
   return (
     <li className="rounded border border-port-border p-2 space-y-2">
+      <p className="text-xs text-port-text-muted">Preparing a draft may upload files and save platform metadata. This is separate from production and never publishes.</p>
+      <label htmlFor={idFor('password')} className="block text-xs">Instance password to prepare {label}
+        <input id={idFor('password')} type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} className={inputCls} />
+      </label>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as @{account}</span>}</div>
@@ -146,7 +151,7 @@ function TargetRow({ project, kit, entry, publishing }) {
             </a>
           )}
         </div>
-        <button type="button" onClick={() => publishing.prepare(target, clean)} disabled={!!busy}
+        <button type="button" onClick={() => { publishing.prepare(target, { ...clean, password }); setPassword(''); }} disabled={!!busy || !password}
           className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
           {busy === 'prepare' ? 'Filling…' : (draft ? 'Fill again' : 'Fill draft')}
         </button>
@@ -170,10 +175,7 @@ function TargetRow({ project, kit, entry, publishing }) {
             ))}
           </dl>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => publishing.submit(target)} disabled={!!busy}
-              className="flex items-center gap-1 bg-port-accent text-white disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
-              <Send size={13} /> {busy === 'submit' ? 'Posting…' : `Post to ${label}`}
-            </button>
+            <p className="text-sm">Review and publish yourself in the destination platform's open browser tab. PortOS cannot submit this draft. Record the resulting link below.</p>
             <button type="button" onClick={() => publishing.discard(target)} disabled={!!busy}
               className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
               <XIcon size={13} /> Discard
@@ -188,8 +190,7 @@ function TargetRow({ project, kit, entry, publishing }) {
 /**
  * Posting (#9282): each platform's post is filled in the PortOS Browser (in
  * a new tab, with the director's signed-in sessions) and shown back here as
- * a screenshot and summary. Nothing is posted until the director presses
- * Post for that draft.
+ * a screenshot and summary. Publication is performed manually on the platform.
  */
 export default function PublishPostingPanel({ project, publishing }) {
   const kit = project?.publishKit || {};
@@ -198,9 +199,9 @@ export default function PublishPostingPanel({ project, publishing }) {
   const targets = PUBLISH_TARGETS.filter((entry) => publishing.enabledTargets?.includes(entry.target));
   return (
     <section aria-label="Post the release" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
-      <h3 className="text-sm font-medium flex items-center gap-1.5"><Send size={14} /> Post the release</h3>
-      <p className="text-port-text-muted">Sign in to each platform in the PortOS Browser first. Fill draft opens a new tab there and fills the post from the kit and copy above; nothing is posted until you review it and press Post.</p>
-      {!targets.length && <p className="text-port-text-muted">Turn on the platforms you use under Where you post to fill and post drafts here.</p>}
+      <h3 className="text-sm font-medium flex items-center gap-1.5"><ExternalLink size={14} /> Publish manually</h3>
+      <p className="text-port-text-muted">Sign in to each platform in the PortOS Browser first. Fill draft opens a new tab there and fills the post from the kit and copy above; review and publish yourself on the platform. PortOS cannot submit posts.</p>
+      {!targets.length && <p className="text-port-text-muted">Turn on the platforms you use under Where you post to prepare drafts. Final publication happens on each platform.</p>}
       <ul className="space-y-2">
         {targets.map((entry) => <TargetRow key={`${project.id}-${entry.target}`} project={project} kit={kit} entry={entry} publishing={publishing} />)}
       </ul>

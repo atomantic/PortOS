@@ -1,3 +1,5 @@
+import ProductionReviewPanel from '../components/musicVideo/ProductionReviewPanel.jsx';
+import useMusicVideoProductionReview from '../hooks/useMusicVideoProductionReview.js';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film, Copy, Trash2, Wand2 } from 'lucide-react';
@@ -143,13 +145,15 @@ export default function MusicVideo() {
   // unknown one) the tab is the stage the project was in when it was opened,
   // pinned so a stage completing mid-session doesn't move the user off the tab
   // they are working in — the header's next action tracks the project instead.
-  const progress = useMemo(() => deriveStages(selected), [selected]);
+  const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+  const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
+  const progress = useMemo(() => deriveStages(selected, productionReview.readiness), [selected, productionReview.readiness]);
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
   if (selected && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
   const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
   const activeStage = resolveStageParam(routeStage) || pinnedStage || progress.current;
 
-  const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+
   // Functional merges keyed on the captured projectId/sceneId so an async result
   // that resolves after the user edited the board can't clobber those edits with
   // a stale project snapshot. `patch` may be a function of the current record
@@ -761,6 +765,7 @@ export default function MusicVideo() {
   const audioFilename = projectAudioFilename(selected);
   const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
   const nextAction = selected ? deriveNextAction(selected, {
+    readiness: productionReview.readiness,
     renderActive: renderTargetsSelected,
     renderProgress: renderJob.progress,
     renderPending: renderJob.pending,
@@ -791,6 +796,7 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
+    productionReadiness: productionReview.readiness,
     locked: creativeSetupPending || styleReferencesPending || compositionSavePending > 0,
     busy: { analyzing, planning, arranging, cloning },
     tracks,
@@ -1082,6 +1088,7 @@ export default function MusicVideo() {
           >
             <div className="space-y-3 min-w-0">
               <AutonomousRunPanel key={`autonomous-${selected.id}`} project={selected} auto={autonomous} selectedStage={runStage} onSelectStage={setRunStage} />
+              <ProductionReviewPanel key={`production-review-${selected.id}`} project={selected} review={productionReview} onOpenArtifact={openArtifact} />
               <StageView key={selected.id} board={board} />
             </div>
           </MusicVideoLayout>

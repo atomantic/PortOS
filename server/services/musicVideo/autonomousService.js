@@ -1,3 +1,5 @@
+import { prepareProductionReview, renderProductionProof } from './productionReviewService.js';
+import { assertProductionApproval, productionReadiness, productionProofNeedsRender, productionProofWindow } from './productionReview.js';
 /**
  * Fully-autonomous Music Video — the run orchestrator.
  *
@@ -257,12 +259,23 @@ const STAGES = {
 
   async produce({ project, run }) {
     const medium = autonomousMedium(run.brief.tools);
-    if (medium === 'code') {
+    if (medium === 'code' && !['code', 'document'].includes(project.composition?.mode)) {
       await deps.updateProject(project.id, { composition: { mode: 'code' } });
+    }
+    await prepareProductionReview(project.id);
+    project = await getProject(project.id);
+    assertProductionApproval(project, 'storyboard');
+    if (medium === 'code') {
       const authoring = run.brief.authoring || (run.brief.llm ? { providerId: run.brief.llm.providerId, model: run.brief.llm.model, effort: run.brief.llm.effort } : {});
-      await deps.generateCode(project.id, {
+      if (project.composition?.mode === 'code' && !project.composition?.codeVideo?.sections?.length) await deps.generateCode(project.id, {
         providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}),
       });
+      project = await getProject(project.id);
+      const readiness = productionReadiness(project);
+      if (productionProofNeedsRender(project, readiness.basis.proof)) {
+        await renderProductionProof(project.id, productionProofWindow(project));
+      }
+      assertProductionApproval(await getProject(project.id));
       const render = await deps.renderVideo(project.id);
       return { output: { renderJobId: render?.jobId || null } };
     }
@@ -311,7 +324,7 @@ async function advance(projectId) {
         const latest = projectAutonomousRun(await getProject(projectId));
         if (latest?.status !== 'running' || latest.processId !== PROCESS_ID) return;
         await patchRun(projectId, (r) => stagePatch(r, stage, { status: 'failed', error: trimTo(err.message, 500), step: null }));
-        await park(projectId, isLoginRequired(err) ? 'needs-human' : 'failed', { error: trimTo(err.message, 500), errorCode: err.code || null });
+        await park(projectId, isLoginRequired(err) || err.code === 'MUSIC_VIDEO_APPROVAL_REQUIRED' ? 'needs-human' : 'failed', { error: trimTo(err.message, 500), errorCode: err.code || null });
         return;
       }
       const finishedAt = new Date().toISOString();

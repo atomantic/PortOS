@@ -80,7 +80,7 @@ const composeDone = (project, mode) => {
  * `todo` — plus `current`, the first stage that is not done. A live production
  * run owns the project, so it pins `current` to Produce.
  */
-export function deriveStages(project) {
+export function deriveStages(project, readiness = project?.productionReadiness) {
   const scenes = project?.scenes || [];
   const mode = project?.composition?.mode || 'concat';
   const cast = project?.castAndSets || null;
@@ -89,18 +89,17 @@ export function deriveStages(project) {
   const layered = isLayeredComposition(project);
   // Code and document renders draw the picture themselves; scene footage is optional there.
   const footageOptional = mode === 'code' || mode === 'document';
-  const planned = scenes.length > 0;
-  const castApplies = !!cast || !!project?.automation;
+  const planned = !!readiness?.storyboard.approved;
   const castStopped = !!cast && (cast.interrupted || cast.status === 'failed');
-  const castDone = !castApplies || cast?.status === 'approved' || cast?.status === 'skipped' || (!cast && planned);
+  const castDone = !!readiness?.art.approved;
   const produceDone = planned && (footageOptional || scenes.every((scene) => sceneRenderReady(scene, { layered })));
 
   const done = {
     setup: projectHasAudio(project) && !!project?.audioAnalysis,
     'cast-sets': castDone,
     board: planned,
-    produce: produceDone,
-    compose: composeDone(project || {}, mode),
+    produce: produceDone && !!readiness?.proof.approved,
+    compose: !!readiness?.proof.approved && composeDone(project || {}, mode),
     review: !!project?.renderHistoryId,
     // #9281/#9282: a release is published once any platform post is recorded.
     publish: Object.keys(project?.publishKit?.posts || {}).length > 0,
@@ -131,14 +130,18 @@ export function deriveStages(project) {
 export function deriveNextAction(project, {
   renderActive = false, renderProgress = 0, renderPending = false, renderBlockedByOther = false,
   kickoffRunning = false, kickoffStep = '', kickoffBlockedReason = null,
-  planning = false, analyzing = false,
+  planning = false, analyzing = false, readiness = project?.productionReadiness,
 } = {}) {
   if (!project) return null;
-  const { current } = deriveStages(project);
+  const { current } = deriveStages(project, readiness);
   const run = currentProductionRun(project);
   const cast = project.castAndSets || null;
   const scenes = project.scenes || [];
 
+  if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && run?.status !== 'running' && !renderActive && !kickoffRunning) {
+    return { id: 'review-production', kind: 'goto', stage: !readiness?.art.approved ? 'cast-sets' : !readiness?.storyboard.approved ? 'board' : 'review',
+      anchor: 'mv-production-review', label: !readiness?.art.approved ? 'Review art direction' : !readiness?.storyboard.approved ? 'Review timed storyboard' : 'Review animated proof' };
+  }
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
     if (run.status === 'running' && !run.interrupted) return { id: 'stop-production', kind: 'run', label: 'Stop production', runId: run.id };
     return {

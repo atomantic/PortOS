@@ -21,7 +21,7 @@ export default function ReviewStage({ board }) {
       <section id="mv-final-video" aria-label="Final render" className="rounded-lg border border-port-border bg-port-card p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-medium">Final render</h3>
-          <RenderFinalButton project={project} renderJob={renderJob} />
+          <RenderFinalButton project={project} renderJob={renderJob} readiness={board.productionReadiness} />
         </div>
         <RenderStatusPanel
           rendering={renderBound}

@@ -288,3 +288,5 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | `useGraphNodeDetail` | Selection-keyed graph record loading with render-time identity gating and late-response disposal. | Brain and CoS graph detail panels. |
 | `useModelLifecycle` | Targeted 3D model lifecycle reads, cancellation and bounded transient recovery. | Image-to-3D and procedural model views. |
+
+| `useMusicVideoProductionReview` | Server-authoritative art/storyboard/proof approvals and SSE proof rendering, with stale-readiness suppression. | Music Video production review. |

@@ -628,3 +628,25 @@ describe('Cast & Sets procedural check-in', () => {
     expect(res.body.code).toBe('CAST_SETS_NOT_PROCEDURAL');
   });
 });
+
+
+it('carries unresolved targeted production feedback into regeneration without resolving the human decision', async () => {
+  const project = await seed();
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+    productionReview: { feedback: [
+      { id: 'feedback-open', stage: 'art', target: 'cast:keeper', text: 'Use a wider composition and a stronger silhouette', decision: 'request-changes' },
+      { id: 'feedback-closed', stage: 'art', target: 'environment:harbor', text: 'Obsolete resolved direction', decision: 'comment', resolvedAt: '2026-01-01T00:00:00.000Z' },
+    ] },
+  } }));
+  await service.regenerateCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  expect(runPrompt).toHaveBeenCalledTimes(2);
+  const prompt = runPrompt.mock.calls[1][0].prompt;
+  expect(prompt).toContain('cast:keeper');
+  expect(prompt).toContain('Use a wider composition and a stronger silhouette');
+  expect(prompt).not.toContain('Obsolete resolved direction');
+  const revised = await current(project.id);
+  expect(revised.productionReview.feedback[0].resolvedAt).toBeUndefined();
+});
