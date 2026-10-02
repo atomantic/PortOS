@@ -471,7 +471,7 @@ const OBSERVE_TAIL_MAX_LEN = 4000;
  * Test whether a launch shape owns its own PTY process.
  * 'runner' and 'direct' shapes own their PTY; 'login-shell' is hosted in a shell.
  */
-export function shapeHasOwnPty(launchShape) {
+function shapeHasOwnPty(launchShape) {
   return launchShape === 'runner' || launchShape === 'direct';
 }
 
