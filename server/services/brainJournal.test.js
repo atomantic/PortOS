@@ -418,7 +418,10 @@ describe('brainJournal', () => {
       const callOrder = [];
       obsidian.upsertNote.mockImplementation(async (vaultId, path, content) => {
         const match = content.match(/content-(\d+)/);
-        const num = match ? match[1] : '0';
+        // A fire-and-forget mirror left over from an earlier test can land on
+        // this shared mock (same date queue); only this test's own writes count.
+        if (!match) return path;
+        const num = match[1];
         callOrder.push(`start-${num}`);
         await new Promise((r) => setTimeout(r, 10));
         callOrder.push(`end-${num}`);
