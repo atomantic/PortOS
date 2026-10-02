@@ -6,8 +6,13 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 
-const requireServer = createRequire(new URL('../../../server/package.json', import.meta.url));
-const { chromium } = requireServer('playwright-core');
+const require = createRequire(import.meta.url);
+// Prefer the client dev dependency; linked worktrees can also use the same
+// pinned driver from the server without installing into shared node_modules.
+const { chromium } = require(require.resolve('playwright-core', { paths: [
+  fileURLToPath(new URL('../..', import.meta.url)),
+  fileURLToPath(new URL('../../../server', import.meta.url)),
+] }));
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
