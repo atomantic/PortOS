@@ -85,11 +85,23 @@ export function buildDescribePrompt({ concept, guidance, template } = {}) {
   ].join('');
 }
 
-export function buildLyricsPrompt({ description, guidance, template } = {}) {
+// Songs render at roughly 6 sung seconds per lyric line, so the line budget is
+// what actually steers the finished length. Lives outside the overridable
+// template (like the output contract) so a customised template still gets it.
+export const DEFAULT_TARGET_SECONDS = 180;
+const lengthContract = (targetSeconds) => {
+  const sec = Math.min(600, Math.max(30, Math.round(Number(targetSeconds) || DEFAULT_TARGET_SECONDS)));
+  const lines = Math.round(sec / 6);
+  const minutes = sec % 60 === 0 ? `${sec / 60}` : (sec / 60).toFixed(1);
+  return `\n\nTARGET LENGTH: the finished song should run about ${minutes} minute${minutes === '1' ? '' : 's'} (${sec} seconds). Write roughly ${lines} sung lyric lines in total (section tags excluded) and never more than ${Math.round(lines * 1.2)}; keep sections concise rather than adding verses. This overrides any instruction above to add more sections.`;
+};
+
+export function buildLyricsPrompt({ description, guidance, template, targetSeconds } = {}) {
   return [
     pickTemplate(template, DEFAULT_LYRICS_TEMPLATE),
     section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
     section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
+    lengthContract(targetSeconds),
     '\n\nReturn ONLY the lyrics with their section tags. No preamble, no commentary, no markdown fence.',
   ].join('');
 }
@@ -138,16 +150,17 @@ export async function describeMusic({ concept, guidance, template, providerId, m
  * @param {string} args.description — the enriched musical description
  * @param {string} [args.guidance] — "make the chorus about X", etc.
  * @param {string} [args.template] — meta-prompt override; blank → the default
+ * @param {number} [args.targetSeconds] — intended song length; default 180 (~3 min)
  * @param {string} [args.providerId]
  * @param {string} [args.model]
  * @param {string} [args.effort]
  * @returns {Promise<{ lyrics: string, llm: { provider: string, model: string|null } }>}
  */
-export async function writeLyrics({ description, guidance, template, providerId, model, effort } = {}) {
+export async function writeLyrics({ description, guidance, template, targetSeconds, providerId, model, effort } = {}) {
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to write lyrics', code: 'NO_PROVIDER' });
 
-  const prompt = buildLyricsPrompt({ description, guidance, template });
+  const prompt = buildLyricsPrompt({ description, guidance, template, targetSeconds });
   const { text, model: ranModel } = await runPromptThroughProvider({
     provider, model: selectedModel, effort, prompt, source: 'music-lyrics',
   });
