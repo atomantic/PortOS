@@ -183,6 +183,19 @@ describe('Code Animation portable packages', () => {
   };
   const validate = (value) => request(makeApp()).post('/api/code-animation/packages/validate').send(value);
 
+  it('serves the original Blender starter as an unchanged data-only package', async () => {
+    const response = await request(makeApp()).get('/api/code-animation/packages/starter/blender');
+    expect(response.status).toBe(200);
+    expect(response.body.manifest).toMatchObject({ renderer: { kind: 'blender', version: '4.2.0', engine: 'CYCLES' }, format: { width: 1920, height: 1080, fps: 24, durationSeconds: 10 } });
+    expect((await validate(response.body)).body.executed).toBe(false);
+    expect(response.body.files[0].content).toContain('def build_scene(config):');
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    expect(enqueueJob).not.toHaveBeenCalled();
+    const foreignAuthority = structuredClone(response.body);
+    foreignAuthority.manifest.renderer.executionMode = 'trusted-local';
+    expect((await validate(rehash(foreignAuthority))).status).toBe(400);
+  });
+
   it('downloads exact legacy HTML with portable fields, validates it, and still reopens the job', async () => {
     codeAnimationRecords.set(id, savedJob());
     codeAnimationHtml.set(id, html);
