@@ -20,4 +20,6 @@ export default makeSplitMigration({
   recordsKey: 'series',
   idPattern: VALID_ID,
   recordNoun: 'series record',
+  // Corrupt source must stay pending (not stamped applied) so a repaired file re-splits.
+  onUnreadable: 'throw',
 });

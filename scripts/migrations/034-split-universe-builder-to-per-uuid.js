@@ -58,6 +58,8 @@ export default makeSplitMigration({
   recordsKey: 'universes',
   idPattern: VALID_UNIVERSE_ID,
   recordNoun: 'universe',
+  // Corrupt source must stay pending (not stamped applied) so a repaired file re-splits.
+  onUnreadable: 'throw',
   // Cross-record `runs[]` moves into `config.runs` so it travels with the
   // type-level index (fresh install → empty).
   buildConfig: (doc) => ({ runs: Array.isArray(doc?.runs) ? doc.runs : [] }),

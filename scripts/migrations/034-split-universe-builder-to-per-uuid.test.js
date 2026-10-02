@@ -149,13 +149,9 @@ describe('migration 034 — split universe-builder.json to per-UUID files', () =
     expect(existsSync(join(typeDir, 'aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa', 'index.json'))).toBe(true);
   });
 
-  it('reports unreadable when the legacy file is corrupted', async () => {
+  it('rejects when the legacy file is corrupted so the runner keeps it pending', async () => {
     writeFileSync(legacyPath, 'not json');
-    const result = await migration.up({ rootDir });
-    // JSON.parse throws — the migration catches outside our code? Actually
-    // readJson throws on parse error. Let's check the behavior matches.
-    // (If parse throws, the migration propagates — test that explicitly.)
-    expect(result.ok).toBe(false);
+    await expect(migration.up({ rootDir })).rejects.toThrow(/unreadable/);
   });
 
   it('recovers from the .bak-034 file if the legacy was already renamed', async () => {

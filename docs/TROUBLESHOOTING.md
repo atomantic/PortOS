@@ -442,6 +442,31 @@ pg_isready -h localhost -p 5432 || pg_isready -h localhost -p 5561
 
 Universes, series, catalog ingredients, memories, and other relational records live in PostgreSQL, not `data/` files. Inspect them via the Database settings tab or `psql`. To recover, restore a snapshot's `portos-db.sql` from the Backup tab (see [BACKUP.md](./BACKUP.md)).
 
+### Legacy Record Split Stamped Applied With a Corrupt Source
+
+**Symptom**: On an install that upgraded before #9557, `data/universe-builder.json` (migration 034), `data/pipeline-issues.json` (035) or `data/pipeline-series.json` (036) was truncated when migrations ran. The migration was stamped applied in `data/migrations.applied.json`, but `data/universes/`, `data/pipeline-issues/` or `data/pipeline-series/` lacks the records. Current builds throw and keep the migration pending instead, so only already-stamped installs need this.
+
+**Solution** (touch only the affected split):
+```bash
+# 1. Stop PortOS, then back up the source, the target layout and the ledger
+pm2 stop all
+cp -R data/pipeline-issues data/pipeline-issues.bak-manual 2>/dev/null
+mkdir -p data/manual-backup && cp data/pipeline-issues.json* data/manual-backup/ 2>/dev/null
+cp data/migrations.applied.json data/migrations.applied.json.bak-manual
+
+# 2. Repair the source JSON (restore from a backup or fix the truncation).
+#    If the migration already renamed it, repair the `.bak-035` file instead.
+
+# 3. Remove ONLY the affected migration's entry (e.g. 035-split-pipeline-issues-to-per-id.js)
+#    from data/migrations.applied.json — never clear the whole list.
+
+# 4. Re-run migrations; records already split are kept, only missing ones are added
+node scripts/run-migrations.js
+pm2 start all
+```
+
+The split never overwrites a record directory that already exists. If a later Postgres import (`server/scripts/migrateUniversesToDB.js` and similar) already ran, re-run that explicit legacy-import tool after the split rather than resetting import markers or schema versions.
+
 ### Lost App Registrations
 
 **Symptom**: Apps disappear after restart.
