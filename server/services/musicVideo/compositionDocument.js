@@ -292,7 +292,7 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
   if (renderer === 'three') {
     const { files } = await collectTree(join(TEMPLATE_ROOT, 'spatial'));
     const fonts = await collectTree(join(TEMPLATE_ROOT, 'layered', 'fonts'));
-    const require = createRequire(new URL('../../../client/package.json', import.meta.url));
+    const require = createRequire(import.meta.url);
     const packageRoot = dirname(dirname(require.resolve('three')));
     const pkg = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
     const dependencies = [];
