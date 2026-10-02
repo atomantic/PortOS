@@ -241,6 +241,27 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
 });
 
 describe('CI test impact planner', () => {
+  it('selects executable documentation tests, including contracts outside the always-run list', () => {
+    const paths = ['docs/features/product-surfaces.test.js', 'docs/example.test.js'];
+    const plan = buildCiTestPlan(paths, { trackedFiles: [...TRACKED, ...paths] });
+
+    expect(plan.full).toBe(false);
+    expect(plan.server.mode).toBe('files');
+    expect(plan.server.files).toEqual(expect.arrayContaining(paths));
+    expect(plan.client.mode).toBe('skip');
+  });
+
+  it('covers the product-surfaces Markdown input without widening ordinary documentation changes', () => {
+    const contract = 'docs/features/product-surfaces.test.js';
+    const plan = buildCiTestPlan(['docs/features/product-surfaces.md'], {
+      trackedFiles: [...TRACKED, contract],
+    });
+
+    expect(plan).toMatchObject({ full: false, reason: 'documentation-only change',
+      server: { mode: 'files' }, client: { mode: 'skip' }, build: false, db: false, windows: false });
+    expect(plan.server.files).toContain(contract);
+  });
+
   it('skips all expensive jobs for documentation-only changes, keeping the always-run guards', () => {
     const plan = buildCiTestPlan([
       '.changelog/NEXT.md',
@@ -555,6 +576,7 @@ describe('CI test impact planner', () => {
     const plan = buildCiTestPlan([
       'server/services/sprites/atlas.test.js', // deleted alongside its source
       'client/src/components/catalog/CatalogCard.test.jsx', // deleted test
+      'docs/example.test.js', // executable documentation contract was removed
     ], { trackedFiles: TRACKED.filter((path) => ![
       'server/services/sprites/atlas.test.js',
       'client/src/components/catalog/CatalogCard.test.jsx',
@@ -562,6 +584,7 @@ describe('CI test impact planner', () => {
 
     expect(plan.full).toBe(false);
     expect(plan.server.files).not.toContain('server/services/sprites/atlas.test.js');
+    expect(plan.server.files).not.toContain('docs/example.test.js');
   });
 
   it('widens when a changed executable source was deleted', () => {

@@ -218,6 +218,7 @@ export const ALWAYS_RUN_TESTS = [
   // otherwise merge green.
   'docs/api-doc.test.js',
   'docs/deps-doc.test.js',
+  'docs/features/product-surfaces.test.js',
   'scripts/agent-instructions-files.test.js',
   // The union-merged catalogs are `.md` to the planner — documentation-only —
   // so a rebase that doubled a row would otherwise never be re-checked.
@@ -402,9 +403,10 @@ const pathMatchesFeature = (path, feature) => {
 };
 
 const isTestFile = (path) => TEST_FILE_RE.test(path);
-const isDocumentationOnly = (path) => DOCUMENTATION_RULES.some((rule) => rule.test(path));
 const isPythonScript = (path) => PYTHON_SCRIPT_RE.test(path);
 const isExecutable = (path) => EXECUTABLE_RE.test(path) || isPythonScript(path);
+// A documentation directory can also contain runnable contracts and helpers.
+const isDocumentationOnly = (path) => !isExecutable(path) && DOCUMENTATION_RULES.some((rule) => rule.test(path));
 const isServerRunnerFile = (path) => RUNNER_ROOTS.server.some((root) => path.startsWith(root));
 const isClientRunnerFile = (path) => RUNNER_ROOTS.client.some((root) => path.startsWith(root));
 
