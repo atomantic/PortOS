@@ -20,6 +20,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
   readdir: vi.fn().mockResolvedValue([]),
+  rm: vi.fn().mockResolvedValue(undefined),
   stat: vi.fn().mockResolvedValue({ isDirectory: () => true })
 }));
 
@@ -59,7 +60,7 @@ vi.mock('../services/xcodeScripts.js', () => ({ toTargetName: vi.fn(() => 'TestA
 
 import scaffoldRoutes from './scaffold.js';
 import { ensureDir } from '../lib/fileUtils.js';
-import { writeFile, readdir } from 'fs/promises';
+import { writeFile, readdir, rm } from 'fs/promises';
 import { spawn, exec } from '../lib/childProcess.js';
 import { createApp } from '../services/apps.js';
 import { scaffoldVite } from './scaffoldVite.js';
@@ -157,6 +158,42 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
     // (directory creation) and registered the app.
     expect(ensureDir).toHaveBeenCalledWith(join('/tmp/workspace', 'my-app'));
     expect(createApp).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression (#9650): a failed scaffold left the directory behind, so a retry
+  // with the same name was permanently blocked by DIR_EXISTS.
+  it('removes the partial directory on failure so a retry with the same name succeeds', async () => {
+    const repoPath = join('/tmp/workspace', 'my-app');
+    const onDisk = new Set(['/tmp/workspace']);
+    existsSync.mockImplementation((p) => onDisk.has(p));
+    ensureDir.mockImplementation(async (p) => { onDisk.add(p); });
+    rm.mockImplementation(async (p) => { onDisk.delete(p); });
+    scaffoldVite.mockRejectedValueOnce(new Error('npm create failed'));
+
+    const failed = await request(app)
+      .post('/api/scaffold')
+      .send({ ...validBody, template: 'vite-react', uiPort: 3100 });
+
+    expect(failed.status).toBe(500);
+    expect(rm).toHaveBeenCalledWith(repoPath, { recursive: true, force: true });
+    expect(createApp).not.toHaveBeenCalled();
+    expect(onDisk.has(repoPath)).toBe(false);
+
+    const retry = await request(app)
+      .post('/api/scaffold')
+      .send({ ...validBody, template: 'vite-react', uiPort: 3100 });
+
+    expect(retry.status).toBe(200);
+    expect(createApp).toHaveBeenCalledTimes(1);
+
+    existsSync.mockImplementation((p) => p === '/tmp/workspace');
+    ensureDir.mockResolvedValue(undefined);
+  });
+
+  it('does not remove the directory when registration already succeeded', async () => {
+    const res = await request(app).post('/api/scaffold').send(validBody);
+    expect(res.status).toBe(200);
+    expect(rm).not.toHaveBeenCalled();
   });
 
   // The scaffolders take a single options object (#2841) — a positional call
