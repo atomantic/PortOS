@@ -129,7 +129,7 @@ Storage, retention and the privacy posture are in [STORAGE.md](../STORAGE.md).
 | POST /api/cos/start | Start daemon |
 | POST /api/cos/stop | Stop daemon |
 | GET/PUT /api/cos/config | Configuration |
-| GET /api/cos/tasks | Get all tasks |
+| GET /api/cos/tasks | Get tasks (bounded: all non-completed + first 25 completed with `completedCount`; `?view=queue`, `?view=completed`, `?view=full` for the raw store) |
 | POST /api/cos/evaluate | Force evaluation |
 | GET /api/cos/health | Health status |
 | POST /api/cos/health/check | Run health check |

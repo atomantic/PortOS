@@ -132,6 +132,8 @@ async function preparePlanOnlyTask(taskData, knownApp = null) {
 
 const router = Router();
 
+const COMPLETED_FIRST_PAGE = 25;
+
 // GET /api/cos/tasks - Get all tasks (user + internal), grouped by source.
 //
 // Settled for the spawn window (lib/cosSpawnWindow.js): an agent registers as
@@ -143,9 +145,10 @@ const router = Router();
 // exists. `cos.getAgents()` is free at this point — `getAllTasks()` has already
 // warmed the same `loadState()` snapshot it reads.
 //
-// Backward-compatible by default: with no pagination params it returns the full
-// `{ user, cos }` structure every existing consumer expects (tasks + grouped
-// buckets + awaiting/auto-approved derived lists). When a client passes
+// With no params it returns a bounded `{ user, cos }` projection: all non-completed
+// tasks plus grouped/derived lists, and only the first page of completed history
+// (+ `completedCount`/`completedNextCursor`; page on with `view=completed`).
+// `view=full` returns the raw unbounded store. When a client passes
 // `limit`/`offset`, each source is reduced to a *genuinely bounded* shape: the
 // windowed `tasks` slice plus scalar metadata only. The full-set derived
 // collections (`grouped`, `autoApproved`, `awaitingApproval`) are dropped from
@@ -154,7 +157,7 @@ const router = Router();
 // the true per-source totals is added so the caller can page.
 router.get('/tasks', asyncHandler(async (req, res) => {
   const query = validateRequest(z.object({
-    view: z.enum(['queue', 'completed']).optional(),
+    view: z.enum(['queue', 'completed', 'full']).optional(),
     source: z.enum(['user', 'internal']).default('user'),
     selected: z.string().max(512).optional(),
     cursor: z.string().max(512).optional(),
@@ -190,7 +193,23 @@ router.get('/tasks', asyncHandler(async (req, res) => {
     return res.json({ user: queueSource(tasks.user), cos: queueSource(tasks.cos) });
   }
   if (!isPaginationRequested(req.query)) {
-    return res.json(tasks);
+    if (query.view === 'full') return res.json(tasks);
+    // Bare form: bounded projection. Every non-completed task stays whole; the
+    // completed history (96% of the bytes on a long-lived install, and once
+    // more inside `grouped`) shrinks to the first `view=completed` page plus
+    // `completedCount`. `view=full` is the raw-store escape hatch.
+    const boundSource = source => {
+      if (!source) return source;
+      const isDone = task => task.status === 'completed';
+      const list = source.tasks || [];
+      const firstPage = list.filter(isDone).sort((a, b) => a.id < b.id ? 1 : a.id > b.id ? -1 : 0).slice(0, COMPLETED_FIRST_PAGE);
+      const completedCount = list.filter(isDone).length;
+      return { ...source, tasks: [...list.filter(task => !isDone(task)), ...firstPage], completedCount,
+        completedNextCursor: completedCount > COMPLETED_FIRST_PAGE ? firstPage[firstPage.length - 1].id : null,
+        grouped: Object.fromEntries(Object.entries(source.grouped || {}).map(([key, rows]) => [key, rows.filter(task => !isDone(task))])),
+        autoApproved: source.autoApproved?.filter(task => !isDone(task)), awaitingApproval: source.awaitingApproval?.filter(task => !isDone(task)) };
+    };
+    return res.json({ ...tasks, user: boundSource(tasks.user), cos: boundSource(tasks.cos) });
   }
   const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
   const sliceSource = (src) => {
