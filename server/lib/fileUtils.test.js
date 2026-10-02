@@ -1415,7 +1415,6 @@ describe('fileUtils', () => {
 describe('Windows swap-window retries (#4095)', () => {
   // Matches WIN_RETRY_ATTEMPTS in fileCore.js.
   const RETRY_ATTEMPTS = 5;
-  const BACKUP_RETRY_ATTEMPTS = 20;
   const lockError = (code) => Object.assign(new Error(`${code}: simulated windows lock`), { code });
 
   let tmpRoot;
@@ -1473,64 +1472,22 @@ describe('Windows swap-window retries (#4095)', () => {
       expect(fsPromises.rename.mock.calls.some(([from]) => from === target)).toBe(false);
     });
 
-    it('retries moving a locked destination into the backup slot', async () => {
-      const target = join(tmpRoot, 'busy-backup.json');
-      writeFileSync(target, JSON.stringify({ v: 1 }));
-      fakePlatform('win32');
-      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
-      fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
-
-      await atomicWrite(target, { v: 2 });
-
-      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 2 });
-      const moves = fsPromises.rename.mock.calls.filter(([from]) => from === target);
-      expect(moves).toHaveLength(2);
-      expect(moves[0][1]).toMatch(/\.bak$/);
-      expect(moves[1][1]).toBe(moves[0][1]);
-      expect(readdirSync(tmpRoot).filter((n) => n.endsWith('.bak') || n.endsWith('.tmp'))).toEqual([]);
-    });
-
-    it('still falls back to the backup swap when every retry is refused', async () => {
+    it('preserves the original bytes and removes only the temp file when every retry stays locked (#9556)', async () => {
       const target = join(tmpRoot, 'stubborn.json');
       writeFileSync(target, JSON.stringify({ v: 1 }));
       fakePlatform('win32');
-      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
+      fsPromises.rename.mockRejectedValue(lockError('EPERM'));
 
-      await atomicWrite(target, { v: 2 });
+      await expect(atomicWrite(target, { v: 2 })).rejects.toMatchObject({
+        code: 'EPERM',
+        message: expect.stringContaining('existing file was left untouched'),
+      });
 
-      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 2 });
-      const movedDestinationAside = fsPromises.rename.mock.calls.some(([from]) => from === target);
-      expect(movedDestinationAside).toBe(true);
-      // …and the swap cleaned up after itself.
-      expect(readdirSync(tmpRoot).filter((n) => n.endsWith('.bak') || n.endsWith('.tmp'))).toEqual([]);
-    });
-
-    it('retries a transient lock while moving the existing destination to backup', async () => {
-      const target = join(tmpRoot, 'transient-backup-lock.json');
-      writeFileSync(target, JSON.stringify({ v: 1 }));
-      fakePlatform('win32');
-      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
-      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
-
-      await atomicWrite(target, { v: 2 });
-
-      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 2 });
-      expect(fsPromises.rename.mock.calls.filter(([from]) => from === target)).toHaveLength(RETRY_ATTEMPTS + 1);
-      expect(readdirSync(tmpRoot).filter((n) => n.endsWith('.bak') || n.endsWith('.tmp'))).toEqual([]);
-    });
-
-    it('preserves the existing destination when the backup move stays locked', async () => {
-      const target = join(tmpRoot, 'persistent-backup-lock.json');
-      writeFileSync(target, JSON.stringify({ v: 1 }));
-      fakePlatform('win32');
-      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
-      for (let i = 0; i < BACKUP_RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
-
-      await expect(atomicWrite(target, { v: 2 })).rejects.toMatchObject({ code: 'EBUSY' });
-
+      // The destination is never moved aside — no backup swap exists any more.
+      expect(fsPromises.rename.mock.calls.some(([from]) => from === target)).toBe(false);
+      expect(fsPromises.rename).toHaveBeenCalledTimes(RETRY_ATTEMPTS);
       expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 1 });
-      expect(fsPromises.rename).toHaveBeenCalledTimes(RETRY_ATTEMPTS + BACKUP_RETRY_ATTEMPTS);
-      expect(readdirSync(tmpRoot)).toEqual(['persistent-backup-lock.json']);
+      expect(readdirSync(tmpRoot)).toEqual(['stubborn.json']);
     });
 
     it('does not retry off win32 — a rename failure still surfaces immediately', async () => {
@@ -1596,6 +1553,16 @@ describe('Windows swap-window retries (#4095)', () => {
 
       expect(await readJSONFileStrict(missing, { fallback: true })).toEqual({ ok: true, value: { fallback: true } });
       expect(fsPromises.readFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a missing file with a legacy .bak sibling as recovery-required, never empty (#9556)', async () => {
+      const target = join(tmpRoot, 'orphaned.json');
+      writeFileSync(`${target}.1234.5678.bak`, '{"secret":"original"}');
+      fakePlatform('win32');
+
+      expect(await readJSONFileStrict(target, { fallback: true }, { logError: false }))
+        .toEqual({ ok: false, value: { fallback: true } });
+      expect(await tryReadFileStrict(target)).toEqual({ ok: false, value: null });
     });
 
     it('does not retry a plain missing file on win32 — no sibling, no second read', async () => {
