@@ -960,10 +960,12 @@ export const musicVideoProjectUpdateSchema = z.object({
 
 // Fork a project into its next editable version. The server derives lineage and
 // version numbers from the source; callers may only override the display name
-// and choose whether generated scene media should remain attached.
+// and choose whether generated scene media should remain attached. A video
+// variant always clears selected media and starts independent creative setup.
 export const musicVideoProjectCloneSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   includeGeneratedMedia: z.boolean().optional(),
+  variant: z.enum(['revision', 'video-generation']).optional(),
 }).strict();
 
 // A scene on the director board. `startSec`/`endSec` place it on the timeline;
