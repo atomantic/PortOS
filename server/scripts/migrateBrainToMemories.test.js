@@ -4,6 +4,7 @@ const { syncAllBrainData } = vi.hoisted(() => ({ syncAllBrainData: vi.fn() }));
 vi.mock('../services/brainMemoryBridge.js', () => ({ syncAllBrainData }));
 
 describe('Brain migration CLI mode', () => {
+  const originalArgv = process.argv;
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();
@@ -13,6 +14,7 @@ describe('Brain migration CLI mode', () => {
   });
 
   afterEach(() => {
+    process.argv = originalArgv;
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -22,7 +24,7 @@ describe('Brain migration CLI mode', () => {
     { args: [], dryRun: true, mode: 'default preview' },
     { args: ['--execute'], dryRun: false, mode: 'explicit execute' },
   ])('forwards $mode to the bridge', async ({ args, dryRun }) => {
-    vi.spyOn(process, 'argv', 'get').mockReturnValue(['node', 'migrateBrainToMemories.js', ...args]);
+    process.argv = ['node', 'migrateBrainToMemories.js', ...args];
 
     await import('./migrateBrainToMemories.js');
     await vi.runAllTimersAsync();
