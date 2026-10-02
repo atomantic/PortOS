@@ -47,7 +47,7 @@ import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 
 const PROCESS_ID = `proc-${randomUUID()}`;
-const inflight = new Set();
+const inflight = new Map();
 const sunoControllers = new Map();
 const short = (id) => String(id).slice(0, 8);
 
@@ -267,7 +267,8 @@ async function park(projectId, status, patch) {
 
 async function advance(projectId) {
   if (inflight.has(projectId)) return;
-  inflight.add(projectId);
+  const settlement = Promise.withResolvers();
+  inflight.set(projectId, settlement.promise);
   try {
     for (;;) {
       const project = await getProject(projectId);
@@ -311,6 +312,7 @@ async function advance(projectId) {
     console.error(`❌ Autonomous music video advance failed for ${short(projectId)}: ${err.message}`);
   } finally {
     inflight.delete(projectId);
+    settlement.resolve();
   }
 }
 
@@ -372,12 +374,21 @@ export async function getAutonomousRun(projectId) {
  * approve the checkpoint it is waiting on (optionally replacing the stage
  * output the director edited). Returns `{ project, run }`.
  */
-export async function resumeAutonomousVideo(projectId, edits = {}) {
-  const { run } = await requireRun(projectId);
+const assertResumable = (run) => {
   const resumable = AUTONOMOUS_LIVE_STATUSES.includes(run.status) || run.status === 'failed';
   if (!resumable) throw runError(409, 'NOT_RESUMABLE', `A ${run.status} run cannot be resumed`);
   if (run.status === 'running' && run.processId === PROCESS_ID) throw runError(409, 'ALREADY_RUNNING', 'This run is already running');
+};
+
+export async function resumeAutonomousVideo(projectId, edits = {}) {
+  const { run } = await requireRun(projectId);
+  assertResumable(run);
+  // Stop changes the record immediately, but its stage may still be settling.
+  // Let that attempt release ownership before marking a new attempt running.
+  await inflight.get(projectId);
   const out = await patchRun(projectId, (r) => {
+    // Cancel or another Resume may have won while the old attempt settled.
+    assertResumable(r);
     // A run waiting on production resumes by resuming that run, not by redoing
     // the stage — the stage re-runs only when production never started.
     const stage = r.stage;

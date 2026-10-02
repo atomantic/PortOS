@@ -65,6 +65,7 @@ and does not press Create or spend credits on a second generation.
 
 - A signed-out Suno parks the run **`needs-human`** (`PUBLISH_LOGIN_REQUIRED`): sign in to Suno in the PortOS Browser, then Resume.
 - Any other stage failure parks **`failed`** with the error; Retry re-runs that stage only. Songs already submitted to Suno are stored the moment Suno accepts the request, so a failed download retries the same songs and never spends credits on a second generation.
+- Resume after Stop waits for the prior stage attempt to settle before restarting. A Cancel while Resume waits remains canceled.
 - A parked or failed delegated production run parks this run `needs-human`; Resume resumes the production run.
 
 The Suno adapter fills the form through `placeholder` / role selectors and reads the new `/song/<id>` links. It opens the first take in the same signed-in PortOS Browser, selects only M4A, and presses Download (or Unlock & Download) once. It waits for the browser download to finish saving, checks the container and decodes the complete audio to reject damaged files, and imports the original M4A without conversion. The export has a ten-minute deadline; timeout, cancellation, or invalid audio removes staging files and never imports a partial/error response. Failures identify the export stage using bounded reason metadata. A retry reopens the existing song rather than pressing Create again.
