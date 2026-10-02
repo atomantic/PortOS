@@ -8,6 +8,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildCastAndSetsPrompt,
+  castAndSetsAllowsImages,
+  castAndSetsMedium,
   mergeCastAndSetsDirection,
   parseCastAndSetsResponse,
   songSections,
@@ -89,5 +91,73 @@ describe('Cast & Sets direction', () => {
     expect(direction.logline).toBe('She escapes.');
     expect(direction.questions).toEqual([]);
     expect(direction.interpretation).toBe('');
+  });
+});
+
+describe('Cast & Sets procedural medium', () => {
+  const procedural = { ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } };
+  const PROCEDURAL_ANSWER = {
+    logline: 'A paper boat crosses a neon city.',
+    protagonist: {
+      name: 'Boat', description: 'a folded paper boat', construction: 'three triangles hinged at the keel', shapeLanguage: 'sharp, folded',
+      materials: 'flat fills with a soft glow', palette: '#f5f0e6, #ff5a1f', expressions: ['proud: bow lifts', 'tired: bow droops'], movement: 'eases in, bobs on every beat',
+    },
+    world: { layout: 'a river through stacked streets', depth: 'three parallax planes', camera: 'slow dolly with a beat-synced push', transitions: 'wipe through reflections' },
+    sets: [
+      { name: 'River', description: 'a neon river', lighting: 'magenta', imageRole: 'Background' },
+      { name: 'Bridge', description: 'an iron span', lighting: 'cyan', imageRole: 'decoration' },
+      { name: 'Quay', description: 'wet stone', lighting: 'amber', imageRole: 'photo-booth' },
+    ],
+    looks: [],
+  };
+
+  it('resolves the medium from the production policy and the brief tools together', () => {
+    expect(castAndSetsMedium(procedural)).toBe('procedural');
+    expect(castAndSetsMedium({ automation: { tools: ['image:codex', 'code:render'] } })).toBe('procedural');
+    // A video tool, an image-only brief and an untouched project stay photographic.
+    expect(castAndSetsMedium({ automation: { tools: ['image:codex', 'code:render', 'video:local'] } })).toBe('photographic');
+    expect(castAndSetsMedium({ automation: { tools: ['image:codex'] } })).toBe('photographic');
+    expect(castAndSetsMedium(project)).toBe('photographic');
+    expect(castAndSetsAllowsImages({ automation: { tools: ['code:render'] } })).toBe(false);
+    expect(castAndSetsAllowsImages({ automation: { tools: ['image:codex', 'code:render'] } })).toBe(true);
+    expect(castAndSetsAllowsImages(project)).toBe(true);
+  });
+
+  it('asks for construction, world and image roles instead of a photographic cast', () => {
+    const prompt = buildCastAndSetsPrompt(procedural);
+    expect(prompt).toContain('PROCEDURAL music video');
+    expect(prompt).toContain('"construction"');
+    expect(prompt).toContain('"imageRole"');
+    expect(prompt).toContain('"cutout"');
+    expect(prompt).not.toMatch(/"face"|"hair"|"tests"/);
+    expect(buildCastAndSetsPrompt(project)).toContain('"face"');
+    // A revision keeps the medium the saved direction was made in, whatever the project says now.
+    expect(buildCastAndSetsPrompt(project, { previous: { medium: 'procedural' }, notes: [{ text: 'bigger sail' }] })).toContain('PROCEDURAL');
+  });
+
+  it('merges procedural fields, defaults an unknown image role, and does not require looks', () => {
+    const parsed = parseCastAndSetsResponse(JSON.stringify(PROCEDURAL_ANSWER));
+    const { direction, missing } = mergeCastAndSetsDirection(null, parsed, { sections, medium: 'procedural' });
+    expect(missing).toEqual([]);
+    expect(direction).toMatchObject({ medium: 'procedural', looks: [], tests: [] });
+    expect(direction.protagonist).toMatchObject({ construction: 'three triangles hinged at the keel', expressions: ['proud: bow lifts', 'tired: bow droops'] });
+    expect(direction.world.camera).toBe('slow dolly with a beat-synced push');
+    expect(direction.sets.map((s) => s.imageRole)).toEqual(['background', 'decoration', 'background']);
+
+    // Revision: absent keys keep the saved values, a present empty value clears.
+    const revision = parseCastAndSetsResponse(JSON.stringify({ protagonist: { movement: '' }, world: { depth: 'two planes' } }));
+    const revised = mergeCastAndSetsDirection(direction, revision, { sections }).direction;
+    expect(revised.medium).toBe('procedural');
+    expect(revised.protagonist).toMatchObject({ movement: '', construction: 'three triangles hinged at the keel' });
+    expect(revised.world).toMatchObject({ depth: 'two planes', layout: 'a river through stacked streets' });
+    expect(revised.sets).toEqual(direction.sets);
+  });
+
+  it('leaves a photographic direction exactly as it was', () => {
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(ANSWER)), { sections });
+    expect(direction).not.toHaveProperty('medium');
+    expect(direction).not.toHaveProperty('world');
+    expect(direction.protagonist).not.toHaveProperty('construction');
+    expect(direction.sets[0]).not.toHaveProperty('imageRole');
   });
 });

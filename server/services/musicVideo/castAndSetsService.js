@@ -53,6 +53,8 @@ import {
 } from './castAndSets.js';
 import {
   buildCastAndSetsPrompt,
+  castAndSetsAllowsImages,
+  castAndSetsMedium,
   mergeCastAndSetsDirection,
   moodBoardImageList,
   parseCastAndSetsResponse,
@@ -165,7 +167,11 @@ async function runDirection(projectId, { providerId, model, notes = [], forceKey
   if (!provider) return fail(projectId, 'No AI provider is available for the creative direction');
   if (provider.enabled === false) return fail(projectId, `The ${provider.name || provider.id} provider is disabled`);
   const previous = stage?.direction || null;
-  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes });
+  // A revision keeps the medium it was directed in; a fresh pass resolves it
+  // from the project's policy and tools, so a saved direction is never
+  // silently re-cast into the other medium.
+  const medium = (notes.length && previous?.medium) || castAndSetsMedium(project);
+  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium });
   let text;
   try {
     ({ text } = await deps.runPrompt({ provider, model: selectedModel, prompt, source: 'music-video-cast-sets' }));
@@ -175,7 +181,7 @@ async function runDirection(projectId, { providerId, model, notes = [], forceKey
   const parsed = parseCastAndSetsResponse(text);
   if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
-  const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, moodImageCount: moodImages.length });
+  const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, moodImageCount: moodImages.length, medium });
   if (missing.length) return fail(projectId, `The creative direction answer is missing: ${missing.join(', ')}`);
   // The photographic look every image prompt carries: the mood board's composed
   // style, else the project's visual style (never the board's literal places).
@@ -192,17 +198,20 @@ async function writePlan(projectId, { direction = null, moodImages = null, force
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const nextDirection = direction || stage.direction;
-  const plan = buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes) });
+  // A procedural project whose brief names no image tool is code-only: nothing
+  // is rendered, so no image backend is needed (or consulted).
+  const codeOnly = nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
+  const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes) });
   const renderKeys = affectedImageKeys(stage.plan || {}, plan, forceKeys);
   const settings = await deps.getSettings();
   const run = stage.productionRunId ? (project.productionRuns || []).find((r) => r.id === stage.productionRunId) : null;
   const preferred = run?.pool?.find((r) => r.kind === 'image') || stage.route || null;
-  const route = await chooseCastAndSetsRoute(project, { preferred, settings });
-  if (!route) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
+  const route = codeOnly ? (stage.route || null) : await chooseCastAndSetsRoute(project, { preferred, settings });
+  if (!route && !codeOnly) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
   const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsDirection(current, {
     direction: nextDirection, plan, moodImages, route, renderKeys,
   }));
-  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render on ${route.mode}`);
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render${route ? ` on ${route.mode}` : ' (code-only, no image backend)'}`);
   publish(projectId, out.project);
   return advance(projectId);
 }
