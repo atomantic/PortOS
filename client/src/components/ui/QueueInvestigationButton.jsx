@@ -24,7 +24,8 @@ import toast from './Toast';
 // human asked for this one.
 const INVESTIGATION_MARKER = { isInvestigation: true };
 
-export default function QueueInvestigationButton({ task, className = '' }) {
+// `task.label` is presentation only (e.g. "Resolve with agent"); it is never posted.
+export default function QueueInvestigationButton({ task: { label, ...task }, className = '' }) {
   // null = not queued yet · 'queued' = this click created the task ·
   // 'duplicate' = the store already held one. They read differently to the user:
   // the store's 409 also fires for a task it has BLOCKED, which will not run
@@ -46,7 +47,7 @@ export default function QueueInvestigationButton({ task, className = '' }) {
       });
     setQueueResult(duplicateMessage ? 'duplicate' : 'queued');
     if (duplicateMessage) toast(duplicateMessage, { icon: '🤖' });
-    else toast.success('Queued an agent to investigate this failure');
+    else toast.success('Queued an agent to investigate this issue');
   }, { errorMessage: 'Failed to queue the investigation task' });
 
   return (
@@ -66,7 +67,7 @@ export default function QueueInvestigationButton({ task, className = '' }) {
         ? 'Agent queued'
         : queueResult === 'duplicate'
           ? 'Task already exists'
-          : queueing ? 'Queueing…' : 'Queue agent to investigate'}
+          : queueing ? 'Queueing…' : (label || 'Queue agent to investigate')}
     </button>
   );
 }

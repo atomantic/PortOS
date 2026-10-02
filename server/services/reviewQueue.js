@@ -34,6 +34,7 @@ import * as askConversations from './askConversations.js';
 import * as cosTaskStore from './cosTaskStore.js';
 import * as messageDrafts from './messageDrafts.js';
 import { HEALTH_RESOLUTION_PREFIX } from './healthAlertResolutions.js';
+import { buildHealthAlertInvestigation } from './healthAlertAgentTask.js';
 import { generateNonProductAlerts } from './proactiveAlertSources.js';
 import * as identity from './identity.js';
 import * as reviewService from './review.js';
@@ -754,7 +755,9 @@ const PRODUCERS = [
         : alert.link || '/system-resources/overview';
       return {
         id: `health:${alert.id}`,
-        ...(alert.investigation ? { investigation: alert.investigation } : {}),
+        // Process-crash alerts carry an app-scoped task; every other alert gets
+        // the PortOS-scoped resolve-with-agent task.
+        ...(alert.investigationUnavailable ? {} : { investigation: alert.investigation || buildHealthAlertInvestigation(alert) }),
         ...(alert.investigationUnavailable ? { investigationUnavailable: alert.investigationUnavailable } : {}),
         operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
         nextAction: 'Investigate or mark resolved',
