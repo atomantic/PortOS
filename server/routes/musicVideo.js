@@ -219,6 +219,31 @@ router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(project);
 }));
 
+router.post('/:id/song-revision', asyncHandler(async (req, res) => {
+  const { musicVideoSongDraftSchema } = await import('../lib/musicVideoValidation.js');
+  const fields = validateRequest(musicVideoSongDraftSchema, req.body);
+  const { saveSongRevision } = await import('../services/musicVideo/songRevision.js');
+  res.json(await saveSongRevision(req.params.id, fields));
+}));
+router.post('/:id/song-revision/generate', asyncHandler(async (req, res) => {
+  const { musicVideoSongActionSchema } = await import('../lib/musicVideoValidation.js');
+  const { revisionId } = validateRequest(musicVideoSongActionSchema, req.body);
+  const { generateSongRevision } = await import('../services/musicVideo/songRevision.js');
+  res.status(202).json(await generateSongRevision(req.params.id, revisionId));
+}));
+router.post('/:id/song-revision/cancel', asyncHandler(async (req, res) => {
+  const { musicVideoSongActionSchema } = await import('../lib/musicVideoValidation.js');
+  const { revisionId } = validateRequest(musicVideoSongActionSchema, req.body);
+  const { cancelSongRevision } = await import('../services/musicVideo/songRevision.js');
+  res.json(await cancelSongRevision(req.params.id, revisionId));
+}));
+router.post('/:id/song-revision/select', asyncHandler(async (req, res) => {
+  const { musicVideoSongSelectSchema } = await import('../lib/musicVideoValidation.js');
+  const { revisionId, songId } = validateRequest(musicVideoSongSelectSchema, req.body);
+  const { selectSongRevision } = await import('../services/musicVideo/songRevision.js');
+  res.json(await selectSongRevision(req.params.id, revisionId, songId));
+}));
+
 router.post('/:id/clone', asyncHandler(async (req, res) => {
   const options = validateRequest(musicVideoProjectCloneSchema, req.body || {});
   res.status(201).json(await cloneProject(req.params.id, options));

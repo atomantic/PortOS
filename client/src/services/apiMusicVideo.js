@@ -444,3 +444,6 @@ export const bindMusicVideoProductionShot = (id, shotId, options = {}) => reques
 
 export const addMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const resolveMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback/resolve`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Drafting is free; generation and candidate selection are separate explicit actions.
+export const saveMusicVideoSongRevision = (id, fields, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision`, { method: 'POST', body: JSON.stringify(fields), ...options });
+export const actOnMusicVideoSongRevision = (id, action, data, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision/${action}`, { method: 'POST', body: JSON.stringify(data), ...options });

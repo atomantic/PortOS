@@ -11,6 +11,13 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
  */
 
 import { z } from 'zod';
+
+export const musicVideoSongDraftSchema = z.object({
+  title: z.string().trim().min(1).max(80), style: z.string().trim().min(1).max(1000),
+  lyrics: z.string().max(5000), instrumental: z.boolean().default(false),
+}).strict().refine((v) => v.instrumental || v.lyrics.trim().length > 0, 'Lyrics are required for a vocal song');
+export const musicVideoSongActionSchema = z.object({ revisionId: z.string().min(1) }).strict();
+export const musicVideoSongSelectSchema = z.object({ revisionId: z.string().min(1), songId: z.string().min(1) }).strict();
 import { EFFORT_LEVELS } from './providerModels.js';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';

@@ -315,6 +315,7 @@ const SIMPLE_BRIDGES = [
   { emitter: musicVideoEvents, event: 'production', channel: 'music-video:production' },
   // A fully-autonomous run (prompt → lyrics → Suno song → video) advancing.
   { emitter: musicVideoEvents, event: 'autonomous', channel: 'music-video:autonomous' },
+  { emitter: musicVideoEvents, event: 'song-revision', channel: 'music-video:song-revision' },
   // The Cast & Sets check-in advancing, and a development artifact changing.
   { emitter: musicVideoEvents, event: 'cast-and-sets', channel: 'music-video:cast-and-sets' },
   { emitter: musicVideoEvents, event: 'dev-artifact', channel: 'music-video:dev-artifact' },

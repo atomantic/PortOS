@@ -344,7 +344,7 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to delete project'));
   };
 
-  const handleClone = (optionsOrTarget = {}, maybeOptions = {}) => {
+  const handleClone = (optionsOrTarget = {}, maybeOptions = {}, songRevision = false) => {
     const isTarget = optionsOrTarget && typeof optionsOrTarget.id === 'string';
     const target = isTarget ? optionsOrTarget : selected;
     const options = isTarget ? maybeOptions : (optionsOrTarget || {});
@@ -354,7 +354,7 @@ export default function MusicVideo() {
     cloneMusicVideoProject(target.id, options, { silent: true })
       .then((project) => {
         setProjects((prev) => [...prev, project]);
-        navigate(`/music-video/${project.id}`);
+        navigate(`/music-video/${project.id}${songRevision === true ? "/setup" : ""}`);
         toast.success(`Created ${project.name}`);
       })
       .catch((err) => toast.error(err?.message || 'Failed to clone project'))
@@ -807,6 +807,7 @@ export default function MusicVideo() {
     locked: creativeSetupPending || styleReferencesPending || compositionSavePending > 0,
     busy: { analyzing, planning, arranging, cloning },
     tracks,
+    onForkSong: () => handleClone({}, {}, true),
     trackName,
     audioFilename,
     audioUrl,
