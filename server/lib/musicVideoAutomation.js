@@ -12,6 +12,7 @@
  */
 
 import { EFFORT_LEVELS } from './providerModels.js';
+import { trimTo } from './textUtils.js';
 import {
   CLOUD_IMAGE_GEN_MODES, CLOUD_VIDEO_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES, VIDEO_GEN_MODE, VIDEO_GEN_MODES,
 } from './generationModes.js';
@@ -70,22 +71,21 @@ export const normalizeMusicVideoEffort = (value) => (EFFORT_LEVELS.includes(valu
  */
 export function normalizeMusicVideoLlm(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-  const providerId = text(raw.providerId, 200);
+  const providerId = trimTo(raw.providerId, 200);
   if (!providerId) return null;
   return {
     providerId,
-    model: text(raw.model, 200) || null,
+    model: trimTo(raw.model, 200) || null,
     effort: normalizeMusicVideoEffort(raw.effort),
   };
 }
 
 /** The effective LLM route a stage last ran on, as stored for the project summary. */
-export function normalizeMusicVideoLlmRoute(raw) {
+function normalizeMusicVideoLlmRoute(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const providerId = typeof raw.providerId === 'string' ? raw.providerId.trim().slice(0, 200) : '';
+  const providerId = trimTo(raw.providerId, 200);
   if (!providerId) return null;
-  const text = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+  const text = (v, max) => trimTo(v, max) || null;
   return {
     providerId,
     model: text(raw.model, 200),

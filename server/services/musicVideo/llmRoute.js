@@ -40,7 +40,7 @@ async function launchable(provider) {
  * The TUI provider an unpinned text stage should use, or null. Never throws: a
  * registry read failure just means "no preference".
  */
-export async function preferredTuiProvider() {
+async function preferredTuiProvider() {
   // Lazy: the provider registry (and its toolkit) is only needed when nothing is pinned.
   const { getActiveProvider, listProviders } = await import('../providers.js');
   const providers = await listProviders().catch(() => []);
