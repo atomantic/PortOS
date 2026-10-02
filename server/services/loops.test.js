@@ -588,4 +588,190 @@ describe('loops.js', () => {
     });
   });
 
+  // ===========================================================================
+  // Early rejection recovery (#9649) — if loadLoops rejects or setup fails
+  // before the main run, active.running must be reset so subsequent ticks
+  // can proceed without permanent wedge.
+  // ===========================================================================
+  describe('early rejection recovery and active.running reset', () => {
+    let disk;
+
+    beforeEach(() => {
+      disk = [];
+      tryReadFile.mockImplementation(async (path) =>
+        String(path).endsWith('loops.json') ? JSON.stringify(disk) : null
+      );
+      atomicWrite.mockImplementation(async (path, data) => {
+        if (String(path).endsWith('loops.json') && Array.isArray(data)) {
+          disk = JSON.parse(JSON.stringify(data));
+          for (const l of disk) {
+            if (l.id && !createdLoopIds.includes(l.id)) createdLoopIds.push(l.id);
+          }
+        }
+      });
+    });
+
+    it('resets active.running when loadLoops rejects during iteration', async () => {
+      const loop = await createLoop({
+        prompt: 'loadLoops test',
+        interval: '30s',
+        runImmediately: false,
+      });
+
+      // First call succeeds (when loop was created), but subsequent calls fail
+      let callCount = 0;
+      tryReadFile.mockImplementation(async (path) => {
+        if (String(path).endsWith('loops.json')) {
+          callCount++;
+          if (callCount === 1) return JSON.stringify(disk);
+          throw new Error('Disk I/O failed');
+        }
+        return null;
+      });
+
+      const errors = [];
+      loopEvents.on('iteration:error', (data) => errors.push(data));
+
+      await triggerLoop(loop.id);
+      await flushAsync();
+
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].error).toContain('Disk I/O failed');
+
+      // Try to trigger again — if active.running wasn't reset, this would
+      // no-op silently. With the fix, it should attempt the iteration.
+      mockResolveProvider.mockResolvedValue({ provider: MOCK_PROVIDER, selectedModel: null });
+      mockCreateRun.mockResolvedValue(MOCK_RUN_RESULT);
+      mockRunPrompt.mockResolvedValue({ text: '', runId: 'run-2', model: 'test' });
+
+      // Reset the tryReadFile mock so the second attempt can succeed
+      callCount = 0;
+      tryReadFile.mockImplementation(async (path) =>
+        String(path).endsWith('loops.json') ? JSON.stringify(disk) : null
+      );
+
+      errors.length = 0;
+      await triggerLoop(loop.id);
+      await flushAsync();
+
+      // Second trigger should have succeeded (no error from loadLoops)
+      // Either it succeeds silently or only hits the createRun rejection if we
+      // configured it to fail. But crucially, it does NOT immediately return
+      // without trying because active.running stayed true.
+      expect(mockResolveProvider).toHaveBeenCalled();
+
+      loopEvents.removeAllListeners('iteration:error');
+    });
+
+    it('emits iteration:error when setup fails with unhandled rejection', async () => {
+      const loop = await createLoop({
+        prompt: 'early error test',
+        interval: '30s',
+        runImmediately: false,
+      });
+
+      // Make loadLoops throw an unhandled error (no .catch on this call)
+      let callCount = 0;
+      tryReadFile.mockImplementation(async (path) => {
+        if (String(path).endsWith('loops.json')) {
+          callCount++;
+          if (callCount > 1) {  // First call is from createLoop, next is from trigger
+            throw new Error('Unhandled loadLoops rejection');
+          }
+          return JSON.stringify(disk);
+        }
+        return null;
+      });
+
+      const errors = [];
+      loopEvents.on('iteration:error', (data) => errors.push(data));
+
+      await triggerLoop(loop.id);
+      await flushAsync();
+
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].error).toContain('Unhandled loadLoops rejection');
+
+      loopEvents.removeAllListeners('iteration:error');
+    });
+
+    it('allows subsequent iterations after an early rejection when using the timer', async () => {
+      const loop = await createLoop({
+        prompt: 'timer recovery test',
+        interval: '30s',
+        runImmediately: false,
+      });
+
+      // First tick: make loadLoops fail to simulate transient error
+      let failOnce = true;
+      tryReadFile.mockImplementation(async (path) => {
+        if (String(path).endsWith('loops.json')) {
+          if (failOnce) {
+            failOnce = false;
+            throw new Error('Transient I/O error');
+          }
+          return JSON.stringify(disk);
+        }
+        return null;
+      });
+
+      const errors = [];
+      const starts = [];
+      loopEvents.on('iteration:error', (data) => errors.push(data));
+      loopEvents.on('iteration:start', (data) => starts.push(data));
+
+      // First interval tick hits the error
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushAsync();
+      expect(errors.length).toBeGreaterThan(0);
+      expect(starts).toHaveLength(0);
+
+      // Second interval tick should proceed because active.running was reset
+      mockResolveProvider.mockResolvedValue({ provider: MOCK_PROVIDER, selectedModel: null });
+      mockCreateRun.mockResolvedValue(MOCK_RUN_RESULT);
+      mockRunPrompt.mockResolvedValue({ text: '', runId: 'run-ok', model: 'test' });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushAsync();
+
+      // Iteration should have started successfully (iteration:start emitted)
+      expect(starts.length).toBeGreaterThan(0);
+
+      loopEvents.removeAllListeners('iteration:error');
+      loopEvents.removeAllListeners('iteration:start');
+    });
+
+    it('does not log false "iteration setup failed" when createRun error is handled', async () => {
+      const loop = await createLoop({
+        prompt: 'createRun error test',
+        interval: '30s',
+        runImmediately: false,
+      });
+
+      mockCreateRun.mockRejectedValue(new Error('createRun failed as expected'));
+
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await triggerLoop(loop.id);
+      await flushAsync();
+
+      // The error is caught by createRun's .catch handler, which emits
+      // iteration:error and logs "createRun failed". The outer catch handler
+      // should NOT log an additional "iteration setup failed" message because
+      // the error was handled inside the try block.
+      const setupFailedLogs = consoleSpy.mock.calls.filter(call =>
+        call[0]?.includes?.('iteration setup failed')
+      );
+      expect(setupFailedLogs).toHaveLength(0);
+
+      // But the createRun error IS logged
+      const createRunLogs = consoleSpy.mock.calls.filter(call =>
+        call[0]?.includes?.('createRun failed')
+      );
+      expect(createRunLogs.length).toBeGreaterThan(0);
+
+      consoleSpy.mockRestore();
+    });
+  });
+
 });

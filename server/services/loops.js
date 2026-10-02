@@ -71,171 +71,185 @@ async function executeIteration(loopId) {
   // second overlapping iteration through the same guard.
   active.running = true;
 
-  // Re-read the record on every tick so an edit through updateLoop (prompt,
-  // provider, cwd, timeout, name) takes effect on the NEXT iteration instead of
-  // at the next restart. Previously the interval closed over the record object
-  // it was armed with, so edits persisted to disk but never reached the run.
-  const loops = await loadLoops();
-  const loop = loops.find(l => l.id === id);
-  if (!loop) {
-    active.running = false;
-    return;
-  }
-
-  active.iterationCount++;
-  const iterationNum = active.iterationCount;
-
-  loopEvents.emit('iteration:start', { id, iteration: iterationNum, timestamp: Date.now() });
-
-  let { provider } = await resolveProviderAndModel({ providerId: loop.providerId })
-    .catch(() => ({ provider: null }));
-  if (!provider) {
-    const msg = 'No AI provider available';
-    active.running = false;
-    loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: msg, timestamp: Date.now() });
-    console.error(`❌ Loop ${id}: ${msg}`);
-    return;
-  }
-
-  const outputLines = [];
-
-  const onData = (text) => {
-    const lines = text.split('\n').filter(l => l.trim());
-    for (const line of lines) {
-      outputLines.push(line);
-      loopEvents.emit('output', { id, iteration: iterationNum, line, timestamp: Date.now() });
+  try {
+    // Re-read the record on every tick so an edit through updateLoop (prompt,
+    // provider, cwd, timeout, name) takes effect on the NEXT iteration instead of
+    // at the next restart. Previously the interval closed over the record object
+    // it was armed with, so edits persisted to disk but never reached the run.
+    const loops = await loadLoops();
+    const loop = loops.find(l => l.id === id);
+    if (!loop) {
+      active.running = false;
+      return;
     }
-  };
 
-  const onComplete = async (metadata) => {
-    const result = outputLines.join('\n');
-    const iterResult = {
-      iteration: iterationNum,
-      exitCode: metadata.exitCode,
-      success: metadata.success,
-      output: result,
-      lineCount: outputLines.length,
-      duration: metadata.duration,
-      provider: provider.name,
-      // The model the central handler actually ran (set by the .then below
-      // when the run resolved), with provider.defaultModel as the fallback
-      // for the failure path where executedModel is still null.
-      model: metadata.model || provider.defaultModel,
-      timestamp: Date.now()
+    active.iterationCount++;
+    const iterationNum = active.iterationCount;
+
+    loopEvents.emit('iteration:start', { id, iteration: iterationNum, timestamp: Date.now() });
+
+    let { provider } = await resolveProviderAndModel({ providerId: loop.providerId })
+      .catch(() => ({ provider: null }));
+    if (!provider) {
+      const msg = 'No AI provider available';
+      active.running = false;
+      loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: msg, timestamp: Date.now() });
+      console.error(`❌ Loop ${id}: ${msg}`);
+      return;
+    }
+
+    const outputLines = [];
+
+    const onData = (text) => {
+      const lines = text.split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        outputLines.push(line);
+        loopEvents.emit('output', { id, iteration: iterationNum, line, timestamp: Date.now() });
+      }
     };
 
-    active.lastResult = iterResult;
-    active.history.push({
-      iteration: iterationNum,
-      exitCode: metadata.exitCode,
-      success: metadata.success,
-      summary: result.slice(0, 500),
-      duration: metadata.duration,
-      provider: provider.name,
-      timestamp: Date.now()
-    });
-    if (active.history.length > 50) active.history.shift();
+    const onComplete = async (metadata) => {
+      const result = outputLines.join('\n');
+      const iterResult = {
+        iteration: iterationNum,
+        exitCode: metadata.exitCode,
+        success: metadata.success,
+        output: result,
+        lineCount: outputLines.length,
+        duration: metadata.duration,
+        provider: provider.name,
+        // The model the central handler actually ran (set by the .then below
+        // when the run resolved), with provider.defaultModel as the fallback
+        // for the failure path where executedModel is still null.
+        model: metadata.model || provider.defaultModel,
+        timestamp: Date.now()
+      };
 
-    active.running = false;
-    active.runId = null;
-
-    const outputPath = join(LOOPS_OUTPUT_DIR, `${id}-${iterationNum}.txt`);
-    // atomicWrite (not a bare writeFile, which is no longer imported) — a bare
-    // writeFile here throws ReferenceError synchronously, before .catch() can
-    // attach, skipping updatePersistedLoop so lastRun/iterationCount never persist.
-    await atomicWrite(outputPath, result).catch(() => {});
-
-    await updatePersistedLoop(id, {
-      lastRun: Date.now(),
-      iterationCount: active.iterationCount,
-      lastExitCode: metadata.exitCode
-    }).finally(() => {
-      // Notify after persistence settles, including failures: live execution
-      // has ended either way, and consumers must leave the running state.
-      loopEvents.emit('iteration:complete', { id, ...iterResult });
-    });
-
-    console.log(`🔄 Loop ${id} iteration ${iterationNum} complete (${provider.name}, exit ${metadata.exitCode}, ${outputLines.length} lines)`);
-  };
-
-  // Pre-create the run so `active.runId` can be set before generation
-  // starts (cancellation needs the id). The central handler reuses our
-  // runId when provided rather than creating a second one.
-  const runResult = await createRun({
-    providerId: provider.id,
-    prompt: loop.prompt,
-    workspacePath: loop.cwd || PATHS.root,
-    source: 'loop',
-    sourceId: id,
-    label: `Loop: ${loop.name} #${iterationNum}`
-  }).catch(err => {
-    active.running = false;
-    loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: err.message, timestamp: Date.now() });
-    console.error(`❌ Loop ${id} createRun failed: ${err.message}`);
-    return null;
-  });
-
-  if (!runResult) return;
-
-  active.runId = runResult.metadata.id;
-
-  // The toolkit's createRun may switch to a fallback provider when the
-  // requested one is marked unavailable (providerStatusService). Reassign
-  // `provider` to the effective one so dispatch, onComplete's
-  // history/persistence side, and the `iteration:complete` event all see
-  // the provider that actually ran. Without this, fallback would only
-  // update the run record while the spawn still hit the dead provider.
-  if (runResult.provider && runResult.provider.id !== provider.id) {
-    provider = runResult.provider;
-  }
-
-  // Adapt the central handler's resolve/reject to the legacy onComplete
-  // metadata shape. We can't get the runner's full metadata back from
-  // runPromptThroughProvider today — it only resolves `{ text, runId,
-  // model }`. Reconstruct the bits onComplete inspects (exitCode + success
-  // + duration) from the promise resolution; pass through `model` so
-  // iterResult records what actually ran (not just the saved default).
-  const startedAt = Date.now();
-  runPromptThroughProvider({
-    provider,
-    // A proactive fallback may pin a model that belongs only to the selected
-    // fallback provider. Thread that pin through the pre-created run path so
-    // execution uses the same model that createRun recorded.
-    model: runResult.fallbackModel ?? null,
-    prompt: loop.prompt, source: 'loop', runId: runResult.metadata.id,
-    onData, timeout: loop.timeout || DEFAULT_TIMEOUT_MS,
-    // loop.cwd is a user-facing setting on each loop record — without this
-    // pass-through, every loop runs against PortOS's own cwd instead of
-    // the directory the user picked.
-    cwd: loop.cwd || PATHS.root,
-  }).then(({ model: executedModel }) => {
-    // Wrap `onComplete` so a throw inside the success branch doesn't fall
-    // through to the chained `.catch` below and get misclassified as
-    // `iteration:error`. History/persistence side is best-effort anyway.
-    return Promise.resolve()
-      .then(() => onComplete({ exitCode: 0, success: true, duration: Date.now() - startedAt, model: executedModel }))
-      .catch((err) => {
-        console.error(`❌ Loop ${id} onComplete (success branch) threw: ${err?.message || err}`);
+      active.lastResult = iterResult;
+      active.history.push({
+        iteration: iterationNum,
+        exitCode: metadata.exitCode,
+        success: metadata.success,
+        summary: result.slice(0, 500),
+        duration: metadata.duration,
+        provider: provider.name,
+        timestamp: Date.now()
       });
-  }).catch(err => {
-    // Pre-migration `executeCliRun` always invoked `onComplete` — even on
-    // non-zero exit — so loop history / persistence / `iteration:complete`
-    // observers saw failed runs too. The .then/.catch split here would
-    // skip onComplete on failure and only emit `iteration:error`, breaking
-    // anything that subscribed to completes (history.push, lastExitCode
-    // persistence). Fire onComplete with a failure shape before the error
-    // event so the history + persistence side stays consistent.
-    const failureMetadata = {
-      exitCode: 1,
-      success: false,
-      duration: Date.now() - startedAt,
-      error: err.message,
-      model: provider.defaultModel,
+      if (active.history.length > 50) active.history.shift();
+
+      active.running = false;
+      active.runId = null;
+
+      const outputPath = join(LOOPS_OUTPUT_DIR, `${id}-${iterationNum}.txt`);
+      // atomicWrite (not a bare writeFile, which is no longer imported) — a bare
+      // writeFile here throws ReferenceError synchronously, before .catch() can
+      // attach, skipping updatePersistedLoop so lastRun/iterationCount never persist.
+      await atomicWrite(outputPath, result).catch(() => {});
+
+      await updatePersistedLoop(id, {
+        lastRun: Date.now(),
+        iterationCount: active.iterationCount,
+        lastExitCode: metadata.exitCode
+      }).finally(() => {
+        // Notify after persistence settles, including failures: live execution
+        // has ended either way, and consumers must leave the running state.
+        loopEvents.emit('iteration:complete', { id, ...iterResult });
+      });
+
+      console.log(`🔄 Loop ${id} iteration ${iterationNum} complete (${provider.name}, exit ${metadata.exitCode}, ${outputLines.length} lines)`);
     };
-    onComplete(failureMetadata).catch(() => { /* history write is best-effort */ });
-    loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: err.message, timestamp: Date.now() });
-    console.error(`❌ Loop ${id} run failed: ${err.message}`);
-  });
+
+    // Pre-create the run so `active.runId` can be set before generation
+    // starts (cancellation needs the id). The central handler reuses our
+    // runId when provided rather than creating a second one.
+    const runResult = await createRun({
+      providerId: provider.id,
+      prompt: loop.prompt,
+      workspacePath: loop.cwd || PATHS.root,
+      source: 'loop',
+      sourceId: id,
+      label: `Loop: ${loop.name} #${iterationNum}`
+    }).catch(err => {
+      active.running = false;
+      loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: err.message, timestamp: Date.now() });
+      console.error(`❌ Loop ${id} createRun failed: ${err.message}`);
+      return null;
+    });
+
+    if (!runResult) return;
+
+    active.runId = runResult.metadata.id;
+
+    // The toolkit's createRun may switch to a fallback provider when the
+    // requested one is marked unavailable (providerStatusService). Reassign
+    // `provider` to the effective one so dispatch, onComplete's
+    // history/persistence side, and the `iteration:complete` event all see
+    // the provider that actually ran. Without this, fallback would only
+    // update the run record while the spawn still hit the dead provider.
+    if (runResult.provider && runResult.provider.id !== provider.id) {
+      provider = runResult.provider;
+    }
+
+    // Adapt the central handler's resolve/reject to the legacy onComplete
+    // metadata shape. We can't get the runner's full metadata back from
+    // runPromptThroughProvider today — it only resolves `{ text, runId,
+    // model }`. Reconstruct the bits onComplete inspects (exitCode + success
+    // + duration) from the promise resolution; pass through `model` so
+    // iterResult records what actually ran (not just the saved default).
+    const startedAt = Date.now();
+    runPromptThroughProvider({
+      provider,
+      // A proactive fallback may pin a model that belongs only to the selected
+      // fallback provider. Thread that pin through the pre-created run path so
+      // execution uses the same model that createRun recorded.
+      model: runResult.fallbackModel ?? null,
+      prompt: loop.prompt, source: 'loop', runId: runResult.metadata.id,
+      onData, timeout: loop.timeout || DEFAULT_TIMEOUT_MS,
+      // loop.cwd is a user-facing setting on each loop record — without this
+      // pass-through, every loop runs against PortOS's own cwd instead of
+      // the directory the user picked.
+      cwd: loop.cwd || PATHS.root,
+    }).then(({ model: executedModel }) => {
+      // Wrap `onComplete` so a throw inside the success branch doesn't fall
+      // through to the chained `.catch` below and get misclassified as
+      // `iteration:error`. History/persistence side is best-effort anyway.
+      return Promise.resolve()
+        .then(() => onComplete({ exitCode: 0, success: true, duration: Date.now() - startedAt, model: executedModel }))
+        .catch((err) => {
+          console.error(`❌ Loop ${id} onComplete (success branch) threw: ${err?.message || err}`);
+        });
+    }).catch(err => {
+      // Pre-migration `executeCliRun` always invoked `onComplete` — even on
+      // non-zero exit — so loop history / persistence / `iteration:complete`
+      // observers saw failed runs too. The .then/.catch split here would
+      // skip onComplete on failure and only emit `iteration:error`, breaking
+      // anything that subscribed to completes (history.push, lastExitCode
+      // persistence). Fire onComplete with a failure shape before the error
+      // event so the history + persistence side stays consistent.
+      const failureMetadata = {
+        exitCode: 1,
+        success: false,
+        duration: Date.now() - startedAt,
+        error: err.message,
+        model: provider.defaultModel,
+      };
+      onComplete(failureMetadata).catch(() => { /* history write is best-effort */ });
+      loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: err.message, timestamp: Date.now() });
+      console.error(`❌ Loop ${id} run failed: ${err.message}`);
+    });
+  } catch (err) {
+    // Early rejection before the main run execution (e.g. loadLoops, provider
+    // resolution, or createRun) — ensure active.running is reset so the next
+    // scheduled tick can proceed without being permanently wedged.
+    active.running = false;
+    loopEvents.emit('iteration:error', {
+      id,
+      iteration: active.iterationCount,
+      error: err?.message || String(err),
+      timestamp: Date.now()
+    });
+    console.error(`❌ Loop ${id} iteration setup failed: ${err?.message || String(err)}`);
+  }
 }
 
 /**
