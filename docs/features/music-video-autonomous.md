@@ -13,7 +13,7 @@ brief → lyrics → style → song → analyze → produce
 | `brief` | One LLM call turns the prompt into a title, a musical description, a compact Suno style line, a visual concept and a mood-board spec. The project is renamed to the title. | one provider call |
 | `lyrics` | Original lyrics written against the musical description (skipped for an instrumental). | one provider call |
 | `style` | A **Mood Board** (text notes + a composite look prompt and an avoid list) is created and linked as the project's mood board; the concept is set from the brief. No images are generated. | free |
-| `song` | The PortOS Browser drives the Suno web UI (custom mode: lyrics, style, title), the song is downloaded from Suno's CDN into the music library, a Track is created, the take is recorded with `source: 'suno'`, and the project is linked to it. | Suno credits |
+| `song` | The PortOS Browser submits a Suno song (custom mode: lyrics, style, title). CDN downloads are bounded and decoded before import, but the current adapter cannot verify generation completion and stops before importing (see [Suno completion evidence](#suno-completion-evidence)). | Suno credits |
 | `song` (local) | `songSource: 'local'` renders the song with the on-device Music Designer engines instead (see [Local song source](#local-song-source)). | free (GPU time) |
 | `analyze` | The usual offline beat / tempo / section analysis. | free |
 | `produce` | **Footage** (any image/video tool picked): the existing server-owned production run (`/production-runs`) with a pool built from the picks, then the final render once it completes. **Code** (only `code:render`): a code-rendered video is authored and rendered directly. | per tool |
@@ -40,7 +40,33 @@ Approving can carry edits (`POST /api/music-video/:id/autonomous/resume` with `{
 3. The render is queued onto that Track and the job id stored as `output.localSongJobId`; the Music Studio completion hook lands the audio on the Track, and the stage settles once it is there. A retry rejoins the stored job (or starts a new one if it failed/was canceled) and never renders a track that already has audio.
 4. Stop / Cancel on a run waiting in this stage cancels the queued render.
 
-**Fallback.** With `localFallback: true` (Suno source only), a Suno failure *before Suno accepted the request* — signed out, no credits, page changed, browser down — switches the run to the local source instead of parking it (`output.songSource: 'local'`, `output.songFallbackReason`). Once Suno has accepted a request the credits are spent, so a later failure parks as usual and a retry reuses those songs. A fully unattended scheduled run therefore still finishes when Suno is unavailable.
+**Fallback.** With `localFallback: true` (Suno source only), a Suno failure *before Suno accepted the request* — signed out, no credits, page changed, browser down — switches the run to the local source instead of parking it (`output.songSource: 'local'`, `output.songFallbackReason`). Once Suno has accepted a request the credits are spent, so a later failure parks as usual and a retry reuses those songs. This fallback does not apply to a submitted song whose download or completion verification fails.
+
+## Suno completion evidence
+
+The CDN exposes playable partial files. Two equal byte counts, an audio MIME
+header, a duration, or successful decoding cannot prove that generation ended.
+As required by [#9525](https://github.com/atomantic/PortOS/issues/9525), the adapter
+preserves that uncertainty explicitly until a reliable completion signal is
+available. **Automatic Suno import is currently unavailable**: a stable,
+decodable candidate returns `SUNO_AUDIO_COMPLETION_UNVERIFIED` instead of
+silently importing potentially partial audio. Choosing the local song source
+remains the complete unattended path.
+
+The downloader aborts stalled headers and body reads within the overall budget
+(`SUNO_AUDIO_TIMEOUT`). It rejects known non-audio content and uses ffmpeg to
+decode candidate audio in a temporary directory, removed on success or failure.
+Diagnostics carry fixed reasons and bounded HTTP status, never response bodies
+or song URLs.
+
+A future integration must verify the exact song's completion before returning
+`complete` from the internal completion adapter; `pending` keeps polling, and
+missing/unrecognized evidence remains unknown. The injected completed fixture
+tests this admission contract; it is not evidence of live Suno support.
+[#9474](https://github.com/atomantic/PortOS/issues/9474) owns live Suno acceptance.
+Retry retains already-submitted IDs and does not press Create or spend more
+credits. Repeating Retry cannot resolve unknown completion until the integration
+provides that evidence.
 
 ## Failure handling
 

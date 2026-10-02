@@ -2,12 +2,21 @@
  * The Suno step with a fake browser page and a fake CDN. Pins what only this
  * layer knows: a signed-out page is a login-required park (not a generic
  * failure), songs already in the workspace are never mistaken for ours, audio
- * is accepted only once it stops growing, and a retry reuses submitted songs.
+ * requires decoding and verified completion, and a retry reuses submitted songs.
  */
 
 import { EventEmitter } from 'node:events';
-import { describe, it, expect, vi } from 'vitest';
+import { mkdtemp, access } from 'fs/promises';
+import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { __testing, generateSunoSong } from './autonomousSuno.js';
+
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, mkdtemp: vi.fn(actual.mkdtemp) };
+});
+const ffmpegAvailable = Boolean(await findFfmpeg());
+const completed = { checkCompletion: async () => 'complete', validateAudio: async () => true };
 
 const { downloadSunoAudio, submitSunoSong } = __testing;
 
@@ -127,27 +136,114 @@ describe('submitSunoSong', () => {
 });
 
 describe('downloadSunoAudio', () => {
+  afterEach(() => vi.useRealTimers());
   const body = (size) => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(size) });
 
-  it('waits out a partial file: returns only once the size is stable and real', async () => {
+  it('selects stable candidates for decoding and verified completion', async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce({ ok: false })
       .mockResolvedValueOnce(body(1000)) // too small — a stub
       .mockResolvedValueOnce(body(300 * 1024)) // growing
       .mockResolvedValueOnce(body(400 * 1024))
       .mockResolvedValueOnce(body(400 * 1024)); // stable
-    const bytes = await downloadSunoAudio(NEW_A, { fetchImpl, sleep: noSleep, now: () => 0 });
+    const bytes = await downloadSunoAudio(NEW_A, { ...completed, fetchImpl, sleep: noSleep, now: () => 0 });
     expect(bytes.length).toBe(400 * 1024);
     expect(fetchImpl).toHaveBeenCalledTimes(5);
-    expect(fetchImpl).toHaveBeenCalledWith(`https://cdn1.suno.ai/${NEW_A}.mp3`);
+    expect(fetchImpl).toHaveBeenCalledWith(`https://cdn1.suno.ai/${NEW_A}.mp3`, { signal: expect.any(AbortSignal) });
   });
 
-  it('gives up with a clear timeout naming the song when it never finishes', async () => {
+  it('times out with bounded diagnostics when it never finishes', async () => {
     let t = 0;
     await expect(downloadSunoAudio(NEW_A, {
       fetchImpl: async () => ({ ok: false }), sleep: noSleep, intervalMs: 10, timeoutMs: 25, now: () => (t += 10),
-    })).rejects.toMatchObject({ code: 'SUNO_AUDIO_TIMEOUT', context: expect.objectContaining({ songId: NEW_A }) });
+    })).rejects.toMatchObject({ code: 'SUNO_AUDIO_TIMEOUT', context: expect.objectContaining({ platform: 'Suno' }) });
   });
+  it.each(['headers', 'body'])('aborts stalled %s at the overall deadline without leaking timers', async (phase) => {
+    vi.useFakeTimers();
+    let requestSignal;
+    let bodyAborted = false;
+    const fetchImpl = async (_url, { signal }) => {
+      requestSignal = signal;
+      const hang = () => new Promise((_resolve, reject) => signal.addEventListener('abort', () => {
+        bodyAborted = phase === 'body';
+        reject(signal.reason);
+      }, { once: true }));
+      if (phase === 'headers') return hang();
+      return { ok: true, status: 200, bodyUsed: true, arrayBuffer: hang };
+    };
+    const assertion = expect(downloadSunoAudio(NEW_A, { fetchImpl, timeoutMs: 100 })).rejects.toMatchObject({
+      code: 'SUNO_AUDIO_TIMEOUT', context: { reason: 'deadline_exceeded' },
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await assertion;
+    expect(requestSignal.aborted).toBe(true);
+    expect(bodyAborted).toBe(phase === 'body');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cancels unread HTTP error bodies before retrying', async () => {
+    let time = 0;
+    const cancel = vi.fn(async () => {});
+    await expect(downloadSunoAudio(NEW_A, {
+      fetchImpl: async () => ({ ok: false, status: 503, body: { cancel } }),
+      now: () => time, sleep: async (ms) => { time += ms; }, timeoutMs: 25, intervalMs: 10,
+    })).rejects.toMatchObject({ code: 'SUNO_AUDIO_TIMEOUT', context: { httpStatus: 503 } });
+    expect(cancel).toHaveBeenCalledTimes(3);
+  });
+
+  it('never imports stable, decodable audio while generation is pending', async () => {
+    let time = 0;
+    const importAudio = vi.fn();
+    await expect(generateSunoSong({}, {
+      ...completed, checkCompletion: async () => 'pending', songIds: [NEW_A], importAudio,
+      fetchImpl: async () => body(200 * 1024), now: () => time,
+      sleep: async (ms) => { time += ms; }, timeoutMs: 25, intervalMs: 10,
+    })).rejects.toMatchObject({ code: 'SUNO_AUDIO_TIMEOUT', context: { reason: 'generation_pending' } });
+    expect(importAudio).not.toHaveBeenCalled();
+  });
+
+  it('imports bytes fetched after completion rather than certifying an earlier partial body', async () => {
+    let checks = 0;
+    let complete = false;
+    const partial = Buffer.alloc(200 * 1024, 1);
+    const finished = Buffer.alloc(200 * 1024, 2);
+    const importAudio = vi.fn(async () => ({ filename: 'finished.mp3', sizeBytes: finished.length }));
+    await generateSunoSong({}, {
+      songIds: [NEW_A], importAudio, validateAudio: completed.validateAudio, sleep: noSleep,
+      checkCompletion: async () => { complete = ++checks >= 2; return complete ? 'complete' : 'pending'; },
+      fetchImpl: async () => new Response(complete ? finished : partial),
+    });
+    expect(importAudio).toHaveBeenCalledWith(finished);
+  });
+
+  it('preserves unknown completion explicitly and never resubmits on retry', async () => {
+    const connect = vi.fn();
+    const importAudio = vi.fn();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(generateSunoSong({}, {
+        songIds: [NEW_A], connect, importAudio, validateAudio: completed.validateAudio,
+        fetchImpl: async () => body(200 * 1024), sleep: noSleep,
+      })).rejects.toMatchObject({ code: 'SUNO_AUDIO_COMPLETION_UNVERIFIED' });
+    }
+    expect(connect).not.toHaveBeenCalled();
+    expect(importAudio).not.toHaveBeenCalled();
+  });
+
+  it('rejects large HTML responses and cancels unread content without importing', async () => {
+    const importAudio = vi.fn();
+    const cancel = vi.fn(async () => {});
+    const arrayBuffer = vi.fn(async () => Buffer.alloc(200 * 1024, '<'));
+    const error = await generateSunoSong({}, {
+      ...completed, songIds: [NEW_A], importAudio,
+      fetchImpl: async () => ({ ok: true, status: 200, headers: new Headers({ 'content-type': 'text/html' }), arrayBuffer, body: { cancel } }),
+    }).catch(error => error);
+    expect(error).toMatchObject({ code: 'SUNO_AUDIO_INVALID', context: { reason: 'non_audio_content' } });
+    expect(importAudio).not.toHaveBeenCalled();
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(JSON.stringify({ message: error.message, context: error.context })).not.toContain(NEW_A);
+  });
+
 });
 
 describe('generateSunoSong', () => {
@@ -158,7 +254,7 @@ describe('generateSunoSong', () => {
   it('submits once, downloads the first take and imports it', async () => {
     const importAudio = vi.fn(async () => ({ filename: 'music-x.mp3', sizeBytes: 204800 }));
     const onSubmitted = vi.fn();
-    const out = await generateSunoSong(fields, { connect, importAudio, onSubmitted, fetchImpl: async () => audio, sleep: noSleep, intervalMs: 0 });
+    const out = await generateSunoSong(fields, { ...completed, connect, importAudio, onSubmitted, fetchImpl: async () => audio, sleep: noSleep, intervalMs: 0 });
     expect(out).toMatchObject({ songId: NEW_A, songIds: [NEW_A, NEW_B], filename: 'music-x.mp3' });
     expect(onSubmitted).toHaveBeenCalledWith([NEW_A, NEW_B]);
   });
@@ -166,10 +262,47 @@ describe('generateSunoSong', () => {
   it('with songs already submitted, never opens the browser — a retry spends no new credits', async () => {
     const connectSpy = vi.fn(connect);
     const out = await generateSunoSong(fields, {
-      connect: connectSpy, importAudio: async () => ({ filename: 'm.mp3', sizeBytes: 1 }), songIds: [NEW_B],
+      ...completed, connect: connectSpy, importAudio: async () => ({ filename: 'm.mp3', sizeBytes: 1 }), songIds: [NEW_B],
       fetchImpl: async () => audio, sleep: noSleep, intervalMs: 0,
     });
     expect(connectSpy).not.toHaveBeenCalled();
     expect(out.songId).toBe(NEW_B);
+  });
+});
+
+// Real decoder contract: synthetic PCM WAV avoids network calls and credits.
+describe.skipIf(!ffmpegAvailable)('Suno audio decoding', () => {
+  function wav() {
+    const frames = 96_000;
+    const bytes = Buffer.alloc(44 + frames * 2);
+    bytes.write('RIFF'); bytes.writeUInt32LE(bytes.length - 8, 4); bytes.write('WAVEfmt ', 8);
+    bytes.writeUInt32LE(16, 16); bytes.writeUInt16LE(1, 20); bytes.writeUInt16LE(1, 22);
+    bytes.writeUInt32LE(48_000, 24); bytes.writeUInt32LE(96_000, 28);
+    bytes.writeUInt16LE(2, 32); bytes.writeUInt16LE(16, 34);
+    bytes.write('data', 36); bytes.writeUInt32LE(frames * 2, 40);
+    for (let i = 0; i < frames; i++) bytes.writeInt16LE(Math.round(8000 * Math.sin(i * Math.PI / 60)), 44 + i * 2);
+    return bytes;
+  }
+
+  it.each(['valid', 'malformed', 'disguised-html'])('validates %s bytes before import and removes temporary artifacts', async (kind) => {
+    const bytes = kind === 'valid' ? wav() : Buffer.alloc(200 * 1024, kind === 'malformed' ? 0 : '<html>private-body');
+    const importAudio = vi.fn(async () => ({ filename: 'test.mp3', sizeBytes: bytes.length }));
+    const firstTemp = mkdtemp.mock.results.length;
+    const result = generateSunoSong({}, {
+      songIds: [NEW_A], importAudio, checkCompletion: async () => 'complete',
+      fetchImpl: async () => new Response(bytes, { headers: { 'content-type': 'audio/mpeg' } }), sleep: noSleep,
+    });
+    if (kind === 'valid') {
+      await expect(result).resolves.toMatchObject({ filename: 'test.mp3' });
+      expect(importAudio).toHaveBeenCalledWith(bytes);
+    } else {
+      const error = await result.catch(error => error);
+      expect(error).toMatchObject({ code: 'SUNO_AUDIO_INVALID', context: { reason: 'decode_failed' } });
+      expect(JSON.stringify({ message: error.message, context: error.context })).not.toMatch(/private-body|candidate|portos-suno-validation/);
+      expect(importAudio).not.toHaveBeenCalled();
+    }
+    const temps = mkdtemp.mock.results.slice(firstTemp);
+    expect(temps).toHaveLength(1);
+    for (const temp of temps) await expect(access(await temp.value)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
