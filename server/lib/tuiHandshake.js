@@ -467,18 +467,21 @@ const OBSERVE_TAIL_MAX_LEN = 4000;
 // rolling tail. When supplied, `ready` also requires that marker to have been
 // seen (see AGY_INPUT_READY_PATTERN).
 //
-// directLaunch: the TUI was pty.spawn'd DIRECTLY — there is no launch shell on
-// the PTY, so the shell's paste-mode OFF (`ESC[?2004l`) that normally proves
-// "the command is now running" never occurs; the first `ESC[?2004h` in the
-// stream comes from the TUI itself and IS the ready signal. Without this flag a
-// direct-launch session can never become ready (the durable-runner regression:
-// every runner-tui claude agent died `tui-not-ready` at the 45s deadline while
-// its input box sat live on screen).
-export function createInputReadyTracker({ readyTextPattern = null, directLaunch = false } = {}) {
+// launchShape: which PTY shape this TUI runs in. 'runner' and 'direct' shapes
+// own their PTY from byte zero and have no launch shell, so the shell's
+// paste-mode OFF (`ESC[?2004l`) that normally proves "the command is now
+// running" never occurs; the first `ESC[?2004h` in the stream comes from the
+// TUI itself and IS the ready signal. Without this knowledge a runner/direct
+// session can never become ready (the durable-runner regression: every
+// runner-tui claude agent died `tui-not-ready` at the 45s deadline while its
+// input box sat live on screen). 'login-shell' has a persistent shell that
+// handles paste-mode negotiation.
+export function createInputReadyTracker({ readyTextPattern = null, launchShape = 'login-shell' } = {}) {
   let pasteModeOn = false;   // LIVE bracketed-paste mode state from the stream
-  // Shell turned paste mode OFF to run the command. Pre-latched for direct
-  // launches, where the TUI owns the PTY from byte zero and no shell OFF exists.
-  let sawCommandRun = directLaunch;
+  // Shell turned paste mode OFF to run the command. Pre-latched when the TUI
+  // owns its own PTY (runner/direct shapes), where no shell OFF exists.
+  const hasOwnPty = launchShape === 'runner' || launchShape === 'direct';
+  let sawCommandRun = hasOwnPty;
   let needsTrust = false;
   let trustAnswered = false;
   let trustChoiceReady = false;

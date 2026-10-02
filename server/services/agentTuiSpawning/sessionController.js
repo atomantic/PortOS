@@ -41,6 +41,7 @@ import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDe
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
 import { isClaudeCommand } from '../../lib/providerModels.js';
+import { shapeHasLoginShell } from '../agentTuiSpawning.js';
 import { createCodexModelRejectionGate } from './codexModelRejection.js';
 import {
   READY_POLL_INTERVAL_MS,
@@ -115,7 +116,7 @@ function createPasteRetryController({
   write,
   paste,
   hasLiveChild,
-  directLaunch,
+  launchShape,
   prompt,
   tuiConfig,
   mcpBoot,
@@ -225,12 +226,12 @@ function createPasteRetryController({
     // `^[[200~ …` session. If the shell has no live child, the command is gone:
     // fail loudly with whatever it printed instead of pasting into the shell.
     //
-    // A direct launch — runner mode, or a public-content stage spawned as its
-    // own PTY (#6159) — has no launch shell: the TUI IS the PTY process. "Does
-    // this pid have a live child?" is then the wrong question (claude may have
-    // zero children at paste time) and a TUI exit kills the PTY, firing onExit.
-    // Skip the probe there.
-    if (!directLaunch && !(await hasLiveChild())) {
+    // A launch shape with a login shell has an intermediate shell; without one
+    // (runner or direct), the TUI IS the PTY process and "does this pid have a
+    // live child?" is the wrong question (the TUI may have zero children at
+    // paste time). A TUI exit kills the PTY in those shapes, firing onExit.
+    // Skip the probe when there is no shell to host the TUI.
+    if (shapeHasLoginShell(launchShape) && !(await hasLiveChild())) {
       if (isFinalized()) return; // a real onExit may have finalized during the probe await
       await finishStartupFailure(
         'tui-exited-early',
@@ -473,7 +474,7 @@ export function createTuiSessionController({
   rawFile,
   executionId,
   laneName,
-  directLaunch,
+  launchShape,
   prOwnership,
   mergeGateIsOwed,
   spooler,
@@ -550,9 +551,9 @@ export function createTuiSessionController({
   const detectTruncatedResponse = createTruncatedResponseDetector();
   const truncationNudgeGate = createTruncationNudgeGate();
   // agy quitting back to its launch shell (see createAgyResumeGate). Only a
-  // login-shell launch has a shell to fall back to; a direct PTY dies with agy
-  // and finishes through handleExit instead.
-  const agyResumeGate = !directLaunch && isAntigravityCommand(tuiConfig.command) ? createAgyResumeGate() : null;
+  // login-shell launch has a shell to fall back to; runner/direct PTYs die with
+  // agy and finish through handleExit instead.
+  const agyResumeGate = shapeHasLoginShell(launchShape) && isAntigravityCommand(tuiConfig.command) ? createAgyResumeGate() : null;
   let agyResumeAwaitingComposer = false;
   // A request the TUI keeps retrying and the provider never answers. Every
   // reaper reads such a session as busy (the retry ladder repaints the screen),
@@ -644,11 +645,11 @@ export function createTuiSessionController({
   // paste into a startup banner, a trust menu, or a returned shell prompt.
   // agy enables bracketed paste on alt-screen entry, before its composer (and
   // before its trust gate) exists, so it needs the extra composer-footer gate.
-  // A direct launch pty.spawns the TUI itself (no launch shell), so the tracker
-  // must not wait for a shell paste-mode OFF that will never come.
+  // Runner/direct shapes pty.spawn the TUI itself (no launch shell), so the
+  // tracker must not wait for a shell paste-mode OFF that will never come.
   const inputReady = createInputReadyTracker({
     ...(isAntigravityCommand(tuiConfig.command) ? { readyTextPattern: AGY_INPUT_READY_PATTERN } : {}),
-    directLaunch,
+    launchShape,
   });
   // Which of the TUI's startup dialogs this session has already answered. One
   // record instead of four sibling booleans; the arms themselves live in
@@ -1559,7 +1560,7 @@ export function createTuiSessionController({
       write: (keys) => session.write(sessionId, keys),
       paste: (text, options) => (sessionId ? session.paste(sessionId, text, options) : false),
       hasLiveChild: () => session.hasLiveChild(pid),
-      directLaunch,
+      launchShape,
       prompt,
       tuiConfig,
       mcpBoot,

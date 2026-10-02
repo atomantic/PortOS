@@ -95,11 +95,28 @@ export function resolveTuiLaunchShape({ useDurableRunner = false, safetyProfile 
 }
 
 /**
+ * Test whether a launch shape owns its own PTY process.
+ * 'runner' and 'direct' shapes own their PTY; 'login-shell' is hosted in a shell.
+ */
+export function shapeHasOwnPty(launchShape) {
+  return launchShape === 'runner' || launchShape === 'direct';
+}
+
+/**
+ * Test whether a launch shape has a login shell to fall back to.
+ * Only 'login-shell' has a persistent shell; 'runner' and 'direct' do not.
+ */
+export function shapeHasLoginShell(launchShape) {
+  return launchShape === 'login-shell';
+}
+
+/**
  * Open the agent TUI's PTY and pair the returned session id with its underlying
  * pty process, so callers don't have to make a second `getSessionProcess` call
  * inline. Centralizes the agent-side defaults (kind, label, initialCommand).
  *
- * Which of the three PTY shapes it opens is `resolveTuiLaunchShape`'s call.
+ * The launch shape is resolved by the caller and threaded through to avoid
+ * the hand-shake mismatch documented in resolveTuiLaunchShape.
  *
  * Returns `{ sessionId, ptyProcess, pid }`. When the shell service fails
  * to create the session, `sessionId` is null and the caller is expected
@@ -115,7 +132,7 @@ export async function createAgentTuiSession({
   forgeTokenEnv = {},
   agentApiEnv = {},
   doneSentinelPath = null,
-  useDurableRunner = false,
+  launchShape,
   safetyProfile = null,
   onData,
   onExit,
@@ -152,7 +169,6 @@ export async function createAgentTuiSession({
     label: `${provider.name} ${agentId}`,
     command: tuiConfig.commandLine,
   };
-  const launchShape = resolveTuiLaunchShape({ useDurableRunner, safetyProfile });
   let sessionId;
   if (launchShape === 'runner') {
     // The CoS runner is a shared long-lived process and builds its own child
@@ -275,11 +291,10 @@ export async function spawnTuiAgent({
   // gets the same allowlisted environment its headless sibling would.
   safetyProfile = null,
 }) {
-  // The SAME call `createAgentTuiSession` branches on — resolved here because
-  // the prompt handshake below is wired before the spawn happens. Everything
-  // that is not a login shell has the provider binary as its own PTY process,
-  // which is what both consumers below actually depend on.
-  const directLaunch = resolveTuiLaunchShape({ useDurableRunner, safetyProfile }) !== 'login-shell';
+  // Resolved here once because the prompt handshake below is wired before the
+  // spawn happens. Threaded through to createAgentTuiSession and the controller
+  // so the shape is derived once per run and both consumers see the same answer.
+  const launchShape = resolveTuiLaunchShape({ useDurableRunner, safetyProfile });
   const outputFile = join(agentDir, 'output.txt');
   // Raw PTY bytes spool to disk continuously rather than accumulate in-memory.
   // A chatty TUI (token-tick repaints, status lines) emits hundreds of chunks
@@ -361,7 +376,7 @@ export async function spawnTuiAgent({
     rawFile,
     executionId,
     laneName,
-    directLaunch,
+    launchShape,
     prOwnership,
     mergeGateIsOwed,
     spooler,
@@ -465,7 +480,7 @@ export async function spawnTuiAgent({
       forgeTokenEnv,
       agentApiEnv,
       doneSentinelPath,
-      useDurableRunner,
+      launchShape,
       safetyProfile,
       onData: controller.handleData,
       onExit: controller.handleExit,
