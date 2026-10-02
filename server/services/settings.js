@@ -183,6 +183,14 @@ export const reloadSettings = async () => {
 // stay off the queue — atomicWrite's temp-file+rename keeps every read whole.
 const queueWrite = createFileWriteQueue();
 
+/**
+ * Drain admitted settings writes and hold later writes through an out-of-band
+ * restore and its cache reconciliation. The callback must not re-enter any
+ * settings write API; reloadSettings reads directly and is safe inside it.
+ * For a full restore acquire this queue before CoS config, then CoS state.
+ */
+export const withLiveSettingsRestore = (restore) => queueWrite(restore);
+
 // Longest scalar the ledger keeps verbatim. A settings value longer than this
 // is a blob (a prompt template, a key list), and the useful fact for "what did I
 // change?" is THAT it changed, not its full text.

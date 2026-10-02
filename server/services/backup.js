@@ -25,7 +25,7 @@ import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
-import { reloadSettings } from './settings.js';
+import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { noteSystemActivity } from './systemActivityNotify.js';
 
@@ -1509,11 +1509,20 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
   };
   const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
-  if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
-    const { withLiveCosRestore } = await import('./cosState.js');
-    return withLiveCosRestore(restoreFiles);
+  const restoreWithCosBoundary = async () => {
+    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
+      const { withLiveCosRestore } = await import('./cosState.js');
+      return withLiveCosRestore(restoreFiles);
+    }
+    return restoreFiles();
+  };
+  // Fixed acquisition order: settings -> CoS config -> CoS runtime. Settings
+  // writers drain before any CoS queue is held, and remain fenced until both
+  // the transfer and all cache reconciliation (including CoS) have settled.
+  if (!dryRun && (!scope || scope === 'settings.json')) {
+    return withLiveSettingsRestore(restoreWithCosBoundary);
   }
-  return restoreFiles();
+  return restoreWithCosBoundary();
 }
 
 const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadable', error: 'The snapshot database dump could not be read or staged for restore. Restore was refused without changing data.' });

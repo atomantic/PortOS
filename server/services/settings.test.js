@@ -35,7 +35,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { join as joinPath } from 'path';
 import { tmpdir } from 'os';
 import { atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
-import { getSettings, updateSettings, updateSettingsWith, reloadSettings, settingsEvents, __resetSettingsCache, readSettingsStrict } from './settings.js';
+import { getSettings, updateSettings, updateSettingsWith, withLiveSettingsRestore, reloadSettings, settingsEvents, __resetSettingsCache, readSettingsStrict } from './settings.js';
 
 describe('settings.js', () => {
   beforeEach(() => {
@@ -345,6 +345,59 @@ describe('settings.js', () => {
       }
       // No invalid content (e.g. "undefined") was ever persisted.
       expect(atomicWrite).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('live settings restore boundary', () => {
+    it('drains admitted mutations and gives waiting mutations the restored warm-store base', async () => {
+      let disk = { exampleSetting: 'before' };
+      tryReadFile.mockImplementation(async () => JSON.stringify(disk));
+      atomicWrite.mockImplementation(async (_path, content) => { disk = JSON.parse(content); });
+      expect(await getSettings()).toEqual(disk);
+      const admitted = Promise.withResolvers();
+      const resumeMutation = Promise.withResolvers();
+      const transferStarted = Promise.withResolvers();
+      const finishTransfer = Promise.withResolvers();
+      const mutation = updateSettingsWith(async current => {
+        admitted.resolve();
+        await resumeMutation.promise;
+        return { ...current, earlier: true };
+      });
+      await admitted.promise;
+      const transfer = vi.fn(async () => {
+        expect(disk).toEqual({ exampleSetting: 'before', earlier: true });
+        disk = { exampleSetting: 'snapshot' };
+        transferStarted.resolve();
+        await finishTransfer.promise;
+        await reloadSettings();
+      });
+      const restore = withLiveSettingsRestore(transfer);
+      await Promise.resolve();
+      expect(transfer).not.toHaveBeenCalled();
+      resumeMutation.resolve();
+      await transferStarted.promise;
+      const laterMutation = vi.fn(current => ({ ...current, later: true }));
+      const later = updateSettingsWith(laterMutation);
+      await Promise.resolve();
+      expect(laterMutation).not.toHaveBeenCalled();
+      finishTransfer.resolve();
+      await Promise.all([mutation, restore, later]);
+      expect(disk).toEqual({ exampleSetting: 'snapshot', later: true });
+      expect(await getSettings()).toEqual(disk);
+    });
+
+    it('releases a rejected restore so a later update reads the partially restored file', async () => {
+      let disk = { exampleSetting: 'before' };
+      tryReadFile.mockImplementation(async () => JSON.stringify(disk));
+      atomicWrite.mockImplementation(async (_path, content) => { disk = JSON.parse(content); });
+      await getSettings();
+      await expect(withLiveSettingsRestore(async () => {
+        disk = { exampleSetting: 'partial snapshot' };
+        await reloadSettings();
+        throw new Error('partial transfer failed');
+      })).rejects.toThrow('partial transfer failed');
+      await updateSettings({ later: true });
+      expect(await getSettings()).toEqual({ exampleSetting: 'partial snapshot', later: true });
     });
   });
 
