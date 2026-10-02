@@ -87,17 +87,50 @@ export async function requireProductionOperator(req) {
 }
 
 export async function saveProductionDraft(id, draft) {
-  const { project } = await mutateProjectRecord(id, current => ({ project: { ...current,
+  const guard = await validateGuideSelection(await requireProject(id), () => draft.guideArtifactId);
+  const { project } = await mutateProjectRecord(id, current => {
+    guard(current);
+    return { project: { ...current,
     productionReview: { ...current.productionReview, draft,
       alignmentBasis: draft.timingStatus === 'verified'
         ? (current.productionReview?.draft?.timingStatus !== 'verified' ? productionAlignmentBasis(current) : current.productionReview?.alignmentBasis)
-        : null } } }));
+        : null } } };
+  });
   return changed(project);
 }
 
 export async function approveProductionReview(id, input) {
-  const { project } = await mutateProjectRecord(id, current => ({ project: approveProductionStage(current, input) }));
+  const guard = await validateGuideSelection(await requireProject(id), current => current.productionReview?.draft?.guideArtifactId);
+  const { project } = await mutateProjectRecord(id, current => {
+    guard(current);
+    return { project: approveProductionStage(current, input) };
+  });
   return changed(project);
+}
+
+// Historical guides remain readable. Selecting or approving one validates its
+// immutable bytes under today's policy, including HTML saved before narrowing.
+async function validateGuideSelection(project, selectedId) {
+  const { musicVideoMediaMode } = await import('../../lib/musicVideoMediaPolicy.js');
+  const signature = current => {
+    const id = selectedId(current);
+    const artifact = current.devArtifacts?.find(entry => entry.id === id && !entry.deleted);
+    return JSON.stringify([musicVideoMediaMode(current), id || null, artifact?.file, artifact?.version]);
+  };
+  const initial = signature(project);
+  const id = selectedId(project);
+  if (id) {
+    const { findDevArtifact } = await import('./devArtifacts.js');
+    const { resolveDevArtifactFile } = await import('./devArtifactStore.js');
+    const { assertDocumentMediaPolicy } = await import('./documentMediaPolicy.js');
+    const artifact = findDevArtifact(project, id);
+    const abs = resolveDevArtifactFile(artifact.file);
+    if (!abs) throw new ServerError('Guide artifact file path is invalid', { status: 422, code: 'VALIDATION_ERROR' });
+    await assertDocumentMediaPolicy(project, [{ rel: artifact.file, abs }]);
+  }
+  return current => {
+    if (signature(current) !== initial) throw new ServerError('The guide or media mode changed while it was being checked — review it again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+  };
 }
 
 /** Prepare ordinary editable artifacts; never mark any stage approved. */
@@ -138,6 +171,23 @@ export async function prepareProductionReview(id, options = {}) {
     const { planProject } = await import('./planner.js');
     await planProject(id, { ...options, seedPrompts: true });
     project = await requireProject(id);
+  }
+  // New code-first projects need an executable medium plan as well as scenes.
+  // Prepare supplies deterministic defaults before human storyboard approval;
+  // it never recompiles an existing treatment or replaces authored direction.
+  if (project.productionPolicy?.strategy === 'code-first' && !project.treatment) {
+    const { buildTreatmentDraft } = await import('./treatmentDraft.js');
+    const { treatmentBasis, writeCompiledTreatment, applyTreatmentToProject } = await import('./treatment.js');
+    ({ project } = await mutateProjectRecord(id, current => {
+      if (current.productionPolicy?.strategy !== 'code-first' || current.treatment
+        || !productionReadiness(current).art.approved) return { project: current };
+      const compiled = writeCompiledTreatment(current, { baseRevision: 0, basis: treatmentBasis(current),
+        draft: buildTreatmentDraft(current), compiledWith: { source: 'deterministic', providerId: null, model: null } });
+      const applied = applyTreatmentToProject(compiled, { revision: compiled.treatment.revision }).project;
+      const original = new Map(current.scenes.map(scene => [scene.sceneId, scene]));
+      return { project: { ...applied, scenes: applied.scenes.map(scene => ({ ...scene,
+        ...(original.get(scene.sceneId)?.direction ? { direction: original.get(scene.sceneId).direction } : {}) })) } };
+    }));
   }
   const { project: planned } = await mutateProjectRecord(id, current => {
     const latest = current.productionReview.draft;

@@ -340,6 +340,7 @@ describe('syncWire', () => {
         name: 'Example Video',
         imageMode: 'grok',
         imageModelId: 'example-image-model',
+        renderError: 'Example local render diagnostic',
         videoSettings: {
           backend: 'grok',
           modelId: 'example-video-model',

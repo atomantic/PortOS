@@ -116,12 +116,14 @@ describe('music video code generation (#9076)', () => {
     const response = () => JSON.stringify({ sections: [{ id: 'a', source: fixtureSectionSource('#555555') }, { id: 'b', source: fixtureSectionSource('#666666') }] });
 
     it('sends the approved definitions and motion/camera rules with both the full and the one-section request', async () => {
-      h.project = { ...base(), castAndSets: { status: 'approved', direction: direction() } };
+      h.project = { ...base(), productionReview: { draft: { motionLanguage: 'Energy: playful. 0–1s unfold on the downbeat; 1–2s expand the chorus gesture.', implementationPlan: 'Hinge the paper limbs; arc the camera analytically.' } }, castAndSets: { status: 'approved', direction: direction() } };
       h.response = response();
       await generateMusicVideoCode('mv-code', { providerId: 'stub-provider' });
       await regenerateMusicVideoCodeSection('mv-code', 'a', { providerId: 'stub-provider' });
       expect(h.prompts).toHaveLength(2);
       for (const prompt of h.prompts) {
+        expect(prompt).toContain(h.project.productionReview.draft.motionLanguage);
+        expect(prompt).toContain(h.project.productionReview.draft.implementationPlan);
         expect(prompt).toContain('APPROVED CAST & SETS DEFINITIONS AND RULES');
         expect(prompt).toContain('camera: slow dolly with a beat-synced push');
         expect(prompt).toContain('movement: bobs on every beat');

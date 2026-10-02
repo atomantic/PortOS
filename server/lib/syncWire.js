@@ -58,6 +58,8 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
     // A fully-autonomous run names this install's providers, Suno songs and
     // production run (services/musicVideo/autonomousService.js).
     autonomousRun: _autonomousRun,
+    // Render diagnostics describe a job on this machine, never a peer job.
+    renderError: _renderError,
     ...shared
   } = record;
   // A composition document names a folder on this install only

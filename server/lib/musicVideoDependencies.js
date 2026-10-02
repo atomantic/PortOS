@@ -27,7 +27,7 @@ const compositionRef = (project, startSec, endSec) => {
   const value = composition ? { ...composition,
     cues: (composition.cues || []).filter((cue) => intersects(cue, startSec, endSec)),
   } : null;
-  return { role: 'composition', assetId: 'composition', revision: checksum(value), startSec, endSec };
+  return { role: 'composition', assetId: 'composition', revision: checksum({ mediaMode: project.mediaMode || null, composition: value }), startSec, endSec };
 };
 
 /** Evidence tracks its rendered window, selected layers and transitive take inputs. */

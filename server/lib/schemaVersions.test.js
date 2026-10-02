@@ -66,10 +66,10 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 describe('buildPortosMeta', () => {
   it('rejects repair, timing and narrative event metadata on older music-video peers', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(18);
-    for (const receiverV of [13, 14, 15, 16, 17]) {
+    expect(meta.schemaVersions.musicVideoProjects).toBe(19);
+    for (const receiverV of [13, 14, 15, 16, 17, 18]) {
       expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
-        .toContainEqual({ category: 'musicVideoProjects', senderV: 18, receiverV });
+        .toContainEqual({ category: 'musicVideoProjects', senderV: 19, receiverV });
     }
   });
 

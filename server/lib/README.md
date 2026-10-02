@@ -830,3 +830,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `persistentMindContextEvents.js` | `selectPersistentMindContextEvents`, `renderPersistentMindContextEvent` — retain useful conversation evidence without diagnostic ledger noise. |
 
 | `codeAnimationSound.js` | Versioned frame/sample timelines, deterministic impact/reveal WAV synthesis and decoded event measurements. |
+
+| `musicVideoMediaPolicy.js` | Whole-workflow media modes, legacy intent, selection admission and independent document renderer choice. |

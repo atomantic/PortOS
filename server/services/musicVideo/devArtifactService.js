@@ -1,3 +1,5 @@
+import { assertDocumentMediaPolicy } from './documentMediaPolicy.js';
+import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — development artifact workflow: import/upload, generated saves,
  * notes, review and soft delete over the pure transforms in devArtifacts.js
@@ -60,6 +62,7 @@ async function storeVersion(projectId, {
   const mimeType = devArtifactTypeFor(ext);
   if (!mimeType) throw new ServerError('Unsupported file type — accepted: HTML, Markdown, MP4, PNG, JPG', { status: 400, code: 'VALIDATION_ERROR' });
   const project = await requireProject(projectId);
+  await assertDocumentMediaPolicy(project, [{ rel: `guide.${ext}`, data: buffer, abs: tempPath }]);
   if (artifactId) findDevArtifact(project, artifactId);
   const id = artifactId || newDevArtifactId();
   const version = nextDevArtifactVersion(project, artifactId);
@@ -67,6 +70,9 @@ async function storeVersion(projectId, {
     projectId, artifactId: id, version, ext: ext === 'jpeg' ? 'jpg' : ext, buffer, tempPath,
   });
   const out = await mutateProjectRecord(projectId, (current) => {
+    if (musicVideoMediaMode(current) !== musicVideoMediaMode(project)) {
+      throw new ServerError('Media mode changed during the artifact upload — try again', { status: 409, code: 'DEV_ARTIFACT_CONFLICT' });
+    }
     // A concurrent write took this version number: refuse rather than point
     // two versions at one file.
     if (nextDevArtifactVersion(current, artifactId) !== version) {

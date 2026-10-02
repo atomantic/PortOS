@@ -1,3 +1,4 @@
+vi.mock('../musicVideo/projects.js', () => ({ getProject: vi.fn(async () => ({ mediaMode: 'code-images-video' })) }));
 vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSceneReview: vi.fn(async () => {}) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
@@ -246,6 +247,19 @@ afterAll(async () => {
 });
 
 describe('mediaJobQueue', () => {
+  it('blocks guide generation and rechecks media policy before delayed provider dispatch', async () => {
+    const { getProject } = await import('../musicVideo/projects.js');
+    const request = { kind: 'image', params: { prompt: 'Synthetic guide', musicVideo: { projectId: 'mv-example', castAndSets: { key: 'guide' } } } };
+    getProject.mockResolvedValueOnce({ mediaMode: 'code-only' });
+    await expect(mediaJobQueue.enqueueJob(request)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    getProject.mockResolvedValueOnce({ mediaMode: 'code-images' }).mockResolvedValueOnce({ mediaMode: 'code-only' });
+    const { jobId } = await mediaJobQueue.enqueueJob(request);
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(jobId).error).toContain('planning guides');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+  });
+
   it('rejects an unreviewed music-video scene before queue admission and rechecks delayed dispatch', async () => {
     const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
     const request = { kind: 'video', params: { prompt: 'Synthetic scene', musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' } } };
@@ -1531,6 +1545,31 @@ describe('Audio kind (#1928)', () => {
     }));
     audioGenEvents.emit('completed', { generationId: id, filename: `${id}.wav` });
     await waitFor(() => mediaJobQueue.getJob(id)?.status === 'completed');
+  });
+
+  it.each([{ mediaMode: 'code-only' }, null])('recovers an already-submitted remote cancellation after project policy changes: %j', async project => {
+    const { getProject } = await import('../musicVideo/projects.js');
+    getProject.mockResolvedValueOnce(project);
+    const id = '00000000-0000-4000-8000-000000000003';
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
+      id, kind: 'video', status: 'running', queuedAt: new Date().toISOString(),
+      params: { musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' },
+        remoteMedia: { ...remoteVideoMediaParams(), cancelRequested: true } },
+    }] }));
+    stubs.generateVideoRemote.mockImplementation(async params => {
+      videoGenEvents.emit('failed', { generationId: params.jobId, error: 'Canceled remotely' });
+    });
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => mediaJobQueue.getJob(id)?.status === 'canceled');
+    expect(stubs.generateVideoRemote).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: id, remoteMedia: expect.objectContaining({ reconcile: true, cancelRequested: true }),
+    }));
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    // A newly submitted request still passes admission policy, even if it
+    // carries a forged cancellation/reconciliation marker.
+    await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      musicVideo: { projectId: 'mv-example' }, remoteMedia: { ...remoteVideoMediaParams(), reconcile: true, cancelRequested: true },
+    } })).rejects.toThrow();
   });
 
 

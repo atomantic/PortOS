@@ -1,3 +1,4 @@
+import { MUSIC_VIDEO_MEDIA_MODES, musicVideoMediaMode } from './musicVideoMediaPolicy.js';
 /**
  * Fully-autonomous Music Video — the pure vocabulary and transforms.
  *
@@ -115,6 +116,7 @@ function normalizeAutonomousSettings(raw = {}) {
   const authoringModel = clean(raw.authoring?.model, 200);
   const authoringEffort = normalizeMusicVideoEffort(raw.authoring?.effort);
   return {
+    mediaMode: MUSIC_VIDEO_MEDIA_MODES.includes(raw.mediaMode) ? raw.mediaMode : musicVideoMediaMode({ tools }),
     songSource: AUTONOMOUS_SONG_SOURCES.includes(raw.songSource) ? raw.songSource : AUTONOMOUS_SONG_SOURCES[0],
     // Suno only: when it cannot even take the request (signed out, no credits,
     // page changed), render the song locally instead of parking the run.

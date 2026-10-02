@@ -2,18 +2,26 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalSnapshotChecksum as hash } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 
 import { isNonBlankStr as text } from '../../lib/textUtils.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
 const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
-const source = p => ({ trackId: p.trackId, uploadedAudioFilename: p.uploadedAudioFilename,
-  duration: p.audioAnalysis?.durationSec, beats: p.audioAnalysis?.beats, sections: p.audioAnalysis?.sections,
-  lyrics: p.lyricCues, markers: p.lyricMarkers, phrases: p.phrases });
+const source = p => {
+  const timing = p.audioTimingRevisions?.at(-1);
+  return { trackId: p.trackId, uploadedAudioFilename: p.uploadedAudioFilename,
+    duration: p.audioAnalysis?.durationSec, beats: p.audioAnalysis?.beats, sections: p.audioAnalysis?.sections,
+    // These drive authored musical actions even when the beat grid and lyrics
+    // stay unchanged. Waveform display samples and receipt timestamps do not.
+    downbeats: p.audioAnalysis?.downbeats, features: p.audioAnalysis?.features,
+    audioTiming: timing ? { version: timing.version, basis: timing.basis, input: timing.input } : null,
+    lyrics: p.lyricCues, markers: p.lyricMarkers, phrases: p.phrases };
+};
 export const productionAlignmentBasis = project => hash(source(project));
 
 export function productionReviewBasis(project) {
   const draft = project.productionReview?.draft || {};
-  const art = hash({ projectId: project.id, mode: project.composition?.mode, policy: project.productionPolicy,
+  const art = hash({ projectId: project.id, mediaMode: project.mediaMode, authoringRenderer: project.composition?.authoringRenderer, mode: project.composition?.mode, policy: project.productionPolicy,
     concept: project.concept, visualSpec: project.visualSpec, styleReferences: project.styleReferences,
     direction: project.castAndSets?.direction,
     cast: draft.cast, environments: draft.environments, visualLanguage: draft.visualLanguage,
@@ -43,6 +51,7 @@ export function productionReadiness(project) {
     if (!text(draft[key])) artProblems.push(`${label} needs editable direction.`);
   }
   if (!['text/html', 'image/png', 'image/jpeg'].includes(artifact(project, draft.guideArtifactId)?.mimeType)) artProblems.push('Attach a visual cast/environment sheet from Development artifacts.');
+  if (artifact(project, draft.guideArtifactId)?.mimeType?.startsWith('image/') && !musicVideoAllowsMedia(project, 'image')) artProblems.push('Code only requires a code-authored visual guide; select a compatible Development artifact.');
   const artApproved = !artProblems.length && review.approvals?.art?.basis === basis.art;
   const boardProblems = unresolved('storyboard').map(f => `Resolve storyboard feedback for ${f.target}: ${f.text}`);
   if (!artApproved) boardProblems.push('Review and approve the current art direction first.');
@@ -104,7 +113,7 @@ export function assertProductionApproval(project, stage = 'proof') {
     { status: 409, code: 'MUSIC_VIDEO_APPROVAL_REQUIRED', context: { stage, readiness } });
 }
 
-export function approveProductionStage(project, { stage, basis }) {
+export function approveProductionStage(project, { stage, basis, proofReview }) {
   const readiness = productionReadiness(project);
   const expected = stage === 'proof'
     ? hash({ basis: readiness.basis.proof, excerptId: project.productionReview?.proof?.excerptId,
@@ -112,9 +121,19 @@ export function approveProductionStage(project, { stage, basis }) {
     : readiness.basis[stage];
   if (basis !== readiness.basis[stage]) throw new ServerError('This revision changed while you were reviewing it. Review it again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   if (readiness[stage].problems.length) throw new ServerError(readiness[stage].problems.join(' '), { status: 409, code: 'MUSIC_VIDEO_REVIEW_INCOMPLETE' });
+  if (stage === 'proof') {
+    const excerpt = project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId);
+    if (proofReview?.watchedWithAudio !== true || !text(proofReview.energyComparison)
+      || !text(proofReview.timecodedNotes) || !/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(proofReview.timecodedNotes)) {
+      throw new ServerError('Play this proof with audio and record the energy comparison and timecoded choreography notes before approving.', { status: 409, code: 'MUSIC_VIDEO_PROOF_REVIEW_REQUIRED' });
+    }
+    if (proofReview.excerptId !== excerpt?.id || proofReview.filename !== excerpt?.filename) {
+      throw new ServerError('The rendered proof changed. Play and review the new excerpt before approving.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+    }
+  }
   return { ...project, productionReview: { ...project.productionReview,
     reviewedRevisions: { ...project.productionReview?.reviewedRevisions, [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } },
-    approvals: { ...project.productionReview?.approvals, [stage]: { basis: expected, approvedAt: new Date().toISOString() } } } };
+    approvals: { ...project.productionReview?.approvals, [stage]: { basis: expected, approvedAt: new Date().toISOString(), ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) } } } };
 }
 
 /** Comments retain the exact reviewed draft, even after a replacement import. */

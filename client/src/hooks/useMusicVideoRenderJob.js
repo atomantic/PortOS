@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   renderMusicVideoProject,
   musicVideoRenderEventsUrl,
@@ -21,13 +22,18 @@ const startRender = (projectId) => renderMusicVideoProject(projectId, { silent: 
  * callbacks. The job shape stays compatible with the existing cancel controls.
  */
 export default function useMusicVideoRenderJob({ onRendered, onFailed } = {}) {
+  const [failure, setFailure] = useState(null);
   const slot = useSseJobSlot({
     startRequest: startRender,
     eventsUrl: musicVideoRenderEventsUrl,
     cancelRequest: cancelMusicVideoRender,
     readPercent: readRenderPercent,
-    onComplete: (frame, projectId) => onRendered?.(projectId, frame.result || {}),
-    onErrorFrame: (_frame, projectId) => { onFailed?.(projectId); },
+    onComplete: (frame, projectId) => { setFailure(null); onRendered?.(projectId, frame.result || {}); },
+    onErrorFrame: (frame, projectId) => {
+      setFailure({ projectId, message: frame.error || 'Render failed' });
+      onFailed?.(projectId, frame.error || 'Render failed');
+    },
+    onKickoffError: (error, projectId) => { setFailure({ projectId, message: error?.message || 'Failed to start render' }); },
     successToast: () => 'Music video rendered',
     errorFallback: 'Render failed',
     canceledMessage: 'Render cancelled',
@@ -36,6 +42,12 @@ export default function useMusicVideoRenderJob({ onRendered, onFailed } = {}) {
   });
   return {
     ...slot,
+    failure,
+    start: (projectId) => {
+      if (slot.active) return;
+      setFailure(null);
+      slot.start(projectId);
+    },
     job: slot.jobId ? { jobId: slot.jobId, projectId: slot.context } : null,
     progress: slot.active ? slot.percent : 0,
   };

@@ -1,3 +1,4 @@
+import MediaModePicker from './MediaModePicker.jsx';
 import { Bot, Clapperboard, Plus, Music, Sparkles, FileText, CheckCircle2 } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
@@ -125,6 +126,7 @@ export default function CreateProjectDrawer({ open, onClose, form, onFormChange,
 
         {/* 2. Project Name */}
         <div>
+          <MediaModePicker value={form.mediaMode} onChange={(mediaMode) => onFormChange({ mediaMode })} />
           <label htmlFor="mv-name" className="block text-xs text-port-text-muted mb-1">Name</label>
           <input
             id="mv-name"

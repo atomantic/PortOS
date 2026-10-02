@@ -1,3 +1,5 @@
+import { inlineDocumentModule } from './documentModules.js';
+import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — the in-app live preview of a composition document.
  *
@@ -35,7 +37,7 @@ const INLINE_TOTAL_MAX = 24 * 1024 * 1024;
 const BRIDGED = new Set(['.mp4', '.mov', '.webm', '.mp3', '.wav', '.png', '.jpg', '.jpeg', '.webp', '.gif']);
 
 export const PREVIEW_CSP = [
-  "default-src 'none'", "script-src 'unsafe-inline'", "style-src 'unsafe-inline'",
+  "default-src 'none'", "script-src 'unsafe-inline' data:", "style-src 'unsafe-inline'",
   'img-src data: blob:', 'media-src data: blob:', 'font-src data: blob:',
   "connect-src 'none'", "form-action 'none'", "base-uri 'none'", "object-src 'none'",
   "frame-src 'none'", "worker-src 'none'", "manifest-src 'none'",
@@ -52,6 +54,11 @@ const cleanRef = (ref) => {
 
 // Runs before any document script: asset bridge, relative-src mapping, seek/layout messages.
 const BOOTSTRAP = `(() => {
+  // CSP does not block ICE/STUN. Match the render host before document code runs.
+  for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport', 'Worker', 'SharedWorker', 'WebSocket']) {
+    Object.defineProperty(globalThis, key, { configurable: false, writable: false,
+      value: function() { throw new Error(key + ' is disabled in compositions'); } });
+  }
   const map = new Map();
   let resolved = false;
   let resolveAssets;
@@ -160,7 +167,18 @@ export async function buildDocumentPreview(project, { draft = false } = {}) {
     if (rel === 'portos-mv.js') { html = html.split(match[0]).join(''); continue; }
     const file = files.get(rel);
     if (!file) continue;
-    html = html.split(match[0]).join(`<script${match[1]}${match[3]}>${inlineScript(await readFile(file.abs, 'utf8'))}</script>`);
+    const isModule = /type\s*=\s*['"]module['"]/i.test(match[1] + match[3]);
+    html = html.split(match[0]).join(isModule
+      ? `<script type="module">import ${JSON.stringify(await inlineDocumentModule(rel, files))};</script>`
+      : `<script${match[1]}${match[3]}>${inlineScript(await readFile(file.abs, 'utf8'))}</script>`);
+  }
+  // Inline entry modules need the same local graph resolution as src modules.
+  for (const [index, match] of [...html.matchAll(/<script\b[^>]*type\s*=\s*['"]module['"][^>]*>([\s\S]*?)<\/script>/gi)].entries()) {
+    if (/^import "data:text\/javascript;base64,/.test(match[1])) continue;
+    const entry = `__inline-${index}.js`;
+    const graph = new Map(files); graph.set(entry, { data: Buffer.from(match[1]) });
+    const url = await inlineDocumentModule(entry, graph);
+    html = html.split(match[0]).join(`<script type="module">import ${JSON.stringify(url)};</script>`);
   }
   // Inline <style> blocks and style="" attributes, then <img src>.
   for (const match of [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)]) {
@@ -172,7 +190,9 @@ export async function buildDocumentPreview(project, { draft = false } = {}) {
     const url = rel ? await dataUrl(rel) : null;
     if (url) html = html.split(match[0]).join(match[0].replace(match[1], () => `"${url}"`));
   }
-  const head = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}"><script>${BOOTSTRAP}</script><script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
+  const mode = musicVideoMediaMode(project);
+  const csp = PREVIEW_CSP.replace('img-src data: blob:', mode === 'code-only' ? "img-src 'none'" : 'img-src data: blob:').replace('media-src data: blob:', mode !== 'code-images-video' ? "media-src 'none'" : 'media-src data: blob:');
+  const head = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script>${BOOTSTRAP}</script><script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
   const at = html.match(/<head[^>]*>/i);
   html = at ? `${html.slice(0, at.index + at[0].length)}${head}${html.slice(at.index + at[0].length)}` : `${head}${html}`;
 

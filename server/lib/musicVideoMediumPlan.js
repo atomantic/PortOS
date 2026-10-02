@@ -1,3 +1,4 @@
+import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
 /**
  * Planning-only medium policy. Final-edit seconds are an interval union, not
  * provider clip lengths or a sum that double-counts overlapping footage.
@@ -28,6 +29,7 @@ export const musicVideoBriefTools = (project) => (Array.isArray(project?.automat
 
 /** False when the brief names tools and none of them makes video. A brief naming no tools restricts nothing. */
 export function musicVideoBriefAllowsVideo(project) {
+  if (!musicVideoAllowsMedia(project, 'video')) return false;
   const tools = musicVideoBriefTools(project);
   return tools.length === 0 || tools.some((t) => t.startsWith('video:'));
 }
@@ -70,6 +72,7 @@ export function summarizeMusicVideoMediumPlan(project, directions = project?.tre
   const codeFirst = policy.strategy === 'code-first';
   for (const scene of project?.scenes || []) {
     const d = byScene.get(scene.sceneId);
+    if (d?.medium === 'still' && !musicVideoAllowsMedia(project, 'image') || ['generated-footage', 'existing-footage'].includes(d?.medium) && !musicVideoAllowsMedia(project, 'video')) unresolved.push({ sceneId: scene.sceneId, blocking: true, message: 'This shot medium conflicts with the project media mode.' });
     if (!d || !MUSIC_VIDEO_MEDIA.includes(d.medium)) {
       if (codeFirst) unresolved.push({ sceneId: scene.sceneId, blocking: true, message: 'Compile a medium plan for this shot.' });
       continue;
@@ -182,6 +185,9 @@ export function planMusicVideoMedia(project, directions) {
           : d.route === 'supplied-asset' ? 'existing-footage' : 'generated-footage';
       rationale = codeFirst ? 'Carry the section motif and transitions with code or available images.'
         : 'Retain the legacy treatment route.';
+    }
+    if (!manualLayer && !scene?.referenceImageId && !scene?.videoHistoryId && (medium === 'still' && !musicVideoAllowsMedia(project, 'image') || ['existing-footage', 'generated-footage'].includes(medium) && !musicVideoAllowsMedia(project, 'video'))) {
+      medium = 'procedural'; rationale = 'Author the full scene in code within the selected media mode.';
     }
     return { ...d, medium, mediumRationale: rationale || d.rationale || 'Director-selected medium.', mediumPinned: manualLayer };
   });

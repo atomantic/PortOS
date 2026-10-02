@@ -104,9 +104,9 @@ function directedPrompts(shot, generated = {}) {
     shot.look && `Wardrobe: ${quote(`${shot.look.name}. ${shot.look.description}`, 350)}`,
     generated.framePrompt || (shot.visualLayer === 'card' ? 'Graphic title card.' : 'Cinematic shot in the directed setting.'),
   ].filter(Boolean).join(' ');
-  const motion = generated.prompt || (shot.visualLayer === 'card' ? 'Hold the graphic beat.'
+  const motion = generated.prompt || (shot.visualLayer === 'card' ? 'Choreograph the graphic scene around the supplied musical anchors; give subject, props and camera a readable action and payoff. Use a hold only when it serves the chosen energy target.'
     : shot.shotMode === 'performance' ? `Perform to the source audio: ${shot.lyricText}`
-      : `Slow camera push; interpret the emotion and action of ${shot.lyricText || shot.visualIntent || shot.sectionLabel || 'this instrumental passage'}.`);
+      : `Stage a readable subject action and camera response for ${shot.lyricText || shot.visualIntent || shot.sectionLabel || 'this instrumental passage'}, timed to the supplied musical anchors and chosen energy target.`);
   return { framePrompt: frame.slice(0, SCENE_TEXT_MAX), prompt: motion.slice(0, SCENE_TEXT_MAX) };
 }
 
@@ -139,6 +139,9 @@ export function buildScenePlanPrompt(project, shots) {
   // Automation-first projects carry the director's standing guidance.
   const guidance = project.automation?.guidance?.trim();
   const guidanceLine = guidance ? `Director guidance: ${quote(guidance, PROMPT_GUIDANCE_MAX)}` : '';
+  const savedPlan = project.productionReview?.draft;
+  const motionPlan = savedPlan?.motionLanguage
+    ? `SAVED ENERGY AND CHOREOGRAPHY DRAFT (planning does not grant approval):\n${quote(savedPlan.motionLanguage, 12000)}\nImplementation: ${quote(savedPlan.implementationPlan || '', 16000)}` : '';
   const hasLyrics = shots.some((s) => s.lyricText);
   const hasDelivery = shots.some((s) => s.delivery?.length);
   const shotLines = shots.map((s, i) => {
@@ -153,6 +156,12 @@ export function buildScenePlanPrompt(project, shots) {
     if (s.visualLayer) parts.push(`layer: ${s.visualLayer}; mode: ${s.shotMode}`);
     if (s.set) parts.push(`assigned set: ${quote(`${s.set.name}: ${s.set.description}; ${s.set.lighting || ''}`, 650)}`);
     if (s.look) parts.push(`assigned look: ${quote(`${s.look.name}: ${s.look.description}`, 400)}`);
+    parts.push(`absolute time: ${s.startSec}–${s.endSec}s`);
+    const anchors = (values) => (values || []).filter(t => Number.isFinite(t) && t >= s.startSec && t < s.endSec).slice(0, 16).join(', ');
+    for (const kind of ['beats', 'downbeats']) {
+      const times = anchors(project.audioAnalysis?.[kind]);
+      if (times) parts.push(`${kind} (seconds): ${times}`);
+    }
     if (s.shotMode === 'performance') parts.push(PERFORMANCE_FRAME);
     return parts.join('; ');
   }).join('\n');
@@ -164,15 +173,18 @@ ${musicVideoCreativeContext(concept)}
 ${musicVideoDirectionContext(direction)}
 ${briefLines}
 ${guidanceLine}
+${motionPlan}
 
 The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent${hasDelivery ? '; optional delivery directions from the lyric sheet' : ''}):
 ${shotLines}
 
-For EACH shot above, propose the shot for a generative video model:
+For EACH shot above, propose a timed composition for its assigned medium (code-authored worlds, selected stills or footage):
 - "framePrompt": the opening reference still — subject, setting, lighting, composition. Keep it concrete and visual.
 - "prompt": the motion for that shot — camera move, subject motion, mood — building on the frame. Higher-energy sections read more kinetic; calmer sections more static/lingering.
 - Shots in the same section are one edited sequence: keep subject and setting continuous, but vary framing (wide / medium / close), angle, or action from shot to shot so consecutive shots cut rather than repeat.
 - The OPENING HOOK shot must grab attention immediately.
+- In each motion prompt, name absolute start/end times and the supplied musical anchors for subject action, prop transformation, camera framing/movement and any permitted graphic typography. Follow the saved energy target; this proposal still needs human review. Repeated choruses must develop the action, scale or staging instead of replaying the same pose. Include anticipation, payoff and recovery; motivated holds and long takes are valid. Do not replace choreography with continuous camera drift, geometry presence, subtitles alone or an arbitrary fast-cut quota.
+- If an energy target or required audio timing is absent, identify it as a director decision to review rather than inventing analysis or claiming the plan is approved.
 ${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text in footage; assigned card layers use their explicit card text.\n' : ''}${hasDelivery ? '- Follow the delivery directions: spoken or whispered lines play as intimate close-ups; shouts land as hard-hitting cuts or impacts; a silence or stop is a held, frozen or cut-to-black beat.\n' : ''}- Keep the assigned layer and shot mode: performance uses source-audio lip-sync and a frontal medium close-up with the mouth visible; cutaways show narrative action without lip-sync; cards are graphic beats.\n- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
 
 Respond with ONLY a JSON array, one object per shot, in shot-index order (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
