@@ -14,8 +14,10 @@
  * fires them on its own (AI Provider Usage Policy). `waveform` is the same
  * designer's "Drawn waveform" engine: the LLM paints strokes on a stereo
  * spectrogram canvas (server/lib/paintedCanvas.js) that the browser plays directly.
- * `code` is its "Code" engine: the LLM writes the piece as Strudel code, which
- * only ever runs in the browser's sandboxed player frame, never on the server.
+ * `code` is its "Code" engine: the LLM writes the piece for a sandboxed browser
+ * player or contained server renderer. Authoring itself can launch a
+ * coding CLI/TUI agent (including via fallback), so all four designer routes
+ * require operator authority through the central host-control gate.
  *
  * Generation (`queueMusicGeneration`, services/musicGeneration.js — shared with the
  * autonomous Music Video run) runs the engine-agnostic `generateMusic` (server/services/pipeline/
@@ -374,15 +376,16 @@ router.post('/waveform', asyncHandler(async (req, res) => {
 const codeSchema = z.object({
   description: z.string().trim().min(1, 'description is required').max(8000),
   lyrics: z.string().trim().max(20000).optional(),
-  // The code in the editor, to revise. Only its size is checked: it is text
-  // for the prompt here and runs nowhere but the browser's sandboxed frame.
+  // The code in the editor, to revise. It is prompt input for an authorized
+  // authoring provider; playback uses the language's separate render boundary.
   current: z.string().max(MUSIC_CODE_MAX).optional().transform(blankToUndefined),
   language: z.enum(MUSIC_CODE_LANGUAGES).optional().default('strudel'),
   ...designerPickerShape,
 }).omit({ template: true });
 
-// POST /api/music/code — have the LLM write the piece as Strudel code for the
-// browser to play. One explicit user action per call; nothing is executed here.
+// POST /api/music/code — have the LLM write the piece in the selected language.
+// The selected provider or fallback can execute a coding agent on the host;
+// the central host-control gate requires operator authority.
 router.post('/code', asyncHandler(async (req, res) => {
   const body = validateRequest(codeSchema, req.body ?? {});
   res.json(await writeMusicCode(body));

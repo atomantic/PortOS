@@ -304,8 +304,8 @@ export async function generateCodeAnimationBrief(input) {
     effort: input.effort || undefined,
     prompt,
     source: 'code-animation-brief',
-    // Same containment as the HTML generation: a CLI/TUI agent only needs to
-    // print a JSON document, never to touch the PortOS checkout.
+    // Runtime data is the authoring working directory, not a sandbox. CLI/TUI
+    // providers retain host tools; the HTTP entry point requires operator authority.
     cwd: PATHS.data,
   });
   const brief = extractBriefIdea(text);
@@ -401,9 +401,8 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
     effort: effort || undefined,
     prompt,
     source: 'code-animation-generation',
-    // CLI/TUI agents only need to read the references and print a document;
-    // keep them in runtime data so a generation can't become a code-editing
-    // session in the PortOS checkout.
+    // Start authoring in runtime data. This does not restrict CLI/TUI host tools;
+    // operator authorization is separate from the later render containment.
     cwd: PATHS.data,
     screenshots: provider.type === 'api' ? referencePaths : [],
     timeout: Math.max(provider.timeout || 0, 15 * 60 * 1000),
