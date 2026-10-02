@@ -232,6 +232,18 @@ async function hasSwapSibling(filePath) {
 }
 
 /**
+ * Error for a missing canonical file that has a legacy `.bak` sibling: the only
+ * copy of the data may live at the backup path. Deliberately NOT ENOENT, so both
+ * strict readers report it as unreadable/recovery-required instead of absent.
+ * Carries no file contents; the guide is docs/TROUBLESHOOTING.md.
+ */
+function orphanedBackupError(filePath, cause) {
+  const err = new Error(`${basename(filePath)} is missing but a ${basename(filePath)}.*.bak backup sibling exists — recovery required; stop writers and restore it manually (see docs/TROUBLESHOOTING.md "Recovering a store with an orphaned .bak file")`, { cause });
+  err.code = 'EBACKUP_ORPHANED';
+  return err;
+}
+
+/**
  * `readFile(filePath, encoding)` with the Windows-only retries that keep a read
  * racing `atomicWrite` from being mistaken for an empty/absent file (#4095).
  *
@@ -261,6 +273,9 @@ async function readWithSwapRetry(filePath, encoding = 'utf-8') {
       return outcome.content;
     }
     const last = attempt >= WIN_RETRY_ATTEMPTS - 1;
+    // Retries exhausted on a vanished file that still has a `.bak` sibling: a legacy
+    // backup swap lost its canonical copy (#9556). Never report this as absent.
+    if (last && outcome.err.code === 'ENOENT' && await hasSwapSibling(filePath)) throw orphanedBackupError(filePath, outcome.err);
     const retriable = WIN_READ_LOCK_CODES.includes(outcome.err.code)
       || (outcome.err.code === 'ENOENT' && !last && await hasSwapSibling(filePath));
     if (last || !retriable) throw outcome.err;

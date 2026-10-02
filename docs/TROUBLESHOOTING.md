@@ -881,3 +881,19 @@ a test, and update macOS + `mflux`/`mlx`.
 2. **Browser console**: F12 → Console for frontend errors
 3. **Server logs**: Look for emoji prefixes (❌ errors, ⚠️ warnings)
 4. **GitHub Issues**: Report bugs at https://github.com/atomantic/PortOS/issues
+
+## Recovering a store with an orphaned `.bak` file
+
+**Symptom**: a read reports a store as unreadable with "is missing but a `<name>.*.bak` backup sibling exists — recovery required", or a Windows write fails with "stayed locked … the existing file was left untouched".
+
+**Cause**: Windows can keep a file locked (antivirus scan, open handle) so the atomic replace is refused. Current versions retry briefly, then fail the write and leave the original file untouched. Older versions instead moved the file to `<name>.<pid>.<ts>.<uuid>.bak` and could lose the canonical copy if installing the new file also failed. PortOS never picks a backup automatically, because it cannot tell which copy is correct.
+
+**Solution**:
+
+1. Stop PortOS (and anything else that writes the data directory) so nothing recreates the canonical file.
+2. Keep every copy — do not delete any `.bak` or `.tmp` sibling yet.
+3. Inspect the `.bak` files (newest timestamp first) and decide which holds the right state.
+4. Copy the chosen one to the canonical filename (e.g. `settings.json`), leaving the other copies in place.
+5. Restart PortOS, confirm the data is intact, then remove the leftover backups.
+
+For a failed write, wait for the lock to clear (pause the antivirus scan on the data directory) and repeat the action; no recovery is needed.
