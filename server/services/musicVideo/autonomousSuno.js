@@ -289,6 +289,10 @@ async function closeSunoBrowser(page, browser) {
   }
 }
 
+// Suno returns two renders per request; the second is usually the better one.
+// A single-id resume (or a one-render result) falls back to the only id.
+const pickRender = (ids) => ids[1] ?? ids[0];
+
 /** Generate (or resume) a song and import its completed, validated M4A. */
 export async function generateSunoSong(fields, deps = {}) {
   const connect = deps.connect || connectPortosBrowser;
@@ -307,7 +311,7 @@ export async function generateSunoSong(fields, deps = {}) {
         page = await context.newPage();
         const ids = deps.songIds?.length ? deps.songIds : await submitSunoSong(page, fields, deps);
         if (!deps.songIds?.length) await deps.onSubmitted?.(ids);
-        await downloadSunoAudio(page, ids[0], path, deps);
+        await downloadSunoAudio(page, pickRender(ids), path, deps);
         return ids;
       } finally {
         await closeSunoBrowser(page, browser); // disconnect; keep the shared browser running
@@ -315,7 +319,7 @@ export async function generateSunoSong(fields, deps = {}) {
     });
     deps.signal?.throwIfAborted();
     const { filename, sizeBytes } = await importAudio(path, 'song.m4a');
-    return { songId: songIds[0], songIds, filename, sizeBytes };
+    return { songId: pickRender(songIds), songIds, filename, sizeBytes };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
