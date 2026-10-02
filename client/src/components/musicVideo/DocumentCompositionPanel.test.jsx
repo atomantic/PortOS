@@ -21,7 +21,7 @@ const authorProvider = vi.hoisted(() => ({ type: 'api', toolFreeOneShot: true })
 vi.mock('../../hooks/useProviderModels.js', () => ({ default: () => ({
   providers: [{ id: 'stub-provider', name: 'Stub Provider', models: ['fixture-model'], ...authorProvider }],
   selectedProviderId: 'stub-provider', selectedModel: 'fixture-model', availableModels: ['fixture-model'],
-  selectedProvider: { id: 'stub-provider', name: 'Stub Provider', ...authorProvider },
+  selectedProvider: { providerId: 'stub-provider', model: 'fixture-model' },
   setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(),
 }) }));
 vi.mock('./CompositionPreviewPlayer.jsx', () => ({ default: () => <div>Candidate preview</div> }));

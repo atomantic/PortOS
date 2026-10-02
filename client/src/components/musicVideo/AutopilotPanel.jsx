@@ -171,7 +171,7 @@ function StartForm({ project, production }) {
   const hasImage = pool.some((id) => id.startsWith('image:'));
   const hasVideo = pool.some((id) => id.startsWith('video:'));
   const routesValid = assets ? (!assets.requiredRoutes.image || hasImage) && (!assets.requiredRoutes.video || hasVideo) : hasImage && hasVideo;
-  const valid = routesValid && (!assets || (project.scenes?.length > 0 && assets.conflicts.length === 0 && supportsToolFreeOneShot(author.selectedProvider || author.providers.find((entry) => entry.id === author.selectedProviderId)) && author.selectedProviderId && author.selectedModel))
+  const valid = routesValid && (!assets || (project.scenes?.length > 0 && assets.conflicts.length === 0 && supportsToolFreeOneShot(author.providers.find((entry) => entry.id === author.selectedProviderId)) && author.selectedProviderId && author.selectedModel))
     && Number.isInteger(maxGenerations) && maxGenerations >= 1 && maxGenerations <= 500
     && Number.isInteger(maxReviewAttempts) && maxReviewAttempts >= 1 && maxReviewAttempts <= 10
     && (capValue == null || (Number.isFinite(capValue) && capValue >= 0));

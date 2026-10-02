@@ -27,6 +27,7 @@ const authorProvider = vi.hoisted(() => ({ type: 'api', toolFreeOneShot: true })
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: (options) => options.allowDefault === false ? {
     providers: [{ id: 'local-fixture', name: 'Local fixture', models: ['fixture-model'], ...authorProvider }], selectedProviderId: 'local-fixture', selectedModel: 'fixture-model', availableModels: ['fixture-model'],
+    selectedProvider: { providerId: 'local-fixture', model: 'fixture-model' },
     setSelectedProviderId: () => {}, setSelectedModel: () => {},
   } : ({
     providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],

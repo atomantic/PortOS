@@ -175,7 +175,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   });
   const detach = confirmFirst('detach', () => run('detach', () => detachMusicVideoCompositionDocument(project.id, { silent: true }), 'Composition document detached'));
   const effectiveModel = selectedModel || selectedProvider?.defaultModel || '';
-  const authoringValid = supportsToolFreeOneShot(selectedProvider || providers.find((entry) => entry.id === selectedProviderId)) && Boolean(selectedProviderId && effectiveModel);
+  const authoringValid = supportsToolFreeOneShot(providers.find((entry) => entry.id === selectedProviderId)) && Boolean(selectedProviderId && effectiveModel);
   const provider = { providerId: selectedProviderId, model: effectiveModel };
   const selectedSectionValid = candidate?.sections?.some((section) => section.id === selectedSection) || false;
   const generate = () => run('generate', () => generateMusicVideoMixedMediaDocument(project.id, provider, { silent: true }), 'Candidate ready to review');
