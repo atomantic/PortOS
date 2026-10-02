@@ -239,6 +239,21 @@ reports that replay committed and recovery still needs attention. Application
 database operations drain before reset; new operations receive a temporary
 maintenance error until replay and reconciliation finish (including failures).
 
+### Restoring settings in a running server
+
+Full live file restores and selective `settings.json` restores join the settings
+write queue. Previously admitted mutations finish before transfer starts; later
+mutations wait through transfer and cache reconciliation, then read the restored
+file as their base. Partial transfer and reconciliation failures release the
+queue while retaining the existing restore diagnostics. Malformed restored
+settings still invalidate the cache rather than broadcasting empty defaults.
+Dry runs and unrelated selective restores do not acquire this settings boundary.
+
+A full restore acquires queues in this order: settings, CoS configuration, CoS
+runtime state. The settings queue remains held through CoS reconciliation. A
+restore callback must never call a queued settings write API; cache reload reads
+directly and does not re-enter the queue.
+
 ### Restoring CoS files in a running server
 
 A full live file restore or selective `cos` restore requires the CoS daemon and

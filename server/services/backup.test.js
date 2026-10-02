@@ -120,15 +120,19 @@ import * as fs from 'fs/promises';
 // Partial mock of the settings service: only reloadSettings is overridden, so a
 // live restore can be asserted to re-sync the settings caches without actually
 // touching the developer's settings.json or emitting socket events.
-vi.mock('./settings.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  reloadSettings: vi.fn(async () => {}),
-}));
+vi.mock('./settings.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    reloadSettings: vi.fn(async () => {}),
+    withLiveSettingsRestore: vi.fn(actual.withLiveSettingsRestore),
+  };
+});
 vi.mock('./brainStorage.js', async (importOriginal) => ({
   ...(await importOriginal()),
   invalidateAllCaches: vi.fn(),
 }));
-import { reloadSettings } from './settings.js';
+import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary, deleteSnapshot } from './backup.js';
 import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../lib/sharedSchemas.js';
@@ -2515,6 +2519,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     reloadSettings.mockClear();
     invalidateBrainCaches.mockClear();
     withLiveCosRestore.mockClear();
+    withLiveSettingsRestore.mockClear();
   });
 
   // Drive a mocked rsync to a clean exit so restoreSnapshot resolves.
@@ -2636,6 +2641,89 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       withLiveCosRestore.mockRejectedValueOnce(new Error('Stop CoS before restoring'));
       await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'cos' })).rejects.toThrow('Stop CoS');
       expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('settings restore ownership boundary', () => {
+    it.each([undefined, 'settings.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const reloading = Promise.withResolvers();
+      const finishReload = Promise.withResolvers();
+      reloadSettings.mockImplementationOnce(async () => {
+        reloading.resolve();
+        await finishReload.promise;
+      });
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter });
+      await flush();
+      expect(withLiveSettingsRestore).toHaveBeenCalledTimes(1);
+      const later = vi.fn();
+      const waitingWrite = withLiveSettingsRestore(later);
+      proc.emit('close', 0);
+      await reloading.promise;
+      expect(later).not.toHaveBeenCalled();
+      finishReload.resolve();
+      await Promise.all([pending, waitingWrite]);
+      expect(later).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([{ dryRun: true }, { dryRun: true, subdirFilter: 'settings.json' }, { dryRun: false, subdirFilter: 'images' }, { dryRun: false, subdirFilter: 'cos' }])('leaves unaffected scope alone: %j', async options => {
+      await runRestore('/dest', 'snap-1', options);
+      expect(withLiveSettingsRestore).not.toHaveBeenCalled();
+    });
+
+    it('drains settings before acquiring CoS and holds them through CoS reconciliation', async () => {
+      const admitted = Promise.withResolvers();
+      const finishWrite = Promise.withResolvers();
+      const writing = withLiveSettingsRestore(async () => {
+        admitted.resolve();
+        await finishWrite.promise;
+      });
+      await admitted.promise;
+      const reconciled = Promise.withResolvers();
+      const finishCosReload = Promise.withResolvers();
+      withLiveCosRestore.mockImplementationOnce(async transfer => {
+        const result = await transfer();
+        reconciled.resolve();
+        await finishCosReload.promise;
+        return result;
+      });
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(withLiveSettingsRestore).toHaveBeenCalledTimes(2));
+      expect(withLiveCosRestore).not.toHaveBeenCalled();
+      finishWrite.resolve();
+      await flush();
+      const later = vi.fn();
+      const waitingWrite = withLiveSettingsRestore(later);
+      proc.emit('close', 0);
+      await reconciled.promise;
+      expect(later).not.toHaveBeenCalled();
+      finishCosReload.resolve();
+      await Promise.all([writing, pending, waitingWrite]);
+      expect(later).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves full-restore CoS busy refusal and releases settings admission', async () => {
+      withLiveCosRestore.mockRejectedValueOnce(Object.assign(new Error('Stop CoS before restoring'), { code: 'COS_RESTORE_BUSY' }));
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false })).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
+      expect(spawn).not.toHaveBeenCalled();
+      await expect(withLiveSettingsRestore(() => 'released')).resolves.toBe('released');
+    });
+
+    it.each([0, 1])('releases settings after reconciliation failure with rsync exit %s', async exitCode => {
+      reloadSettings.mockRejectedValueOnce(new Error('settings reload failed'));
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'settings.json' });
+      await flush();
+      const later = vi.fn();
+      const waitingWrite = withLiveSettingsRestore(later);
+      proc.emit('close', exitCode);
+      await expect(pending).rejects.toThrow(/settings reload failed/);
+      await waitingWrite;
+      expect(later).toHaveBeenCalledTimes(1);
     });
   });
 
