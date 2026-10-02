@@ -12,7 +12,19 @@ import * as toolsService from '../services/tools.js';
 
 const router = Router();
 
-const toolIdSchema = z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/, 'Tool ID must contain only alphanumeric characters, hyphens, and underscores');
+// Reserved subpaths that would shadow the parameterized /:id route
+const RESERVED_TOOL_IDS = ['enabled', 'summary'];
+
+const toolIdSchema = z.string()
+  .min(1)
+  .max(100)
+  .regex(/^[a-zA-Z0-9_-]+$/, 'Tool ID must contain only alphanumeric characters, hyphens, and underscores')
+  .refine(
+    (id) => !RESERVED_TOOL_IDS.includes(id),
+    (ctx) => ({
+      message: `Tool ID cannot be a reserved route slug (${RESERVED_TOOL_IDS.join(', ')})`
+    })
+  );
 
 const registerToolSchema = z.object({
   id: toolIdSchema.optional(),
