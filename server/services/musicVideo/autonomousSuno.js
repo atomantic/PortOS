@@ -201,7 +201,7 @@ async function validateSunoAudio(bytes, { signal, timeoutMs }) {
       '-nostdin', '-v', 'error', '-xerror', '-err_detect', 'explode',
       '-protocol_whitelist', 'file', '-format_whitelist', 'mp3,wav', '-i', file,
       '-map', '0:a:0', '-progress', 'pipe:1', '-stats_period', '600', '-f', 'null', '-',
-    ], safeChildProcessOptions({ signal, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }));
+    ], safeChildProcessOptions({ signal, timeout: Math.min(timeoutMs, 15_000), killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }));
     if (![...stdout.matchAll(/^out_time_us=(\d+)$/gm)].some((match) => Number(match[1]) > 0)) {
       throw new Error('No decoded audio frames');
     }
@@ -239,6 +239,10 @@ async function downloadSunoAudio(songId, {
     const candidate = await withAbortTimeout(remaining, async (signal) => {
       let res;
       try {
+        // Fetch only after observing completion, so a status transition cannot
+        // certify bytes downloaded while the song was still rendering.
+        const completion = await checkCompletion(songId, { signal });
+        signal.throwIfAborted();
         res = await fetchImpl(sunoAudioUrl(songId), { signal });
         signal.throwIfAborted();
         httpStatus = Number.isInteger(res.status) && res.status >= 100 && res.status <= 599 ? res.status : null;
@@ -259,8 +263,6 @@ async function downloadSunoAudio(songId, {
         if (valid !== true) throw new ServerError('Suno: downloaded content is not decodable audio', {
           status: 502, code: 'SUNO_AUDIO_INVALID', context: { platform: LABEL, reason: 'decode_failed' },
         });
-        const completion = await checkCompletion(songId, { signal });
-        signal.throwIfAborted();
         if (completion === 'complete') return bytes;
         if (completion === 'pending') { reason = 'generation_pending'; return null; }
         throw new ServerError('Suno: audio is decodable, but generation completion is unverified; existing song IDs are retained for retry', {

@@ -202,6 +202,20 @@ describe('downloadSunoAudio', () => {
     expect(importAudio).not.toHaveBeenCalled();
   });
 
+  it('imports bytes fetched after completion rather than certifying an earlier partial body', async () => {
+    let checks = 0;
+    let complete = false;
+    const partial = Buffer.alloc(200 * 1024, 1);
+    const finished = Buffer.alloc(200 * 1024, 2);
+    const importAudio = vi.fn(async () => ({ filename: 'finished.mp3', sizeBytes: finished.length }));
+    await generateSunoSong({}, {
+      songIds: [NEW_A], importAudio, validateAudio: completed.validateAudio, sleep: noSleep,
+      checkCompletion: async () => { complete = ++checks >= 2; return complete ? 'complete' : 'pending'; },
+      fetchImpl: async () => new Response(complete ? finished : partial),
+    });
+    expect(importAudio).toHaveBeenCalledWith(finished);
+  });
+
   it('preserves unknown completion explicitly and never resubmits on retry', async () => {
     const connect = vi.fn();
     const importAudio = vi.fn();
