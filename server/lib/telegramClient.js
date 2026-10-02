@@ -10,6 +10,7 @@ import { sleep } from './fileCore.js';
 const BASE_URL = 'https://api.telegram.org/bot';
 const POLL_TIMEOUT_SEC = 30;
 const API_TIMEOUT_MS = 10_000; // regular calls: sendMessage, editMessageText, etc.
+const POLL_CLIENT_TIMEOUT_MS = (POLL_TIMEOUT_SEC + 15) * 1000; // client-side deadline for long-poll requests
 const RETRY_DELAY_API_ERROR_MS = 5_000;
 const RETRY_DELAY_NETWORK_ERROR_MS = 2_000;
 
@@ -66,7 +67,7 @@ export function createTelegramBot(token, opts = {}) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ offset, timeout: POLL_TIMEOUT_SEC, allowed_updates: ['message', 'callback_query'] }),
-          signal: activePollController.signal
+          signal: AbortSignal.any([activePollController.signal, AbortSignal.timeout(POLL_CLIENT_TIMEOUT_MS)])
         });
         const json = await readResponseJson(res);
         if (!json.ok) {
