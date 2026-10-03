@@ -311,6 +311,33 @@ describe('retaking the song at the song checkpoint', () => {
     expect(calls).not.toContain('suno');
   });
 
+  it('retakes a song whose export never finished: a run stopped in the song stage discards the dead ids and submits afresh', async () => {
+    let release;
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      await opts.onSubmitted(['song-dead-a', 'song-dead-b']);
+      opts.onProgress('exporting');
+      // Suno dropped the rows: the export hangs until the director stops the run.
+      await new Promise((resolve) => { release = resolve; });
+      throw Object.assign(new Error('cancelled'), { code: 'SUNO_AUDIO_CANCELLED' });
+    });
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['song'] });
+    await vi.waitFor(() => expect(runOf().output.sunoSongIds).toEqual(['song-dead-a', 'song-dead-b']));
+    await service.stopAutonomousVideo('mv-auto');
+    release();
+    await vi.waitFor(() => expect(runOf().status).toBe('stopped'));
+    expect(runOf().stage).toBe('song');
+
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      expect(opts.songIds).toBeNull();
+      await opts.onSubmitted(['song-e', 'song-f']);
+      return { songId: 'song-f', songIds: ['song-e', 'song-f'], filename: 'music-song-f.m4a' };
+    });
+    const { run } = await service.resumeAutonomousVideo('mv-auto', { retakeSong: true, style: 'industrial electro' });
+    expect(run).toMatchObject({ status: 'running', stage: 'song', output: { sunoSongIds: null, sunoStyle: 'industrial electro' } });
+    await settled('awaiting-approval');
+    expect(runOf()).toMatchObject({ awaiting: 'song', output: { sunoSongIds: ['song-e', 'song-f'] } });
+  });
+
   it('applies a Suno options patch on a plain approval too', async () => {
     await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['lyrics'], suno: { excludeStyles: 'metal', model: 'v5' } });
     await settled('awaiting-approval');

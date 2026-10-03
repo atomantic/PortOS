@@ -436,10 +436,14 @@ const assertResumable = (run) => {
   if (run.status === 'running' && run.processId === PROCESS_ID) throw runError(409, 'ALREADY_RUNNING', 'This run is already running');
 };
 
-// A retake is only meaningful while the run is parked on the song it would replace.
+// A retake is only meaningful while the run sits on the song it would replace: parked for
+// approval of it, or stopped / failed inside the song stage (a Suno request whose rows
+// vanished leaves ids no export can find — the retake discards them and submits afresh).
 const assertAtSongCheckpoint = (run) => {
-  if (run.status !== 'awaiting-approval' || run.awaiting !== 'song') {
-    throw runError(409, 'NOT_AT_SONG_CHECKPOINT', 'A song can only be retaken while the run is waiting for approval of its song');
+  const parkedOnSong = run.status === 'awaiting-approval' && run.awaiting === 'song';
+  const stuckInSong = run.stage === 'song' && ['stopped', 'failed', 'needs-human'].includes(run.status);
+  if (!parkedOnSong && !stuckInSong) {
+    throw runError(409, 'NOT_AT_SONG_CHECKPOINT', 'A song can only be retaken while the run is waiting for approval of its song, or is stopped or failed in the song stage');
   }
 };
 
