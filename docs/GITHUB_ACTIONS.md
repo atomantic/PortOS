@@ -30,8 +30,8 @@ A release therefore pays for one full run (on its PR), not three.
 ## CI Workflow (`ci.yml`)
 
 PRs into `main` use `scripts/ci-test-plan.js` to classify the changed files
-before installing dependencies. Directory-scoped features run their server and
-client feature tests; flat modules fall back to Vitest's import-graph-aware
+before installing dependencies. Directory-scoped features add their server and
+client feature tests, and every behavioral source (nested or flat) uses Vitest's import-graph-aware
 `related` mode, fed the changed behavioral source paths plus the planner's
 explicit test files. The planner deliberately chooses full CI for shared
 composition roots, test configuration, dependency manifests, workflow changes,
@@ -799,10 +799,15 @@ successor run".
 
 ### Impact-planner safety rules
 
-- A directory feature such as `server/services/sprites/` selects tests carrying
-  the same feature segment across server and client.
-- Flat/shared behavioral modules use Vitest's import graph, driven by their
-  exact changed source paths. Directly changed tests are always included.
+- A directory feature such as `server/services/sprites/` additively selects
+  tests carrying the same feature segment across server and client. The feature
+  name never identifies all consumers (a nested leaf can be imported by a
+  differently named test in another area), so it does not replace traversal.
+- Every runner with a changed behavioral source — flat, shared, or nested
+  feature — runs one `related` invocation driven by the exact changed source
+  paths, combined with the explicit selectors (feature, basename contract,
+  guard, direct test) without duplicate execution. Directly changed tests are
+  always included; a test-only or barrel-only diff keeps exact-file selection.
 - Barrel/catalog guards are added when reusable `lib`, `hooks`, or `utils`
   directories change, and catalog-only barrels are excluded from import-graph
   expansion. JSX changes include the global accessibility convention guard.
