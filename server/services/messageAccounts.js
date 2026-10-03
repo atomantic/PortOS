@@ -1,7 +1,7 @@
 import { noteReadinessChanged } from './readinessNotify.js';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS, safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 
@@ -11,10 +11,9 @@ const queueAccountWrite = createFileWriteQueue();
 
 async function loadAccounts() {
   await ensureDir(PATHS.messages);
-  const content = await tryReadFile(ACCOUNTS_FILE);
-  if (!content) return {};
-  const parsed = safeJSONParse(content, {}, { context: 'messageAccounts' });
-  return isPlainObject(parsed) ? parsed : {};
+  const parsed = await readJSONFile(ACCOUNTS_FILE, {}, { strict: true, allowArray: false });
+  if (!isPlainObject(parsed)) throw new Error('Invalid message accounts file: expected an object');
+  return parsed;
 }
 
 async function saveAccounts(accounts) {

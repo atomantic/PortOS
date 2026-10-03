@@ -38,6 +38,7 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => ({
 }));
 
 const calendar = await import('./calendarAccounts.js');
+const messages = await import('./messageAccounts.js');
 const datadog = await import('./datadog.js');
 const github = await import('./github.js');
 const obsidian = await import('./obsidian.js');
@@ -52,6 +53,14 @@ const stores = [
     mutate: () => calendar.createAccount({ name: 'New', type: 'outlook-calendar' }),
     preserved: data => data.existing,
     initialized: data => Object.values(data).some(account => account.name === 'New'),
+  },
+  {
+    name: 'message accounts', path: join(PATHS.messages, 'accounts.json'),
+    seed: { existing: { id: 'existing', name: 'Existing' } },
+    mutate: () => messages.createAccount({ name: 'New', type: 'gmail' }),
+    preserved: data => data.existing,
+    initialized: data => Object.values(data).some(account => account.name === 'New'),
+    rejectsNonObjectRoot: true,
   },
   {
     name: 'Datadog instances', path: join(PATHS.data, 'datadog.json'),
@@ -122,6 +131,17 @@ describe.each(stores)('$name durable write-back', store => {
     await store.mutate();
     expect(store.initialized(JSON.parse(readFileSync(store.path, 'utf8')))).toBe(true);
   });
+
+  if (store.rejectsNonObjectRoot) {
+    it.each(['[]', 'null', '42', '"scalar"'])('rejects a non-object root (%s)', async bytes => {
+      mkdirSync(dirname(store.path), { recursive: true });
+      writeFileSync(store.path, bytes);
+      await expect(store.mutate()).rejects.toThrow();
+      expect(readFileSync(store.path, 'utf8')).toBe(bytes);
+      await expect(messages.listAccounts()).rejects.toThrow();
+      await expect(messages.getAccount('existing')).rejects.toThrow();
+    });
+  }
 });
 
 it('tool updates already refuse to rewrite an unreadable record', async () => {
