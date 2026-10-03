@@ -14,8 +14,18 @@ import { EMPTY_LLM_DRAFT } from '../../lib/musicVideoAutomation.js';
  * saved pin is restored into the hook once the catalog loads, and a pin whose
  * provider is gone is cleared back to Auto with a visible note rather than
  * silently kept.
+ *
+ * `emptyProviderOption` / `fallbackName` / `hint` let a per-stage row
+ * (MusicVideoLlmStagesPicker) name its blank choice "Default" and drop the
+ * direction picker's help text.
  */
-export default function MusicVideoLlmPicker({ idPrefix, value, onChange, disabled = false, label = 'Direction & planning LLM' }) {
+const AUTO_OPTION = 'Auto — a TUI provider when one is eligible';
+const AUTO_HINT = 'Auto prefers an enabled TUI provider so the work shows up as an attachable Shell session; pick an API provider to run without one. Applies to shot planning, the Cast & Sets direction and code authoring.';
+
+export default function MusicVideoLlmPicker({
+  idPrefix, value, onChange, disabled = false, label = 'Direction & planning LLM',
+  emptyProviderOption = AUTO_OPTION, fallbackName = 'Auto', hint = AUTO_HINT,
+}) {
   const llm = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
   const { providers, loading, setSelectedProviderId, setSelectedModel } = llm;
   const [seeded, setSeeded] = useState(false);
@@ -57,7 +67,7 @@ export default function MusicVideoLlmPicker({ idPrefix, value, onChange, disable
         effort={current.effort}
         onEffortChange={(effort) => onChange({ ...current, effort })}
         label={label}
-        emptyProviderOption="Auto — a TUI provider when one is eligible"
+        emptyProviderOption={emptyProviderOption}
         emptyModelOption="Provider default"
         disabled={disabled}
         loading={loading}
@@ -65,11 +75,8 @@ export default function MusicVideoLlmPicker({ idPrefix, value, onChange, disable
         layout="stacked"
         compact
       />
-      {missingId && <p className="text-[11px] text-port-warning mt-1" role="status">The saved provider “{missingId}” is no longer available — Auto will be used unless you pick another.</p>}
-      <p className="text-[11px] text-port-text-muted mt-1">
-        Auto prefers an enabled TUI provider so the work shows up as an attachable Shell session; pick an API provider to run without one.
-        Applies to shot planning, the Cast &amp; Sets direction and code authoring.
-      </p>
+      {missingId && <p className="text-[11px] text-port-warning mt-1" role="status">The saved provider “{missingId}” is no longer available — {fallbackName} will be used unless you pick another.</p>}
+      {hint && <p className="text-[11px] text-port-text-muted mt-1">{hint}</p>}
     </div>
   );
 }

@@ -28,6 +28,7 @@ import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
   MUSIC_VIDEO_AUTOMATION_TOOL_IDS,
+  MUSIC_VIDEO_LLM_STAGES,
   MUSIC_VIDEO_CHECKIN_MODES,
 } from './musicVideoAutomation.js';
 import {
@@ -37,6 +38,9 @@ import {
   AUTONOMOUS_ORIGINS,
   AUTONOMOUS_PROMPT_MAX,
   AUTONOMOUS_SONG_SOURCES,
+  SUNO_LIMITS,
+  SUNO_MODEL_PATTERN,
+  SUNO_VOCAL_GENDERS,
 } from './musicVideoAutonomous.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
@@ -759,6 +763,29 @@ export const musicVideoProductionResumeSchema = z.object({
 }).strict();
 
 // ---- Fully-autonomous run: one prompt → lyrics → Suno song → video --------------
+// Suno's Advanced-form options. `excludeStyles: ''` clears the field Suno keeps
+// from its last draft; null (resume only) clears a stored option.
+const musicVideoSunoOptionsSchema = z.object({
+  excludeStyles: z.string().trim().max(SUNO_LIMITS.excludeStyles).nullable().optional(),
+  vocalGender: z.enum(SUNO_VOCAL_GENDERS).nullable().optional(),
+  model: z.string().trim().regex(SUNO_MODEL_PATTERN, 'A Suno model version such as v6 or v6-wild').nullable().optional(),
+  maxMode: z.boolean().nullable().optional(),
+}).strict();
+
+// A provider/model/effort pin for a Music Video text stage. Effort is the union
+// of every accepted level; the runner clamps it to the chosen provider's ladder.
+export const musicVideoLlmSchema = z.object({
+  providerId: z.string().trim().min(1).max(200),
+  model: z.string().trim().min(1).max(200).nullable().optional(),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+}).strict();
+
+// Per-stage pins (MUSIC_VIDEO_LLM_STAGES): an absent stage keeps its stored pin
+// (or, on a start request, uses the direction pin); null clears that stage.
+export const musicVideoLlmStagesSchema = z.object(Object.fromEntries(
+  MUSIC_VIDEO_LLM_STAGES.map((stage) => [stage, musicVideoLlmSchema.nullable().optional()]),
+)).strict();
+
 // The alternate entry point: no track, style or board is picked up front. Tool
 // ids are the same catalog the autopilot brief uses; `checkpoints` names the
 // stages that park for approval (none = fully unattended).
@@ -788,11 +815,17 @@ export const musicVideoAutonomousStartSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).nullable().optional(),
   // The separate code-authoring provider a code-rendered video needs.
   authoring: musicVideoAuthoringSchema.optional(),
+  // A provider/model/effort per LLM stage; an unpinned stage uses the direction LLM above.
+  llmStages: musicVideoLlmStagesSchema.nullable().optional(),
+  // Review and revise the lyric draft with a second pass (the `lyricsReview` stage
+  // pin when set, else the direction LLM). Pinning `llmStages.lyricsReview` implies it.
+  lyricsReview: z.boolean().optional(),
   origin: z.object({
     kind: z.enum(AUTONOMOUS_ORIGINS).optional(),
     ideaId: z.string().max(80).nullable().optional(),
     ideaTitle: z.string().max(200).nullable().optional(),
   }).strict().optional(),
+  suno: musicVideoSunoOptionsSchema.nullable().optional(),
 }).strict();
 
 // Resume a parked/failed run, or approve the checkpoint it is waiting on.
@@ -800,6 +833,10 @@ export const musicVideoAutonomousResumeSchema = z.object({
   // Replace the stage output the director edited at a checkpoint.
   lyrics: z.string().max(20000).optional(),
   style: z.string().max(AUTONOMOUS_PROMPT_MAX).optional(),
+  // Patch the brief's Suno options, key by key (null clears one).
+  suno: musicVideoSunoOptionsSchema.optional(),
+  // At the song checkpoint: discard the song and generate a new one.
+  retakeSong: z.boolean().optional(),
 }).strict();
 
 // A generation kickoff that failed before reaching the queue (#9011) — names
@@ -817,14 +854,6 @@ export const musicVideoSoundBedSchema = z.object({
   volume: z.number().min(0.05).max(1).optional(),
 }).strict();
 
-// A provider/model/effort pin for a Music Video text stage. Effort is the union
-// of every accepted level; the runner clamps it to the chosen provider's ladder.
-export const musicVideoLlmSchema = z.object({
-  providerId: z.string().trim().min(1).max(200),
-  model: z.string().trim().min(1).max(200).nullable().optional(),
-  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
-}).strict();
-
 // Automation-first brief: which render tools the agent may use, the director's
 // free-text guidance, and a spend cap (null = no cap). A patch merges per
 // sub-field; `tools` replaces its list whole. See musicVideoAutomation.js.
@@ -840,6 +869,8 @@ export const musicVideoAutomationSchema = z.object({
   // The direction/planning LLM (#9545): absent keeps the stored pin, null clears
   // it back to Auto (an eligible TUI provider, else the active provider).
   llm: musicVideoLlmSchema.nullable().optional(),
+  // Per-stage LLM pins: merged per stage, a stage set to null clears it.
+  llmStages: musicVideoLlmStagesSchema.nullable().optional(),
 }).strict();
 
 // ---- Development artifacts ("ingredients") ----------------------------------

@@ -71,27 +71,28 @@ afterEach(async () => {
   await Promise.allSettled(projectIds.splice(0).map((id) => service.cancelAutonomousVideo(id)));
   await settle();
 });
+const stageDoubles = () => ({
+  draftCreativeBrief: async () => ({ brief: BRIEF }),
+  writeLyrics: async () => {
+    await heldStage?.promise;
+    return { lyrics: '[verse]\nrain on glass' };
+  },
+  createMoodBoard: async () => ({ id: 'board-1' }),
+  generateSunoSong: async (_fields, opts) => {
+    await opts.onSubmitted(['song-a']);
+    return { songId: 'song-a', songIds: ['song-a'], filename: 'music-song-a.mp3' };
+  },
+  createTrack: async () => ({ id: 'track-1' }),
+  attachAudio: async () => ({}),
+  probeDuration: async () => 120,
+  // The real updateProject would validate the track link against the track store.
+  updateProject: async (id, patch) => (patch.trackId ? projects.getProject(id) : projects.updateProject(id, patch)),
+  analyzeSong: async () => ({}),
+  startProduction,
+});
 beforeEach(() => {
   startProduction.mockClear();
-  service.__setAutonomousDepsForTests({
-    draftCreativeBrief: async () => ({ brief: BRIEF }),
-    writeLyrics: async () => {
-      await heldStage?.promise;
-      return { lyrics: '[verse]\nrain on glass' };
-    },
-    createMoodBoard: async () => ({ id: 'board-1' }),
-    generateSunoSong: async (_fields, opts) => {
-      await opts.onSubmitted(['song-a']);
-      return { songId: 'song-a', songIds: ['song-a'], filename: 'music-song-a.mp3' };
-    },
-    createTrack: async () => ({ id: 'track-1' }),
-    attachAudio: async () => ({}),
-    probeDuration: async () => 120,
-    // The real updateProject would validate the track link against the track store.
-    updateProject: async (id, patch) => (patch.trackId ? projects.getProject(id) : projects.updateProject(id, patch)),
-    analyzeSong: async () => ({}),
-    startProduction,
-  });
+  service.__setAutonomousDepsForTests(stageDoubles());
 });
 
 const get = async (id) => (await request(app).get(`/api/music-video/${id}/autonomous`)).body.run;
@@ -169,6 +170,52 @@ describe('POST /api/music-video/autonomous', () => {
     await settle();
     expect((await get(id))).toMatchObject({ status: 'needs-human', errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', output: { lyrics: '[verse]\nedited' } });
     expect(startProduction).not.toHaveBeenCalled();
+  });
+
+  it('accepts per-stage LLM pins, stores them on the run and the project brief, and parks on the reviewed lyrics', async () => {
+    expect((await request(app).post('/api/music-video/autonomous').send({ prompt: 'p', llmStages: { mastering: { providerId: 'x' } } })).status).toBe(400);
+    expect((await request(app).post('/api/music-video/autonomous').send({ prompt: 'p', llmStages: { plan: { model: 'no-provider' } } })).status).toBe(400);
+
+    const reviewLyrics = vi.fn(async () => ({ lyrics: '[verse]\nrain against the glass', notes: 'Sharper verse.' }));
+    service.__setAutonomousDepsForTests({ ...stageDoubles(), reviewLyrics });
+    const llmStages = { lyricsReview: { providerId: 'example-review', model: 'example-large', effort: 'high' }, plan: { providerId: 'example-plan' } };
+    const res = await begin({ prompt: 'p', checkpoints: ['lyrics'], llmStages });
+    expect(res.status).toBe(202);
+    const id = res.body.project.id;
+    expect(res.body.project.automation.llmStages).toEqual({ ...llmStages, plan: { providerId: 'example-plan', model: null, effort: null } });
+    await settle();
+
+    const run = await get(id);
+    expect(run).toMatchObject({ status: 'awaiting-approval', awaiting: 'lyrics', brief: { llmStages: { lyricsReview: llmStages.lyricsReview }, lyricsReview: false } });
+    expect(run.output).toMatchObject({ lyricsDraft: '[verse]\nrain on glass', lyrics: '[verse]\nrain against the glass', lyricsReviewNotes: 'Sharper verse.' });
+    expect(reviewLyrics).toHaveBeenCalledOnce();
+    // The stored brief still carries the pins after the real store's read/write path.
+    expect((await projects.getProject(id)).automation.llmStages.plan).toMatchObject({ providerId: 'example-plan' });
+  });
+
+  it('stores the Suno form options, and retakes the song over HTTP only at the song checkpoint', async () => {
+    expect((await request(app).post('/api/music-video/autonomous').send({ prompt: 'p', suno: { model: 'latest' } })).status).toBe(400);
+    const res = await begin({ prompt: 'p', checkpoints: ['lyrics', 'song'], suno: { excludeStyles: 'metal', vocalGender: 'female' } });
+    const id = res.body.project.id;
+    await settle();
+    expect(await get(id)).toMatchObject({ status: 'awaiting-approval', awaiting: 'lyrics', brief: { suno: { excludeStyles: 'metal', vocalGender: 'female', model: null } } });
+    const resume = (body) => request(app).post(`/api/music-video/${id}/autonomous/resume`).send(body);
+    const early = await resume({ retakeSong: true });
+    expect(early.status).toBe(409);
+    expect(early.body.code).toBe('NOT_AT_SONG_CHECKPOINT');
+    expect((await get(id)).awaiting).toBe('lyrics');
+
+    expect((await resume({ suno: { vocalGender: 'robot' } })).status).toBe(400);
+    expect((await resume({ suno: { model: 'v6' } })).status).toBe(200);
+    await settle();
+    expect(await get(id)).toMatchObject({ status: 'awaiting-approval', awaiting: 'song', output: { sunoSongIds: ['song-a'] } });
+
+    expect((await resume({ retakeSong: true, suno: { vocalGender: 'male' } })).status).toBe(200);
+    await settle();
+    expect(await get(id)).toMatchObject({
+      status: 'awaiting-approval', awaiting: 'song', stages: { song: { status: 'done' } },
+      brief: { suno: { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' } },
+    });
   });
 
   it('cancels a live run, and refuses to cancel or resume one that is finished or absent', async () => {

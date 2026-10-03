@@ -106,6 +106,17 @@ describe('AutonomousRunPanel', () => {
     expect(screen.getByLabelText(/suno style \(edit before continuing\)/i).value).toBe('synthwave');
   });
 
+  it('offers a song retake only at the song checkpoint', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    const { unmount } = render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'lyrics' })} />);
+    expect(screen.queryByRole('button', { name: /retake song/i })).toBeNull();
+    unmount();
+
+    render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'song', stage: 'analyze' })} />);
+    fireEvent.click(screen.getByRole('button', { name: /retake song/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { retakeSong: true }, { silent: true }));
+  });
+
   it('offers a retry for a run that needs the director, and shows why', async () => {
     api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
     render(<Harness initial={baseRun({ status: 'needs-human', stage: 'song', error: 'Sign in to Suno in the PortOS Browser' })} />);
@@ -232,6 +243,22 @@ describe('AutonomousStartDrawer', () => {
     expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({
       checkpoints: ['lyrics'], models: { 'image:local': 'flux2-dev' }, budgetUsd: 12, moodBoardId: 'mb-1',
     });
+  });
+
+  it('sends the Suno form options only when set, and blocks an unrecognizable model version', async () => {
+    api.startAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
+    const submit = screen.getByRole('button', { name: /start autonomous video/i });
+    fireEvent.change(screen.getByLabelText('Suno model'), { target: { value: 'latest' } });
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Suno model'), { target: { value: 'v6' } });
+    fireEvent.change(screen.getByLabelText('Exclude styles'), { target: { value: ' metal ' } });
+    fireEvent.change(screen.getByLabelText('Vocal gender'), { target: { value: 'female' } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(1));
+    expect(api.startAutonomousMusicVideo.mock.calls[0][0].suno).toEqual({ excludeStyles: 'metal', vocalGender: 'female', model: 'v6' });
   });
 
   it('offers the local song source, and the Suno-only fallback opt-in only while Suno is the source', async () => {

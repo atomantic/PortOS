@@ -2385,8 +2385,9 @@ describe('MusicVideo main page project cards', () => {
     listMusicVideoProjects.mockResolvedValueOnce([projectWithRender, PROJECT_NO_CLIP]);
     renderMV();
 
-    // New project card exists
-    expect(await screen.findByRole('button', { name: /New music video/i })).toBeInTheDocument();
+    // The header's New project button is the only one (no duplicate card buttons)
+    expect(await screen.findByRole('button', { name: /New project/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /New music video/i })).toBeNull();
 
     // Project cards grid exists below new project card
     const grid = await screen.findByTestId('mv-project-grid');

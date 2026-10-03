@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { AlertTriangle, CheckCircle2, Circle, CircleDot, ExternalLink, Loader2, Pause, Play, Wand2, X, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Circle, CircleDot, ExternalLink, Loader2, Pause, Play, RotateCcw, Wand2, X, XCircle } from 'lucide-react';
 import {
-  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
+  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
   autonomousStageOutput, autonomousStageRows, isAutonomousLive,
 } from '../../lib/musicVideoAutonomous.js';
+
+// The stages that report a sub-step while they run (the server's `stages[id].step`).
+const STEP_LABELS = { lyrics: AUTONOMOUS_LYRICS_STEP_LABELS, song: AUTONOMOUS_SONG_STEP_LABELS };
 
 const STATUS_TONES = {
   running: 'text-port-accent', 'awaiting-approval': 'text-port-warning', 'needs-human': 'text-port-warning', stopped: 'text-port-warning',
@@ -45,7 +48,8 @@ function StageOutput({ run, row, editableBelow }) {
 /**
  * The fully-autonomous run on a project: where it is in the pipeline, what it is
  * waiting for, and the few things the director can do — approve a checkpoint
- * (optionally with edited lyrics or Suno style), retry the stage that stopped,
+ * (optionally with edited lyrics or Suno style), retake the song at the song
+ * checkpoint, retry the stage that stopped,
  * pause, or cancel. A finished stage's output (brief, lyrics, style, song) opens
  * read-only from its checklist row; the open row is the caller's URL state
  * (`selectedStage` / `onSelectStage`). Progress arrives over `music-video:autonomous` through
@@ -109,8 +113,8 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
               ) : (
                 <span className={`flex min-w-0 items-center gap-1 ${tone}`}>{content}</span>
               )}
-              {row.id === 'song' && row.status === 'running' && row.step && (
-                <p role="status" className="pl-[17px] text-port-accent break-words">{AUTONOMOUS_SONG_STEP_LABELS[row.step] || row.step}…</p>
+              {STEP_LABELS[row.id] && row.status === 'running' && row.step && (
+                <p role="status" className="pl-[17px] text-port-accent break-words">{STEP_LABELS[row.id][row.step] || row.step}…</p>
               )}
             </li>
           );
@@ -142,9 +146,17 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
               />
             </div>
           )}
-          <button type="button" disabled={auto.busy} onClick={() => auto.resume(changed ? { [editable.key]: draft } : {})} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
-            <Play size={14} aria-hidden="true" /> {changed ? 'Save edit & approve' : 'Approve & continue'}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={auto.busy} onClick={() => auto.resume(changed ? { [editable.key]: draft } : {})} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
+              <Play size={14} aria-hidden="true" /> {changed ? 'Save edit & approve' : 'Approve & continue'}
+            </button>
+            {awaiting === 'song' && (
+              // Discards this song and makes a new one (a new Suno generation spends credits), then pauses here again.
+              <button type="button" disabled={auto.busy} onClick={() => auto.resume({ retakeSong: true })} className={buttonClass}>
+                <RotateCcw size={14} aria-hidden="true" /> Retake song
+              </button>
+            )}
+          </div>
         </div>
       )}
 

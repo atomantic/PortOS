@@ -206,11 +206,87 @@ describe('startAutonomousVideo', () => {
     expect(project.automation.llm).toEqual({ providerId: 'cloud', model: 'big', effort: 'low' });
     await vi.waitFor(() => expect(calls).toContain('production'));
 
-    // The run's pin is what gets resolved; what the resolver returns is what runs.
-    expect(doubles.resolveLlm).toHaveBeenCalledWith({ providerId: 'cloud', model: 'big', effort: 'low' });
+    // The run's pin is what gets resolved, per stage; what the resolver returns is what runs.
+    const runPins = { llm: { providerId: 'cloud', model: 'big', effort: 'low' }, llmStages: null };
+    expect(doubles.resolveLlm).toHaveBeenCalledWith({ stage: 'brief', automation: runPins });
+    expect(doubles.resolveLlm).toHaveBeenCalledWith({ stage: 'lyrics', automation: runPins });
     expect(doubles.draftCreativeBrief).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'claude-tui', model: 'opus', effort: 'high' }));
     expect(doubles.writeLyrics).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'claude-tui', model: 'opus', effort: 'high' }));
     expect(runOf().output).toMatchObject({ briefRoute: route, lyricsRoute: route });
+  });
+
+  it('drafts lyrics on the lyrics stage\'s model, then reviews and revises them on the review stage\'s model, and the checkpoint shows the revision', async () => {
+    const llmStages = { lyrics: { providerId: 'local-llm', model: 'small' }, lyricsReview: { providerId: 'cloud', model: 'big', effort: 'high' } };
+    const routeOf = (pin, source) => ({ providerId: pin.providerId, model: pin.model, effort: pin.effort || null, transport: 'api', source });
+    // A resolver double honoring the stage pin, like llmRoute.js does.
+    doubles.resolveLlm.mockImplementation(async ({ stage, automation }) => {
+      const pin = automation.llmStages?.[stage];
+      return pin ? { provider: { id: pin.providerId }, selectedModel: pin.model, route: routeOf(pin, 'stage') } : { provider: null, route: null };
+    });
+    doubles.reviewLyrics = stub('review', async () => ({ lyrics: '[verse]\nrain against the glass', notes: 'Tightened the verse.' }));
+    service.__setAutonomousDepsForTests(doubles);
+    const steps = [];
+    const onEvent = ({ run }) => { if (run.stages.lyrics.step) steps.push(run.stages.lyrics.step); };
+    musicVideoEvents.on('autonomous', onEvent);
+    try {
+      const { project } = await service.startAutonomousVideo({ prompt: 'p', llmStages, checkpoints: ['lyrics'] });
+      // The stage pins also reach the project's brief for the stages production runs later.
+      expect(project.automation.llmStages).toEqual({ lyrics: { ...llmStages.lyrics, effort: null }, lyricsReview: llmStages.lyricsReview });
+      await settled('awaiting-approval');
+    } finally {
+      musicVideoEvents.off('autonomous', onEvent);
+    }
+    expect(calls).toEqual(['createProject', 'brief', 'updateProject', 'lyrics', 'review']);
+    expect(doubles.writeLyrics).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'local-llm', model: 'small' }));
+    expect(doubles.reviewLyrics).toHaveBeenCalledWith(expect.objectContaining({
+      lyrics: '[verse]\nrain on glass', description: BRIEF.musicalDescription, providerId: 'cloud', model: 'big', effort: 'high',
+    }));
+    expect(steps).toEqual(expect.arrayContaining(['draft', 'review']));
+    // The checkpoint parks on the revision, keeping the draft and the critique beside it.
+    expect(runOf()).toMatchObject({ awaiting: 'lyrics', stages: { lyrics: { status: 'done', step: null } } });
+    expect(runOf().output).toMatchObject({
+      lyricsDraft: '[verse]\nrain on glass', lyrics: '[verse]\nrain against the glass', lyricsReviewNotes: 'Tightened the verse.',
+      lyricsRoute: routeOf(llmStages.lyrics, 'stage'), lyricsReviewRoute: routeOf(llmStages.lyricsReview, 'stage'),
+    });
+    // Each stage's route is kept on the project brief too.
+    expect(store.get('mv-auto').automation.routes).toMatchObject({ lyrics: { providerId: 'local-llm' }, lyricsReview: { providerId: 'cloud' } });
+
+    // Approving sends the revised lyrics to Suno.
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(doubles.generateSunoSong.mock.calls[0][0].lyrics).toBe('[verse]\nrain against the glass');
+  });
+
+  it('skips the lyric review unless the brief asks for it, and reviews on the direction LLM when only the toggle is set', async () => {
+    doubles.reviewLyrics = stub('review', async () => ({ lyrics: '[verse]\nrevised', notes: '' }));
+    service.__setAutonomousDepsForTests(doubles);
+    await service.startAutonomousVideo({ prompt: 'p', providerId: 'cloud', model: 'big' });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(calls).not.toContain('review');
+    expect(runOf().output).not.toHaveProperty('lyricsDraft');
+    expect(runOf().output.lyrics).toBe('[verse]\nrain on glass');
+
+    store.clear();
+    calls.length = 0;
+    await service.startAutonomousVideo({ prompt: 'p', providerId: 'cloud', model: 'big', lyricsReview: true });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    // No registry route resolves here, so both passes run on the run's own direction pin.
+    expect(doubles.reviewLyrics).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'cloud', model: 'big' }));
+    expect(runOf().output).toMatchObject({ lyricsDraft: '[verse]\nrain on glass', lyrics: '[verse]\nrevised', lyricsReviewNotes: '' });
+  });
+
+  it('retries only the review when the review fails after the draft was stored', async () => {
+    doubles.reviewLyrics = vi.fn()
+      .mockRejectedValueOnce(new Error('review provider down'))
+      .mockResolvedValueOnce({ lyrics: '[verse]\nrevised', notes: 'ok' });
+    service.__setAutonomousDepsForTests(doubles);
+    await service.startAutonomousVideo({ prompt: 'p', lyricsReview: true });
+    await settled('failed');
+    expect(runOf().output.lyricsDraft).toBe('[verse]\nrain on glass');
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(doubles.writeLyrics).toHaveBeenCalledTimes(1);
+    expect(runOf().output.lyrics).toBe('[verse]\nrevised');
   });
 
   it('falls back to the run\'s own pin when the provider registry cannot be read', async () => {
@@ -259,6 +335,92 @@ describe('checkpoints', () => {
     await service.resumeAutonomousVideo('mv-auto', { lyrics: '[verse]\nedited line' });
     await vi.waitFor(() => expect(calls).toContain('production'));
     expect(doubles.generateSunoSong).toHaveBeenCalledWith(expect.objectContaining({ lyrics: '[verse]\nedited line' }), expect.any(Object));
+  });
+});
+
+describe('retaking the song at the song checkpoint', () => {
+  it('discards the song, re-runs the stage with the edited lyrics, style and Suno options, and parks there again', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['song'], suno: { excludeStyles: 'metal', vocalGender: 'female' } });
+    await settled('awaiting-approval');
+    expect(runOf()).toMatchObject({ awaiting: 'song', stage: 'analyze', output: { trackId: 'track-1', sunoSongIds: ['song-a', 'song-b'] } });
+    expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({ excludeStyles: 'metal', vocalGender: 'female', model: null }), expect.any(Object));
+    expect(store.get('mv-auto').trackId).toBe('track-1');
+
+    doubles.createTrack.mockResolvedValueOnce({ id: 'track-2' });
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      // A fresh request: the rejected take's ids are not offered for reuse.
+      expect(opts.songIds).toBeNull();
+      await opts.onSubmitted(['song-c', 'song-d']);
+      return { songId: 'song-d', songIds: ['song-c', 'song-d'], filename: 'music-song-d.m4a' };
+    });
+    const { run } = await service.resumeAutonomousVideo('mv-auto', {
+      retakeSong: true, lyrics: '[verse]\nnew words', style: 'darker synthwave', suno: { vocalGender: 'male', model: 'v6' },
+    });
+    expect(run).toMatchObject({ status: 'running', stage: 'song', awaiting: null, output: { trackId: null, sunoSongIds: null } });
+    await settled('awaiting-approval');
+    expect(runOf()).toMatchObject({
+      awaiting: 'song', stage: 'analyze',
+      brief: { suno: { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' } },
+      output: { trackId: 'track-2', sunoSongIds: ['song-c', 'song-d'], lyrics: '[verse]\nnew words', sunoStyle: 'darker synthwave' },
+    });
+    expect(runOf().stages.song).toMatchObject({ status: 'done' });
+    expect(doubles.generateSunoSong).toHaveBeenCalledTimes(2);
+    expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({
+      lyrics: '[verse]\nnew words', style: 'darker synthwave', excludeStyles: 'metal', vocalGender: 'male', model: 'v6',
+    }), expect.any(Object));
+    // The project was unlinked from the rejected track, then linked to the new one; analysis has not run.
+    expect(doubles.updateProject).toHaveBeenCalledWith('mv-auto', { trackId: null });
+    expect(store.get('mv-auto').trackId).toBe('track-2');
+    expect(calls).not.toContain('analyze');
+
+    // Approving the new take continues the pipeline as before.
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+  });
+
+  it('refuses a retake anywhere but the song checkpoint, leaving the run untouched', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['lyrics'] });
+    await settled('awaiting-approval');
+    const before = runOf();
+    await expect(service.resumeAutonomousVideo('mv-auto', { retakeSong: true })).rejects.toMatchObject({ status: 409, code: 'NOT_AT_SONG_CHECKPOINT' });
+    expect(runOf()).toEqual(before);
+    expect(calls).not.toContain('suno');
+  });
+
+  it('retakes a song whose export never finished: a run stopped in the song stage discards the dead ids and submits afresh', async () => {
+    let release;
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      await opts.onSubmitted(['song-dead-a', 'song-dead-b']);
+      opts.onProgress('exporting');
+      // Suno dropped the rows: the export hangs until the director stops the run.
+      await new Promise((resolve) => { release = resolve; });
+      throw Object.assign(new Error('cancelled'), { code: 'SUNO_AUDIO_CANCELLED' });
+    });
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['song'] });
+    await vi.waitFor(() => expect(runOf().output.sunoSongIds).toEqual(['song-dead-a', 'song-dead-b']));
+    await service.stopAutonomousVideo('mv-auto');
+    release();
+    await vi.waitFor(() => expect(runOf().status).toBe('stopped'));
+    expect(runOf().stage).toBe('song');
+
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      expect(opts.songIds).toBeNull();
+      await opts.onSubmitted(['song-e', 'song-f']);
+      return { songId: 'song-f', songIds: ['song-e', 'song-f'], filename: 'music-song-f.m4a' };
+    });
+    const { run } = await service.resumeAutonomousVideo('mv-auto', { retakeSong: true, style: 'industrial electro' });
+    expect(run).toMatchObject({ status: 'running', stage: 'song', output: { sunoSongIds: null, sunoStyle: 'industrial electro' } });
+    await settled('awaiting-approval');
+    expect(runOf()).toMatchObject({ awaiting: 'song', output: { sunoSongIds: ['song-e', 'song-f'] } });
+  });
+
+  it('applies a Suno options patch on a plain approval too', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['lyrics'], suno: { excludeStyles: 'metal', model: 'v5' } });
+    await settled('awaiting-approval');
+    await service.resumeAutonomousVideo('mv-auto', { suno: { model: null, vocalGender: 'female' } });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(runOf().brief.suno).toEqual({ excludeStyles: 'metal', vocalGender: 'female', model: null, maxMode: null });
+    expect(doubles.generateSunoSong).toHaveBeenCalledWith(expect.objectContaining({ excludeStyles: 'metal', vocalGender: 'female', model: null }), expect.any(Object));
   });
 });
 
