@@ -172,6 +172,13 @@ describe('TabPills — underline variant (default)', () => {
 // reads as a form control rather than navigation, so it is reserved for the
 // bars that have no icons to show (#7283 made it universal; this reverses that).
 describe('TabPills — mobileCompact icon row', () => {
+  it.each(['underline', 'pills', 'filter'])('gives compact %s controls a 44px touch target', (variant) => {
+    render(<TabPills variant={variant} mobileCompact tabs={sampleTabs} activeTab="cast" onChange={() => {}} />);
+    for (const tab of screen.getAllByRole(variant === 'filter' ? 'button' : 'tab')) {
+      expect(tab).toHaveClass('max-sm:min-w-[44px]', 'max-sm:min-h-[44px]');
+    }
+  });
+
   it('keeps one tablist and hides each label below `sm` without renaming the tab', () => {
     render(<TabPills mobileCompact tabs={sampleTabs} activeTab="cast" onChange={() => {}} />);
 
@@ -209,12 +216,16 @@ describe('TabPills — mobileCompact icon row', () => {
     act(() => { for (const cb of resize) cb(); });
     expect(screen.queryByRole('button', { name: 'Scroll tabs left' })).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: 'Scroll tabs right' }));
+    const rightArrow = screen.getByRole('button', { name: 'Scroll tabs right' });
+    expect(rightArrow).toHaveClass('min-w-[44px]', 'min-h-[44px]');
+    await user.click(rightArrow);
     expect(scrollBy).toHaveBeenCalledWith({ left: 240, behavior });
 
     strip.scrollLeft = 200;
     fireEvent.scroll(strip);
-    await user.click(screen.getByRole('button', { name: 'Scroll tabs left' }));
+    const leftArrow = screen.getByRole('button', { name: 'Scroll tabs left' });
+    expect(leftArrow).toHaveClass('min-w-[44px]', 'min-h-[44px]');
+    await user.click(leftArrow);
     expect(scrollBy).toHaveBeenLastCalledWith({ left: -240, behavior });
     changePreference(!reduced);
     await user.click(screen.getByRole('button', { name: 'Scroll tabs right' }));
