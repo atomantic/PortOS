@@ -230,7 +230,7 @@ export const deleteOrchestrationProfile = (id, options = {}) => request(`/settin
   method: 'DELETE',
   ...options,
 });
-export const getCosHealth = () => request('/cos/health');
+export const getCosHealth = (options = {}) => request('/cos/health', options);
 export const forceHealthCheck = (options = {}) => request('/cos/health/check', { method: 'POST', ...options });
 export const getCosAgents = ({ active = false, ...options } = {}) => request(`/cos/agents${active ? '?active=1' : ''}`, options);
 export const getCosCompletedAgents = ({ cursor, limit = 25, feedback = false, ...options } = {}) =>

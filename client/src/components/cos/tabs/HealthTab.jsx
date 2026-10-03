@@ -4,7 +4,7 @@ import * as api from '../../../services/api';
 import { formatDateTime } from '../../../utils/formatters';
 import ProviderStatusCard from './ProviderStatusCard';
 
-export default function HealthTab({ health, healthLoading = false, onCheck }) {
+export default function HealthTab({ health, healthLoading = false, healthError = null, onCheck }) {
   const [learning, setLearning] = useState(null);
   const [loadingLearning, setLoadingLearning] = useState(true);
   const [backfilling, setBackfilling] = useState(false);
@@ -145,12 +145,22 @@ export default function HealthTab({ health, healthLoading = false, onCheck }) {
             </button>
           </div>
 
+          {healthError && (
+            <div role="alert" className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-3 mb-2 text-port-warning text-sm">
+              <p className="font-medium">{health ? 'Health results stale' : 'CoS health unavailable'}</p>
+              <p className="text-xs mt-1">{healthError}</p>
+            </div>
+          )}
           {healthLoading ? (
             <div className="text-center py-4 text-gray-500">
               <RefreshCw size={16} className="animate-spin mx-auto mb-2" />
               Loading health...
             </div>
-          ) : !health?.issues || health.issues.length === 0 ? (
+          ) : !Array.isArray(health?.issues) ? (
+            !healthError && <p className="text-port-warning text-sm">Health has not been observed. Run Check to retry.</p>
+          ) : healthError && health.issues.length === 0 ? (
+            <p className="text-gray-400 text-sm">The last successful check found no issues. Current health is unknown.</p>
+          ) : health.issues.length === 0 ? (
             <div className="bg-port-success/10 border border-port-success/30 rounded-lg p-4 text-center">
               <CheckCircle className="w-8 h-8 text-port-success mx-auto mb-2" />
               <p className="text-port-success font-medium text-sm">All Systems Healthy</p>
