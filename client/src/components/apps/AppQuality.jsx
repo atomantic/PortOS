@@ -108,7 +108,7 @@ export default function AppQuality({ app, detail = false }) {
           <div className="min-w-0">
             <h3 className="flex items-center gap-1.5 font-semibold text-white">
               {label}
-              <InfoTooltip label="How the quality score works" placement="below" align="start" panelClassName="w-80">
+              <InfoTooltip label="How the quality score works" placement="below" align="start" width={320}>
                 <p>Equal-weight mean of broad, medium/high-confidence assessments from the last 30 days. Missing, partial, low-confidence and stale assessments are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
                 <p className="mt-1.5">Scores are the auditing agent’s evidence-based judgment, not an issue count: 90–100 no material defect · 70–89 localized debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure. A run with no findings can score below 100.</p>
                 {federation && <p className="mt-1.5">Unified score: the newest assessment per category across this install and sync peers with the same repository. Offline peers do not contribute.</p>}
@@ -208,7 +208,7 @@ function CategoryRow({ category, below, runLink }) {
       <th scope="row" className="font-medium text-left col-span-1 min-w-0 sm:table-cell sm:py-1.5 sm:px-2">
         <span className="inline-flex items-center gap-1.5">
           {category.label}
-          {details && <InfoTooltip label={`${category.label} assessment details`} placement="below" align="start" panelClassName="w-72 max-h-64 overflow-auto font-normal">
+          {details && <InfoTooltip label={`${category.label} assessment details`} placement="below" align="start" width={288} panelClassName="font-normal">
             {category.summary && <p className="break-words">{category.summary}</p>}
             {category.totalFiles > 0 && <p className="mt-1">{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</p>}
             {category.id === 'better-dependency-freedom' && <p className="mt-1">Assesses whether packages earn their place; dependency count carries no automatic penalty.</p>}
