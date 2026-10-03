@@ -119,3 +119,29 @@ describe('encodeComposition song-time windows', () => {
       .rejects.toThrow(/seek\(10\.25\) failed at frame 3: .*video seek failed/);
   });
 });
+
+describe('encodeComposition process termination diagnostics', () => {
+  it.each([
+    { code: null, signal: 'SIGKILL', abort: false, message: 'SIGKILL; external signal (no encoder stop requested)' },
+    { code: null, signal: 'SIGTERM', abort: true, message: 'SIGTERM; encoder abort requested' },
+    { code: 7, signal: null, abort: false, message: '7' },
+    { code: null, signal: null, abort: false, message: 'unknown' },
+  ])('reports $message through the render boundary', async ({ code, signal, abort, message }) => {
+    const controller = new AbortController();
+    const spawnProcess = () => {
+      const proc = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.stdin = new EventEmitter();
+      proc.stdin.write = (_bytes, callback) => { callback(); return true; };
+      proc.stdin.end = () => {
+        if (abort) controller.abort();
+        proc.stderr.emit('data', Buffer.from('synthetic diagnostic'));
+        proc.emit('close', code, signal);
+      };
+      return proc;
+    };
+    await expect(encodeComposition(page, contract(0.25), '/tmp/termination.mp4', {
+      signal: controller.signal, spawnProcess,
+    })).rejects.toThrow(`ffmpeg failed (${message}): synthetic diagnostic`);
+  });
+});

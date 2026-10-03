@@ -897,9 +897,18 @@ router.post('/:id/production-runs/:runId/cancel', asyncHandler(async (req, res) 
 // (brief → lyrics → mood board → Suno → analysis → production) and reports over
 // `music-video:autonomous`. Optional checkpoints park it for approval. Only these
 // explicit requests (or the scheduled task) begin work — nothing at boot does.
+// A non-empty `autoApprove` lets the run approve those Production review stages
+// itself. That is the operator's authority, so the request re-enters the
+// instance password once (same check as an approval; never stored).
+const authorizeAutoApprove = async (req, autoApprove) => {
+  if (!autoApprove?.length) return false;
+  await requireProductionOperator(req);
+  return true;
+};
 router.post('/autonomous', asyncHandler(async (req, res) => {
-  const input = validateRequest(musicVideoAutonomousStartSchema, req.body || {});
-  res.status(202).json(await startAutonomousVideo(input));
+  const { password: _password, ...input } = validateRequest(musicVideoAutonomousStartSchema, req.body || {});
+  const autoApproveAuthorized = await authorizeAutoApprove(req, input.autoApprove);
+  res.status(202).json(await startAutonomousVideo(input, { autoApproveAuthorized }));
 }));
 
 router.get('/:id/autonomous', asyncHandler(async (req, res) => {
@@ -908,8 +917,9 @@ router.get('/:id/autonomous', asyncHandler(async (req, res) => {
 
 // Resume a parked/failed/interrupted run, or approve the checkpoint it waits on.
 router.post('/:id/autonomous/resume', asyncHandler(async (req, res) => {
-  const edits = validateRequest(musicVideoAutonomousResumeSchema, req.body || {});
-  res.json(await resumeAutonomousVideo(req.params.id, edits));
+  const { password: _password, ...edits } = validateRequest(musicVideoAutonomousResumeSchema, req.body || {});
+  const autoApproveAuthorized = await authorizeAutoApprove(req, edits.autoApprove);
+  res.json(await resumeAutonomousVideo(req.params.id, edits, { autoApproveAuthorized }));
 }));
 
 router.post('/:id/autonomous/stop', asyncHandler(async (req, res) => {

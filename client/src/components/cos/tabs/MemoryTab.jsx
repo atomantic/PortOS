@@ -461,7 +461,7 @@ export default function MemoryTab({ apps = [] }) {
                 {isConfirming(memory.id) && (
                   <InlineConfirmRow
                     className="mt-3"
-                    question="Archive this memory? This cannot be undone."
+                    question="Archive this memory? It will be hidden from active memory and search. Its contents remain stored."
                     confirmText="Archive"
                     confirmTitle="Confirm archive"
                     cancelTitle="Cancel archive"

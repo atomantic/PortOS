@@ -96,6 +96,19 @@ describe('normalizeAutonomousBrief', () => {
     expect(() => musicVideoAutonomousStartSchema.parse({ prompt: 'p', tools: ['nope'] })).toThrow();
     expect(() => musicVideoAutonomousStartSchema.parse({ prompt: '' })).toThrow();
   });
+
+  it('accepts an auto-approve grant on start and resume: known stages only, de-duplicated in review order, never in the scheduled params', () => {
+    expect(musicVideoAutonomousStartSchema.parse({ prompt: 'p', autoApprove: ['proof', 'art', 'proof', 'art'], password: 'example-password' }))
+      .toMatchObject({ autoApprove: ['art', 'proof'], password: 'example-password' });
+    expect(musicVideoAutonomousResumeSchema.parse({ autoApprove: ['storyboard', 'storyboard'] })).toEqual({ autoApprove: ['storyboard'] });
+    expect(musicVideoAutonomousResumeSchema.parse({ autoApprove: [] })).toEqual({ autoApprove: [] });
+    for (const autoApprove of [['render'], 'art', [1]]) {
+      expect(() => musicVideoAutonomousResumeSchema.parse({ autoApprove }), JSON.stringify(autoApprove)).toThrow();
+    }
+    expect(() => musicVideoAutonomousStartSchema.parse({ prompt: 'p', password: '' })).toThrow();
+    // A grant needs the operator's password on that request, so a saved schedule cannot carry one.
+    expect(normalizeAutopilotParams({ autoApprove: ['art'] })).not.toHaveProperty('autoApprove');
+  });
 });
 
 describe('tool picks → how the video is made', () => {
