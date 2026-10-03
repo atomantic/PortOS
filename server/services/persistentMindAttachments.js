@@ -256,7 +256,7 @@ export async function createPersistentMindAttachment({ filename, data } = {}) {
   const saved = await saveImageUpload(PATHS.screenshots, {
     filename: `mind-${attachmentId}-${originalName}`,
     data,
-  }, { maxBytes: PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_BYTES }).then(
+  }, { maxBytes: PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_BYTES, stagePrefix: `mind-${attachmentId}-` }).then(
     (value) => value,
     async (error) => {
       await removeRejectedUpload(attachmentId);

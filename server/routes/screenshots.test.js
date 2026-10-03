@@ -17,6 +17,13 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return { ...actual, PATHS: { ...actual.PATHS, screenshots: join(root, 'screenshots') } };
 });
 
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, writeFile: vi.fn((...args) => actual.writeFile(...args)) };
+});
+
+import { readFileSync, readdirSync } from 'fs';
+import * as fsPromises from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
 import screenshotRoutes from './screenshots.js';
 
@@ -44,6 +51,38 @@ describe('screenshots routes (#2518)', () => {
     // The response must not leak the on-disk location.
     expect(res.body.path).not.toContain(PATHS.screenshots);
     expect(res.body.path).toBe(`/api/screenshots/${encodeURIComponent(res.body.filename)}`);
+  });
+
+  it('stores repeated client filenames as distinct files, keeping both images', async () => {
+    const other = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0e]);
+    const first = await request(buildApp()).post('/api/screenshots').send({ data: pngBase64, filename: 'dup.png' });
+    const second = await request(buildApp()).post('/api/screenshots').send({ data: other.toString('base64'), filename: 'dup.png' });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(first.body.filename).not.toBe(second.body.filename);
+    expect(first.body.filename).toBe(`${first.body.id}-dup.png`);
+    expect(readFileSync(`${PATHS.screenshots}/${first.body.filename}`)).toEqual(Buffer.from(pngBase64, 'base64'));
+    expect(readFileSync(`${PATHS.screenshots}/${second.body.filename}`)).toEqual(other);
+  });
+
+  it('keeps a traversal-shaped name inside the bucket and prefixed with the server id', async () => {
+    const res = await request(buildApp()).post('/api/screenshots').send({ data: pngBase64, filename: '../../x.png' });
+    expect(res.status).toBe(200);
+    expect(res.body.filename).toBe(`${res.body.id}-x.png`);
+  });
+
+  it('a failed write leaves earlier uploads untouched and a retry succeeds', async () => {
+    const ok = await request(buildApp()).post('/api/screenshots').send({ data: pngBase64, filename: 'keep.png' });
+    const before = readdirSync(PATHS.screenshots).sort();
+    fsPromises.writeFile.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+    });
+    const failed = await request(buildApp()).post('/api/screenshots').send({ data: pngBase64, filename: 'keep.png' });
+    expect(failed.status).toBe(500);
+    expect(readdirSync(PATHS.screenshots).sort()).toEqual(before);
+    expect(readFileSync(`${PATHS.screenshots}/${ok.body.filename}`)).toEqual(Buffer.from(pngBase64, 'base64'));
+    const retry = await request(buildApp()).post('/api/screenshots').send({ data: pngBase64, filename: 'keep.png' });
+    expect(retry.status).toBe(200);
   });
 
   it('rejects non-image content (magic-byte guard)', async () => {
