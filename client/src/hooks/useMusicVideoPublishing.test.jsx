@@ -40,7 +40,6 @@ describe('music-video publishing project boundary', () => {
     const view = render(<Posting id="project-a" />);
     await screen.findByText('YouTube', { selector: 'div' });
     fireEvent.change(within(row('Reddit')).getByLabelText('Subreddit'), { target: { value: 'example-community' } });
-    fireEvent.change(screen.getByLabelText('Instance password to prepare YouTube'), { target: { value: 'synthetic-password' } });
     await act(async () => { fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' })); });
     expect(screen.getByText('Example A')).toBeInTheDocument();
 
@@ -60,10 +59,8 @@ describe('music-video publishing project boundary', () => {
     api.submitMusicVideoPublishDraft.mockResolvedValue({ post: { url: 'https://example.com/post' } });
     const view = render(<Posting id="project-a" />);
     await screen.findByText('YouTube', { selector: 'div' });
-    fireEvent.change(screen.getByLabelText('Instance password to prepare YouTube'), { target: { value: 'synthetic-password' } });
     fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' }));
     view.rerender(<Posting id="project-b" />);
-    fireEvent.change(screen.getByLabelText('Instance password to prepare YouTube'), { target: { value: 'synthetic-password' } });
     fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' }));
     await act(async () => { first.resolve({ draftId: 'draft-a', summary: { title: 'Example A' } }); });
     expect(screen.queryByText('Example A')).not.toBeInTheDocument();
@@ -72,7 +69,7 @@ describe('music-video publishing project boundary', () => {
     expect(screen.getByText('Example B')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Post to YouTube' })).not.toBeInTheDocument();
     expect(api.submitMusicVideoPublishDraft).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('Instance password to prepare YouTube')).toHaveValue('');
+    expect(screen.queryByLabelText('Instance password to prepare YouTube')).toBeNull();
   });
 
   it('ignores an old-project sign-in error after switching away and back', async () => {
@@ -80,14 +77,12 @@ describe('music-video publishing project boundary', () => {
     api.prepareMusicVideoPublishDraft.mockReturnValueOnce(first.promise);
     const view = render(<Posting id="project-a" />);
     await screen.findByText('YouTube', { selector: 'div' });
-    fireEvent.change(screen.getByLabelText('Instance password to prepare YouTube'), { target: { value: 'synthetic-password' } });
     fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' }));
     view.rerender(<Posting id="project-b" />);
     view.rerender(<Posting id="project-a" />);
     await act(async () => { first.reject({ message: 'Example sign-in required', code: 'PUBLISH_LOGIN_REQUIRED' }); });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Instance password to prepare YouTube')).toHaveValue('');
-    fireEvent.change(screen.getByLabelText('Instance password to prepare YouTube'), { target: { value: 'synthetic-password' } });
+    expect(screen.queryByLabelText('Instance password to prepare YouTube')).toBeNull();
     expect(within(row('YouTube')).getByRole('button', { name: 'Fill draft' })).toBeEnabled();
   });
 });

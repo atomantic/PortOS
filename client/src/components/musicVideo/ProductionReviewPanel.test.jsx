@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import ProductionReviewPanel from './ProductionReviewPanel.jsx';
+
+afterEach(() => { vi.unstubAllGlobals(); window.location.hash = ''; });
 
 const acknowledgement = 'I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.';
 const project = {
@@ -17,13 +19,56 @@ const reviewFixture = () => ({ readiness: {
   art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: false, problems: [] },
 }, busy: false, proof: { active: false }, approve: vi.fn(), save: vi.fn(async () => null) });
 function recordPlayback() {
-  fireEvent.change(screen.getByLabelText('Instance password for this approval'), { target: { value: 'synthetic-password' } });
+  fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
   fireEvent.change(screen.getByLabelText('Playback energy compared with the saved plan'), { target: { value: 'The driving turn matches the chosen energy.' } });
   fireEvent.change(screen.getByLabelText('Timecoded playback notes'), { target: { value: '0:04 — figure turns on the downbeat; prop follows at 4.5s.' } });
   fireEvent.click(screen.getByLabelText(acknowledgement));
 }
 
 describe('Production proof playback evidence', () => {
+  it('shows the selected version before permitting art approval without password re-entry', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true })));
+    const review = reviewFixture(); review.readiness.art.approved = false;
+    const art = { ...project, devArtifacts: [{ id: 'guide', title: 'Synthetic visual guide', version: 2, mimeType: 'image/png' }],
+      productionReview: { ...project.productionReview, draft: { ...project.productionReview.draft, guideArtifactId: 'guide' } } };
+    render(<ProductionReviewPanel project={art} review={review} onOpenArtifact={vi.fn()} />);
+    const approve = screen.getByRole('button', { name: 'Approve art direction' });
+    expect(approve.disabled).toBe(true);
+    const image = await screen.findByAltText('Synthetic visual guide v2');
+    expect(image.getAttribute('src')).toContain('?version=2');
+    fireEvent.load(image);
+    expect(screen.queryByLabelText('Instance password for this approval')).toBeNull();
+    fireEvent.click(approve);
+    expect(review.approve).toHaveBeenCalledWith('art', undefined);
+    fireEvent.error(image);
+    expect(approve.disabled).toBe(true);
+    expect(screen.getByRole('alert').textContent).toContain('could not be loaded');
+  });
+
+  it('shows the document shots beside storyboard approval and targets change requests to that stage', () => {
+    const review = reviewFixture(); review.readiness.storyboard.approved = false;
+    const doc = { ...project, composition: { mode: 'document', document: { directory: 'synthetic/doc-2' } },
+      productionReview: { ...project.productionReview, draft: { ...project.productionReview.draft, storyboardSource: 'document',
+        storyboard: [{ id: 'shot-a', label: 'Doorway', startSec: 0, endSec: 10, action: 'Open the doorway on the downbeat', camera: 'Push in', staging: 'Figure left', transition: 'Match cut', lyricCueIds: [] }] } } };
+    render(<ProductionReviewPanel project={doc} review={review} onOpenArtifact={vi.fn()} />);
+    const content = screen.getByLabelText('Storyboard review content');
+    expect(content.textContent).toContain('1 document shots');
+    expect(content.textContent).toContain('doc-2');
+    expect(content.textContent).toContain('Open the doorway on the downbeat');
+    fireEvent.click(within(content.closest('details')).getByRole('button', { name: 'Request changes' }));
+    expect(screen.getByLabelText('Feedback stage').value).toBe('storyboard');
+    expect(document.activeElement).toBe(screen.getByLabelText('Requested change'));
+    expect(screen.getByLabelText('Requested change').closest('details').open).toBe(true);
+  });
+
+  it('keeps the hash-selected art context open when readiness arrives', () => {
+    window.location.hash = '#mv-review-art';
+    const review = reviewFixture();
+    const view = render(<ProductionReviewPanel project={project} review={{ ...review, readiness: null }} onOpenArtifact={vi.fn()} />);
+    view.rerender(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);
+    expect(document.getElementById('mv-review-art').open).toBe(true);
+  });
+
   it('shows the recorded review for an approved artifact without treating it as fresh playback evidence', () => {
     const review = reviewFixture();
     review.readiness.proof.approved = true;
@@ -56,10 +101,19 @@ describe('Production proof playback evidence', () => {
     expect(screen.getByRole('button', { name: 'Approve animated proof' }).disabled).toBe(true);
     recordPlayback();
     fireEvent.click(screen.getByRole('button', { name: 'Approve animated proof' }));
-    expect(review.approve).toHaveBeenCalledWith('proof', 'synthetic-password', expect.objectContaining({
+    expect(review.approve).toHaveBeenCalledWith('proof', expect.objectContaining({
       excerptId: id, filename, watchedWithAudio: true, energyComparison: 'The driving turn matches the chosen energy.',
       timecodedNotes: '0:04 — figure turns on the downbeat; prop follows at 4.5s.',
     }));
+  });
+
+  it('blocks approval and explains a failed proof player', () => {
+    const review = reviewFixture();
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);
+    recordPlayback();
+    fireEvent.error(screen.getByLabelText('Animated proof with master audio'));
+    expect(screen.getByRole('alert').textContent).toContain('could not be played');
+    expect(screen.getByRole('button', { name: 'Approve animated proof' }).disabled).toBe(true);
   });
 
   it('keeps failed choreography saves dirty and blocks playback acknowledgement and approval', async () => {

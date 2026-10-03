@@ -790,7 +790,7 @@ export const musicVideoLlmStagesSchema = z.object(Object.fromEntries(
 
 // Production review stages the run may approve by itself (de-duplicated, in
 // review order). A non-empty list is approval authority, so the request must
-// carry the instance password once (checked by the route, never stored); an
+// use an authenticated session (checked by the route); an
 // empty list on resume clears the grant.
 const musicVideoAutoApproveFields = {
   autoApprove: z.array(z.enum(AUTONOMOUS_AUTO_APPROVE_STAGES)).max(AUTONOMOUS_AUTO_APPROVE_STAGES.length * 4)
@@ -1071,9 +1071,15 @@ export const musicVideoDocumentShotsSchema = z.object({
 export const musicVideoProductionImportSchema = z.object({ source: z.string().min(2).max(250000) }).strict();
 export const musicVideoProductionApprovalSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
-  password: z.string().min(1).max(1024),
+  password: z.string().max(1024).optional(),
   proofReview: z.object({
-    watchedWithAudio: z.literal(true),
+    method: z.enum(['playback', 'machine']).optional(),
+    watchedWithAudio: z.boolean(),
+    machineEvidence: z.object({
+      visualReview: z.string().trim().min(40).max(8000),
+      audioReview: z.string().trim().min(40).max(8000),
+      limitations: z.string().trim().min(1).max(4000),
+    }).strict().optional(),
     excerptId: z.string().min(1).max(200), filename: z.string().min(1).max(200),
     energyComparison: z.string().trim().min(1).max(4000),
     timecodedNotes: z.string().trim().min(1).max(4000)
@@ -1280,5 +1286,5 @@ export const musicVideoProductionFeedbackSchema = z.object({
   decision: z.enum(['comment', 'structure-accepted', 'request-changes']),
 }).strict();
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
-  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().min(1).max(1024),
+  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().max(1024).optional(),
 }).strict();

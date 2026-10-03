@@ -33,9 +33,8 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   const [authoringReady, setAuthoringReady] = useState(false);
   const llm = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
-  // Kept out of the draft: the password rides one request and is cleared after it.
+  // An explicit per-run grant, authorized by the signed-in session.
   const [autoApprove, setAutoApprove] = useState([]);
-  const [password, setPassword] = useState('');
   const [grantError, setGrantError] = useState(null);
   const patch = (next) => setDraft((d) => ({ ...d, ...next }));
   const toggleCheckpoint = (id) => patch({
@@ -43,19 +42,17 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   });
   const patchSuno = (next) => setDraft((d) => ({ ...d, suno: { ...d.suno, ...next } }));
   const sunoModelValid = draft.songSource !== 'suno' || isSunoModelValid(draft.suno.model);
-  const valid = draft.prompt.trim().length > 0 && authoringReady && sunoModelValid && (!autoApprove.length || !!password);
+  const valid = draft.prompt.trim().length > 0 && authoringReady && sunoModelValid;
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!valid || submitting) return;
     setSubmitting(true);
     setGrantError(null);
-    const secret = password;
-    setPassword('');
     startAutonomousMusicVideo(
       {
         ...autonomousRequestFromDraft(draft, { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined, effort: effort || undefined }),
-        ...(autoApprove.length ? { autoApprove, password: secret } : {}),
+        ...(autoApprove.length ? { autoApprove } : {}),
       },
       { silent: true },
     )
@@ -66,7 +63,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
         onStarted(project);
       })
       .catch((err) => {
-        if (String(err?.code || '').startsWith('OPERATOR_')) setGrantError(err.message);
+        if (err?.code === 'AUTH_REQUIRED') setGrantError(err.message);
         else toast.error(err?.message || 'Failed to start the autonomous music video');
       })
       .finally(() => setSubmitting(false));
@@ -177,15 +174,13 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
               />
             ))}
           </div>
-          <p className="text-[11px] text-port-text-muted mt-1">Production still pauses for your art, storyboard and animated proof approvals unless you auto-approve them below.</p>
+          <p className="text-[11px] text-port-text-muted mt-1">Select automatic planning approvals below if desired. The animated proof always needs a recorded review.</p>
         </fieldset>
 
         <AutoApproveFields
           idPrefix="mv-auto"
           value={autoApprove}
           onChange={(next) => { setAutoApprove(next); setGrantError(null); }}
-          password={password}
-          onPasswordChange={setPassword}
           error={grantError}
         />
 

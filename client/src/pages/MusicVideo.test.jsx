@@ -343,6 +343,8 @@ const renderMVWithNav = (to) => render(
   </MemoryRouter>,
 );
 
+afterEach(() => vi.restoreAllMocks());
+
 beforeEach(() => {
   // Keep the real artifact iframe and src assertions without navigating to its API URL.
   window.happyDOM.settings.navigation.disableChildFrameNavigation = true;
@@ -1781,6 +1783,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   });
 
   it('opens a development file from its deep link in a sandboxed viewer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true });
     const sheet = {
       id: 'mvd-1', kind: 'cast-sets', title: 'Cast & Sets — Nova', status: 'approved', version: 2, mimeType: 'text/html', updatedAt: '2026-01-02T00:00:00Z',
       versions: [{ version: 1, mimeType: 'text/html', source: 'upload', createdAt: '2026-01-01T00:00:00Z' }, { version: 2, mimeType: 'text/html', source: 'upload', createdAt: '2026-01-02T00:00:00Z' }],
@@ -2504,8 +2507,8 @@ describe('direct production review navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review art direction' }));
     expect(art).toHaveFocus();
     expect(screen.getByRole('button', { name: 'Approve art direction' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Enter your password to enable approval' }));
-    expect(screen.getByLabelText('Instance password for this approval')).toHaveFocus();
+    expect(screen.getByText('No current visual guide selected. Choose a Development file in the planning editor below.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Instance password for this approval')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'go--1' }));
     expect(screen.getByTestId('loc')).toHaveTextContent('/review');
     fireEvent.click(screen.getByRole('button', { name: 'go-1' }));

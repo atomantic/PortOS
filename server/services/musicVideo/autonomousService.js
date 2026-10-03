@@ -33,13 +33,11 @@ import { assertProductionApproval, productionReadiness, productionProofNeedsRend
  * the code render) and finishes when that reports back over the `production`
  * event. Only explicit start/resume requests begin work.
  *
- * Production review (art → storyboard → proof) is a human gate: `produce` parks
- * `needs-human` until it is approved. `brief.autoApprove` lets the operator hand
- * the listed stages to the run instead — granted once, with the instance
- * password, on the start or resume request (the route checks it; the service
- * only accepts a grant the route authorized). An auto-approval still needs a
- * clean readiness report for that stage, and the proof is approved only once
- * its excerpt has actually rendered.
+ * Production review (art → storyboard → proof) parks `produce` until approved.
+ * An authenticated start/resume can grant `brief.autoApprove` for planning;
+ * the route binds the grant to a session and each automatic decision to this run.
+ * Proof always requires recorded playback or machine review evidence. Older
+ * briefs granting proof auto-approval still wait for rendering, then park for review.
  */
 
 import { randomUUID } from 'crypto';
@@ -92,7 +90,7 @@ const defaults = {
   acceptDocument: async (...args) => (await import('./documentGeneration.js')).acceptMixedMediaDocument(...args),
   generateCode: async (...args) => (await import('./codeGeneration.js')).generateMusicVideoCode(...args),
   renderVideo: async (...args) => (await import('./render.js')).renderMusicVideo(...args),
-  // The operator route's persistence path, minus its password check (the grant was checked on start/resume).
+  // The review persistence path; session authority was checked on start/resume.
   approveProductionReview: async (...args) => (await import('./productionReviewService.js')).approveProductionReview(...args),
   wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
 };
@@ -152,13 +150,14 @@ const autoApproves = (run, stage) => normalizeAutoApprove(run.brief.autoApprove)
 /**
  * The brief fields for an auto-approve request: none when it lists no stage,
  * else the stages plus when the operator granted them. A non-empty list the
- * route did not authorize (operator password) is refused.
+ * route did not authorize (authenticated session) is refused.
  */
 function autoApproveGrant(list, authorized) {
   const autoApprove = normalizeAutoApprove(list);
-  if (!autoApprove.length) return { autoApprove: [], autoApproveAuthorizedAt: null };
-  if (!authorized) throw runError(403, 'OPERATOR_REAUTH_REQUIRED', 'Enter the instance password yourself to let the run approve production review stages. Agent/API credentials cannot grant it.');
-  return { autoApprove, autoApproveAuthorizedAt: new Date().toISOString() };
+  if (!autoApprove.length) return { autoApprove: [], autoApproveAuthorizedAt: null, autoApproveAuthorizedBy: null };
+  if (!authorized) throw runError(403, 'AUTH_REQUIRED', 'Sign in to grant automatic planning approvals.');
+  return { autoApprove, autoApproveAuthorizedAt: new Date().toISOString(),
+    ...(typeof authorized === 'object' ? { autoApproveAuthorizedBy: structuredClone(authorized) } : {}) };
 }
 
 /** Approve `stage` for the run when the brief allows it and its readiness is clean; returns the fresh project. */
@@ -166,7 +165,8 @@ async function autoApproveStage(project, run, stage) {
   if (!autoApproves(run, stage)) return project;
   const readiness = productionReadiness(project);
   if (readiness[stage].approved || readiness[stage].problems.length) return project;
-  await deps.approveProductionReview(project.id, { stage, basis: readiness.basis[stage], approvedBy: 'autopilot' });
+  await deps.approveProductionReview(project.id, { stage, basis: readiness.basis[stage], approvedBy: 'autopilot',
+    reviewer: { kind: 'autopilot', runId: run.id, authorizedBy: run.brief.autoApproveAuthorizedBy || null } });
   console.log(`🤖 Autonomous music video ${short(run.id)} auto-approved ${stage} (brief.autoApprove)`);
   return getProject(project.id);
 }
@@ -193,23 +193,6 @@ async function awaitProofExcerpt(projectId, run) {
     if (i >= polls) throw runError(504, 'PROOF_RENDER_TIMEOUT', 'The proof render did not finish within 90 minutes');
     await deps.wait(PROOF_POLL_MS);
   }
-}
-
-/** Approve the rendered proof for the run (brief lists `proof`); readiness problems are left for the assert to park on. */
-async function autoApproveProof(projectId, run) {
-  const project = await awaitProofExcerpt(projectId, run);
-  const readiness = productionReadiness(project);
-  if (readiness.proof.approved || readiness.proof.problems.length) return;
-  const excerptId = project.productionReview.proof.excerptId;
-  const excerpt = project.excerpts.find((e) => e.id === excerptId);
-  await deps.approveProductionReview(projectId, {
-    stage: 'proof', basis: readiness.basis.proof, approvedBy: 'autopilot',
-    proofReview: {
-      autoApproved: true, watchedWithAudio: false, excerptId, filename: excerpt.filename,
-      energyComparison: 'Auto-approved by the autonomous run (brief.autoApprove).', timecodedNotes: '0:00 auto-approved',
-    },
-  });
-  console.log(`🤖 Autonomous music video ${short(run.id)} auto-approved proof ${short(excerptId)} (brief.autoApprove)`);
 }
 
 // ---- stage executors -------------------------------------------------------------
@@ -423,7 +406,9 @@ const STAGES = {
       if (productionProofNeedsRender(project, readiness.basis.proof)) {
         await renderProductionProof(project.id, productionProofWindow(project));
       }
-      if (autoApproves(run, 'proof')) await autoApproveProof(project.id, run);
+      // Older briefs may grant proof approval. Honor the render wait, but never
+      // manufacture review evidence: a reviewer must approve the finished excerpt.
+      if (autoApproves(run, 'proof')) await awaitProofExcerpt(project.id, run);
       assertProductionApproval(await getProject(project.id));
       const render = await deps.renderVideo(project.id);
       return { output: { renderJobId: render?.jobId || null } };

@@ -42,6 +42,7 @@ describe('vitestCiPool', () => {
 
   it('leaves local runs unbounded', () => {
     delete process.env.CI;
+    delete process.env.PORTOS_PREGATE_MAX_WORKERS;
     expect(vitestCiPool()).toEqual({});
   });
 
