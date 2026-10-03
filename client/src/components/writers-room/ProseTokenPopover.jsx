@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ExternalLink, X } from 'lucide-react';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
 
 // ProseTokenPopover — single fixed-position card driven by hover events from
 // inline tokens in ProseReader. Stateless w.r.t. open/close: WorkEditor passes
@@ -102,6 +103,13 @@ export default function ProseTokenPopover({
 }) {
   const [pos, setPos] = useState(null);
   const cardRef = useRef(null);
+  const profile = resolveProfile({ kind, refId, characters, places, objects });
+  useFocusTrap(open && pinned && Boolean(pos) && Boolean(profile), cardRef);
+
+  const dismiss = useCallback(() => {
+    onClose?.();
+    anchorEl?.focus();
+  }, [onClose, anchorEl]);
 
   useEffect(() => {
     if (!open || !anchorEl) { setPos(null); return; }
@@ -168,14 +176,18 @@ export default function ProseTokenPopover({
   // Close on Escape when pinned (mirrors the dropdown patterns in this folder).
   useEffect(() => {
     if (!pinned) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      dismiss();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pinned, onClose]);
+  }, [pinned, dismiss]);
 
   if (!open || !pos) return null;
 
-  const profile = resolveProfile({ kind, refId, characters, places, objects });
   if (!profile) return null;
 
   const rows = fieldRows(kind, profile);
@@ -185,14 +197,13 @@ export default function ProseTokenPopover({
   // Use role="dialog" because the popover contains interactive controls
   // (Close button when pinned, Open profile button always). role="tooltip"
   // is only correct for non-interactive descriptive content.
-  // aria-modal=false: this popover doesn't trap focus or block the page; it's
-  // a non-modal floating panel.
+  // Hover previews leave focus alone; pinning makes the dialog keyboard-modal.
   const a11yLabel = `${KIND_LABEL[kind] || 'Profile'}: ${profile.name || profile.slugline || ''}`;
   return (
     <div
       ref={cardRef}
       role="dialog"
-      aria-modal="false"
+      aria-modal={pinned ? "true" : "false"}
       aria-label={a11yLabel}
       style={{ left: pos.left, top: pos.top, width: pos.width, position: 'fixed' }}
       className="z-40 bg-port-card border border-port-border rounded-lg shadow-2xl p-3 text-xs text-gray-200"
@@ -206,7 +217,7 @@ export default function ProseTokenPopover({
         {pinned && (
           <button
             type="button"
-            onClick={onClose}
+            onClick={dismiss}
             className="text-gray-500 hover:text-gray-200 min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close"
           >

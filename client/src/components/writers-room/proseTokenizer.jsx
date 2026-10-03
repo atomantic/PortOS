@@ -95,6 +95,7 @@ export function renderTokenized(text, {
   places = [],
   objects = [],
   hotRef = null,
+  pinnedToken = null,
   onTokenEnter,
   onTokenLeave,
   onTokenClick,
@@ -127,6 +128,8 @@ export function renderTokenized(text, {
         data-wr-ref={a.refId}
         role="button"
         tabIndex={0}
+        aria-haspopup="dialog"
+        aria-expanded={Boolean(pinnedToken && pinnedToken.refId === a.refId && pinnedToken.kind === a.kind)}
         aria-label={`${a.kind === 'char' ? 'Character' : a.kind === 'place' ? 'Setting' : 'Object'}: ${a.label}`}
         className={`${baseClass} ${hotClass} px-px rounded-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent focus-visible:ring-offset-1`}
         onMouseEnter={(ev) => onTokenEnter?.({ kind: a.kind, refId: a.refId, label: a.label, anchor: ev.currentTarget })}
