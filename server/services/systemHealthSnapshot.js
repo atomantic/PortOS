@@ -235,6 +235,8 @@ export async function getSystemHealthSnapshot() {
     rawWarnings.push({ type: 'database', severity: 'warning', message: `PostgreSQL disconnected${dbHealth.error ? `: ${dbHealth.error}` : ''}` });
   } else if (!dbHealth.hasSchema) {
     rawWarnings.push({ type: 'database', severity: 'warning', message: 'PostgreSQL connected but schema missing' });
+  } else if (dbHealth.hasCatalogSchema === false) {
+    rawWarnings.push({ type: 'database', severity: 'warning', message: 'PostgreSQL connected and schema available but Catalog tables missing — open Settings → Database to troubleshoot' });
   }
 
   // A `gh` that cannot reach the forge does not fail loudly anywhere else: the
