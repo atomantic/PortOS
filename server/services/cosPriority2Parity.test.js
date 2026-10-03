@@ -29,6 +29,7 @@ vi.mock('./cosTaskStore.js', async (importActual) => ({
   }),
   getUserTasks: async () => ({ exists: true, grouped: { pending: mocks.userPending } }),
   getCosTasks: async () => mocks.cosTaskData,
+  reconcileLegacyForgeMaintenanceTasks: async () => ({ recovered: 0, retired: 0 }),
 }));
 vi.mock('./onDemandDrain.js', () => ({
   drainOnDemandRequests: async () => ({ schedule: {

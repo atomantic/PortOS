@@ -24,6 +24,7 @@ vi.mock('./providerStatus.js', () => ({
 }));
 vi.mock('./agentModelSelection.js', () => ({ selectModelForTask: vi.fn(), selectModelForRole: vi.fn() }));
 
+import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { emitLog } from './cosEvents.js';
 import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
@@ -55,6 +56,22 @@ describe('resolveAgentProviderAndModel', () => {
       expect(await resolveAgentProviderAndModel({ id: 'legacy', metadata: { analysisType } })).toMatchObject({ ok: false, permanent: true });
     }
     expect(getActiveProvider).not.toHaveBeenCalled();
+  });
+
+  it('dispatches screened maintenance after the real markdown queue round-trip', async () => {
+    getActiveProvider.mockResolvedValue({ id: 'p1', type: 'cli', models: ['m-default'] });
+    for (const analysisType of ['pr-watcher', 'issue-reconcile']) {
+      const [task] = parseTasksMarkdown(generateTasksMarkdown([{
+        id: 'sys-screened', status: 'pending', priority: 'LOW', description: 'Trusted maintenance',
+        metadata: { analysisType, forgeMaintenanceVersion: 1 },
+      }]));
+      expect(task.metadata.forgeMaintenanceVersion).toBe('1');
+      expect(await resolveAgentProviderAndModel(task)).toMatchObject({ ok: true });
+    }
+    for (const forgeMaintenanceVersion of [true, '01', '1.0', 2, {}, null]) {
+      expect(await resolveAgentProviderAndModel({ metadata: { analysisType: 'pr-watcher', forgeMaintenanceVersion } }))
+        .toMatchObject({ ok: false, permanent: true });
+    }
   });
 
   it('fails when no active provider is configured', async () => {

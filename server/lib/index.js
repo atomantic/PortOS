@@ -823,3 +823,5 @@ export * from './codeAnimationSound.js';
 
 export * from './musicVideoMediaPolicy.js';
 export * from './sandboxDelegation.js';
+
+export * from './forgeMaintenanceTasks.js';

@@ -15,6 +15,10 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { removeByMetadata } from './notifications.js';
 
+vi.mock('./prWatcher.js', () => ({ persistPrWatcherState: vi.fn(async () => ({})) }));
+import { persistPrWatcherState } from './prWatcher.js';
+import { LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js';
+
 vi.mock('./notifications.js', () => ({ removeByMetadata: vi.fn().mockResolvedValue(1) }));
 
 const mock = vi.hoisted(() => ({
@@ -120,6 +124,7 @@ import {
   isReapableBlockedFailure,
   isReapableInvestigation,
   sweepResolvedFailureTasks,
+  reconcileLegacyForgeMaintenanceTasks,
   DEFAULT_FAILURE_TASK_MAX_AGE_MS,
   __resetTaskCache
 } from './cosTaskStore.js';
@@ -148,6 +153,45 @@ beforeEach(() => {
   mock.review = { ok: true, findings: 'No findings.' };
   mock.reviewDefaults = { lmstudioModel: 'default-lmstudio', ollamaModel: 'default-ollama' };
   mock.reviewCalls = [];
+});
+
+describe('forge maintenance queue recovery', () => {
+  const queue = async (id, metadata, status = 'pending') => {
+    await addTask({ id, description: `Maintenance ${id}`, priority: 'LOW', status: 'pending', metadata }, 'internal', { raw: true });
+    if (status !== 'pending') await updateTask(id, { status }, 'internal');
+  };
+  const block = { blockedCategory: 'provider-config', blockedReason: LEGACY_FORGE_MAINTENANCE_REASON };
+
+  it('recovers screened refusals and retires unscreened prompts without authorizing them', async () => {
+    await queue('sys-screened', { analysisType: 'pr-watcher', forgeMaintenanceVersion: 1, ...block }, 'blocked');
+    await queue('sys-old-pr', { analysisType: 'pr-watcher', app: 'example', ...block }, 'blocked');
+    await queue('sys-old-issue', { analysisType: 'issue-reconcile' });
+    const result = await reconcileLegacyForgeMaintenanceTasks({ instanceId: 'local' });
+    expect(result).toEqual({ recovered: 1, retired: 2 });
+    const tasks = (await getCosTasks()).tasks;
+    expect(tasks.find(t => t.id === 'sys-screened')).toMatchObject({ status: 'pending', metadata: { forgeMaintenanceVersion: '1' } });
+    expect(tasks.find(t => t.id === 'sys-screened').metadata.blockedReason).toBeUndefined();
+    for (const id of ['sys-old-pr', 'sys-old-issue']) {
+      expect(tasks.find(t => t.id === id)).toMatchObject({ status: 'completed', metadata: { resolution: 'superseded' } });
+      expect(tasks.find(t => t.id === id).metadata.forgeMaintenanceVersion).toBeUndefined();
+    }
+    expect(persistPrWatcherState).toHaveBeenCalledWith('example', { activityByPr: {} });
+    expect(await reconcileLegacyForgeMaintenanceTasks({ instanceId: 'local' })).toEqual({ recovered: 0, retired: 0 });
+  });
+
+  it('preserves active owners, user holds, other configuration failures, and future versions', async () => {
+    mock.state.agents = { running: { taskId: 'sys-owned', status: 'running' } };
+    await queue('sys-owned', { analysisType: 'pr-watcher' });
+    await queue('sys-running', { analysisType: 'issue-reconcile' }, 'in_progress');
+    await queue('sys-stopped', { analysisType: 'pr-watcher', blockedCategory: 'user-terminated' }, 'blocked');
+    await queue('sys-config', { analysisType: 'pr-watcher', ...block, blockedReason: 'Provider unavailable' }, 'blocked');
+    await queue('sys-future', { analysisType: 'pr-watcher', forgeMaintenanceVersion: 2 });
+    await queue('sys-current', { analysisType: 'pr-watcher', forgeMaintenanceVersion: 1 });
+    await queue('sys-peer', { analysisType: 'pr-watcher', targetInstanceId: 'peer' });
+    const before = (await getCosTasks()).tasks;
+    expect(await reconcileLegacyForgeMaintenanceTasks({ instanceId: 'local' })).toEqual({ recovered: 0, retired: 0 });
+    expect((await getCosTasks()).tasks).toEqual(before);
+  });
 });
 
 describe('cosTaskStore.firstLine', () => {
