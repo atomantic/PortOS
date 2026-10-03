@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rm } from 'fs/promises';
+import { readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -7,8 +7,16 @@ const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-epi
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makeProxy(actual);
+  return makeProxy({ ...actual, atomicWrite: vi.fn(actual.atomicWrite) });
 });
+
+vi.mock('fs/promises', async () => {
+  const actual = await vi.importActual('fs/promises');
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
+
+const { atomicWrite } = await import('../lib/fileUtils.js');
+const { readFile: realReadFile } = await vi.importActual('fs/promises');
 
 const {
   addIntervention,
@@ -16,9 +24,11 @@ const {
   getComplianceSummary,
   getInterventions,
   logEntry,
+  updateIntervention,
 } = await import('./epigenetic.js');
 
 const meatspaceRoot = join(tempRoot, 'meatspace');
+const savedFile = join(meatspaceRoot, 'epigenetic.json');
 
 const dayKey = (daysAgo) => {
   const date = new Date();
@@ -37,6 +47,9 @@ const addTracked = (id, frequency = 'daily') => addIntervention({
 describe('epigenetic intervention persistence', () => {
   beforeEach(async () => {
     await rm(meatspaceRoot, { recursive: true, force: true });
+    vi.mocked(readFile).mockReset().mockImplementation(realReadFile);
+    vi.mocked(atomicWrite).mockClear();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
@@ -46,6 +59,81 @@ describe('epigenetic intervention persistence', () => {
   });
 
   afterAll(cleanup);
+
+
+  const mutations = [
+    () => addTracked('example-new'),
+    () => updateIntervention('example-existing', { notes: 'updated' }),
+    () => logEntry('example-existing', { amount: 1, date: '2026-09-10' }),
+    () => deleteIntervention('example-existing'),
+  ];
+
+  const expectProtected = async (bytes) => {
+    vi.mocked(atomicWrite).mockClear();
+    for (const mutate of mutations) {
+      await expect(mutate()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+      expect(await realReadFile(savedFile, 'utf8')).toBe(bytes);
+    }
+    expect(atomicWrite).not.toHaveBeenCalled();
+  };
+
+  it.each(['EACCES', 'EIO'])('preserves saved history when reading fails with %s and recovers on retry', async (code) => {
+    await addTracked('example-existing');
+    await logEntry('example-existing', { amount: 2, date: '2026-09-09' });
+    const bytes = await realReadFile(savedFile, 'utf8');
+    vi.mocked(readFile).mockImplementation((path, ...args) =>
+      path === savedFile
+        ? Promise.reject(Object.assign(new Error('synthetic read failure'), { code }))
+        : realReadFile(path, ...args));
+
+    await expectProtected(bytes);
+
+    vi.mocked(readFile).mockImplementation(realReadFile);
+    await addTracked('example-new');
+    const { interventions } = await getInterventions();
+    expect(Object.keys(interventions)).toEqual(['example-existing', 'example-new']);
+    expect(interventions['example-existing'].logs).toMatchObject([{ amount: 2 }]);
+  });
+
+  it.each([
+    ['truncated', '{"interventions":'],
+    ['malformed', 'invalid JSON'],
+    ['empty', ''],
+    ['whitespace', '  '],
+    ['null root', 'null'],
+    ['array root', '[]'],
+    ['scalar root', '42'],
+    ['missing interventions', '{}'],
+    ['null interventions', '{"interventions":null}'],
+    ['array interventions', '{"interventions":[]}'],
+    ['scalar interventions', '{"interventions":1}'],
+    ['null intervention', '{"interventions":{"example-existing":null}}'],
+    ['array intervention', '{"interventions":{"example-existing":[]}}'],
+    ['missing logs', '{"interventions":{"example-existing":{}}}'],
+    ['null logs', '{"interventions":{"example-existing":{"logs":null}}}'],
+    ['object logs', '{"interventions":{"example-existing":{"logs":{}}}}'],
+  ])('preserves %s input across every mutation and resumes after repair', async (_name, bytes) => {
+    await addTracked('example-existing');
+    const healthy = await realReadFile(savedFile, 'utf8');
+    await writeFile(savedFile, bytes);
+    await expectProtected(bytes);
+
+    await writeFile(savedFile, healthy);
+    await updateIntervention('example-existing', { notes: 'repaired' });
+    const { interventions } = await getInterventions();
+    expect(interventions['example-existing'].notes).toBe('repaired');
+  });
+
+  it('initializes absent stores with independent nested defaults', async () => {
+    const first = await getInterventions();
+    first.interventions['example-local'] = { logs: [] };
+    await expect(getInterventions()).resolves.toMatchObject({ interventions: {}, lastUpdated: null });
+    await addTracked('example-first');
+    await rm(savedFile);
+    await addTracked('example-second');
+    const { interventions } = await getInterventions();
+    expect(Object.keys(interventions)).toEqual(['example-second']);
+  });
 
   it('persists an added intervention and removes it with all associated data', async () => {
     await addTracked('strength-training', 'weekly');
