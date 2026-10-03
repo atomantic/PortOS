@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../../services/api';
 import {Play,
   Calendar,
@@ -18,26 +18,45 @@ export default function DigestTab({ onRefresh }) {
   const [latestReview, setLatestReview] = useState(null);
   const [digestHistory, setDigestHistory] = useState([]);
   const [reviewHistory, setReviewHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [reads, setReads] = useState({});
+  const readVersions = useRef({});
   const [runningDigest, setRunningDigest] = useState(false);
   const [runningReview, setRunningReview] = useState(false);
   const [showDigestHistory, setShowDigestHistory] = useState(false);
   const [showReviewHistory, setShowReviewHistory] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    const [digest, review, digests, reviews] = await Promise.all([
-      api.getBrainLatestDigest().catch(() => null),
-      api.getBrainLatestReview().catch(() => null),
-      api.getBrainDigests().catch(() => []),
-      api.getBrainReviews().catch(() => [])
-    ]);
-
-    setLatestDigest(digest);
-    setLatestReview(review);
-    setDigestHistory(digests.slice(1)); // Exclude latest
-    setReviewHistory(reviews.slice(1)); // Exclude latest
-    setLoading(false);
+  const loadRegion = useCallback(async (region) => {
+    const version = (readVersions.current[region] || 0) + 1;
+    readVersions.current[region] = version;
+    setReads(previous => ({ ...previous, [region]: 'loading' }));
+    const loaders = {
+      digest: () => api.getBrainLatestDigest({ silent: true }),
+      review: () => api.getBrainLatestReview({ silent: true }),
+      digests: () => api.getBrainDigests(10, { silent: true }),
+      reviews: () => api.getBrainReviews(10, { silent: true })
+    };
+    const setters = {
+      digest: setLatestDigest,
+      review: setLatestReview,
+      digests: value => setDigestHistory(value.slice(1)),
+      reviews: value => setReviewHistory(value.slice(1))
+    };
+    const [result] = await Promise.allSettled([loaders[region]()]);
+    if (readVersions.current[region] !== version) return;
+    if (result.status === 'fulfilled') setters[region](result.value);
+    setReads(previous => ({ ...previous, [region]: result.status === 'fulfilled' ? 'ready' : 'error' }));
   }, []);
+
+  const fetchData = useCallback(() => Promise.all(
+    ['digest', 'review', 'digests', 'reviews'].map(loadRegion)
+  ), [loadRegion]);
+
+  const readFeedback = (region, label) => reads[region] === 'error' ? (
+    <div role="alert" className="mb-3 text-sm text-port-warning">
+      {label} unavailable. Previously loaded content may be out of date.
+      <button onClick={() => loadRegion(region)} className="ml-2 underline">Retry {label.toLowerCase()}</button>
+    </div>
+  ) : reads[region] !== 'ready' ? <BrailleSpinner text={`Loading ${label.toLowerCase()}`} /> : null;
 
   useEffect(() => {
     fetchData();
@@ -73,13 +92,6 @@ export default function DigestTab({ onRefresh }) {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <BrailleSpinner text="Loading" />
-      </div>
-    );
-  }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
@@ -104,6 +116,7 @@ export default function DigestTab({ onRefresh }) {
           </button>
         </div>
 
+        {readFeedback('digest', 'Daily digest')}
         {latestDigest ? (
           <div className="p-4 bg-port-card border border-port-border rounded-lg">
             <div className="flex items-center justify-between mb-3">
@@ -147,15 +160,16 @@ export default function DigestTab({ onRefresh }) {
               </div>
             </div>
           </div>
-        ) : (
+        ) : reads.digest === 'ready' ? (
           <div className="p-8 bg-port-card border border-port-border rounded-lg text-center">
             <Calendar className="w-12 h-12 text-gray-500 mx-auto mb-3" />
             <p className="text-gray-500">No daily digest yet.</p>
             <p className="text-gray-600 text-sm mt-1">Click "Generate Now" to create your first digest.</p>
           </div>
-        )}
+        ) : null}
 
         {/* Digest History */}
+        {readFeedback('digests', 'Digest history')}
         {digestHistory.length > 0 && (
           <div className="mt-3">
             <button
@@ -205,6 +219,7 @@ export default function DigestTab({ onRefresh }) {
           </button>
         </div>
 
+        {readFeedback('review', 'Weekly review')}
         {latestReview ? (
           <div className="p-4 bg-port-card border border-port-border rounded-lg">
             <div className="flex items-center justify-between mb-3">
@@ -257,15 +272,16 @@ export default function DigestTab({ onRefresh }) {
               </div>
             )}
           </div>
-        ) : (
+        ) : reads.review === 'ready' ? (
           <div className="p-8 bg-port-card border border-port-border rounded-lg text-center">
             <Clock className="w-12 h-12 text-gray-500 mx-auto mb-3" />
             <p className="text-gray-500">No weekly review yet.</p>
             <p className="text-gray-600 text-sm mt-1">Click "Generate Now" to create your first review.</p>
           </div>
-        )}
+        ) : null}
 
         {/* Review History */}
+        {readFeedback('reviews', 'Review history')}
         {reviewHistory.length > 0 && (
           <div className="mt-3">
             <button
