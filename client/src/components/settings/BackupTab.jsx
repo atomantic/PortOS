@@ -31,12 +31,28 @@ const asArray = (v) => Array.isArray(v) ? v : [];
 // Backup form. Drop those on load instead: the spelling of the survivors is left
 // untouched (anchoring is a read-time concern), so the form is not dirty.
 const asExcludeArray = (v) => asArray(v).filter(isSafeExcludePattern);
-// restorePostgres refusals that left the database untouched (preview or execution).
-const DB_RESTORE_REFUSALS = {
+// User-facing restore failures shared by preview and confirmation. Only proven
+// refusals promise unchanged data; transport and unknown outcomes stay uncertain.
+const DB_RESTORE_FAILURE_MESSAGES = {
   manifest_mismatch: 'Snapshot dump failed integrity verification',
   manifest_unreadable: 'Snapshot verification metadata could not be read. Choose another snapshot or repair the backup media before retrying.',
   dump_unreadable: 'The snapshot database dump could not be read or staged for restore. Nothing was changed; check the backup media and free temp space, then retry.',
   dump_incomplete: 'The snapshot database dump is incomplete (truncated or damaged). Nothing was changed; choose another snapshot.',
+  restore_preflight: 'Database restore was refused because the database contains unexpected objects, ownership, or dependencies. Nothing was changed. Check the server logs and resolve the reported database conflict before trying again.',
+  restore_journal: 'The restore recovery journal could not be written. Nothing was changed. Check the server logs and available disk space before trying again.',
+  no_dump: 'No DB dump in this snapshot',
+  not_configured: 'The database is unavailable for restore. Check Database status and the server logs for connection details.',
+  restore_error: 'Database restore failed. Check Backup status, any recovery warning, and the server logs for details.',
+  timeout: 'Database restore timed out. Check Backup status, any recovery warning, and the server logs before taking further action.',
+  request_error: 'Could not confirm the database restore result. Check Backup status and any recovery warning before starting another restore.',
+};
+const dbRestoreFailureMessage = (result) => {
+  const message = DB_RESTORE_FAILURE_MESSAGES[result?.reason]
+    || 'Database restore could not be confirmed. Check Backup status and the server logs for details.';
+  // Producer explanations can name the specific missing table or database
+  // conflict. Keep them in the owned toast alongside the safe next step.
+  const details = typeof result?.error === 'string' ? result.error.trim() : '';
+  return details ? `${message} Details: ${details}` : message;
 };
 const snapshotIdentity = (snapshot) =>
   snapshot.selectionKey || `${snapshot.source || 'current'}/${snapshot.id}`;
@@ -311,6 +327,16 @@ export function BackupTab() {
     );
   };
 
+  const reportRestoreFailure = (result) => {
+    if (result?.recovery) {
+      // Committed (or not yet provably rolled back): resume, never replay.
+      setRestoreRecovery({ pending: true, ...result.recovery });
+      toast.error(result.error || 'The database restore needs recovery before the database can be used.', { duration: Infinity });
+      return;
+    }
+    toast.error(dbRestoreFailureMessage(result));
+  };
+
   const handleRestoreDb = async (snapshot) => {
     const generation = restorePreviewGenerationRef.current + 1;
     restorePreviewGenerationRef.current = generation;
@@ -322,14 +348,10 @@ export function BackupTab() {
     };
     // Dry-run first to show what would restore, then open the confirm modal.
     const preview = await restoreDatabase({ ...request, dryRun: true }, { silent: true })
-      .catch(() => null);
+      .catch(err => ({ status: 'failed', reason: 'request_error', error: err?.message }));
     if (restorePreviewGenerationRef.current !== generation) return;
-    if (!preview || preview.status === 'skipped') {
-      toast.error(preview?.reason === 'no_dump' ? 'No DB dump in this snapshot' : 'DB restore unavailable');
-      return;
-    }
-    if (preview.status !== 'ok') {
-      toast.error(DB_RESTORE_REFUSALS[preview.reason] || `DB restore unavailable: ${preview.reason || 'unknown'}`);
+    if (preview?.status !== 'ok') {
+      reportRestoreFailure(preview);
       return;
     }
     setRestorePreview(preview);
@@ -340,18 +362,11 @@ export function BackupTab() {
     const target = restoreTarget;
     setRestoreTarget(null);
     const result = await restoreDatabase({ ...target.request, dryRun: false }, { silent: true })
-      .catch(() => ({ status: 'failed', reason: 'request_error' }));
-    if (result.status === 'ok') {
+      .catch(err => ({ status: 'failed', reason: 'request_error', error: err?.message }));
+    if (result?.status === 'ok') {
       toast.success(`Database restored from ${target.request.snapshotId}`, { icon: '💾' });
-    } else if (DB_RESTORE_REFUSALS[result.reason]) {
-      toast.error(DB_RESTORE_REFUSALS[result.reason]);
-    } else if (result.recovery) {
-      // Committed (or not yet provably rolled back): the server keeps the
-      // database fenced. Resume — never repeat — the restore.
-      setRestoreRecovery({ pending: true, ...result.recovery });
-      toast.error(result.error || 'The database restore needs recovery before the database can be used.', { duration: Infinity });
     } else {
-      toast.error(`DB restore failed: ${result.reason || 'unknown'}`);
+      reportRestoreFailure(result);
     }
     setRestorePreview(null);
   };
