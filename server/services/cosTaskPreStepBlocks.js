@@ -1,3 +1,4 @@
+import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 /**
  * CoS Task Pre-Step Blocks
  *
@@ -735,7 +736,7 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
   });
   if (!dispatch) return { skip: true };
   metadata.perpetual = true;
-  metadata.forgeMaintenanceVersion = 1;
+  metadata.forgeMaintenanceVersion = FORGE_MAINTENANCE_VERSION;
   const block = formatZombiesForPrompt(result.zombies, {
     fullName: result.fullName, forge: result.forge, autoClose,
     projectKey: jira?.projectKey, instanceId: jira?.instanceId,
@@ -867,7 +868,7 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
     return { skip: true };
   }
 
-  metadata.forgeMaintenanceVersion = 1;
+  metadata.forgeMaintenanceVersion = FORGE_MAINTENANCE_VERSION;
   const block = prWatcher.formatPullRequestsForPrompt(check.newPrs, {
     repoFullName: check.repoFullName, defaultBranch: check.defaultBranch
   });
