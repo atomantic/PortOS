@@ -81,7 +81,7 @@ export default function InboxTab({ onRefresh, settings }) {
   const tempIdCounter = useRef(0);
 
   const fetchInboxPage = useCallback(async ({ cursor, signal }) => {
-    const data = await api.getBrainInbox({ cursor, limit: 50, signal }).catch(() => ({ items: [], entries: [] }));
+    const data = await api.getBrainInbox({ cursor, limit: 50, signal, silent: true });
     if (data.counts) {
       setServerCounts(data.counts);
     }
@@ -943,7 +943,7 @@ export default function InboxTab({ onRefresh, settings }) {
               })}
 
               {filedEntries.length === 0 && (
-                <p className="text-gray-500 text-sm">{paged.loaded ? 'No filed entries yet. Start capturing thoughts above.' : 'Inbox history is loading. You can capture thoughts above.'}</p>
+                <p className="text-gray-500 text-sm">{paged.loaded ? 'No filed entries yet. Start capturing thoughts above.' : 'Inbox history is not available yet. You can capture thoughts above.'}</p>
               )}
             </div>
           )}

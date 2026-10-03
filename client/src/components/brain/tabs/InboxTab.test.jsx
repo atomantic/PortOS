@@ -90,6 +90,24 @@ describe('Brain inbox capture', () => {
     expect(screen.getAllByText(accepted.capturedText)).toHaveLength(1);
   });
 
+  it('keeps capture usable after history fails without claiming it is still loading', async () => {
+    getBrainInbox.mockRejectedValue(new Error('Example history could not load'));
+    const accepted = {
+      id: 'example-after-history-error', capturedText: 'A thought after a history failure',
+      status: 'filed', capturedAt: '2026-01-01T00:00:00.000Z',
+    };
+    captureBrainThought.mockResolvedValue({ inboxLog: accepted });
+    render(<MemoryRouter><InboxTab /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Example history could not load');
+    expect(screen.getByRole('button', { name: 'Retry loading' })).toBeEnabled();
+    expect(screen.queryByText('Inbox history is loading. You can capture thoughts above.')).toBeNull();
+    expect(screen.queryByText('Loading inbox history')).toBeNull();
+    fireEvent.change(screen.getByLabelText('New inbox thought'), { target: { value: accepted.capturedText } });
+    fireEvent.click(screen.getByLabelText('Capture thought'));
+    await waitFor(() => expect(screen.getByText(accepted.capturedText)).toBeInTheDocument());
+  });
+
   it('sends an optional note when a URL is filed to Links', async () => {
     render(<MemoryRouter><InboxTab /></MemoryRouter>);
     const input = await screen.findByLabelText('New inbox thought');
