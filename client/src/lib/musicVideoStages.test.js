@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, resolvePreviewSource, resolveStageParam,
+  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, listPreviewSources, describeProjectStatus, resolveStageParam,
 } from './musicVideoStages.js';
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
@@ -125,16 +125,53 @@ describe('stage route param', () => {
   });
 });
 
-describe('resolvePreviewSource', () => {
-  it('prefers the composition document, then the newest finished excerpt, then nothing', () => {
+describe('listPreviewSources', () => {
+  it('orders the final render, the composition document, then finished excerpts newest first', () => {
     const excerpts = [
       { id: 'a', status: 'complete', filename: 'a.mp4', startSec: 0, endSec: 10 },
       { id: 'b', status: 'complete', filename: 'b.mp4', startSec: 10, endSec: 20 },
       { id: 'c', status: 'rendering', filename: null },
     ];
-    expect(resolvePreviewSource({ composition: { mode: 'document', document: { directory: 'd' } }, excerpts })).toEqual({ kind: 'document' });
-    expect(resolvePreviewSource({ composition: { mode: 'document' }, excerpts }).excerpt.id).toBe('b');
-    expect(resolvePreviewSource({ composition: { mode: 'concat', document: { directory: 'd' } }, excerpts }).kind).toBe('excerpt');
-    expect(resolvePreviewSource({ excerpts: [{ id: 'c', status: 'error' }] })).toBeNull();
+    const ids = (project, opts) => listPreviewSources(project, opts).map((source) => source.id);
+    expect(ids({ renderHistoryId: 'r1', composition: { mode: 'document', document: { directory: 'd' } }, excerpts }, { finalVideoSrc: '/data/videos/final.mp4' }))
+      .toEqual(['final', 'document', 'excerpt:b', 'excerpt:a']);
+    // The final render plays only once its file has resolved; a non-document mode has no live composition.
+    expect(ids({ renderHistoryId: 'r1', composition: { mode: 'concat', document: { directory: 'd' } }, excerpts })).toEqual(['excerpt:b', 'excerpt:a']);
+    expect(listPreviewSources({ excerpts: [{ id: 'c', status: 'error' }] })).toEqual([]);
+    expect(listPreviewSources({ excerpts })[0]).toMatchObject({ kind: 'video', src: '/data/videos/b.mp4', startSec: 10, endSec: 20 });
+  });
+});
+
+describe('describeProjectStatus', () => {
+  const stages = (current, overrides = {}) => ({
+    current,
+    stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: overrides[stage.id] || (stage.id === current ? 'active' : 'todo') })),
+  });
+  const readiness = (art, storyboard, proof) => ({
+    art: { approved: art }, storyboard: { approved: storyboard }, proof: { approved: proof }, readyForProduction: proof,
+  });
+
+  it('names the stage, flags a pending approval and says nothing has been rendered', () => {
+    const status = describeProjectStatus(
+      { autonomousRun: { status: 'stopped' }, excerpts: [] },
+      { progress: stages('cast-sets', { setup: 'done' }), nextAction: { id: 'review-production' }, readiness: readiness(false, false, false) },
+    );
+    expect(status.headline).toBe('Stage 2 of 7: Cast & Sets · needs you');
+    expect(status.tone).toBe('warn');
+    expect(status.facts.map((fact) => fact.label)).toEqual([
+      'Autopilot paused', 'Approvals: 0 of 3 approved · needs art, storyboard, proof', 'Nothing rendered yet',
+    ]);
+  });
+
+  it('reports drafts and the final render', () => {
+    const drafts = describeProjectStatus({ excerpts: [{ id: 'a', status: 'complete', filename: 'a.mp4' }] }, { progress: stages('review') });
+    expect(drafts.headline).toBe('Stage 6 of 7: Review');
+    expect(drafts.facts.at(-1).label).toBe('1 draft excerpt, no final render');
+    const done = describeProjectStatus({ renderHistoryId: 'r1' }, {
+      progress: { current: 'publish', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'done' })) },
+      readiness: readiness(true, true, true),
+    });
+    expect(done.headline).toBe('Published');
+    expect(done.facts.map((fact) => fact.label)).toEqual(['Approvals: All 3 approved', 'Final render ready']);
   });
 });

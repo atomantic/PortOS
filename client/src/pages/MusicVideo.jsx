@@ -41,7 +41,6 @@ import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
 import useMusicVideoProduction from '../hooks/useMusicVideoProduction.js';
 import useAutonomousMusicVideo from '../hooks/useAutonomousMusicVideo.js';
 import useDrawerTab from '../hooks/useDrawerTab.js';
-import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
@@ -59,7 +58,8 @@ import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawe
 import AutonomousRunPanel from '../components/musicVideo/AutonomousRunPanel.jsx';
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
-import MusicVideoLayout from '../components/musicVideo/MusicVideoLayout.jsx';
+import MusicVideoLayout, { MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
+import StageSection from '../components/musicVideo/StageSection.jsx';
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
@@ -79,8 +79,9 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import {
-  deriveNextAction, deriveStages, projectSpend, resolvePreviewSource, resolveStageParam,
+  approvalSummary, deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam,
 } from '../lib/musicVideoStages.js';
+import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
 const emptyCreateForm = () => ({
@@ -98,6 +99,14 @@ function autopilotBlocker(project) {
 // The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
 const STAGE_VIEWS = {
   setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage, publish: PublishStage,
+};
+
+// The shared autopilot section stays unfolded only while the run is working or
+// waiting on the director; a paused, finished or cancelled run folds to its summary line.
+const AUTOPILOT_OPEN_STATUSES = new Set(['running', 'awaiting-approval', 'needs-human', 'failed']);
+const autopilotSummary = (run) => {
+  const label = run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status;
+  return run.error ? `${label} — ${run.error}` : label;
 };
 
 const STATUS_COLORS = {
@@ -769,6 +778,9 @@ export default function MusicVideo() {
   useEffect(() => {
     if (!pendingAnchor || pendingAnchor.stage !== activeStage) return;
     const el = document.getElementById(pendingAnchor.id);
+    // An anchor inside a folded section (Production review) unfolds it first.
+    const fold = el?.closest?.('details');
+    if (fold) fold.open = true;
     el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
     const focusable = el?.matches?.('button, input, select, textarea, a') ? el : el?.querySelector?.('button, input, select, textarea, a');
     focusable?.focus?.({ preventScroll: true });
@@ -908,8 +920,11 @@ export default function MusicVideo() {
   } : null;
   const StageView = STAGE_VIEWS[activeStage];
 
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src }) : [];
+  const autopilotRun = selected?.autonomousRun || null;
+
   return (
-    <div className="space-y-4">
+    <div className="flex h-full flex-col">
       <MidiInstallModal {...midi.installGate} />
       <MidiGatedModal {...midi.gatedGate} />
       <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
@@ -1066,7 +1081,7 @@ export default function MusicVideo() {
         }}
       />
 
-      <div>
+      <div id={MUSIC_VIDEO_SCROLL_ID} className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
         {projectsError && (
           <Banner tone="error" size="md" title="Music video projects unavailable" className="mb-4" actions={(
             <button
@@ -1137,9 +1152,11 @@ export default function MusicVideo() {
             nextAction={compositionSavePending > 0 && nextAction ? { ...nextAction, disabled: true, reason: 'Saving composition…' } : nextAction}
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
-            dock={resolvePreviewSource(selected) ? (
+            status={describeProjectStatus(selected, { progress, nextAction, readiness: productionReview.readiness })}
+            dock={previewSources.length ? (
               <PreviewDock
                 project={selected}
+                sources={previewSources}
                 audioUrl={audioUrl}
                 seekRequest={seekRequest}
                 collapsed={dockCollapsed}
@@ -1147,8 +1164,24 @@ export default function MusicVideo() {
               />
             ) : null}
             projectPanels={<div className="space-y-3 min-w-0">
-              <AutonomousRunPanel key={`autonomous-${selected.id}`} project={selected} auto={autonomous} selectedStage={runStage} onSelectStage={setRunStage} />
-              <ProductionReviewPanel key={`production-review-${selected.id}`} project={selected} review={productionReview} onOpenArtifact={openArtifact} />
+              {autopilotRun && (
+                <StageSection
+                  key={`autonomous-${selected.id}`}
+                  title="Autopilot run"
+                  summary={autopilotSummary(autopilotRun)}
+                  defaultOpen={!!runStage || autopilotRun.interrupted || AUTOPILOT_OPEN_STATUSES.has(autopilotRun.status)}
+                >
+                  <AutonomousRunPanel project={selected} auto={autonomous} selectedStage={runStage} onSelectStage={setRunStage} framed={false} />
+                </StageSection>
+              )}
+              <StageSection
+                key={`production-review-${selected.id}`}
+                title="Production approvals"
+                summary={approvalSummary(productionReview.readiness) || 'Visual direction, timed storyboard and a watched proof'}
+                defaultOpen={nextAction?.id === 'review-production' && nextAction.stage === activeStage}
+              >
+                <ProductionReviewPanel project={selected} review={productionReview} onOpenArtifact={openArtifact} framed={false} />
+              </StageSection>
             </div>}
           >
             <StageView key={selected.id} board={board} />

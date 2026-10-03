@@ -107,6 +107,10 @@ const FULL_WIDTH_PATH_REGEXES = [
   // scrolling body. Keep this boundary-specific so `/music-video` retains its
   // own route classification.
   /^\/music(?:\/|$)/,
+  // Music Video is a full-width PageHeader over its own scroll body (which
+  // holds the sticky project header and stage tabs) — in the padded main its
+  // bordered title bar sat indented inside the page padding.
+  /^\/music-video(?:\/|$)/,
   // Video workspace (`/video`) owns its own header+scroll shell. Generate
   // Video (`/video/generate`) uses the MediaGen tab shell (header + tabs +
   // overflow-auto body), so it must stay full-width with that shell — taking

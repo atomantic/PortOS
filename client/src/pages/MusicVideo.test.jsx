@@ -2307,13 +2307,13 @@ describe('MusicVideo stage tabs (#9243)', () => {
       ],
     };
 
-    it('seeks the player to a scene\'s start when its card is opened, and mounts only once a preview stage is visited', async () => {
+    it('docks the preview on every stage and seeks it to a scene\'s start when its card is opened', async () => {
       listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3' }]);
       await openProject(docProject, 'setup');
-      expect(screen.queryByTitle('Composition document preview')).toBeNull();
+      expect(await screen.findByTitle('Composition document preview')).toBeTruthy();
 
       await openStage('board');
-      expect(await screen.findByTitle('Composition document preview')).toBeTruthy();
+      expect(screen.getByTitle('Composition document preview')).toBeTruthy();
       await waitFor(() => expect(screen.getByText('0.00s / 60.0s')).toBeTruthy());
       fireEvent.click(screen.getByText('Scene 2'));
       await waitFor(() => expect(screen.getByText('4.00s / 60.0s')).toBeTruthy());
@@ -2330,9 +2330,12 @@ describe('MusicVideo stage tabs (#9243)', () => {
         ],
       };
       await openProject(project, 'board');
-      const player = await screen.findByLabelText('Latest draft excerpt preview');
+      const player = await screen.findByLabelText('Draft excerpt preview');
       expect(player.getAttribute('src')).toBe('/data/videos/excerpt-new.mp4');
       expect(screen.queryByTitle('Composition document preview')).toBeNull();
+      // Every finished draft stays reachable from the dock's source picker.
+      fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'excerpt:mve-1' } });
+      await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
     });
 
     it('offers no preview when the project has neither a document nor a finished excerpt', async () => {

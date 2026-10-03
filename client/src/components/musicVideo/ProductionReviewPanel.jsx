@@ -8,7 +8,8 @@ const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 te
 const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', proof: 'Animated proof' };
 
 /** Editable planning content and explicit operator decisions for every render mode. */
-export default function ProductionReviewPanel({ project, review, onOpenArtifact }) {
+// `framed={false}` drops the card chrome and heading for a host that supplies them (the page's collapsible section).
+export default function ProductionReviewPanel({ project, review, onOpenArtifact, framed = true }) {
   const fieldId = key => `mv-review-${project.id}-${key}`;
   const saved = project.productionReview?.draft || EMPTY;
   const [local, setLocal] = useState(null);
@@ -50,8 +51,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact 
       excerptId: excerpt.id, filename: excerpt.filename } : undefined);
   };
 
-  return <section id="mv-production-review" aria-label="Production review" className="rounded-lg border border-port-border bg-port-card p-3 space-y-3">
-    <h3 className="font-medium">Production review</h3>
+  return <section id="mv-production-review" aria-label="Production review" className={framed ? 'rounded-lg border border-port-border bg-port-card p-3 space-y-3' : 'space-y-3'}>
+    {framed && <h3 className="font-medium">Production review</h3>}
     <p className="text-sm text-port-text-muted">Every medium needs visual direction, a timed storyboard and a watched animated proof. Drafts and technical renders do not count as approval.</p>
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
     <ol className="grid gap-2 sm:grid-cols-3">
