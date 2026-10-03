@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { cosEvents } from './cosEvents.js';
 
 // --- Mock every dependency agentWorktreeCleanup.js pulls in transitively ---
 
@@ -1914,6 +1915,19 @@ describe('spawnReviewLoopFollowUp', () => {
 });
 
 describe('spawnMergeRecoveryTask', () => {
+  let logEvents;
+  let captureLog;
+
+  beforeEach(() => {
+    logEvents = [];
+    captureLog = entry => logEvents.push(entry);
+    cosEvents.on('log', captureLog);
+  });
+
+  afterEach(() => {
+    cosEvents.off('log', captureLog);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     addTask.mockResolvedValue({ id: 'task-recovery' });
@@ -1923,7 +1937,7 @@ describe('spawnMergeRecoveryTask', () => {
     const warnings = ['Auto-merge failed for branch cos/task-abc123/agent-1 — branch preserved for manual recovery'];
     const task = { id: 'task-original', description: 'Fix deps', metadata: { app: 'sparsetree' } };
 
-    await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'SparseTree', '/mock/workspace');
+    const result = await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'SparseTree', '/mock/workspace');
 
     expect(addTask).toHaveBeenCalledTimes(1);
     expect(addTask).toHaveBeenCalledWith(
@@ -1936,6 +1950,11 @@ describe('spawnMergeRecoveryTask', () => {
       }),
       'user'
     );
+    expect(result).toEqual({ id: 'task-recovery' });
+    expect(logEvents).toContainEqual(expect.objectContaining({
+      level: 'info',
+      message: expect.stringContaining('Auto-created merge recovery task'),
+    }));
   });
 
   it('should include branch name and repo path in recovery context', async () => {
@@ -1982,12 +2001,27 @@ describe('spawnMergeRecoveryTask', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it('should handle addTask failure gracefully', async () => {
+  // Rejected persistence must retain its diagnostic without claiming a task exists.
+  it.each([
+    ['merge', 'Auto-merge failed for branch cos/task-abc/agent-1 — branch preserved', 'gh'],
+    ['PR', 'PR creation failed for branch cos/task-abc/agent-1: forge error. Worktree preserved.', 'gh'],
+    ['MR', 'PR creation failed for branch cos/task-abc/agent-1: forge error. Worktree preserved.', 'glab'],
+  ])('should handle addTask failure gracefully for %s recovery', async (kind, warning, cli) => {
+    if (kind !== 'merge') git.resolveForgeForRepo.mockResolvedValueOnce({ cli });
     addTask.mockRejectedValue(new Error('write failed'));
-    const warnings = ['Auto-merge failed for branch cos/task-abc/agent-1 — branch preserved'];
 
-    // Should not throw
-    await spawnMergeRecoveryTask(warnings, 'agent-1', { metadata: {} }, 'TestApp', '/mock/workspace');
+    await expect(spawnMergeRecoveryTask(
+      [warning], 'agent-1', { metadata: {} }, 'TestApp', '/mock/workspace'
+    )).resolves.toBeNull();
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(logEvents).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      message: `Failed to create ${kind} recovery task: write failed`,
+      agentId: 'agent-1',
+      staleBranch: 'cos/task-abc/agent-1',
+    }));
+    expect(logEvents.some(entry => entry.message.includes('Auto-created'))).toBe(false);
   });
 
   it('should use "unknown" for task description when not provided', async () => {
@@ -2003,7 +2037,7 @@ describe('spawnMergeRecoveryTask', () => {
     const warnings = ['PR creation failed for branch cos/task-xyz/agent-1: GraphQL: some error. Worktree preserved for manual PR creation.'];
     const task = { id: 'task-original', description: 'Add feature', metadata: { app: 'myapp' } };
 
-    await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'MyApp', '/mock/workspace');
+    const result = await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'MyApp', '/mock/workspace');
 
     expect(addTask).toHaveBeenCalledTimes(1);
     expect(addTask).toHaveBeenCalledWith(
@@ -2016,6 +2050,11 @@ describe('spawnMergeRecoveryTask', () => {
       }),
       'user'
     );
+    expect(result).toEqual({ id: 'task-recovery' });
+    expect(logEvents).toContainEqual(expect.objectContaining({
+      level: 'info',
+      message: expect.stringContaining('Auto-created PR recovery task'),
+    }));
   });
 
   it('should include branch name and workspace in PR recovery context', async () => {
@@ -2053,6 +2092,10 @@ describe('spawnMergeRecoveryTask', () => {
     expect(call.context).toContain('glab mr list --source-branch feature/x');
     expect(call.context).toContain('glab mr create --source-branch feature/x --target-branch main');
     expect(call.context).not.toContain('gh pr ');
+    expect(logEvents).toContainEqual(expect.objectContaining({
+      level: 'info',
+      message: expect.stringContaining('Auto-created MR recovery task'),
+    }));
   });
 });
 

@@ -1240,7 +1240,9 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
       emitLog('warn', `Failed to create merge recovery task: ${err.message}`, { agentId, staleBranch });
       return null;
     });
-    emitLog('info', `🔧 Auto-created merge recovery task for stale branch ${staleBranch}`, { agentId, appName });
+    if (recoveryTask) {
+      emitLog('info', `🔧 Auto-created merge recovery task for stale branch ${staleBranch}`, { agentId, appName });
+    }
     return recoveryTask;
   } else {
     // PR/MR creation failed — spawn an agent to investigate and retry. Pick gh vs
@@ -1275,7 +1277,9 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
       emitLog('warn', `Failed to create ${reqWord} recovery task: ${err.message}`, { agentId, staleBranch });
       return null;
     });
-    emitLog('info', `🔧 Auto-created ${reqWord} recovery task for branch ${staleBranch}`, { agentId, appName, cli });
+    if (recoveryTask) {
+      emitLog('info', `🔧 Auto-created ${reqWord} recovery task for branch ${staleBranch}`, { agentId, appName, cli });
+    }
     return recoveryTask;
   }
 }
