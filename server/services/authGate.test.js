@@ -699,6 +699,10 @@ describe('mounted host-control trailing slashes (#8950)', () => {
       res.json({ saved: true });
     });
     app.use('/api/settings', settings);
+    app.put('/api/settings/features/:featureId', (req, res) => {
+      persist(req.body);
+      res.json({ saved: true });
+    });
     return { app, runner, persist };
   };
   const runBody = { providerId: 'example-cli', prompt: 'Example prompt' };
@@ -725,6 +729,18 @@ describe('mounted host-control trailing slashes (#8950)', () => {
     expect((await request(app).get('/api/runs//')).status).toBe(200);
     expect((await request(app).put('/api/settings//').send({ location: {} })).status).toBe(200);
     expect(persist).toHaveBeenCalledExactlyOnceWith({ location: {} });
+  });
+
+  it('requires operator authority to arm Eidoverse through either settings path', async () => {
+    const remote = await buildApp();
+    const body = { instanceFeatures: { eidoverse: { enabled: true } } };
+    expect((await request(remote.app).put('/api/settings').send(body)).status).toBe(403);
+    expect((await request(remote.app).put('/api/settings/features/eidoverse').send({ enabled: true })).status).toBe(403);
+    expect(remote.persist).not.toHaveBeenCalled();
+    const local = await buildApp('127.0.0.1');
+    expect((await request(local.app).put('/api/settings').send(body)).status).toBe(200);
+    expect((await request(local.app).put('/api/settings/features/eidoverse').send({ enabled: true })).status).toBe(200);
+    expect(local.persist).toHaveBeenCalledTimes(2);
   });
 
   it.each(['local', 'session', 'basic'])('preserves %s authority through mounted root handlers', async (authority) => {

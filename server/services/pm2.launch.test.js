@@ -58,6 +58,15 @@ describe('PM2 command launch interpreters', () => {
     expect(options).not.toHaveProperty('interpreter');
   });
 
+  it('honors a runtime memory limit on both command launch paths', async () => {
+    await startWithCommand('example-world', '/repo/worlds', 'bun server/server.ts', { maxMemoryRestart: '2G' });
+    expect(mockPm2.start.mock.calls[0][0].max_memory_restart).toBe('2G');
+    await startWithCommand('example-world', '/repo/worlds', 'bun server/server.ts', {
+      maxMemoryRestart: '2G', pm2Home: '/tmp/example-pm2',
+    });
+    expect(mockSpawn.mock.calls[0][1]).toEqual(expect.arrayContaining(['--max-memory-restart', '2G']));
+  });
+
   it('applies the same direct-execution rule to configured app scripts', async () => {
     await startApp('tooling-app', { script: 'npm', args: 'run dev' });
 

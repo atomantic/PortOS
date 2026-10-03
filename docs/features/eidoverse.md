@@ -92,8 +92,16 @@ installed during setup:
 <bun> --env-file=.env.portos server/server.ts
 ```
 
-Installation does not start the server. Start, stop, logs, updates, and launch
-links remain visible on the normal managed-app screen. Plain-HTTP managed apps
+Once installed and enabled, PortOS starts the runtime automatically at server
+boot and when the feature is enabled. It waits for readiness, opens the host
+bridge, reconnects the resident CoS presence when that presence is enabled, and
+reconciles pending world-design updates. This startup never installs missing
+dependencies, downloads assets, or calls an AI provider. A disabled feature does
+not auto-start the runtime; manual app controls remain available. Start, stop,
+logs, updates, and launch links remain visible on the normal managed-app screen.
+Command-based Eidoverse launches use a 2 GB PM2 memory restart limit so the
+loaded world and asset runtime can exceed the generic app limit of 500 MB.
+Plain-HTTP managed apps
 keep an `http://` launch URL even when PortOS itself is open over HTTPS, so the
 Apps launch action works from a Tailscale MagicDNS session. Managed updates pull
 both the selected Worlds checkout and its companion video runtime before using

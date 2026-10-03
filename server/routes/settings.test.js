@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
+const reconcileEidoverseRuntime = vi.hoisted(() => vi.fn(async () => ({ running: true })));
+vi.mock('../services/eidoverseRuntime.js', () => ({ reconcileEidoverseRuntime }));
+
 // In-memory settings store backing the mocked service.
 let store = {};
 
@@ -306,6 +309,14 @@ describe('Settings routes — instance feature participation', () => {
     // Only Beeper's own gate is reconciled; an unrelated toggle must not reach
     // into the Beeper service graph at all.
     expect(reconcileBeeperIngestion).not.toHaveBeenCalled();
+  });
+
+  it('reconciles Eidoverse when the general settings save changes its feature gate', async () => {
+    const res = await request(buildApp()).put('/api/settings')
+      .send({ instanceFeatures: { eidoverse: { enabled: true } } });
+    expect(res.status).toBe(200);
+    expect(store.instanceFeatures.eidoverse.enabled).toBe(true);
+    expect(reconcileEidoverseRuntime).toHaveBeenCalledOnce();
   });
 
   // Fork issue #1, final live pass: the Beeper sweep + realtime transport arm on

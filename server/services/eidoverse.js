@@ -15,6 +15,8 @@ export const DEFAULT_EIDOVERSE_WORLDS_REPO = 'https://github.com/atomantic/eidov
 export const EIDOVERSE_VIDEO_REPO = 'https://github.com/anima-research/eidoverse-video';
 export { EIDOVERSE_PORT };
 export const EIDOVERSE_PROCESS_NAME = 'eidoverse-worlds';
+// The loaded world and asset runtime exceeds the generic command-app 500M cap.
+export const EIDOVERSE_MAX_MEMORY_RESTART = '2G';
 
 const BUN_INSTALL_URL = 'https://bun.com/install';
 const BUN_INSTALL_PS1_URL = 'https://bun.com/install.ps1';
