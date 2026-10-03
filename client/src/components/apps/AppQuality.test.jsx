@@ -192,3 +192,18 @@ it('lists categories that cannot apply last, with their reason instead of eviden
   expect(rows).toEqual(['Security', 'Privacy', 'Accessibility']);
   expect(within(table).getAllByText(/Not applicable · no user interface found in this repository/)).not.toHaveLength(0);
 });
+
+it('uses responsive classes for mobile cards and desktop table layout', async () => {
+  const app = { id: 'example', quality: { score: 70, categories: [
+    { id: 'security', label: 'Security', score: 70, coverage: 'broad', confidence: 'high' },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  const table = await screen.findByRole('table');
+  expect(table).toHaveClass('block', 'sm:table');
+  const thead = table.querySelector('thead');
+  expect(thead).toHaveClass('hidden', 'sm:table-header-group');
+  const tbody = table.querySelector('tbody');
+  expect(tbody).toHaveClass('block', 'sm:table-row-group');
+  const row = within(tbody).getByRole('row');
+  expect(row).toHaveClass('grid', 'grid-cols-[1fr_auto]', 'sm:table-row');
+});
