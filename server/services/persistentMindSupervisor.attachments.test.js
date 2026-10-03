@@ -351,7 +351,7 @@ describe('persistent mind image attachment lifecycle', () => {
     expect(unavailable).toMatchObject({ success: false, code: 'ATTACHMENT_UNAVAILABLE', status: 503 });
     expect(unavailable.error).not.toMatch(/missing|invalid|corrupt/i);
     expect(mocks.root.persistentMind.pendingAttachments).toMatchObject([{ attachmentId: 'attachment-1' }]);
-    expect(mocks.root.persistentMind.pendingAttachments[0].claimedBy).toBeUndefined();
+    expect(mocks.root.persistentMind.pendingAttachments[0].claimedBy).toBeNull();
 
     // Recovery: same attachment id is admitted without a new upload.
     mocks.readFile.mockResolvedValue(PNG);
