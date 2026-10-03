@@ -20,6 +20,7 @@ import { normalizeMusicVideoGrade } from '../../lib/musicVideoGrade.js';
 import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
 import {
+  musicVideoEidoverseSceneSchema,
   MUSIC_VIDEO_COMPOSITION_MODES as COMPOSITION_MODES,
   MUSIC_VIDEO_CUTTING_MODES as CUTTING_MODES,
   MUSIC_VIDEO_DOCUMENT_DIRECTORY,
@@ -144,6 +145,7 @@ export function normalizeComposition(input) {
     });
   }
   const style = input.style && typeof input.style === 'object' ? input.style : {};
+  const eidoverse = musicVideoEidoverseSceneSchema.safeParse(input.eidoverseScene);
   const codeVideo = normalizeCodeVideo(input.codeVideo);
   const documentRef = normalizeCompositionDocument(input.document);
   const documentDraft = normalizeCompositionDocument(input.documentDraft);
@@ -166,6 +168,7 @@ export function normalizeComposition(input) {
     // Absent unless a code video was actually stored, so a composed manifest
     // stays the shape peers and clones already compare.
     ...(codeVideo ? { codeVideo } : {}),
+    ...(eidoverse.success ? { eidoverseScene: eidoverse.data } : {}),
     // Same posture: present only once a document was imported / a HUD set.
     ...(documentRef ? { document: documentRef } : {}),
     ...(documentDraft ? { documentDraft } : {}),

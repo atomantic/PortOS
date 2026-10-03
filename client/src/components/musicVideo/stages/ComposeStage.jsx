@@ -1,6 +1,7 @@
 import { RenderFailure } from '../RenderStatusPanel.jsx';
 import GradePanel from '../GradePanel.jsx';
 import TypographyPanel from '../TypographyPanel.jsx';
+import EidoverseVideoPanel from '../EidoverseVideoPanel.jsx';
 import CodeVideoPanel from '../CodeVideoPanel.jsx';
 import DocumentCompositionPanel from '../DocumentCompositionPanel.jsx';
 import { RenderStyleSelect } from '../ProjectActionGroups.jsx';
@@ -22,7 +23,8 @@ export default function ComposeStage({ board }) {
           <RenderStyleSelect project={project} onRenderStyle={board.onRenderStyle} />
         </div>
         <GradePanel project={project} onSave={board.saveCompositionGrade} />
-        <TypographyPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
+        {mode !== 'eidoverse' && <TypographyPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />}
+        {mode === 'eidoverse' && <EidoverseVideoPanel key={project.id} project={project} onProject={board.replaceProject} />}
         {mode === 'code' && (
           <CodeVideoPanel project={project} audioUrl={audioUrl} onProject={board.replaceProject} />
         )}

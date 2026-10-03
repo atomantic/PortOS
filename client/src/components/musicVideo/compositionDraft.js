@@ -10,6 +10,7 @@ export const RENDER_STYLES = [
   ['composed', 'Composed'],
   ['code', 'Code-rendered'],
   ['document', 'Composition document'],
+  ['eidoverse', 'Eidoverse Video'],
 ];
 
 export function compositionDraft(project, patch = {}) {
