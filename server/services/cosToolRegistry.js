@@ -15,6 +15,7 @@ import { zodToOpenApiSchema } from '../lib/apiContractSchemas.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { sha256Text } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { eidoverseInspectSceneInputSchema, eidoverseInspectSceneOutputSchema } from '../lib/eidoverseSceneInspection.js';
 import {
   normalizePersistentMindCapabilities,
   persistentMindCleanupRequestSchema,
@@ -382,6 +383,17 @@ const eidoverseProjectTool = Object.freeze({
   adapter: { kind: 'eidoverse-world', operation: 'project' },
 });
 
+const eidoverseInspectSceneTool = Object.freeze({
+  type: 'portos_tool', name: 'eidoverse.inspect-scene', version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName('eidoverse.inspect-scene'), aliases: [providerToolName('eidoverse.inspect-scene')],
+  description: 'Inspect authored entities in this install\'s admitted private world before construction. Input {anchor:[x,y,z],radius,limit?}: coordinates ±10000, radius (0,100], limit 1–12 (default 8). Returns stable ids, authored transforms, safe asset references, PortOS-managed markers and world AABBs where measured. Known boxes intersect the sphere; unknown boxes are selected by origin. complete covers enumeration only; boundsComplete also requires no unknown extents anywhere in the snapshot. Unavailable, incomplete, truncated, invalidEntities>0 or unknownBounds>0 NEVER certifies an area clear. Motion, attachments, procedural components and simulation are not evaluated; terrain, avatars and rendered animation are outside this inspection. No remote inspection, raw components or private record content. Use a new requestId for a fresh read.',
+  input_schema: zodToOpenApiSchema(eidoverseInspectSceneInputSchema),
+  output_schema: zodToOpenApiSchema(eidoverseInspectSceneOutputSchema),
+  policy: { scopes: ['agent', 'mind', 'ui'], requiredCapabilities: ['manageEidoverse'], sideEffect: 'read',
+    idempotent: true, async: false, confirmation: 'capability-grant' },
+  adapter: { kind: 'eidoverse-world', operation: 'inspect-scene' },
+});
+
 const eidoverseAugmentTool = Object.freeze({
   type: 'portos_tool',
   name: 'eidoverse.augment',
@@ -534,7 +546,7 @@ const eidoverseControllerTools = [
     idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
   adapter: { kind: 'eidoverse-controllers', operation },
 }));
-const eidoverseTools = [eidoverseObserveTool, ...eidoverseTravelTools, ...eidoverseFoundationTools, ...eidoverseCreativeTools, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
+const eidoverseTools = [eidoverseObserveTool, ...eidoverseTravelTools, ...eidoverseFoundationTools, ...eidoverseCreativeTools, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseInspectSceneTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
 const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].map((name, index) => ({
   type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName(name), aliases: [],
@@ -1151,6 +1163,7 @@ const executeAdapter = async (tool, args, context, authority) => {
   if (tool.adapter.kind === 'eidoverse-world') {
     const world = await import('./eidoverseWorld.js');
     if (tool.adapter.operation === 'status') return world.getEidoverseWorldStatus({ compact: true });
+    if (tool.adapter.operation === 'inspect-scene') return world.inspectEidoverseScene(args, { signal: context.signal });
     if (tool.adapter.operation === 'project') return world.projectEidoverseWorld({ signal: context.signal, compact: true });
     if (tool.adapter.operation === 'augment') return world.augmentEidoverseWorld(args.operations, { signal: context.signal });
     return world.sayInEidoverseWorld(args.text, { signal: context.signal });

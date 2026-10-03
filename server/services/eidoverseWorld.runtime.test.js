@@ -85,6 +85,13 @@ vi.mock('./instanceFeatures.js', () => ({
   })),
 }));
 
+// Exercise the public semantic dispatcher with the REAL world adapter; these
+// unrelated adapters must never reach live instance data. All-schema grants
+// bypass lease bookkeeping for these calls.
+vi.mock('./voice/tools.js', () => ({ getToolSpecs: () => [], getToolSpecsForIntent: () => ({ specs: [] }), dispatchTool: vi.fn() }));
+vi.mock('./persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
+vi.mock('./persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
+
 vi.mock('ws', () => {
   class FakeWebSocket {
     static OPEN = 1;
@@ -124,7 +131,7 @@ vi.mock('ws', () => {
       if (message.type === 'join') {
         this.identity = message.id;
         this.world = message.world;
-        const state = mocks.worlds.get(message.world) || { roles: {} };
+        const state = mocks.worlds.get(message.world) || { roles: {}, entities: {} };
         if (!Object.keys(state.roles).length) state.roles[message.id] = { role: 'owner' };
         else state.roles[message.id] ||= { role: 'visitor' };
         mocks.worlds.set(message.world, state);
@@ -133,6 +140,7 @@ vi.mock('ws', () => {
           callback?.(null);
           this.emit('message', JSON.stringify({
             type: 'snapshot',
+            throughSeq: mocks.nextSeq - 1, entries: [],
             yourRights: { role: state.roles[message.id].role, gen: false },
             state: structuredClone(state),
           }));
@@ -223,8 +231,12 @@ const world = new Proxy(rawWorld, {
   },
 });
 const { EIDOVERSE_WORLD_DESIGN_V1 } = await import('../lib/eidoverseWorldDesign.js');
+const { executeCosToolCall, getCosToolCatalog, __testing: semanticTesting } = await import('./cosToolRegistry.js');
+const { eidoverseInspectSceneOutputSchema } = await import('../lib/eidoverseSceneInspection.js');
 
 beforeEach(async () => {
+  semanticTesting.toolCalls.clear();
+  semanticTesting.toolCallFingerprints.clear();
   vi.unstubAllEnvs();
   await world.__resetEidoverseWorldForTests();
   mocks.persistedState = null;
@@ -1319,4 +1331,199 @@ it('reserves names seen in live grants after the resident snapshot and bounds co
   }
   const guest = await world.admitEidoverseGuest({ name });
   expect(guest.identity.name).toBe(`${name.slice(0, 60)} (2)`);
+});
+
+describe('bounded scene inspection through semantic dispatch', () => {
+  const authority = { scope: 'mind', capabilities: { manageEidoverse: true, readPortos: true, toolExposureAllSchemas: true } };
+  let callIndex = 0;
+  const dispatch = (name, args = {}, grants = authority) => executeCosToolCall({
+    call: { requestId: `scene-contract-${++callIndex}`, name, arguments: args }, authority: grants,
+  });
+  const inspect = async (args = { anchor: [0, 0, 0], radius: 5 }) => {
+    const response = await dispatch('eidoverse.inspect-scene', args);
+    expect(response.state).toBe('completed');
+    expect(JSON.stringify(response).length).toBeLessThan(4000);
+    eidoverseInspectSceneOutputSchema.parse(response.result);
+    return response.result;
+  };
+  const seed = async (entities, extra = {}) => {
+    mocks.worlds.set('portos', { roles: {}, entities, ...extra });
+    await world.ensureEidoverseWorldPresence();
+  };
+  const model = (pos = [0, 0, 0], extra = {}) => ({ lib: 'eidoverse/assets/models/example.glb', pos, ...extra });
+  const emit = (verb, args) => {
+    const socket = mocks.sockets.findLast((row) => row.identity === 'portos-cos' && row.readyState === 1);
+    socket.emit('message', JSON.stringify({ type: 'log', entry: { seq: mocks.nextSeq++, actor: 'synthetic-builder', verb, args } }));
+  };
+
+  it('finds an existing structure, selects another anchor and submits an original build in five calls', async () => {
+    await seed({ 'existing-structure': model([0, 0, 0], { comp: { portos: { managedBy: 'portos', privateRecord: 'synthetic-private-record' } } }) });
+    // This is a synthetic workflow only, never a live placement.
+    await dispatch('eidoverse.status');
+    const occupied = await inspect();
+    expect(occupied).toMatchObject({ availability: 'current', complete: true, boundsComplete: true, unknownBounds: 0 });
+    expect(occupied.entities).toEqual([expect.objectContaining({ id: 'existing-structure', portosManaged: true,
+      bounds: { min: [-1, 0, -1], max: [1, 2, 1] }, boundsState: 'known' })]);
+    const anchor = [20, 0, 0];
+    expect((await inspect({ anchor, radius: 3 })).entities).toEqual([]);
+    const submitted = await dispatch('eidoverse.augment', { operations: [{ verb: 'spawn', args: {
+      id: 'original-example', lib: occupied.entities[0].asset, pos: anchor, yaw: 0, scale: 1,
+    } }] });
+    expect(submitted.result.operations[0].outcome).toBe('accepted');
+    expect((await inspect({ anchor, radius: 3 })).entities[0].id).toBe('original-example');
+  });
+
+  it('reflects live added, moved, and removed objects and rotation/scale rather than the handshake', async () => {
+    await seed({});
+    emit('spawn', { id: 'live-model', lib: 'eidoverse/assets/models/example.glb', pos: [10, 0, 0], yaw: Math.PI / 2, scale: 2 });
+    // Origin outside the sphere, measured box overlaps its edge.
+    const added = await inspect({ anchor: [7, 0, 0], radius: 1 });
+    expect(added.entities[0]).toMatchObject({ id: 'live-model', scale: 2 });
+    expect(added.entities[0].bounds.min[0]).toBeCloseTo(8);
+    expect(added.entities[0].bounds.max[1]).toBe(4);
+    emit('place', { id: 'live-model', pos: [30, 0, 0] });
+    expect((await inspect()).entities).toEqual([]);
+    expect((await inspect({ anchor: [30, 0, 0], radius: 2 })).entities).toHaveLength(1);
+    emit('remove', { id: 'live-model' });
+    expect(await inspect({ anchor: [30, 0, 0], radius: 2 })).toMatchObject({ entities: [], complete: true, boundsComplete: true });
+    const sequence = mocks.nextSeq;
+    emit('use', { id: 'example-affordance' });
+    emit('kick', { id: 'example-principal' });
+    expect(await inspect()).toMatchObject({ availability: 'current', sequence: sequence + 1, entities: [], complete: true, boundsComplete: true });
+  });
+
+  it('denies missing grants, validates strict bounded inputs, and publishes a typed schema', async () => {
+    await expect(dispatch('eidoverse.inspect-scene', { anchor: [0, 0, 0], radius: 1 }, { scope: 'mind', capabilities: { readPortos: true } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    for (const args of [
+      { anchor: [0, 0], radius: 1 }, { anchor: [Infinity, 0, 0], radius: 1 }, { anchor: [10001, 0, 0], radius: 1 },
+      { anchor: [0, 0, 0], radius: 0 }, { anchor: [0, 0, 0], radius: 101 }, { anchor: [0, 0, 0], radius: 1, limit: 13 },
+      { anchor: [0, 0, 0], radius: 1, limit: 0 }, { anchor: [0, 0, 0], radius: 1, limit: 1.5 },
+      { anchor: [0, 0, 0], radius: 1, peerId: 'example-peer' },
+    ]) await expect(dispatch('eidoverse.inspect-scene', args)).rejects.toMatchObject({ code: 'TOOL_VALIDATION_ERROR' });
+    expect(mocks.sent).toEqual([]);
+    const tool = getCosToolCatalog({ scope: 'mind', capabilities: authority.capabilities }).tools.find((row) => row.name === 'eidoverse.inspect-scene');
+    expect(tool).toMatchObject({ granted: true, output_schema: { properties: { complete: { type: 'boolean' } } } });
+  });
+
+  it('returns a detached object at its stamped absolute pose after a live mount/dismount', async () => {
+    await seed({ parent: model([20, 0, 0]), child: model() });
+    emit('mount', { id: 'child', to: 'parent', offset: [1, 0, 0] });
+    expect(await inspect()).toMatchObject({ invalidEntities: 1, complete: false, entities: [] });
+    emit('dismount', { id: 'child', pos: [2, 0, 0], yaw: 1 });
+    const detached = await inspect();
+    expect(detached).toMatchObject({ invalidEntities: 0, complete: true, boundsComplete: false });
+    expect(detached.entities).toEqual([expect.objectContaining({ id: 'child', pos: [2, 0, 0], yaw: 1, boundsState: 'unknown' })]);
+  });
+
+  it('bounds dense results without exporting components, chat, tickets, credentials or arbitrary paths', async () => {
+    const entities = Object.fromEntries(Array.from({ length: 30 }, (_, n) => [`model-${n}`, model([0, 0, 0], {
+      actor: 'synthetic-private-person', comp: { portos: { managedBy: 'portos', ticket: 'synthetic-private-ticket', token: 'Bearer synthetic-secret' },
+        label: { description: 'synthetic-private-description' } },
+    })]));
+    entities['unsafe-asset'] = model([20, 0, 0], { lib: 'https://example.com/private?token=synthetic-secret' });
+    entities['unsafe-path'] = model([20, 0, 0], { lib: '/private/example/model.glb' });
+    await seed(entities, { recentChat: [{ text: 'synthetic-private-chat' }] });
+    const dense = await inspect({ anchor: [0, 0, 0], radius: 5, limit: 12 });
+    expect(dense).toMatchObject({ complete: false, truncated: true, boundsComplete: false, unknownBounds: 2 });
+    expect(dense.entities.length).toBeLessThanOrEqual(12);
+    expect(JSON.stringify(dense).length).toBeLessThanOrEqual(3000);
+    expect(JSON.stringify(dense)).not.toMatch(/synthetic-private|synthetic-secret|https:|\/private\/|"comp":|recentChat/);
+    expect((await inspect({ anchor: [0, 0, 0], radius: 5, limit: 1 })).entities).toHaveLength(1);
+    const unsafe = await inspect({ anchor: [20, 0, 0], radius: 1 });
+    expect(unsafe.entities).toHaveLength(2);
+    expect(unsafe.entities.every((row) => row.asset === null && row.bounds === null)).toBe(true);
+  });
+
+  it('keeps missing, malformed, procedural, dynamic and out-of-range geometry explicitly unknown', async () => {
+    await seed({
+      missing: model([0, 0, 0], { lib: 'store/aaaaaaaaaaaaaaaa.glb' }),
+      procedural: model([0, 0, 0], { comp: { structure: { privateDescription: 'synthetic-private' } } }),
+      far: model([500, 0, 0], { lib: 'store/bbbbbbbbbbbbbbbb.glb' }),
+      invalid: model([0, 0, 0], { scale: 101 }),
+      mounted: model([0, 0, 0], { parent: { to: 'procedural' } }),
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input) => {
+      const url = new URL(String(input));
+      if (url.searchParams.get('lib')?.startsWith('store/')) return Response.json({ bbox: { min: [2, 0, 0], max: [1, 1, 1] }, secret: 'Bearer synthetic-secret' });
+      return Response.json({ bbox: { min: [-1, 0, -1], max: [1, 2, 1] } });
+    }));
+    const result = await inspect();
+    expect(result).toMatchObject({ complete: false, boundsComplete: false, unknownBounds: 3, invalidEntities: 2 });
+    expect(result.entities.every((row) => row.bounds === null && row.boundsState === 'unknown')).toBe(true);
+    expect(result.entities.find((row) => row.id === 'missing').asset).toBe('store/aaaaaaaaaaaaaaaa.glb');
+    expect(JSON.stringify(result)).not.toContain('synthetic-secret');
+    emit('place', { id: 'missing', pos: [20000, 0, 0] });
+    expect((await inspect()).invalidEntities).toBe(3);
+  });
+
+  it('distinguishes disconnected, sequence gaps, reset and invalid snapshots from empty current geometry', async () => {
+    expect(await inspect()).toMatchObject({ availability: 'unavailable', complete: false, boundsComplete: false, entities: [] });
+    expect(mocks.sent).toEqual([]);
+    await seed({ existing: model() });
+    const socket = mocks.sockets.findLast((row) => row.identity === 'portos-cos');
+    // State includes the tail already: a stale spawn in the tail must NOT undo
+    // a later move reflected in the snapshot state.
+    socket.emit('message', JSON.stringify({ type: 'snapshot', throughSeq: 10,
+      entries: [{ seq: 11, verb: 'spawn', args: { id: 'existing', pos: [0, 0, 0] } }],
+      state: { entities: { existing: model([20, 0, 0]) } } }));
+    expect(await inspect()).toMatchObject({ availability: 'current', sequence: 11, entities: [] });
+    socket.emit('message', JSON.stringify({ type: 'log', entry: { seq: 13, verb: 'remove', args: { id: 'existing' } } }));
+    expect(await inspect()).toMatchObject({ availability: 'incomplete', complete: false, boundsComplete: false });
+    socket.emit('message', JSON.stringify({ type: 'snapshot', throughSeq: 13, entries: [], state: { entities: {} } }));
+    expect((await inspect()).complete).toBe(true);
+    socket.emit('message', JSON.stringify({ type: 'world-reset' }));
+    expect((await inspect()).availability).toBe('incomplete');
+    socket.emit('message', JSON.stringify({ type: 'snapshot', state: { entities: {} } }));
+    expect((await inspect()).availability).toBe('unavailable');
+    socket.emit('message', JSON.stringify({ type: 'snapshot', throughSeq: 13, entries: [], state: {
+      entities: Object.fromEntries(Array.from({ length: 2001 }, (_, n) => [`dense-${n}`, model()])),
+    } }));
+    expect(await inspect({ anchor: [9000, 0, 0], radius: 1 })).toMatchObject({ availability: 'incomplete', complete: false, boundsComplete: false });
+    socket.close();
+    expect((await inspect()).availability).toBe('unavailable');
+  });
+
+  it('caps geometry requests and bodies, and treats renderer motion as unknown', async () => {
+    await seed(Object.fromEntries(Array.from({ length: 20 }, (_, n) => [`asset-${n}`, {
+      lib: `store/${n.toString(16).padStart(16, '0')}.glb`, pos: [0, 0, 0],
+    }])));
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ bbox: { min: [-1, 0, -1], max: [1, 2, 1] }, oversized: 'x'.repeat(66000) })));
+    const oversized = await inspect();
+    expect(fetch).toHaveBeenCalledTimes(16);
+    expect(oversized).toMatchObject({ unknownBounds: 20, boundsComplete: false, truncated: true });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ bbox: { min: [-1, 0, -1], max: [1, 2, 1] } })));
+    expect((await inspect()).unknownBounds).toBe(4);
+    emit('motion', { id: 'asset-0', type: 'spin', speed: 1 });
+    expect((await inspect()).entities.find((row) => row.id === 'asset-0').boundsState).toBe('unknown');
+    emit('epoch', { sim: 'example-sim', tickMs: 66 });
+    expect((await inspect()).unknownBounds).toBe(20);
+  });
+
+  it('does not let failed geometry or an update during geometry loading certify old occupancy', async () => {
+    await seed({ existing: model() });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Bearer synthetic-secret', { status: 503 })));
+    expect(await inspect()).toMatchObject({ unknownBounds: 1, boundsComplete: false });
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      emit('place', { id: 'existing', pos: [20, 0, 0] });
+      return Response.json({ bbox: { min: [-10001, 0, -1], max: [1, 2, 1] } });
+    }));
+    expect(await inspect()).toMatchObject({ entities: [], unknownBounds: 1, boundsComplete: false });
+  });
+
+  it('returns unknown geometry when the shared deadline aborts, without a production sleep', async () => {
+    await seed({ existing: model() });
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      expect(ms).toBe(2000);
+      queueMicrotask(() => controller.abort());
+      return controller.signal;
+    });
+    vi.stubGlobal('fetch', vi.fn((_input, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('synthetic deadline')), { once: true });
+    })));
+    try {
+      expect(await inspect()).toMatchObject({ availability: 'current', complete: true, boundsComplete: false, unknownBounds: 1 });
+    } finally { timeout.mockRestore(); }
+  });
 });
