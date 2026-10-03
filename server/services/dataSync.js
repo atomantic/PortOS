@@ -10,6 +10,7 @@ import { meatspaceEvents } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
+import { isDeepStrictEqual } from 'util';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { canonicalStringify, isEmptyScalar, isPlainObject } from '../lib/objects.js';
 import { snapshotChecksum } from '../lib/snapshotChecksum.js';
@@ -416,6 +417,26 @@ async function getGoalsSnapshot() {
   return { data, checksum: computeChecksum(data) };
 }
 
+const GOALS_METADATA_FIELDS = ['birthDate', 'lifeExpectancy', 'timeHorizons'];
+
+/**
+ * Freshness of a goals document for the metadata LWW. The document's own
+ * `updatedAt` is the clock — `setBirthDate` and every goal write stamp it — so a
+ * birth-date edit that never touches a child goal still orders correctly. The
+ * newest goal `updatedAt` stands in only for a legacy document with no usable
+ * document clock. `null` = no usable clock at all (never wins).
+ */
+function goalsDocumentClockMs(doc) {
+  const docMs = parseTsMs(doc?.updatedAt);
+  if (docMs !== null) return docMs;
+  let newest = null;
+  for (const goal of Array.isArray(doc?.goals) ? doc.goals : []) {
+    const ms = parseTsMs(goal?.updatedAt);
+    if (ms !== null && (newest === null || ms > newest)) newest = ms;
+  }
+  return newest;
+}
+
 // Goals merge by union, so a delete is only representable as a tombstone (#9816):
 // `deleteGoal` leaves `{ id, deletedAt }` in the goals document, the list unions in
 // both directions (a legacy peer that omits it leaves ours untouched), and any
@@ -439,22 +460,26 @@ async function applyGoalsRemote(remoteData) {
     const goalsChanged = canonicalStringify(mergedGoals) !== canonicalStringify(localGoals);
     const tombstonesChanged = canonicalStringify(liveTombstones) !== canonicalStringify(local[GOAL_TOMBSTONES_KEY] ?? []);
 
-    // Merge top-level metadata (birthDate, lifeExpectancy, timeHorizons) via LWW
-    // Use the most recent goal's updatedAt as proxy for file freshness
-    const localMaxTs = localGoals.reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
-    const remoteMaxTs = remoteGoals.reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
-    const metaSource = remoteMaxTs > localMaxTs ? remoteData : local;
+    // Top-level metadata (birthDate, lifeExpectancy, timeHorizons) is LWW on the document
+    // clock, independent of the goal-array merge: a metadata-only edit changes no goal.
+    // A tie keeps local, so a replay of the same snapshot is a no-op. The legacy child-clock
+    // fallback reads the tombstone-filtered remote goals, so a deleted copy is no proof of
+    // a fresher document.
+    const remoteClock = goalsDocumentClockMs({ ...remoteData, goals: remoteGoals });
+    const localClock = goalsDocumentClockMs(local);
+    const remoteWins = remoteClock !== null && (localClock === null || remoteClock > localClock);
 
-    const merged = {
-      ...local,
-      birthDate: metaSource.birthDate ?? local.birthDate,
-      lifeExpectancy: metaSource.lifeExpectancy ?? local.lifeExpectancy,
-      timeHorizons: metaSource.timeHorizons ?? local.timeHorizons,
-      goals: mergedGoals
-    };
+    const winning = {};
+    if (remoteWins) {
+      for (const field of GOALS_METADATA_FIELDS) winning[field] = remoteData[field] ?? local[field];
+      // Carry the winning clock itself — restamping on receipt would out-date the peer's
+      // next edit, and leaving ours would let the same snapshot win again.
+      if (parseTsMs(remoteData.updatedAt) !== null) winning.updatedAt = remoteData.updatedAt;
+    }
+    const metaChanged = Object.entries(winning).some(([field, value]) => !isDeepStrictEqual(value, local[field]));
 
-    if (goalsChanged || tombstonesChanged || remoteMaxTs > localMaxTs) {
-      Object.assign(local, merged);
+    if (goalsChanged || tombstonesChanged || metaChanged) {
+      Object.assign(local, winning, { goals: mergedGoals });
       // A legacy document stays free of the field until something is tombstoned.
       if (liveTombstones.length > 0) local[GOAL_TOMBSTONES_KEY] = liveTombstones;
       else delete local[GOAL_TOMBSTONES_KEY];
