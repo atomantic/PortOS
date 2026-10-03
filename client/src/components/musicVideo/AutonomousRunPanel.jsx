@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { AlertTriangle, CheckCircle2, Circle, CircleDot, ExternalLink, Loader2, Pause, Play, RotateCcw, Wand2, X, XCircle } from 'lucide-react';
 import {
-  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
+  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
   autonomousStageOutput, autonomousStageRows, isAutonomousLive,
 } from '../../lib/musicVideoAutonomous.js';
+
+// The stages that report a sub-step while they run (the server's `stages[id].step`).
+const STEP_LABELS = { lyrics: AUTONOMOUS_LYRICS_STEP_LABELS, song: AUTONOMOUS_SONG_STEP_LABELS };
 
 const STATUS_TONES = {
   running: 'text-port-accent', 'awaiting-approval': 'text-port-warning', 'needs-human': 'text-port-warning', stopped: 'text-port-warning',
@@ -110,8 +113,8 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
               ) : (
                 <span className={`flex min-w-0 items-center gap-1 ${tone}`}>{content}</span>
               )}
-              {row.id === 'song' && row.status === 'running' && row.step && (
-                <p role="status" className="pl-[17px] text-port-accent break-words">{AUTONOMOUS_SONG_STEP_LABELS[row.step] || row.step}…</p>
+              {STEP_LABELS[row.id] && row.status === 'running' && row.step && (
+                <p role="status" className="pl-[17px] text-port-accent break-words">{STEP_LABELS[row.id][row.step] || row.step}…</p>
               )}
             </li>
           );

@@ -87,6 +87,35 @@ describe('resolveMusicVideoLlm', () => {
     expect(route).toMatchObject({ providerId: 'tui-1', source: 'tui-preferred', requestedProviderId: 'deleted-provider' });
   });
 
+  it('routes a stage to its own pin over the direction pin, and falls back to the direction pin for an unpinned stage', async () => {
+    registry.providers = [api('cloud'), tui('tui-1'), api('local-llm')];
+    registry.active = registry.providers[0];
+    const automation = {
+      llm: { providerId: 'cloud', model: 'big' },
+      llmStages: { lyrics: { providerId: 'local-llm', model: 'small', effort: null }, lyricsReview: { providerId: 'tui-1', model: 'opus', effort: 'high' } },
+    };
+    expect((await resolveMusicVideoLlm({ automation, stage: 'lyrics' })).route).toEqual({ providerId: 'local-llm', model: 'small', effort: null, transport: 'api', source: 'stage' });
+    expect((await resolveMusicVideoLlm({ automation, stage: 'lyricsReview' })).route).toMatchObject({ providerId: 'tui-1', model: 'opus', effort: 'high', source: 'stage' });
+    // No pin for `plan`, and a caller that names no stage, both run on the direction pin.
+    expect((await resolveMusicVideoLlm({ automation, stage: 'plan' })).route).toMatchObject({ providerId: 'cloud', model: 'big', source: 'brief' });
+    expect((await resolveMusicVideoLlm({ automation })).route).toMatchObject({ providerId: 'cloud', source: 'brief' });
+    // A request pin still beats the stage pin.
+    expect((await resolveMusicVideoLlm({ automation, stage: 'lyrics', providerId: 'tui-1' })).route).toMatchObject({ providerId: 'tui-1', source: 'pinned' });
+  });
+
+  it('gives a vanished stage pin way to the next pin, naming what it replaced; authoring consults its own pin before the direction pin', async () => {
+    registry.providers = [api('cloud'), tui('tui-1'), api('author')];
+    registry.active = registry.providers[0];
+    const automation = { llm: { providerId: 'cloud' }, llmStages: { plan: { providerId: 'deleted-provider' } } };
+    expect((await resolveMusicVideoLlm({ automation, stage: 'plan' })).route).toMatchObject({ providerId: 'cloud', source: 'brief', requestedProviderId: 'deleted-provider' });
+
+    const authoring = { providerId: 'author', model: 'code-model' };
+    expect((await resolveMusicVideoLlm({ automation, stage: 'authoring', authoring })).route).toMatchObject({ providerId: 'author', model: 'code-model', source: 'brief' });
+    // The authoring stage's own pin outranks the authoring pin; other stages never read it.
+    expect((await resolveMusicVideoLlm({ automation: { ...automation, llmStages: { authoring: { providerId: 'tui-1' } } }, stage: 'authoring', authoring })).route).toMatchObject({ providerId: 'tui-1', source: 'stage' });
+    expect((await resolveMusicVideoLlm({ automation, stage: 'castAndSets', authoring })).route).toMatchObject({ providerId: 'cloud' });
+  });
+
   it('survives a registry with no providers at all', async () => {
     expect(await resolveMusicVideoLlm()).toEqual({ provider: null, selectedModel: null, route: null });
   });

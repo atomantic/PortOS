@@ -6,15 +6,20 @@
  *
  *   1. a pin on the request (`providerId`/`model`/`effort`) — authoritative,
  *      API or TUI alike;
- *   2. the pin saved on the project's automation brief (`automation.llm`);
- *   3. nothing pinned: an enabled, launchable, hardware-compatible TUI provider
+ *   2. the brief's pin for this stage (`automation.llmStages[stage]`), when the
+ *      caller names its `stage`;
+ *   3. for `authoring` only, the separate code-authoring pin a caller passes
+ *      (`authoring`, e.g. an autonomous run's `brief.authoring`);
+ *   4. the brief's direction pin (`automation.llm`);
+ *   5. nothing pinned: an enabled, launchable, hardware-compatible TUI provider
  *      (the active provider when it is one), so the work shows up as an
  *      attachable Shell session instead of an invisible API call;
- *   4. the install's active provider (no eligible TUI) — a usable route, never
+ *   6. the install's active provider (no eligible TUI) — a usable route, never
  *      an error just because no TUI is configured.
  *
- * A pin whose provider no longer resolves is not honored silently: the route
- * carries `requestedProviderId` so the summary shows what it replaced.
+ * Pins are tried in that order; one whose provider no longer resolves gives way
+ * to the next, and is not dropped silently: the route carries the first such
+ * `requestedProviderId` so the summary shows what it replaced.
  *
  * Image-reading stages (plate review, auto-review) deliberately do NOT resolve
  * here: they take an explicit reviewer and already refuse, before dispatch, a
@@ -77,28 +82,34 @@ function describe({ provider, selectedModel, effort, source, requestedProviderId
  * @param {string} [input.providerId] request pin
  * @param {string} [input.model]
  * @param {string} [input.effort]
- * @param {object|null} [input.automation] the project's automation brief; its `llm` pin applies when the request pins nothing
+ * @param {object|null} [input.automation] the project's automation brief; its `llmStages[stage]` and then `llm` pins apply when the request pins nothing
+ * @param {string} [input.stage] the stage being run (one of MUSIC_VIDEO_LLM_STAGES); selects the stage pin
+ * @param {object|null} [input.authoring] the code-authoring pin, consulted for the `authoring` stage after its stage pin
  * @returns {Promise<{ provider: object|null, selectedModel: string|null, route: object|null }>}
  *   `route` carries the effective providerId/model/effort (clamped)/transport/source.
  *   `provider: null` when nothing resolves, so the caller throws its own typed error.
  */
-export async function resolveMusicVideoLlm({ providerId, model, effort, automation = null } = {}) {
+export async function resolveMusicVideoLlm({ providerId, model, effort, automation = null, stage = null, authoring = null } = {}) {
   // Lazy: promptRunner drags the whole provider runtime, and callers that import this file for
   // its pure helpers (or whose suites mock it) shouldn't pay for it at load.
   const { resolveProviderAndModel } = await import('../promptRunner.js');
-  const saved = normalizeMusicVideoLlm(automation?.llm);
-  const pin = providerId
-    ? { providerId, model, effort, source: 'pinned' }
-    : saved ? { ...saved, source: 'brief' } : null;
+  const tagged = (pin, source) => (pin ? { ...pin, source } : null);
+  const pins = [
+    providerId ? { providerId, model, effort, source: 'pinned' } : null,
+    stage ? tagged(normalizeMusicVideoLlm(automation?.llmStages?.[stage]), 'stage') : null,
+    stage === 'authoring' ? tagged(normalizeMusicVideoLlm(authoring), 'brief') : null,
+    tagged(normalizeMusicVideoLlm(automation?.llm), 'brief'),
+  ].filter(Boolean);
 
   let requestedProviderId = null;
-  if (pin) {
+  for (const pin of pins) {
     const { provider, selectedModel } = await resolveProviderAndModel({ providerId: pin.providerId, model: pin.model || undefined });
     if (provider?.id === pin.providerId) {
-      return { provider, selectedModel, route: describe({ provider, selectedModel, effort: pin.effort, source: pin.source }) };
+      return { provider, selectedModel, route: describe({ provider, selectedModel, effort: pin.effort, source: pin.source, requestedProviderId }) };
     }
-    requestedProviderId = pin.providerId;
+    requestedProviderId ||= pin.providerId;
   }
+  const pin = pins[0] || null;
 
   const tui = await preferredTuiProvider();
   if (tui) {

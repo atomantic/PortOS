@@ -354,6 +354,24 @@ describe('applyProjectPatch', () => {
     expect(legacy.automation).toEqual({ tools: ['image:codex'], guidance: 'h', budgetUsd: null, checkins: { castAndSets: 'review' } });
   });
 
+  it('merges per-stage LLM pins stage by stage: absent keeps, null clears one stage, null for the whole map clears them all', () => {
+    const lyrics = { providerId: 'local-llm', model: 'small', effort: null };
+    const plan = { providerId: 'claude-tui', model: 'opus', effort: 'high' };
+    const created = buildProjectRecord({ name: 'Auto', mode: 'autonomous', automation: { tools: ['image:codex'], llmStages: { lyrics, bogus: plan, plan: { model: 'orphan' } } } }, { id: 'mv-a', now: 'n' });
+    // Unknown stages and a pin with no provider are dropped.
+    expect(created.automation.llmStages).toEqual({ lyrics });
+
+    const added = applyProjectPatch(created, { automation: { llmStages: { plan } } });
+    expect(added.automation.llmStages).toEqual({ lyrics, plan });
+    // An unrelated brief edit keeps every stage pin.
+    expect(applyProjectPatch(added, { automation: { guidance: 'darker' } }).automation.llmStages).toEqual({ lyrics, plan });
+
+    expect(applyProjectPatch(added, { automation: { llmStages: { lyrics: null } } }).automation.llmStages).toEqual({ plan });
+    // Clearing the last stage drops the field rather than storing an empty map.
+    expect('llmStages' in applyProjectPatch(created, { automation: { llmStages: { lyrics: null } } }).automation).toBe(false);
+    expect('llmStages' in applyProjectPatch(added, { automation: { llmStages: null } }).automation).toBe(false);
+  });
+
   it('persists explicit renderer settings and merges later partial changes', () => {
     const project = buildProjectRecord({
       name: 'A',

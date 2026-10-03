@@ -55,13 +55,16 @@ function acceptSources(parsed, ids) {
 }
 
 /**
- * Run one code-authoring prompt. The provider resolves through llmRoute.js —
- * request pin > the brief's saved LLM (`automation`) > an eligible TUI provider
- * > the active one — and `effort` rides the run when the provider has one.
+ * Run one code-authoring prompt. The provider resolves through llmRoute.js as
+ * the `authoring` stage — request pin > the brief's authoring-stage pin > its
+ * direction LLM (`automation`) > an eligible TUI provider > the active one —
+ * and `effort` rides the run when the provider has one. The route rides back on
+ * the result; it is not written to `automation.routes` here, because authoring
+ * runs inside production and the brief is part of production's creative basis.
  */
 export async function runModel({ providerId, model, effort, automation = null, prompt, source = 'music-video-code', beforeSubmit = null }) {
   const { assertProvider, runPromptThroughProvider } = await import('../promptRunner.js');
-  const { provider, selectedModel, route } = await resolveMusicVideoLlm({ providerId, model, effort, automation });
+  const { provider, selectedModel, route } = await resolveMusicVideoLlm({ providerId, model, effort, automation, stage: 'authoring' });
   assertProvider(provider, { message: 'No AI provider available to write the code video', code: 'PROVIDER_UNAVAILABLE', status: 400 });
   console.log(`🎬 Music-video code generation on ${musicVideoLlmRouteLabel(route)}`);
   const { text } = await runPromptThroughProvider({

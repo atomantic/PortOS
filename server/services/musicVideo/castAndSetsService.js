@@ -170,8 +170,8 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const { board, moodImages, track } = await loadContext(project);
-  // Request pin > the brief's saved LLM > an eligible TUI provider > the active one (llmRoute.js).
-  const { provider, selectedModel, route } = await deps.resolveProvider({ providerId, model, effort, automation: project.automation }).catch(() => ({ provider: null }));
+  // Request pin > the brief's Cast & Sets pin > its direction LLM > an eligible TUI provider > the active one (llmRoute.js).
+  const { provider, selectedModel, route } = await deps.resolveProvider({ providerId, model, effort, automation: project.automation, stage: 'castAndSets' }).catch(() => ({ provider: null }));
   if (!provider) return fail(projectId, 'No AI provider is available for the creative direction');
   if (provider.enabled === false) return fail(projectId, `The ${provider.name || provider.id} provider is disabled`);
   const previous = stage?.direction || null;

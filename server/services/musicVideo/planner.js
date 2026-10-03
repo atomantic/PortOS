@@ -241,8 +241,8 @@ async function tryProposeScenePrompts(project, shots, { providerId, model, effor
     return { seeded: null, reason: 'too-many-shots' };
   }
 
-  // Request pin > the brief's saved LLM > an eligible TUI provider > the active one (llmRoute.js).
-  const { provider, selectedModel, route } = await resolveMusicVideoLlm({ providerId, model, effort, automation: project.automation }).catch((err) => {
+  // Request pin > the brief's shot-plan pin > its direction LLM > an eligible TUI provider > the active one (llmRoute.js).
+  const { provider, selectedModel, route } = await resolveMusicVideoLlm({ providerId, model, effort, automation: project.automation, stage: 'plan' }).catch((err) => {
     console.warn(`⚠️ Music Video plan: provider resolution failed for ${project.id}: ${err.message}`);
     return { provider: null, selectedModel: null, route: null };
   });

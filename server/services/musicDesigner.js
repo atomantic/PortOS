@@ -7,8 +7,11 @@
  *   writeLyrics()    that description (+ the user's extra guidance) → original
  *                    lyrics in the `[verse]` / `[chorus]` section syntax the
  *                    lyric-aware engines expect.
+ *   reviewLyrics()   a lyric draft → the revised sheet plus a short critique,
+ *                    so a second (often stronger) model can tighten a draft a
+ *                    cheaper one wrote (the autonomous run's lyric review).
  *
- * Both are plain-text generators — no JSON contract — and both return an `llm`
+ * All are plain-text generators — no JSON contract — and all return an `llm`
  * attribution block alongside the text, matching `roundsAI.js`'s shape.
  *
  * Meta-prompts ship as module constants and are overridable per call via
@@ -106,6 +109,47 @@ export function buildLyricsPrompt({ description, guidance, template, targetSecon
   ].join('');
 }
 
+// The review pass is not user-overridable (no `template`): it edits a draft in
+// place, so its constraints are the contract rather than a creative brief.
+export const LYRICS_REVIEW_SEPARATOR = '---';
+const LYRICS_REVIEW_INSTRUCTIONS = [
+  'You are a lyric editor. Review the draft song lyrics below against the musical description, then revise them.',
+  'Keep the title and the song\'s subject. Keep every bracketed section tag and the section order; each tag stays alone on its own line.',
+  'Keep the length roughly equal to the draft: about the same number of sung lines per section.',
+  'Improve scansion and singability, sharpen weak or generic lines, give the chorus more punch, and make the argument of the song land more clearly.',
+  'Never add new topics, characters or story beats the draft does not already contain. Keep the lyrics original.',
+].join(' ');
+const LYRICS_REVIEW_OUTPUT_CONTRACT = [
+  'Return the complete revised lyric sheet first, with its section tags.',
+  `Then a line containing only ${LYRICS_REVIEW_SEPARATOR}`,
+  'Then two to four short sentences of notes: what was weak in the draft and what you changed.',
+  'No preamble, no other commentary, no markdown fence.',
+].join('\n');
+
+export function buildLyricsReviewPrompt({ lyrics, description, guidance } = {}) {
+  return [
+    LYRICS_REVIEW_INSTRUCTIONS,
+    section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
+    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
+    section('DRAFT LYRICS', trimTo(lyrics, MAX_LYRICS)),
+    `\n\n${LYRICS_REVIEW_OUTPUT_CONTRACT}`,
+  ].join('');
+}
+
+/**
+ * Split a review response into the revised sheet and the notes: everything
+ * before the last line that is only `---` is the lyrics, everything after it
+ * the notes. No separator → the whole text is the lyrics and the notes are
+ * empty (a model that skipped the critique still revised the song).
+ */
+export function parseLyricsReview(text) {
+  const body = unfence(text).replace(/\r\n?/g, '\n');
+  const lines = body.split('\n');
+  const cut = lines.findLastIndex((line) => line.trim() === LYRICS_REVIEW_SEPARATOR);
+  if (cut < 0) return { lyrics: body.trim(), notes: '' };
+  return { lyrics: unfence(lines.slice(0, cut).join('\n')).trim(), notes: lines.slice(cut + 1).join('\n').trim() };
+}
+
 // Providers habitually wrap prose in a ``` fence despite the instruction above.
 // Unwrap a response that is ENTIRELY one fence; leave anything else untouched
 // so a lyric line that merely contains backticks survives.
@@ -171,4 +215,38 @@ export async function writeLyrics({ description, guidance, template, targetSecon
   }
   console.log(`🎤 Wrote lyrics via ${provider.id}/${ranModel || 'default'} (${lyrics.length} chars)`);
   return { lyrics, llm: { provider: provider.id, model: ranModel || null } };
+}
+
+/**
+ * Review a lyric draft and return the revised sheet plus a short critique.
+ *
+ * @param {object} args
+ * @param {string} args.lyrics — the draft to revise
+ * @param {string} [args.description] — the musical description it was written against
+ * @param {string} [args.guidance]
+ * @param {string} [args.providerId]
+ * @param {string} [args.model]
+ * @param {string} [args.effort]
+ * @returns {Promise<{ lyrics: string, notes: string, llm: { provider: string, model: string|null } }>}
+ */
+export async function reviewLyrics({ lyrics, description, guidance, providerId, model, effort } = {}) {
+  if (!trimTo(lyrics, MAX_LYRICS)) {
+    throw new ServerError('There are no lyrics to review.', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
+  assertProvider(provider, { message: 'No AI provider available to review lyrics', code: 'NO_PROVIDER' });
+
+  const prompt = buildLyricsReviewPrompt({ lyrics, description, guidance });
+  const { text, model: ranModel } = await runPromptThroughProvider({
+    provider, model: selectedModel, effort, prompt, source: 'music-lyrics-review',
+  });
+
+  const parsed = parseLyricsReview(text);
+  const revised = trimTo(parsed.lyrics, MAX_LYRICS);
+  if (!revised) {
+    throw new ServerError('The AI returned empty revised lyrics. Try rerunning or picking a stronger model.', { status: 502, code: 'LLM_EMPTY' });
+  }
+  const notes = trimTo(parsed.notes, MAX_GUIDANCE);
+  console.log(`🎤 Reviewed lyrics via ${provider.id}/${ranModel || 'default'} (${revised.length} chars${notes ? ', with notes' : ''})`);
+  return { lyrics: revised, notes, llm: { provider: provider.id, model: ranModel || null } };
 }
