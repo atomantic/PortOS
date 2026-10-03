@@ -7,6 +7,7 @@ import {
   ideaToPrompt,
   normalizeAutonomousBrief,
   normalizeAutopilotParams,
+  normalizeLocalMusicOptions,
   pickBrainIdea,
   sunoSongFields,
   sunoSongIdsFromHrefs,
@@ -183,5 +184,40 @@ describe('scheduled-task params', () => {
     // The existing-mood-board pick round-trips; blank collapses to "generate one".
     expect(sanitizeTaskMetadata({ musicVideoAutopilot: { moodBoardId: ' mb-1 ' } }).musicVideoAutopilot.moodBoardId).toBe('mb-1');
     expect(sanitizeTaskMetadata({ musicVideoAutopilot: { moodBoardId: '  ' } }).musicVideoAutopilot.moodBoardId).toBeNull();
+  });
+});
+
+describe('normalizeLocalMusicOptions', () => {
+  it('normalizes local music options for audio models and code', () => {
+    expect(normalizeLocalMusicOptions(null)).toBeNull();
+    expect(normalizeLocalMusicOptions(undefined)).toBeNull();
+    expect(normalizeLocalMusicOptions('invalid')).toBeNull();
+    expect(normalizeLocalMusicOptions({})).toBeNull();
+    expect(normalizeLocalMusicOptions({ type: 'model' })).toEqual({ type: 'model' });
+    expect(normalizeLocalMusicOptions({ type: 'model', engine: 'acestep' })).toEqual({ type: 'model', engine: 'acestep' });
+    expect(normalizeLocalMusicOptions({ type: 'model', engine: '  ' })).toEqual({ type: 'model' });
+    expect(normalizeLocalMusicOptions({ type: 'code' })).toEqual({ type: 'code', language: 'strudel' });
+    expect(normalizeLocalMusicOptions({ type: 'code', language: 'supercollider' })).toEqual({ type: 'code', language: 'supercollider' });
+    expect(normalizeLocalMusicOptions({ type: 'code', language: 'unknown' })).toEqual({ type: 'code', language: 'strudel' });
+    expect(normalizeLocalMusicOptions({ language: 'tonejs' })).toEqual({ type: 'code', language: 'tonejs' });
+  });
+
+  it('validates localMusic in autonomous start and resume schemas', () => {
+    const startValid = musicVideoAutonomousStartSchema.parse({
+      prompt: 'test prompt',
+      songSource: 'local',
+      localMusic: { type: 'model', engine: 'acestep' },
+    });
+    expect(startValid.localMusic).toEqual({ type: 'model', engine: 'acestep' });
+
+    const resumeValid = musicVideoAutonomousResumeSchema.parse({
+      localMusic: { type: 'code', language: 'supercollider' },
+    });
+    expect(resumeValid.localMusic).toEqual({ type: 'code', language: 'supercollider' });
+
+    expect(() => musicVideoAutonomousStartSchema.parse({
+      prompt: 'test prompt',
+      localMusic: { type: 'invalid-type' },
+    })).toThrow();
   });
 });

@@ -70,7 +70,7 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
         <input id="mv-ap-idea-tags" value={draft.ideaTags} onChange={(e) => patch({ ideaTags: e.target.value })} placeholder="song, music — comma separated; blank = any active idea" className={inputClass} />
       </div>
 
-      <SongSourcePicker idPrefix="mv-ap" songSource={draft.songSource} localFallback={draft.localFallback} onChange={patch} />
+      <SongSourcePicker idPrefix="mv-ap" songSource={draft.songSource} localFallback={draft.localFallback} localMusic={draft.localMusic} onChange={patch} />
 
       <ToggleChip id="mv-ap-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 

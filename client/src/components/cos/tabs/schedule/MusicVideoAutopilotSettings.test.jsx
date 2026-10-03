@@ -4,6 +4,9 @@ import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/re
 vi.mock('../../../../services/apiMoodBoard.js', () => ({
   listMoodBoardNames: vi.fn(async () => [{ id: 'mb-1', name: 'Neon Rain' }]),
 }));
+vi.mock('../../../../services/apiMusic.js', () => ({
+  listMusicEngines: vi.fn(async () => ({ engines: [{ id: 'acestep', name: 'ACE-Step', ready: true, lyrics: true }] })),
+}));
 vi.mock('../../../../services/apiImageVideo.js', () => ({
   getVideoGenModelContext: vi.fn(async () => ({
     models: [
