@@ -22,13 +22,17 @@
  *              success; a stopped autopilot run reads warning.
  *   label    — the accessible name. Required in spirit; defaults to 'Progress'
  *              so the trio is never nameless.
+ *   valueText — optional spoken value, useful when a measurement is unavailable.
  *   size     — `sm` (h-1.5, default) or `md` (h-2, the drill timer).
- *   track    — `bg` (on a card, default) or `border` (on the page ground, where
- *              `bg-port-bg` would vanish).
+ *   track    — `bg` (on a card, default), `border` (on the page ground, where
+ *              `bg-port-bg` would vanish), or `borderMuted`.
  *   duration — fill transition in ms. Static class map, because Tailwind can't
  *              see an interpolated `duration-${n}` and would drop it from the
  *              build.
  * `className` passes through for layout only (`flex-1`, `mt-1.5`).
+ * `fillClassName` passes through for a surface-specific fill treatment.
+ * `indeterminateAnimation={false}` keeps an unknown value visually empty when
+ * pulsing would suggest that a scan is still running.
  */
 
 const TONES = {
@@ -48,6 +52,7 @@ const SIZES = {
 const TRACKS = {
   bg: 'bg-port-bg',
   border: 'bg-port-border',
+  borderMuted: 'bg-port-border/60',
 };
 
 // Interpolated Tailwind class names are invisible to the build, so the only
@@ -74,10 +79,13 @@ export default function ProgressBar({
   percent,
   tone = 'accent',
   label = 'Progress',
+  valueText,
   size = 'sm',
   track = 'bg',
   duration = 200,
   className = '',
+  fillClassName = '',
+  indeterminateAnimation = true,
 }) {
   const value = clampPercent(percent);
   const indeterminate = value === null;
@@ -95,8 +103,9 @@ export default function ProgressBar({
     'h-full rounded-full',
     fillTone,
     indeterminate
-      ? 'w-1/3 animate-pulse'
+      ? (indeterminateAnimation ? 'w-1/3 animate-pulse' : 'w-0')
       : `transition-[width] ${DURATIONS[duration] || DURATIONS[200]}`,
+    fillClassName,
   ].join(' ');
 
   return (
@@ -104,6 +113,7 @@ export default function ProgressBar({
       className={trackCls}
       role="progressbar"
       aria-label={label}
+      aria-valuetext={valueText}
       aria-valuenow={indeterminate ? undefined : Math.round(value)}
       aria-valuemin={0}
       aria-valuemax={100}
