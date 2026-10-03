@@ -331,6 +331,43 @@ describe('persistent mind image attachment lifecycle', () => {
     expect(mocks.root.persistentMind.pendingAttachments).toEqual([]);
   });
 
+  it.each(['EACCES', 'EIO', 'EBUSY'])('preserves a valid pending image through cleanup and admission while reads fail with %s', async (code) => {
+    mocks.root.persistentMind.pendingAttachments = [
+      uploadRecord(),
+      uploadRecord({ attachmentId: 'expired', filename: 'mind-expired.png', expiresAt: '2026-08-26T00:00:00.000Z' }),
+    ];
+    mocks.readFile.mockRejectedValue(Object.assign(new Error('storage unavailable'), { code }));
+
+    await expect(supervisor.cleanupPersistentMindAttachments({ now: Date.parse('2026-08-27T00:00:00.000Z') }))
+      .resolves.toMatchObject({ success: true, removed: 1, examined: 2 });
+    expect(mocks.unlink).toHaveBeenCalledTimes(1);
+    expect(mocks.unlink.mock.calls[0][0]).toContain('mind-expired.png');
+    expect(mocks.root.persistentMind.pendingAttachments).toMatchObject([{ attachmentId: 'attachment-1' }]);
+
+    // Unrelated text admission is not blocked by the unreadable image.
+    expect(await supervisor.enqueuePersistentMindMessage({ id: 'text-only', text: 'Hello.' })).toMatchObject({ success: true });
+
+    const unavailable = await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Look.', images: ['attachment-1'] });
+    expect(unavailable).toMatchObject({ success: false, code: 'ATTACHMENT_UNAVAILABLE', status: 503 });
+    expect(unavailable.error).not.toMatch(/missing|invalid|corrupt/i);
+    expect(mocks.root.persistentMind.pendingAttachments).toMatchObject([{ attachmentId: 'attachment-1' }]);
+    expect(mocks.root.persistentMind.pendingAttachments[0].claimedBy).toBeUndefined();
+
+    // Recovery: same attachment id is admitted without a new upload.
+    mocks.readFile.mockResolvedValue(PNG);
+    expect(await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Look.', images: ['attachment-1'] }))
+      .toMatchObject({ success: true });
+    expect(mocks.root.persistentMind.pendingAttachments).toMatchObject([{ attachmentId: 'attachment-1', claimedBy: 'message-1' }]);
+  });
+
+  it('still removes a pending image whose file is definitively missing (ENOENT)', async () => {
+    mocks.root.persistentMind.pendingAttachments = [uploadRecord()];
+    mocks.readFile.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+    await expect(supervisor.cleanupPersistentMindAttachments())
+      .resolves.toMatchObject({ success: true, removed: 1, examined: 1 });
+    expect(mocks.root.persistentMind.pendingAttachments).toEqual([]);
+  });
+
   it('rejects a changed retry and a missing or invalid image before queue mutation', async () => {
     mocks.root.persistentMind.pendingAttachments = [uploadRecord()];
     const first = await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Original caption.', images: ['attachment-1'] });
