@@ -169,6 +169,23 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect(await runDbMigrations()).toBe(0);
   });
 
+  // #9925: replay a complete real dump with the exact newer-client header
+  // against the guarded test target. On PG16 this previously rolled back.
+  it('restores a newer-client transaction_timeout header without changing its source or receipt identity', async () => {
+    const dir = join(dest, 'snapshots', 'fixture-source', 'newer-client');
+    await mkdir(dir);
+    const original = await readFile(dumpPath, 'utf8');
+    const sql = original.includes('SET transaction_timeout = 0;')
+      ? original : original.replace('SET statement_timeout = 0;', 'SET statement_timeout = 0;\nSET transaction_timeout = 0;');
+    const path = join(dir, 'portos-db.sql');
+    await writeFile(path, sql);
+    await query("UPDATE tribe_people SET name = 'Changed after newer-client backup' WHERE id = $1", [personId]);
+    expect(await restore(true, 'newer-client')).toMatchObject({ status: 'ok', dryRun: true });
+    expect(await restore(false, 'newer-client')).toMatchObject({ status: 'ok', dryRun: false });
+    expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Snapshot person' }]);
+    expect(await readFile(path, 'utf8')).toBe(sql);
+  });
+
   // #9725: a committed replay whose repair fails keeps ordinary work fenced
   // with its receipt and ORIGINAL floors, and recovery repairs without replay.
   it('fences a committed replay whose migrations fail, then recovers from the receipt and original floors', async () => {

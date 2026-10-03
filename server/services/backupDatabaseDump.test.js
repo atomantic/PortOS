@@ -91,6 +91,32 @@ describe('inspectDatabaseDump', () => {
     if (process.platform !== 'win32') expect(statSync(replayPath).mode & 0o777).toBe(0o600);
   });
 
+  // #9925: version normalization must never rewrite stored SQL-looking data.
+  it.each([16, 17, 18])('normalizes only the exact top-level PG17 header for target %s', async targetServerMajor => {
+    const header = 'SET transaction_timeout = 0;\r\n';
+    const stored = [
+      '-- SET transaction_timeout = 0;\r\n',
+      '/*\r\nSET transaction_timeout = 0;\r\n*/\r\n',
+      "COMMENT ON TABLE public.memories IS '\r\nSET transaction_timeout = 0;\r\n';\r\n",
+      'CREATE FUNCTION public.example() RETURNS text AS $body$\r\nSET transaction_timeout = 0;\r\n$body$ LANGUAGE sql;\r\n',
+      'COPY public.memories (id) FROM stdin;\r\nSET transaction_timeout = 0;\r\n\\.\r\n',
+      'SET transaction_timeout = 1;\r\n',
+      'SET transaction_timeout = 0; SELECT 42;\r\n',
+    ].join('');
+    const sql = Buffer.from('\\restrict fixturekey\r\n' + header
+      + 'CREATE TABLE public.memories (\r\n);\r\nCREATE TABLE public.memory_links (\r\n);\r\n'
+      + stored + TRAILER.replaceAll('\n', '\r\n') + '\\unrestrict fixturekey\r\n');
+    const original = write(`target-${targetServerMajor}.sql`, sql);
+    const spoolTo = join(dir, `target-${targetServerMajor}-spool.sql`);
+    const dump = await inspectDatabaseDump(original, { spoolTo, targetServerMajor });
+    expect(dump).toMatchObject({ complete: true, missingTables: [], sha256: createHash('sha256').update(sql).digest('hex') });
+    const replayPath = await prepareDatabaseReplay(spoolTo, dump.extensionMetadata);
+    expect(readFileSync(original)).toEqual(sql);
+    expect(readFileSync(spoolTo)).toEqual(sql);
+    const expected = targetServerMajor < 17 ? Buffer.from(sql.toString().replace(header, '')) : sql;
+    expect(readFileSync(replayPath)).toEqual(expected);
+  });
+
   it('retains an oversized statement prefix so invalid SQL still reaches transactional replay', async () => {
     const sql = "CREATE TABLE public.memories (\n);\nCREATE TABLE public.memory_links (\n);\n"
       + `COMMENT ON EXTENSION vector IS NULL${' \n'.repeat(CHUNK)}INVALID SQL;\n` + TRAILER;

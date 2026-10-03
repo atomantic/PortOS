@@ -1548,7 +1548,7 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_preflight'|'restore_journal'|'restore_error'|'timeout', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'restore_error'|'timeout', error? }
  *     (nothing changed; a failed replay is reported only once proven rolled back)
  *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
  *     (a restore awaits recovery: ordinary database work stays fenced until
@@ -1614,7 +1614,8 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
 async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotId, dryRun, sizeBytes }) {
   // One streamed read supplies the checksum and the completeness proof. A read
   // failure is refused here — never mistaken for an empty dump.
-  const dump = await inspectDatabaseDump(sqlPath, { spoolTo: spoolPath }).catch((err) => {
+  const targetServerMajor = await getServerMajorVersion().catch(() => null);
+  const dump = await inspectDatabaseDump(sqlPath, { spoolTo: spoolPath, targetServerMajor }).catch((err) => {
     console.error(`❌ restore: dump unreadable for snapshot ${snapshotId}: ${err.message}`);
     return null;
   });
@@ -1637,9 +1638,19 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
     return { status: 'failed', reason: 'dump_incomplete', error: `The snapshot database dump is incomplete (missing ${missing}). Restore was refused without changing data.` };
   }
   const { tableCount } = dump;
+  const health = await checkHealth();
+  if (!health.connected) return { status: 'skipped', reason: 'not_configured' };
+  if (!Number.isInteger(targetServerMajor) || targetServerMajor <= 0) {
+    return {
+      status: 'failed',
+      reason: 'restore_compatibility',
+      error: 'Cannot establish the target PostgreSQL major version. Check database connectivity and permission to SHOW server_version_num, then retry preview before restoring. No data was changed.',
+    };
+  }
   // Admission checks above always cover the original bytes. Only the private
   // replay copy omits extension comments and clean-dump extension drops,
-  // whose ownership may belong to a provisioning role.
+  // whose ownership may belong to a provisioning role, plus the exact PG17
+  // transaction_timeout header when replaying to an older target.
   const replayPath = dryRun ? null : await prepareDatabaseReplay(spoolPath, dump.extensionMetadata).catch(err => {
     console.error(`❌ restore: cannot normalize admitted dump for snapshot ${snapshotId}: ${err.message}`);
     return null;
@@ -1648,8 +1659,6 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
 
   // Preview remains read-only. Recheck inside the replay transaction as well,
   // so a changed catalog cannot turn a previously safe preview into a cascade.
-  const health = await checkHealth();
-  if (!health.connected) return { status: 'skipped', reason: 'not_configured' };
   const { getDatabaseResetPlan } = await import('./backupDatabaseReset.js');
   const { preflight, reset } = await getDatabaseResetPlan();
   const preflightError = await query(preflight).then(() => null, error => error);

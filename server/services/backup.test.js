@@ -1224,7 +1224,22 @@ describe('restorePostgres', () => {
     rmSync(RECOVERY_JOURNAL(), { force: true });
     query.mockReset().mockImplementation(restoreDbAnswer());
     checkHealth.mockResolvedValue({ connected: true });
+    getServerMajorVersion.mockResolvedValue(16);
     ({ restorePostgres } = await import('./backup.js'));
+  });
+
+  it.each([null, 0, NaN])('refuses an unknown target major %s equally in preview and execution before mutation', async major => {
+    getServerMajorVersion.mockResolvedValue(major);
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    for (const dryRun of [true, false]) {
+      expect(await restorePostgres('/dest', 'snap-1', { dryRun }))
+        .toMatchObject({ status: 'failed', reason: 'restore_compatibility', error: expect.stringContaining('SHOW server_version_num') });
+    }
+    expect(query).not.toHaveBeenCalled();
+    expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(readRecoveryJournal()).toBeNull();
   });
 
   it('rejects a path-traversal snapshotId', async () => {
@@ -1628,10 +1643,11 @@ describe('restorePostgres', () => {
 
     // A later swap on the backup media must not reach psql: it replays the
     // private copy the admission read wrote, and the copy is removed afterwards.
-    it('verifies original integrity and receipts while replaying only extension-comment normalization', async () => {
+    it('verifies original integrity and receipts while normalizing extension metadata and the PG17 header', async () => {
       const comment = "COMMENT ON EXTENSION vector IS 'provisioned extension';";
       const extensionDrop = 'DROP EXTENSION IF EXISTS vector;';
-      const sql = DUMP_HEADER + extensionDrop + '\n' + comment + '\n' + DUMP_TABLES + DUMP_TRAILER;
+      const sql = DUMP_HEADER + 'SET transaction_timeout = 0;\n'
+        + extensionDrop + '\n' + comment + '\n' + DUMP_TABLES + DUMP_TRAILER;
       const originalHash = createHash('sha256').update(sql).digest('hex');
       vi.spyOn(fs, 'readFile').mockImplementation(async path => {
         if (String(path).endsWith('manifest.json')) return JSON.stringify({ files: { '../portos-db.sql': originalHash } });
@@ -1651,7 +1667,7 @@ describe('restorePostgres', () => {
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
       proc.emit('close', 0);
       expect(await pending).toMatchObject({ status: 'ok', dryRun: false });
-      expect(replayed.sql).toBe(sql.replace(comment, '').replace(extensionDrop, ''));
+      expect(replayed.sql).toBe(sql.replace(comment, '').replace(extensionDrop, '').replace('SET transaction_timeout = 0;\n', ''));
       expect(existsSync(replayed.path)).toBe(false);
     });
 

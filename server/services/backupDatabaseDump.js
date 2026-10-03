@@ -40,10 +40,10 @@ const MAX_SCANNED_LINE = 64 * 1024;
  * (created exclusively, owner-only), so a restore can replay what it checked
  * even if the snapshot changes afterwards; a spool write failure rejects too.
  * @param {string} path
- * @param {{ spoolTo?: string, omitVersionDirectives?: boolean }} [options]
+ * @param {{ spoolTo?: string, omitVersionDirectives?: boolean, targetServerMajor?: number }} [options]
  * @returns {Promise<{ sizeBytes: number, sha256: string, tableCount: number, complete: boolean, missingTables: string[], extensionMetadata?: {start: number, end: number}[] }>}
  */
-export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = false } = {}) {
+export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = false, targetServerMajor } = {}) {
   return new Promise((resolvePromise, reject) => {
     const hash = createHash('sha256');
     // Latin-1 preserves byte offsets and dumps in non-UTF-8 client encodings.
@@ -74,7 +74,11 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
         return;
       }
       if (!statement && !quote && !dollarQuote && !blockDepth) {
-        if (omitVersionDirectives && (/^\\(?:un)?restrict /.test(line) || /^SET transaction_timeout = 0;\r?\n?$/.test(line))) {
+        // Snapshot replay retains psql restrictions. Only the exact pg_dump
+        // header unsupported before PG17 is removable, never stored SQL text.
+        const timeoutHeader = /^SET transaction_timeout = 0;\r?\n?$/.test(line);
+        if ((omitVersionDirectives && (/^\\(?:un)?restrict /.test(line) || timeoutHeader))
+          || (Number.isInteger(targetServerMajor) && targetServerMajor > 0 && targetServerMajor < 17 && timeoutHeader)) {
           extensionMetadata.push({ start: lineStart, end: scannedBytes });
           return;
         }
@@ -211,7 +215,7 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
 
 /**
  * Omit admitted extension comments and clean-dump extension drops from the
- * private replay copy. The snapshot, checksum, completion proof and recovery
+ * private replay copy, along with admitted incompatible version headers. The snapshot, checksum, completion proof and recovery
  * receipt retain the original bytes.
  * All other bytes pass through unchanged, including non-UTF-8 COPY data.
  */
