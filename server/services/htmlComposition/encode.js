@@ -70,11 +70,16 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   let stderr = '';
   let exited = false;
   let stopping = false;
+  let stopReason = null;
   proc.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-2000); });
   const finished = new Promise((resolve, reject) => {
     proc.on('error', reject);
     proc.stdin.on('error', reject);
-    proc.once('close', code => { exited = true; code === 0 ? resolve() : reject(new Error(`ffmpeg failed (${code}): ${stderr}`)); });
+    proc.once('close', (code, exitSignal) => {
+      exited = true;
+      const origin = stopReason ? `; encoder ${stopReason}` : exitSignal ? '; external signal (no encoder stop requested)' : '';
+      code === 0 ? resolve() : reject(new Error(`ffmpeg failed (${code ?? exitSignal ?? 'unknown'}${origin}): ${stderr}`));
+    });
   });
   // Attach a rejection handler before the first browser round trip.
   finished.catch(() => {});
@@ -87,13 +92,15 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     () => failEncoder(new Error('ffmpeg exited before capture completed')),
     (error) => failEncoder(error),
   );
-  const stop = () => {
+  const stop = (reason) => {
     if (!exited && !stopping) {
       stopping = true;
+      stopReason = reason;
       killWithEscalation(proc, { label: 'HTML composition encode', stillRunning: () => !exited, delayMs: 1000 });
     }
   };
-  signal?.addEventListener('abort', stop, { once: true });
+  const abort = () => stop('abort requested');
+  signal?.addEventListener('abort', abort, { once: true });
   if (!Number.isFinite(offsetSec) || offsetSec < 0) throw new Error('offsetSec must be a non-negative number');
   const capture = async t => {
     page.check();
@@ -143,8 +150,8 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     page.check();
     return shutter ? { sampleHistogram: histogram } : {};
   } finally {
-    signal?.removeEventListener('abort', stop);
-    stop();
+    signal?.removeEventListener('abort', abort);
+    stop('cleanup requested');
     // Wait for close, not just the first error, before deleting partial output.
     if (!exited) await new Promise(resolve => proc.once('close', resolve));
   }
