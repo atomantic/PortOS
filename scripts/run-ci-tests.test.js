@@ -1,5 +1,5 @@
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -16,7 +16,18 @@ import {
   shardArgs,
   toRunnerPath,
 } from './run-ci-tests.js';
+import { killProcessTree } from '../server/lib/bufferedSpawn.js';
+import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
+
+// Keep nested Vitest's own scratch under its separately owned pvt-* root,
+// just like the workspace configs; reporter diagnostics stay outside it.
+const FIXTURE_CONFIG = `
+  import { bootstrapVitestTempRoot } from ${JSON.stringify(new URL('./lib/vitestTempRoot.js', import.meta.url).href)};
+  bootstrapVitestTempRoot();
+  export default { test: { globals: true, maxWorkers: 1, testTimeout: 60000,
+    globalSetup: [${JSON.stringify(new URL('./vitestTempRootSetup.js', import.meta.url).href)}] } };
+`;
 
 const WORKFLOW = readFileSync(join(import.meta.dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
 
@@ -255,20 +266,25 @@ describe('structured failure diagnostics', () => {
   it('recovers a real bail failure with default and GitHub reporters even if their summary is incomplete', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-diagnostics-'));
     try {
+      const host = join(fixture, 'host');
+      mkdirSync(host);
       const report = join(fixture, 'report.json');
       writeFileSync(join(fixture, 'fixture.test.js'),
         "test('synthetic assertion diagnostic', () => { expect(1, 'synthetic mismatch').toBe(2); });");
       writeFileSync(join(fixture, 'vitest.config.mjs'),
-        'export default { test: { globals: true, maxWorkers: 1 } };');
+        FIXTURE_CONFIG);
       const runnerUrl = new URL('./run-ci-tests.js', import.meta.url).href;
       const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js'];
+      const env = { ...process.env, NODE_ENV: 'test', TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1' };
+      delete env.PORTOS_TEST_TEMP_ROOT;
       const result = spawnSync(process.execPath, ['--input-type=module', '-e',
         `import { runNpm } from ${JSON.stringify(runnerUrl)};
          const result = await runNpm('server', 'test:ci:related', ${JSON.stringify(args)});
          process.exitCode = result.status;`,
-      ], { encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_ENV: 'test' } });
+      ], { encoding: 'utf8', timeout: 30_000, env });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
+      expect(readdirSync(host)).toEqual([]);
       expect(result.stdout).toContain('Test Files');
       expect(result.stdout).toContain('Tests');
       expect(result.stderr).toContain('Failed Tests');
@@ -286,4 +302,161 @@ describe('structured failure diagnostics', () => {
       rmSync(fixture, { recursive: true, force: true });
     }
   }, 35_000);
+});
+
+describe('report launcher subprocess lifecycle (#9804)', () => {
+  const runnerUrl = new URL('./run-ci-tests.js', import.meta.url).href;
+
+  function launch(host, name, { blocking = false } = {}) {
+    const fixture = join(host, name);
+    mkdirSync(fixture);
+    const ready = join(fixture, 'ready.json');
+    writeFileSync(join(fixture, 'vitest.config.mjs'),
+      FIXTURE_CONFIG);
+    writeFileSync(join(fixture, 'fixture.test.js'), blocking ? `
+      import { spawn, execFileSync } from 'node:child_process';
+      import { renameSync, writeFileSync } from 'node:fs';
+      test('blocking fixture', async () => {
+        // A descendant that ignores graceful signals must be escalated too.
+        const descendant = spawn(process.execPath, ['-e',
+          "process.on('SIGTERM', () => {}); process.on('SIGINT', () => {}); setInterval(() => {}, 1000); process.send('ready');"],
+          { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+        await new Promise(resolve => descendant.once('message', resolve));
+        writeFileSync(${JSON.stringify(ready + '.tmp')}, JSON.stringify({ worker: process.pid, descendant: descendant.pid,
+          group: process.platform === 'win32' ? null : Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8' }).trim()) }));
+        renameSync(${JSON.stringify(ready + '.tmp')}, ${JSON.stringify(ready)});
+        await new Promise(() => {});
+      });` : "test('success fixture', () => { expect(true).toBe(true); });");
+    const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js'];
+    const env = { ...process.env, TMPDIR: host, TMP: host, TEMP: host, NODE_ENV: 'test', NODE_DISABLE_COMPILE_CACHE: '1' };
+    delete env.PORTOS_TEST_TEMP_ROOT;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { runNpm } from ${JSON.stringify(runnerUrl)};
+      const result = await runNpm('server', 'test:ci:related', ${JSON.stringify(args)});
+      process.exitCode = result.status;`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    const closed = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (existsSync(ready)) {
+          const pids = JSON.parse(readFileSync(ready, 'utf8'));
+          if (pids.group) killProcessTree({ pid: pids.group }, 'SIGKILL', { processGroup: true });
+        }
+        killProcessTree(child, 'SIGKILL');
+        reject(Error('report launcher exceeded its subprocess budget'));
+      }, 40000);
+      child.once('error', error => { clearTimeout(timeout); reject(error); });
+      child.once('close', (code, signal) => {
+        clearTimeout(timeout);
+        resolve({ code, signal, output });
+      });
+    });
+    return { child, closed, ready };
+  }
+
+  async function waitFor(check, message) {
+    const deadline = Date.now() + 15000;
+    while (!check()) {
+      if (Date.now() > deadline) throw Error(message);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+
+  function ownedRoot(host, pid) {
+    return readdirSync(host).filter(name => name.startsWith('portos-vitest-'))
+      .map(name => join(host, name))
+      .filter(root => existsSync(join(root, OWNER_FILE)))
+      .find(root => readFileSync(join(root, OWNER_FILE), 'utf8').startsWith(`${pid} `));
+  }
+
+  function alive(pid) {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+  }
+
+  // Windows cannot deliver POSIX SIGINT/SIGTERM to a Node process; ordinary
+  // outcomes and recovery below still exercise its real npm.cmd boundary.
+  describe.skipIf(process.platform === 'win32')('graceful signals', () => {
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+      it(`${signal} fails the stage, stops descendants, and removes the report root`, async () => {
+        const host = mkdtempSync(join(tmpdir(), 'rcl-'));
+        let run;
+        let pids;
+        try {
+          run = launch(host, 'cancel', { blocking: true });
+          await waitFor(() => existsSync(run.ready), 'test worker did not start');
+          pids = JSON.parse(readFileSync(run.ready, 'utf8'));
+          expect(ownedRoot(host, run.child.pid)).toBeTruthy();
+          run.child.kill(signal);
+          const result = await run.closed;
+          expect(result.code, result.output).toBe(signal === 'SIGINT' ? 130 : 143);
+          expect(ownedRoot(host, run.child.pid)).toBeUndefined();
+          await waitFor(() => !alive(pids.worker) && !alive(pids.descendant), 'owned test processes survived cancellation');
+        } finally {
+          run?.child.kill('SIGKILL');
+          if (pids) {
+            if (pids.group) killProcessTree({ pid: pids.group }, 'SIGKILL', { processGroup: true });
+            else for (const pid of [pids.worker, pids.descendant]) killProcessTree({ pid }, 'SIGKILL');
+          }
+          rmSync(host, { recursive: true, force: true });
+        }
+      }, 35000);
+    }
+  });
+
+  it('recovers a killed owner on the next successful launch while preserving a concurrent old live root and host entries', async () => {
+    const host = mkdtempSync(join(tmpdir(), 'rcl-'));
+    const runs = [];
+    const descendants = [];
+    try {
+      const old = new Date(Date.now() - STALE_ROOT_AGE_MS * 2);
+      for (const name of ['unrelated-old', 'portos-vitest-legacy-old', 'portos-vitest-legacy-fresh']) {
+        mkdirSync(join(host, name));
+        if (name.endsWith('-old')) utimesSync(join(host, name), old, old);
+      }
+      const live = launch(host, 'live', { blocking: true });
+      runs.push(live);
+      await waitFor(() => existsSync(live.ready), 'live worker did not start');
+      const livePids = JSON.parse(readFileSync(live.ready, 'utf8'));
+      descendants.push(livePids.worker, livePids.descendant);
+      const liveRoot = ownedRoot(host, live.child.pid);
+      expect(liveRoot).toBeTruthy();
+      utimesSync(liveRoot, old, old);
+      const doomed = launch(host, 'doomed', { blocking: true });
+      runs.push(doomed);
+      await waitFor(() => existsSync(doomed.ready), 'doomed worker did not start');
+      const doomedPids = JSON.parse(readFileSync(doomed.ready, 'utf8'));
+      descendants.push(doomedPids.worker, doomedPids.descendant);
+      const deadRoot = ownedRoot(host, doomed.child.pid);
+      expect(deadRoot).toBeTruthy();
+      // Abruptly kill only this fixture's launcher/tree. Its finally cannot run.
+      if (process.platform === 'win32') killProcessTree(doomed.child, 'SIGKILL');
+      else {
+        doomed.child.kill('SIGKILL');
+        killProcessTree({ pid: doomedPids.group }, 'SIGKILL', { processGroup: true });
+      }
+      await doomed.closed;
+      expect(existsSync(deadRoot)).toBe(true);
+      const next = launch(host, 'success');
+      runs.push(next);
+      const result = await next.closed;
+      expect(result.code, result.output).toBe(0);
+      expect(ownedRoot(host, next.child.pid)).toBeUndefined();
+      expect(existsSync(deadRoot)).toBe(false);
+      expect(existsSync(liveRoot)).toBe(true);
+      expect(alive(live.child.pid)).toBe(true);
+      expect(existsSync(join(host, 'unrelated-old'))).toBe(true);
+      expect(existsSync(join(host, 'portos-vitest-legacy-old'))).toBe(false);
+      expect(existsSync(join(host, 'portos-vitest-legacy-fresh'))).toBe(true);
+    } finally {
+      for (const run of runs) {
+        if (process.platform === 'win32') killProcessTree(run.child, 'SIGKILL');
+        else run.child.kill('SIGTERM');
+      }
+      for (const pid of descendants) killProcessTree({ pid }, 'SIGKILL');
+      await Promise.allSettled(runs.map(run => run.closed));
+      rmSync(host, { recursive: true, force: true });
+    }
+  }, 65000);
 });
