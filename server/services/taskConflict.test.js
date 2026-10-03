@@ -1,73 +1,25 @@
-import { describe, it, expect } from 'vitest';
-import { extractKeywords } from './taskConflict.js';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { execGit } from '../lib/execGit.js';
+import { detectConflicts, extractKeywords } from './taskConflict.js';
 
-/**
- * Tests for the task conflict detection service.
- * extractKeywords is imported from the real module (pure, no I/O). The
- * conflict-recommendation branching below (`analyzeConflict`) has no standalone
- * exported counterpart — it's inlined inside the async detectConflicts(), which
- * shells out to git via getModifiedFiles/isGitRepo. It stays a local copy here
- * to test the recommendation branching without mocking child_process/fs.
- */
+vi.mock('fs', () => ({ existsSync: vi.fn() }));
+vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 
-// Inline conflict analysis logic for testing without git/fs dependencies
-function analyzeConflict(task, workspacePath, activeAgents, options = {}) {
-  const { isGitRepo = true, modifiedFiles = [] } = options;
+const workspace = '/example/workspace';
+let porcelain;
 
-  if (!isGitRepo) {
-    return { hasConflict: false, reason: 'not-a-git-repo', conflictingAgents: [], recommendation: 'skip' };
-  }
-
-  const sameWorkspaceAgents = activeAgents.filter(agent => {
-    const agentWorkspace = agent.metadata?.workspacePath || agent.workspacePath;
-    return agentWorkspace === workspacePath;
+beforeEach(() => {
+  porcelain = '';
+  existsSync.mockReset().mockImplementation(path => path === join(workspace, '.git'));
+  execGit.mockReset().mockImplementation(async (args, cwd) => {
+    expect(cwd).toBe(workspace);
+    if (args.join(' ') === 'rev-parse --is-inside-work-tree') return { stdout: 'true\n' };
+    if (args.join(' ') === 'status --porcelain') return { stdout: porcelain };
+    throw new Error('Unexpected git subcommand');
   });
-
-  if (sameWorkspaceAgents.length === 0) {
-    return { hasConflict: false, reason: 'no-active-agents-in-workspace', conflictingAgents: [], recommendation: 'proceed' };
-  }
-
-  if (modifiedFiles.length > 0) {
-    return {
-      hasConflict: true,
-      reason: 'workspace-has-uncommitted-changes',
-      conflictingAgents: sameWorkspaceAgents.map(a => a.id),
-      modifiedFiles,
-      recommendation: 'worktree'
-    };
-  }
-
-  const taskDesc = (task.description || '').toLowerCase();
-  const taskApp = task.metadata?.app;
-
-  const overlappingAgents = sameWorkspaceAgents.filter(agent => {
-    const agentDesc = (agent.metadata?.taskDescription || agent.taskDescription || '').toLowerCase();
-    const agentApp = agent.metadata?.app || agent.app;
-
-    if (taskApp && agentApp && taskApp === agentApp) return true;
-
-    const taskKeywords = extractKeywords(taskDesc);
-    const agentKeywords = extractKeywords(agentDesc);
-    const overlap = taskKeywords.filter(k => agentKeywords.includes(k));
-    return overlap.length >= 2;
-  });
-
-  if (overlappingAgents.length > 0) {
-    return {
-      hasConflict: true,
-      reason: 'concurrent-agents-likely-overlap',
-      conflictingAgents: overlappingAgents.map(a => a.id),
-      recommendation: 'worktree'
-    };
-  }
-
-  return {
-    hasConflict: true,
-    reason: 'concurrent-agents-in-same-workspace',
-    conflictingAgents: sameWorkspaceAgents.map(a => a.id),
-    recommendation: 'worktree'
-  };
-}
+});
 
 describe('extractKeywords', () => {
   it('should extract meaningful words and filter stop words', () => {
@@ -94,106 +46,122 @@ describe('extractKeywords', () => {
   });
 });
 
-describe('Conflict Detection Logic', () => {
-  const workspace = '/home/user/portos';
-
+describe('detectConflicts', () => {
   describe('No conflict scenarios', () => {
-    it('should return proceed when no agents are active in workspace', () => {
+    it('should return proceed when no agents are active in workspace', async () => {
       const task = { description: 'Fix login button', metadata: {} };
-      const result = analyzeConflict(task, workspace, []);
+      const result = await detectConflicts(task, workspace, []);
 
-      expect(result.hasConflict).toBe(false);
-      expect(result.recommendation).toBe('proceed');
+      expect(result).toEqual({
+        hasConflict: false,
+        reason: 'no-active-agents-in-workspace',
+        conflictingAgents: [],
+        recommendation: 'proceed'
+      });
     });
 
-    it('should return proceed when agents are in different workspaces', () => {
+    it('should return proceed when agents are in different workspaces', async () => {
       const task = { description: 'Fix login', metadata: {} };
       const agents = [
         { id: 'agent-1', metadata: { workspacePath: '/other/workspace', taskDescription: 'Fix login' } }
       ];
-      const result = analyzeConflict(task, workspace, agents);
+      const result = await detectConflicts(task, workspace, agents);
 
-      expect(result.hasConflict).toBe(false);
-      expect(result.recommendation).toBe('proceed');
+      expect(result).toEqual({
+        hasConflict: false,
+        reason: 'no-active-agents-in-workspace',
+        conflictingAgents: [],
+        recommendation: 'proceed'
+      });
     });
 
-    it('should skip conflict detection for non-git repos', () => {
+    it('should skip conflict detection for non-git repos', async () => {
       const task = { description: 'Run something', metadata: {} };
-      const result = analyzeConflict(task, workspace, [], { isGitRepo: false });
+      existsSync.mockReturnValue(false);
+      const result = await detectConflicts(task, workspace, []);
 
-      expect(result.hasConflict).toBe(false);
-      expect(result.recommendation).toBe('skip');
+      expect(execGit).not.toHaveBeenCalled();
+
+      expect(result).toEqual({
+        hasConflict: false,
+        reason: 'not-a-git-repo',
+        conflictingAgents: [],
+        recommendation: 'skip'
+      });
     });
   });
 
   describe('Conflict scenarios', () => {
-    it('should detect conflict when workspace has uncommitted changes', () => {
+    it('should detect conflict when workspace has uncommitted changes', async () => {
       const task = { description: 'Add feature', metadata: {} };
       const agents = [
         { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'Working on stuff' } }
       ];
-      const result = analyzeConflict(task, workspace, agents, {
-        modifiedFiles: ['server/index.js', 'client/App.jsx']
-      });
+      porcelain = ' M server/index.js\nM  client/App.jsx\n?? notes.txt\n';
+      const result = await detectConflicts(task, workspace, agents);
+
+      expect(result.modifiedFiles).toEqual(['server/index.js', 'client/App.jsx', 'notes.txt']);
 
       expect(result.hasConflict).toBe(true);
       expect(result.reason).toBe('workspace-has-uncommitted-changes');
       expect(result.recommendation).toBe('worktree');
-      expect(result.conflictingAgents).toContain('agent-1');
+      expect(result.conflictingAgents).toEqual(['agent-1']);
     });
 
-    it('should detect overlap when tasks target the same app', () => {
+    it('should detect overlap when tasks target the same app', async () => {
       const task = { description: 'Improve dashboard', metadata: { app: 'my-app' } };
       const agents = [
         { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'Review my-app', app: 'my-app' } }
       ];
-      const result = analyzeConflict(task, workspace, agents);
+      const result = await detectConflicts(task, workspace, agents);
 
       expect(result.hasConflict).toBe(true);
       expect(result.reason).toBe('concurrent-agents-likely-overlap');
       expect(result.recommendation).toBe('worktree');
+      expect(result.conflictingAgents).toEqual(['agent-1']);
     });
 
-    it('should detect overlap when descriptions share keywords', () => {
+    it('should detect overlap when descriptions share keywords', async () => {
       const task = { description: 'refactor authentication middleware logic', metadata: {} };
       const agents = [
         { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'improve authentication middleware performance' } }
       ];
-      const result = analyzeConflict(task, workspace, agents);
+      const result = await detectConflicts(task, workspace, agents);
 
       expect(result.hasConflict).toBe(true);
       expect(result.reason).toBe('concurrent-agents-likely-overlap');
       expect(result.recommendation).toBe('worktree');
+      expect(result.conflictingAgents).toEqual(['agent-1']);
     });
 
-    it('should still flag conflict for agents in same workspace with no keyword overlap', () => {
+    it('should still flag conflict for agents in same workspace with no keyword overlap', async () => {
       const task = { description: 'update readme file', metadata: {} };
       const agents = [
         { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'deploy kubernetes cluster' } }
       ];
-      const result = analyzeConflict(task, workspace, agents);
+      const result = await detectConflicts(task, workspace, agents);
 
       expect(result.hasConflict).toBe(true);
       expect(result.reason).toBe('concurrent-agents-in-same-workspace');
       expect(result.recommendation).toBe('worktree');
+      expect(result.conflictingAgents).toEqual(['agent-1']);
     });
   });
 
   describe('Multiple agents', () => {
-    it('should identify all conflicting agents', () => {
+    it('should identify all conflicting agents', async () => {
       const task = { description: 'work on auth', metadata: {} };
       const agents = [
         { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'fix auth module' } },
-        { id: 'agent-2', metadata: { workspacePath: workspace, taskDescription: 'test auth flows' } },
+        { id: 'agent-2', workspacePath: workspace, taskDescription: 'test auth flows' },
         { id: 'agent-3', metadata: { workspacePath: '/other', taskDescription: 'something else' } }
       ];
-      const result = analyzeConflict(task, workspace, agents);
+      const result = await detectConflicts(task, workspace, agents);
 
       expect(result.hasConflict).toBe(true);
-      expect(result.conflictingAgents).toHaveLength(2);
-      expect(result.conflictingAgents).toContain('agent-1');
-      expect(result.conflictingAgents).toContain('agent-2');
-      expect(result.conflictingAgents).not.toContain('agent-3');
+      expect(result.reason).toBe('concurrent-agents-in-same-workspace');
+      expect(result.recommendation).toBe('worktree');
+      expect(result.conflictingAgents).toEqual(['agent-1', 'agent-2']);
     });
   });
 });
