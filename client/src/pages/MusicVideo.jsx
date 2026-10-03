@@ -1129,12 +1129,12 @@ export default function MusicVideo() {
                 onToggleCollapsed={() => setDockCollapsed((c) => !c)}
               />
             ) : null}
-          >
-            <div className="space-y-3 min-w-0">
+            projectPanels={<div className="space-y-3 min-w-0">
               <AutonomousRunPanel key={`autonomous-${selected.id}`} project={selected} auto={autonomous} selectedStage={runStage} onSelectStage={setRunStage} />
               <ProductionReviewPanel key={`production-review-${selected.id}`} project={selected} review={productionReview} onOpenArtifact={openArtifact} />
-              <StageView key={selected.id} board={board} />
-            </div>
+            </div>}
+          >
+            <StageView key={selected.id} board={board} />
           </MusicVideoLayout>
         )}
       </div>

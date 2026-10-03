@@ -2086,6 +2086,29 @@ describe('MusicVideo stage tabs (#9243)', () => {
   );
   const selectedTab = () => screen.getByRole('tab', { selected: true });
 
+  it('puts the selected stage before shared run/review panels and preserves review drafts when tabs change', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
+      autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
+    }]);
+    renderAt('/music-video/mv-1/cast-sets');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    const review = screen.getByRole('region', { name: 'Production review' });
+    fireEvent.click(within(review).getByText('Edit visual guide and storyboard'));
+    const castDraft = within(review).getByLabelText('Cast guide');
+    fireEvent.change(castDraft, { target: { value: 'Example unsaved cast direction' } });
+
+    for (const stage of ['board', 'produce', 'cast-sets']) {
+      await openStage(stage);
+      const panel = screen.getByRole('tabpanel');
+      expect(within(panel).getByRole('heading', { level: 3, name: selectedTab().textContent })).toBeInTheDocument();
+      for (const shared of [screen.getByRole('region', { name: 'Autonomous run' }), review]) {
+        expect(panel.contains(shared)).toBe(false);
+        expect(panel.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+      expect(within(review).getByLabelText('Cast guide')).toHaveValue('Example unsaved cast direction');
+    }
+  });
+
   it('uses the newly selected project making-of notes and links when drafting publication copy', async () => {
     const first = { ...PROJECT_WITH_CLIP, publishKit: { notes: 'Example first story', links: { youtube: 'https://example.com/first' } } };
     const second = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Example Other Project', publishKit: { notes: 'Example second story', links: { youtube: 'https://example.com/second' } } };

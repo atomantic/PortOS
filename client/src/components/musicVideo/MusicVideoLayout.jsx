@@ -42,7 +42,7 @@ const DOCK_CLASSES = 'max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 
  */
 export default function MusicVideoLayout({
   project, trackLabel, stage, onStageChange, progress, nextAction, onNextAction, spend,
-  dock, children,
+  dock, projectPanels, children,
 }) {
   const headerRef = useRef(null);
   const rootRef = useRef(null);
@@ -79,6 +79,7 @@ export default function MusicVideoLayout({
     trailing: STAGE_TRAILING[entry.state] || null,
   }));
   const showSpend = spend.spentUsd > 0 || spend.capUsd != null;
+  const stageEntry = progress.stages.find((entry) => entry.id === stage);
   const ActionIcon = nextAction?.kind === 'goto' ? ArrowRight : Play;
 
   return (
@@ -137,10 +138,14 @@ export default function MusicVideoLayout({
           aria-labelledby={`tab-${stage}`}
           className="min-w-0 space-y-3"
         >
+          <h3 className="text-base font-semibold">{stageEntry?.title || stageEntry?.label}</h3>
           {children}
         </div>
         {dockMounted && dock ? <div className={dockVisible ? DOCK_CLASSES : 'hidden'}>{dock}</div> : null}
       </div>
+      {/* Shared run/review forms stay mounted, but never obscure the stage
+          selected from the phone's bottom navigation. */}
+      {projectPanels}
     </div>
   );
 }
