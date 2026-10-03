@@ -31,6 +31,23 @@ function renderPanel(overrides = {}) {
 }
 
 describe('LyricsPanel word alignment', () => {
+  it('saves exact first-word starts and multiple boundaries together, preserving the cue and rejecting reversed ranges', () => {
+    const { onSave } = renderPanel();
+    fireEvent.change(screen.getByLabelText('Start of word 1 (walking), line 1'), { target: { value: '0.82' } });
+    fireEvent.change(screen.getByLabelText('End of word 1 (walking), line 1'), { target: { value: '1.25' } });
+    fireEvent.change(screen.getByLabelText('Start of word 2 (home), line 1'), { target: { value: '1.3' } });
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save word times for line 1' }));
+    expect(onSave).toHaveBeenCalledWith({ lyricCues: [{ ...PROJECT.lyricCues[0], words: [
+      { ...PROJECT.lyricCues[0].words[0], startSec: 0.82, endSec: 1.25 },
+      { ...PROJECT.lyricCues[0].words[1], startSec: 1.3 },
+    ] }] });
+    onSave.mockClear();
+    fireEvent.change(screen.getByLabelText('End of word 2 (home), line 1'), { target: { value: '1.2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save word times for line 1' }));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('at least 0.02 seconds');
+  });
   it('does not align until Align words is clicked, and shows the whisper setup error', async () => {
     const onAlign = vi.fn().mockRejectedValue(new Error(
       'Speech-to-text is not running. Enable the local whisper server in Settings → Voice, then try Align words again.',

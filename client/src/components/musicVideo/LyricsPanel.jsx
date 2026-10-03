@@ -31,7 +31,52 @@ function nudgeWordBoundary(words, index, deltaSec) {
   return next;
 }
 
-function WordTimingRow({ cue, onPreview, onCommit }) {
+function WordTimingEditor({ cue, lineNumber, onCommit, disabled }) {
+  const [error, setError] = useState('');
+  const submit = (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const words = cue.words.map((word, index) => ({
+      ...word,
+      startSec: round3(Number(data.get(`start-${index}`))),
+      endSec: round3(Number(data.get(`end-${index}`))),
+    }));
+    if (words.some((word) => !Number.isFinite(word.startSec) || !Number.isFinite(word.endSec)
+      || word.startSec < 0 || word.endSec > 36000 || word.endSec < word.startSec + MIN_WORD_SEC)) {
+      setError('Each word must end at least 0.02 seconds after it starts.');
+      return;
+    }
+    setError('');
+    onCommit(words);
+  };
+  return (
+    <details className="basis-full min-w-0">
+      <summary className="cursor-pointer min-h-[44px] sm:min-h-0">Exact word times · line {lineNumber}</summary>
+      <form onSubmit={submit}>
+        <fieldset disabled={disabled} className="min-w-0 space-y-1">
+          <p className="text-port-text-muted">Seconds on the song clock. Save this line’s word times together; line bounds stay unchanged.</p>
+          {cue.words.map((word, index) => (
+            <div key={`${index}-${word.startSec}-${word.endSec}`} className="flex flex-wrap items-center gap-2">
+              <span className="w-24 break-words">{index + 1}. {word.w}</span>
+              {['start', 'end'].map((edge) => {
+                const id = `mv-word-${cue.id}-${index}-${edge}`;
+                return <div key={edge} className="flex items-center gap-1">
+                  <label htmlFor={id}>{edge === 'start' ? 'Start' : 'End'}<span className="sr-only"> of word {index + 1} ({word.w}), line {lineNumber}</span></label>
+                  <input id={id} name={`${edge}-${index}`} type="number" required min={0} max={36000} step={0.001}
+                    defaultValue={word[`${edge}Sec`]} className={`${inputCls} w-24`} />
+                </div>;
+              })}
+            </div>
+          ))}
+          {error && <p role="alert" className="text-port-error">{error}</p>}
+          <button type="submit" className="min-h-[44px] text-port-accent">Save word times for line {lineNumber}</button>
+        </fieldset>
+      </form>
+    </details>
+  );
+}
+
+function WordTimingRow({ cue, lineNumber, disabled, onPreview, onCommit }) {
   const words = cue.words || [];
   const drag = useRef(null);
   if (words.length === 0) return null;
@@ -79,6 +124,7 @@ function WordTimingRow({ cue, onPreview, onCommit }) {
             className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 px-1 text-port-text-muted">+</button>
         </span>
       ))}
+      <WordTimingEditor cue={cue} lineNumber={lineNumber} disabled={disabled} onCommit={onCommit} />
     </div>
   );
 }
@@ -285,7 +331,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                     Low confidence — check by ear
                   </span>
                 )}
-                <WordTimingRow cue={cue}
+                <WordTimingRow cue={cue} lineNumber={i + 1} disabled={aligning}
                   onPreview={(words) => editWords(cue.id, words, false)}
                   onCommit={(words) => editWords(cue.id, words, true)} />
               </div>
