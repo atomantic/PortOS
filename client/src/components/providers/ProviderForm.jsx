@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { AlertTriangle, Braces, Cpu, Link2, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
-import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, mergeObservedContextWindows, withRuntimeContextWindow, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
+import { sortProviderModels, filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, mergeObservedContextWindows, withRuntimeContextWindow, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
 import Banner from '../ui/Banner';
 import {
   formatDurationMs,
@@ -253,13 +253,14 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // meaning differs: no Default Model is "None", while an empty tier INHERITS
   // the Default Model (resolveProviderModelTier) — so a preset only sets the
   // tiers it wants on a different model (#8149).
+  const sortedTierModels = sortProviderModels([...new Set([...configuredModels, ...availableModels])]);
   const modelSelectOptions = (emptyLabel = 'None') => (
     <>
       <option value="">{emptyLabel}</option>
       {configuredDefault && (
         <option value={configuredDefault}>Use the CLI&apos;s configured default</option>
       )}
-      {[...new Set([...configuredModels, ...availableModels])].map(model => (
+      {sortedTierModels.map(model => (
         <option key={model} value={model} disabled={!availableModels.includes(model)}>
           {modelOptionLabel(model, localModels.ctxById, capabilityProvider)}
           {!availableModels.includes(model) ? ' (unavailable on this machine)' : ''}
@@ -288,10 +289,10 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   const fallbackModelOptions = filterGenerationModels(
     mergeModelLists(selectedFallbackProvider?.models, liveModelsFor(selectedFallbackProvider)),
   );
-  const compatibleFallbackModelOptions = filterHardwareCompatibleProviderModels(
+  const compatibleFallbackModelOptions = sortProviderModels(filterHardwareCompatibleProviderModels(
     fallbackModelOptions,
     fallbackCapabilityProvider,
-  );
+  ));
   const fallbackModelIsUnavailable = Boolean(
     formData.fallbackModel
     && !isEmbeddingModel(formData.fallbackModel)

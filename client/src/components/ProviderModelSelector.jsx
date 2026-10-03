@@ -121,6 +121,7 @@ import {
   isProviderModelHardwareCompatible,
   providerModelList,
   selectableProviders,
+  sortProviderModels,
   localToolUseHint,
   withModelCapabilityOptionLabel,
 } from '../utils/providers.js';
@@ -279,10 +280,10 @@ export default function ProviderModelSelector({
     || !isProviderModelHardwareCompatible(selectedProvider, selectedModel)
     || (modelAllowed && !modelAllowed(selectedModel, selectedProvider))
   );
-  const modelOptions = preserveSelectedModel
+  const modelOptions = sortProviderModels(preserveSelectedModel
     && !compatibleModels.some((model) => modelOption(model)?.value === selectedModel)
     ? [selectedModel, ...compatibleModels]
-    : compatibleModels;
+    : compatibleModels);
   // A model select with no `onModelChange` is a dead control: its `onChange`
   // reaches nobody. Provider-only callers keep their own model field (a table
   // cell, a free-text pin), and a composite's catalog models would otherwise

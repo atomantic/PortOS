@@ -39,6 +39,15 @@ async function composePiTui() {
 }
 
 describe('ProviderComposePopover', () => {
+  it('alphabetizes custom-combination model options by displayed name', async () => {
+    const models = Object.freeze(['Zulu', { id: 'z-id', name: 'alpha' }, 'Beta']);
+    mocked.useProviderCatalog.mockReturnValue({ ...CATALOG, modelsFor: () => models });
+    render(<ProviderComposePopover open onClose={vi.fn()} onCompose={vi.fn()} />);
+    await composePiTui();
+    expect([...screen.getByLabelText('Model').options].map(option => option.textContent))
+      .toEqual(['Default model', 'alpha', 'Beta', 'Zulu']);
+  });
+
   it('renders nothing while closed', () => {
     const { container } = render(<ProviderComposePopover open={false} onClose={vi.fn()} onCompose={vi.fn()} />);
     expect(container.textContent).toBe('');

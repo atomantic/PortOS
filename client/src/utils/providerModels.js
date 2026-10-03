@@ -57,6 +57,17 @@ export {
 } from '../../../server/lib/providerModels.js';
 
 /**
+ * Alphabetize model options by their displayed name (or id), without changing
+ * the provider's catalog or the caller's array. Accepts strings and { id, name }
+ * entries, matching the shared picker and custom-combination model options.
+ * CLIENT-ONLY — presentation order must not change default-model resolution.
+ */
+export const sortProviderModels = (models) => [...models].sort((a, b) => {
+  const label = (model) => typeof model === 'string' ? model : model?.name || model?.id || '';
+  return label(a).localeCompare(label(b), 'en', { sensitivity: 'base' });
+});
+
+/**
  * The configured-default sentinel carried in a provider's model list, or null.
  *
  * `filterSelectableModels` strips sentinels from every picker, which is right

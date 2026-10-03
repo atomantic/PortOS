@@ -987,7 +987,7 @@ describe('TaskAddForm Codex model catalog', () => {
   it('keeps the shipped list, and says so, when the catalog failed to load', async () => {
     await renderWithCodex({ models: null, fetchedAt: null, error: { code: 'protocol', message: 'boom' } });
 
-    expect(modelValues()).toEqual(SHIPPED);
+    expect(modelValues()).toEqual(['gpt-5.4', 'gpt-5.6-sol', 'gpt-6-astra']);
     expect(screen.getByText(/bundled list/i)).toBeInTheDocument();
   });
 
