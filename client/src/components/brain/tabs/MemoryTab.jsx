@@ -183,10 +183,10 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     setDetailResult(null);
     fetchRecord();
     return () => { active = false; };
-  }, [recordId, selectedType, listedRecord]);
+  }, [recordId, selectedType, listedRecord, records]);
 
   const detailResolved = detailResult?.id === recordId && detailResult?.type === selectedType;
-  const viewerRecord = recordId ? (listedRecord || (detailResolved ? detailResult.record : null)) : null;
+  const viewerRecord = recordId ? ((detailResolved ? detailResult.record : null) || listedRecord) : null;
   const viewerLoading = !!recordId && !listedRecord && !detailResolved;
 
   const fetchBackendStatus = useCallback(() => {
@@ -252,6 +252,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
 
     if (result) {
       toast.success('Saved');
+      if (editingId === recordId) setDetailResult({ id: recordId, type: activeType, record: result });
       setEditingId(null);
       setEditForm({});
       paged.refreshFirst();
@@ -620,8 +621,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     }
   };
 
-  const renderRecord = (record) => {
-    if (editingId === record.id) {
+  const renderRecord = (record, inReader = false) => {
+    if (editingId === record.id && (recordId !== record.id || inReader)) {
       return (
         <div key={record.id} className="p-4 bg-port-card border border-port-accent/50 rounded-lg">
           {renderForm(editForm, setEditForm, true)}
@@ -1012,6 +1013,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
                   Back to entries
                 </button>
               </aside>
+            ) : viewerRecord && editingId === recordId ? (
+              renderRecord(viewerRecord, true)
             ) : viewerRecord ? (
               <ConversationViewer
                 key={viewerRecord.id}

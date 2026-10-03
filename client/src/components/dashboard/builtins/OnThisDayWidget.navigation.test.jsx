@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
   getBrainMemory: vi.fn(),
   getBrainIdeas: vi.fn(),
   getBrainIdea: vi.fn(),
+  updateBrainMemory: vi.fn(),
+  updateBrainIdea: vi.fn(),
 }));
 vi.mock('../../../services/api', () => api);
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
@@ -66,7 +68,7 @@ describe('On This Day record destinations', () => {
     const listGetter = type === 'memory' ? 'getBrainMemories' : 'getBrainIdeas';
     const page = { items: [first], total: 2, nextCursor: 'older-page' };
     api[listGetter].mockImplementation(() => new Promise(resolve => { resolvePage = resolve; }));
-    api[getter].mockImplementation(() => new Promise(resolve => { resolveDetail = resolve; }));
+    api[getter].mockImplementationOnce(() => new Promise(resolve => { resolveDetail = resolve; })).mockResolvedValue(second);
     const view = mount(type);
     fireEvent.click(screen.getByRole('link', { name: /Example second/ }));
     expect(screen.getByTestId('location').textContent).toBe(path);
@@ -130,6 +132,27 @@ describe('On This Day record destinations', () => {
     expect(screen.getByTestId('location').textContent).toBe(path);
     expect(await screen.findByRole('button', { name: 'Read Example first' })).toBeTruthy();
     expect(screen.queryByRole('complementary')).toBeNull();
+  });
+
+  it.each([
+    ['memory', '/brain/memory/memories/example-second', 'getBrainMemory', 'updateBrainMemory'],
+    ['idea', '/brain/ideas/ideas/example-second', 'getBrainIdea', 'updateBrainIdea'],
+    ['memory', '/brain/memory/memories/example-first', 'getBrainMemory', 'updateBrainMemory'],
+  ])('edits the URL-selected %s in the reader pane and shows its saved content', async (type, path, getter, updater) => {
+    const record = path.endsWith(first.id) ? first : second;
+    const saved = { ...record, title: 'Example saved' };
+    api[updater].mockImplementation(async () => {
+      api[getter].mockResolvedValue(saved);
+      return saved;
+    });
+    mount(type, path);
+    const reader = await screen.findByRole('complementary', { name: `Preview: ${record.title}` });
+    fireEvent.click(within(reader).getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Title' }), { target: { value: saved.title } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+    expect(await screen.findByRole('complementary', { name: 'Preview: Example saved' })).toBeTruthy();
+    expect(api[updater]).toHaveBeenCalledWith(record.id, expect.objectContaining({ title: saved.title }), { silent: true });
+    expect(screen.getByTestId('location').textContent).toBe(path);
   });
 
   it('drops a superseded detail response when another URL selects a different record', async () => {
