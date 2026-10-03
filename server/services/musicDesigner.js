@@ -126,7 +126,7 @@ const LYRICS_REVIEW_OUTPUT_CONTRACT = [
   'No preamble, no other commentary, no markdown fence.',
 ].join('\n');
 
-export function buildLyricsReviewPrompt({ lyrics, description, guidance } = {}) {
+function buildLyricsReviewPrompt({ lyrics, description, guidance } = {}) {
   return [
     LYRICS_REVIEW_INSTRUCTIONS,
     section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
@@ -142,7 +142,7 @@ export function buildLyricsReviewPrompt({ lyrics, description, guidance } = {}) 
  * the notes. No separator → the whole text is the lyrics and the notes are
  * empty (a model that skipped the critique still revised the song).
  */
-export function parseLyricsReview(text) {
+function parseLyricsReview(text) {
   const body = unfence(text).replace(/\r\n?/g, '\n');
   const lines = body.split('\n');
   const cut = lines.findLastIndex((line) => line.trim() === LYRICS_REVIEW_SEPARATOR);
