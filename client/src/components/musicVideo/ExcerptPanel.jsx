@@ -4,6 +4,7 @@ import { musicVideoAspect, MUSIC_VIDEO_ASPECTS } from '../../lib/musicVideoAspec
 import { getMusicVideoSocialCuts } from '../../services/apiMusicVideo.js';
 import RevisionPanel, { currentRevision } from './RevisionPanel.jsx';
 import AutoReviewPanel from './AutoReviewPanel.jsx';
+import { formatCount } from '../../utils/formatters.js';
 
 const VERDICT_STYLES = {
   flagged: 'bg-port-error/20 text-port-error',
@@ -71,7 +72,7 @@ function NoteRow({ excerptId, note, busy, onEdit, onDelete, onSeek }) {
   );
 }
 
-function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNote, onEditNote, onDeleteNote, canRevise, onRevise }) {
+function ExcerptCard({ excerpt, activeRenderId, connected, deleting, noteBusy, onDelete, onCancel, onAddNote, onEditNote, onDeleteNote, canRevise, onRevise }) {
   const videoRef = useRef(null);
   const [draft, setDraft] = useState('');
   const seek = (t) => { if (videoRef.current) { videoRef.current.currentTime = t; videoRef.current.play?.().catch(() => {}); } };
@@ -87,7 +88,7 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
   return (
     <li className="rounded border border-port-border p-2 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-        <span className="font-medium">{fmt(excerpt.startSec)} – {fmt(excerpt.endSec)} <span className="text-port-text-muted">({STATUS_LABELS[excerpt.status] || excerpt.status})</span>
+        <span className="font-medium">{fmt(excerpt.startSec)} – {fmt(excerpt.endSec)} <span className="text-port-text-muted">({excerpt.status === 'rendering' && (activeRenderId !== excerpt.id || connected === false) ? 'Checking render status' : STATUS_LABELS[excerpt.status] || excerpt.status})</span>
           {excerpt.aspect && excerpt.aspect !== '16:9' && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent text-[10px]">{excerpt.aspect}</span>}</span>
         <div className="flex items-center gap-2">
           {/* #8987: regenerate ONLY the sections holding a flagged note; the rest stay as approved. */}
@@ -101,6 +102,7 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
             : <button type="button" disabled={deleting} onClick={() => onDelete(excerpt.id)} className="text-port-error flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0"><Trash2 size={12} /> Delete</button>}
         </div>
       </div>
+      <p className="text-xs text-port-text-muted">{excerpt.dependencyState?.status === 'stale' ? 'Earlier inputs — retained for reference' : excerpt.dependencyState?.status === 'current' ? 'Matches current inputs · production approval is separate' : 'Draft · approval is separate'}{excerpt.createdAt ? ` · ${new Date(excerpt.createdAt).toISOString().replace('T', ' ').slice(0, 19)} UTC` : ''}</p>
       {excerpt.status === 'error' && excerpt.error && <p role="alert" className="text-xs text-port-error">{excerpt.error}</p>}
       {excerpt.status === 'complete' && excerpt.filename && (
         <div className="space-y-2">
@@ -145,9 +147,18 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
  * start) — a frame check alone can't prove motion/audio sync, so the video
  * plays alongside the sheet rather than replacing it.
  */
-export default function ExcerptPanel({ project, rendering, progress, excerpts, revision = null, autoReview = null, ...actions }) {
+export default function ExcerptPanel({ project, rendering, occupied = rendering, progress, excerpts, activeRenderId = null, connected, revision = null, autoReview = null, ...actions }) {
+  const newest = [...excerpts].reverse();
+  const latestAttempt = newest[0];
+  const current = newest.find(e => e.status === 'complete' && e.filename && e.dependencyState?.status !== 'stale');
+  const visible = newest.filter(e => e.status === 'rendering' || e === current);
+  const history = newest.filter(e => !visible.includes(e));
+  const card = excerpt => <ExcerptCard key={excerpt.id} excerpt={excerpt} activeRenderId={activeRenderId} connected={connected}
+    deleting={actions.deletingId === excerpt.id} noteBusy={actions.noteBusyId}
+    onDelete={actions.deleteExcerpt} onCancel={actions.cancelExcerpt} onAddNote={actions.addNote}
+    onEditNote={actions.editNote} onDeleteNote={actions.deleteNote} canRevise={canRevise} onRevise={revision?.revise} />;
   const activeRevision = currentRevision(project);
-  const canRevise = !!revision && !revision.busy && !rendering
+  const canRevise = !!revision && !revision.busy && !occupied
     && !(activeRevision && (activeRevision.status === 'open' || activeRevision.status === 'rendering'));
   const durationSec = project?.audioAnalysis?.durationSec ?? null;
   const [startSec, setStartSec] = useState(0);
@@ -172,7 +183,7 @@ export default function ExcerptPanel({ project, rendering, progress, excerpts, r
   };
 
   return (
-    <div className="space-y-2">
+    <div id="mv-draft-excerpts" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="space-y-2">
       <span className="text-xs text-port-text-muted flex items-center gap-1"><Film size={12} /> Draft excerpt</span>
       <div className="flex flex-wrap items-end gap-2">
         <div>
@@ -202,7 +213,7 @@ export default function ExcerptPanel({ project, rendering, progress, excerpts, r
             Fade audio edges
           </label>
         )}
-        <button type="button" disabled={rendering || !valid}
+        <button type="button" disabled={occupied || !valid}
           onClick={() => render(startSec, endSec, canReframe ? { aspect: aspect === projectAspect ? null : aspect, fade } : undefined)}
           className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
           <Film size={13} /> Render excerpt
@@ -226,7 +237,7 @@ export default function ExcerptPanel({ project, rendering, progress, excerpts, r
                   <span className="min-w-0 flex-1 break-words">{s.label ? `“${s.label}”` : ''} <span className="text-port-text-muted">{s.reasons.join(' · ')}</span></span>
                   <button type="button" onClick={() => { setStartSec(s.startSec); setEndSec(s.endSec); }}
                     className="text-port-text-muted min-h-[44px] sm:min-h-0 px-1">Use range</button>
-                  <button type="button" disabled={rendering}
+                  <button type="button" disabled={occupied}
                     onClick={() => { setStartSec(s.startSec); setEndSec(s.endSec); render(s.startSec, s.endSec, { aspect: projectAspect === '9:16' ? null : '9:16', fade: true }); }}
                     className="text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0 px-1">Render 9:16</button>
                 </li>
@@ -235,33 +246,35 @@ export default function ExcerptPanel({ project, rendering, progress, excerpts, r
           )}
         </div>
       )}
+      {occupied && !rendering && <p role="status" className="text-sm">A draft is rendering in another project. Wait for it to finish before starting another.</p>}
       {rendering && (
         <div>
           <div className="h-1.5 bg-port-bg rounded overflow-hidden">
             <div className="h-full bg-port-accent transition-all" style={{ width: `${progress}%` }} />
           </div>
-          <p className="text-xs text-port-text-muted mt-1">Rendering excerpt — {Math.round(progress)}%</p>
+          <p className="text-xs text-port-text-muted mt-1">{connected === false ? 'Connecting to draft render…' : `Rendering draft — ${Math.round(progress)}%`}</p>
         </div>
       )}
+      {['error', 'canceled'].includes(latestAttempt?.status) && <p role="status" className="text-sm text-port-warning">
+        {latestAttempt.status === 'error' ? `Latest draft attempt failed: ${latestAttempt.error || 'No error details recorded.'}` : 'Latest draft attempt was cancelled.'} Completed drafts are retained. Details are in Earlier and failed attempts.
+      </p>}
+      <details><summary className="cursor-pointer min-h-[44px] py-2 text-sm">Revision and automatic review tools</summary>
       {revision && (
-        <RevisionPanel project={project} busy={revision.busy || rendering}
+        <RevisionPanel project={project} busy={revision.busy || occupied}
           genScenes={revision.genScenes} genVideoScenes={revision.genVideoScenes}
           onResume={revision.resume} onCancel={revision.cancel} />
       )}
       {autoReview && (
         <AutoReviewPanel project={project} startSec={startSec} endSec={endSec} rangeValid={valid}
-          rendering={rendering} autoReview={autoReview} />
+          rendering={occupied} autoReview={autoReview} />
       )}
-      {excerpts.length > 0 && (
-        <ul className="space-y-2">
-          {[...excerpts].reverse().map((excerpt) => (
-            <ExcerptCard key={excerpt.id} excerpt={excerpt} deleting={actions.deletingId === excerpt.id} noteBusy={actions.noteBusyId}
-              onDelete={actions.deleteExcerpt} onCancel={actions.cancelExcerpt}
-              onAddNote={actions.addNote} onEditNote={actions.editNote} onDeleteNote={actions.deleteNote}
-              canRevise={canRevise} onRevise={revision?.revise} />
-          ))}
-        </ul>
-      )}
+      </details>
+      {visible.length > 0 && <ul aria-label="Current draft and active renders" className="space-y-2">{visible.map(card)}</ul>}
+      {history.length > 0 && <details>
+        <summary className="cursor-pointer min-h-[44px] py-2 text-sm">Earlier and failed attempts ({formatCount(history.length)})</summary>
+        <p className="text-xs text-port-text-muted">Retained for comparison. These attempts do not block approval of the current work.</p>
+        <ul className="space-y-2">{history.map(card)}</ul>
+      </details>}
     </div>
   );
 }

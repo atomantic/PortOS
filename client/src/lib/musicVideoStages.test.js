@@ -159,7 +159,7 @@ describe('describeProjectStatus', () => {
     expect(status.headline).toBe('Stage 2 of 7: Cast & Sets · needs you');
     expect(status.tone).toBe('warn');
     expect(status.facts.map((fact) => fact.label)).toEqual([
-      'Autopilot paused', 'Approvals: 0 of 3 approved · needs art, storyboard, proof', 'Nothing rendered yet',
+      'Approvals: 0 of 3 approved · needs art, storyboard, proof', 'Nothing rendered yet',
     ]);
   });
 
@@ -183,4 +183,12 @@ describe('describeProjectStatus', () => {
     expect(done.headline).toBe('Published');
     expect(done.facts.map((fact) => fact.label)).toEqual(['Approvals: All 3 approved', 'Final render ready']);
   });
+});
+
+it('links active draft and proof jobs to their own evidence controls before offering approval', () => {
+  const project = { id: 'example', trackId: 'song', audioAnalysis: {}, scenes: [] };
+  expect(deriveNextAction(project, { draftActive: true })).toMatchObject({ id: 'draft-progress', anchor: 'mv-draft-excerpts' });
+  expect(deriveNextAction(project, { proofActive: true })).toMatchObject({ id: 'proof-progress', anchor: 'mv-review-render' });
+  const nextAction = deriveNextAction(project, { draftActive: true });
+  expect(describeProjectStatus(project, { progress: deriveStages(project), nextAction })).toMatchObject({ headline: 'Review render in progress', tone: 'muted' });
 });

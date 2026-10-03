@@ -52,6 +52,9 @@ describe('CompositionPreviewPlayer', () => {
       const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl={null} collapsed />);
       await act(async () => {});
       expect(api.getMusicVideoCompositionPreview).not.toHaveBeenCalled();
+      expect(screen.getByText('Expand to load preview')).toBeInTheDocument();
+      expect(screen.getByLabelText('Scrub the composition preview')).toBeDisabled();
+      expect(screen.queryByText('0.00s / 0.0s')).not.toBeInTheDocument();
       rerender(<CompositionPreviewPlayer project={project} audioUrl={null} collapsed={false} />);
       await screen.findByTitle('Composition document preview');
       expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);

@@ -15,6 +15,10 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-plan-'),
 }));
+vi.mock('../../lib/sseUtils.js', async load => ({ ...await load(), broadcastSse: vi.fn((...args) => broadcastOriginal(...args)) }));
+const { broadcastSse: broadcastOriginal } = await vi.importActual('../../lib/sseUtils.js');
+const { broadcastSse } = await import('../../lib/sseUtils.js');
+
 vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({ ...(await importOriginal()), generateThumbnail: vi.fn(async () => 'thumb.jpg') }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'instance-test') }));
 vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
@@ -155,4 +159,26 @@ it('persists a document failure for returning operators and clears it after a su
   }));
   await renderMusicVideo(id);
   await vi.waitFor(async () => expect(await projects.getProject(id)).toMatchObject({ status: 'complete', renderError: null }));
+});
+
+it.each(['error', 'canceled'])('persists document excerpt %s before notifying subscribers to refresh', async (status) => {
+  const id = await documentProject();
+  await importDocumentTemplate(id);
+  let rejectEncode;
+  encodeDocumentComposition.mockImplementationOnce(() => new Promise((resolve, reject) => { rejectEncode = reject; }));
+  const { excerptId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
+  await vi.waitFor(() => expect(rejectEncode).toBeTypeOf('function'));
+  const snapshots = [];
+  broadcastSse.mockImplementation((job, frame) => {
+    if (frame.type === status) snapshots.push(projects.getProject(id));
+    return broadcastOriginal(job, frame);
+  });
+  try {
+    rejectEncode(Object.assign(new Error('Synthetic encoder interruption'), status === 'canceled' ? { code: 'CANCELED' } : {}));
+    await vi.waitFor(() => expect(snapshots).toHaveLength(1));
+    const snapshot = await snapshots[0];
+    expect(snapshot.excerpts.find(e => e.id === excerptId)).toMatchObject({ status, jobId: null });
+  } finally {
+    broadcastSse.mockImplementation(broadcastOriginal);
+  }
 });

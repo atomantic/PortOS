@@ -6,7 +6,7 @@
  */
 import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
 import { AUTONOMOUS_STATUS_LABELS } from './musicVideoAutonomous.js';
-import { formatTimecode } from '../utils/formatters.js';
+import { formatCount, formatTimecode } from '../utils/formatters.js';
 
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Setup', title: 'Setup' },
@@ -32,6 +32,13 @@ export const currentProductionRun = (project) => {
   const runs = Array.isArray(project?.productionRuns) ? project.productionRuns : [];
   return runs.find((r) => RESUMABLE_RUN_STATUSES.has(r.status)) || runs[runs.length - 1] || null;
 };
+
+export function projectShotSummary(project) {
+  const draft = project?.productionReview?.draft;
+  const document = project?.composition?.mode === 'document' && draft?.storyboardSource === 'document';
+  const count = (document ? draft.storyboard : project?.scenes)?.length || 0;
+  return `${formatCount(count)} ${document ? 'document shot' : 'scene'}${count === 1 ? '' : 's'}`;
+}
 
 export const projectHasAudio = (project) => !!(project?.trackId || project?.uploadedAudioFilename);
 
@@ -72,7 +79,7 @@ export function listPreviewSources(project, { finalVideoSrc = null } = {}) {
     sources.push({
       id: `excerpt:${excerpt.id}`, kind: 'video', src: `/data/videos/${excerpt.filename}`,
       startSec: excerpt.startSec, endSec: excerpt.endSec,
-      label: `Draft ${formatTimecode(excerpt.startSec)}–${formatTimecode(excerpt.endSec)}`,
+      label: `${excerpt.dependencyState?.status === 'stale' ? 'Older draft' : 'Draft'} ${formatTimecode(excerpt.startSec)}–${formatTimecode(excerpt.endSec)} · ${excerpt.id.slice(-6)}`,
     });
   }
   return sources;
@@ -109,12 +116,13 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
   const allDone = progress.stages.every((stage) => stage.state === 'done');
   // A goto into Production review is a human approval, not something the app does by itself.
   const needsYou = entry?.state === 'blocked' || nextAction?.id === 'review-production' || nextAction?.id === 'approve-cast-sets';
-  const headline = allDone
+  const activeEvidence = ['draft-progress', 'proof-progress'].includes(nextAction?.id);
+  const headline = activeEvidence ? 'Review render in progress' : allDone
     ? 'Published'
     : `Stage ${index + 1} of ${MUSIC_VIDEO_STAGES.length}: ${entry?.label || ''}${needsYou ? ' · needs you' : ''}`;
   const facts = [];
   const auto = project.autonomousRun;
-  if (auto) {
+  if (auto && nextAction?.id !== 'review-production' && !activeEvidence) {
     const label = auto.interrupted ? 'interrupted' : (AUTONOMOUS_STATUS_LABELS[auto.status] || auto.status).toLowerCase();
     const tone = auto.status === 'completed' ? 'ok' : auto.status === 'running' && !auto.interrupted ? 'muted' : 'warn';
     facts.push({ id: 'autopilot', label: `Autopilot ${label}`, tone });
@@ -129,7 +137,7 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
   if (project.renderHistoryId) facts.push({ id: 'render', label: 'Final render ready', tone: 'ok' });
   else if (drafts) facts.push({ id: 'render', label: `${drafts} draft ${drafts === 1 ? 'excerpt' : 'excerpts'}, no final render`, tone: 'muted' });
   else facts.push({ id: 'render', label: 'Nothing rendered yet', tone: 'muted' });
-  return { headline, tone: allDone ? 'ok' : needsYou ? 'warn' : 'muted', facts };
+  return { headline, tone: activeEvidence ? 'muted' : allDone ? 'ok' : needsYou ? 'warn' : 'muted', facts };
 }
 
 /** Resolve the `:stage` route param; an unknown or missing value is null. */
@@ -196,7 +204,7 @@ export function deriveStages(project, readiness = project?.productionReadiness) 
  * over the stage: they own the project until they settle.
  */
 export function deriveNextAction(project, {
-  renderActive = false, renderProgress = 0, renderPending = false, renderBlockedByOther = false,
+  draftActive = false, proofActive = false, renderActive = false, renderProgress = 0, renderPending = false, renderBlockedByOther = false,
   kickoffRunning = false, kickoffStep = '', kickoffBlockedReason = null,
   planning = false, analyzing = false, readiness = project?.productionReadiness,
 } = {}) {
@@ -206,9 +214,11 @@ export function deriveNextAction(project, {
   const cast = project.castAndSets || null;
   const scenes = project.scenes || [];
 
+  if (proofActive) return { id: 'proof-progress', kind: 'goto', stage: 'review', anchor: 'mv-review-render', label: 'View review render' };
+  if (draftActive) return { id: 'draft-progress', kind: 'goto', stage: 'review', anchor: 'mv-draft-excerpts', label: 'View draft render' };
   if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && run?.status !== 'running' && !renderActive && !kickoffRunning) {
     return { id: 'review-production', kind: 'goto', stage: !readiness?.art.approved ? 'cast-sets' : !readiness?.storyboard.approved ? 'board' : 'review',
-      anchor: 'mv-production-review', label: !readiness?.art.approved ? 'Review art direction' : !readiness?.storyboard.approved ? 'Review timed storyboard' : 'Review animated proof' };
+      anchor: !readiness?.art.approved ? 'mv-review-art' : !readiness?.storyboard.approved ? 'mv-review-storyboard' : 'mv-review-proof', label: !readiness?.art.approved ? 'Review art direction' : !readiness?.storyboard.approved ? 'Review timed storyboard' : 'Review animated proof' };
   }
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
     if (run.status === 'running' && !run.interrupted) return { id: 'stop-production', kind: 'run', label: 'Stop production', runId: run.id };

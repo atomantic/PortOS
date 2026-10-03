@@ -13,6 +13,7 @@ const defaultReadPercent = (frame) => frame.percent;
  * Options:
  * - `startRequest(startArg)` → resolves `{ jobId }` — the feature's kickoff call.
  * - `eventsUrl(jobId)` / `cancelRequest(jobId, { silent })` — SSE URL + cancel call.
+ * - `onSettled(reason, context)` — refresh saved state on success, failure, cancellation or disconnect.
  * - `onComplete(frame, context)` — fires on the terminal `complete` frame.
  * - `context` (the second `start` arg, or the start arg itself when omitted) is
  *   captured and exposed immediately at kickoff, including while `pending`.
@@ -46,6 +47,7 @@ export default function useSseJobSlot({
   onErrorFrame,
   onKickoffError,
   onKickoffSuccess,
+  onSettled,
 } = {}) {
   // jobId is null during preparation; context already owns the target then.
   const [job, setJob] = useState(null);
@@ -78,6 +80,7 @@ export default function useSseJobSlot({
   useEffect(() => {
     if (!job?.jobId || !latest) return;
     if (sse.latestUrl && sse.latestUrl !== jobUrl) return;
+    if (['complete', 'error', 'canceled', 'cancelled'].includes(latest.type)) onSettled?.(latest.type, job.context);
     if (latest.type === 'complete') {
       clearJob();
       onComplete?.(latest, job.context);
@@ -97,7 +100,9 @@ export default function useSseJobSlot({
   useEffect(() => {
     if (job?.jobId && sse.closed && !isTerminalSseFrame(latest)) {
       if (sse.latestUrl && sse.latestUrl !== jobUrl) return;
+      const context = job.context;
       clearJob();
+      onSettled?.('disconnected', context);
       toast.info(lostConnectionMessage);
     }
   }, [sse.closed]);
@@ -141,6 +146,7 @@ export default function useSseJobSlot({
 
   return {
     active: !!job,
+    connected: sse.isOpen,
     pending: !!job && !job.jobId,
     jobId: job?.jobId ?? null,
     percent: progress.percent,

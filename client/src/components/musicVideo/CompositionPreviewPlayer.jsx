@@ -161,14 +161,14 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview || !audioUrl}>
+        <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview || !audioUrl || (!!previewError && !playing)}>
           {playing ? <Pause size={14} /> : <Play size={14} />} {playing ? 'Pause' : 'Play'}
         </button>
         <label htmlFor={scrubId} className="sr-only">{draft ? 'Scrub the composition candidate' : 'Scrub the composition preview'}</label>
-        <input id={scrubId} type="range" min={0} max={duration || 0} step={1 / fps} value={Math.min(t, duration || 0)}
+        <input disabled={!preview || !!previewError} id={scrubId} type="range" min={0} max={duration || 0} step={1 / fps} value={Math.min(t, duration || 0)}
           onChange={(e) => { audioRef.current?.pause(); setPlaying(false); seek(Number(e.target.value)); }}
           className="min-w-0 flex-1" />
-        <span className="text-xs text-port-text-muted tabular-nums">{t.toFixed(2)}s / {duration.toFixed(1)}s</span>
+        <span className="text-xs text-port-text-muted tabular-nums">{previewError ? 'Preview unavailable' : preview ? `${t.toFixed(2)}s / ${duration.toFixed(1)}s` : !wanted ? 'Expand to load preview' : 'Loading preview…'}</span>
       </div>
       {lyric && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
       {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onEnded={() => setPlaying(false)} />}

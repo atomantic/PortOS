@@ -5,7 +5,7 @@ import ScenePreview from '../creative-director/ScenePreview.jsx';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { selectMusicVideoPreview } from '../../lib/musicVideoPreview.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
-import { deriveStages, projectSpend, MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
+import { deriveStages, projectSpend, projectShotSummary, MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
 
 export const STATUS_COLORS = {
   draft: 'bg-port-border text-port-text',
@@ -253,7 +253,7 @@ export default function MusicVideoProjectCard({
         <div className="space-y-1 pt-1.5 border-t border-port-border/40 text-[11px]">
           <div className="flex items-center justify-between text-port-text-muted">
             <span>
-              {scenes.length} scene{scenes.length === 1 ? '' : 's'}
+              {projectShotSummary(project)}
               {scenesWithClips > 0 ? ` · ${scenesWithClips} clip${scenesWithClips === 1 ? '' : 's'}` : ''}
               {scenesWithFrames > 0 && scenesWithClips === 0 ? ` · ${scenesWithFrames} frame${scenesWithFrames === 1 ? '' : 's'}` : ''}
             </span>
