@@ -270,6 +270,123 @@ export async function getAllTasks() {
   return { user: userTasks, cos: cosTasks };
 }
 
+// ── Bounded task views (#9677) ──────────────────────────────────────────────
+//
+// `GET /api/cos/tasks` returns the open queue plus at most one page of completed
+// history, yet `getAllTasks()` structured-clones every archived prompt body from
+// BOTH sources first. These readers select from the private snapshot and clone
+// only what the response carries. Nothing returned here aliases the cache.
+const COMPLETED_FIRST_PAGE = 25;
+const byIdDesc = (a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+const isCompleted = (task) => task.status === 'completed';
+
+// Per-snapshot derivations, dropped with the snapshot on any stamp/write change.
+function snapshotPartitions(snapshot) {
+  if (!snapshot.partitions) {
+    const open = [];
+    const completed = [];
+    for (const task of snapshot.tasks) (isCompleted(task) ? completed : open).push(task);
+    completed.sort(byIdDesc);
+    snapshot.partitions = { open, completed };
+  }
+  return snapshot.partitions;
+}
+
+async function resolveSourceFile(type) {
+  const { config } = await loadState();
+  const filePath = join(ROOT_DIR, type === 'internal' ? config.cosTasksFile : config.userTasksFile);
+  return existsSync(filePath) ? filePath : null;
+}
+
+// Shape of getUserTasks()/getCosTasks() over an already-selected task subset.
+// Callers pass CLONED tasks; grouped/derived lists share those clones. A missing
+// file keeps getCosTasks()'s shape: no derived lists.
+function sourceShape(type, filePath, tasks, { exists = true } = {}) {
+  const shape = { tasks, grouped: groupTasksByStatus(tasks), file: filePath, exists, type };
+  if (type === 'internal' && exists) {
+    shape.autoApproved = getAutoApprovedTasks(tasks);
+    shape.awaitingApproval = getAwaitingApprovalTasks(tasks);
+  }
+  return shape;
+}
+
+/**
+ * Open queue (every non-completed task, plus the `selected` historical task)
+ * for both sources. `completedCount` carries the archived total.
+ */
+async function readQueueView(selected) {
+  const read = async (type) => {
+    const filePath = await resolveSourceFile(type);
+    if (!filePath) return { ...sourceShape(type, filePath, [], { exists: false }), completedCount: 0 };
+    const snapshot = await readTaskSnapshot(filePath);
+    const { open, completed } = snapshotPartitions(snapshot);
+    const refs = selected === undefined ? open : snapshot.tasks.filter((task) => !isCompleted(task) || task.id === selected);
+    return { ...sourceShape(type, filePath, structuredClone(refs)), completedCount: completed.length };
+  };
+  const [user, cos] = await Promise.all([read('user'), read('internal')]);
+  return { user, cos };
+}
+
+/** Open queue plus the first completed page; completed history stays archived. */
+async function readBareView() {
+  const read = async (type) => {
+    const filePath = await resolveSourceFile(type);
+    if (!filePath) return { ...sourceShape(type, filePath, [], { exists: false }), completedCount: 0, completedNextCursor: null };
+    const { open, completed } = snapshotPartitions(await readTaskSnapshot(filePath));
+    const firstPage = completed.slice(0, COMPLETED_FIRST_PAGE);
+    const shape = sourceShape(type, filePath, structuredClone([...open, ...firstPage]));
+    // Completed rows leave `grouped`; only the page inside `tasks` carries them.
+    return { ...shape, grouped: { ...shape.grouped, completed: [] }, completedCount: completed.length,
+      completedNextCursor: completed.length > COMPLETED_FIRST_PAGE ? firstPage[firstPage.length - 1].id : null };
+  };
+  const [user, cos] = await Promise.all([read('user'), read('internal')]);
+  return { user, cos };
+}
+
+/** One page of completed history from ONE source, newest id first. */
+async function readCompletedView({ source, cursor, limit }) {
+  const type = source === 'internal' ? 'internal' : 'user';
+  const filePath = await resolveSourceFile(type);
+  if (!filePath) return { items: [], total: 0, nextCursor: null };
+  const { completed } = snapshotPartitions(await readTaskSnapshot(filePath));
+  const remaining = cursor ? completed.filter((task) => task.id < cursor) : completed;
+  return { items: structuredClone(remaining.slice(0, limit)), total: completed.length,
+    nextCursor: remaining.length > limit ? remaining[limit - 1].id : null };
+}
+
+/** Legacy limit/offset window: the slice and scalar metadata only. */
+async function readWindowView({ offset, limit }) {
+  const read = async (type) => {
+    const filePath = await resolveSourceFile(type);
+    if (!filePath) return { meta: { file: filePath, exists: false, type }, tasks: [], total: 0 };
+    const snapshot = await readTaskSnapshot(filePath);
+    return { meta: { file: filePath, exists: true, type }, tasks: structuredClone(snapshot.tasks.slice(offset, offset + limit)), total: snapshot.tasks.length };
+  };
+  const [user, cos] = await Promise.all([read('user'), read('internal')]);
+  return {
+    user: { ...user.meta, tasks: user.tasks },
+    cos: { ...cos.meta, tasks: cos.tasks },
+    totals: { user: user.total, cos: cos.total },
+  };
+}
+
+/**
+ * Read-only, bounded task view for the HTTP layer. `kind`:
+ *   - 'queue'     { selected? } open tasks (+ the selected historical one) + completedCount
+ *   - 'bare'      open tasks + first completed page (+ completedCount/completedNextCursor)
+ *   - 'completed' { source, cursor?, limit } one source's page → { items, total, nextCursor }
+ *   - 'window'    { offset, limit } legacy slice → { user, cos, totals }
+ * Sources come back unsettled for the spawn window; `getAllTasks()` stays the raw
+ * truth for scheduler readers and `view=full`.
+ */
+export async function getTaskView({ kind, ...options }) {
+  if (kind === 'queue') return readQueueView(options.selected);
+  if (kind === 'bare') return readBareView();
+  if (kind === 'completed') return readCompletedView(options);
+  if (kind === 'window') return readWindowView(options);
+  throw new Error(`Unknown task view: ${kind}`);
+}
+
 /**
  * Lightweight live-activity input. Derive once per task-file snapshot, so a
  * three-second poll never clones prompts or groups completed history.
