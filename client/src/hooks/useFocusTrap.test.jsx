@@ -50,6 +50,18 @@ function InputFocusDialog() {
   );
 }
 
+function NegativeTabIndexDialog() {
+  const ref = useRef(null);
+  useFocusTrap(true, ref);
+  return (
+    <div ref={ref} data-testid="dialog">
+      <button>first</button>
+      <button tabIndex={-1}>virtual option</button>
+      <button>last</button>
+    </div>
+  );
+}
+
 function Harness({ active }) {
   return (
     <>
@@ -143,6 +155,13 @@ describe('useFocusTrap', () => {
     render(<Dialog active />);
     const first = screen.getByText('first');
     first.focus();
+    fireEvent.keyDown(screen.getByTestId('dialog'), { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(screen.getByText('last'));
+  });
+
+  it('excludes tabindex=-1 controls when finding Tab wrap boundaries', () => {
+    render(<NegativeTabIndexDialog />);
+    screen.getByText('first').focus();
     fireEvent.keyDown(screen.getByTestId('dialog'), { key: 'Tab', shiftKey: true });
     expect(document.activeElement).toBe(screen.getByText('last'));
   });

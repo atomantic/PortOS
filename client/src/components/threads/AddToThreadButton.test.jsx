@@ -70,6 +70,27 @@ describe('AddToThreadButton', () => {
     });
   });
 
+  it('focuses the search input, traps Tab, and returns focus after Escape', async () => {
+    render(<AddToThreadButton threadRef={sampleRef} />);
+    const trigger = screen.getByRole('button', { name: 'Add to Brain thread' });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const input = await screen.findByRole('combobox');
+    await waitFor(() => expect(input).toHaveFocus());
+
+    const close = screen.getByRole('button', { name: 'Close' });
+    close.focus();
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    });
+  });
+
   it('attaches to an existing thread when selected from combobox', async () => {
     const onAttached = vi.fn();
     render(<AddToThreadButton threadRef={sampleRef} onAttached={onAttached} />);

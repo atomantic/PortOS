@@ -17,6 +17,8 @@ import toast from '../ui/Toast';
 import EntityCombobox from '../EntityCombobox';
 import useClickOutside from '../../hooks/useClickOutside';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition';
+import useEscapeKey from '../../hooks/useEscapeKey.js';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { THREAD_ACTIVE_STATUSES } from '../../lib/brainThreads';
 
 export default function AddToThreadButton({
@@ -87,8 +89,16 @@ export default function AddToThreadButton({
     position: 'below',
     contentDeps: [comboboxItems.length, loading, attaching]
   });
+  const menuVisible = open && Boolean(menuStyle);
 
   useClickOutside([triggerRef, popoverRef], open, () => setOpen(false));
+  useEscapeKey(open, () => { setOpen(false); triggerRef.current?.focus(); });
+  useFocusTrap(menuVisible, popoverRef);
+  useEffect(() => {
+    if (menuVisible) {
+      popoverRef.current?.querySelector('[role="combobox"]')?.focus();
+    }
+  }, [menuVisible, popoverRef]);
 
   const handlePick = async (item) => {
     if (!computedRef || attaching) return;
@@ -159,12 +169,6 @@ export default function AddToThreadButton({
             top: menuStyle?.top ?? `${VIEWPORT_PADDING}px`,
             width: menuStyle?.width ?? '320px',
             visibility: menuStyle ? 'visible' : 'hidden',
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.stopPropagation();
-              setOpen(false);
-            }
           }}
           className="z-50 bg-port-card border border-port-border rounded-lg shadow-xl p-3 space-y-2 text-white"
         >
