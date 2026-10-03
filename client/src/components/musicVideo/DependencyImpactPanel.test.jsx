@@ -18,6 +18,12 @@ describe('rendered stale impact', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Repair affected dependencies' }));
     expect(repair).toHaveBeenCalledWith('example-basis');
   });
+  it('says no clips are needed when only review evidence is stale', async () => {
+    getMusicVideoDependencyImpact.mockResolvedValue({ ...impact, shots: [], estimate: { maxGenerations: 0, outputSeconds: 0, evidenceRebuilds: 2 } });
+    render(<DependencyImpactPanel project={project} onRepair={vi.fn()} />);
+    expect(await screen.findByText(/No new clips needed; 2 evidence records/)).toBeInTheDocument();
+    expect(screen.queryByText(/Up to 0 clip/)).not.toBeInTheDocument();
+  });
   it('drops an older project response and keeps an active repair disabled', async () => {
     let resolveOld;
     getMusicVideoDependencyImpact.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; })).mockResolvedValueOnce(impact);

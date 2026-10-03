@@ -124,14 +124,15 @@ export const toast = Object.assign(
     error:   (content, opts = {}) => add(content, opts, 'error'),
     loading: (content, opts = {}) => add(content, opts, 'loading'),
     warning: (content, opts = {}) => add(content, opts, 'warning'),
+    info:    (content, opts = {}) => add(content, opts, 'info'),
     dismiss,
   }
 );
 
 export default toast;
 
-const TYPE_ICON = { success: '✓', error: '✕', warning: '⚠' };
-const TYPE_CLASS = { success: 'text-port-success', error: 'text-port-error', loading: 'text-gray-400', warning: 'text-port-warning' };
+const TYPE_ICON = { success: '✓', error: '✕', warning: '⚠', info: 'ℹ' };
+const TYPE_CLASS = { success: 'text-port-success', error: 'text-port-error', loading: 'text-gray-400', warning: 'text-port-warning', info: 'text-port-accent' };
 
 export function Toaster({ position = 'bottom-right', toastOptions = {} }) {
   const [items, setItems] = useState([]);
