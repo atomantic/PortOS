@@ -99,10 +99,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
   });
 
   it('retains recovery files when the parent repository disappears or the git pointer is unreadable', async () => {
-    const missing = await addTree('agent-missing-parent');
+    const missingParent = join(root(), 'missing-app');
+    await materializeGitRepo(missingParent);
+    const missing = join(PATHS.worktrees, 'agent-missing-parent');
+    await execGit(['worktree', 'add', '-b', 'agent-missing-parent', missing, 'main'], missingParent);
     const unreadable = await addTree('agent-unreadable');
     await writeFile(join(unreadable, '.git'), 'unreadable registration\n');
-    await rm(external, { recursive: true, force: true });
+    await rm(missingParent, { recursive: true, force: true });
     expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(0);
     expect(existsSync(missing)).toBe(true);
     expect(existsSync(unreadable)).toBe(true);
