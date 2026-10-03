@@ -314,6 +314,14 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // the value is current before any child effect or event handler runs.
   const bodyRef = useRef(body);
   bodyRef.current = body;
+  // Same idea for the saved baseline and the work/draft identity: async
+  // completions (Format pass, Polish refresh) compare against these at
+  // resolution time instead of the values closed over when they started (#9738).
+  const savedBodyRef = useRef(savedBody);
+  savedBodyRef.current = savedBody;
+  const ownerKey = `${work.id}:${work.activeDraftVersionId || ''}`;
+  const ownerKeyRef = useRef(ownerKey);
+  ownerKeyRef.current = ownerKey;
 
   const mountedRef = useMounted();
 
@@ -579,6 +587,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // the storyboard's prompt enrichment picks up new profiles immediately.
   const runAnalysis = useCallback(async (kind) => {
     if (runningKind) return false;
+    const startOwner = ownerKeyRef.current;
+    const startBody = bodyRef.current;
     setRunningKind(kind);
     setRunStartedAt(Date.now());
     const snapshot = await runWritersRoomAnalysis(work.id, { kind }, { silent: true }).catch((err) => {
@@ -593,6 +603,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     setRunningKind(null);
     setRunStartedAt(null);
     if (!snapshot) return false;
+    // The writer moved to another work/draft while this ran; its result belongs
+    // to the old owner and must not touch the current buffer or bible lists.
+    if (ownerKeyRef.current !== startOwner) return false;
     if (snapshot.status === 'failed') {
       toast.error(`${ANALYSIS_LABELS[kind] || kind} failed: ${snapshot.error || 'unknown'}`);
       return false;
@@ -608,8 +621,16 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       setObjects(snapshot.result.mergedProfiles);
     }
     if (kind === 'format' && snapshot.result?.formattedBody) {
-      setBody(snapshot.result.formattedBody);
-      toast('Format applied to draft buffer — save to persist', { icon: '💾' });
+      // Apply only if the buffer is untouched since the pass started. Comparing
+      // text (not just a dirty flag) also catches edit-then-save, where the
+      // buffer is clean again but no longer the analyzed source. The result
+      // stays in Analysis history for explicit application.
+      if (bodyRef.current !== startBody) {
+        toast('Format result not applied — you edited the draft meanwhile. Apply it from Analysis history.', { icon: 'ℹ️' });
+      } else {
+        setBody(snapshot.result.formattedBody);
+        toast('Format applied to draft buffer — save to persist', { icon: '💾' });
+      }
     }
     return true;
   }, [runningKind, work.id]);
@@ -635,10 +656,16 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // keep/revert). After a completed run or a manual revert, pull the fresh body
   // back into the editor as the new saved baseline so the buffer isn't stale.
   const reloadBodyFromServer = useCallback(async () => {
+    const startOwner = ownerKeyRef.current;
+    const startBody = bodyRef.current;
+    const wasDirty = startBody !== savedBodyRef.current;
     const fresh = await getWritersRoomWork(work.id).catch(() => null);
-    if (!fresh || !mountedRef.current) return;
+    if (!fresh || !mountedRef.current || ownerKeyRef.current !== startOwner) return;
     const nextBody = fresh.activeDraftBody || '';
-    setBody(nextBody);
+    // Adopt the server body as the saved baseline always; replace the buffer
+    // only when the writer had nothing unsaved and typed nothing during the GET.
+    // Otherwise the local draft stays and the dirty indicator reflects the diff.
+    if (!wasDirty && bodyRef.current === startBody) setBody(nextBody);
     setSavedBody(nextBody);
     onChange?.(fresh);
   }, [work.id, onChange, mountedRef]);
