@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 import { vitestCaptureProjects, vitestCiPool } from '../scripts/vitestCiPool.js';
-import { DB_TEST_INCLUDE } from './vitest.config.db.js';
+import { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
 
 // `npm run test:fast` is the Windows-safe way to set the flag (a

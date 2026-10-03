@@ -120,7 +120,7 @@ describe('pregate hidden-content invocation', () => {
     for (const path of [
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-      'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js',
+      'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
     ]) {
@@ -204,6 +204,16 @@ describe('pregate hidden-content invocation', () => {
     expect(result.stdout).not.toContain('▶️');
     expect(result.stderr).toBe('');
     expect(snapshot()).toEqual(before);
+  });
+
+  it('reports database validation for an excluded DB-only suite in a scoped working-tree plan', () => {
+    mkdirSync(join(root, 'server/routes'), { recursive: true });
+    write('server/routes/decks.db.test.js', "import { it } from 'vitest';\nit('db contract', () => {});\n");
+    const result = run('--plan-only');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('CI will also run: db');
+    expect(result.stdout).toContain('npm run test:db');
+    expect(result.stdout).not.toContain('FULL suite');
   });
 
   it('preserves binary, empty-file, and stdin-like path findings for untracked additions', () => {
@@ -406,7 +416,7 @@ describe('the gate end to end', () => {
       for (const path of [
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-        'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js',
+        'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',
       ]) {
