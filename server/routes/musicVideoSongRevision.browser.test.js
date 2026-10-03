@@ -27,10 +27,14 @@ const broadcast = event => io.emit('music-video:song-revision', event);
 afterAll(async () => {
   musicVideoEvents?.off('song-revision', broadcast);
   await songs?.__testing.settle(); songs?.__setSongRevisionDepsForTests();
-  await _cleanupTestBrowser({ browser, proc, cleanup: () => {} });
-  if (io) await new Promise(resolve => io.close(resolve));
-  else if (server) await new Promise(resolve => server.close(resolve));
-  cleanupTempDataRoots();
+  await _cleanupTestBrowser({ browser, proc, cleanup: async () => {
+    try {
+      if (io) await new Promise(resolve => io.close(resolve));
+      else if (server) await new Promise(resolve => server.close(resolve));
+    } finally {
+      cleanupTempDataRoots();
+    }
+  } });
 });
 
 describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)', () => {

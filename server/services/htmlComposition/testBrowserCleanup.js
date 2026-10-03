@@ -106,13 +106,13 @@ export function _waitForTestChrome(proc, timeoutMs = 20000, startup) {
   });
 }
 
-async function withinDeadline(action, timeoutMs, stage) {
+async function withinDeadline(action, timeoutMs, stage, facts = () => '') {
   let timer;
   try {
     await Promise.race([
       Promise.resolve().then(action),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Test Chrome ${stage} exceeded ${timeoutMs}ms deadline`)), timeoutMs);
+        timer = setTimeout(() => reject(new Error(`Test Chrome ${stage} exceeded ${timeoutMs}ms deadline${facts()}`)), timeoutMs);
       }),
     ]);
   } finally {
@@ -123,25 +123,57 @@ async function withinDeadline(action, timeoutMs, stage) {
 async function terminateOwnedChrome(proc) {
   if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
   let escalation;
+  let exitObserved = false;
+  let term = 'not-attempted';
+  let kill = 'not-attempted';
+  let signalError = 'none';
+  const safeSignal = value => /^[A-Z0-9]{1,32}$/.test(value) ? value : 'none';
+  const facts = () => `; teardown: stage=child-termination term=${term} kill=${kill}`
+    + ` exitCode=${Number.isInteger(proc.exitCode) ? proc.exitCode : 'none'}`
+    + ` signal=${safeSignal(proc.signalCode)} exitObserved=${exitObserved} signalError=${signalError}`;
+  // Observe errors from kill() too: Node may emit an error rather than throw.
+  // Only bounded codes are retained, never the raw message or child identity.
+  const onError = error => { signalError = /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : 'unknown'; };
   let onExit;
-  // Subscribe before kill. Wait for exit, not stdio close: Chrome descendants
-  // can retain stderr after the owned process has terminated.
   const exited = new Promise(resolve => {
-    onExit = resolve;
+    onExit = () => { exitObserved = true; resolve(); };
     proc.once('exit', onExit);
   });
+  proc.on('error', onError);
+  // Keep the shared escalation semantics; instrument only this owned test
+  // process, without changing its handle or discarding kill's return value.
+  const tracked = {
+    get exitCode() { return proc.exitCode; },
+    get signalCode() { return proc.signalCode; },
+    kill(signal) {
+      const record = value => { if (signal === 'SIGTERM') term = value; else kill = value; };
+      record('attempted');
+      try {
+        const accepted = proc.kill(signal);
+        record(accepted === true ? 'accepted' : accepted === false ? 'rejected' : 'unknown');
+        return accepted;
+      } catch {
+        record('threw');
+        throw new Error(`Test Chrome signal delivery failed${facts()}`);
+      }
+    },
+  };
   try {
     await withinDeadline(() => {
-      escalation = killWithEscalation(proc, {
+      escalation = killWithEscalation(tracked, {
         label: 'HTML composition test Chrome',
         stillRunning: () => proc.exitCode === null && proc.signalCode === null,
         delayMs: 3000,
       });
       return exited;
-    }, 10000, 'child termination');
+    }, 10000, 'child termination', facts);
+    if (signalError !== 'none') throw new Error(`Test Chrome signal delivery error${facts()}`);
   } finally {
     clearTimeout(escalation);
     proc.removeListener('exit', onExit);
+    proc.removeListener('error', onError);
+    const log = exitObserved && signalError === 'none' ? console.log : console.error;
+    log(`🧹 Test Chrome termination${facts()}`);
   }
 }
 
