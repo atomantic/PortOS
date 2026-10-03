@@ -400,3 +400,39 @@ describe('LinksTab drag-and-drop wiring', () => {
     expect(message).toBe('Alpha was dropped outside a valid destination and did not move.');
   });
 });
+
+describe('LinksTab unavailable collection', () => {
+  const failure = () => Object.assign(new Error('boom'), { status: 500 });
+
+  it('shows Links unavailable with Retry instead of the empty state, then recovers', async () => {
+    getBrainLinks.mockRejectedValueOnce(failure());
+    await renderTab();
+    expect(screen.getByText('Links unavailable')).toBeTruthy();
+    expect(screen.queryByText('No links saved yet.')).toBeNull();
+    getBrainLinks.mockResolvedValue({ links: [link('a', 'cloned')] });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Retry/ })); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.queryByText('Links unavailable')).toBeNull();
+    expect(screen.getByText('repo-a')).toBeTruthy();
+  });
+
+  it('keeps the paste-a-URL onboarding for a successful empty read', async () => {
+    getBrainLinks.mockResolvedValue({ links: [] });
+    await renderTab();
+    expect(screen.queryByText('Links unavailable')).toBeNull();
+    expect(screen.getByText('No links saved yet.')).toBeTruthy();
+  });
+
+  it('preserves prior links and search when a refresh read fails', async () => {
+    getBrainLinks.mockResolvedValueOnce({ links: [link('a', 'cloned'), link('b', 'cloned')] });
+    await renderTab();
+    fireEvent.change(screen.getByPlaceholderText(/Search links/), { target: { value: 'repo-a' } });
+    getBrainLinks.mockRejectedValue(failure());
+    await act(async () => { socket.emit('connect'); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByText('Links unavailable')).toBeTruthy();
+    expect(screen.getByText(/may be out of date/)).toBeTruthy();
+    expect(screen.getByText('repo-a')).toBeTruthy();
+    expect(screen.getByPlaceholderText(/Search links/).value).toBe('repo-a');
+  });
+});
