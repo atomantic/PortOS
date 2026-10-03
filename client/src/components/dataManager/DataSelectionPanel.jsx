@@ -56,11 +56,16 @@ export default function DataSelectionPanel({ overview, totalFiles, selected, det
           <span className={`w-1 h-6 rounded-full ${swatch}`} />
           <span className="truncate text-lg text-white">{selected ? selected.label : `${overview?.dataDir || 'data'}/`}</span>
         </div>
-        <div className="mt-0.5 truncate text-xs font-mono text-gray-500">{selected?.path || 'everything PortOS stores'}</div>
+        <div className="mt-0.5 truncate text-xs font-mono text-gray-500">{selected?.path || `Files in ${overview?.dataDir || 'data'}/`}</div>
         <div className="mt-3 flex items-baseline gap-1.5">
           <span className="text-4xl font-light text-white tabular-nums">{value}</span>
           <span className="text-sm text-gray-500">{unit}</span>
         </div>
+        {!selected && (
+          <p className="mt-2 text-xs leading-relaxed text-gray-400">
+            Live PostgreSQL data is not included. See <a className="text-port-accent hover:underline" href="/settings/database">Database settings</a> for database size.
+          </p>
+        )}
         <ProgressBar percent={share} tone={kind?.tone ?? 'accent'} track="border" label="Share of data/" className="mt-2" />
         <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
           <Stat label="Of data/">{formatPercent(share, { decimals: share < 10 ? 1 : 0 })}</Stat>
