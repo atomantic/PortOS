@@ -589,6 +589,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (runningKind) return false;
     const startOwner = ownerKeyRef.current;
     const startBody = bodyRef.current;
+    // Analysis reads the SAVED draft, so a buffer that was already dirty is not what gets formatted.
+    const startedClean = startBody === savedBodyRef.current;
     setRunningKind(kind);
     setRunStartedAt(Date.now());
     const snapshot = await runWritersRoomAnalysis(work.id, { kind }, { silent: true }).catch((err) => {
@@ -625,7 +627,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       // text (not just a dirty flag) also catches edit-then-save, where the
       // buffer is clean again but no longer the analyzed source. The result
       // stays in Analysis history for explicit application.
-      if (bodyRef.current !== startBody) {
+      if (!startedClean || bodyRef.current !== startBody) {
         toast('Format result not applied — you edited the draft meanwhile. Apply it from Analysis history.', { icon: 'ℹ️' });
       } else {
         setBody(snapshot.result.formattedBody);
