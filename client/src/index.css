@@ -1,5 +1,27 @@
 @import "tailwindcss";
 
+/* Compact notification actions only when the primary input can both hover and
+   target precisely. Viewport width alone does not identify a mouse or trackpad. */
+@media (hover: hover) and (pointer: fine) and (min-width: 640px) {
+  .notification-action {
+    min-width: 0;
+    min-height: 0;
+    margin-block: 0;
+    padding: 0.25rem;
+    opacity: 0;
+  }
+
+  .group:hover .notification-action,
+  .group:focus-within .notification-action {
+    opacity: 1;
+  }
+
+  .notification-mark-read {
+    min-height: 0;
+    margin-block: 0;
+  }
+}
+
 /* Viewport is both wide AND tall enough to host a canvas overlay (a legend/key)
    without blanketing the graph under it. Width alone is the wrong signal: a
    landscape phone is wider than `sm` but only ~390px tall, so a `sm:`-only rule

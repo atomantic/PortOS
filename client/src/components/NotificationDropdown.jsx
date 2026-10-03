@@ -272,7 +272,7 @@ export default function NotificationDropdown({
                         <button
                           type="button"
                           onClick={() => onRemove(notification.id)}
-                          className="inline-flex shrink-0 items-center justify-center min-w-[44px] min-h-[44px] -my-2 rounded hover:bg-port-border transition-colors sm:min-w-0 sm:min-h-0 sm:my-0 sm:p-1 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                          className="inline-flex shrink-0 items-center justify-center min-w-[44px] min-h-[44px] -my-2 rounded hover:bg-port-border transition-colors group-focus-within:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent notification-action"
                           aria-label={`Remove notification: ${notification.title}`}
                         >
                           <X className="w-4 h-4 text-gray-500 sm:w-3 sm:h-3" aria-hidden="true" />
@@ -281,7 +281,7 @@ export default function NotificationDropdown({
                           <button
                             type="button"
                             onClick={() => onMarkAsRead(notification.id)}
-                            className="min-h-[44px] text-[10px] text-port-accent hover:underline -my-2 sm:min-h-0 sm:my-0"
+                            className="min-h-[44px] text-[10px] text-port-accent hover:underline -my-2 notification-mark-read"
                             aria-label={`Mark notification as read: ${notification.title}`}
                           >
                             Mark read
