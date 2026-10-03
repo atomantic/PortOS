@@ -144,19 +144,14 @@ function PortosShellView() {
       className={isFullscreen
       ? 'fixed inset-0 z-[70] flex flex-col bg-port-bg p-2'
       // Deliberately tighter than the app-wide `p-4 md:p-6` mobile gutter: every
-      // pixel here is a terminal row/column, and the chrome above it is already
-      // compressed to three fixed rows. `gap` (not per-child `mb-*`) owns the
+      // pixel here is a terminal row/column. `gap` (not per-child `mb-*`) owns the
       // vertical rhythm so the tab strip doesn't bake page spacing into itself.
       : 'h-full flex flex-col gap-2 md:gap-3 p-2 md:p-6'}>
       {/* Header (hidden in fullscreen — the compact bottom bar takes over) */}
       {!isFullscreen && (
-      // Single non-wrapping row on mobile: the status pill collapses to a bare dot
-      // and the session count drops out, so the action buttons stay on the title
-      // line instead of wrapping to a second row above the fold.
-      <div className="flex items-center gap-2">
-        {/* Everything else in this row is `shrink-0`, so the title is what absorbs
-            an overflow — without it a narrow phone would push the row wider than
-            the page and give the whole document a horizontal scrollbar. */}
+      // Phones give actions their own row. Metadata and actions can wrap
+      // independently; wider containers share a row whenever both groups fit.
+      <div className="flex flex-wrap items-center gap-2 min-w-0 shrink-0">
         <h1 className="text-xl font-semibold text-white min-w-0 truncate">Shell</h1>
         <ShellSourceSwitch source="portos" />
         <div
@@ -189,11 +184,11 @@ function PortosShellView() {
             </InfoTooltip>
           </span>
         )}
-        <div className="flex items-center gap-2 ml-auto shrink-0">
+        <div role="group" aria-label="Session controls" className="flex flex-wrap items-center gap-2 w-full max-w-full sm:w-auto sm:ml-auto">
           <button
             onClick={() => setIsFullscreen(true)}
             ref={toggleRef}
-            className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
+            className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[44px] min-w-[44px] shrink-0"
             title="Fullscreen terminal"
             aria-label="Fullscreen terminal"
           >
@@ -204,7 +199,7 @@ function PortosShellView() {
           {connected && !isLiveRun && (
             <button
               onClick={restartSession}
-              className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
+              className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[44px] min-w-[44px] shrink-0"
               title="Restart session (kill + new)"
             >
               <RefreshCw size={16} />
@@ -214,7 +209,7 @@ function PortosShellView() {
           {connected && (
             <button
               onClick={stopSession}
-              className="flex items-center gap-1.5 px-2.5 py-2 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
+              className="flex items-center gap-1.5 px-2.5 py-2 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[44px] min-w-[44px] shrink-0"
               title={isLiveRun ? 'Stop this TUI run' : 'Kill current session'}
             >
               <PowerOff size={16} />
@@ -223,7 +218,7 @@ function PortosShellView() {
           )}
           <button
             onClick={startNewSession}
-            className="flex items-center gap-1.5 px-2.5 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm transition-colors min-h-[40px]"
+            className="flex items-center gap-1.5 px-2.5 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm transition-colors min-h-[44px] min-w-[44px] shrink-0"
             title="Start new session"
           >
             <Power size={16} />
