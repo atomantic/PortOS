@@ -764,6 +764,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `videoTimelineFades.js` | Browser-safe `fitFades()` proportionally fits a fade pair to its visible duration. Shared by timeline normalization/export and the editor preview/trim controls; legacy import paths re-export it. |
 | `voiceEcho.js` | Pure voice-echo detection helpers — tokenization, trigram building, thresholds shared by server and client echo gates. |
 | `voiceEngines.js` | Shared TTS engine IDs, display metadata, supported-engine set, persisted configuration keys, and retired TTS config migration. |
+| `voiceModelAssets.js` | Completion contract for downloaded voice model assets (Whisper `.bin`, Piper `.onnx` + `.onnx.json`). `inspectVoiceAsset(kind, path)` is the read-only readiness check (`verified` / `unverified` / `incomplete` / `missing` — stat plus one small JSON read, no hashing or network); `verifyVoiceAssetHashes` and `writeVoiceAssetReceipt` are the script-side halves that re-hash and record the `.portos-complete.json` receipt after promotion. `isManagedVoiceAsset` separates setup-script-owned files from user-supplied ones. Shared by `voice/bootstrap.js`, `voice/health.js` and `scripts/voice-asset.js`. |
 
 | `auditQuality.js` | Category discovery strategies, assessment prompt and strict schema, sentinel parsing, and freshness-aware app quality aggregation with deterministic latest-per-category selection across peers. |
 

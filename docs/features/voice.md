@@ -263,6 +263,40 @@ PortOS will:
 
 Piper voice models live under `~/.portos/voice/voices/`.
 
+### Model download completion and repair
+
+A model file that merely exists is not proof its download finished — a dropped
+connection leaves a truncated file at the final path. Both setup scripts
+(`scripts/setup-voice.sh`, `scripts/setup-voice.ps1`) therefore:
+
+- download each managed asset (Whisper `.bin`, Piper `.onnx` and `.onnx.json`) to a unique
+  temp sibling, check that the transfer completed with a non-empty payload, and parse the Piper
+  config (`audio.sample_rate`) **before** promoting anything — a failed replacement leaves the
+  previous files in place, and temp files are removed on failure;
+- write a `<asset>.portos-complete.json` receipt (size + sha256 per file) only after the whole
+  asset is promoted — for Piper, only once the `.onnx` **and** its `.onnx.json` are both in place;
+- on every run, re-verify the receipt (including sha256) and repair anything that no longer
+  matches.
+
+The server applies the same contract through `server/lib/voiceModelAssets.js`. A model is **ready**
+when its receipt matches the file sizes on disk, or — for installs that predate receipts and for
+files at a path you chose yourself — when it is non-empty and, for Piper, the `.onnx.json` next to
+it parses. A Piper `.onnx` without a valid `.onnx.json`, an empty file, or a file that disagrees
+with its receipt is **incomplete**: `/api/voice/status` and the Piper health badge stop reporting it
+ready (`models.ttsVoiceState` / `sttModelState` carry `verified`, `unverified`, `incomplete` or
+`missing`).
+
+Repair is always user-authorized. **Save & Reconcile** and the Settings voice-picker download re-run
+the setup script for an incomplete model instead of skipping it. Server boot only reads state: an
+incomplete model is logged and left for the next Save & Reconcile, and boot starts no model download.
+
+Models that predate receipts keep working. The next Save & Reconcile has the script adopt them: a
+Piper pair with a parseable config is recorded as complete with no network access; a Whisper file is
+compared with the remote size (adopted on a match, re-downloaded on a mismatch, left untouched when
+the remote size cannot be read). Only files directly in `~/.portos/voice/models/` and
+`~/.portos/voice/voices/` are managed this way — a model at any other path is validated but never
+replaced, so give a hand-installed model its own filename or directory.
+
 You can also run the bootstrap script directly:
 
 ```bash
