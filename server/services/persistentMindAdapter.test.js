@@ -53,6 +53,9 @@ vi.mock('./persistentMindVisibility.js', () => ({
 vi.mock('./persistentMindUserActions.js', () => ({
   readPersistentMindUserActionsPrompt: vi.fn(async () => '# Recent user actions (last 24h)\n- 2× cos.schedule.trigger (branch-reconcile) actor=user'),
 }));
+vi.mock('./persistentMindVisitContinuation.js', () => ({
+  readPersistentMindVisitContinuationPrompt: vi.fn(async () => ''),
+}));
 vi.mock('./persistentMindMaintenanceContext.js', () => ({
   readPersistentMindMaintenanceContext: (...args) => mock.readMaintenance(...args),
   buildPersistentMindMaintenancePrompt: () => '# Development maintenance\nNo new maintenance; return to the existing Eidoverse playbook.',
@@ -102,6 +105,26 @@ beforeEach(() => {
     memoryCandidates: [{ content: 'Remember this.', type: 'fact', category: 'other', tags: [], protection: 'important' }],
     selfWake: null,
   }) });
+});
+
+it('stamps a typed continuation receipt on a completed visit and retirement on a completed leave, never the guidance or other result content', async () => {
+  const visitId = 'ab'.repeat(24);
+  mock.root.config.persistentMindCapabilities = { visitEidoversePeers: true };
+  mock.executeToolCall
+    .mockResolvedValueOnce({ state: 'completed', result: { visitId, peerId: 'peer-1', expiresAt: 1_900_000_000_000, guidance: 'long untrusted text' } })
+    .mockResolvedValueOnce({ state: 'completed', result: { success: true } })
+    .mockResolvedValueOnce({ state: 'failed', error: 'boom' });
+  mock.runPrompt.mockResolvedValueOnce({ text: JSON.stringify({ thinkingSummary: 'Visiting.', message: '', toolCalls: [
+    { name: 'eidoverse.visit', arguments: { peerId: 'peer-1' } },
+    { name: 'eidoverse.leave', arguments: { visitId } },
+    { name: 'eidoverse.leave', arguments: { visitId: 'cd'.repeat(24) } },
+  ] }) });
+  const recordCapabilityEvent = vi.fn(async () => true);
+  await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'visit-turn', wake: { kind: 'self' }, context: { text: 'Continuity' }, recordCapabilityEvent });
+  const results = recordCapabilityEvent.mock.calls.map(([event]) => event).filter((event) => event.kind === 'result').map((event) => event.data);
+  expect(results[0]).toEqual({ displayText: 'eidoverse.visit completed', tool: 'eidoverse.visit', success: true, visitReceipt: { visitId, peerId: 'peer-1', expiresAt: 1_900_000_000_000 } });
+  expect(results[1]).toMatchObject({ visitRetired: visitId });
+  expect(results[2]).toEqual({ displayText: 'eidoverse.leave failed', tool: 'eidoverse.leave', success: false });
 });
 
 it('uses bounded maintenance context on opted-in wakes instead of raw action snippets', async () => {

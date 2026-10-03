@@ -145,6 +145,9 @@ export async function visitEidoversePeer({ peerId, agent = true }) {
   };
 }
 
+/** True while this process still holds the unexpired outbound session behind a visit handle (sessions are process-local). */
+export const isEidoverseVisitLive = (visitId) => (outbound.get(visitId)?.expiresAt ?? 0) > Date.now();
+
 export async function eidoverseVisitChat({ visitId, after = -1, text }) {
   await requireAvailable();
   const session = outbound.get(visitId);

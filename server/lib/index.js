@@ -814,6 +814,7 @@ export * from './codeAnimationProjects.js';
 export * from './musicVideoNarrativeEvents.js';
 
 export * from './persistentMindContextEvents.js';
+export * from './persistentMindVisitReceipts.js';
 
 export * from './scheduleExecutionFieldsValidation.js';
 export * from './codeAnimationSound.js';
