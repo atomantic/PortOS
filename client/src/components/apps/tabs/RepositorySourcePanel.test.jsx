@@ -438,6 +438,6 @@ describe('PortOS self-update restart handoff', () => {
   fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'example-model' } });
   fireEvent.click(start);
   await screen.findByRole('link', { name: 'Recovery queued · View agents' });
-  expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'app-example', provider: 'example-cli', model: 'example-model', useWorktree: false, openPR: false, whenDone: 'commit-push', prompt: expect.stringContaining('including untracked files and the index') }), { silent: true });
+  expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'app-example', provider: 'example-cli', model: 'example-model', useWorktree: false, openPR: false, whenDone: 'commit-push', prompt: expect.stringMatching(/including untracked files and the index[\s\S]*never an acceptable resting place[\s\S]*empty stash list/) }), { silent: true });
   expect(useAppOperation().startUpdate).not.toHaveBeenCalled();
  });
