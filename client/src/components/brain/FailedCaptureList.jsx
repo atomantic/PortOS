@@ -12,19 +12,27 @@ import { AlertCircle, Pencil, RotateCcw, Trash2 } from 'lucide-react';
  * project the payload so each surface keeps its own payload shape.
  */
 export default function FailedCaptureList({ failures, getText, getNote, onRetry, onDiscard, retryDisabled = false, idPrefix = 'failed-capture' }) {
+  // `edits` keeps the user's changed text per row; `editingIds` only says which
+  // rows currently show the textarea, so closing it never drops an edit.
   const [edits, setEdits] = useState({});
+  const [editingIds, setEditingIds] = useState({});
 
   if (!failures.length) return null;
 
-  const closeEdit = (id) => setEdits((prev) => {
-    const { [id]: _removed, ...rest } = prev;
-    return rest;
-  });
+  const setEditing = (id, on) => setEditingIds((prev) => ({ ...prev, [id]: on }));
+  const forget = (id) => {
+    const without = (prev) => {
+      const { [id]: _removed, ...rest } = prev;
+      return rest;
+    };
+    setEdits(without);
+    setEditingIds(without);
+  };
 
   return (
     <ul className="mt-3 space-y-2 min-w-0" aria-label="Captures not saved">
       {failures.map((f) => {
-        const editing = edits[f.id] !== undefined;
+        const editing = !!editingIds[f.id];
         const text = edits[f.id] ?? getText(f);
         const note = getNote?.(f);
         return (
@@ -54,7 +62,7 @@ export default function FailedCaptureList({ failures, getText, getNote, onRetry,
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => (editing ? closeEdit(f.id) : setEdits((prev) => ({ ...prev, [f.id]: getText(f) })))}
+                onClick={() => setEditing(f.id, !editing)}
                 aria-pressed={editing}
                 className="min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-port-border text-xs text-gray-300 hover:text-white transition-colors"
               >
@@ -71,7 +79,7 @@ export default function FailedCaptureList({ failures, getText, getNote, onRetry,
               <button
                 type="button"
                 disabled={f.retrying}
-                onClick={() => { closeEdit(f.id); onDiscard(f.id); }}
+                onClick={() => { forget(f.id); onDiscard(f.id); }}
                 className="min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-port-border text-xs text-gray-400 hover:text-port-error transition-colors disabled:opacity-50"
               >
                 <Trash2 size={12} aria-hidden="true" /> Discard

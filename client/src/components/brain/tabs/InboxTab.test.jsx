@@ -145,6 +145,9 @@ describe('Brain inbox capture', () => {
       // Editing the failed row leaves the composer alone; Retry sends the edit once.
       fireEvent.click(screen.getByRole('button', { name: /^Edit$/ }));
       fireEvent.change(screen.getByLabelText('Edit unsaved capture'), { target: { value: 'invented thought A, fixed' } });
+      // Closing the editor keeps the edit.
+      fireEvent.click(screen.getByRole('button', { name: /Done editing/ }));
+      expect(screen.getByRole('group', { name: 'Not saved capture' }).textContent).toContain('invented thought A, fixed');
       fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
       fireEvent.click(screen.getByRole('button', { name: /Retry|Retrying/ }));
 

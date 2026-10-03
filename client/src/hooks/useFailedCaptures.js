@@ -15,8 +15,8 @@ import { useCallback, useRef, useState } from 'react';
  *   fail: (payload: object, error: string, id?: string) => string,
  *   markRetrying: (id: string) => boolean,
  *   discard: (id: string) => void,
- * }} `fail` adds a row (or, given the `id` of an existing row, refreshes its
- *   error and clears `retrying`) and returns the row id. `markRetrying` returns
+ * }} `fail` adds a row (or, given the `id` of an existing row, replaces its
+ *   payload and error and clears `retrying`) and returns the row id. `markRetrying` returns
  *   false when that row is already retrying, so a double click sends once.
  */
 export function useFailedCaptures() {
@@ -28,7 +28,7 @@ export function useFailedCaptures() {
     const rowId = id ?? `failed-capture-${++counter.current}`;
     retryingRef.current.delete(rowId);
     setFailures((prev) => (prev.some((f) => f.id === rowId)
-      ? prev.map((f) => (f.id === rowId ? { ...f, error, retrying: false } : f))
+      ? prev.map((f) => (f.id === rowId ? { ...f, payload, error, retrying: false } : f))
       : [{ id: rowId, payload, error, retrying: false }, ...prev]));
     return rowId;
   }, []);
