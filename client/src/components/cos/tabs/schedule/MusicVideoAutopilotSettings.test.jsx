@@ -7,7 +7,9 @@ vi.mock('../../../../services/apiMoodBoard.js', () => ({
 vi.mock('../../../../services/apiMusic.js', () => ({
   listMusicEngines: vi.fn(async () => ({ engines: [{ id: 'acestep', name: 'ACE-Step', ready: true, lyrics: true }] })),
 }));
+vi.mock('../../../../services/apiSystem.js', () => ({ getSettings: vi.fn(async () => ({ imageGen: { local: { modelId: 'example-image' } } })) }));
 vi.mock('../../../../services/apiImageVideo.js', () => ({
+  listImageModels: vi.fn(async () => [{ id: 'example-image', name: 'Example image' }]),
   getVideoGenModelContext: vi.fn(async () => ({
     models: [
       { id: 'example-ltx', name: 'Example LTX' },
