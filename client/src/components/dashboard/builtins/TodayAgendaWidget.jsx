@@ -1,7 +1,7 @@
 import { Link } from 'react-router';
 import { CalendarDays, ArrowRight } from 'lucide-react';
 import { useTimeTick } from '../../../hooks/useTimeTick';
-import { formatTimeOfDay } from '../../../utils/formatters';
+import { formatCount, formatTimeOfDay } from '../../../utils/formatters';
 
 // Glanceable "what's left today" agenda. Reads the shared `calendarAgenda`
 // slice of dashboardState (populated from GET /api/calendar/agenda — the
@@ -46,11 +46,11 @@ export default function TodayAgendaWidget({ dashboardState }) {
           <div className="text-xs text-gray-500 mb-2 min-w-0 break-words">
             {truncated ? (
               <>
-                {remaining} of {events.length} shown event{events.length !== 1 ? 's' : ''} remaining
-                <span className="block">{total} event{total !== 1 ? 's' : ''} today</span>
+                {formatCount(remaining)} of {formatCount(events.length)} shown event{events.length !== 1 ? 's' : ''} remaining
+                <span className="block">{formatCount(total)} event{total !== 1 ? 's' : ''} today</span>
               </>
             ) : (
-              <>{remaining} of {total} event{total !== 1 ? 's' : ''} remaining</>
+              <>{formatCount(remaining)} of {formatCount(total)} event{total !== 1 ? 's' : ''} remaining</>
             )}
           </div>
           <ul className="space-y-1">
@@ -74,7 +74,7 @@ export default function TodayAgendaWidget({ dashboardState }) {
             ))}
           </ul>
           {truncated && (
-            <div className="text-xs text-gray-500 mt-2">+{total - events.length} more</div>
+            <div className="text-xs text-gray-500 mt-2">+{formatCount(total - events.length)} more</div>
           )}
         </>
       )}

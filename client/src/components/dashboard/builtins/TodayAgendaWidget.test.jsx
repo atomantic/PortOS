@@ -88,4 +88,18 @@ describe('TodayAgendaWidget', () => {
     expect(screen.getByText('4 events today')).toBeTruthy();
     expect(screen.getByText('+2 more')).toBeTruthy();
   });
+
+  it('formats large counts in both the day total and omitted-event cue', () => {
+    renderWidget({
+      date: '2026-09-01',
+      accountCount: 1,
+      total: 12345,
+      events: [
+        { id: 'a', accountId: 'acc', title: 'Upcoming', startTime: iso(3600000), endTime: iso(7200000), isAllDay: false, location: null },
+      ],
+    });
+
+    expect(screen.getByText('12,345 events today')).toBeTruthy();
+    expect(screen.getByText('+12,344 more')).toBeTruthy();
+  });
 });
