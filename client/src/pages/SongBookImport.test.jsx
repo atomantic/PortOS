@@ -53,6 +53,16 @@ describe('SongBookImport', () => {
     expect(body.content.text).toBe('&lt; C   G   Am');
   });
 
+  it('preserves unknown references when saving pasted lyrics', async () => {
+    const text = 'C  G\n&constructor; &toString; &hasOwnProperty;';
+    await renderPage();
+    fireEvent.change(screen.getByLabelText('Pasted tab content'), { target: { value: text } });
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Example Song' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save song' }));
+    await waitFor(() => expect(api.createSong).toHaveBeenCalled());
+    expect(api.createSong.mock.calls[0][0].content.text).toBe(text);
+  });
+
   it('the header Save action saves the draft and is gated on content (#6001)', async () => {
     // The form's own Save sits below the textarea + preview — off-screen on a
     // phone — so the header copy is the one that has to work above the fold.

@@ -32,7 +32,7 @@ describe('decodeXmlEntities', () => {
   });
 
   it('leaves unknown named entities untouched', () => {
-    expect(decodeXmlEntities('&bogus;')).toBe('&bogus;');
+    expect(decodeXmlEntities('&bogus; &constructor; &toString; &hasOwnProperty;')).toBe('&bogus; &constructor; &toString; &hasOwnProperty;');
     expect(decodeXmlEntities('&nbsp;')).toBe('&nbsp;'); // not predefined without extras
   });
 
