@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -30,17 +31,23 @@ vi.mock('../../services/apiWritersRoom', async (importOriginal) => ({
   listWritersRoomWorks: vi.fn(async () => []),
   getWritersRoomWork: vi.fn(),
   saveWritersRoomDraft: vi.fn(),
+  runWritersRoomAnalysis: vi.fn(),
   listWritersRoomCharacters: vi.fn(async () => []),
   listWritersRoomPlaces: vi.fn(async () => []),
   listWritersRoomObjects: vi.fn(async () => []),
 }));
 
+vi.mock('./PolishPanel', () => ({
+  default: function PolishPanelStub({ onBodyChanged }) {
+    return <button onClick={() => onBodyChanged?.()}>Stub polish refresh</button>;
+  },
+}));
 vi.mock('../CatalogCastPanel', () => ({ default: () => <div>Catalog cast controls</div> }));
 vi.mock('./LibraryPane', () => ({ default: () => <div>Library controls</div> }));
 
 import WorkEditor from './WorkEditor';
 import WritersRoom from '../../pages/WritersRoom';
-import { getWritersRoomWork, saveWritersRoomDraft } from '../../services/apiWritersRoom';
+import { getWritersRoomWork, runWritersRoomAnalysis, saveWritersRoomDraft } from '../../services/apiWritersRoom';
 
 const work = {
   id: 'wr-work-1',
@@ -324,5 +331,118 @@ describe('Writers Room focused writing', () => {
     expect(screen.getByTestId('work-header-secondary')).not.toHaveClass('hidden');
     expect(container.querySelector('textarea')).toBe(area);
     expect(area.value).toBe('Second edit.');
+  });
+});
+
+// #9738: async Format / Polish results must not clobber newer local edits.
+describe('WorkEditor async buffer ownership (#9738)', () => {
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    return { promise, resolve };
+  };
+  const type = (area, value) => act(async () => { fireEvent.change(area, { target: { value } }); });
+  const openMenuItem = async (name) => {
+    await act(async () => { fireEvent.click(screen.getByLabelText('Work menu')); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name }) ); });
+  };
+  // Mirrors the real parent: onChange feeds the saved work back down as the prop.
+  function StatefulParent() {
+    const [w, setW] = useState(work);
+    return <WorkEditor work={w} onChange={setW} />;
+  }
+  const renderStateful = async () => {
+    const router = createMemoryRouter([
+      { path: '/writers-room', element: <StatefulParent /> },
+    ], { initialEntries: ['/writers-room'] });
+    const view = render(<RouterProvider router={router} />);
+    await act(async () => {});
+    return view;
+  };
+  const formatResult = { status: 'complete', result: { formattedBody: 'Old formatted text.' } };
+
+  it('applies the format result to a clean, untouched editor', async () => {
+    const { container } = await renderEditor();
+    runWritersRoomAnalysis.mockResolvedValueOnce(formatResult);
+    await openMenuItem(/Format pass/);
+    expect(container.querySelector('textarea').value).toBe('Old formatted text.');
+  });
+
+  it('keeps text typed while the format pass is pending', async () => {
+    const { container } = await renderEditor();
+    const d = deferred();
+    runWritersRoomAnalysis.mockReturnValueOnce(d.promise);
+    await openMenuItem(/Format pass/);
+    const area = container.querySelector('textarea');
+    await type(area, 'Newest prose.');
+    await act(async () => { d.resolve(formatResult); });
+    expect(area.value).toBe('Newest prose.');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('keeps newer prose that was edited and saved before the format response', async () => {
+    const { container } = await renderStateful();
+    const d = deferred();
+    runWritersRoomAnalysis.mockReturnValueOnce(d.promise);
+    await openMenuItem(/Format pass/);
+    const area = container.querySelector('textarea');
+    await type(area, 'Saved newer prose.');
+    saveWritersRoomDraft.mockResolvedValueOnce({ ...work, activeDraftBody: 'Saved newer prose.' });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
+    await act(async () => { d.resolve(formatResult); });
+    expect(area.value).toBe('Saved newer prose.');
+  });
+
+  it('ignores a format result for a work the editor has since swapped away from', async () => {
+    const d = deferred();
+    runWritersRoomAnalysis.mockReturnValueOnce(d.promise);
+    const router = (w) => createMemoryRouter([
+      { path: '/writers-room', element: <WorkEditor work={w} onChange={() => {}} /> },
+    ], { initialEntries: ['/writers-room'] });
+    const { container, rerender } = render(<RouterProvider router={router(work)} />);
+    await act(async () => {});
+    await openMenuItem(/Format pass/);
+    const other = { ...work, id: 'wr-work-2', activeDraftVersionId: 'wr-draft-2', activeDraftBody: 'Other work.' };
+    await act(async () => { rerender(<RouterProvider router={router(other)} />); });
+    await act(async () => { d.resolve(formatResult); });
+    expect(container.querySelector('textarea').value).toBe('Other work.');
+  });
+
+  const refresh = async () => {
+    await act(async () => { fireEvent.click(screen.getByLabelText('Work menu')); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Polish/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Stub polish refresh' })); });
+  };
+
+  it('keeps edits made during the polish refresh GET and moves the baseline to the server body', async () => {
+    const { container } = await renderEditor();
+    const d = deferred();
+    getWritersRoomWork.mockReturnValueOnce(d.promise);
+    await refresh();
+    const area = container.querySelector('textarea');
+    await type(area, 'Typed during GET.');
+    await act(async () => { d.resolve({ ...work, activeDraftBody: 'Polished body.' }); });
+    expect(area.value).toBe('Typed during GET.');
+    // Still unsaved relative to the server's polished body.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('keeps edits that were already dirty when the polish refresh began', async () => {
+    const { container } = await renderEditor();
+    const area = container.querySelector('textarea');
+    await type(area, 'Dirty before refresh.');
+    getWritersRoomWork.mockResolvedValueOnce({ ...work, activeDraftBody: 'Polished body.' });
+    await refresh();
+    expect(area.value).toBe('Dirty before refresh.');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('adopts the polished body on a clean editor', async () => {
+    const { container } = await renderStateful();
+    getWritersRoomWork.mockResolvedValueOnce({ ...work, activeDraftBody: 'Polished body.' });
+    await refresh();
+    expect(container.querySelector('textarea').value).toBe('Polished body.');
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
   });
 });
