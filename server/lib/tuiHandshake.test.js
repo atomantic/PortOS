@@ -21,6 +21,7 @@ import {
   STALL_NUDGE_IDLE_MS,
   STALL_NUDGE_RECOVERY_MS,
   STALL_NUDGE_MAX_ATTEMPTS,
+  STALL_NUDGE_TEXT,
   SELF_CLEARING_RESUBMIT_INTERVAL_MS,
   SELF_CLEARING_RESUBMIT_ECHO_MS,
   MCP_BOOT_PASTE_DEADLINE_MS,
@@ -2076,6 +2077,12 @@ describe('answerStartupDialogs', () => {
 });
 
 describe('createStallNudgeGate', () => {
+  it('pastes the word a human types, not a paragraph', () => {
+    // A long explanation restates rules the prompt already carries and crowds
+    // the composer. The resume a human types is the single word.
+    expect(STALL_NUDGE_TEXT).toBe('continue');
+  });
+
   it('nudges a session that went quiet with its task unfinished', () => {
     const gate = createStallNudgeGate();
     const quietSince = 0;
