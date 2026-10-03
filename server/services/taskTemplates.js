@@ -7,10 +7,14 @@
 
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { SLASHDO_WORKFLOWS } from '../lib/slashdoCatalog.js';
 
 const DATA_DIR = PATHS.cos;
 const TEMPLATES_FILE = join(DATA_DIR, 'task-templates.json');
+
+// Usage and authoring share a file, so admission must precede every state read.
+const queueWrite = createFileWriteQueue();
 
 // Built-in templates: one per bundled slashdo workflow worth launching
 // unattended. These replaced eight generic phrase stubs ("Fix the bug where",
@@ -53,7 +57,7 @@ const DEFAULT_STATE = {
  */
 async function loadState() {
   const data = await readJSONFile(TEMPLATES_FILE, null, { strict: true });
-  if (!data) return { ...DEFAULT_STATE };
+  if (!data) return { ...DEFAULT_STATE, userTemplates: [], usage: {} };
   return {
     ...DEFAULT_STATE,
     ...data,
@@ -123,99 +127,107 @@ export async function getPopularTemplates(limit = 5) {
  * Record template usage (for popularity tracking)
  */
 export async function recordTemplateUsage(templateId) {
-  const state = await loadState();
+  return queueWrite(async () => {
+    const state = await loadState();
 
-  if (!state.usage) {
-    state.usage = {};
-  }
+    if (!state.usage) {
+      state.usage = {};
+    }
 
-  state.usage[templateId] = (state.usage[templateId] || 0) + 1;
-  await saveState(state);
+    state.usage[templateId] = (state.usage[templateId] || 0) + 1;
+    await saveState(state);
 
-  return state.usage[templateId];
+    return state.usage[templateId];
+  });
 }
 
 /**
  * Create a new user template
  */
 export async function createTemplate(templateData) {
-  const state = await loadState();
+  return queueWrite(async () => {
+    const state = await loadState();
 
-  const newTemplate = {
-    id: `user-${Date.now().toString(36)}`,
-    name: templateData.name,
-    icon: templateData.icon || '📝',
-    description: templateData.description,
-    context: templateData.context || '',
-    category: templateData.category || 'custom',
-    provider: templateData.provider || '',
-    model: templateData.model || '',
-    effort: templateData.effort || '',
-    app: templateData.app || '',
-    isBuiltin: false,
-    createdAt: new Date().toISOString()
-  };
+    const newTemplate = {
+      id: `user-${Date.now().toString(36)}`,
+      name: templateData.name,
+      icon: templateData.icon || '📝',
+      description: templateData.description,
+      context: templateData.context || '',
+      category: templateData.category || 'custom',
+      provider: templateData.provider || '',
+      model: templateData.model || '',
+      effort: templateData.effort || '',
+      app: templateData.app || '',
+      isBuiltin: false,
+      createdAt: new Date().toISOString()
+    };
 
-  // Optional slashdo binding. Omitted (not blanked) when absent so applyTemplate's
-  // "key absent = leave the toggle alone" contract holds for user templates too.
-  if (templateData.slashdoCommand) newTemplate.slashdoCommand = templateData.slashdoCommand;
-  if (templateData.settings && typeof templateData.settings === 'object') newTemplate.settings = templateData.settings;
+    // Optional slashdo binding. Omitted (not blanked) when absent so applyTemplate's
+    // "key absent = leave the toggle alone" contract holds for user templates too.
+    if (templateData.slashdoCommand) newTemplate.slashdoCommand = templateData.slashdoCommand;
+    if (templateData.settings && typeof templateData.settings === 'object') newTemplate.settings = templateData.settings;
 
-  state.userTemplates.push(newTemplate);
-  await saveState(state);
+    state.userTemplates.push(newTemplate);
+    await saveState(state);
 
-  return newTemplate;
+    return newTemplate;
+  });
 }
 
 /**
  * Update a user template
  */
 export async function updateTemplate(templateId, updates) {
-  const state = await loadState();
+  return queueWrite(async () => {
+    const state = await loadState();
 
-  const index = state.userTemplates.findIndex(t => t.id === templateId);
-  if (index === -1) {
-    return { error: 'Template not found or is a built-in template' };
-  }
+    const index = state.userTemplates.findIndex(t => t.id === templateId);
+    if (index === -1) {
+      return { error: 'Template not found or is a built-in template' };
+    }
 
-  state.userTemplates[index] = {
-    ...state.userTemplates[index],
-    ...updates,
-    id: templateId, // Preserve ID
-    isBuiltin: false,
-    updatedAt: new Date().toISOString()
-  };
+    state.userTemplates[index] = {
+      ...state.userTemplates[index],
+      ...updates,
+      id: templateId, // Preserve ID
+      isBuiltin: false,
+      updatedAt: new Date().toISOString()
+    };
 
-  await saveState(state);
-  return state.userTemplates[index];
+    await saveState(state);
+    return state.userTemplates[index];
+  });
 }
 
 /**
  * Delete a user template
  */
 export async function deleteTemplate(templateId) {
-  const state = await loadState();
+  return queueWrite(async () => {
+    const state = await loadState();
 
-  // Can't delete built-in templates
-  if (templateId.startsWith('builtin-')) {
-    return { error: 'Cannot delete built-in templates' };
-  }
+    // Can't delete built-in templates
+    if (templateId.startsWith('builtin-')) {
+      return { error: 'Cannot delete built-in templates' };
+    }
 
-  const index = state.userTemplates.findIndex(t => t.id === templateId);
-  if (index === -1) {
-    return { error: 'Template not found' };
-  }
+    const index = state.userTemplates.findIndex(t => t.id === templateId);
+    if (index === -1) {
+      return { error: 'Template not found' };
+    }
 
-  const deleted = state.userTemplates.splice(index, 1)[0];
+    const deleted = state.userTemplates.splice(index, 1)[0];
 
-  // Also clean up usage data
-  if (state.usage && state.usage[templateId]) {
-    delete state.usage[templateId];
-  }
+    // Also clean up usage data
+    if (state.usage && state.usage[templateId]) {
+      delete state.usage[templateId];
+    }
 
-  await saveState(state);
+    await saveState(state);
 
-  return { success: true, deleted };
+    return { success: true, deleted };
+  });
 }
 
 /**
