@@ -93,8 +93,8 @@ export function agePersistentMindToolActivation(leases) {
 /**
  * Activate one or more families for a fresh `retentionTurns`-turn window.
  * `retentionTurns <= 0` persists nothing — the family is still exposed for
- * whatever turn calls this (the caller re-reads `leases` afterward), but
- * ages away immediately rather than surviving into the next user turn.
+ * whatever turn calls this via the adapter's turn-local selection, without
+ * surviving into the next user or self-directed turn.
  */
 export function activatePersistentMindToolActivationFamilies(leases, families, retentionTurns) {
   const normalized = normalizePersistentMindToolActivation({ leases }).leases;

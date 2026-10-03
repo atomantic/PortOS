@@ -566,13 +566,15 @@ export function createPersistentMindTurnAdapter() {
       // Set after the first tool round: what a continuation prompt carries.
       let continuation = null;
       const requestedToolNames = new Map();
+      // Selection lasts for this adapter run independently of persisted leases.
+      const activatedFamilies = new Set();
       const composeRoundPrompt = async (namePrompt) => {
         // Rebuilds never age the lease or trace (isUserTurn/trace omitted).
         let exposedToolNames = [];
         const buildTools = (maxChars) => (continuation
           ? buildPersistentMindToolPrompt(continuation.capabilities, continuation.recipes, {
             turnId, maxChars, requiredToolNames: continuation.requiredToolNames,
-            requestedToolNames: [...requestedToolNames.keys()], onSelection: (names) => { exposedToolNames = names; },
+            requestedToolNames: [...requestedToolNames.keys()], activatedFamilies: [...activatedFamilies], onSelection: (names) => { exposedToolNames = names; },
           })
           : buildPersistentMindToolPrompt(taskAccess, recipeCatalog, { turnId, maxChars }));
         const annotateActivationResults = () => {
@@ -753,12 +755,14 @@ export function createPersistentMindTurnAdapter() {
         completedToolResults.push(...toolResults);
         for (const receipt of toolResults) {
           if (receipt.state === 'completed' && ['tools.activate', 'tools_activate'].includes(receipt.name)) {
+            for (const family of receipt.result?.activated || []) activatedFamilies.add(family);
             for (const name of receipt.result?.requestedToolNames || []) {
               requestedToolNames.set(name, receipt.result.targetFamilies?.[name]);
             }
           }
           if (receipt.state === 'completed' && ['tools.deactivate', 'tools_deactivate'].includes(receipt.name)) {
             const deactivated = new Set(receipt.result?.deactivated || []);
+            for (const family of deactivated) activatedFamilies.delete(family);
             for (const [name, family] of requestedToolNames) {
               if (deactivated.has(family)) requestedToolNames.delete(name);
             }
