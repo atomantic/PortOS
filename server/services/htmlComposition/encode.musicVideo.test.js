@@ -145,3 +145,18 @@ describe('encodeComposition process termination diagnostics', () => {
     })).rejects.toThrow(`ffmpeg failed (${message}): synthetic diagnostic`);
   });
 });
+
+
+it('preserves the exit signal and stderr when EPIPE arrives before the encoder closes', async () => {
+  const spawnProcess = () => {
+    const proc = new EventEmitter(); proc.stderr = new EventEmitter(); proc.stdin = new EventEmitter();
+    proc.stdin.write = (_bytes, callback) => {
+      const error = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+      callback(error); proc.stdin.emit('error', error);
+      setImmediate(() => { proc.stderr.emit('data', 'synthetic encoder stopped'); proc.emit('close', null, 'SIGTERM'); });
+    };
+    return proc;
+  };
+  await expect(encodeComposition(page, contract(0.25), '/tmp/interrupted.mp4', { spawnProcess }))
+    .rejects.toThrow(/Render interrupted:.*EPIPE.*SIGTERM.*synthetic encoder stopped/);
+});

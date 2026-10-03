@@ -81,3 +81,18 @@ describe('unmounted kickoff ownership', () => {
     expect(MockEventSource.instances).toHaveLength(0);
   });
 });
+
+
+it.each(['complete', 'error', 'canceled', 'disconnected'])('settles %s once against the captured project for a persisted-state refresh', async (reason) => {
+  const onSettled = vi.fn();
+  const { result } = renderHook(() => useSseJobSlot({ eventsUrl: id => `/events/${id}`, onSettled }));
+  act(() => result.current.attach('synthetic-render', 'synthetic-project'));
+  act(() => { lastEventSource().onopen(); });
+  expect(result.current.connected).toBe(true);
+  act(() => {
+    if (reason === 'disconnected') lastEventSource().fail();
+    else lastEventSource().emit({ type: reason });
+  });
+  expect(result.current.active).toBe(false);
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith(reason, 'synthetic-project');
+});

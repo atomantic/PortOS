@@ -53,10 +53,10 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
 
   return <section id="mv-production-review" aria-label="Production review" className={framed ? 'rounded-lg border border-port-border bg-port-card p-3 space-y-3' : 'space-y-3'}>
     {framed && <h3 className="font-medium">Production review</h3>}
-    <p className="text-sm text-port-text-muted">Every medium needs visual direction, a timed storyboard and a watched animated proof. Drafts and technical renders do not count as approval.</p>
+    <p className="text-sm text-port-text-muted">Approve the visual direction, then the timed storyboard, then a watched animated proof. Approving a development file or rendering a draft does not approve production.</p>
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
     <ol className="grid gap-2 sm:grid-cols-3">
-      {Object.entries(labels).map(([key, label]) => <li key={key} className="rounded border border-port-border p-2">
+      {Object.entries(labels).map(([key, label]) => <li key={key} id={`mv-review-${key}`} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
         <strong className="text-sm">{label}</strong>
         <p role="status" className="text-xs">{ready?.[key].approved ? 'Approved for this revision' : 'Human review required'}</p>
         {(ready?.[key].problems || []).map(problem => <p key={problem} className="mt-1 text-xs text-port-text-muted">{problem}</p>)}
@@ -65,6 +65,10 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
             || (key === 'proof' && (playbackBlocked || !playbackComplete))}>
           Approve {label.toLowerCase()}
         </button>
+        {!blocked && !password && !ready?.[key].approved && !ready?.[key].problems.length && (key !== 'proof' || (!playbackBlocked && playbackComplete)) && <button type="button" className="block min-h-[44px] text-xs text-port-accent" onClick={() => {
+          const input = document.getElementById(fieldId('password'));
+          input?.scrollIntoView({ block: 'center' }); input?.focus({ preventScroll: true });
+        }}>Enter your password to enable approval</button>}
       </li>)}
     </ol>
     <label htmlFor={fieldId('password')} className="block text-sm">Instance password for this approval
@@ -206,13 +210,14 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         <p className="mt-1 whitespace-pre-wrap text-sm">{saved.motionLanguage || 'Save an energy target and timed choreography in the planning editor before judging the proof.'}</p>
         <p className="mt-2 text-xs text-port-text-muted">Compare playback with this saved plan. If the chosen energy or actions are missing, record revision feedback with a time range before approving.</p>
       </section>
-      <div className="flex flex-wrap items-end gap-2">
+      <div id="mv-review-render" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="flex flex-wrap items-end gap-2">
         <label htmlFor={fieldId('proof-start')} className="text-sm">Proof start (seconds)<input id={fieldId('proof-start')} type="number" min="0" step="0.01" value={startSec} onChange={e => setStartSec(Number(e.target.value))} className={fieldClass} /></label>
         <label htmlFor={fieldId('proof-end')} className="text-sm">Proof end (seconds)<input id={fieldId('proof-end')} type="number" min="0" step="0.01" value={endSec} onChange={e => setEndSec(Number(e.target.value))} className={fieldClass} /></label>
-        <button type="button" className={buttonClass} disabled={blocked || review.proof.active} onClick={() => review.renderProof({ startSec, endSec, kind: 'prototype' })}>Render feasibility prototype — unapproved</button>
-        <button type="button" className={buttonClass} disabled={blocked || !ready?.storyboard.approved || review.proof.active} onClick={() => review.renderProof({ startSec, endSec })}>Render animated proof</button>
+        <button type="button" className={buttonClass} disabled={blocked || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec, kind: 'prototype' })}>Render feasibility prototype — unapproved</button>
+        <button type="button" className={buttonClass} disabled={blocked || !ready?.storyboard.approved || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec })}>Render animated proof</button>
       </div>
-      {review.proof.active && <p role="status">Rendering proof…</p>}
+      {review.proof.occupied && !review.proof.active && <p role="status">Review evidence is rendering in another project. Wait for it to finish before starting another.</p>}
+      {review.proof.active && <p role="status">{review.proof.connected === false ? 'Connecting to review render…' : `Rendering review evidence — ${review.proof.percent ?? 0}%.`} Production approvals are separate.</p>}
       <p className="text-xs text-port-text-muted">A feasibility prototype uses the current authored composition and master audio without approving the look or authorizing production. It can be made before art approval; it never becomes approved proof automatically.</p>
       {prototype?.status === 'complete' && prototype.filename && <figure><video controls className="mt-2 w-full rounded" aria-label="Unapproved feasibility prototype" src={`/data/videos/${encodeURIComponent(prototype.filename)}`} /><figcaption className="text-sm">Unapproved feasibility prototype — separate from production proof</figcaption></figure>}
       {excerpt?.status === 'complete'  && excerpt.filename && <video controls className="mt-2 w-full rounded" aria-label="Animated proof with master audio" src={`/data/videos/${encodeURIComponent(excerpt.filename)}`} />}

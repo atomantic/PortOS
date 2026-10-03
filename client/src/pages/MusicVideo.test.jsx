@@ -37,8 +37,8 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
 
 // This page suite exercises existing controls with production approvals already granted.
 // ProductionReviewPanel and route integration suites exercise the real approval refusals.
-vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: () => ({
-  readiness: { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
+vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
+  readiness: project?.productionReadiness || { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
   busy: false, error: null, proof: { active: false }, save: vi.fn(), prepare: vi.fn(), approve: vi.fn(), renderProof: vi.fn(),
 }) }));
 
@@ -329,7 +329,7 @@ const openCreateForm = async () => {
 // Back / ⌘K jump, which bypass the in-app selectProject guard).
 function LocationProbe() {
   const loc = useLocation();
-  return <div data-testid="loc">{loc.pathname}</div>;
+  return <div data-testid="loc">{loc.pathname}{loc.hash}</div>;
 }
 function NavTo({ to }) {
   const navigate = useNavigate();
@@ -350,6 +350,7 @@ beforeEach(() => {
   getMusicVideoProject.mockImplementation(async id => (await listMusicVideoProjects()).find(project => project.id === id));
   sseState.latest = null;
   sseState.closed = false;
+  sseState.isOpen = true;
   ytSseStates.clear();
 });
 
@@ -556,7 +557,7 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
     // the component until something else does — force one (mirrors the
     // existing render-job tests' use of this same mock).
     fireEvent.click(screen.getByRole('button', { name: /New project/i }));
-    await screen.findByText(/Rendering excerpt — 50%/);
+    await screen.findByText(/Rendering draft — 50%/);
   });
 
   it('reloads the project on a completed excerpt render and shows the player + contact sheet + notes', async () => {
@@ -682,7 +683,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
 
     fireEvent.click(await findEnabledByRole('button', { name: /Render revised draft/i }));
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
-    await screen.findByText(/Rendering excerpt/);
+    await screen.findByText(/Rendering draft/);
     expect(generateVideo).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
   });
@@ -2481,5 +2482,33 @@ describe('MusicVideo main page project cards', () => {
       fireEvent.click(confirmBtn);
     });
     expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
+  });
+});
+
+
+describe('direct production review navigation', () => {
+  it('focuses the exact step on repeated clicks and restores its deep link with Back/Forward without approval', async () => {
+    const project = { ...PROJECT_ANALYZED, scenes: [], composition: { mode: 'document' },
+      productionReview: { draft: { storyboardSource: 'document', storyboard: [{ id: 'shot-1' }, { id: 'shot-2' }] } },
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: false, problems: [] },
+        storyboard: { approved: false, problems: ['Approve art first'] }, proof: { approved: false, problems: ['Approve storyboard first'] } } };
+    listMusicVideoProjects.mockResolvedValue([project]);
+    render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}><LocationProbe /><NavTo to={-1} /><NavTo to={1} />{MV_ROUTES}</MemoryRouter>);
+    const action = await screen.findByRole('button', { name: 'Review art direction' });
+    expect(screen.getByLabelText('Project')).toHaveTextContent('2 document shots');
+    fireEvent.click(action);
+    const art = document.getElementById('mv-review-art');
+    await waitFor(() => expect(art).toHaveFocus());
+    expect(art.closest('details').open).toBe(true);
+    expect(screen.getByTestId('loc')).toHaveTextContent('/cast-sets#mv-review-art');
+    fireEvent.click(screen.getByRole('button', { name: 'Review art direction' }));
+    expect(art).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Approve art direction' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Enter your password to enable approval' }));
+    expect(screen.getByLabelText('Instance password for this approval')).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'go--1' }));
+    expect(screen.getByTestId('loc')).toHaveTextContent('/review');
+    fireEvent.click(screen.getByRole('button', { name: 'go-1' }));
+    await waitFor(() => expect(art).toHaveFocus());
   });
 });

@@ -71,13 +71,16 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   let exited = false;
   let stopping = false;
   let stopReason = null;
+  let exitDetail = '';
+  let inputError = null;
   proc.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-2000); });
   const finished = new Promise((resolve, reject) => {
     proc.on('error', reject);
-    proc.stdin.on('error', reject);
+    proc.stdin.on('error', error => { inputError = error; reject(error); });
     proc.once('close', (code, exitSignal) => {
       exited = true;
       const origin = stopReason ? `; encoder ${stopReason}` : exitSignal ? '; external signal (no encoder stop requested)' : '';
+      exitDetail = `ffmpeg exited with ${code ?? exitSignal ?? 'unknown status'}${origin}${stderr ? `: ${stderr}` : ''}`;
       code === 0 ? resolve() : reject(new Error(`ffmpeg failed (${code ?? exitSignal ?? 'unknown'}${origin}): ${stderr}`));
     });
   });
@@ -149,6 +152,15 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     await finished;
     page.check();
     return shutter ? { sampleHistogram: histogram } : {};
+  } catch (error) {
+    if (error.code === 'EPIPE' || inputError?.code === 'EPIPE') {
+      // A closed pipe often arrives before the process's close event. Preserve
+      // that event's signal and stderr instead of persisting just 'write EPIPE'.
+      stop('input pipe closed');
+      if (!exited) await new Promise(resolve => proc.once('close', resolve));
+      throw new Error(`Render interrupted: encoder stopped accepting frames (EPIPE); ${exitDetail}. A server restart or encoder exit can interrupt a draft. Existing completed drafts are retained.`);
+    }
+    throw error;
   } finally {
     signal?.removeEventListener('abort', abort);
     stop('cleanup requested');

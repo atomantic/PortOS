@@ -217,8 +217,8 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     const log = canceled ? console.log : console.error;
     log(`${canceled ? '🛑' : '❌'} Music-video ${renderer.label} excerpt ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(4, 12)}]: ${reason}`);
     await unlink(outputPath).catch(() => {});
-    broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
     await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
+    broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
   });
   return { jobId, excerptId };
 }
@@ -318,9 +318,8 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // gates its 'complete' broadcast on it, so a director is never told an
     // excerpt is ready when the record never actually recorded it (the project
     // would otherwise stay stuck 'rendering' while the client believes it's
-    // done). The error/cancel paths already broadcast their OWN terminal type
-    // before calling this, so their write failing only delays the record
-    // catching up (boot recovery clears a truly stuck one).
+    // done). Error/cancel paths attempt persistence before notifying clients
+    // to refresh; boot recovery clears a record if that write also fails.
     const finalize = async (patch) => {
       projectExcerptRenders.delete(projectId);
       const persisted = await mutateProjectRecord(projectId, (current) => ({
@@ -432,8 +431,8 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
             job.status = 'error';
             job.lastError = `Finalize failed: ${err.message}`;
             console.error(`❌ Music-video excerpt render finalize failed [${jobId.slice(4, 12)}]: ${err.message}`);
-            broadcastSse(job, { type: 'error', error: 'Excerpt render finalize failed' });
             await finalize({ status: 'error', error: 'Finalize failed', filename: null, jobId: null });
+            broadcastSse(job, { type: 'error', error: 'Excerpt render finalize failed' });
           }
         },
       });

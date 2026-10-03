@@ -1,7 +1,7 @@
 import ProductionReviewPanel from '../components/musicVideo/ProductionReviewPanel.jsx';
 import useMusicVideoProductionReview from '../hooks/useMusicVideoProductionReview.js';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router';
+import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
 import { Plus, Film, Copy, Trash2, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -79,7 +79,7 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import {
-  approvalSummary, deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam,
+  approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam,
 } from '../lib/musicVideoStages.js';
 import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
@@ -101,9 +101,7 @@ const STAGE_VIEWS = {
   setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage, publish: PublishStage,
 };
 
-// The shared autopilot section stays unfolded only while the run is working or
-// waiting on the director; a paused, finished or cancelled run folds to its summary line.
-const AUTOPILOT_OPEN_STATUSES = new Set(['running', 'awaiting-approval', 'needs-human', 'failed']);
+// Keep active work open; historical runs remain available behind their summary.
 const autopilotSummary = (run) => {
   const label = run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status;
   return run.error ? `${label} — ${run.error}` : label;
@@ -774,23 +772,22 @@ export default function MusicVideo() {
   // ---- stage plumbing -------------------------------------------------------
   // A header action that lands on a control (Attach a track, Set up production)
   // scrolls to and focuses it once its stage has rendered.
-  const [pendingAnchor, setPendingAnchor] = useState(null);
+  const location = useLocation();
   useEffect(() => {
-    if (!pendingAnchor || pendingAnchor.stage !== activeStage) return;
-    const el = document.getElementById(pendingAnchor.id);
+    const anchor = location.hash.slice(1);
+    if (!anchor || !selected) return;
+    const el = document.getElementById(anchor);
+    if (!el) return;
     // An anchor inside a folded section (Production review) unfolds it first.
-    const fold = el?.closest?.('details');
-    if (fold) fold.open = true;
-    el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
-    const focusable = el?.matches?.('button, input, select, textarea, a') ? el : el?.querySelector?.('button, input, select, textarea, a');
+    for (let fold = el.closest('details'); fold; fold = fold.parentElement?.closest('details')) fold.open = true;
+    el.scrollIntoView?.({ block: 'start', behavior: 'instant' });
+    const focusable = el.matches('[tabindex], button, input, select, textarea, a') ? el : el.querySelector('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a');
     focusable?.focus?.({ preventScroll: true });
-    setPendingAnchor(null);
-  }, [pendingAnchor, activeStage]);
+  }, [activeStage, location.key, selectedId, !!selected]);
   const goToStage = (stage, anchor = null) => {
-    setPendingAnchor(anchor ? { stage, id: anchor } : null);
     // The dock's picked source (`?play=`) follows the director across tabs.
     const play = searchParams.get('play');
-    navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${play ? `?play=${encodeURIComponent(play)}` : ''}`);
+    navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${play ? `?play=${encodeURIComponent(play)}` : ''}${anchor ? `#${anchor}` : ''}`, { replace: activeStage === stage });
   };
 
   // The docked preview: scene cards seek it; on a phone it is a mini-player
@@ -808,6 +805,8 @@ export default function MusicVideo() {
   const nextAction = selected ? deriveNextAction(selected, {
     readiness: productionReview.readiness,
     renderActive: renderTargetsSelected,
+    draftActive: excerpts.rendering,
+    proofActive: productionReview.proof.active,
     renderProgress: renderJob.progress,
     renderPending: renderJob.pending,
     renderBlockedByOther: !!renderJob.active && !renderTargetsSelected,
@@ -987,7 +986,7 @@ export default function MusicVideo() {
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
-                  {project.name} · {project.scenes?.length || 0} scenes · {project.status}
+                  {project.name} · {projectShotSummary(project)} · {project.status}
                 </option>
               ))}
             </select>
@@ -1171,7 +1170,7 @@ export default function MusicVideo() {
                   key={`autonomous-${selected.id}`}
                   title="Autopilot run"
                   summary={autopilotSummary(autopilotRun)}
-                  defaultOpen={!!runStage || autopilotRun.interrupted || AUTOPILOT_OPEN_STATUSES.has(autopilotRun.status)}
+                  defaultOpen={!!runStage || (autopilotRun.status === 'running' && !autopilotRun.interrupted)}
                 >
                   <AutonomousRunPanel project={selected} auto={autonomous} selectedStage={runStage} onSelectStage={setRunStage} framed={false} />
                 </StageSection>

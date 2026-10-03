@@ -87,3 +87,15 @@ describe('useSseProgress', () => {
     expect(isTerminalSseFrame(null)).toBe(false);
   });
 });
+
+it('reports a transient outage and recovers without ending the job stream', () => {
+  const { result } = renderHook(() => useSseProgress('/reconnect'));
+  act(() => last().onopen());
+  expect(result.current.isOpen).toBe(true);
+  act(() => last().fail(MockEventSource.CONNECTING));
+  expect(result.current.isOpen).toBe(false);
+  expect(result.current.closed).toBe(false);
+  expect(last().closed).toBe(false);
+  act(() => last().onopen());
+  expect(result.current.isOpen).toBe(true);
+});

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {
   getMusicVideoProject,
@@ -31,6 +31,7 @@ const readPercent = (frame) => (Number.isFinite(frame.progress) ? frame.progress
  */
 export default function useMusicVideoExcerpts({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
+  const seenJobs = useRef(new Set());
   const [noteBusyId, setNoteBusyId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
 
@@ -48,8 +49,9 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
     eventsUrl: musicVideoExcerptRenderEventsUrl,
     cancelRequest: cancelMusicVideoExcerptRender,
     readPercent,
-    onComplete: (_frame, id) => reload(id),
-    onErrorFrame: (_frame, id) => { reload(id); return true; }, // reload already surfaces the persisted `error` field; skip the generic toast
+    onKickoffSuccess: id => seenJobs.current.add(id),
+    onSettled: (_reason, id) => reload(id),
+    onErrorFrame: () => true, // reload already surfaces the persisted `error` field; skip the generic toast
     onKickoffError: (err) => {
       if (err?.status === 409) { toast.error(err.message || 'An excerpt render is already in progress'); return true; }
       return false;
@@ -61,13 +63,22 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
     startErrorFallback: 'Failed to start the excerpt render',
   });
 
+  useEffect(() => {
+    const excerpt = project?.excerpts?.find(e => e.status === 'rendering' && e.jobId);
+    if (excerpt && !seenJobs.current.has(excerpt.jobId) && job.attach(excerpt.jobId, projectId)) seenJobs.current.add(excerpt.jobId);
+  }, [project, projectId, job.active]);
+
   // #9280: a social cut passes its own frame (`aspect`) and faded audio edges.
   const startExcerpt = (startSec, endSec, { aspect = null, fade = false } = {}) => job.start({
     startSec, endSec, ...(aspect ? { aspect } : {}), ...(fade ? { fade: true } : {}),
   }, projectId);
   // #8987: a selective revision's resume starts its draft re-render server-side;
   // adopt that job so it shows the same progress and reloads on its finish.
-  const attachRender = (jobId, id = projectId) => job.attach(jobId, id);
+  const attachRender = (jobId, id = projectId) => {
+    const attached = job.attach(jobId, id);
+    if (attached) seenJobs.current.add(jobId);
+    return attached;
+  };
   // An excerpt's id IS its render job id, so any rendering excerpt — including
   // one started before a reload, or by a revision — can be cancelled by id.
   const cancelExcerpt = (excerptId) => cancelMusicVideoExcerptRender(excerptId, { silent: true })
@@ -106,8 +117,11 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
   };
 
   return {
-    rendering: job.active,
-    progress: job.active ? job.percent : 0,
+    occupied: job.active,
+    rendering: job.active && job.context === projectId,
+    activeRenderId: job.context === projectId ? job.jobId : null,
+    connected: job.connected,
+    progress: job.active && job.context === projectId ? job.percent : 0,
     deletingId,
     noteBusyId,
     startExcerpt,
