@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
@@ -387,6 +387,22 @@ describe('MediaCollectionDetail — bulkMoveOrCopy move/remove failures', () => 
     expect(toast.success).toHaveBeenCalledWith('Moved 3 to "Target Collection"');
     expect(toast.error).not.toHaveBeenCalled();
     expect(screen.queryByText(/of 3 selected/)).toBeNull();
+  });
+
+  it('keeps a usable page focus target while a destination action disables and removes its opener', async () => {
+    let finishAdd;
+    mockAddMediaCollectionItem.mockImplementationOnce(() => new Promise(resolve => { finishAdd = resolve; }));
+    const user = userEvent.setup();
+    renderReal();
+    await selectAllAndMove(user);
+    const region = screen.getByRole('region', { name: 'Media collection' });
+    expect(screen.getByRole('button', { name: /move…/i })).toBeDisabled();
+    expect(document.activeElement).toBe(region);
+    await act(async () => finishAdd(REAL_COLLECTION));
+    await waitFor(() => expect(screen.queryByText(/of 3 selected/)).toBeNull());
+    expect(document.activeElement).toBe(region);
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Back' }));
   });
 
   it('reports the removal failure instead of a false success when every removal fails', async () => {
