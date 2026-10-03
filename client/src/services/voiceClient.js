@@ -20,7 +20,6 @@ import { ECHO_WINDOW_MS, MIN_TOKENS_FOR_ECHO_CHECK, MIN_SHARED_TRIGRAMS, tokeniz
 // both working — that session ignores the ring/silent switch too, so whatever is
 // playing stays audible. See the audio-session note in lib/audioContext.js.
 let releaseCaptureSession = null;
-let releaseContinuousSession = null;
 let releaseWebSpeechSession = null;
 
 let stream = null;
@@ -778,14 +777,7 @@ let calibrationUntil = 0;
 let lastRmsValue = 0;
 let lastDebugLogAt = 0;
 
-let continuousCtx = null;
-let continuousStream = null;
-let continuousWorkletNode = null;
-let continuousSource = null;
-let continuousCapture = null;
-let continuousGeneration = 0;
-let continuousStartPendingGeneration = null;
-let continuousSessionGeneration = null;
+let continuousAttempt = null;
 let vadState = 'idle';
 let speechChunks = [];
 // Fixed-size ring buffer of the last `preRollLimit` frames; avoids the
@@ -809,15 +801,58 @@ class VADProcessor extends AudioWorkletProcessor {
 registerProcessor('vad-processor', VADProcessor);
 `;
 
-const isContinuousCaptureCurrent = (capture) => Boolean(
-  capture
-  && capture.ownerGeneration === captureOwnerGeneration
-  && capture.generation === continuousGeneration
-  && continuousCapture === capture,
+const isCurrentContinuousAttempt = (attempt) => Boolean(
+  attempt?.active
+  && attempt.ownerGeneration === captureOwnerGeneration
+  && continuousAttempt === attempt,
 );
 
+const settleContinuousStart = (attempt) => {
+  attempt.pending = false;
+};
+
+const resetContinuousVad = () => {
+  speechChunks = [];
+  preRoll = null;
+  preRollIdx = 0;
+  preRollFilled = 0;
+  vadState = 'idle';
+  onsetFrames = 0;
+  calibrating = false;
+  calibrationSamples = [];
+};
+
+// Detach before any asynchronous close. A stale startup may still receive a
+// stream later, but it can release only resources on its own attempt.
+const detachContinuousAttempt = (attempt) => {
+  if (!attempt) return null;
+  attempt.active = false;
+  settleContinuousStart(attempt);
+  if (continuousAttempt === attempt) {
+    continuousAttempt = null;
+    resetContinuousVad();
+  }
+  return attempt;
+};
+
+const releaseContinuousResources = (attempt) => {
+  if (!attempt) return null;
+  const { source, workletNode, stream, releaseSession } = attempt;
+  attempt.source = null;
+  attempt.workletNode = null;
+  attempt.stream = null;
+  attempt.releaseSession = null;
+  try {
+    source?.disconnect();
+    workletNode?.disconnect();
+    if (workletNode) workletNode.port.onmessage = null;
+  } catch { /* ignore teardown errors */ }
+  stream?.getTracks().forEach((track) => track.stop());
+  return releaseSession;
+};
+
 const submitUtterance = async (capture) => {
-  if (!isContinuousCaptureCurrent(capture)) return;
+  if (!isCurrentContinuousAttempt(capture)) return;
   if (!speechChunks.length) return;
   const chunksToSubmit = speechChunks;
   speechChunks = [];
@@ -829,7 +864,7 @@ const submitUtterance = async (capture) => {
 
   const rate = capture.context?.sampleRate || 48000;
   const { wav, peak } = await float32ToWav16k(samples, rate);
-  if (!isContinuousCaptureCurrent(capture)) return;
+  if (!isCurrentContinuousAttempt(capture)) return;
   if (!wav || wav.byteLength < 800) {
     capture.callbacks?.onSubmit?.({ submitted: false, peak });
     return;
@@ -861,7 +896,7 @@ const snapshotPreRoll = () => {
 };
 
 const handleFrame = (frame, capture) => {
-  if (!isContinuousCaptureCurrent(capture)) return;
+  if (!isCurrentContinuousAttempt(capture)) return;
   let sum = 0;
   for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
   const rms = Math.sqrt(sum / frame.length);
@@ -955,18 +990,24 @@ const handleFrame = (frame, capture) => {
 };
 
 export const startContinuous = async (callbacks = {}) => {
-  if (continuousCtx || continuousStartPendingGeneration !== null) return;
-  const ownerGeneration = captureOwnerGeneration;
-  const generation = ++continuousGeneration;
-  continuousStartPendingGeneration = generation;
+  if (continuousAttempt?.context || continuousAttempt?.pending) return;
+  const attempt = {
+    ownerGeneration: captureOwnerGeneration,
+    active: true,
+    pending: true,
+    callbacks,
+    releaseSession: null,
+    stream: null,
+    context: null,
+    source: null,
+    workletNode: null,
+  };
+  continuousAttempt = attempt;
 
   // Claimed BEFORE getUserMedia — an output-only session already in force would
   // refuse the request outright — and handed back on failure, since a denied mic
-  // never reaches stopContinuous (`continuousCtx` is still null).
-  releaseContinuousSession?.();
-  const sessionRelease = acquireAudioSession('play-and-record');
-  releaseContinuousSession = sessionRelease;
-  continuousSessionGeneration = generation;
+  // never reaches stopContinuous (the attempt has no context yet).
+  attempt.releaseSession = acquireAudioSession('play-and-record');
 
   // AGC is intentionally OFF here — it boosts silence to maintain a target
   // output level, which destroys the energy-difference signal the VAD needs.
@@ -977,45 +1018,35 @@ export const startContinuous = async (callbacks = {}) => {
       autoGainControl: false,
     },
   }).catch((err) => {
-    if (continuousSessionGeneration === generation) {
-      sessionRelease();
-      releaseContinuousSession = null;
-      continuousSessionGeneration = null;
-    }
-    if (continuousStartPendingGeneration === generation) continuousStartPendingGeneration = null;
+    detachContinuousAttempt(attempt);
+    releaseContinuousResources(attempt)?.();
     throw err;
   });
-  if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) {
-    nextStream.getTracks().forEach((track) => track.stop());
-    if (continuousSessionGeneration === generation) {
-      sessionRelease();
-      releaseContinuousSession = null;
-      continuousSessionGeneration = null;
-    }
-    if (continuousStartPendingGeneration === generation) continuousStartPendingGeneration = null;
+  attempt.stream = nextStream;
+  if (!isCurrentContinuousAttempt(attempt)) {
+    releaseContinuousResources(attempt)?.();
     return null;
   }
-  continuousStream = nextStream;
-  detectAudioRoute(continuousStream).catch(() => {});
+  detectAudioRoute(attempt.stream).catch(() => {});
 
   // Constructors and graph wiring can throw synchronously too. Roll back every
   // partial setup, including one that acquired the mic but never got a context.
   let blobUrl = null;
   try {
     const Ctor = window.AudioContext || window.webkitAudioContext;
-    continuousCtx = new Ctor();
-    await resumeAudioContext(continuousCtx);
-    if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) return null;
+    attempt.context = new Ctor();
+    await resumeAudioContext(attempt.context);
+    if (!isCurrentContinuousAttempt(attempt)) return null;
 
     // Inline worklet module so we don't need a separate file in the build.
     blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
-    await continuousCtx.audioWorklet.addModule(blobUrl);
-    if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) return null;
+    await attempt.context.audioWorklet.addModule(blobUrl);
+    if (!isCurrentContinuousAttempt(attempt)) return null;
 
-    continuousSource = continuousCtx.createMediaStreamSource(continuousStream);
-    continuousWorkletNode = new AudioWorkletNode(continuousCtx, 'vad-processor');
+    attempt.source = attempt.context.createMediaStreamSource(attempt.stream);
+    attempt.workletNode = new AudioWorkletNode(attempt.context, 'vad-processor');
 
-    const sampleRate = continuousCtx.sampleRate;
+    const sampleRate = attempt.context.sampleRate;
     preRollLimit = Math.max(1, Math.ceil((VAD.preRollMs / 1000) * sampleRate / 128));
     preRoll = new Array(preRollLimit);
     preRollIdx = 0;
@@ -1031,25 +1062,18 @@ export const startContinuous = async (callbacks = {}) => {
     onRms = VAD.minOnRms;
     offRms = VAD.minOffRms;
 
-    const capture = {
-      ownerGeneration,
-      generation,
-      callbacks,
-      context: continuousCtx,
-    };
-    continuousCapture = capture;
-    continuousWorkletNode.port.onmessage = (e) => handleFrame(e.data, capture);
-    continuousSource.connect(continuousWorkletNode);
+    attempt.workletNode.port.onmessage = (e) => handleFrame(e.data, attempt);
+    attempt.source.connect(attempt.workletNode);
     // Worklet output must be pulled by the graph or process() stops running;
     // sinking through a zero-gain node keeps it alive without echoing the mic.
-    const sink = continuousCtx.createGain();
+    const sink = attempt.context.createGain();
     sink.gain.value = 0;
-    continuousWorkletNode.connect(sink).connect(continuousCtx.destination);
-    continuousStartPendingGeneration = null;
+    attempt.workletNode.connect(sink).connect(attempt.context.destination);
+    settleContinuousStart(attempt);
   } catch (err) {
-    // A disposed or stopped generation already released its resources. Its late
+    // A disposed or stopped attempt already released its resources. Its late
     // rejection must not stop a newer capture that has since started.
-    if (continuousGeneration === generation) await stopContinuous();
+    if (isCurrentContinuousAttempt(attempt)) await stopContinuous();
     throw err;
   } finally {
     if (blobUrl !== null) URL.revokeObjectURL(blobUrl);
@@ -1057,43 +1081,13 @@ export const startContinuous = async (callbacks = {}) => {
 };
 
 export const stopContinuous = async () => {
-  const generation = continuousGeneration;
-  continuousGeneration += 1;
-  continuousStartPendingGeneration = null;
-  const ctx = continuousCtx;
-  const captureStream = continuousStream;
-  const workletNode = continuousWorkletNode;
-  const source = continuousSource;
-  const release = continuousSessionGeneration === generation
-    ? releaseContinuousSession
-    : null;
-  continuousCtx = null;
-  continuousStream = null;
-  continuousWorkletNode = null;
-  continuousSource = null;
-  continuousCapture = null;
-  try {
-    source?.disconnect();
-    workletNode?.disconnect();
-    workletNode && (workletNode.port.onmessage = null);
-  } catch { /* ignore teardown errors */ }
-  captureStream?.getTracks().forEach((track) => track.stop());
-  if (release) release();
-  if (releaseContinuousSession === release) releaseContinuousSession = null;
-  if (continuousSessionGeneration === generation) continuousSessionGeneration = null;
-  speechChunks = [];
-  preRoll = null;
-  preRollIdx = 0;
-  preRollFilled = 0;
-  vadState = 'idle';
-  onsetFrames = 0;
-  calibrating = false;
-  calibrationSamples = [];
+  const attempt = detachContinuousAttempt(continuousAttempt);
+  releaseContinuousResources(attempt)?.();
   // Reset shared state before awaiting close so a retry owns fresh VAD state.
-  await Promise.resolve().then(() => ctx?.close?.()).catch(() => {});
+  await Promise.resolve().then(() => attempt?.context?.close?.()).catch(() => {});
 };
 
-export const isContinuous = () => continuousCtx !== null;
+export const isContinuous = () => continuousAttempt?.context != null;
 
 export const getVadLevel = () => lastRmsValue;
 
@@ -1282,34 +1276,10 @@ export const disposeCaptureOwner = () => {
   recorderSessionGeneration = null;
   try { activeRecorder?.stop(); } catch { /* already stopped */ }
 
-  const context = continuousCtx;
-  const captureStream = continuousStream;
-  const workletNode = continuousWorkletNode;
-  const source = continuousSource;
-  continuousGeneration += 1;
-  continuousStartPendingGeneration = null;
-  continuousCapture = null;
-  continuousCtx = null;
-  continuousStream = null;
-  continuousWorkletNode = null;
-  continuousSource = null;
-  try {
-    source?.disconnect();
-    workletNode?.disconnect();
-    workletNode && (workletNode.port.onmessage = null);
-  } catch { /* ignore teardown errors */ }
-  captureStream?.getTracks().forEach((track) => track.stop());
-  Promise.resolve(context?.close?.()).catch(() => {});
-  releaseContinuousSession?.();
-  releaseContinuousSession = null;
-  continuousSessionGeneration = null;
-  speechChunks = [];
-  preRoll = null;
-  preRollIdx = 0;
-  preRollFilled = 0;
-  vadState = 'idle';
-  calibrating = false;
-  calibrationSamples = [];
+  const attempt = detachContinuousAttempt(continuousAttempt);
+  const releaseSession = releaseContinuousResources(attempt);
+  Promise.resolve(attempt?.context?.close?.()).catch(() => {});
+  releaseSession?.();
 
   const recognition = webSpeechRecognition;
   webSpeechRecognition = null;
