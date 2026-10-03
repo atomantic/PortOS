@@ -1402,6 +1402,16 @@ describe('bounded scene inspection through semantic dispatch', () => {
     expect(tool).toMatchObject({ granted: true, output_schema: { properties: { complete: { type: 'boolean' } } } });
   });
 
+  it('returns a detached object at its stamped absolute pose after a live mount/dismount', async () => {
+    await seed({ parent: model([20, 0, 0]), child: model() });
+    emit('mount', { id: 'child', to: 'parent', offset: [1, 0, 0] });
+    expect(await inspect()).toMatchObject({ invalidEntities: 1, complete: false, entities: [] });
+    emit('dismount', { id: 'child', pos: [2, 0, 0], yaw: 1 });
+    const detached = await inspect();
+    expect(detached).toMatchObject({ invalidEntities: 0, complete: true, boundsComplete: false });
+    expect(detached.entities).toEqual([expect.objectContaining({ id: 'child', pos: [2, 0, 0], yaw: 1, boundsState: 'unknown' })]);
+  });
+
   it('bounds dense results without exporting components, chat, tickets, credentials or arbitrary paths', async () => {
     const entities = Object.fromEntries(Array.from({ length: 30 }, (_, n) => [`model-${n}`, model([0, 0, 0], {
       actor: 'synthetic-private-person', comp: { portos: { managedBy: 'portos', ticket: 'synthetic-private-ticket', token: 'Bearer synthetic-secret' },
@@ -1495,5 +1505,21 @@ describe('bounded scene inspection through semantic dispatch', () => {
       return Response.json({ bbox: { min: [-10001, 0, -1], max: [1, 2, 1] } });
     }));
     expect(await inspect()).toMatchObject({ entities: [], unknownBounds: 1, boundsComplete: false });
+  });
+
+  it('returns unknown geometry when the shared deadline aborts, without a production sleep', async () => {
+    await seed({ existing: model() });
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      expect(ms).toBe(2000);
+      queueMicrotask(() => controller.abort());
+      return controller.signal;
+    });
+    vi.stubGlobal('fetch', vi.fn((_input, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('synthetic deadline')), { once: true });
+    })));
+    try {
+      expect(await inspect()).toMatchObject({ availability: 'current', complete: true, boundsComplete: false, unknownBounds: 1 });
+    } finally { timeout.mockRestore(); }
   });
 });

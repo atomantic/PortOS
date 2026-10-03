@@ -31,7 +31,7 @@ const record = (value) => value !== null && typeof value === 'object' && !Array.
 const validVector = (value) => vector.safeParse(value).success;
 
 /** Only library model references and content-addressed store models, never URLs. */
-export function eidoverseSceneAsset(value) {
+function eidoverseSceneAsset(value) {
   if (typeof value !== 'string') return null;
   const path = value.replaceAll('\\', '/');
   if (path.length > 192 || path.split('/').some((part) => !part || part === '.' || part === '..')) return null;
@@ -113,7 +113,11 @@ export function updateEidoverseSceneView(view, entry) {
       if (entity) {
         entity.unsupported = true;
         if (entry.verb === 'mount') entity.parentId = args.to;
-        if (entry.verb === 'dismount') { entity.parentId = null; entity.pos = null; }
+        if (entry.verb === 'dismount') {
+          entity.parentId = null;
+          entity.pos = validVector(args.pos) ? args.pos : null;
+          if (args.yaw !== undefined) entity.yaw = args.yaw;
+        }
       }
       break;
     case 'epoch': case 'behavior': case 'bstate': case 'force': case 'punt':
