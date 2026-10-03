@@ -29,6 +29,10 @@ if [[ $head == 1 ]]; then
   printf 'HTTP/2 200\\r\\ncontent-length: %s\\r\\n\\r\\n' "$CURL_REMOTE_SIZE"
   exit 0
 fi
+if [[ -z "$dest" ]]; then
+  printf 'archive'
+  exit 0
+fi
 if [[ -n "\${CURL_FAIL_MATCH:-}" && "$url" == *"\${CURL_FAIL_MATCH}"* ]]; then
   printf 'partial' > "$dest"
   exit 18
@@ -38,6 +42,32 @@ case "$url" in
   *.onnx) printf 'onnx-%s' "\${CURL_TAG:-v1}" > "$dest" ;;
   *) printf 'whisper-%s' "\${CURL_TAG:-v1}" > "$dest" ;;
 esac
+`;
+const UNAME_STUB = `#!/usr/bin/env bash
+case "$1" in
+  -s) printf '%s\\n' "\${FAKE_UNAME_S:-Linux}" ;;
+  -m) printf '%s\\n' "\${FAKE_UNAME_M:-x86_64}" ;;
+  *) exit 2 ;;
+esac
+`;
+const TAR_STUB = `#!/usr/bin/env bash
+dest=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -C) dest="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cat >/dev/null
+if [[ "$dest" == *"/.portos/voice" ]]; then
+  mkdir -p "$dest/piper"
+  printf '#!/bin/sh\\n' > "$dest/piper/piper"
+  chmod +x "$dest/piper/piper"
+else
+  mkdir -p "$dest/piper-phonemize/lib"
+  : > "$dest/piper-phonemize/lib/libpiper_phonemize.so"
+  : > "$dest/piper-phonemize/lib/libpiper_phonemize.dylib"
+fi
 `;
 
 describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning', () => {
@@ -72,6 +102,10 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
     mkdirSync(stubDir);
     writeFileSync(join(stubDir, 'curl'), CURL_STUB);
     chmodSync(join(stubDir, 'curl'), 0o755);
+    writeFileSync(join(stubDir, 'uname'), UNAME_STUB);
+    chmodSync(join(stubDir, 'uname'), 0o755);
+    writeFileSync(join(stubDir, 'tar'), TAR_STUB);
+    chmodSync(join(stubDir, 'tar'), 0o755);
     log = join(home, 'curl.log');
     // Pretend the Piper binary and its libs are already installed.
     const piper = join(home, '.portos/voice/piper');
@@ -96,6 +130,28 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
     const retry = run();
     expect(retry.status).toBe(0);
     expect(inspectVoiceAsset('piper', onnx()).state).toBe('verified');
+  });
+
+  it.each([
+    ['Linux', 'x86_64', 'linux_x86_64'],
+    ['Darwin', 'x86_64', 'macos_x64'],
+    ['Linux', 'aarch64', 'linux_aarch64'],
+    ['Darwin', 'arm64', 'macos_aarch64'],
+  ])('selects published Piper and phonemize archives for %s/%s', (system, machine, suffix) => {
+    rmSync(join(home, '.portos/voice/piper'), { recursive: true, force: true });
+    const result = run({ FAKE_UNAME_S: system, FAKE_UNAME_M: machine });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const urls = downloads().join('\n');
+    expect(urls).toContain(`piper_${suffix}.tar.gz`);
+    expect(urls).toContain(`piper-phonemize_${suffix}.tar.gz`);
+  });
+
+  it('rejects an unsupported platform before requesting an archive', () => {
+    rmSync(join(home, '.portos/voice/piper'), { recursive: true, force: true });
+    const result = run({ FAKE_UNAME_S: 'FreeBSD', FAKE_UNAME_M: 'x86_64' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Unsupported Piper platform: freebsd/x86_64');
+    expect(downloads()).toEqual([]);
   });
 
   it('repairs a poisoned ONNX with no sidecar instead of reporting ready', () => {
