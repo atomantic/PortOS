@@ -17,6 +17,7 @@ import {
   mutateGoals
 } from './store.js';
 import { applyFreshTimeHorizons, deriveLongevity } from './longevity.js';
+import { tombstoneGoal } from './goalTombstones.js';
 
 /**
  * Read the longevity snapshot with `timeHorizons` re-derived against today (#4122).
@@ -393,7 +394,10 @@ export async function deleteGoal(goalId) {
     }
 
     goals.goals.splice(idx, 1);
-    goals.updatedAt = new Date().toISOString();
+    // Leave a tombstone so a peer that still holds the goal drops it on sync
+    // instead of sending it back (#9816). Same document, same write queue.
+    tombstoneGoal(goals, deletedGoal, now);
+    goals.updatedAt = now;
     return true;
   });
 }
