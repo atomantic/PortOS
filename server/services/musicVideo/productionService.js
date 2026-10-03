@@ -453,8 +453,10 @@ async function takeSteps(projectId, runId) {
       // Marked first, like the plan: a failed start halts instead of looping.
       await mutateProjectRecord(projectId, (current) => markProductionCastAndSets(current, runId));
       // The reviewer pick steers the direction call only when the brief pins no LLM of its
-      // own — a saved brief pin is the deliberate choice (castAndSetsService resolves it).
-      const reviewerPin = !project.automation?.llm?.providerId && run.reviewer?.providerId;
+      // own — a saved brief pin (direction or Cast & Sets stage) is the deliberate choice
+      // (castAndSetsService resolves it).
+      const briefPinned = project.automation?.llm?.providerId || project.automation?.llmStages?.castAndSets?.providerId;
+      const reviewerPin = !briefPinned && run.reviewer?.providerId;
       const started = await deps.startCastAndSets(projectId, {
         productionRunId: runId,
         ...(reviewerPin ? { providerId: run.reviewer.providerId } : {}),

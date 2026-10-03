@@ -49,6 +49,19 @@ describe('normalizeAutonomousBrief', () => {
     expect(normalizeAutonomousBrief({ prompt: 'p', providerId: 'prov', effort: 'turbo' }).llm).toEqual({ providerId: 'prov', model: null });
   });
 
+  it('carries per-stage LLM pins and the lyric review opt-in on a start request and the scheduled params', () => {
+    const llmStages = { lyrics: { providerId: 'local-llm', model: 'small' }, lyricsReview: { providerId: 'cloud', model: null, effort: 'high' } };
+    const body = musicVideoAutonomousStartSchema.parse({ prompt: 'p', llmStages, lyricsReview: true });
+    expect(normalizeAutonomousBrief(body)).toMatchObject({
+      llmStages: { lyrics: { providerId: 'local-llm', model: 'small', effort: null }, lyricsReview: { providerId: 'cloud', model: null, effort: 'high' } },
+      lyricsReview: true,
+    });
+    expect(() => musicVideoAutonomousStartSchema.parse({ prompt: 'p', llmStages: { mastering: { providerId: 'x' } } })).toThrow();
+    expect(normalizeAutonomousBrief({ prompt: 'p' })).toMatchObject({ llmStages: null, lyricsReview: false });
+    // The scheduled task's saved params re-normalize to the same shape.
+    expect(normalizeAutopilotParams({ llmStages, lyricsReview: true })).toMatchObject({ llmStages: { lyrics: { providerId: 'local-llm' } }, lyricsReview: true });
+  });
+
   it('keeps Suno the default song source, accepts local, and only honors the fallback opt-in as a boolean', () => {
     expect(normalizeAutonomousBrief({ prompt: 'p' })).toMatchObject({ songSource: 'suno', localFallback: false });
     expect(normalizeAutonomousBrief({ prompt: 'p', songSource: 'local', localFallback: true })).toMatchObject({ songSource: 'local', localFallback: true });

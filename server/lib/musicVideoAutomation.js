@@ -52,13 +52,27 @@ export const MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX = 8000;
 // director; `auto` approves the step and continues.
 export const MUSIC_VIDEO_CHECKIN_MODES = Object.freeze(['review', 'auto']);
 export const MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD = 100000;
-// Stages that record the effective LLM route they last ran on (#9545).
-export const MUSIC_VIDEO_AUTOMATION_ROUTE_STAGES = Object.freeze(['plan', 'castAndSets']);
+// The LLM text stages a director may route to their own provider/model/effort
+// (`automation.llmStages`). An unpinned stage uses the direction pin (`llm`).
+// `brief` / `lyrics` / `lyricsReview` run inside an autonomous run; `castAndSets`,
+// `plan` and `authoring` run for every automation-first project.
+export const MUSIC_VIDEO_LLM_STAGES = Object.freeze(['brief', 'lyrics', 'lyricsReview', 'castAndSets', 'plan', 'authoring']);
+export const MUSIC_VIDEO_LLM_STAGE_LABELS = Object.freeze({
+  brief: 'Creative brief',
+  lyrics: 'Lyrics draft',
+  lyricsReview: 'Lyrics review & revise',
+  castAndSets: 'Cast & sets direction',
+  plan: 'Shot plan',
+  authoring: 'Code authoring',
+});
+// Stages that record the effective LLM route they last ran on (#9545): every LLM stage.
+export const MUSIC_VIDEO_AUTOMATION_ROUTE_STAGES = MUSIC_VIDEO_LLM_STAGES;
 export const MUSIC_VIDEO_LLM_TRANSPORTS = Object.freeze(['tui', 'cli', 'api']);
-// pinned = the request named it; brief = the saved brief did; tui-preferred =
-// nothing was pinned so an eligible TUI provider was chosen; active = the
-// install's active provider (no eligible TUI).
-export const MUSIC_VIDEO_LLM_ROUTE_SOURCES = Object.freeze(['pinned', 'brief', 'tui-preferred', 'active']);
+// pinned = the request named it; stage = the brief's pin for that stage did;
+// brief = the saved brief's direction pin did; tui-preferred = nothing was
+// pinned so an eligible TUI provider was chosen; active = the install's active
+// provider (no eligible TUI).
+export const MUSIC_VIDEO_LLM_ROUTE_SOURCES = Object.freeze(['pinned', 'stage', 'brief', 'tui-preferred', 'active']);
 
 /** A reasoning-effort level the runner accepts, else null (the runner clamps it per provider). */
 export const normalizeMusicVideoEffort = (value) => (EFFORT_LEVELS.includes(value) ? value : null);
@@ -78,6 +92,20 @@ export function normalizeMusicVideoLlm(raw) {
     model: trimTo(raw.model, 200) || null,
     effort: normalizeMusicVideoEffort(raw.effort),
   };
+}
+
+/**
+ * Per-stage LLM pins: `{ [stage]: { providerId, model, effort } }`, keeping
+ * only known stages whose pin normalizes. Null when no stage is pinned.
+ */
+export function normalizeMusicVideoLlmStages(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const stages = {};
+  for (const stage of MUSIC_VIDEO_LLM_STAGES) {
+    const pin = normalizeMusicVideoLlm(raw[stage]);
+    if (pin) stages[stage] = pin;
+  }
+  return Object.keys(stages).length ? stages : null;
 }
 
 /** The effective LLM route a stage last ran on, as stored for the project summary. */
@@ -108,7 +136,10 @@ export const musicVideoLlmRouteLabel = (route) => (route?.providerId
  * (a guidance edit cannot drop the tool list); `tools` replaces its list whole,
  * de-duplicated in catalog order. `budgetUsd: null` means "no cap".
  * `checkins` merges per gate; an unknown or absent gate is `review`.
- * `llm` (#9545): absent keeps the stored pin, `null` clears it. `routes` (the
+ * `llm` (#9545): absent keeps the stored pin, `null` clears it. `llmStages`
+ * merges per stage: an absent stage keeps its stored pin, a stage set to `null`
+ * clears it (back to the direction pin), and `llmStages: null` clears them all.
+ * `routes` (the
  * effective route each stage last ran on) is server-written: only the stored
  * record's value survives — a patch can never set it.
  */
@@ -122,6 +153,10 @@ export function normalizeMusicVideoAutomation(patch, current = null) {
     if (route) routes[stage] = route;
   }
   const llm = normalizeMusicVideoLlm(merged.llm);
+  const llmStages = normalizeMusicVideoLlmStages(patch?.llmStages === null ? null : {
+    ...(current?.llmStages && typeof current.llmStages === 'object' ? current.llmStages : {}),
+    ...(patch?.llmStages && typeof patch.llmStages === 'object' ? patch.llmStages : {}),
+  });
   return {
     tools: MUSIC_VIDEO_AUTOMATION_TOOL_IDS.filter((id) => picked.has(id)),
     guidance: typeof merged.guidance === 'string' ? merged.guidance.slice(0, MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX) : '',
@@ -131,6 +166,7 @@ export function normalizeMusicVideoAutomation(patch, current = null) {
       castAndSets: ({ ...(current?.checkins || {}), ...(patch?.checkins || {}) }).castAndSets === 'auto' ? 'auto' : 'review',
     },
     ...(llm ? { llm } : {}),
+    ...(llmStages ? { llmStages } : {}),
     ...(Object.keys(routes).length ? { routes } : {}),
   };
 }

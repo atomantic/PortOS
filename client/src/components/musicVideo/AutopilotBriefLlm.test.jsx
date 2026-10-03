@@ -112,6 +112,32 @@ describe('AutopilotPanel direction LLM (#9545)', () => {
     expect(onSave.mock.calls[0][0].llm).toBeNull();
   });
 
+  it('pins a model per stage from the collapsed "Models per stage" section, and clears a saved stage with null', async () => {
+    const onSave = vi.fn();
+    await renderBrief({ ...BASE, llmStages: { castAndSets: { providerId: 'cloud-api', model: 'big', effort: null } } }, onSave);
+    expect(screen.getByText(/Per stage: Cast & sets direction → cloud-api · big/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit brief' }));
+
+    // A saved stage pin opens the section; only the stages a saved project runs are offered.
+    const section = within(await screen.findByTestId('mv-auto-mv-1-llm-stages'));
+    expect(section.getByRole('button', { name: /Models per stage/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(section.queryByLabelText('Lyrics draft')).not.toBeInTheDocument();
+    const planRow = within(await screen.findByTestId('mv-auto-mv-1-stage-plan-llm'));
+    const plan = await planRow.findByLabelText('Shot plan');
+    expect(planRow.getByRole('option', { name: 'Default (use direction LLM)' })).toBeInTheDocument();
+    fireEvent.change(plan, { target: { value: 'claude-tui' } });
+    fireEvent.change(await planRow.findByLabelText('Model'), { target: { value: 'opus' } });
+
+    const castRow = within(screen.getByTestId('mv-auto-mv-1-stage-castAndSets-llm'));
+    const cast = await castRow.findByLabelText('Cast & sets direction');
+    await waitFor(() => expect(cast).toHaveValue('cloud-api'));
+    fireEvent.change(cast, { target: { value: '' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save brief' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].llmStages).toEqual({ castAndSets: null, plan: { providerId: 'claude-tui', model: 'opus', effort: null } });
+  });
+
   it('shows the route each stage last ran on, including a pin it replaced', async () => {
     const routes = {
       plan: { providerId: 'claude-tui', model: 'opus', effort: 'high', transport: 'tui', source: 'tui-preferred' },

@@ -43,6 +43,7 @@ import { trimTo } from '../../lib/textUtils.js';
 import {
   AUTONOMOUS_LIVE_STATUSES,
   AUTONOMOUS_STAGE_IDS,
+  autonomousLyricsReviewEnabled,
   autonomousMedium,
   autonomousPool,
   nextAutonomousStage,
@@ -65,8 +66,10 @@ const defaults = {
   createProject: async (input) => (await import('./projects.js')).createProject(input),
   updateProject: async (id, patch) => (await import('./projects.js')).updateProject(id, patch),
   resolveLlm: async (pin) => (await import('./llmRoute.js')).resolveMusicVideoLlm(pin),
+  recordRoute: async (projectId, stage, route) => (await import('./llmRoute.js')).recordLlmRoute(projectId, stage, route),
   draftCreativeBrief: async (args) => (await import('./autonomousBrief.js')).draftCreativeBrief(args),
   writeLyrics: async (args) => (await import('../musicDesigner.js')).writeLyrics(args),
+  reviewLyrics: async (args) => (await import('../musicDesigner.js')).reviewLyrics(args),
   createMoodBoard: async (spec) => (await import('./autonomousBoard.js')).createAutonomousMoodBoard(spec),
   generateSunoSong: async (fields, opts) => (await import('./autonomousSuno.js')).generateSunoSong(fields, opts),
   generateLocalSong: async (args) => (await import('./autonomousLocalSong.js')).generateLocalSong(args),
@@ -133,14 +136,22 @@ const stagePatch = (run, stage, patch) => ({ stages: { [stage]: { ...run.stages[
 // when the stage's completion arrives later (production).
 
 /**
- * The direction LLM for a run's text stages, resolved once per stage: the run's
- * pin, else an eligible TUI provider, else the active one (llmRoute.js). The
- * resolved route rides along (`route`) so the stage can record it on the run;
- * a failed registry read degrades to the plain pin rather than failing the stage.
+ * The LLM for one of a run's stages, resolved each time the stage runs: the
+ * run's pin for that stage (`brief.llmStages[stage]`), else — for `authoring` —
+ * its code-authoring pin, else its direction pin (`brief.llm`), else an
+ * eligible TUI provider, else the active one (llmRoute.js). The resolved route
+ * rides along (`route`) so the stage can record it on the run; a failed
+ * registry read degrades to the plain pin rather than failing the stage.
  */
-async function llmOf(run) {
-  const pin = { providerId: run.brief.llm?.providerId, model: run.brief.llm?.model || undefined, effort: run.brief.llm?.effort || undefined };
-  const resolved = await deps.resolveLlm(pin).catch((err) => {
+async function llmOf(run, stage) {
+  const { llm, llmStages, authoring } = run.brief;
+  const own = llmStages?.[stage] || (stage === 'authoring' && authoring) || llm;
+  const pin = { providerId: own?.providerId, model: own?.model || undefined, effort: own?.effort || undefined };
+  const resolved = await deps.resolveLlm({
+    stage,
+    automation: { llm: llm || null, llmStages: llmStages || null },
+    ...(stage === 'authoring' && authoring ? { authoring } : {}),
+  }).catch((err) => {
     console.warn(`⚠️ Autonomous music video: LLM route resolution failed: ${err.message}`);
     return null;
   });
@@ -148,6 +159,9 @@ async function llmOf(run) {
   if (!route) return { ...pin, route: null };
   return { providerId: route.providerId, model: route.model || undefined, effort: route.effort || undefined, route };
 }
+
+/** Keep the route a text stage ran on in the project's brief too (best-effort, never fails the stage). */
+const recordRoute = (project, stage, route) => (route ? deps.recordRoute(project.id, stage, route).catch(() => null) : null);
 
 /**
  * The local song source: the track is created first (its id is stored at once),
@@ -184,22 +198,49 @@ async function localSong({ project, run, save }) {
 
 const STAGES = {
   async brief({ project, run }) {
-    const { route, ...llm } = await llmOf(run);
+    const { route, ...llm } = await llmOf(run, 'brief');
     const { brief } = await deps.draftCreativeBrief({
       prompt: run.brief.prompt, guidance: run.brief.guidance, instrumental: run.brief.instrumental, ...llm,
     });
     // A blank project name from the prompt gives way to the song title.
     if (!run.brief.name) await deps.updateProject(project.id, { name: trimTo(brief.title, 200) });
+    await recordRoute(project, 'brief', route);
     return { output: { ...brief, ...(route ? { briefRoute: route } : {}) } };
   },
 
-  async lyrics({ run }) {
+  // Draft, then — when the brief asks for it — review & revise on the
+  // `lyricsReview` stage's LLM. The review is a step inside this stage (the
+  // stage list is wire/UI contract), reported through `stages.lyrics.step`.
+  // The draft is stored before the review runs, so a failed review retries
+  // only the review.
+  async lyrics({ project, run, save }) {
     if (run.brief.instrumental) return { output: { lyrics: '' } };
-    const { route, ...llm } = await llmOf(run);
-    const { lyrics } = await deps.writeLyrics({
-      description: run.output.musicalDescription, guidance: run.brief.guidance || undefined, ...llm,
-    });
-    return { output: { lyrics, ...(route ? { lyricsRoute: route } : {}) } };
+    const review = autonomousLyricsReviewEnabled(run.brief);
+    const description = run.output.musicalDescription;
+    const guidance = run.brief.guidance || undefined;
+    const step = (name) => patchRun(project.id, (r) => stagePatch(r, 'lyrics', { step: name }));
+    let draft = review ? run.output.lyricsDraft : null;
+    let draftRoute = review ? run.output.lyricsRoute : null;
+    if (!draft) {
+      if (review) await step('draft');
+      const { route, ...llm } = await llmOf(run, 'lyrics');
+      ({ lyrics: draft } = await deps.writeLyrics({ description, guidance, ...llm }));
+      draftRoute = route;
+      await recordRoute(project, 'lyrics', route);
+      if (!review) return { output: { lyrics: draft, ...(route ? { lyricsRoute: route } : {}) } };
+      await save({ output: { lyricsDraft: draft, ...(route ? { lyricsRoute: route } : {}) } });
+    }
+    await step('review');
+    const { route, ...llm } = await llmOf(run, 'lyricsReview');
+    const revised = await deps.reviewLyrics({ lyrics: draft, description, guidance, ...llm });
+    await recordRoute(project, 'lyricsReview', route);
+    return { output: {
+      lyricsDraft: draft,
+      lyrics: revised.lyrics,
+      lyricsReviewNotes: revised.notes || '',
+      ...(draftRoute ? { lyricsRoute: draftRoute } : {}),
+      ...(route ? { lyricsReviewRoute: route } : {}),
+    } };
   },
 
   async style({ project, run }) {
@@ -276,7 +317,9 @@ const STAGES = {
     await prepareProductionReview(project.id);
     project = await getProject(project.id);
     assertProductionApproval(project, 'storyboard');
-    const authoring = run.brief.authoring || await llmOf(run);
+    // The authoring stage's pin, else the run's code-authoring pin taken as
+    // given (production checks it exactly), else the direction LLM.
+    const authoring = !run.brief.llmStages?.authoring && run.brief.authoring ? run.brief.authoring : await llmOf(run, 'authoring');
     const input = { providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}) };
     if (medium === 'code') {
       if (project.composition?.mode === 'code') {
@@ -395,8 +438,9 @@ export async function startAutonomousVideo(input) {
       guidance: brief.guidance,
       budgetUsd: brief.budgetUsd,
       checkins: { castAndSets: brief.checkpoints.includes('cast') ? 'review' : 'auto' },
-      // The run's LLM pin also steers the stages production starts later (Cast & Sets, shot planning).
+      // The run's LLM pins also steer the stages production starts later (Cast & Sets, shot planning, authoring).
       ...(brief.llm ? { llm: brief.llm } : {}),
+      ...(brief.llmStages ? { llmStages: brief.llmStages } : {}),
     },
   });
   const run = {

@@ -27,7 +27,7 @@ import { MUSIC_VIDEO_MEDIA_MODES, musicVideoMediaMode } from './musicVideoMediaP
  * the run is fully unattended.
  */
 
-import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS, normalizeMusicVideoEffort, normalizeMusicVideoLlm } from './musicVideoAutomation.js';
+import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS, normalizeMusicVideoEffort, normalizeMusicVideoLlm, normalizeMusicVideoLlmStages } from './musicVideoAutomation.js';
 import { isStr, trimTo } from './textUtils.js';
 
 export const AUTONOMOUS_STAGES = Object.freeze([
@@ -157,8 +157,16 @@ function normalizeAutonomousSettings(raw = {}) {
     authoring: authoringProvider && authoringModel
       ? { providerId: authoringProvider, model: authoringModel, ...(authoringEffort ? { effort: authoringEffort } : {}) } : null,
     suno: normalizeSunoOptions(raw.suno),
+    // A provider/model/effort per LLM stage (null = every stage uses `llm`).
+    llmStages: normalizeMusicVideoLlmStages(raw.llmStages),
+    // Review and revise the lyric draft in a second pass. A `llmStages.lyricsReview`
+    // pin turns the pass on by itself; this asks for it on the direction LLM.
+    lyricsReview: raw.lyricsReview === true,
   };
 }
+
+/** True when a run brief asks for the lyric review & revise pass. */
+export const autonomousLyricsReviewEnabled = (brief) => brief?.lyricsReview === true || !!brief?.llmStages?.lyricsReview;
 
 /** Normalize a start request into the brief a run stores: the settings plus prompt, name and origin. */
 export function normalizeAutonomousBrief(raw = {}) {

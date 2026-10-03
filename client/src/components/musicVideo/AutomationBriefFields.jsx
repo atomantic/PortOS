@@ -1,8 +1,12 @@
 import ToggleChip from '../ui/ToggleChip.jsx';
 import MusicVideoLlmPicker from './MusicVideoLlmPicker.jsx';
+import MusicVideoLlmStagesPicker from './MusicVideoLlmStagesPicker.jsx';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideoAutomation.js';
 
 const GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
+// The LLM stages a saved project runs from its brief. The brief and lyric
+// stages belong to an autonomous run, which keeps its own pins on the run.
+const PROJECT_LLM_STAGES = ['castAndSets', 'plan', 'authoring'];
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
 /** Tool picker + guidance + direction LLM + budget for an automation-first music video. */
@@ -59,6 +63,7 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
         />
       </div>
       <MusicVideoLlmPicker idPrefix={idPrefix} value={draft.llm} onChange={(llm) => onChange({ llm })} />
+      <MusicVideoLlmStagesPicker idPrefix={idPrefix} value={draft.llmStages} onChange={(llmStages) => onChange({ llmStages })} stages={PROJECT_LLM_STAGES} />
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),18rem))] gap-3">
       <div>
         <label htmlFor={`${idPrefix}-checkin`} className="block text-xs text-port-text-muted mb-1">Cast &amp; Sets check-in</label>

@@ -1,5 +1,6 @@
 import CodeAuthoringPicker from '../../../musicVideo/CodeAuthoringPicker.jsx';
 import MediaModePicker from '../../../musicVideo/MediaModePicker.jsx';
+import MusicVideoLlmStagesPicker from '../../../musicVideo/MusicVideoLlmStagesPicker.jsx';
 import { useEffect, useState } from 'react';
 import ToggleChip from '../../../ui/ToggleChip';
 import ProviderModelSelector from '../../../ProviderModelSelector';
@@ -116,12 +117,21 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
           onEffortChange={setEffort}
           emptyProviderOption="Auto — a TUI provider when one is eligible"
           emptyModelOption="Provider default"
-          label="Writes the brief and lyrics"
+          label="Direction LLM (brief, lyrics and every stage on Default)"
           disabled={updating}
           modelDisabled={llm.availableModels.length === 0}
           compact
         />
       )}
+
+      <MusicVideoLlmStagesPicker
+        idPrefix="mv-ap"
+        value={draft.llmStages}
+        onChange={(llmStages) => patch({ llmStages })}
+        lyricsReview={draft.lyricsReview}
+        onLyricsReviewChange={(lyricsReview) => patch({ lyricsReview })}
+        disabled={updating}
+      />
 
       <button type="submit" disabled={updating} className="w-full bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
         {updating ? 'Saving…' : 'Save settings'}

@@ -8,6 +8,7 @@ import ToolPicker from './ToolPicker.jsx';
 import MoodBoardPicker from './MoodBoardPicker.jsx';
 import SongSourcePicker from './SongSourcePicker.jsx';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
+import MusicVideoLlmStagesPicker from './MusicVideoLlmStagesPicker.jsx';
 import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { startAutonomousMusicVideo } from '../../services/apiMusicVideo.js';
@@ -176,12 +177,21 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
             onEffortChange={setEffort}
             emptyProviderOption="Auto — a TUI provider when one is eligible"
             emptyModelOption="Provider default"
-            label="Writes the brief and lyrics"
+            label="Direction LLM (brief, lyrics and every stage on Default)"
             disabled={submitting}
             modelDisabled={llm.availableModels.length === 0}
             compact
           />
         )}
+
+        <MusicVideoLlmStagesPicker
+          idPrefix="mv-auto-start"
+          value={draft.llmStages}
+          onChange={(llmStages) => patch({ llmStages })}
+          lyricsReview={draft.lyricsReview}
+          onLyricsReviewChange={(lyricsReview) => patch({ lyricsReview })}
+          disabled={submitting}
+        />
 
         <button
           type="submit"
