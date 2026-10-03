@@ -670,7 +670,7 @@ export default function NotesTab() {
                 onClickItem={link => {
                   const match = notes.find(n => n.name.toLowerCase() === link.toLowerCase());
                   if (match) handleSelectNote(match.path);
-                  else toast.warn(`Note "${link}" not found in vault`);
+                  else toast.warning(`Note "${link}" not found in vault`);
                 }} />
               <LinkSection icon={<ArrowLeft size={10} />} label="Backlinks" items={note.backlinks}
                 getKey={bl => bl.path} getLabel={bl => bl.name}

@@ -206,7 +206,7 @@ export default function CmdKSearch() {
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      listCatalogIngredients({ q: query, limit: 5 }, { silent: true })
+      listCatalogIngredients({ q: query, limit: 5, silent: true })
         .then((data) => { if (!cancelled) setCatalogResults(data?.items ?? []); })
         .catch(() => { if (!cancelled) setCatalogResults([]); });
     }, 300);

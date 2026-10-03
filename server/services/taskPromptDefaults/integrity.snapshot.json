@@ -7,9 +7,9 @@
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
     "better-dependency-freedom": "8a79c8be829f926bbc7720ee29818d53",
     "better-dev-environment": "62523b82066e70ff1c786da22ccf0372",
-    "better-runtime-safety": "1038ac5008cb52e418460f53f262ad22",
+    "better-runtime-safety": "444c7104f32a8cd1c1ddb7a15b275512",
     "better-structural-drift": "941389a1f1c8983eef4f87af1241fbf9",
-    "better-test-quality": "ab53a477cd194a5c4fbda09d901a3775",
+    "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "ae6e8164698faebc2a5fd4fecb3d41e8",
     "claim-issue": "2663933c28056e0e23caf42acb1b41d0",
@@ -28,6 +28,7 @@
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "a30e3bfba8cd13369ccaf806a3534a79",
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
+    "feature-completeness": "00d8916cc6032e74817657375375115b",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
     "infrastructure": "b4ad755eb115b82679c601a0df1ffd7b",
     "issue-reconcile": "716c87476d77d7e4f98613dadc06f228",
@@ -53,14 +54,15 @@
     "reliability": "2a99be77b8f34653f4b926db0a773ea5",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
     "security": "4bd26243a5792a39040da0b49321ca27",
-    "simplify": "2a048214d1dd3b75bee9ae1a38fa1589",
+    "simplify": "3144f78ff48104926f5fce059dc3f7ff",
     "stash-cleanup": "1c12bac5aac6bb27008c40981e7db08c",
     "test-coverage": "36beffc0c2959be5d818ded54b3fe298",
     "typing": "bd7cb874b2784395280b116369c7e7ac",
-    "ui-bugs": "073bea13a94b0266c53b5f55bb2344b9",
+    "ui-bugs": "06baf650e41fce12aaa59c66030c0357",
     "ui-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
-    "ux": "9f346b8be4408c5a8207d9a8b6080ff0"
+    "ux": "bb8670c1e6eb28434ad2d45b6dc62177",
+    "workflow-recovery": "628d2ec51c3cd3d8bbd76eacb212dada"
   },
   "PROMPT_VERSIONS": {
     "accessibility": 5,
@@ -70,9 +72,9 @@
     "better-complexity": 2,
     "better-dependency-freedom": 1,
     "better-dev-environment": 1,
-    "better-runtime-safety": 2,
+    "better-runtime-safety": 3,
     "better-structural-drift": 1,
-    "better-test-quality": 1,
+    "better-test-quality": 2,
     "branch-reconcile": 7,
     "claim-issue": 38,
     "claim-issue-gitlab": 34,
@@ -90,6 +92,7 @@
     "do-replan": 2,
     "documentation": 7,
     "error-handling": 3,
+    "feature-completeness": 1,
     "feature-ideas": 11,
     "infrastructure": 1,
     "issue-reconcile": 8,
@@ -111,14 +114,15 @@
     "reliability": 1,
     "repo-sync": 1,
     "security": 4,
-    "simplify": 1,
+    "simplify": 2,
     "stash-cleanup": 2,
     "test-coverage": 3,
     "typing": 3,
-    "ui-bugs": 3,
+    "ui-bugs": 4,
     "ui-lifecycle": 2,
     "user-action-review": 2,
-    "ux": 5
+    "ux": 6,
+    "workflow-recovery": 1
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 4,
   "PREVIOUS_DEFAULT_PROMPTS": {
@@ -145,7 +149,11 @@
       "c92b99080d0453d70bb26a412fb48ce9"
     ],
     "better-runtime-safety": [
-      "4259ab85dd3eaf8efb16a250187bd857"
+      "4259ab85dd3eaf8efb16a250187bd857",
+      "1038ac5008cb52e418460f53f262ad22"
+    ],
+    "better-test-quality": [
+      "ab53a477cd194a5c4fbda09d901a3775"
     ],
     "branch-reconcile": [
       "7ef2b5f7d8f05937d4912b26ad45f42e",
@@ -397,6 +405,9 @@
       "8e58c1305a391ac765b0b13ab9615eb3",
       "c5e35a12eeb06e6afe4617f4428fa1ab"
     ],
+    "simplify": [
+      "2a048214d1dd3b75bee9ae1a38fa1589"
+    ],
     "stash-cleanup": [
       "f9de8b10937919ceb6656fbdb70179c4"
     ],
@@ -411,7 +422,8 @@
     ],
     "ui-bugs": [
       "01d2a7e034713195f33071f2c71a3c99",
-      "def9ad96bd74ab397233f234d79a1974"
+      "def9ad96bd74ab397233f234d79a1974",
+      "073bea13a94b0266c53b5f55bb2344b9"
     ],
     "ui-lifecycle": [
       "14b3816d1bcc10f0d7d6357e55cc5e69"
@@ -423,7 +435,8 @@
       "e03d03fc7c16faa5b5db93be2896b9ad",
       "ac11f692eae40ffe8ddeaeaccbcf75e9",
       "b8c0bde4075685625443a405b2c70b50",
-      "f90b5f38a7c6264e0d40919a2933ba4c"
+      "f90b5f38a7c6264e0d40919a2933ba4c",
+      "9f346b8be4408c5a8207d9a8b6080ff0"
     ]
   }
 }

@@ -36,6 +36,8 @@ export const AUDIT_DISCOVERY = Object.freeze({
   'data-integrity': 'Inventory every write path, ingestion entry point, consumer, batch/backfill job and stored data format; trace retry and redelivery behavior and multi-step writes, ranking silent duplication, loss and wrong results first.',
   reliability: 'Inventory process entry points, signal handling, health endpoints, queues, workers and scheduled jobs; trace shutdown, restart, overload and multi-instance behavior, ranking dropped work and outage amplification first.',
   privacy: 'Inventory personal and sensitive fields in schemas and payloads, then trace them to logs, errors, analytics, caches, exports, third-party calls and deletion paths; rank exposure already happening over missing governance.',
+  'feature-completeness': 'Scan for not-implemented/501/placeholder returns, permanently disabled or "coming soon" controls, settings written but never read, endpoints and jobs with no caller, server events with no listener, and to-do references to missing or closed tracker items; trace each to the control or document that offers it, ranking what users are offered today over internal gaps.',
+  'workflow-recovery': 'Inventory server-side in-progress states (persisted statuses, in-memory locks and in-flight maps, leases, "already in progress" refusals) and the client chains that drive them; trace each state to the page that must show it and its resume/cancel/reattach exit, ranking records left blocked with no visible exit first.',
   'cost-efficiency': 'Inventory metered dependencies (paid APIs, model providers, cloud storage/query/compute, egress) and their call sites, schedules and retry paths; rank spend by frequency times unit cost and growth with usage.',
 });
 

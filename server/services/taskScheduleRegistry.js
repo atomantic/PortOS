@@ -379,6 +379,10 @@ const TASK_INTERVAL_DEFAULTS = {
   'reliability':                fileIssuesAuditInterval(),
   'privacy':                    fileIssuesAuditInterval(),
   'cost-efficiency':            fileIssuesAuditInterval(),
+  // Gap lenses the page-walking audits miss: unfinished features and workflows
+  // that strand their record between steps. File-issues by default.
+  'feature-completeness':       fileIssuesAuditInterval(),
+  'workflow-recovery':          fileIssuesAuditInterval(),
   // Trusted remediation is separate from external intake. Legacy author
   // filter settings cannot widen this lane into untrusted contributor PRs.
   'pr-watcher':          { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 1800000, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'trusted', readOnly: false } },
@@ -609,6 +613,8 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'reliability': 'Reliability — graceful shutdown, health/readiness, backpressure, job leasing, mixed-version deploys; file issues (default) or implement fixes',
   'privacy': 'Privacy & data governance — personal data in logs/exports/third parties, minimization, retention and erasure; file issues (default) or implement fixes',
   'cost-efficiency': 'Cost efficiency — metered API/model calls, unbounded scans, storage tiers, over-provisioning; file issues (default) or implement fixes',
+  'feature-completeness': 'Feature completeness — stubs reachable from the UI, disabled or "coming soon" controls, settings nothing reads, endpoints with no entry point; file issues (default) or finish one',
+  'workflow-recovery': 'Workflow recovery — in-progress states with no visible resume/cancel, busy refusals without a handle, follow-up steps that strand a record; file issues (default) or implement fixes',
   'model-comparison-refresh': 'Research sourced model quality, effort, price, latency and quota evidence for Models Comparison',
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',

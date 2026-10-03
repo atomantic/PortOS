@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, Edit2, Trash2, Cpu, Check, X, Shield, Sparkles } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import ProviderModelSelector from '../ProviderModelSelector';
 import * as api from '../../services/api';
 import { effortAwareModelOptions, effortSurvivingModel } from '../../utils/providers';
@@ -33,6 +35,7 @@ export default function OrchestrationTab() {
   const [isNew, setIsNew] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const deleteConfirm = useConfirmDelete();
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -130,7 +133,6 @@ export default function OrchestrationTab() {
   };
 
   const handleDelete = async (id, name) => {
-    if (!confirm(`Are you sure you want to delete profile "${name}"?`)) return;
     setDeletingId(id);
     try {
       await api.deleteOrchestrationProfile(id);
@@ -383,9 +385,19 @@ export default function OrchestrationTab() {
                     >
                       <Edit2 size={16} />
                     </button>
-                    {!p.isBuiltin && (
+                    {!p.isBuiltin && (deleteConfirm.isConfirming(p.id) || isDeleting ? (
+                      <ConfirmButtonPair
+                        prompt="Delete?"
+                        onConfirm={() => deleteConfirm.confirmDelete(() => handleDelete(p.id, p.name))}
+                        onCancel={deleteConfirm.cancelDelete}
+                        busy={isDeleting}
+                        busyText="Deleting"
+                        ariaLabel={`Confirm deleting profile ${p.name}`}
+                        largeTouchTargets
+                      />
+                    ) : (
                       <button
-                        onClick={() => handleDelete(p.id, p.name)}
+                        onClick={() => deleteConfirm.requestDelete(p.id)}
                         disabled={isDeleting}
                         className="p-2 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors disabled:opacity-50 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                         title="Delete profile"
@@ -393,7 +405,7 @@ export default function OrchestrationTab() {
                       >
                         <Trash2 size={16} />
                       </button>
-                    )}
+                    ))}
                   </div>
                 </div>
 

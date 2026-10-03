@@ -7,8 +7,8 @@ export const getCreativeDirectorSources = (id, options = {}) => request(`/creati
 // (status / per-scene status / finalVideoId / failureReason / updatedAt) —
 // drops the `runs[]` history and the full treatment text. Useful
 // for 4s-poll surfaces like the Pipeline EpisodeVideoStage.
-export const getCreativeDirectorProject = (id, { slim = false } = {}) =>
-  request(`/creative-director/${encodeURIComponent(id)}${slim ? '?slim=1' : ''}`);
+export const getCreativeDirectorProject = (id, { slim = false, ...options } = {}) =>
+  request(`/creative-director/${encodeURIComponent(id)}${slim ? '?slim=1' : ''}`, options);
 // Batch fetch projects by id (#4148) — the `ids` filter rides the normal list
 // endpoint, so the response is the same full, non-slim project shape previews
 // compute from. Used by surfaces that reference a known handful of projects

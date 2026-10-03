@@ -573,6 +573,39 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'cost finding(s)',
     }),
   },
+  // Work that was started and never finished: stubs reachable from the UI,
+  // permanently disabled controls, settings nothing reads. Every other lens
+  // reads these as intentional (simplify would delete them, ui-bugs sees
+  // nothing "broken"), so they need an owner that decides finish/hide/remove.
+  'feature-completeness': {
+    quotaBurnId: null,
+    label: 'Feature completeness',
+    description: 'Incomplete-feature audit (stubs reachable from the UI, disabled or "coming soon" controls, settings nothing reads, capabilities with no entry point) — configurable: file issues (default) or finish one',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'incomplete-',
+      label: 'feature-completeness-audit',
+      issueLabel: 'bug',
+      labelDescription: 'Proposed from an incomplete-feature audit',
+      noun: 'incomplete-feature finding(s)',
+    }),
+  },
+  // Multi-step workflows judged from the server's in-progress states: each
+  // needs a visible resume/cancel/reattach exit after a failed follow-up step
+  // or a reload. A page walk exercises one click and never sees this.
+  'workflow-recovery': {
+    quotaBurnId: null,
+    label: 'Workflow recovery',
+    description: 'Workflow completion and recovery audit (stranded in-progress states, busy refusals without a handle, client follow-up steps that fail after the server succeeded) — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'workflow-',
+      label: 'workflow-recovery-audit',
+      issueLabel: 'bug',
+      labelDescription: 'Proposed from a workflow completion and recovery audit',
+      noun: 'workflow-recovery finding(s)',
+    }),
+  },
 });
 
 export const AUDIT_TASK_TYPES = new Set(Object.keys(AUDIT_DEFINITIONS));
@@ -762,11 +795,11 @@ export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
   'code-quality': ['code-quality', 'observability'],
   dry: ['simplify'],
   architecture: ['module-hygiene', 'api-contract'],
-  'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability', 'reliability', 'cost-efficiency'],
+  'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability', 'reliability', 'cost-efficiency', 'workflow-recovery'],
   'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'security', 'infrastructure', 'data-integrity'],
   deps: ['better-dependency-freedom', 'security'],
   tests: ['test-coverage', 'better-test-quality', 'better-dev-environment'],
-  ux: ['ux', 'mobile-responsive', 'copy'],
+  ux: ['ux', 'mobile-responsive', 'copy', 'feature-completeness'],
   structural: ['module-hygiene', 'better-structural-drift', 'simplify'],
   'cognitive-load': ['better-cognitive-load', 'better-complexity'],
 });
@@ -821,7 +854,7 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   'better-dev-environment': Object.freeze(['better-test-quality']),
   // The restructuring ladder: consolidate sources of truth, delete what is
   // dead, then draw module boundaries, then reduce what survives.
-  simplify: Object.freeze(['better-structural-drift']),
+  simplify: Object.freeze(['better-structural-drift', 'feature-completeness']),
   'module-hygiene': Object.freeze(['simplify']),
   'better-dependency-freedom': Object.freeze(['module-hygiene']),
   'better-complexity': Object.freeze(['module-hygiene']),
@@ -834,6 +867,7 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   // handling; spend after latency, since a performance fix often moves cost.
   infrastructure: Object.freeze(['security']),
   reliability: Object.freeze(['error-handling']),
+  'workflow-recovery': Object.freeze(['error-handling']),
   'cost-efficiency': Object.freeze(['performance']),
 });
 
@@ -863,4 +897,6 @@ export const AUDIT_RUN_GUIDANCE = Object.freeze({
   infrastructure: 'Follows the code-level security pass, so deployment findings (exposure, credentials, unpinned images) do not duplicate what it already filed.',
   reliability: 'Follows call-level failure handling: once each call fails safely, look at how the service as a whole restarts, drains, and sheds load.',
   'cost-efficiency': 'Follows performance, because a latency fix often changes what the path costs; measure spend on the shape that survived.',
+  'feature-completeness': 'Runs before simplify sweeps unreferenced code, so an unfinished feature is decided (finish, hide, or remove) rather than silently deleted.',
+  'workflow-recovery': 'Follows call-level failure handling: once each step fails safely, check that a workflow stopped between steps still offers the user a way to finish or cancel it.',
 });

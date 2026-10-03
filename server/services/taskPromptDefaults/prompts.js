@@ -721,7 +721,8 @@ requests, and interact with the primary controls rather than only looking at the
 page.
 
 If the interface is not reachable, exit cleanly and say so. Do not file
-speculative findings from source alone.
+speculative findings from source alone; a defect proven by reading both sides
+of a call (see "Statically provable crashes" below) is not speculative.
 
 ## Hunt for
 
@@ -738,13 +739,26 @@ speculative findings from source alone.
   leaves the view stale until reload, or a list that loses its selection.
 - **Navigation defects** — a route that 404s, a deep link that lands somewhere
   else, a back navigation that loses state it should keep.
+- **Unhappy paths of primary actions** — the not-found, empty-input, conflict,
+  and failure branch of each primary control, not only its success path. A
+  handler that throws only on its error branch is invisible to a happy-path
+  walk, so trigger that branch deliberately.
+- **Statically provable crashes** — where no type checker runs, a call to a
+  member the imported module does not define, or a named import it does not
+  export, on a path a control reaches. Reading the callee's real export is the
+  proof; name the control that reaches it. When one module's contract is
+  broken at several call sites, file one finding for the class and propose a
+  mechanical guard rather than one fix per site.
 
 ## Not yours
 
 Viewport and layout breakage at small sizes belongs to the mobile and responsive
 work; keyboard, contrast, and screen-reader barriers to the accessibility work;
-design and flow judgments to the UX work; wording to the copy work. This audit
-owns things that are broken, not things that could be better.
+design and flow judgments to the UX work; wording to the copy work; a
+multi-step workflow that strands its record after a failure or reload to the
+workflow-recovery work; a control that was never finished to the
+incomplete-feature work. This audit owns things that are broken, not things
+that could be better.
 
 For each finding: the view, the exact steps to reproduce, what happens, what
 should happen, and the \`file:LINE\` of the cause once you have traced it.`,
@@ -824,6 +838,8 @@ Duplicate findings are noise. Do NOT file:
 - **Touch-only mechanics** (hover-only controls and tap-target sizing) — \`mobile-responsive\` owns these. Responsive layout failures ARE part of this UX audit; deduplicate against findings from that sibling task.
 - **ARIA labels, contrast ratios, keyboard traps** — \`accessibility\` owns these.
 - **The wording of a single string** (jargon, an ambiguous verb, broken plurals) — \`copy\` owns it. How MUCH text a screen spends explaining itself, and whether it repeats what the controls already say, is this audit's (checklist item 9).
+- **A workflow that cannot be resumed or cancelled after a failure or reload** — \`workflow-recovery\` owns it. Whether the page tells the user where a record stands is this audit's (checklist item 12).
+- **A control that is permanently disabled or "coming soon"** — \`feature-completeness\` owns it.
 
 Mention an overlap only when it is the *cause* of a UX failure you are filing
 (e.g. "the empty state is unreachable because the only trigger is a
@@ -842,7 +858,14 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    output. If the UI is not reachable, exit cleanly and say so in your summary;
    do NOT file speculative findings from source alone.
 
-3. **Walk each main route** with Playwright MCP. For every route:
+3. **Choose routes, then walk them.** Main navigation routes alone are not
+   enough: most work happens on record pages. Also open the detail or editor
+   route (the \`/:id\` view) of each domain that has records, choosing a record
+   partway through its workflow — in progress, awaiting review, failed — over a
+   fresh or finished one. Rotate coverage: prefer routes and domains with no
+   finding from this audit in the tracker in the last 30 days, and list the
+   routes you chose and why. Describe records by their state, never by their
+   names or contents. Walk each chosen route with Playwright MCP. For every route:
    - \`browser_navigate\` to it, then \`browser_snapshot\` to read the structure.
    - \`browser_resize\` to **1440x900**, **1280x800**, **1024x768**, **768x1024**, **390x844**, and **320x812** and
      snapshot at each — the fold differs, and a buried primary action is the
@@ -853,6 +876,8 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    - Inspect empty, populated, loading, and error states with synthetic long names, URLs, and action labels. Check bounding rectangles and scrollWidth/clientWidth on the page AND cards: overflow-hidden can conceal unreachable controls even when the document has no horizontal scrollbar. Exempt only intentional local scroll regions such as tables/timelines; verify their keyboard access.
    - Record route/widget, viewport AND container width, state, sidebar mode, blocked action, and responsible component. Report unvisited routes/states as untested, never as passing.
    - Read the screen as a user, not only its geometry. From the snapshot, list every visible action with what it does, and every block of instructional or explanatory text longer than one sentence. Then reach the states where a user needs particular information (a failed run, a blocked step, a pending decision, a record just created) and note what is visible there without an extra click. These inventories are the evidence for checklist items 9–11.
+   - On a record page, write down in one sentence where the record stands and what the user should do next, using only what is visible above the fold. If you cannot, that is the evidence for checklist item 12.
+   - Compare the page's frame with a sibling page of the same family: where the header sits, the outer padding, the maximum width, and which element scrolls. Evidence for checklist item 13.
 
 4. **Evaluate each route against this named checklist.** Cite the checklist
    number in the finding so results are reproducible rather than vibes:
@@ -898,6 +923,22 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
       is also a finding: a status the user cannot act on that stays expanded
       and dominates the screen. Name the state, where the information is
       hidden, and the click count to reach it.
+   12. **A record page says where it stands.** A record that moves through
+      stages (a project, a pipeline, a run, an import) shows, above the fold
+      and without a click, its current stage, whether it is waiting on the
+      user, and the one next action — and gives a way to see, play, or open
+      its primary output (the render, the document, the result) from wherever
+      the user is on that page. A finding is a status readable only as a raw
+      enum or id, a stage strip with no "you are here", a next step the user
+      must infer from a row of cards, or output reachable only from one tab.
+   13. **Same kind of page, same frame.** Pages of one family share the app's
+      page shell: header placement, outer padding, maximum width, and a single
+      scroll container. A page whose header is inset, whose padding is
+      doubled, or whose content scrolls inside a second scroller, compared
+      with its siblings, is a finding. This item may be proven statically as
+      well as from the snapshot: compare the route's shell or layout
+      configuration and the page's root container with its siblings', and
+      check that a detail route (\`/:id\`) gets the same shell as its index.
 
 5. **File ONE item per finding** using the "Record" mechanics under "Where to
    record findings" above. Each finding must carry:
@@ -905,7 +946,7 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    - **A short, human-readable title** naming the screen and the problem. Do
      not invent an issue ID or add a slug/category/severity tag to a forge
      title; follow the selected tracker's ID convention from its instructions.
-   - **The screen/route** you audited and which checklist item (1–11) it failed.
+   - **The screen/route** you audited and which checklist item (1–13) it failed.
    - **What the user is trying to do** on that screen.
    - **Why the current design impedes it** — 1–2 sentences, concrete and
      observable, referencing what you saw in the snapshot.
@@ -921,8 +962,9 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
 
    Be selective — file the findings that would measurably change whether a user
    succeeds, not every aesthetic preference. A handful of well-argued items
-   beats twenty nitpicks. Items 9–11 are not aesthetic preferences: a wall of
-   instructions, a duplicated button, or a hidden error each costs the user
+   beats twenty nitpicks. Items 9–13 are not aesthetic preferences: a wall of
+   instructions, a duplicated button, a hidden error, a record whose state the
+   user cannot read, or a page framed unlike its siblings each costs the user
    reading time, a wrong guess, or a dead end, so file them when you see them.
    When one component causes the same item on several screens, file one
    finding that lists the screens.
@@ -1010,7 +1052,13 @@ Hunt specifically for:
 
 Cross-version and cross-install compatibility code is NOT dead code, even when
 this install no longer hits it. Read the project's rules on migrations and
-version gates before proposing any such removal.`,
+version gates before proposing any such removal.
+
+An unreferenced endpoint, setting, or job that does user-meaningful work may be
+an unfinished feature rather than dead code — check whether documentation,
+interface text, or a plan describes it. If one does, it belongs to the
+incomplete-feature work, which decides whether to finish or remove it; do not
+file a deletion here.`,
 
   'module-hygiene': `[Improvement: {appName}] Module hygiene audit
 
@@ -1535,6 +1583,12 @@ Repository: {repoPath}
   condition provably off by one for a stated input.
 - **Process-killing calls in reusable code** — exiting the process from a module
   a library or test can import.
+- **Cross-module contract breaks in untyped code** — where no type checker
+  runs, a call to a member the imported object does not define, a named import
+  the module does not export, or an argument at a position the callee never
+  reads (an options object a wrapper silently drops). Read the callee's actual
+  export, not its name. A class of these across many call sites is one
+  finding, and its fix includes a mechanical guard test.
 
 ## Not yours — name the overlap and move on
 
@@ -1659,6 +1713,11 @@ there.
 - Cases sharing mutable state, so they pass only in one order.
 - A guard or safety test that never probes the bypass — it asserts the guard
   allows the good case but never proves it blocks the bad one.
+- Mocks that drift from the module they replace — a mock defining a member,
+  export, or response shape the real module does not have, so the suite passes
+  against a contract production code cannot meet. Compare each widely used
+  mock's keys with the real export; one drifted mock repeated across many
+  suites is one finding.
 
 **Redundant — the test is real but earns nothing:**
 
@@ -2041,6 +2100,138 @@ saves money; resource limits in manifests belong to the infrastructure work.
 For each finding give \`file:LINE\`, the cost driver, the estimate with its
 assumptions, the proposed change, and the expected saving. Reject changes that
 save pennies at the cost of correctness or clarity.`,
+
+  'feature-completeness': `[Improvement: {appName}] Incomplete-feature audit
+
+Find what {appName} offers, documents, or half-built that does not actually work
+end to end — and decide, for each, whether to finish it, hide it, or remove it.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Other audits look for code that is broken or dead. This one looks for work that
+was started and never finished: a control that is permanently disabled, a path
+that ends in "not implemented", a setting that saves and changes nothing. Every
+other lens reads these as intentional, so they survive run after run.
+
+## Hunt for
+
+- **Stubs reachable from the interface** — a handler, service, or adapter that
+  returns "not implemented", a 501, a placeholder or hardcoded result, or throws
+  a to-do error, on a path a user can trigger. Trace from the visible control to
+  the stub. A stub nothing reaches is dead code, not yours.
+- **Controls that can never work** — a button, tab, menu entry, or option that
+  is permanently disabled, labeled "coming soon" or "not available yet", or
+  wired to a no-op handler.
+- **Promises the code does not keep** — interface text, help copy, or
+  documentation describing behavior the implementation lacks or does
+  differently ("restarts the process" where the code only stages a patch).
+- **Settings that change nothing** — a value the interface saves that no runtime
+  path reads, or a runtime option with a real effect that no interface or
+  documented configuration can set.
+- **Capabilities with no entry point** — an endpoint, job, or repair routine that
+  does user-meaningful work but has no caller, interface, schedule, or
+  documented invocation, so the work it exists for never happens.
+- **Events nobody hears** — a server event announcing something the user should
+  see (an approval is needed, a sync needs a login, health turned critical) with
+  no client listener, so the user learns only on a manual reload.
+- **Plans that disagree with the code** — a plan or tracker item marked done or
+  in progress whose acceptance criteria the code does not meet, or one still
+  marked pending for work that has shipped.
+- **Deferred work with no live tracker item** — a to-do comment, disabled
+  feature, or "not supported yet" message that cites no tracker reference, or
+  one that does not exist, is closed, or belongs to another project.
+
+## Decide, do not defer
+
+Every finding ends in a decision, not a question:
+
+- **Finish** — name the missing piece, the files it touches, and how to verify
+  it. Prefer this when the remaining work is small or the feature is documented.
+- **Hide until it works** — stop offering the control, option, or account type,
+  and file the finishing work. Prefer this when finishing is large and the
+  current surface misleads users today.
+- **Remove** — delete the stub and every surface that offers it, when the
+  feature is no longer wanted.
+
+## Not yours
+
+Code with no caller and no user meaning belongs to the simplification work.
+Controls that were finished and now fail belong to the UI-bug work. Wording
+belongs to the copy work. A workflow that starts but cannot be resumed or
+cancelled belongs to the workflow-recovery work.
+
+## The bar
+
+Show the path: the entry point (control, document, setting) with
+\`file:LINE\`, the place the work stops with \`file:LINE\`, and what the user
+experiences. Static evidence is enough here — a stub, a hardcoded disabled
+flag, or a setting nothing reads is proven by reading the code; it does not need
+a live reproduction. Never quote a user's records when describing what is
+offered.`,
+
+  'workflow-recovery': `[Improvement: {appName}] Workflow completion and recovery audit
+
+Find the multi-step workflows in {appName} that can stop halfway and leave the
+user with no visible way to finish, resume, or cancel them.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+A page walk exercises one click on a fresh page. This audit exercises the
+sequence: a request that opens a revision, then a second step that finalizes
+it; a job started in one tab and watched from another; a run that waits for an
+event. The defect lives in the gap between steps, so it is invisible until a
+step fails, a tab reloads, or the server restarts.
+
+## Work from server state, not from views
+
+1. **Inventory every in-progress state the server can hold:** persisted
+   statuses (open, pending, running, rendering, generating, awaiting review),
+   in-memory locks and in-flight maps, leases and claims, and every response
+   that refuses work because something is "already in progress".
+2. **For each state, check three exits:**
+   - The page that owns the record detects the state on load and shows it in
+     a visible, expanded place, not only inside a collapsed panel or another
+     tab.
+   - The user can resume, retry, reattach to, or cancel it from there.
+   - The refusal for a busy state carries the id of what holds it (the job,
+     run, or revision), and the client uses that id to reattach or link to it.
+3. **For each client-orchestrated chain** (step A then step B; a kickoff that
+   waits for an event; a completion callback that finalizes server state):
+   - If step B throws, or the tab reloads between A and B, an exit is still
+     visible after reload.
+   - An error in the client's own follow-up code is not reported as a server
+     failure ("save failed" after the save succeeded), and is not swallowed.
+   - Every wait for an event has a timeout or a cancel, and treats an
+     interrupted or failed status as settled rather than waiting on.
+   - Progress markers that prevent a duplicate (committed, consumed ids,
+     idempotency keys) live on the server, not only in component state.
+4. **Disabled controls say why.** A control disabled because of hidden state
+   names the reason and links to where the user resolves it.
+
+When a running interface is reachable, confirm the worst candidates by driving
+the workflow: interrupt it (reload mid-step, stop the server between steps) and
+record what the page offers afterward. Otherwise trace the code on both sides
+and say that is what you did; a state with no exit is proven by reading the
+code that enters it and every path that leaves it.
+
+## Not yours
+
+Per-call timeouts and retries belong to the failure-path work; process restart
+and shutdown draining to the reliability work; duplicate writes under
+redelivery to the data-integrity work; a feature that was never finished to the
+incomplete-feature work. Name the overlap if it is the cause.
+
+## The bar
+
+Every finding names the in-progress state and where it is set (\`file:LINE\`),
+the step that can fail or be interrupted (\`file:LINE\`), the sequence that
+strands it, and what the user sees afterward. Prefer a fix in the shared
+primitive (the job-tracking hook, the refusal shape) over one workflow at a
+time when several share the cause.`,
 
   'feature-ideas': `[Improvement: {appName}] Implement Next Planned Feature
 

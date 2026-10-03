@@ -50,7 +50,7 @@ vi.mock('../hooks/useProviderModels', () => ({
 
 vi.mock('../components/ui/Toast', () => {
   const toast = Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn(), custom: vi.fn()
+    success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn()
   });
   return { default: toast };
 });
