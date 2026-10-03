@@ -45,7 +45,7 @@ function ActivityRow({ item, kind }) {
   const tone = kind === 'incident' ? 'text-port-error' : 'text-port-success';
   return (
     <Link
-      to="/cos/agents"
+      to={`/cos/agents/${encodeURIComponent(item.id)}`}
       className="flex items-start gap-2.5 p-2 rounded-lg border border-port-border bg-port-bg/40 hover:border-port-accent/40 transition-colors group"
     >
       <Icon size={14} className={`mt-0.5 shrink-0 ${tone}`} />
