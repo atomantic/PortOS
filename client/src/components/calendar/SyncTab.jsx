@@ -10,6 +10,7 @@ import EmptyState from '../EmptyState';
 export default function SyncTab({ accounts, onRefresh }) {
   const [tokenStatus, setTokenStatus] = useState(null);
   const [tokenLoading, setTokenLoading] = useState(true);
+  const [clearingTokens, setClearingTokens] = useState({});
   const [mcpProgress, setMcpProgress] = useState({});
 
   const fetchTokenStatus = useCallback(async () => {
@@ -63,7 +64,11 @@ export default function SyncTab({ accounts, onRefresh }) {
   };
 
   const handleClearToken = async (provider) => {
-    await api.clearCalendarToken(provider).catch(() => null);
+    if (clearingTokens[provider]) return;
+    setClearingTokens(prev => ({ ...prev, [provider]: true }));
+    const cleared = await api.clearCalendarToken(provider).then(() => true).catch(() => false);
+    setClearingTokens(prev => ({ ...prev, [provider]: false }));
+    if (!cleared) return;
     toast.success(`${provider} token cleared`);
     fetchTokenStatus();
   };
@@ -178,6 +183,7 @@ export default function SyncTab({ accounts, onRefresh }) {
                   {status.hasToken && (
                     <button
                       onClick={() => handleClearToken(status.provider)}
+                      disabled={clearingTokens[status.provider]}
                       className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-port-error bg-port-border rounded transition-colors"
                       title="Clear token"
                     >

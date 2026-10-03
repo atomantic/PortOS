@@ -27,6 +27,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [savingSubcals, setSavingSubcals] = useState(null);
   const [discovering, setDiscovering] = useState(null);
   const [googleAuth, setGoogleAuth] = useState(null);
+  const [clearingGoogleAuth, setClearingGoogleAuth] = useState(false);
   const [oauthForm, setOauthForm] = useState({ clientId: '', clientSecret: '' });
   const [savingOAuth, setSavingOAuth] = useState(false);
   const [autoConfigStep, setAutoConfigStep] = useState(null); // null | 'launching' | 'login' | 'project' | 'api' | 'consent' | 'credentials' | 'capturing' | 'done'
@@ -79,7 +80,11 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleClearGoogleAuth = async () => {
-    await api.clearGoogleAuth().catch(() => null);
+    if (clearingGoogleAuth) return;
+    setClearingGoogleAuth(true);
+    const cleared = await api.clearGoogleAuth().then(() => true).catch(() => false);
+    setClearingGoogleAuth(false);
+    if (!cleared) return;
     toast.success('Google auth cleared');
     fetchGoogleAuth();
   };
@@ -402,6 +407,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                               </div>
                               <button
                                 onClick={handleClearGoogleAuth}
+                                disabled={clearingGoogleAuth}
                                 className="px-2 py-0.5 text-xs rounded text-gray-600 hover:text-port-error hover:bg-gray-800"
                               >
                                 Clear

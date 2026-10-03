@@ -6,6 +6,7 @@ import { awaitEnabled } from '../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getCalendarTokenStatus: vi.fn(),
+  clearCalendarToken: vi.fn(),
   syncCalendarAccount: vi.fn(),
   apiSyncGoogleCalendar: vi.fn(),
   mcpSyncGoogleCalendar: vi.fn(),
@@ -139,5 +140,47 @@ describe('Calendar sync lifecycle', () => {
     await act(async () => resolve({ status: 'success', newEvents: 9 }));
     expect(toast.success).not.toHaveBeenCalled();
     expect(onRefresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('Calendar token clearing', () => {
+  const present = { providers: [{ provider: 'outlook', hasToken: true }] };
+
+  it('blocks duplicate clears and refreshes only after a bodyless success', async () => {
+    let resolve;
+    api.getCalendarTokenStatus.mockResolvedValue(present);
+    api.clearCalendarToken.mockImplementation(() => new Promise(done => { resolve = done; }));
+    render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
+    const button = await screen.findByRole('button', { name: 'Clear' });
+    api.getCalendarTokenStatus.mockResolvedValue({ providers: [{ provider: 'outlook', hasToken: false }] });
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(api.clearCalendarToken).toHaveBeenCalledExactlyOnceWith('outlook');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolve(undefined));
+    await screen.findByText('No token');
+    expect(toast.success).toHaveBeenCalledExactlyOnceWith('outlook token cleared');
+    expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves the token on rejection without a component error toast and permits retry', async () => {
+    api.getCalendarTokenStatus.mockResolvedValue(present);
+    api.clearCalendarToken.mockRejectedValueOnce(new Error('Synthetic clear failure')).mockResolvedValueOnce(undefined);
+    render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
+    const button = await screen.findByRole('button', { name: 'Clear' });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.getByText('Token present')).toBeTruthy();
+    expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(1);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+
+    fireEvent.click(button);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledExactlyOnceWith('outlook token cleared'));
+    expect(api.clearCalendarToken).toHaveBeenCalledTimes(2);
+    expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(2);
   });
 });
