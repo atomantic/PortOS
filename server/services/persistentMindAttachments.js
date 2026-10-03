@@ -161,10 +161,9 @@ export const removeStoredAttachmentFile = async (attachment) => {
 export const removeUploadAfterStateFailure = async (filePath, attachmentId) => unlinkGuarded(filePath).then(
   async () => removePendingAttachmentMarker(attachmentId),
   (error) => {
-    if (error?.code !== 'ENOENT') {
-      console.error(`❌ Failed to clean up Persistent Mind upload ${attachmentId}: ${error.message}`);
-    }
-    return removePendingAttachmentMarker(attachmentId).then(() => false);
+    if (error?.code === 'ENOENT') return removePendingAttachmentMarker(attachmentId).then(() => false);
+    console.error(`❌ Failed to clean up Persistent Mind upload ${attachmentId}: ${error.message}`);
+    return false;
   },
 );
 
@@ -174,8 +173,9 @@ export const removeUploadAfterStateFailure = async (filePath, attachmentId) => u
 // recovery path.
 export const removeRejectedUpload = async (attachmentId) => {
   const entries = await screenshotEntries();
-  if (entries) await removePendingAttachmentFiles(attachmentId, entries);
-  await removePendingAttachmentMarker(attachmentId);
+  if (!entries) return false;
+  if (!await removePendingAttachmentFiles(attachmentId, entries)) return false;
+  return removePendingAttachmentMarker(attachmentId);
 };
 
 export const resolveMessageAttachments = async (mind, attachmentIds, messageId) => {
