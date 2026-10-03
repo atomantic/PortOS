@@ -11,11 +11,14 @@ import useSseJobSlot from './useSseJobSlot.js';
  * downloadVideo, ingestAudio, note, agentPrompt, tags }`) rather than a bare URL, so
  * `trimStartArg` stays false and the payload passes through untouched.
  *
+ * `onKickoffError(err, body)` / `onKickoffSuccess(jobId, body)` hand the host the
+ * rejected (or acknowledged) payload so it can keep a failed one recoverable.
+ *
  * Non-fatal outcomes (no captions, a duplicate review task) ride along on the
  * terminal `complete` frame as `warnings[]` — the hook only ever sees the
  * terminal payload, so a live-only warning frame would be lost.
  */
-export default function useYoutubeIngest({ onComplete } = {}) {
+export default function useYoutubeIngest({ onComplete, onKickoffError, onKickoffSuccess } = {}) {
   const { active, percent, stage, start, cancel } = useSseJobSlot({
     startRequest: (body) => startYoutubeIngest(body, { silent: true }),
     eventsUrl: youtubeIngestEventsUrl,
@@ -33,6 +36,8 @@ export default function useYoutubeIngest({ onComplete } = {}) {
     canceledMessage: 'YouTube ingest cancelled',
     lostConnectionMessage: 'Lost connection to the ingest — check Brain → Links',
     startErrorFallback: 'Failed to start the ingest',
+    onKickoffError,
+    onKickoffSuccess,
   });
   return { active, percent, stage, start, cancel };
 }

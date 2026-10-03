@@ -10,6 +10,8 @@ import { INGEST_OPTIONS, defaultIngestOptions, ingestOptionsFromSettings, isYout
 import RepoIntakeOptions from './brain/RepoIntakeOptions';
 import RepoStudyFields from './brain/RepoStudyFields';
 import useRepoStudyConfig from '../hooks/useRepoStudyConfig';
+import { useFailedCaptures } from '../hooks/useFailedCaptures';
+import FailedCaptureList from './brain/FailedCaptureList';
 import ProgressBar from './ui/ProgressBar';
 import ToggleChip from './ui/ToggleChip';
 
@@ -57,10 +59,27 @@ export default function QuickBrainCapture() {
       .catch(() => {}); // defaultIngestOptions() is already sensible
   }, [isYoutube]);
 
+  const failedCaptures = useFailedCaptures();
+  // Which failed row a YouTube Retry came from, so its kickoff outcome updates
+  // or retires that row instead of stacking a new one.
+  const retryingYoutubeRef = useRef(null);
+
   const ingest = useYoutubeIngest({
     onComplete: () => {
       setAgentPrompt('');
       setTagsInput('');
+    },
+    // The kickoff was rejected (the toast still fires): keep the exact request —
+    // URL, note, selected options, agent brief — in a "Not saved" row.
+    onKickoffError: (err, body) => {
+      const failedId = retryingYoutubeRef.current;
+      retryingYoutubeRef.current = null;
+      failedCaptures.fail({ kind: 'youtube', body }, err?.message || 'Failed to start the ingest', failedId ?? undefined);
+    },
+    onKickoffSuccess: () => {
+      const failedId = retryingYoutubeRef.current;
+      retryingYoutubeRef.current = null;
+      if (failedId) failedCaptures.discard(failedId);
     },
   });
 
@@ -82,14 +101,14 @@ export default function QuickBrainCapture() {
       setInput('');
       setLinkNote('');
       const { studyContext: _context, ...agentOptions } = analysis.studyPayload();
-      ingest.start({
+      ingest.start(Object.freeze({
         url: text,
         ...ingestOpts,
         ...(note ? { note } : {}),
         agentPrompt: agentPrompt.trim(),
         ...(agentPrompt.trim() ? { ...agentOptions, workMode } : {}),
         tags: tagsInput.split(',').map((t) => t.trim()).filter(Boolean),
-      });
+      }));
       return;
     }
 
@@ -106,23 +125,50 @@ export default function QuickBrainCapture() {
     // the request honest about what will be stored.
     // `intakeFor` re-derives from the submitted text, so a sticky tick can't ride
     // along on a capture that is no longer a repo URL.
-    const captureOptions = {
+    const payload = Object.freeze({
+      kind: 'thought',
+      text,
+      note,
       creative: creative && !isUrl,
       repoIntake: repoIntake.intakeFor(text),
-    };
-    if (note) captureOptions.note = note;
-    const result = await api.captureBrainThought(text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
-      toast.error(err.message || 'Failed to capture');
-      setInput(prev => prev || text);
+    });
+    // The note and study brief now live in the payload, so they clear with the
+    // composer instead of on acknowledgement (which could wipe the next draft's).
+    repoIntake.setStudyContext('');
+    setLinkNote('');
+    await sendCapture(payload);
+    submittingRef.current = false;
+    setIsSubmitting(false);
+  };
+
+  // Sends one thought/link capture from its retained payload. A rejection keeps
+  // the payload in a persistent "Not saved" row; the composer is never touched.
+  const sendCapture = async (payload, failedId) => {
+    const captureOptions = { creative: payload.creative, repoIntake: payload.repoIntake };
+    if (payload.note) captureOptions.note = payload.note;
+    const result = await api.captureBrainThought(payload.text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
+      const message = err.message || 'Failed to capture';
+      toast.error(message);
+      failedCaptures.fail(payload, message, failedId);
       return null;
     });
     if (result) {
+      if (failedId) failedCaptures.discard(failedId);
       toast.success(result.message || 'Captured');
-      repoIntake.setStudyContext('');
-      setLinkNote('');
     }
-    submittingRef.current = false;
-    setIsSubmitting(false);
+    return result;
+  };
+
+  // Explicit Retry only: re-sends the retained payload (with any edit made in
+  // the row) once, and leaves the composer draft and its options alone.
+  const handleRetryFailed = (failure, text) => {
+    if (!failedCaptures.markRetrying(failure.id)) return;
+    if (failure.payload.kind === 'youtube') {
+      retryingYoutubeRef.current = failure.id;
+      ingest.start(Object.freeze({ ...failure.payload.body, url: text }));
+      return;
+    }
+    return sendCapture({ ...failure.payload, text }, failure.id);
   };
 
   // Paste without having to click into the box first — the usual flow here is
@@ -289,6 +335,16 @@ export default function QuickBrainCapture() {
       <RepoIntakeOptions
         idPrefix="quick-brain-repo"
         {...repoIntake}
+      />
+
+      <FailedCaptureList
+        idPrefix="quick-brain-failed"
+        failures={failedCaptures.failures}
+        getText={(f) => f.payload.kind === 'youtube' ? f.payload.body.url : f.payload.text}
+        getNote={(f) => f.payload.kind === 'youtube' ? f.payload.body.note : f.payload.note}
+        onRetry={handleRetryFailed}
+        onDiscard={failedCaptures.discard}
+        retryDisabled={ingest.active}
       />
 
       {ingest.active && (

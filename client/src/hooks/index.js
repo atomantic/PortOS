@@ -218,6 +218,7 @@ export { default as useUrlParams } from './useUrlParams.js';
 export * from './useValidTab.js';
 
 // === Storage & persistence ===
+export * from './useFailedCaptures.js';
 export * from './useLocalStorageBool.js';
 export * from './useNavWorkingSet.js';
 

@@ -503,4 +503,50 @@ describe('QuickBrainCapture', () => {
       expect(screen.getByPlaceholderText(PLACEHOLDER)).toHaveValue('');
     });
   });
+
+  describe('rejected capture recovery', () => {
+    it('keeps a rejected thought recoverable beside a different draft, and retries it once', async () => {
+      let rejectFirst;
+      captureBrainThought.mockImplementationOnce(() => new Promise((_res, rej) => { rejectFirst = rej; }));
+      renderWidget();
+      submit('invented thought A');
+      type('invented thought B');
+      await act(async () => { rejectFirst(new Error('Server said no')); });
+
+      const row = await screen.findByRole('group', { name: 'Not saved capture' });
+      expect(row.textContent).toContain('invented thought A');
+      expect(row.textContent).toContain('Server said no');
+      expect(screen.getByPlaceholderText(PLACEHOLDER)).toHaveValue('invented thought B');
+
+      const retry = screen.getByRole('button', { name: /Retry/ });
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+      await waitFor(() => expect(screen.queryByRole('group', { name: 'Not saved capture' })).toBeNull());
+      expect(captureBrainThought).toHaveBeenCalledTimes(2);
+      expect(captureBrainThought.mock.calls[1][0]).toBe('invented thought A');
+      expect(screen.getByPlaceholderText(PLACEHOLDER)).toHaveValue('invented thought B');
+    });
+
+    it('preserves a rejected YouTube kickoff with its note and options, and retries without starting twice', async () => {
+      startYoutubeIngest.mockRejectedValueOnce(new Error('Ingest refused'));
+      renderWidget();
+      type(YT);
+      await openAdvanced();
+      fireEvent.click(screen.getByLabelText(/Audio/i));
+      fireEvent.change(screen.getByLabelText(/Tags/i), { target: { value: 'alpha, beta' } });
+      fireEvent.click(screen.getByLabelText('Capture'));
+
+      const row = await screen.findByRole('group', { name: 'Not saved capture' });
+      expect(row.textContent).toContain(YT);
+      expect(row.textContent).toContain('Ingest refused');
+      expect(screen.getByPlaceholderText(PLACEHOLDER)).toHaveValue('');
+      const firstBody = startYoutubeIngest.mock.calls[0][0];
+      expect(firstBody).toMatchObject({ ingestAudio: true, tags: ['alpha', 'beta'] });
+
+      fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+      await waitFor(() => expect(screen.queryByRole('group', { name: 'Not saved capture' })).toBeNull());
+      expect(startYoutubeIngest).toHaveBeenCalledTimes(2);
+      expect(startYoutubeIngest.mock.calls[1][0]).toEqual(firstBody);
+    });
+  });
 });
