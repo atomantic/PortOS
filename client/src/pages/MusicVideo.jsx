@@ -2,7 +2,7 @@ import ProductionReviewPanel from '../components/musicVideo/ProductionReviewPane
 import useMusicVideoProductionReview from '../hooks/useMusicVideoProductionReview.js';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
-import { Plus, Film, Copy, Trash2, Wand2 } from 'lucide-react';
+import { Plus, Film, Copy, Trash2, Wand2, Pencil } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
@@ -157,6 +157,23 @@ export default function MusicVideo() {
   // unknown one) the tab is the stage the project was in when it was opened,
   // pinned so a stage completing mid-session doesn't move the user off the tab
   // they are working in — the header's next action tracks the project instead.
+  const handleRename = () => {
+    if (!selected) return;
+    setRenameDraft(selected.name || '');
+    setRenamingId(selected.id);
+  };
+  const commitRename = () => {
+    const name = renameDraft.trim();
+    if (!selected || !name || name === selected.name) { setRenamingId(null); return; }
+    const projectId = selected.id;
+    updateMusicVideoProject(projectId, { name })
+      .then((saved) => { patchProject(projectId, { name: saved?.name ?? name, updatedAt: saved?.updatedAt }); setRenamingId(null); })
+      .catch(() => {});
+  };
+  // Holds the id being renamed so the form closes itself when another project opens.
+  const [renamingId, setRenamingId] = useState(null);
+  const renaming = !!selected && renamingId === selected.id;
+  const [renameDraft, setRenameDraft] = useState('');
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
   const progress = useMemo(() => deriveStages(selected, productionReview.readiness), [selected, productionReview.readiness]);
@@ -1002,6 +1019,15 @@ export default function MusicVideo() {
               <span className="flex flex-wrap items-center gap-1">
                 <button
                   type="button"
+                  onClick={handleRename}
+                  title="Rename project"
+                  aria-label="Rename project"
+                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0 sm:min-w-0"
+                >
+                  <Pencil size={15} />
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleClone()}
                   disabled={cloning}
                   title={`Create an editable v${(selected.version || 1) + 1}; keep scene media attached and clear the final render`}
@@ -1040,6 +1066,8 @@ export default function MusicVideo() {
                 )}
               </span>
             )}
+            {!selected && (
+              <>
             <button
               type="button"
               onClick={() => setAutonomousOpen(true)}
@@ -1055,9 +1083,30 @@ export default function MusicVideo() {
             >
               <Plus size={15} /> New project
             </button>
+              </>
+            )}
           </>
         )}
       />
+      {renaming && (
+        <form
+          onSubmit={(e) => { e.preventDefault(); commitRename(); }}
+          className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-port-border"
+        >
+          <label htmlFor="mv-rename-input" className="text-sm text-gray-400">Project title</label>
+          <input
+            id="mv-rename-input"
+            autoFocus
+            value={renameDraft}
+            maxLength={120}
+            onChange={(e) => setRenameDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') setRenamingId(null); }}
+            className="min-w-0 flex-1 sm:max-w-md bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+          />
+          <button type="submit" disabled={!renameDraft.trim()} className="rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 min-h-[44px] sm:min-h-0">Save</button>
+          <button type="button" onClick={() => setRenamingId(null)} className="rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0">Cancel</button>
+        </form>
+      )}
 
       <CreateProjectDrawer
         open={createOpen}
