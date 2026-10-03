@@ -363,9 +363,9 @@ export const getBrainGraph = ({ focus, limit } = {}, options = {}) => {
   return request(`/brain/graph${qs ? `?${qs}` : ''}`, options);
 };
 // Lightweight {id,label,brainType} list of every node, for the search box.
-export const getBrainGraphSearchIndex = () => request('/brain/graph/search-index');
+export const getBrainGraphSearchIndex = (options = {}) => request('/brain/graph/search-index', options);
 // Count of active records missing an embedding (powers "Embed missing").
-export const getEmbeddingsStatus = () => request('/brain/embeddings/status');
+export const getEmbeddingsStatus = (options = {}) => request('/brain/embeddings/status', options);
 
 // Brain - Bridge Sync (brain data to CoS memory system).
 // refresh:true re-embeds already-mapped records to heal memory entries that
