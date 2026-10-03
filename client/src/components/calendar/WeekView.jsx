@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import {CalendarDays, ChevronLeft, ChevronRight} from 'lucide-react';
-import * as api from '../../services/api';
-import socket from '../../services/socket';
+import { useCalendarWindowEvents } from '../../hooks/useCalendarWindowEvents';
+import CalendarWindowStatus from './CalendarWindowStatus';
 import EventDetail from './EventDetail';
 import ChronotypeOverlay from './ChronotypeOverlay';
 import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay } from './calendarUtils';
@@ -29,8 +29,6 @@ function getWeekDays(weekStart) {
 
 export default function WeekView({ accounts }) {
   const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [searchParams, updateParams] = useUrlParams();
   const { theme } = useThemeContext();
 
@@ -40,28 +38,8 @@ export default function WeekView({ accounts }) {
   const weekStartIso = weekStart.toISOString();
   const weekEndIso = weekEnd.toISOString();
 
-  useEffect(() => {
-    let active = true;
-    let request = 0;
-    const fetchEvents = async () => {
-      const currentRequest = ++request;
-      const data = await api.getCalendarEvents({
-        startDate: weekStartIso,
-        endDate: weekEndIso,
-        limit: 200
-      }).catch(() => ({ events: [] }));
-      if (!active || currentRequest !== request) return;
-      setEvents(data?.events || []);
-      setLoading(false);
-    };
-    setLoading(true);
-    fetchEvents();
-    socket.on('calendar:sync:completed', fetchEvents);
-    return () => {
-      active = false;
-      socket.off('calendar:sync:completed', fetchEvents);
-    };
-  }, [weekEndIso, weekStartIso]);
+  const windowEvents = useCalendarWindowEvents(weekStartIso, weekEndIso);
+  const { events, loading } = windowEvents;
 
   const navigate = (weeks) => {
     setWeekStart(prev => {
@@ -119,7 +97,9 @@ export default function WeekView({ accounts }) {
         </button>
       </div>
 
-      {loading ? (
+      <CalendarWindowStatus {...windowEvents} />
+
+      {loading && events.length === 0 ? (
         <div className="flex items-center justify-center py-12">
           <BrailleSpinner text="Loading" />
         </div>

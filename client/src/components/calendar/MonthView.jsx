@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {CalendarDays, ChevronLeft, ChevronRight} from 'lucide-react';
-import * as api from '../../services/api';
-import socket from '../../services/socket';
+import { useCalendarWindowEvents } from '../../hooks/useCalendarWindowEvents';
+import CalendarWindowStatus from './CalendarWindowStatus';
 import EventDetail from './EventDetail';
 import Drawer from '../Drawer';
 import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay } from './calendarUtils';
@@ -40,8 +40,6 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 export default function MonthView({ accounts }) {
   const now = new Date();
 
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [searchParams, updateParams] = useUrlParams();
   const { theme } = useThemeContext();
   const monthParam = searchParams.get('month');
@@ -53,29 +51,11 @@ export default function MonthView({ accounts }) {
   const cells = getMonthGrid(year, month);
   const monthLabel = formatMonthYear(new Date(year, month));
 
-  useEffect(() => {
-    let active = true;
-    let request = 0;
-    const fetchEvents = async () => {
-      const currentRequest = ++request;
-      const grid = getMonthGrid(year, month);
-      const last = grid[grid.length - 1].date;
-      const startDate = grid[0].date.toISOString();
-      const endDate = new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1).toISOString();
-      const data = await api.getCalendarEvents({ startDate, endDate, limit: 500 }).catch(() => ({ events: [] }));
-      if (!active || currentRequest !== request) return;
-      setEvents(data?.events || []);
-      setLoading(false);
-    };
-    setEvents([]);
-    setLoading(true);
-    fetchEvents();
-    socket.on('calendar:sync:completed', fetchEvents);
-    return () => {
-      active = false;
-      socket.off('calendar:sync:completed', fetchEvents);
-    };
-  }, [year, month]);
+  const last = cells[cells.length - 1].date;
+  const startDate = cells[0].date.toISOString();
+  const endDate = new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1).toISOString();
+  const windowEvents = useCalendarWindowEvents(startDate, endDate);
+  const { events, loading, complete } = windowEvents;
 
   const navigate = (dir) => {
     updateParams({
@@ -132,7 +112,9 @@ export default function MonthView({ accounts }) {
         </button>
       </div>
 
-      {loading ? (
+      <CalendarWindowStatus {...windowEvents} />
+
+      {loading && events.length === 0 ? (
         <div className="flex items-center justify-center py-12">
           <BrailleSpinner text="Loading" />
         </div>
@@ -217,31 +199,30 @@ export default function MonthView({ accounts }) {
       )}
 
       <Drawer
-        open={!!selectedDay && !selectedEvent && !loading}
+        open={!!selectedDay && !selectedEvent && (events.length > 0 || !loading)}
         onClose={() => updateParams({ day: null, event: null })}
         title={selectedDay ? formatDateFull(selectedDay.date) : ''}
-        subtitle={`${selectedDayEvents.length} events`}
+        subtitle={`${selectedDayEvents.length} events${complete ? '' : ' loaded'}`}
         closeLabel="Close day events"
       >
-        {loading ? <BrailleSpinner text="Loading" /> : (
-          <div className="space-y-2">
-            {selectedDayEvents.length === 0 && <p className="text-sm text-gray-400">No events available for this date.</p>}
-            {selectedDayEvents.map(event => (
-              <button
-                key={`${event.accountId}:${event.id}`}
-                type="button"
-                onClick={() => openEvent(event)}
-                className="w-full min-h-[44px] text-left px-3 py-2 rounded transition-colors hover:brightness-125"
-                style={eventChipStyle(colorMap.get(event.subcalendarId) || null, theme?.mode)}
-              >
-                <span className="block text-xs">{event.isAllDay ? 'All day'
-                  : new Date(event.startTime).toDateString() === selectedDay.date.toDateString()
-                    ? formatTimeOfDay(event.startTime) : 'Continues'}</span>
-                <span className="block text-sm break-words">{event.title}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="space-y-2">
+          <CalendarWindowStatus {...windowEvents} />
+          {complete && selectedDayEvents.length === 0 && <p className="text-sm text-gray-400">No events available for this date.</p>}
+          {selectedDayEvents.map(event => (
+            <button
+              key={`${event.accountId}:${event.id}`}
+              type="button"
+              onClick={() => openEvent(event)}
+              className="w-full min-h-[44px] text-left px-3 py-2 rounded transition-colors hover:brightness-125"
+              style={eventChipStyle(colorMap.get(event.subcalendarId) || null, theme?.mode)}
+            >
+              <span className="block text-xs">{event.isAllDay ? 'All day'
+                : new Date(event.startTime).toDateString() === selectedDay.date.toDateString()
+                  ? formatTimeOfDay(event.startTime) : 'Continues'}</span>
+              <span className="block text-sm break-words">{event.title}</span>
+            </button>
+          ))}
+        </div>
       </Drawer>
       {selectedEvent && <EventDetail event={selectedEvent} onClose={() => updateParams({ event: null })} />}
     </div>
