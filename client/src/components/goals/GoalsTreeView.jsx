@@ -342,145 +342,148 @@ export default function GoalsTreeView({ data, onRefresh }) {
 
   return (
     <div className="h-full flex relative">
-      <div className="flex-1 relative">
+      <div className="flex-1 min-w-0 min-h-0 relative flex flex-col">
         {/* Filter bar */}
-        <div className="absolute top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 z-10 flex items-center gap-1.5 sm:gap-2 flex-wrap">
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Search..."
-              aria-label="Search goals"
-              className="bg-port-card/90 backdrop-blur border border-port-border rounded-lg pl-7 pr-3 py-1.5 text-sm text-white w-32 sm:w-48"
-            />
-          </div>
-          {Object.entries(CATEGORY_CONFIG).map(([key, cfg]) => {
-            const Icon = cfg.icon;
-            return (
-              <button
-                key={key}
-                onClick={() => toggleCategory(key)}
-                className={`flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-lg text-xs font-medium border transition-colors ${
-                  categoryFilters[key]
-                    ? `${cfg.bg} ${cfg.color} border-transparent`
-                    : 'bg-port-card/60 text-gray-600 border-port-border'
-                }`}
-                title={cfg.label}
-              >
-                <Icon className="w-3 h-3" />
-                <span className="max-sm:sr-only">{cfg.label}</span>
-              </button>
-            );
-          })}
-          <button
-            onClick={() => setShowLabels(v => !v)}
-            aria-pressed={showLabels}
-            aria-label="Labels"
-            title={showLabels ? 'Hide goal names' : 'Show goal names'}
-            className={`flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-lg text-xs font-medium border transition-colors ${
-              showLabels
-                ? 'bg-port-accent/20 text-port-accent border-transparent'
-                : 'bg-port-card/60 text-gray-600 border-port-border'
-            }`}
-          >
-            <Type className="w-3 h-3" />
-            <span className="hidden sm:inline">Labels</span>
-          </button>
-          <button
-            onClick={() => setShowNewGoal(!showNewGoal)}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-port-accent text-white"
-          >
-            <Plus className="w-3 h-3" />
-            Add
-          </button>
-          {(data?.flat?.length ?? 0) >= 2 && (
-            <div className="flex items-center gap-2">
-              <div className="hidden sm:block">
-                <ProviderModelSelector
-                  providers={providers}
-                  selectedProviderId={selectedProviderId}
-                  selectedModel={selectedModel}
-                  availableModels={availableModels}
-                  onProviderChange={setSelectedProviderId}
-                  onModelChange={setSelectedModel}
-                  label="AI Provider"
-                  disabled={organizing || providersLoading}
-                  compact
-                />
+        <div className="relative z-10 shrink-0 m-2 sm:m-3">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search..."
+                aria-label="Search goals"
+                className="bg-port-card/90 backdrop-blur border border-port-border rounded-lg pl-7 pr-3 py-1.5 text-sm text-white w-32 sm:w-48"
+              />
+            </div>
+            {Object.entries(CATEGORY_CONFIG).map(([key, cfg]) => {
+              const Icon = cfg.icon;
+              return (
+                <button
+                  key={key}
+                  onClick={() => toggleCategory(key)}
+                  className={`flex items-center justify-center shrink-0 min-w-11 min-h-11 gap-1 px-1.5 sm:px-2 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                    categoryFilters[key]
+                      ? `${cfg.bg} ${cfg.color} border-transparent`
+                      : 'bg-port-card/60 text-gray-600 border-port-border'
+                  }`}
+                  title={cfg.label}
+                >
+                  <Icon className="w-3 h-3" />
+                  <span className="max-sm:sr-only">{cfg.label}</span>
+                </button>
+              );
+            })}
+            <button
+              onClick={() => setShowLabels(v => !v)}
+              aria-pressed={showLabels}
+              aria-label="Labels"
+              title={showLabels ? 'Hide goal names' : 'Show goal names'}
+              className={`flex items-center justify-center shrink-0 min-w-11 min-h-11 gap-1 px-1.5 sm:px-2 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                showLabels
+                  ? 'bg-port-accent/20 text-port-accent border-transparent'
+                  : 'bg-port-card/60 text-gray-600 border-port-border'
+              }`}
+            >
+              <Type className="w-3 h-3" />
+              <span className="hidden sm:inline">Labels</span>
+            </button>
+            <button
+              onClick={() => setShowNewGoal(!showNewGoal)}
+              className="flex items-center justify-center shrink-0 min-w-11 min-h-11 gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-port-accent text-white"
+            >
+              <Plus className="w-3 h-3" />
+              Add
+            </button>
+            {(data?.flat?.length ?? 0) >= 2 && (
+              <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+                <div className="hidden sm:block min-w-0">
+                  <ProviderModelSelector
+                    providers={providers}
+                    selectedProviderId={selectedProviderId}
+                    selectedModel={selectedModel}
+                    availableModels={availableModels}
+                    onProviderChange={setSelectedProviderId}
+                    onModelChange={setSelectedModel}
+                    label="AI Provider"
+                    disabled={organizing || providersLoading}
+                    compact
+                  />
+                </div>
+                <button
+                  onClick={handleOrganize}
+                  disabled={organizing || !selectedProviderId}
+                  className="flex items-center justify-center shrink-0 min-w-11 min-h-11 gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-50"
+                  title="Use AI to organize goals into a hierarchy with an apex north-star goal"
+                >
+                  <Wand2 className={`w-3 h-3 ${organizing ? 'animate-spin' : ''}`} />
+                  {organizing ? 'Analyzing...' : 'Organize'}
+                </button>
               </div>
-              <button
-                onClick={handleOrganize}
-                disabled={organizing || !selectedProviderId}
-                className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-50"
-                title="Use AI to organize goals into a hierarchy with an apex north-star goal"
-              >
-                <Wand2 className={`w-3 h-3 ${organizing ? 'animate-spin' : ''}`} />
-                {organizing ? 'Analyzing...' : 'Organize'}
-              </button>
+            )}
+          </div>
+
+          {/* New goal form */}
+          {showNewGoal && (
+            <div className="absolute top-full mt-2 left-0 z-10 bg-port-card border border-port-border rounded-lg p-3 w-72 max-w-[calc(100vw-1rem)] space-y-2 shadow-lg">
+              <input
+                type="text"
+                value={newGoal.title}
+                onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
+                placeholder="Goal title..."
+                aria-label="New goal title"
+                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+                onKeyDown={e => e.key === 'Enter' && handleCreateGoal()}
+                disabled={isCreating}
+              />
+              <textarea
+                value={newGoal.description}
+                onChange={e => setNewGoal({ ...newGoal, description: e.target.value })}
+                placeholder="Description..."
+                aria-label="New goal description"
+                rows={2}
+                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white resize-none"
+                disabled={isCreating}
+              />
+              <div className="flex gap-2">
+                <select
+                  value={newGoal.horizon}
+                  onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
+                  aria-label="New goal horizon"
+                  className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+                  disabled={isCreating}
+                >
+                  {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
+                </select>
+                <select
+                  value={newGoal.category}
+                  onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
+                  aria-label="New goal category"
+                  className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+                  disabled={isCreating}
+                >
+                  {Object.entries(CATEGORY_CONFIG).map(([k, v]) => (
+                    <option key={k} value={k}>{v.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleCreateGoal}
+                  disabled={!newGoal.title.trim() || isCreating}
+                  className="px-3 py-1 text-sm rounded bg-port-accent text-white disabled:opacity-50"
+                >
+                  Create
+                </button>
+                <button onClick={() => setShowNewGoal(false)} className="px-3 py-1 text-sm rounded bg-port-border text-gray-300">
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
-        </div>
 
-        {/* New goal form */}
-        {showNewGoal && (
-          <div className="absolute top-12 left-3 z-10 bg-port-card border border-port-border rounded-lg p-3 w-72 max-w-[calc(100vw-1rem)] space-y-2 shadow-lg">
-            <input
-              type="text"
-              value={newGoal.title}
-              onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
-              placeholder="Goal title..."
-              aria-label="New goal title"
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
-              onKeyDown={e => e.key === 'Enter' && handleCreateGoal()}
-              disabled={isCreating}
-            />
-            <textarea
-              value={newGoal.description}
-              onChange={e => setNewGoal({ ...newGoal, description: e.target.value })}
-              placeholder="Description..."
-              aria-label="New goal description"
-              rows={2}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white resize-none"
-              disabled={isCreating}
-            />
-            <div className="flex gap-2">
-              <select
-                value={newGoal.horizon}
-                onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
-                aria-label="New goal horizon"
-                className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-                disabled={isCreating}
-              >
-                {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
-              </select>
-              <select
-                value={newGoal.category}
-                onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
-                aria-label="New goal category"
-                className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-                disabled={isCreating}
-              >
-                {Object.entries(CATEGORY_CONFIG).map(([k, v]) => (
-                  <option key={k} value={k}>{v.label}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={handleCreateGoal}
-                disabled={!newGoal.title.trim() || isCreating}
-                className="px-3 py-1 text-sm rounded bg-port-accent text-white disabled:opacity-50"
-              >
-                Create
-              </button>
-              <button onClick={() => setShowNewGoal(false)} className="px-3 py-1 text-sm rounded bg-port-border text-gray-300">
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+        </div>
 
         {/* Organization panel */}
         <OrganizePanel
@@ -539,7 +542,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
             camera={{ position: [0, 15, 40], fov: 60 }}
             onPointerDown={(e) => { dragStartRef.current = { x: e.clientX, y: e.clientY }; }}
             onPointerMissed={handlePointerMissed}
-            style={{ background: 'rgb(var(--port-bg))' }}
+            style={{ background: 'rgb(var(--port-bg))', flex: 1, minHeight: 0 }}
           >
             <GoalScene
               graph={graph}

@@ -126,6 +126,15 @@ describe('labels toggle', () => {
   });
 });
 
+it('opens and dismisses the create form without creating a goal', async () => {
+  const user = userEvent.setup();
+  await renderTree();
+  await user.click(screen.getByRole('button', { name: 'Add' }));
+  expect(screen.getByRole('textbox', { name: 'New goal title' })).toBeVisible();
+  await user.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(screen.queryByRole('textbox', { name: 'New goal title' })).not.toBeInTheDocument();
+});
+
 describe('empty state', () => {
   it('skips the canvas when there is nothing to lay out', async () => {
     await renderTree({ flat: [] });
@@ -148,6 +157,20 @@ describe('handleOrganize error toasting', () => {
   });
   afterEach(() => {
     Object.assign(providerState, { providers: [], selectedProviderId: '', selectedModel: '', availableModels: [] });
+  });
+
+  it('disables organization while a request is pending', async () => {
+    const user = userEvent.setup();
+    let finish;
+    organizeGoals.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    await renderTree();
+    await user.click(screen.getByRole('button', { name: /organize/i }));
+    const pending = screen.getByRole('button', { name: /analyzing/i });
+    expect(pending).toBeDisabled();
+    await user.click(pending);
+    expect(organizeGoals).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(null); });
+    expect(screen.getByRole('button', { name: /organize/i })).toBeEnabled();
   });
 
   it('asks the API helper to stay silent and toasts the failure exactly once', async () => {
