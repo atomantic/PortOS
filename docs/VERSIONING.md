@@ -25,9 +25,16 @@ Example progression: `0.22.0` → `0.22.1` (fix) → `0.23.0` (feature) → `1.0
 
 Version is managed by the `/do:release` Claude Code slash command (provided by the [slashdo](https://github.com/atomantic/slashdo) skill). Do not bump `package.json` version manually during development.
 
-### On Push/PR to `main`
+### CI Validation
 
-CI runs tests and linting. No version changes.
+The [CI workflow](../.github/workflows/ci.yml) runs on pull requests targeting
+`main` or `release`, a nightly schedule that checks `main`, manual dispatch
+(`workflow_dispatch`), and reusable-workflow calls (`workflow_call`). It plans
+the required tests and linting for each run; CI does not change the version.
+
+Direct pushes to `main` do not start this workflow. Run `npm run pregate`
+before every push and again after rebasing onto a moved base, as required by
+[`AGENTS.md`](../AGENTS.md).
 
 ### On Push `main` → `release`
 
