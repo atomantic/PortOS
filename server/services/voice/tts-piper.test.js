@@ -14,6 +14,11 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
   return { ...actual, spawn: (...args) => (spawnOverride ? spawnOverride(...args) : actual.spawn(...args)) };
 });
 
+vi.mock('./config.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getVoiceConfig: vi.fn(),
+}));
+
 const { synthesizePiper } = await import('./tts-piper.js');
 const { IS_WIN } = await import('./config.js');
 
@@ -43,6 +48,32 @@ describe('synthesizePiper', () => {
   afterEach(async () => {
     spawnOverride = null;
     await rm(voiceDir, { recursive: true, force: true });
+  });
+
+  it('rejects a pre-aborted request without spawning a child', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    spawnOverride = vi.fn(() => makeFakeChild());
+
+    await expect(synthesizePiper('hello', { piper: { voicePath } }, controller.signal))
+      .rejects.toThrow('piper synthesis aborted');
+    expect(spawnOverride).not.toHaveBeenCalled();
+  });
+
+  it('creates no Piper child when the turn aborts during facade configuration loading', async () => {
+    const { getVoiceConfig } = await import('./config.js');
+    const { synthesize } = await import('./tts.js');
+    const controller = new AbortController();
+    let resolveConfig;
+    getVoiceConfig.mockReturnValueOnce(new Promise((resolve) => { resolveConfig = resolve; }));
+    spawnOverride = vi.fn(() => makeFakeChild());
+
+    const promise = synthesize('hello', { signal: controller.signal });
+    controller.abort();
+    resolveConfig({ tts: { engine: 'piper', piper: { voicePath } } });
+
+    await expect(promise).rejects.toThrow('piper synthesis aborted');
+    expect(spawnOverride).not.toHaveBeenCalled();
   });
 
   // #7006: an unlistened 'error' on child.stdin re-throws in Node and crashes

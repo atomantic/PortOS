@@ -16,6 +16,8 @@ const PIPER_BIN = join(voiceHome(), 'piper', PIPER_BIN_NAME);
 const voicePathFor = (id) => join(VOICES_DIR, `${id}.onnx`);
 
 export const synthesizePiper = (text, cfg, signal) => {
+  if (signal?.aborted) return Promise.reject(new Error('piper synthesis aborted'));
+
   const voiceId = cfg.piper.voice;
   const voicePath = expandPath(cfg.piper.voicePath || voicePathFor(voiceId));
   if (!existsSync(voicePath)) {
@@ -80,11 +82,6 @@ export const synthesizePiper = (text, cfg, signal) => {
     }, PIPER_TIMEOUT_MS);
 
     if (signal) {
-      if (signal.aborted) {
-        killed = true;
-        try { child.kill('SIGTERM'); } catch { /* already gone */ }
-        return doReject(new Error('piper synthesis aborted'));
-      }
       signal.addEventListener('abort', () => {
         killed = true;
         try { child.kill('SIGTERM'); } catch { /* already gone */ }
