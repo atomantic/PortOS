@@ -209,7 +209,7 @@ describe.skipIf(process.platform === 'win32')('owned maintenance worker', () => 
     expect(stubs.events().slice(0, 6)).toEqual(['stop portos-cos', 'stop portos-server', 'dump writer=none',
       'import-start', 'import-commit', 'restart portos-server']);
     expect(stubs.events()).toContain('restart portos-cos');
-    expect(stubs.invocations('pg_dump')).toEqual([`pg_dump -h ${from.host} -p ${from.port} -U ${from.user} -d ${from.database} --no-owner --no-privileges --if-exists --clean`]);
+    expect(stubs.invocations('pg_dump')).toEqual([`pg_dump -h ${from.host} -p ${from.port} -U ${from.user} -d ${from.database} --no-owner --no-privileges --no-comments --if-exists --clean`]);
     expect(stubs.invocations('psql')).toEqual([`psql -h ${to.host} -p ${to.port} -U ${to.user} -d ${to.database} -v ON_ERROR_STOP=1 --single-transaction`]);
     expect(stubs.receivedVariables()).toEqual(['PGPASSWORD']);
     expect(stubs.imported()).toBe(STUB_DUMP_COMPLETE);
