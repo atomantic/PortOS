@@ -1088,3 +1088,52 @@ describe('targeted activation through the public turn adapter', () => {
     for (const prompt of prompts.slice(1)) expect(prompt.match(/# PortOS semantic tools[\s\S]*?Supply distinct requestId values only when two intentionally identical actions must both run\./)[0].length).toBeLessThanOrEqual(24_000);
   });
 });
+
+
+describe('family activation through the public turn adapter', () => {
+  const namesIn = (prompt) => prompt.includes('Semantic tool access is OFF.') ? [] : JSON.parse(prompt.split('# PortOS semantic tools\n')[1].split('\n\n')[1]).map(({ name }) => name);
+  const activate = { name: 'tools.activate', arguments: { families: ['mind'] } };
+
+  it('keeps zero-retention family schemas across continuations but not another user or self turn', async () => {
+    mock.realToolExposure = true;
+    mock.root.config.persistentMindCapabilities = { manageMind: true, toolExposureRetentionTurns: 0 };
+    mock.executeToolCall.mockImplementation((request) => mock.realRegistry.executeCosToolCall(request));
+    let round = 0;
+    mock.runPrompt.mockImplementation(async ({ prompt }) => {
+      const names = namesIn(prompt);
+      expect(names).not.toContain('eidoverse.visit');
+      expect(names.includes('mind.cleanup')).toBe(round > 0);
+      round += 1;
+      return { text: JSON.stringify({ message: 'Example response.', toolCalls: round <= 2 ? [{ ...activate, requestId: `activate-${round}` }] : [] }) };
+    });
+    const adapter = createPersistentMindTurnAdapter();
+    await adapter.run({ ...profile, turnId: 'zero-retention', wake: { kind: 'message' }, context: { text: 'Example request.' } });
+    expect(round).toBe(3);
+    expect(mock.root.persistentMind.toolActivation.leases).toEqual({});
+    mock.runPrompt.mockImplementation(async ({ prompt }) => {
+      expect(namesIn(prompt)).not.toContain('mind.cleanup');
+      return { text: JSON.stringify({ message: 'Example response.', toolCalls: [] }) };
+    });
+    for (const kind of ['self', 'message']) await adapter.run({ ...profile, turnId: `next-${kind}`, wake: { kind }, context: { text: 'Example next request.' } });
+  });
+
+  it.each(['deactivate', 'revoke'])('removes turn-local schemas after %s', async (change) => {
+    mock.realToolExposure = true;
+    mock.root.config.persistentMindCapabilities = { manageMind: true, toolExposureRetentionTurns: 0 };
+    mock.executeToolCall.mockImplementation(async (request) => {
+      const receipt = await mock.realRegistry.executeCosToolCall(request);
+      if (change === 'revoke' && mock.executeToolCall.mock.calls.length === 2) mock.root.config.persistentMindCapabilities.manageMind = false;
+      return receipt;
+    });
+    let round = 0;
+    mock.runPrompt.mockImplementation(async ({ prompt }) => {
+      expect(namesIn(prompt).includes('mind.cleanup')).toBe(round === 1);
+      round += 1;
+      const call = round === 1 ? { ...activate, requestId: 'initial' } : round === 2
+        ? { ...(change === 'deactivate' ? { name: 'tools.deactivate', arguments: {} } : activate), requestId: 'change' } : null;
+      return { text: JSON.stringify({ message: 'Example response.', toolCalls: call ? [call] : [] }) };
+    });
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: `zero-${change}`, wake: { kind: 'self' }, context: { text: 'Example request.' } });
+    expect(round).toBe(3);
+  });
+});

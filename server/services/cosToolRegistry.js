@@ -822,7 +822,7 @@ const logToolExposureTrace = (stats) => {
  */
 export const buildPersistentMindToolPrompt = async (capabilities, recipes = [], {
   turnId = null, isUserTurn = false, trace = false, maxChars = Infinity, requiredToolNames = [],
-  requestedToolNames = [], onSelection,
+  requestedToolNames = [], activatedFamilies = [], onSelection,
 } = {}) => {
   const grants = normalizePersistentMindCapabilities(capabilities);
   const catalog = getCosToolCatalog({ scope: 'mind', capabilities, recipes });
@@ -870,7 +870,7 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
   }
 
   const requested = new Set(requestedToolNames);
-  const exposedFamilies = new Set(Object.keys(activation.leases));
+  const exposedFamilies = new Set([...Object.keys(activation.leases), ...activatedFamilies]);
   const controlTools = granted.filter((tool) => ['tools.activate', 'tools.deactivate'].includes(tool.name));
   const exposedTools = [];
   const discoverableByFamily = new Map();
