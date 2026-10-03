@@ -4,6 +4,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { discoverWorkspaces } from '../scripts/trusted-rebuilds.js';
+import { BRACES_PATCH_TARGET_VERSION } from '../scripts/lib/bracesDepthPatch.js';
 import { GET_URI_PATCH_TARGET_VERSION } from '../scripts/lib/getUriFtpPatch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -196,6 +197,14 @@ describe('dependency override parity across manifests (#2848)', () => {
     expect(resolved.map(([, metadata]) => metadata.version)).toEqual(
       resolved.map(() => GET_URI_PATCH_TARGET_VERSION)
     );
+  });
+
+  it.each(['package.json', 'server/package.json'])('%s pins the braces install the depth patch guards (#9906)', rel => {
+    const resolved = Object.entries(readLockPackages(lockfileFor(rel)))
+      .filter(([path]) => packageNameFromLockPath(path) === 'braces');
+    expect(resolved.map(([path, metadata]) => [path, metadata.version])).toEqual([
+      ['node_modules/braces', BRACES_PATCH_TARGET_VERSION],
+    ]);
   });
 
   it('governs every workspace manifest that ships its own lockfile', () => {

@@ -97,7 +97,12 @@ describe('startup dependency reconciliation', () => {
     writeFileSync(join(root, 'package.json'), '{"type":"module"}');
     copyFileSync(join(REPO_ROOT, 'scripts', 'ensure-deps.js'), join(root, 'scripts', 'ensure-deps.js'));
     copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'directInvocation.js'), join(root, 'scripts', 'lib', 'directInvocation.js'));
-    writeFileSync(join(root, 'scripts', 'trusted-rebuilds.js'), 'export const rebuildTrusted = () => true;');
+    writeFileSync(join(root, 'scripts', 'trusted-rebuilds.js'), `
+      import { writeFileSync } from 'fs';
+      import { join } from 'path';
+      export const rebuildTrusted = () => true;
+      export const patchInstalledDependencies = dir => writeFileSync(join(dir, 'node_modules', 'patch-applied'), 'patched');
+    `);
     writeFileSync(join(root, 'server', 'lib', 'bufferedSpawn.js'), `
       import { fileURLToPath } from 'url';
       export const prepareCliSpawn = (command, args) => ({
@@ -143,8 +148,10 @@ describe('startup dependency reconciliation', () => {
       expect(readFileSync(join(f.client, 'package-lock.json'), 'utf8')).toBe(updated);
       expect(readFileSync(join(f.client, 'package.json'), 'utf8')).toBe('{}');
       writeFileSync(join(f.client, 'node_modules', 'keep'), 'unchanged tree');
+      rmSync(join(f.client, 'node_modules', 'patch-applied'));
       expect(f.run()).not.toContain('reinstall');
       expect(existsSync(join(f.client, 'node_modules', 'keep'))).toBe(true);
+      expect(readFileSync(join(f.client, 'node_modules', 'patch-applied'), 'utf8')).toBe('patched');
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }
