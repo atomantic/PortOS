@@ -163,6 +163,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
+| `useFailedCaptures` | Recoverable rejected Brain captures: `{ failures, fail(payload, error, id?), markRetrying(id), discard(id) }` keeps each failed submission's immutable payload apart from the composer's next draft; never re-sends by itself (the host's explicit Retry does). | A capture box that clears its input on submit (Inbox, Quick Capture) and must not lose the text when the server rejects it. Pair with `components/brain/FailedCaptureList`. |
 | `useLocalStorageBool` | Boolean `useState` mirrored to `localStorage`; returns `[value, setValue, toggle]`. | Per-user UI preference toggle, and any remembered disclosure (the SongBook viewer's Audio / Sheet controls / Chords used cards). |
 | `useNavWorkingSet` | Sidebar Pinned + Recent working set (localStorage MRU + pins); resolves stored paths to `{ path, label, icon }` rows via a `resolveNavEntry` arg. | Rendering the sidebar's Pinned/Recent sections. |
 
