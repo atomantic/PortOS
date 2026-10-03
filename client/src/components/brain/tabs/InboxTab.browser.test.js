@@ -95,6 +95,15 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
     browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--mute-audio'],
       env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
     });
+    // Compile the cold Vite module graph inside fixture startup, before timed
+    // interaction cases. This does not resolve history or submit a capture.
+    const warmup = await browser.newPage();
+    try {
+      await warmup.goto(`${origin}inbox-test`, { timeout: 25000 });
+      await warmup.getByRole('textbox', { name: 'New inbox thought' }).waitFor({ timeout: 5000 });
+    } finally {
+      await warmup.close();
+    }
   }, 60000);
   afterAll(async () => {
     try {
@@ -103,7 +112,7 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
       await server?.close();
       if (browserTemp) await rm(browserTemp, { recursive: true, force: true });
     }
-  });
+  }, 60000);
 
   it.each([[360, 800], [390, 844], [768, 1024], [1440, 900]])(
     'keeps the complete capture form usable at %ix%i', async (width, height) => {
