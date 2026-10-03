@@ -370,6 +370,19 @@ export default function MediaLightbox({
           // navigation while the browser is handling the gesture.
           style={{ touchAction: 'manipulation' }}
         >
+          {/* Fail-safe close — the SettingsPane's X is hidden in fullscreen
+              and unreachable if iOS Safari mis-lays out the page. Keep it
+              before the media so native video controls sit inside the trap's
+              counted boundaries without intercepting their shadow-DOM tabs. */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            className="absolute top-2 left-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent min-h-[44px] min-w-[44px] flex items-center justify-center"
+            aria-label="Close"
+            title="Close (Esc)"
+          >
+            <X className="w-4 h-4" />
+          </button>
           {isVideo ? (
             /* Mobile playback contract:
                - playsInline keeps iOS Safari from auto-promoting autoplay video
@@ -399,17 +412,6 @@ export default function MediaLightbox({
           ) : (
             <MediaImage src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
           )}
-          {/* Fail-safe close — the SettingsPane's X is hidden in fullscreen
-              and unreachable if iOS Safari mis-lays out the page. */}
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onClose(); }}
-            className="absolute top-2 left-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent min-h-[44px] min-w-[44px] flex items-center justify-center"
-            aria-label="Close"
-            title="Close (Esc)"
-          >
-            <X className="w-4 h-4" />
-          </button>
           {/* Solid white pill keeps it readable against black letterbox bars. */}
           <button
             type="button"
