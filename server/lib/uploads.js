@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { join, resolve as resolvePath } from 'path';
 import { MIRRORED_MIME_TYPES } from './beeperAttachmentPaths.js';
 import { ServerError } from './errorHandler.js';
-import { copyFileGuarded, ensureDir, pathExists, writeFileGuarded } from './fileCore.js';
+import { copyFileGuarded, ensureDir, pathExists, renameGuarded, unlinkGuarded, writeFileGuarded } from './fileCore.js';
 import { detectImageFormat, getFileExtension, getMimeType, RISKY_MIME_TYPES, sanitizeFilename } from './mimeTypes.js';
 import { PATHS } from './paths.js';
 import { assertSafeFilename, isPathInsideDir } from './pathSafety.js';
@@ -62,7 +62,11 @@ const MAX_FILENAME_BYTES = 255;
  * they wrote an image (they hand the file to an image-gen backend or to an agent
  * that will read it), so an extension allowlist isn't enough. Naming is the
  * CALLER's call — pass a name that is already unique if later uploads must not
- * overwrite this one, since `dir` is a shared bucket.
+ * overwrite this one, since `dir` is a shared bucket. The bytes are staged in a
+ * short-named sibling file and renamed into place, so a write that fails midway
+ * (ENOSPC, …) never truncates an image already stored under the final name.
+ * `stagePrefix` lets an owner keep its recovery prefix on the stage name (the
+ * Persistent Mind sweeps `mind-<attachmentId>-*` images when a cleanup fails).
  *
  * Throws ServerError with the status/code/message contract `routes/screenshots.js`
  * established (`FILE_TOO_LARGE`, `INVALID_FILE_TYPE`, `INVALID_FILENAME` — all
@@ -71,11 +75,11 @@ const MAX_FILENAME_BYTES = 255;
  * @param {string} dir - Destination directory (created if missing).
  * @param {{ filename: string, data: string }} upload - Desired base name (the
  *   extension is replaced with the detected one) + base64 payload.
- * @param {{ maxBytes: number }} opts
+ * @param {{ maxBytes: number, stagePrefix?: string }} opts
  * @returns {Promise<{ filename: string, filePath: string, size: number,
  *   format: string, mime: string }>}
  */
-export async function saveImageUpload(dir, { filename, data }, { maxBytes }) {
+export async function saveImageUpload(dir, { filename, data }, { maxBytes, stagePrefix = '' }) {
   const buffer = Buffer.from(data, 'base64');
   if (buffer.length > maxBytes) {
     throw new ServerError(`File exceeds maximum size of ${maxBytes / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
@@ -113,10 +117,22 @@ export async function saveImageUpload(dir, { filename, data }, { maxBytes }) {
   }
 
   await ensureDir(dir);
-  // writeFileGuarded, not atomicWrite: the stored name is clamped to NAME_MAX
-  // just above, and atomicWrite's `.<pid>.<ts>.<uuid>.tmp` suffix would push the
-  // temp file past it (#6176).
-  await writeFileGuarded(filePath, buffer);
+  // Stage + rename rather than atomicWrite: the stored name is clamped to
+  // NAME_MAX just above, and atomicWrite's `.<pid>.<ts>.<uuid>.tmp` suffix would
+  // push the temp file past it (#6176). The stage name is short and fixed-size
+  // whatever the final name is. Both paths are in `dir`, so rename is atomic.
+  const stagePath = join(dir, `${stagePrefix}.stage-${randomUUID().slice(0, 8)}${detected.ext}`);
+  if (!isPathInsideDir(dir, stagePath)) {
+    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
+  }
+  const published = await writeFileGuarded(stagePath, buffer)
+    .then(() => renameGuarded(stagePath, filePath))
+    .then(() => null, (error) => error);
+  if (published) {
+    // Best-effort: a stage that survives keeps its owner prefix for sweeps.
+    await unlinkGuarded(stagePath).catch(() => {});
+    throw published;
+  }
 
   return { filename: fname, filePath, size: buffer.length, format: detected.format, mime: detected.mime };
 }
