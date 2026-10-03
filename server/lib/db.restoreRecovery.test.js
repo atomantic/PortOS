@@ -2,13 +2,41 @@
 // The journal is the real one, in a temp data root; pg is a stub pool, so no
 // statement can reach a real database even if admission regressed.
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const fixture = vi.hoisted(() => ({ dataRoot: null }));
+const fixture = vi.hoisted(() => ({ dataRoot: null, releaseFault: null }));
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal();
+  return {
+    ...fs,
+    unlinkSync: vi.fn((path) => {
+      if (fixture.releaseFault === 'unlink' && path === join(fixture.dataRoot, 'database-restore-recovery.json')) {
+        throw Object.assign(new Error('synthetic unlink failure'), { code: 'EIO' });
+      }
+      return fs.unlinkSync(path);
+    }),
+    fsyncSync: vi.fn((fd) => {
+      if (fixture.releaseFault === 'directory-sync' && fs.fstatSync(fd).isDirectory()) {
+        throw Object.assign(new Error('synthetic directory sync failure'), { code: 'EIO' });
+      }
+      return fs.fsyncSync(fd);
+    }),
+  };
+});
+vi.mock('./db.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  ensureSchema: vi.fn(async () => {}),
+}));
+vi.mock('../scripts/run-db-migrations.js', () => ({
+  runDbMigrations: vi.fn(async () => 0),
+}));
+vi.mock('../services/syncOrchestrator.js', () => ({
+  rewindPostgresSyncCursors: vi.fn(async () => 2),
+}));
 vi.mock('./paths.js', async (importOriginal) => {
   const actual = await importOriginal();
   const { mkdtempSync: mkdtemp } = await import('node:fs');
@@ -32,6 +60,8 @@ vi.mock('pg', async (importOriginal) => ({
 }));
 
 const { query, withTransaction, withDatabaseMaintenance, databaseRestoreRecovery } = await import('./db.js');
+
+const { resumeDatabaseRestore, getDatabaseRestoreRecoveryStatus } = await import('../services/backupRestoreRecovery.js');
 
 const begin = () => databaseRestoreRecovery.begin({
   snapshotId: 'snap-1', dumpSha256: 'a'.repeat(64),
@@ -69,6 +99,51 @@ describe('restore recovery admission', () => {
       databaseRestoreRecovery.release(id);
     }, { restoreRecoveryId: id });
     await expect(query('SELECT 5')).resolves.toEqual({ rows: [] });
+  });
+
+  it.each([null, 'unlink', ...(process.platform === 'win32' ? [] : ['directory-sync'])])('keeps release completion and recovery admission consistent (%s)', async (fault) => {
+    const record = databaseRestoreRecovery.markCommitted(begin().id);
+    fixture.releaseFault = fault;
+    try {
+      const result = await resumeDatabaseRestore(record.id);
+      if (fault) {
+        expect(result).toMatchObject({ status: 'failed', reason: 'restore_recovery_release', recovery: { id: record.id } });
+        // Post-unlink failure really has no file: record and fence must survive
+        // in the journal instance until directory sync completes.
+        expect(existsSync(databaseRestoreRecovery.path)).toBe(fault === 'unlink');
+        expect(databaseRestoreRecovery.read()).toEqual(record);
+        expect(getDatabaseRestoreRecoveryStatus()).toMatchObject({ pending: true, id: record.id, stage: 'repairing' });
+        await expect(query('SELECT ordinary')).rejects.toMatchObject(FENCED);
+        await expect(withTransaction(() => {})).rejects.toMatchObject(FENCED);
+        await expect(resumeDatabaseRestore('00000000-0000-4000-8000-000000000009'))
+          .rejects.toMatchObject({ code: 'RESTORE_RECOVERY_MISMATCH' });
+        expect(() => databaseRestoreRecovery.release('00000000-0000-4000-8000-000000000009')).toThrow();
+        expect(() => begin()).toThrow();
+        expect(databaseRestoreRecovery.read()).toEqual(record);
+        fixture.releaseFault = null;
+        await expect(resumeDatabaseRestore(record.id)).resolves.toMatchObject({ status: 'ok', outcome: 'repaired' });
+      } else {
+        expect(result).toMatchObject({ status: 'ok', outcome: 'repaired' });
+      }
+      expect(existsSync(databaseRestoreRecovery.path)).toBe(false);
+      expect(getDatabaseRestoreRecoveryStatus()).toEqual({ pending: false });
+      await expect(query('SELECT ordinary')).resolves.toEqual({ rows: [] });
+      await expect(withTransaction(client => client.query('SELECT ordinary'))).resolves.toEqual({ rows: [] });
+      const queriesBeforeRetry = pool.query.mock.calls.length;
+      await expect(resumeDatabaseRestore(record.id)).resolves.toEqual({ status: 'ok', outcome: 'none' });
+      expect(pool.query).toHaveBeenCalledTimes(queriesBeforeRetry);
+      // Recovery only floors original positions; no reset, replay or receipt inspection.
+      expect(pool.query.mock.calls).toEqual([
+        ...Array.from({ length: fault ? 2 : 1 }, () => [
+          expect.stringContaining('SELECT setval'),
+          [record.feedPositions.map(p => p.sequencename), record.feedPositions.map(p => p.last_value)],
+        ]),
+        ['SELECT ordinary', undefined],
+      ]);
+    } finally {
+      fixture.releaseFault = null;
+      if (databaseRestoreRecovery.isFenced()) databaseRestoreRecovery.release(record.id);
+    }
   });
 
   it('withdraws recovery authority from work that outlives the maintenance context', async () => {

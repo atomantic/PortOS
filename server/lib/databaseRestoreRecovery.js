@@ -13,7 +13,8 @@
  *               transaction) is inspected.
  *   repairing — replay committed; schema/migration/sequence/cursor repair is
  *               pending. Never replays again.
- * Completion (or a proven rollback) removes the file, reopening admission.
+ * Completion (or a proven rollback) removes the file and syncs its directory
+ * before reopening admission.
  */
 import { closeSync, fsyncSync, linkSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -64,12 +65,14 @@ function writeDurableExclusive(path, value) {
 
 export function createDatabaseRestoreRecovery(dataDir = PATHS.data) {
   const recordPath = join(dataDir, DATABASE_RESTORE_RECOVERY_FILE);
+  let pendingRelease = null;
   const pendingPath = () => join(dataDir, `.database-restore-recovery-${randomUUID()}.pending`);
 
-  // The FILE is the fence, not a successfully parsed record: anything at the
+  // A pending directory sync also fences this process. Otherwise anything at the
   // path other than a confirmed ENOENT (unreadable, wrong type, damaged)
   // keeps ordinary database work closed.
   const isFenced = () => {
+    if (pendingRelease) return true;
     try {
       lstatSync(recordPath);
       return true;
@@ -85,6 +88,7 @@ export function createDatabaseRestoreRecovery(dataDir = PATHS.data) {
   // null when no restore is pending; throws (fails closed) when the record
   // exists but cannot be read or validated.
   const read = () => {
+    if (pendingRelease) return recordSchema.parse(pendingRelease);
     if (!isFenced()) return null;
     try {
       if (!lstatSync(recordPath).isFile()) throw databaseRestoreRecoveryError();
@@ -100,6 +104,7 @@ export function createDatabaseRestoreRecovery(dataDir = PATHS.data) {
   // overwrite a pending operation's original feed positions.
   const begin = ({ snapshotId, dumpSha256, feedPositions }) => {
     assertNotRealDataWrite(recordPath, 'database restore recovery begin');
+    assertAdmission();
     const record = recordSchema.parse({
       version: 1, id: randomUUID(), stage: 'replaying', createdAt: new Date().toISOString(),
       snapshotId, dumpSha256, feedPositions,
@@ -138,8 +143,14 @@ export function createDatabaseRestoreRecovery(dataDir = PATHS.data) {
     assertNotRealDataWrite(recordPath, 'database restore recovery release');
     const current = read();
     if (!current || current.id !== id) throw databaseRestoreRecoveryError();
-    unlinkSync(recordPath);
+    if (!pendingRelease) {
+      unlinkSync(recordPath);
+      // Unlink alone is not durable completion. Retain identity and admission
+      // locally until the directory sync succeeds, including across retries.
+      pendingRelease = current;
+    }
     syncDirectory(dataDir);
+    pendingRelease = null;
   };
 
   return { path: recordPath, isFenced, assertAdmission, read, begin, markCommitted, release };
