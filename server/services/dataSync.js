@@ -34,6 +34,7 @@ import { getPipelineMutationEpoch } from './pipeline/syncEpoch.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { getPeers } from './instances.js';
+import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { markHosted } from './peerHostedMedia.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
@@ -896,48 +897,48 @@ async function applyVideoHistoryRemote(remoteData) {
   const incoming = Array.isArray(remoteData.videos) ? remoteData.videos : [];
   if (incoming.length === 0) return { applied: false, count: 0 };
 
-  // STRICT (#4115): this is the merge BASE, and the merged result is written
-  // back over the whole file below. A swallowed unreadable read makes `local`
-  // empty, so `next` becomes the remote rows alone — deleting every local-only
-  // row, including the id-less ones the code below goes out of its way to keep.
-  const localRaw = await readJSONFile(VIDEO_HISTORY_FILE, [], { strict: true });
-  const local = Array.isArray(localRaw) ? localRaw : [];
-
-  // Union by `id`, LWW on `createdAt` when both sides know the same row.
-  // Video-history rows are append-mostly and immutable once written, so
-  // `createdAt` is a sufficient (and the only) freshness signal — there's no
-  // `updatedAt`. A row with no string id can't be keyed and is skipped (a
-  // hand-edited or corrupt entry shouldn't clobber a real row at key
-  // `undefined`); the snapshot side excludes the same rows so checksums agree.
-  const hasId = hasVideoRowId;
-  const keyed = local.filter(hasId);
-  const before = new Map(keyed.map((r) => [r.id, r]));
-  const { merged, changed } = mergeArraysByKey(
-    keyed,
-    incoming.filter(hasId),
-    'id',
-    'createdAt',
-  );
-  if (!changed) return { applied: false, count: 0 };
-
-  // `count` reports rows actually added/updated by this merge (not total
-  // post-merge size — that would over-report when callers sum across
-  // categories or compare cycle deltas). Matches the pipeline category's
-  // `count` contract.
+  // The whole read/merge/write runs inside the shared history mutation queue so
+  // a local completion (videoDownload) or another peer's snapshot can't be
+  // overwritten by this merge's stale base. The queue's read is STRICT (#4115):
+  // an unreadable file rejects instead of becoming an empty merge base that
+  // would delete every local-only row on write-back.
   let changedCount = 0;
-  for (const row of merged) {
-    const prev = before.get(row.id);
-    if (!prev || prev !== row) changedCount++;
-  }
+  await mutateVideoHistory((local) => {
+    // Union by `id`, LWW on `createdAt` when both sides know the same row.
+    // Video-history rows are append-mostly and immutable once written, so
+    // `createdAt` is a sufficient (and the only) freshness signal — there's no
+    // `updatedAt`. A row with no string id can't be keyed and is skipped (a
+    // hand-edited or corrupt entry shouldn't clobber a real row at key
+    // `undefined`); the snapshot side excludes the same rows so checksums agree.
+    const hasId = hasVideoRowId;
+    const keyed = local.filter(hasId);
+    const before = new Map(keyed.map((r) => [r.id, r]));
+    const { merged, changed } = mergeArraysByKey(
+      keyed,
+      incoming.filter(hasId),
+      'id',
+      'createdAt',
+    );
+    if (!changed) return HISTORY_UNCHANGED;
 
-  // Preserve any local rows that lacked an id (the merge dropped them from its
-  // keyed map) — don't let a sync silently delete un-keyable local history.
-  const idless = local.filter((r) => !hasId(r));
-  // Newest-first to match how generateVideo unshifts new rows + how the
-  // Media History grid expects them.
-  const next = [...merged, ...idless].sort((a, b) =>
-    String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
-  await atomicWrite(VIDEO_HISTORY_FILE, next);
+    // `count` reports rows actually added/updated by this merge (not total
+    // post-merge size — that would over-report when callers sum across
+    // categories or compare cycle deltas). Matches the pipeline category's
+    // `count` contract.
+    for (const row of merged) {
+      const prev = before.get(row.id);
+      if (!prev || prev !== row) changedCount++;
+    }
+
+    // Preserve any local rows that lacked an id (the merge dropped them from its
+    // keyed map) — don't let a sync silently delete un-keyable local history.
+    const idless = local.filter((r) => !hasId(r));
+    // Newest-first to match how generateVideo unshifts new rows + how the
+    // Media History grid expects them.
+    return [...merged, ...idless].sort((a, b) =>
+      String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
+  });
+  if (changedCount === 0) return { applied: false, count: 0 };
   console.log(`🔄 VideoHistory sync: merged ${changedCount} video row(s)`);
   return { applied: true, count: changedCount };
 }
