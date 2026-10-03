@@ -21,8 +21,9 @@
  * file is not auto-globbed). Every fixture uses placeholder names/handles per
  * root AGENTS.md Sensitive Data & Privacy — no real handle, name, or phone.
  */
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import * as database from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import * as tribe from './tribe.js';
 import * as tribeIdentities from './tribeIdentities.js';
@@ -597,4 +598,46 @@ describe.skipIf(!runDb)('beeperTribe (#34)', () => {
     const after = await tribe.listTouchpoints(rosterOnly.id);
     expect(after).toHaveLength(0);
   });
+
+  it('uses 20 transactions for 20 chats with 25 daily messages while retaining database idempotency', async () => {
+    await makeAccount();
+    const person = await makePerson('Example Batch Sender');
+    const batches = [];
+    for (let i = 0; i < 20; i++) {
+      // eslint-disable-next-line no-await-in-loop -- fixture setup before transaction counting
+      const conversationId = await makeConversation(`${nonce}-batch-${i}`);
+      // eslint-disable-next-line no-await-in-loop -- fixture setup
+      await beeperTribe.upsertParticipant({
+        conversationId, sourceUserId: 'batch-sender', handle: '', observedVia: 'message-sender',
+      });
+      // eslint-disable-next-line no-await-in-loop -- fixture setup
+      await beeperTribe.linkParticipant({ conversationId, sourceUserId: 'batch-sender', personId: person.id });
+      batches.push(Array.from({ length: 25 }, () => ({
+        conversationId, senderId: 'batch-sender',
+        sentAt: '2026-10-03T12:00:00.000Z', network: 'whatsapp',
+      })));
+    }
+    const transactions = vi.spyOn(database, 'withTransaction');
+    try {
+      const first = await beeperTribe.logSenderTouchpoints(batches[0]);
+      const contactAfterFirst = await query('SELECT last_contact_on, channel, updated_at FROM tribe_people WHERE id = $1', [person.id]);
+      const remaining = await Promise.all(batches.slice(1).map((batch) => beeperTribe.logSenderTouchpoints(batch)));
+      const totals = [first, ...remaining].reduce((total, result) => ({
+        matched: total.matched + result.matched, created: total.created + result.created,
+      }), { matched: 0, created: 0 });
+      expect(totals).toEqual({ matched: 500, created: 1 });
+      expect(transactions).toHaveBeenCalledTimes(20);
+      expect((await query('SELECT last_contact_on, channel, updated_at FROM tribe_people WHERE id = $1', [person.id])).rows)
+        .toEqual(contactAfterFirst.rows);
+      const touchpoints = await tribe.listTouchpoints(person.id);
+      expect(touchpoints).toHaveLength(1);
+      expect(touchpoints[0]).toMatchObject({
+        channel: 'Beeper (whatsapp)', source: 'message',
+        metadata: { network: 'whatsapp', conversationId: batches[0][0].conversationId },
+      });
+    } finally {
+      transactions.mockRestore();
+    }
+  });
+
 });
