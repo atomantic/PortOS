@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {CalendarDays, ChevronLeft, ChevronRight} from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
@@ -40,21 +40,28 @@ export default function WeekView({ accounts }) {
   const weekStartIso = weekStart.toISOString();
   const weekEndIso = weekEnd.toISOString();
 
-  const fetchEvents = useCallback(async () => {
-    const data = await api.getCalendarEvents({
-      startDate: weekStartIso,
-      endDate: weekEndIso,
-      limit: 200
-    }).catch(() => ({ events: [] }));
-    setEvents(data?.events || []);
-    setLoading(false);
-  }, [weekEndIso, weekStartIso]);
-
-  useEffect(() => { fetchEvents(); }, [fetchEvents]);
   useEffect(() => {
+    let active = true;
+    let request = 0;
+    const fetchEvents = async () => {
+      const currentRequest = ++request;
+      const data = await api.getCalendarEvents({
+        startDate: weekStartIso,
+        endDate: weekEndIso,
+        limit: 200
+      }).catch(() => ({ events: [] }));
+      if (!active || currentRequest !== request) return;
+      setEvents(data?.events || []);
+      setLoading(false);
+    };
+    setLoading(true);
+    fetchEvents();
     socket.on('calendar:sync:completed', fetchEvents);
-    return () => socket.off('calendar:sync:completed', fetchEvents);
-  }, [fetchEvents]);
+    return () => {
+      active = false;
+      socket.off('calendar:sync:completed', fetchEvents);
+    };
+  }, [weekEndIso, weekStartIso]);
 
   const navigate = (weeks) => {
     setWeekStart(prev => {
@@ -62,12 +69,10 @@ export default function WeekView({ accounts }) {
       d.setDate(d.getDate() + weeks * 7);
       return d;
     });
-    setLoading(true);
   };
 
   const goToday = () => {
     setWeekStart(getWeekStart(new Date()));
-    setLoading(true);
   };
 
   const colorMap = useMemo(() => buildSubcalendarColorMap(accounts), [accounts]);
