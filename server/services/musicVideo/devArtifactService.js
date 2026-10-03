@@ -38,6 +38,9 @@ async function requireProject(id) {
   return project;
 }
 
+/** Artifact kinds that show rendered output rather than planning imagery. */
+export const DEV_ARTIFACT_EVIDENCE_KINDS = new Set(['storyboard', 'animatic']);
+
 function publish(projectId, project, artifact) {
   musicVideoEvents.emit('dev-artifact', { projectId, artifactId: artifact?.id || null, project });
 }
@@ -62,7 +65,13 @@ async function storeVersion(projectId, {
   const mimeType = devArtifactTypeFor(ext);
   if (!mimeType) throw new ServerError('Unsupported file type — accepted: HTML, Markdown, MP4, PNG, JPG', { status: 400, code: 'VALIDATION_ERROR' });
   const project = await requireProject(projectId);
-  await assertDocumentMediaPolicy(project, [{ rel: `guide.${ext}`, data: buffer, abs: tempPath }]);
+  // Code-only projects refuse images and clips as *document* assets, and the art guide must be
+  // code-authored (productionReview.js checks the selected guide's type). Storyboards and
+  // animatics are review evidence — frames and clips rendered FROM the code — so they are
+  // exempt here; a planning guide (cast-sets, treatment, other) is still held to the policy.
+  if (!DEV_ARTIFACT_EVIDENCE_KINDS.has(kind)) {
+    await assertDocumentMediaPolicy(project, [{ rel: `guide.${ext}`, data: buffer, abs: tempPath }]);
+  }
   if (artifactId) findDevArtifact(project, artifactId);
   const id = artifactId || newDevArtifactId();
   const version = nextDevArtifactVersion(project, artifactId);

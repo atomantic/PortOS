@@ -117,6 +117,20 @@ describe('music-video development artifacts', () => {
     expect(served.headers['content-security-policy']).toMatch(/^sandbox;/);
   });
 
+  it('keeps planning images out of a code-only project but accepts rendered frames as storyboard evidence', async () => {
+    const codeOnly = await projects.createProject({ name: 'Code Only', mediaMode: 'code-only' });
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+    const guide = await upload(codeOnly.id, { name: 'sheet.png', body: png, type: 'image/png', fields: { kind: 'cast-sets', title: 'Painted sheet' } });
+    expect(guide.status).toBe(422);
+    expect(guide.body.code).toBe('MUSIC_VIDEO_MEDIA_POLICY');
+    const frames = await upload(codeOnly.id, { name: 'frames.png', body: png, type: 'image/png', fields: { kind: 'storyboard', title: 'Rendered frames' } });
+    expect(frames.status).toBe(201);
+    expect(frames.body.artifact.mimeType).toBe('image/png');
+    // the HTML guide path is unchanged
+    const html = await upload(codeOnly.id, { fields: { kind: 'cast-sets', title: 'Code-authored sheet' } });
+    expect(html.status).toBe(201);
+  });
+
   it('refuses an unsupported file type and a new artifact without a kind, storing nothing', async () => {
     const exe = await upload(project.id, { name: 'tool.exe', body: 'MZ', type: 'application/octet-stream', fields: { kind: 'other', title: 'x' } });
     expect(exe.status).toBe(400);
