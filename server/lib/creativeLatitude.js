@@ -85,6 +85,7 @@ export const CREATIVE_PREFIXES = Object.freeze([
 
 /** Creative stages/runs whose names don't carry a domain prefix. */
 export const CREATIVE_NAMES = Object.freeze([
+  'sandbox-delegation-creative',
   'catalog-extract',
   'catalog-extract-ideas-scenes-concepts', // pulls scenes/ideas out of a source work
   'catalog-ideas-scenes-concepts',
@@ -129,6 +130,8 @@ export const OPERATIONAL_STAGE_PREFIXES = Object.freeze([
  * unstamped just because nobody remembered this file.
  */
 export const OPERATIONAL_RUN_SOURCES = Object.freeze([
+  'sandbox-delegation-worker',
+  'sandbox-delegation-evaluator',
   'activity-digest',
   'agent-personality-generation',
   'ai-app-detect',

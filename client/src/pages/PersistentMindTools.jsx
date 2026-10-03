@@ -7,6 +7,7 @@ import Banner from '../components/ui/Banner';
 import PersistentMindRecipeLibrary from '../components/cos/PersistentMindRecipeLibrary';
 import PersistentMindTaskAccessControls from '../components/cos/PersistentMindTaskAccessControls';
 import PersistentMindTaskModelAllowlistControls from '../components/cos/PersistentMindTaskModelAllowlistControls';
+import PersistentMindSandboxControls from '../components/cos/PersistentMindSandboxControls';
 import PersistentMindToolExposureControls from '../components/cos/PersistentMindToolExposureControls';
 
 export default function PersistentMindTools({ onCapabilitiesChange, onSavingChange }) {
@@ -149,6 +150,12 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
                     onSavingChange={handleCapabilitiesSavingChange}
                   />
                 </div>
+                <PersistentMindSandboxControls
+                  capabilities={data.capabilities}
+                  disabled={capabilitiesSaving}
+                  onSaved={updateCapabilities}
+                  onSavingChange={handleCapabilitiesSavingChange}
+                />
                 <PersistentMindToolExposureControls
                   capabilities={data.capabilities}
                   disabled={capabilitiesSaving}
