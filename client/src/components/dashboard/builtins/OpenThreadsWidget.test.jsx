@@ -18,10 +18,12 @@ import OpenThreadsWidget from './OpenThreadsWidget';
 const renderWidget = () => render(<MemoryRouter><OpenThreadsWidget /></MemoryRouter>);
 
 describe('OpenThreadsWidget', () => {
-  it('renders nothing until the first list arrives', () => {
+  it('keeps navigation and a loading status until the first list arrives', () => {
     mockUseSocketResource.mockReturnValue({ data: null, loading: true });
-    const { container } = renderWidget();
-    expect(container.innerHTML).toBe('');
+    renderWidget();
+    expect(screen.getByRole('link', { name: 'Open Threads' })).toHaveAttribute('href', '/brain/threads');
+    expect(screen.getByRole('status')).toHaveTextContent('Loading threads');
+    expect(screen.queryByText(/No open loops/)).toBeNull();
   });
 
   it('asks the server for the first page of open + waiting threads only', () => {
@@ -115,6 +117,36 @@ describe('OpenThreadsWidget', () => {
     fireEvent.click(button);
     await waitFor(() => expect(screen.queryByText('Closed source')).toBeNull());
     expect(api.updateThread).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers retry on initial failure and recovers to genuine empty results', () => {
+    const refetch = vi.fn();
+    mockUseSocketResource.mockReturnValue({ data: null, loading: false, error: new Error('Unavailable'), refetch });
+    const view = renderWidget();
+    expect(screen.getByRole('status')).toHaveTextContent('Threads unavailable');
+    expect(screen.queryByText(/No open loops/)).toBeNull();
+    expect(screen.queryByText(/open$/)).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open Brain Threads' })).toHaveAttribute('href', '/brain/threads');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+    mockUseSocketResource.mockReturnValue({ data: null, loading: true, error: new Error('Unavailable'), refetch });
+    view.rerender(<MemoryRouter><OpenThreadsWidget /></MemoryRouter>);
+    expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
+    mockUseSocketResource.mockReturnValue({ data: { total: 0, threads: [] }, loading: false, error: null, refetch });
+    view.rerender(<MemoryRouter><OpenThreadsWidget /></MemoryRouter>);
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.getByText('Track one')).toBeTruthy();
+  });
+
+  it('identifies retained rows and counts as stale after reconciliation failure', () => {
+    const refetch = vi.fn();
+    mockUseSocketResource.mockReturnValue({ data: { total: 1, threads: [{ id: 'retained', title: 'Retained loop', status: 'open' }] }, loading: false, error: new Error('Unavailable'), refetch });
+    renderWidget();
+    expect(screen.getByRole('status')).toHaveTextContent('Showing last-loaded results');
+    expect(screen.getByText('1 open')).toBeTruthy();
+    expect(screen.getByText('Retained loop').closest('a')).toHaveAttribute('href', '/brain/threads?thread=retained');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 
   it('offers to track one when the list is empty', () => {

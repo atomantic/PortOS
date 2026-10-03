@@ -27,12 +27,12 @@ export default function OpenThreadsWidget() {
   const [completed, setCompleted] = useState({});
   // Overdue coloring is local clock state, not a reason to re-read the API.
   useTimeTick(60000);
-  const { data, loading } = useSocketResource(
+  const { data, loading, error, refetch } = useSocketResource(
     () => api.listThreads({ status: WIDGET_STATUSES, limit: ROWS, offset: 0 }, { silent: true }),
     { events: RESOURCE_EVENTS },
   );
 
-  if (loading && !data) return null;
+  const hasResults = data != null;
 
   const fetchedRows = Array.isArray(data?.threads) ? data.threads : [];
   // Retain successful writes over a read that started before completion.
@@ -43,19 +43,35 @@ export default function OpenThreadsWidget() {
 
   return (
     <div className="@container bg-port-card border border-port-border rounded-xl p-4 h-full">
-      <div className="flex items-center justify-between gap-2 mb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <Link to="/brain/threads" className="flex items-center gap-2 hover:text-port-accent">
           <ListTodo size={16} className="text-gray-500" aria-hidden="true" />
           <h3 className="text-sm font-semibold text-white">Open Threads</h3>
         </Link>
-        {total > 0 && <span className="text-xs text-gray-500">{formatCount(total)} open</span>}
+        {hasResults && total > 0 && <span className="text-xs text-gray-500">{formatCount(total)} open</span>}
       </div>
 
-      {rows.length === 0 ? (
+      {error && (
+        <div className="mb-3 space-y-2 text-xs" role="status">
+          <p className="text-port-warning">
+            {hasResults
+              ? 'Showing last-loaded results — threads could not be refreshed.'
+              : 'Threads unavailable — your open loops could not be loaded.'}
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={refetch} disabled={loading} className="min-h-11 px-3 rounded-lg border border-port-border text-port-accent disabled:opacity-50">
+              {loading ? 'Retrying…' : 'Retry'}
+            </button>
+            <Link to="/brain/threads" className="text-port-accent hover:underline">Open Brain Threads</Link>
+          </div>
+        </div>
+      )}
+      {!hasResults && !error && <p role="status" className="text-xs text-gray-500">Loading threads…</p>}
+      {hasResults && (rows.length === 0 ? (
         <p className="text-xs text-gray-500">
           {total > 0
             ? 'More open loops are available in Brain.'
-            : <>No open loops. <Link to="/brain/threads" className="text-port-accent hover:underline">Track one</Link></>}
+            : error ? 'No open loops in the last-loaded results.' : <>No open loops. <Link to="/brain/threads" className="text-port-accent hover:underline">Track one</Link></>}
         </p>
       ) : (
         <ul className="space-y-2">
@@ -80,8 +96,8 @@ export default function OpenThreadsWidget() {
             );
           })}
         </ul>
-      )}
-      {total > rows.length && (
+      ))}
+      {hasResults && total > rows.length && (
         <Link to="/brain/threads" className="block text-xs text-gray-500 hover:text-port-accent mt-2">
           +{formatCount(total - rows.length)} more
         </Link>
