@@ -240,3 +240,30 @@ describe('media generation and source publication policy (#9667)', () => {
     ]) expect(isHostControlRoute(method, path), path).toBe(false);
   });
 });
+
+describe('auxiliary media mutation inventory (#9672)', () => {
+  // Reviewed as record CRUD, cancellation/pruning or deterministic work that
+  // never hands caller text to an agent. A new mutation needs a new decision.
+  const recordOrContained = [
+    'DELETE /api/lora-datasets/:id',
+    'DELETE /api/lora-datasets/:id/images/:imageId',
+    'DELETE /api/media-jobs/:id',
+    'PATCH /api/lora-datasets/:id',
+    'PATCH /api/lora-datasets/:id/images/:imageId',
+    'POST /api/lora-datasets',
+    'POST /api/lora-datasets/:id/import-gallery',
+    'POST /api/lora-datasets/:id/images',
+    'POST /api/lora-datasets/:id/strip-shared-fragments',
+    'POST /api/media-jobs/:id/cancel',
+    'POST /api/media-jobs/cancel-queued',
+    'POST /api/media-jobs/holds/:holdId/resume',
+  ];
+
+  it('gates every agent-dispatching mutation and keeps reviewed record operations open', () => {
+    const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/(media-jobs|lora-datasets)(\/|$)/.test(path));
+    const open = mutations.filter(({ method, path }) => !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual([...recordOrContained].sort());
+  });
+});

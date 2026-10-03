@@ -326,6 +326,21 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/sprites/:id/publish-binding',
   'POST /api/sprites/:id/atlas/publish',
 
+  // Auxiliary media entry points reach the same tool-capable agents (#9672):
+  // prompt refinement and image-to-prompt hand caller text/images to a provider
+  // that may fall back to a CLI/TUI; retry and run-now (re)dispatch an
+  // agent-backed queue job (retry merges caller prompt overrides); dataset
+  // generate/caption/slice use a cloud-agent render target or a CLI vision
+  // provider. Cancel, reads, dataset CRUD/uploads and strip-shared-fragments
+  // stay open.
+  'POST /api/media-jobs/refine-prompt',
+  'POST /api/media-jobs/prompt-from-media',
+  'POST /api/media-jobs/:id/retry',
+  'POST /api/media-jobs/:id/run-now',
+  'POST /api/lora-datasets/:id/generate',
+  'POST /api/lora-datasets/:id/caption',
+  'POST /api/lora-datasets/:id/slice-reference-sheet',
+
   // Code Animation contained execution (#9388): choosing the installed tool a
   // worker runs, and the containment check that spawns sandboxed processes.
   'PUT /api/code-animation/execution/tools',
