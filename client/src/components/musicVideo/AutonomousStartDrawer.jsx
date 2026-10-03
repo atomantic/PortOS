@@ -96,7 +96,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
           </p>
         </div>
 
-        <SongSourcePicker idPrefix="mv-auto" songSource={draft.songSource} localFallback={draft.localFallback} onChange={patch} />
+        <SongSourcePicker idPrefix="mv-auto" songSource={draft.songSource} localFallback={draft.localFallback} localMusic={draft.localMusic} onChange={patch} />
 
         {draft.songSource === 'suno' && (
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),16rem))] gap-3">

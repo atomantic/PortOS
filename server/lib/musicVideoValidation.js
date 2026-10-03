@@ -39,6 +39,8 @@ import {
   AUTONOMOUS_ORIGINS,
   AUTONOMOUS_PROMPT_MAX,
   AUTONOMOUS_SONG_SOURCES,
+  LOCAL_MUSIC_CODE_LANGUAGES,
+  LOCAL_MUSIC_TYPES,
   SUNO_LIMITS,
   SUNO_MODEL_PATTERN,
   SUNO_VOCAL_GENDERS,
@@ -774,6 +776,13 @@ const musicVideoSunoOptionsSchema = z.object({
   maxMode: z.boolean().nullable().optional(),
 }).strict();
 
+// Local Music Studio options: model (with optional engine) or code (with chosen language).
+export const musicVideoLocalMusicOptionsSchema = z.object({
+  type: z.enum(LOCAL_MUSIC_TYPES).optional(),
+  engine: z.string().trim().max(64).nullable().optional(),
+  language: z.enum(LOCAL_MUSIC_CODE_LANGUAGES).nullable().optional(),
+}).strict();
+
 // A provider/model/effort pin for a Music Video text stage. Effort is the union
 // of every accepted level; the runner clamps it to the chosen provider's ladder.
 export const musicVideoLlmSchema = z.object({
@@ -807,6 +816,7 @@ export const musicVideoAutonomousStartSchema = z.object({
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   songSource: z.enum(AUTONOMOUS_SONG_SOURCES).optional(),
   localFallback: z.boolean().optional(),
+  localMusic: musicVideoLocalMusicOptionsSchema.nullable().optional(),
   instrumental: z.boolean().optional(),
   guidance: z.string().max(4000).optional(),
   tools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),
@@ -848,6 +858,8 @@ export const musicVideoAutonomousResumeSchema = z.object({
   style: z.string().max(AUTONOMOUS_PROMPT_MAX).optional(),
   // Patch the brief's Suno options, key by key (null clears one).
   suno: musicVideoSunoOptionsSchema.optional(),
+  // Patch the brief's local Music Studio options.
+  localMusic: musicVideoLocalMusicOptionsSchema.nullable().optional(),
   // At the song checkpoint: discard the song and generate a new one.
   retakeSong: z.boolean().optional(),
   // Replace the brief's auto-approve grant ("auto-approve the rest").

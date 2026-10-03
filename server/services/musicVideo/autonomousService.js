@@ -55,6 +55,7 @@ import {
   nextAutonomousStage,
   normalizeAutoApprove,
   normalizeAutonomousBrief,
+  normalizeLocalMusicOptions,
   normalizeSunoOptions,
   sunoSongFields,
 } from '../../lib/musicVideoAutonomous.js';
@@ -245,6 +246,7 @@ async function localSong({ project, run, save }) {
   }
   await deps.generateLocalSong({
     trackId, title, prompt, lyrics, instrumental: run.brief.instrumental, jobId: run.output.localSongJobId,
+    localMusic: run.brief.localMusic,
     onSubmitted: async (jobId) => {
       await save({ output: { localSongJobId: jobId } });
       // Stop/cancel cancel the job they find on the record; one that landed
@@ -595,9 +597,10 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     const stage = retake ? 'song' : r.stage;
     return {
       status: 'running', awaiting: null, error: null, errorCode: null, processId: PROCESS_ID,
-      ...(edits.suno || grant ? { brief: {
+      ...(edits.suno || edits.localMusic !== undefined || grant ? { brief: {
         ...r.brief,
         ...(edits.suno ? { suno: normalizeSunoOptions({ ...r.brief.suno, ...edits.suno }) } : {}),
+        ...(edits.localMusic !== undefined ? { localMusic: normalizeLocalMusicOptions(edits.localMusic ? { ...r.brief.localMusic, ...edits.localMusic } : null) } : {}),
         ...(grant || {}),
       } } : {}),
       output: {

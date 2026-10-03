@@ -17,6 +17,7 @@
  * the flow is unit-testable without a GPU.
  */
 
+import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sleep as defaultSleep } from '../../lib/fileCore.js';
 import { trimTo } from '../../lib/textUtils.js';
@@ -37,6 +38,10 @@ const defaults = {
   listEngines: async () => (await import('../pipeline/musicGen.js')).ENGINES,
   isEngineHealthy: async (id) => (await import('../pipeline/musicGen.js')).isEngineHealthy(id),
   queueGeneration: async (body) => (await import('../musicGeneration.js')).queueMusicGeneration(body),
+  writeMusicCode: async (args) => (await import('../musicCode.js')).writeMusicCode(args),
+  renderSuperColliderSource: async (args) => (await import('../superColliderRender.js')).renderSuperColliderSource(args),
+  saveSuperColliderTakeToTrack: async (args) => (await import('../musicCode.js')).saveSuperColliderTakeToTrack(args),
+  getSuperColliderStatus: async () => (await import('../superColliderRuntime.js')).getSuperColliderStatus(),
   getJob: async (id) => (await import('../mediaJobQueue/index.js')).getJob(id),
   getTrack: async (id) => (await import('../tracks/index.js')).getTrack(id),
   cancelJob: async (id) => (await import('../mediaJobQueue/index.js')).cancelJob(id),
@@ -69,10 +74,28 @@ const defaults = {
 /**
  * Pick the local engine for a song: a lyric-capable one when the song has
  * vocals, otherwise any — among the engines this host can actually run now.
+ * When `engineId` is specified, verifies it exists, is healthy, and can sing lyrics.
  */
-async function pickLocalSongEngine({ instrumental }, deps = {}) {
+async function pickLocalSongEngine({ instrumental, engineId = null }, deps = {}) {
   const { listEngines, isEngineHealthy } = { ...defaults, ...deps };
-  const engines = Object.values(await listEngines());
+  const rawEngines = await listEngines();
+  const engines = Array.isArray(rawEngines) ? rawEngines : Object.values(rawEngines || {});
+
+  if (engineId) {
+    const specified = engines.find((e) => e.id === engineId);
+    if (!specified) {
+      throw fail(400, 'LOCAL_SONG_UNKNOWN_ENGINE', `Local music engine '${engineId}' is not installed or recognized`);
+    }
+    const healthy = await isEngineHealthy(specified.id);
+    if (!healthy) {
+      throw fail(409, 'LOCAL_SONG_ENGINE_UNHEALTHY', `Selected local music engine '${specified.name || specified.id}' is not ready — check its install in Music Studio`);
+    }
+    if (!instrumental && specified.lyrics !== true) {
+      throw fail(409, 'LOCAL_SONG_ENGINE_NO_LYRICS', `Selected local music engine '${specified.name || specified.id}' cannot sing lyrics — make the song instrumental or select a lyric-capable engine (e.g. ACE-Step)`);
+    }
+    return specified;
+  }
+
   const healthy = [];
   for (const engine of engines) {
     if (await isEngineHealthy(engine.id)) healthy.push(engine);
@@ -96,7 +119,9 @@ const durationFor = (engine) => (engine.autoDuration
  * Resolves to `{ trackId, filename, jobId }`. `jobId` (a previous attempt's
  * queued render) is rejoined while it is still live or finished.
  */
-export async function generateLocalSong({ trackId, title, prompt, lyrics = '', instrumental = false, jobId = null, onSubmitted }, overrides = {}) {
+export async function generateLocalSong({
+  trackId, title, prompt, lyrics = '', instrumental = false, jobId = null, localMusic = null, onSubmitted,
+}, overrides = {}) {
   const deps = { ...defaults, ...overrides };
   const { timeoutMs = LOCAL_SONG_TIMEOUT_MS } = overrides;
 
@@ -104,9 +129,40 @@ export async function generateLocalSong({ trackId, title, prompt, lyrics = '', i
   if (!existing) throw fail(404, 'NOT_FOUND', 'The song track was removed before its audio rendered');
   if (existing.audioFilename) return { trackId, filename: existing.audioFilename, jobId };
 
+  if (localMusic?.type === 'code') {
+    if (localMusic.language === 'supercollider') {
+      const status = await deps.getSuperColliderStatus().catch(() => ({ ready: false, message: 'Status check failed' }));
+      if (!status?.ready) {
+        throw fail(409, 'LOCAL_SONG_SUPERCOLLIDER_UNAVAILABLE', `SuperCollider is not ready: ${status?.message || 'runtime unavailable'} — check its install in Music Studio`);
+      }
+      const codeJobId = jobId || `sc-${randomUUID()}`;
+      await onSubmitted?.(codeJobId);
+      const codeResult = await deps.writeMusicCode({
+        description: prompt,
+        lyrics: instrumental ? '' : lyrics,
+        language: 'supercollider',
+      });
+      const preview = await deps.renderSuperColliderSource({
+        jobId: codeJobId,
+        source: codeResult.code,
+        durationSec: Math.min(LOCAL_SONG_TARGET_SEC, 120),
+        seed: Math.floor(Math.random() * 100000),
+      });
+      const saved = await deps.saveSuperColliderTakeToTrack({
+        trackId,
+        jobId: preview.jobId,
+        prompt,
+        title,
+      });
+      return { trackId, filename: saved.filename, jobId: codeJobId };
+    }
+    throw fail(400, 'LOCAL_SONG_BROWSER_CODE_ENGINE',
+      `${localMusic.language === 'tonejs' ? 'Tone.js' : 'Strudel'} music code requires an interactive browser session to synthesize audio — select SuperCollider or an Audio Model for autonomous runs`);
+  }
+
   let job = jobId ? await deps.getJob(jobId) : null;
   if (!job || job.status === 'failed' || job.status === 'canceled') {
-    const engine = await pickLocalSongEngine({ instrumental }, deps);
+    const engine = await pickLocalSongEngine({ instrumental, engineId: localMusic?.engine || null }, deps);
     const queued = await deps.queueGeneration({
       prompt: trimTo(prompt, 8000),
       ...(instrumental || !lyrics ? {} : { lyrics: trimTo(lyrics, 20000) }),

@@ -28,6 +28,10 @@ function harness({ healthy = ['musicgen', 'acestep'], tracks = {}, jobs = {}, wa
     listEngines: async () => ENGINES,
     isEngineHealthy: async (id) => healthy.includes(id),
     queueGeneration: vi.fn(async () => ({ jobId: 'job-1', status: 'queued' })),
+    writeMusicCode: vi.fn(async () => ({ code: 'SynthDef(\\pad, {}).add;', language: 'supercollider' })),
+    renderSuperColliderSource: vi.fn(async ({ jobId }) => ({ jobId, wavPath: 'sc.wav' })),
+    saveSuperColliderTakeToTrack: vi.fn(async ({ trackId }) => ({ track: { id: trackId }, filename: 'sc.wav', durationSec: 30 })),
+    getSuperColliderStatus: vi.fn(async () => ({ ready: true })),
     getJob: async (id) => state.jobs[id] || null,
     getTrack: async (id) => state.tracks[id] || null,
     cancelJob: vi.fn(async () => true),
@@ -48,6 +52,43 @@ describe('engine choice', () => {
     const instrumental = harness();
     await generateLocalSong({ ...song, instrumental: true }, instrumental.deps);
     expect(instrumental.deps.queueGeneration.mock.calls[0][0].engine).toBe('musicgen');
+  });
+
+  it('uses a pinned engine when valid and healthy', async () => {
+    const pinned = harness({ healthy: ['musicgen', 'acestep', 'minimax'] });
+    await generateLocalSong({ ...song, localMusic: { type: 'model', engine: 'minimax' } }, pinned.deps);
+    expect(pinned.deps.queueGeneration.mock.calls[0][0].engine).toBe('minimax');
+  });
+
+  it('rejects an unknown, unhealthy, or lyric-incompatible pinned engine', async () => {
+    const { deps } = harness({ healthy: ['musicgen', 'acestep'] });
+    await expect(generateLocalSong({ ...song, localMusic: { type: 'model', engine: 'nonexistent' } }, deps))
+      .rejects.toMatchObject({ code: 'LOCAL_SONG_UNKNOWN_ENGINE' });
+    await expect(generateLocalSong({ ...song, localMusic: { type: 'model', engine: 'minimax' } }, deps))
+      .rejects.toMatchObject({ code: 'LOCAL_SONG_ENGINE_UNHEALTHY' });
+    await expect(generateLocalSong({ ...song, localMusic: { type: 'model', engine: 'musicgen' } }, deps))
+      .rejects.toMatchObject({ code: 'LOCAL_SONG_ENGINE_NO_LYRICS' });
+  });
+
+  it('renders music via SuperCollider code and saves the take', async () => {
+    const { deps } = harness();
+    const onSubmitted = vi.fn();
+    const out = await generateLocalSong({ ...song, localMusic: { type: 'code', language: 'supercollider' }, onSubmitted }, deps);
+    expect(deps.writeMusicCode).toHaveBeenCalledWith({
+      description: 'synthwave', lyrics: '[verse]\nrain', language: 'supercollider',
+    });
+    expect(deps.renderSuperColliderSource).toHaveBeenCalled();
+    expect(deps.saveSuperColliderTakeToTrack).toHaveBeenCalled();
+    expect(out.filename).toBe('sc.wav');
+    expect(onSubmitted).toHaveBeenCalledWith(expect.stringMatching(/^sc-/));
+  });
+
+  it('rejects browser-only code languages in unattended run', async () => {
+    const { deps } = harness();
+    await expect(generateLocalSong({ ...song, localMusic: { type: 'code', language: 'strudel' } }, deps))
+      .rejects.toMatchObject({ code: 'LOCAL_SONG_BROWSER_CODE_ENGINE' });
+    await expect(generateLocalSong({ ...song, localMusic: { type: 'code', language: 'tonejs' } }, deps))
+      .rejects.toMatchObject({ code: 'LOCAL_SONG_BROWSER_CODE_ENGINE' });
   });
 
   it('names what is missing instead of rendering the wrong thing', async () => {

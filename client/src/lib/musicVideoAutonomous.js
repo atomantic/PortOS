@@ -8,6 +8,7 @@ import { llmStagesDraftFrom, llmStagesFromDraft } from './musicVideoAutomation.j
 import {
   AUTONOMOUS_DEFAULT_LIMITS, AUTONOMOUS_DEFAULT_TOOLS, AUTONOMOUS_LIVE_STATUSES, AUTONOMOUS_SONG_SOURCES, AUTONOMOUS_STAGES,
   SUNO_MODEL_PATTERN,
+  normalizeLocalMusicOptions,
 } from '../../../server/lib/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
@@ -15,7 +16,19 @@ export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
   local: 'Local engine (Music Studio)',
 });
 
-export { AUTONOMOUS_AUTO_APPROVE_STAGES, AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousMedium } from '../../../server/lib/musicVideoAutonomous.js';
+export {
+  AUTONOMOUS_AUTO_APPROVE_STAGES,
+  AUTONOMOUS_CHECKPOINT_IDS,
+  AUTONOMOUS_SONG_SOURCES,
+  LOCAL_MUSIC_CODE_LANGUAGES,
+  LOCAL_MUSIC_CODE_LANGUAGE_LABELS,
+  LOCAL_MUSIC_TYPES,
+  LOCAL_MUSIC_TYPE_LABELS,
+  SUNO_LIMITS,
+  SUNO_VOCAL_GENDERS,
+  autonomousMedium,
+  normalizeLocalMusicOptions,
+} from '../../../server/lib/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
   ...Object.fromEntries(AUTONOMOUS_STAGES.map((stage) => [stage.id, stage.label])),
@@ -36,6 +49,11 @@ export const emptyAutonomousDraft = () => ({
   authoring: { providerId: '', model: '', effort: '' },
   songSource: AUTONOMOUS_SONG_SOURCES[0],
   localFallback: false,
+  localMusic: {
+    type: 'model',
+    engine: '',
+    language: 'strudel',
+  },
   instrumental: false,
   tools: [...AUTONOMOUS_DEFAULT_TOOLS],
   models: {},
@@ -78,6 +96,7 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
   const budget = Number.parseFloat(draft.budget);
   const maxGenerations = optionalInt(draft.maxGenerations);
   const suno = draft.songSource === 'suno' ? sunoRequestFromDraft(draft.suno) : null;
+  const localMusic = (draft.songSource === 'local' || draft.localFallback) ? normalizeLocalMusicOptions(draft.localMusic) : null;
   const llmStages = llmStagesFromDraft(draft.llmStages);
   const models = Object.fromEntries(Object.entries(draft.models || {})
     .filter(([id, value]) => draft.tools.includes(id) && typeof value === 'string' && value.trim())
@@ -91,6 +110,7 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
     } } : {}),
     songSource: draft.songSource,
     localFallback: draft.songSource === 'suno' && draft.localFallback === true,
+    ...(localMusic ? { localMusic } : {}),
     instrumental: draft.instrumental === true,
     ...(suno ? { suno } : {}),
     tools: draft.tools,
@@ -178,6 +198,11 @@ export function autopilotDraftFromParams(params) {
     authoring: { ...base.authoring, ...(p.authoring || {}) },
     songSource: AUTONOMOUS_SONG_SOURCES.includes(p.songSource) ? p.songSource : base.songSource,
     localFallback: p.localFallback === true,
+    localMusic: {
+      type: p.localMusic?.type || 'model',
+      engine: p.localMusic?.engine || '',
+      language: p.localMusic?.language || 'strudel',
+    },
     instrumental: p.instrumental === true,
     tools: Array.isArray(p.tools) ? [...p.tools] : base.tools,
     models: { ...(p.models || {}) },
@@ -202,6 +227,7 @@ export function autopilotParamsFromDraft(draft, saved, { providerId, model, effo
   return {
     ...kept,
     ...request,
+    localMusic: request.localMusic || null,
     models: request.models || {},
     authoring: request.authoring || null,
     // The params are replaced whole on save, so an unpinned map and an off toggle are explicit.

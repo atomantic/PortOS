@@ -51,6 +51,37 @@ export const AUTONOMOUS_CHECKPOINT_IDS = Object.freeze([...AUTONOMOUS_STAGE_CHEC
 // and credits) or the on-device Music Designer engines (free, no browser).
 export const AUTONOMOUS_SONG_SOURCES = Object.freeze(['suno', 'local']);
 
+// Local Music Studio options: audio models or generative code.
+export const LOCAL_MUSIC_TYPES = Object.freeze(['model', 'code']);
+export const LOCAL_MUSIC_TYPE_LABELS = Object.freeze({
+  model: 'Audio model',
+  code: 'Code',
+});
+export const LOCAL_MUSIC_CODE_LANGUAGES = Object.freeze(['strudel', 'tonejs', 'supercollider']);
+export const LOCAL_MUSIC_CODE_LANGUAGE_LABELS = Object.freeze({
+  strudel: 'Strudel',
+  tonejs: 'Tone.js',
+  supercollider: 'SuperCollider',
+});
+
+/**
+ * The brief's local Music Studio options: model (with optional engine pin) or
+ * code (with chosen language). Returns null when no option is configured.
+ */
+export function normalizeLocalMusicOptions(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const hasType = LOCAL_MUSIC_TYPES.includes(raw.type);
+  const type = hasType ? raw.type : (raw.language ? 'code' : 'model');
+  const engine = isStr(raw.engine) ? clean(raw.engine, 64) || null : null;
+  const language = isStr(raw.language) && LOCAL_MUSIC_CODE_LANGUAGES.includes(raw.language) ? raw.language : null;
+  if (!hasType && !engine && !language) return null;
+  return {
+    type,
+    ...(engine ? { engine } : {}),
+    ...(type === 'code' ? { language: language || 'strudel' } : {}),
+  };
+}
+
 // A run in one of these states can still be resumed / approved.
 export const AUTONOMOUS_LIVE_STATUSES = Object.freeze(['running', 'awaiting-approval', 'needs-human', 'stopped']);
 
@@ -150,6 +181,7 @@ function normalizeAutonomousSettings(raw = {}) {
     // Suno only: when it cannot even take the request (signed out, no credits,
     // page changed), render the song locally instead of parking the run.
     localFallback: raw.localFallback === true,
+    localMusic: normalizeLocalMusicOptions(raw.localMusic),
     instrumental: raw.instrumental === true,
     guidance: clean(raw.guidance, 4000),
     tools,
