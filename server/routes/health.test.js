@@ -68,7 +68,7 @@ vi.mock('../services/cos.js', () => ({
 }));
 
 vi.mock('../lib/db.js', () => ({
-  checkHealth: vi.fn().mockResolvedValue({ connected: false, hasSchema: false })
+  checkHealth: vi.fn().mockResolvedValue({ connected: false, hasSchema: false, hasCatalogSchema: false })
 }));
 
 // The build stamp is read from the checkout the suite happens to run in, so
@@ -157,6 +157,42 @@ describe('System Health Routes', () => {
     expect(response.body).toHaveProperty('system');
     expect(response.body).toHaveProperty('apps');
     expect(response.body).toHaveProperty('overallHealth');
+  });
+
+  it('warns when connected=true, hasSchema=true but hasCatalogSchema=false', async () => {
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true, hasCatalogSchema: false });
+    const response = await request(app).get('/api/system/health/details');
+
+    expect(response.status).toBe(200);
+    expect(response.body.overallHealth).toBe('warning');
+    expect(response.body.warnings).toContainEqual({
+      type: 'database',
+      severity: 'warning',
+      message: 'PostgreSQL connected and schema available but Catalog tables missing — open Settings → Database to troubleshoot'
+    });
+  });
+
+  it('recovers from catalog-only schema failure when hasCatalogSchema is restored', async () => {
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true, hasCatalogSchema: false });
+    const failed = await request(app).get('/api/system/health/details');
+    expect(failed.body.overallHealth).toBe('warning');
+    const warnings = failed.body.warnings.filter(w => w.type === 'database');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('Catalog tables missing');
+
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true, hasCatalogSchema: true });
+    const recovered = await request(app).get('/api/system/health/details');
+    expect(recovered.body.overallHealth).toBe('healthy');
+    expect((recovered.body.warnings || []).filter(w => w.type === 'database')).toHaveLength(0);
+  });
+
+  it('handles backward compatibility when hasCatalogSchema is omitted (undefined)', async () => {
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
+    const response = await request(app).get('/api/system/health/details');
+
+    expect(response.status).toBe(200);
+    expect(response.body.overallHealth).toBe('healthy');
+    expect((response.body.warnings || []).filter(w => w.type === 'database')).toHaveLength(0);
   });
 
   it('reports an unreadable app aggregate without leaking details, then recovers to a healthy empty registry', async () => {
