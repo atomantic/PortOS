@@ -91,6 +91,17 @@ describe('inspectDatabaseDump', () => {
     if (process.platform !== 'win32') expect(statSync(replayPath).mode & 0o777).toBe(0o600);
   });
 
+  it('retains an oversized statement prefix so invalid SQL still reaches transactional replay', async () => {
+    const sql = "CREATE TABLE public.memories (\n);\nCREATE TABLE public.memory_links (\n);\n"
+      + `COMMENT ON EXTENSION vector IS NULL${' \n'.repeat(CHUNK)}INVALID SQL;\n` + TRAILER;
+    const spoolTo = join(dir, 'invalid-comment-spool.sql');
+    const dump = await inspectDatabaseDump(write('invalid-comment.sql', sql), { spoolTo });
+    expect(dump.complete).toBe(true);
+    expect(dump.extensionMetadata).toEqual([]);
+    const replayPath = await prepareDatabaseReplay(spoolTo, dump.extensionMetadata);
+    expect(readFileSync(replayPath, 'utf8')).toBe(sql);
+  });
+
   it('rejects a read failure rather than reporting an empty dump', async () => {
     await expect(inspectDatabaseDump(join(dir, 'missing.sql'))).rejects.toMatchObject({ code: 'ENOENT' });
   });

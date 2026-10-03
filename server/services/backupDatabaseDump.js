@@ -62,6 +62,7 @@ export function inspectDatabaseDump(path, { spoolTo } = {}) {
     let dollarQuote = null;
     let blockDepth = 0;
     let statement = '';
+    let statementTruncated = false;
     let unscannable = false;
     // Keep only the statement prefix: COPY rows and SQL values may be huge.
     // Count completed top-level statements, never SQL-looking stored content.
@@ -98,13 +99,14 @@ export function inspectDatabaseDump(path, { spoolTo } = {}) {
         if (c === '-' && next === '-') break;
         if (c === '/' && next === '*') { blockDepth = 1; i += 1; continue; }
         if (c === ';') {
-          if (spoolTo && (EXTENSION_COMMENT.test(statement) || EXTENSION_DROP.test(statement))) {
+          if (spoolTo && !statementTruncated && (EXTENSION_COMMENT.test(statement) || EXTENSION_DROP.test(statement))) {
             extensionMetadata.push({ start: statementStart, end: lineStart + i + 1 });
           }
           const match = statement.match(CREATE_TABLE_STATEMENT);
           if (match) { tableCount += 1; tables.add(match[1]); }
           copyData = /^COPY\s/.test(statement) && / FROM stdin$/.test(statement);
           statement = '';
+          statementTruncated = false;
           statementStart = null;
           if (copyData) break;
           continue;
@@ -122,13 +124,17 @@ export function inspectDatabaseDump(path, { spoolTo } = {}) {
         if (c === '"') {
           const identifier = line.slice(i).match(/^"(?:[^"]|"")*"/);
           if (identifier) {
-            if (statement.length < MAX_SCANNED_LINE) statement += identifier[0];
+            if (statement.length + identifier[0].length <= MAX_SCANNED_LINE) statement += identifier[0];
+            else statementTruncated = true;
             i += identifier[0].length - 1;
             quote = null;
             continue;
           }
         }
-        if (statement.length < MAX_SCANNED_LINE && (statement || !/\s/.test(c))) statement += c;
+        if (statement || !/\s/.test(c)) {
+          if (statement.length < MAX_SCANNED_LINE) statement += c;
+          else statementTruncated = true;
+        }
       }
     };
     const scan = (text) => {
