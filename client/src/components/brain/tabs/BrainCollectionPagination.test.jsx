@@ -304,7 +304,7 @@ describe('Brain collection pagination & UI bounds', () => {
 
       // Ensure detail endpoint was called on demand
       await waitFor(() => {
-        expect(api.getBrainMemory).toHaveBeenCalledWith('mem-deeplink');
+        expect(api.getBrainMemory).toHaveBeenCalledWith('mem-deeplink', { silent: true });
       });
 
       // Full content rendered in reader pane

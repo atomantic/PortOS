@@ -72,7 +72,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [backendStatus, setBackendStatus] = useState(null);
-  const [deepLinkedRecord, setDeepLinkedRecord] = useState(null);
+  const [detailResult, setDetailResult] = useState(null);
+  const selectedType = fixedType || recordType || activeType;
   const { isConfirming, requestDelete, cancelDelete } = useConfirmDelete();
 
   useEffect(() => {
@@ -143,58 +144,50 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     return () => socket.off('connect', handleConnect);
   }, [paged.refreshFirst]);
 
-  // Direct URL deep-link or truncated record detail fetch
+  // Resolve the URL independently of the current collection page. Track the
+  // requested identity even for a missing record so pending and missing differ.
+  const listedRecord = activeType === selectedType
+    ? records.find(r => r.id === recordId && !r.contentTruncated)
+    : null;
   useEffect(() => {
-    if (!recordId) {
-      setDeepLinkedRecord(null);
-      return;
-    }
-    const existing = records.find(r => r.id === recordId);
-    if (!existing || existing.contentTruncated) {
-      let active = true;
-      const fetchRecord = async () => {
-        let full = null;
-        switch (activeType) {
-          case 'people':
-            full = await api.getBrainPerson(recordId).catch(() => null);
-            break;
-          case 'projects':
-            full = await api.getBrainProject(recordId).catch(() => null);
-            break;
-          case 'ideas':
-            full = await api.getBrainIdea(recordId).catch(() => null);
-            break;
-          case 'admin':
-            full = await api.getBrainAdminItem(recordId).catch(() => null);
-            break;
-          case 'memories':
-          default:
-            full = await api.getBrainMemory(recordId).catch(() => null);
-            break;
-        }
-        if (active) {
-          if (full && !full.archived && !deletedIdsRef.current.has(full.id)) {
-            setDeepLinkedRecord(full);
-          } else {
-            setDeepLinkedRecord(null);
-          }
-        }
-      };
-      fetchRecord();
-      return () => { active = false; };
-    } else {
-      setDeepLinkedRecord(null);
-    }
-  }, [recordId, activeType, records]);
+    if (!recordId || listedRecord) return;
+    let active = true;
+    const fetchRecord = async () => {
+      let full = null;
+      const options = { silent: true };
+      switch (selectedType) {
+        case 'people':
+          full = await api.getBrainPerson(recordId, options).catch(() => null);
+          break;
+        case 'projects':
+          full = await api.getBrainProject(recordId, options).catch(() => null);
+          break;
+        case 'ideas':
+          full = await api.getBrainIdea(recordId, options).catch(() => null);
+          break;
+        case 'admin':
+          full = await api.getBrainAdminItem(recordId, options).catch(() => null);
+          break;
+        case 'memories':
+        default:
+          full = await api.getBrainMemory(recordId, options).catch(() => null);
+          break;
+      }
+      if (active) {
+        const record = full?.id === recordId && !full.archived && !deletedIdsRef.current.has(full.id)
+          ? full : null;
+        setDetailResult({ id: recordId, type: selectedType, record });
+      }
+    };
+    // Clear a previous visit's result, including when Back revisits the same ID.
+    setDetailResult(null);
+    fetchRecord();
+    return () => { active = false; };
+  }, [recordId, selectedType, listedRecord]);
 
-  const viewerRecord = useMemo(() => {
-    if (!recordId) return null;
-    const existing = records.find(r => r.id === recordId);
-    if (deepLinkedRecord && deepLinkedRecord.id === recordId) {
-      return deepLinkedRecord;
-    }
-    return existing || null;
-  }, [recordId, records, deepLinkedRecord]);
+  const detailResolved = detailResult?.id === recordId && detailResult?.type === selectedType;
+  const viewerRecord = recordId ? (listedRecord || (detailResolved ? detailResult.record : null)) : null;
+  const viewerLoading = !!recordId && !listedRecord && !detailResolved;
 
   const fetchBackendStatus = useCallback(() => {
     api.getMemoryBackendStatus().then(setBackendStatus).catch(() => null);
@@ -698,7 +691,15 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             {activeType === 'ideas' && (
               <>
                 <div className="flex items-center gap-2">
-                  <h3 className="font-medium text-white">{record.title}</h3>
+                  <h3 className="font-medium text-white">
+                    <button
+                      onClick={() => navigate(`${basePath}/ideas/${encodeURIComponent(record.id)}${location.search}`)}
+                      className="text-left hover:text-port-accent"
+                      aria-label={`Read ${record.title || 'idea'}`}
+                    >
+                      {record.title}
+                    </button>
+                  </h3>
                   <span className={`px-2 py-0.5 text-xs rounded border ${IDEA_STATUS_COLORS[record.status || 'active']}`}>
                     {record.status || 'active'}
                   </span>
@@ -917,7 +918,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       {/* Main content area: split into list + sidebar preview when an entry is active */}
       <div className={`flex flex-col lg:flex-row gap-4 ${fixedType ? 'items-start' : 'flex-1 min-h-0 overflow-hidden'}`}>
         {/* Left column: search, add form, records list */}
-        <div role="region" aria-label="Memory entries" tabIndex={0} className={`flex-1 min-w-0 w-full space-y-4 ${fixedType ? '' : 'min-h-0 overflow-y-auto overscroll-contain'} ${recordId && !loading ? 'hidden lg:block' : 'block'}`}>
+        <div role="region" aria-label="Memory entries" tabIndex={0} className={`flex-1 min-w-0 w-full space-y-4 ${fixedType ? '' : 'min-h-0 overflow-y-auto overscroll-contain'} ${recordId ? 'hidden lg:block' : 'block'}`}>
           {/* Search filter */}
           <div className="relative">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
@@ -1002,9 +1003,16 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         </div>
 
         {/* Right column: Sidebar preview for full content */}
-        {recordId && !loading && (
+        {recordId && (
           <div className={`w-full lg:w-[480px] xl:w-[560px] 2xl:w-[640px] shrink-0 ${fixedType ? '' : 'h-full min-h-0 overflow-y-auto'}`}>
-            {viewerRecord ? (
+            {viewerLoading ? (
+              <aside aria-label="Loading entry" className="bg-port-card border border-port-border rounded-lg p-4">
+                <BrailleSpinner text="Loading entry" />
+                <button onClick={closeReader} className="block min-h-[44px] text-port-accent hover:underline">
+                  Back to entries
+                </button>
+              </aside>
+            ) : viewerRecord ? (
               <ConversationViewer
                 key={viewerRecord.id}
                 record={viewerRecord}
@@ -1019,7 +1027,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
                 className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col w-full shadow-lg lg:sticky lg:top-4"
               >
                 <Banner tone="warning" title="Entry not found">
-                  This entry may have been deleted or archived.
+                  This entry may have been deleted, archived, or could not be loaded.
                   <button onClick={closeReader} className="block min-h-[44px] text-port-accent hover:underline">
                     Back to entries
                   </button>

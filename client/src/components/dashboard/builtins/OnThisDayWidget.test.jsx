@@ -29,7 +29,7 @@ describe('OnThisDayWidget', () => {
     });
 
     const hrefs = screen.getAllByRole('link').map((a) => a.getAttribute('href'));
-    expect(hrefs).toEqual(['/brain/daily-log?date=2025-09-01', '/brain/memory', '/brain/ideas']);
+    expect(hrefs).toEqual(['/brain/daily-log?date=2025-09-01', '/brain/memory/memories/m1', '/brain/ideas/ideas/i1']);
     expect(screen.getByText('1 year ago · Daily Log')).toBeTruthy();
     expect(screen.getByText('2 years ago · Memory')).toBeTruthy();
     expect(screen.getByText('shipped the thing')).toBeTruthy();
