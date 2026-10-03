@@ -20,7 +20,7 @@ import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
 import { POOL_CONFIG, checkHealth, databaseRestoreRecovery, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
 import { withPgToolEnv, resolvePgDumpBinary } from '../lib/pgTools.js';
-import { inspectDatabaseDump } from './backupDatabaseDump.js';
+import { inspectDatabaseDump, prepareDatabaseReplay } from './backupDatabaseDump.js';
 import {
   captureSyncFeedPositions, pendingRecoveryResult, repairCommittedRestore, restoreApplicationName, restoreReceiptSql,
   restoreRecoveryRefusal, settleReplayOutcome,
@@ -754,6 +754,7 @@ export async function dumpPostgres(outputPath) {
       '-d', pgDb,
       '--no-owner',
       '--no-acl',
+      '--no-comments',
       '--clean',
       '--if-exists',
       // Machine-local replay receipts (#9725) describe this install's past
@@ -1593,7 +1594,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
   }
   const expectedHash = manifestRead.value?.files?.['../portos-db.sql'];
   // Execution replays a private copy written by the same read that admits the
-  // dump, so the bytes checked are exactly the bytes psql replays even if the
+  // dump, so replay derives only from the checked bytes even if the
   // snapshot changes afterwards (#8782). Preview only inspects.
   const spoolDir = dryRun ? null : await mkdtemp(join(tmpdir(), 'portos-restore-')).catch((err) => {
     console.error(`❌ restore: cannot stage dump for snapshot ${snapshotId}: ${err.message}`);
@@ -1636,6 +1637,14 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
     return { status: 'failed', reason: 'dump_incomplete', error: `The snapshot database dump is incomplete (missing ${missing}). Restore was refused without changing data.` };
   }
   const { tableCount } = dump;
+  // Admission checks above always cover the original bytes. Only the private
+  // replay copy omits extension comments and clean-dump extension drops,
+  // whose ownership may belong to a provisioning role.
+  const replayPath = dryRun ? null : await prepareDatabaseReplay(spoolPath, dump.extensionMetadata).catch(err => {
+    console.error(`❌ restore: cannot normalize admitted dump for snapshot ${snapshotId}: ${err.message}`);
+    return null;
+  });
+  if (!dryRun && !replayPath) return DUMP_UNREADABLE;
 
   // Preview remains read-only. Recheck inside the replay transaction as well,
   // so a changed catalog cannot turn a previously safe preview into a cascade.
@@ -1685,7 +1694,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
         '-X', '-v', 'ON_ERROR_STOP=1',
         '--single-transaction',
         '--echo-all',
-        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', spoolPath,
+        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', replayPath,
         '-c', restoreReceiptSql(record),
       ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...pgEnv, PGAPPNAME: restoreApplicationName(record.id) } });
 

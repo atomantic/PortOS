@@ -633,7 +633,7 @@ cmd_export() {
     err "Could not create a temporary dump file in $DUMP_DIR" >&2
     return 1
   fi
-  if ! run_pg_dump --no-owner --no-privileges --if-exists --clean > "$tmpfile"; then
+  if ! run_pg_dump --no-owner --no-privileges --no-comments --if-exists --clean > "$tmpfile"; then
     rm -f "$tmpfile"
     err "pg_dump failed — no dump was written" >&2
     return 1

@@ -66,19 +66,26 @@ afterAll(async () => {
   // Vitest timing out an assertion does not cancel the real restore. Drain it
   // before cleanup queries, which otherwise race its maintenance fence.
   await Promise.allSettled([...pendingRestores]);
-  if (ready) {
-    await query('DROP SCHEMA IF EXISTS restore_external CASCADE');
-    await query('DROP TABLE IF EXISTS public.unexpected_restore_record');
-    await ensureSchema({ force: true });
-    await query('DELETE FROM writers_room_folders WHERE id = $1', [folderId]);
-    await query('DELETE FROM pipeline_issues WHERE id = $1', [issueId]);
-    await query("DELETE FROM tribe_people WHERE id = $1 OR id = '00000000-0000-4000-8000-000000000863'", [personId]);
-    await query("DELETE FROM app_quality_measurements WHERE app_id = 'restore-probe'");
-    await runDbMigrations();
+  runDbMigrationsFault.next = null;
+  try {
+    if (ready) {
+      await query('DROP SCHEMA IF EXISTS restore_external CASCADE');
+      await query('DROP TABLE IF EXISTS public.unexpected_restore_record');
+      await ensureSchema({ force: true });
+      await query('DELETE FROM writers_room_folders WHERE id = $1', [folderId]);
+      await query('DELETE FROM pipeline_issues WHERE id = $1', [issueId]);
+      await query("DELETE FROM tribe_people WHERE id = $1 OR id = '00000000-0000-4000-8000-000000000863'", [personId]);
+      await query("DELETE FROM app_quality_measurements WHERE app_id = 'restore-probe'");
+      await runDbMigrations();
+    }
+  } finally {
+    // Resource release must survive an earlier replay/repair/cleanup failure.
+    await Promise.all([
+      close(),
+      dest && rm(dest, { recursive: true, force: true }),
+      dataRoot.path && rm(dataRoot.path, { recursive: true, force: true }),
+    ]);
   }
-  await close();
-  if (dest) await rm(dest, { recursive: true, force: true });
-  if (dataRoot.path) await rm(dataRoot.path, { recursive: true, force: true });
 });
 
 async function restore(dryRun = false, snapshotId = 'old-schema') {
@@ -100,6 +107,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
   // query the shared database; a failed drain hook skips that case's body.
   beforeEach(async () => {
     await Promise.all([...pendingRestores]);
+    runDbMigrationsFault.next = null;
   });
 
   // Prepare the shared snapshot in a hook so setup failures stop dependent
@@ -124,6 +132,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
     const { binary } = await resolvePgDumpBinary(await getServerMajorVersion());
     const dump = spawnSync(binary, [...connectionArgs, '--no-owner', '--no-acl', '--clean', '--if-exists', '-f', dumpPath], { env: childEnv, encoding: 'utf8' });
     expect(dump.status, dump.stderr).toBe(0);
+    expect(await readFile(dumpPath, 'utf8')).toContain('COMMENT ON EXTENSION');
 
     // Boot current schema, including its new inbound foreign key. An empty
     // newer table is sufficient to break the old direct-replay implementation.
