@@ -7,6 +7,7 @@ import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
+import Banner from '../components/ui/Banner.jsx';
 import {
   listMusicVideoProjects,
   createMusicVideoProject,
@@ -126,6 +127,8 @@ export default function MusicVideo() {
   const [universes, setUniverses] = useState(null);
   const selectedId = routeProjectId || null;
   const [loading, setLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState(null);
+  const projectsLoadPending = useRef(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [arranging, setArranging] = useState(false);
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
@@ -264,10 +267,27 @@ export default function MusicVideo() {
     navigate(id ? `/music-video/${id}` : '/music-video');
   };
 
+  const loadProjects = useCallback(async () => {
+    if (projectsLoadPending.current) return;
+    projectsLoadPending.current = true;
+    setLoading(true);
+    try {
+      const data = await listMusicVideoProjects({ silent: true });
+      setProjects(data || []);
+      setProjectsError(null);
+    } catch (err) {
+      setProjectsError(err?.message || 'Failed to load music video projects');
+    } finally {
+      projectsLoadPending.current = false;
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    listMusicVideoProjects({ silent: true })
-      .then((data) => { setProjects(data || []); setLoading(false); })
-      .catch((err) => { toast.error(err?.message || 'Failed to load music video projects'); setLoading(false); });
+    loadProjects();
+  }, [loadProjects]);
+
+  useEffect(() => {
     listTracks({ silent: true }).then((t) => setTracks(t || [])).catch(() => setTracks([]));
     listUniverseNames({ silent: true }).then((u) => setUniverses(u || [])).catch(() => setUniverses([]));
   }, []);
@@ -1047,7 +1067,21 @@ export default function MusicVideo() {
       />
 
       <div>
-        {!selected && !loading && routeProjectId && (
+        {projectsError && (
+          <Banner tone="error" size="md" title="Music video projects unavailable" className="mb-4" actions={(
+            <button
+              type="button"
+              onClick={loadProjects}
+              disabled={loading}
+              className="min-h-[44px] rounded border border-port-error/30 px-3 py-2 text-sm disabled:opacity-50"
+            >
+              {loading ? 'Retrying…' : 'Retry'}
+            </button>
+          )}>
+            <p>{projectsError}</p>
+          </Banner>
+        )}
+        {!selected && !loading && !projectsError && routeProjectId && (
           <p className="text-sm text-port-text-muted">
             Project not found — it may have been deleted.{' '}
             <button onClick={() => navigate('/music-video')} className="text-port-accent underline">Back to projects</button>
@@ -1079,7 +1113,7 @@ export default function MusicVideo() {
               <div className="text-center py-8 text-sm text-port-text-muted">
                 Loading projects…
               </div>
-            ) : projects.length === 0 ? (
+            ) : projectsError ? null : projects.length === 0 ? (
               <div className="text-center py-6 text-sm text-port-text-muted">
                 No music video projects yet. Create your first project above to get started.
               </div>
