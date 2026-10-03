@@ -1633,12 +1633,10 @@ export const STALL_NUDGE_MAX_ATTEMPTS = 3;
 // never runs out and the run loops for hours on a local GPU. A run that has
 // needed this many nudges is not going to finish on the next one.
 export const STALL_NUDGE_MAX_TOTAL = 6;
-// What gets pasted. It leads with the literal word a human used, for the literal
-// reason it worked — the TUI still holds the whole conversation and the model
-// only needs a turn — and then closes the two doors that produce this state in
-// an unattended run: waiting on an answer that is never coming, and treating
-// "I described the next step" as finishing it.
-export const STALL_NUDGE_TEXT = 'continue — this session went quiet with its task unfinished, and the completion sentinel has not been written. Nobody is watching it: no question will be answered and no approval is coming, so choose the most reasonable option yourself. Carry out the next step you named, then the one after it, and keep going until the task is genuinely complete and the sentinel is written.';
+// What gets pasted. The same word a human types into the Shell tab: the TUI
+// still holds the conversation, and the unattended-run rules already live in
+// the prompt. A longer paste only clutters the composer.
+export const STALL_NUDGE_TEXT = 'continue';
 
 /**
  * State machine for "nudge a TUI session that stopped mid-task".
