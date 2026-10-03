@@ -335,7 +335,7 @@ describe('normalizePastedTab', () => {
   });
 
   it('leaves unknown named entities untouched', () => {
-    expect(normalizePastedTab('&bogus; C G')).toBe('&bogus; C G');
+    expect(normalizePastedTab('&bogus; &constructor; &toString; &hasOwnProperty; C G')).toBe('&bogus; &constructor; &toString; &hasOwnProperty; C G');
   });
 
   it('maps Unicode accidentals to ASCII so mixed lines classify and transpose', () => {

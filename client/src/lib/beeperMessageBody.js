@@ -29,17 +29,8 @@
  * own (the #59 fix).
  */
 
+import { decodeXmlEntities } from '../../../server/lib/xmlEntities.js';
 import { isHttpUrl } from '../utils/urlNormalize.js';
-
-// Mirrors `server/lib/xmlEntities.js` `decodeXmlEntities` (also privately
-// mirrored by `client/src/lib/tabNotation.js`). Keep the three in sync.
-const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-// `decodeXmlEntities` takes an `extraEntities` map for exactly this case; the
-// client copy inlines its one extra rather than growing a parameter. `&nbsp;`
-// is routine in the HTML bodies below and decodes to U+00A0, written as an
-// escape so the source never carries an invisible non-breaking space.
-const HTML_ENTITIES = { ...NAMED_ENTITIES, nbsp: '\u00a0' };
-const ENTITY_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
 
 /**
  * Beeper Desktop delivers entity-encoded text for some bridged networks, so the
@@ -47,19 +38,7 @@ const ENTITY_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
  * as a text node, so decoding only changes which characters are shown — it can
  * never introduce markup.
  */
-export const decodeHtmlEntities = (str) => {
-  if (typeof str !== 'string' || str.indexOf('&') === -1) return str;
-  return str.replace(ENTITY_RE, (match, code) => {
-    if (code[0] === '#') {
-      const cp = code[1] === 'x' || code[1] === 'X'
-        ? parseInt(code.slice(2), 16)
-        : parseInt(code.slice(1), 10);
-      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
-    }
-    // `Object.hasOwn` rather than `in`: `&constructor;` must stay literal.
-    return Object.hasOwn(HTML_ENTITIES, code) ? HTML_ENTITIES[code] : match;
-  });
-};
+export const decodeHtmlEntities = (str) => decodeXmlEntities(str, { nbsp: '\u00a0' });
 
 // The tags that mean anything here. `div` joins the block set because Matrix
 // bodies wrap lines in one; anything absent from both sets keeps its text and
