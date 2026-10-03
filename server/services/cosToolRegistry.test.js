@@ -369,6 +369,7 @@ describe('cosToolRegistry', () => {
       'eidoverse.arm-controller',
       'eidoverse.retire-controller',
       'eidoverse.status',
+      'eidoverse.inspect-scene',
       'eidoverse.project',
       'eidoverse.augment',
       'eidoverse.say',

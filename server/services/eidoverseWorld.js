@@ -12,6 +12,7 @@ import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { scrubSecretTokens } from '../lib/secretText.js';
 import { buildEidoverseCitySurface } from '../lib/eidoverseCitySurface.js';
 import { eidoverseModelBounds } from '../lib/eidoverseCityLayout.js';
+import { buildEidoverseSceneInspection, createEidoverseSceneView, eidoverseInspectSceneInputSchema, updateEidoverseSceneView } from '../lib/eidoverseSceneInspection.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
@@ -684,6 +685,7 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
   let openSettled = false;
   let snapshotSettled = false;
   let snapshotValue = null;
+  let sceneView = createEidoverseSceneView(null);
   const occupiedIdentities = new Set();
   let closeTimer = null;
   let openTimer = null;
@@ -748,6 +750,7 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
   const fail = (error, fallback) => {
     const normalized = asConnectionError(error, fallback);
     failure ||= normalized;
+    sceneView.availability = 'unavailable';
     settleOpen(failure);
     settleSnapshot(null, failure);
     rejectPending(failure);
@@ -769,14 +772,18 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
     try {
       message = JSON.parse(String(raw));
     } catch {
+      sceneView.availability = 'incomplete';
       return;
     }
 
     if (message?.type === 'snapshot') {
+      sceneView = createEidoverseSceneView(message);
       for (const key of [...Object.keys(message.state?.roles || {}), ...Object.keys(message.state?.entities || {})]) occupiedIdentities.add(key);
       settleSnapshot(message);
       return;
     }
+    if (message?.type === 'world-reset') sceneView.availability = 'incomplete';
+    if (message?.type === 'log') updateEidoverseSceneView(sceneView, message.entry);
     if (message?.type === 'error') {
       fail(new ServerError(String(message.error || 'Eidoverse rejected the request.'), {
         status: 409,
@@ -932,6 +939,11 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
     close,
     isOpen: () => !closed && socket.readyState === WebSocket.OPEN,
     getSnapshot: () => snapshotValue,
+    getSceneView: async () => {
+      await messageTail;
+      return structuredClone({ ...sceneView,
+        availability: closed || failure || socket.readyState !== WebSocket.OPEN ? 'unavailable' : sceneView.availability });
+    },
     hasIdentity: (name) => occupiedIdentities.has(name),
     readChat: (after = -1) => {
       const unread = chat.filter((entry) => entry.seq > after);
@@ -1263,6 +1275,48 @@ export async function ensureEidoverseWorldPresence({ verbIntervalMs } = {}) {
     const presence = await ensureCosPresenceInternal({ verbIntervalMs });
     return presenceSummary(presence);
   });
+}
+
+// Inspection never joins, starts, grants, projects, or visits a peer. It reads
+// the already admitted LOCAL connection and fetches bounded model summaries.
+export async function inspectEidoverseScene(input, { signal } = {}) {
+  const args = eidoverseInspectSceneInputSchema.parse(input);
+  throwIfAborted(signal);
+  const connection = cosPresence?.connection;
+  if (!connection?.isOpen()) return buildEidoverseSceneInspection(null, args);
+  const view = await connection.getSceneView();
+  if (view.availability !== 'current') return buildEidoverseSceneInspection(view, args);
+  const boundsByAsset = new Map();
+  const assets = [...new Set([...view.entities.values()].map((entity) => entity.asset).filter(Boolean))].slice(0, 16);
+  const geometrySignal = AbortSignal.any([AbortSignal.timeout(2000), ...(signal ? [signal] : [])]);
+  // No reusable cache: a mutable library reference may have changed since
+  // the last inspection. Missing, oversized, or timed-out summaries stay unknown.
+  await Promise.all(assets.map(async (asset) => {
+    try {
+      const response = await fetch(libraryUrl('/geom', { lib: asset }), { signal: geometrySignal, redirect: 'error' });
+      if (!response.ok) { await response.body?.cancel(); return; }
+      const reader = response.body?.getReader();
+      if (!reader) return;
+      const chunks = [];
+      let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 65536) { await reader.cancel(); return; }
+          chunks.push(Buffer.from(value));
+        }
+      } finally { reader.releaseLock(); }
+      const bounds = eidoverseModelBounds(JSON.parse(Buffer.concat(chunks).toString('utf8'))?.bbox);
+      if (bounds) boundsByAsset.set(asset, bounds);
+    } catch {
+      // Never export runtime error bodies, URLs, or credentials as evidence.
+    }
+  }));
+  throwIfAborted(signal);
+  const latest = await connection.getSceneView();
+  return buildEidoverseSceneInspection(latest, args, { boundsByAsset, observedAt: new Date().toISOString() });
 }
 
 const libraryUrl = (path, query = null) => {

@@ -356,6 +356,86 @@ source. Status requires bounded PortOS read access. Projection, augmentation,
 and world chat retain the dedicated Eidoverse-management grant without widening
 generic PortOS record-write authority.
 
+**Bounded local scene inspection.** `eidoverse.inspect-scene` (provider alias
+`eidoverse_inspect_scene`) requires `manageEidoverse` for minds and agents,
+using the same local world-management authority as augmentation. It reads the
+already admitted local connection; it never joins, starts the runtime, projects,
+places objects, visits a peer, or adds a federation channel. If disconnected,
+open/start the existing Eidoverse world through its normal controls first.
+
+Input is exactly `{ anchor: [x, y, z], radius, limit? }`: three finite coordinates
+in `[-10000,10000]`, spherical radius in `(0,100]`, integer limit `1..12`
+(default `8`), no extra keys. Use a new semantic `requestId` for a fresh read;
+replaying one returns its original result under the common dispatch contract.
+
+Output is exactly:
+
+```text
+{
+  availability: "current" | "unavailable" | "incomplete",
+  sequence: integer | null,
+  observedAt: ISO timestamp | null,
+  complete: boolean,
+  truncated: boolean,
+  boundsComplete: boolean,
+  unknownBounds: nonnegative integer,
+  invalidEntities: nonnegative integer,
+  entities: [{
+    id: stable entity id,
+    pos: [x,y,z], yaw: radians, scale: positive number,
+    asset: normalized library model reference | null,
+    portosManaged: boolean,
+    bounds: {min:[x,y,z], max:[x,y,z]} | null,
+    boundsState: "known" | "unknown"
+  }]
+}
+```
+
+`sequence` is the current authored log cut (including the snapshot's already
+folded tail), then advances with contiguous live updates. `observedAt` records
+when the response was assembled after draining received messages. Added, moved
+and removed entities come from those updates, rather than the join handshake.
+Sequence gaps, unknown spatial verbs and world resets invalidate completeness;
+a new valid snapshot restores it. Closed/failed connections and snapshots without
+a verifiable cut are unavailable. This is a point-in-time authored view, not a
+reservation against later movement or construction.
+
+Measured static model bounds become world AABBs by transforming all eight
+corners with the authored position, yaw and scale. Known boxes intersecting the
+sphere are returned even if their origin is outside it; entities with unknown
+bounds are selected by their authored origin. Model summaries must be finite,
+ordered, nondegenerate and within the coordinate range; transforms require a
+finite yaw within ±2000π and scale in `(0,100]`. Malformed transforms and
+parent-relative entities are omitted and counted in `invalidEntities`.
+
+`complete` means every selectable entity in this query was enumerated.
+`boundsComplete` additionally requires no invalid or unknown bounds **anywhere
+in the retained world view**, because an unmeasured object outside the query
+might extend into it. `unknownBounds` is that global count, not just returned
+rows. An empty list with incomplete enumeration or unknown extents never
+certifies an area clear. Even measured bounds describe authored model geometry,
+not terrain, avatars or the full rendered scene. Procedural components, motion,
+attachments, runtime behaviors and deterministic simulation are not evaluated;
+their geometry remains unknown. Unsupported component/dynamic flags stay
+conservative until a replacement spawn or fresh snapshot resolves them.
+
+Inspection retains at most 2000 authored entities (more means `incomplete`),
+fetches at most 16 unique model summaries per call with a shared two-second
+budget, and reads at most 64 KiB per summary. Failed or oversized summaries stay
+unknown. Whole result rows are capped at 3000 serialized characters, below the
+mind's 4000-character semantic envelope budget; count or character clipping sets
+`truncated: true` and `complete: false`. There is no pagination or clearance
+certificate. Use smaller spatial queries to inspect candidate anchors.
+
+Only `eidoverse/assets/models/...glb` library references and content-addressed
+`store/<16..64 lowercase hex>.glb` references can appear as `asset`; all other
+references become `null`. No raw component bags, record contents, chat, tickets,
+actor identities, URLs, filesystem paths, error bodies or credentials are
+exported. `portosManaged` reads only `comp.portos.managedBy === "portos"`;
+keep those existing projected objects intact. A small synthetic workflow uses
+five calls: status → inspect occupied anchor → inspect alternate anchor →
+augment original objects → inspect the result. Inspection itself places nothing.
+
 **Proposal vs consequence.** `eidoverse.augment` is a two-phase contract, not a
 direct write: a mind's call is a *proposal* (structured verb+args intent), and
 only the world's own ack determines the *consequence*. The result's
