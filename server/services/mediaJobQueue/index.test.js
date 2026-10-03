@@ -38,12 +38,12 @@ vi.mock('../../lib/fileUtils.js', async () => {
 });
 
 vi.mock('../../lib/mediaModels.js', () => ({
-  getVideoModels: () => [
+  getVideoModels: vi.fn(() => [
     { id: 'example-mlx', runtime: 'mlx_video' },
     { id: 'example-cuda', runtime: 'cuda_video' },
     { id: 'example-large-cuda', runtime: 'cuda_video', hardwareRequirements: { requiresNvidiaGpu: true, minVramGb: 48 } },
     { id: 'example-other', runtime: 'mlx_video' },
-  ],
+  ]),
   getDefaultVideoModelId: vi.fn(() => 'example-mlx'),
 }));
 
@@ -2412,6 +2412,165 @@ describe('local video failure holds', () => {
     for (const id of retainedIds) { await tick(); await finish(id, null); }
     expect(stubs.generateVideo.mock.calls.map(([params]) => params.jobId)).toEqual(retainedIds);
     expect(readFileSync(file, 'utf8')).toBe(snapshot);
+  });
+});
+
+// A rejected cohort lookup must settle only its local-video jobs, without
+// turning model preparation into an admission gate for other lanes.
+describe('local video preparation failures', () => {
+  let resolveModel;
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    resolveModel = vi.fn(async () => ({ model: { id: 'example-mlx', runtime: 'mlx_video' } }));
+    vi.doMock('../videoGen/modelSelection.js', () => ({ resolveVideoModelSelection: resolveModel }));
+    await importFresh();
+  });
+  afterEach(() => {
+    vi.doUnmock('../videoGen/modelSelection.js');
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+  const tick = async () => {
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(150);
+    await flush();
+  };
+  const stage = () => {
+    const uploads = join(tempDataDir, 'uploads');
+    mkdirSync(uploads, { recursive: true });
+    const paths = ['frame.png', 'audio.wav', 'extra.png'].map((name) => join(uploads, name));
+    paths.forEach((path) => writeFileSync(path, 'synthetic upload'));
+    return paths;
+  };
+  const waitForFailure = async (id) => {
+    await vi.waitFor(() => expect(mediaJobQueue.getJob(id).status).toBe('failed'));
+    await flush();
+  };
+  const readJobs = () => JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs;
+
+  it('fails an omitted-model job once, cleans its inputs, and drains independent lanes without another enqueue', async () => {
+    await mediaJobQueue.initMediaJobQueue();
+    const paths = stage();
+    const failed = vi.fn();
+    mediaJobQueue.mediaJobEvents.on('failed', failed);
+    resolveModel.mockRejectedValue(new Error('Example settings could not be loaded'));
+    const omitted = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      prompt: 'omitted model', uploadedTempPath: paths[0], audioFilePath: paths[1], uploadedTempPaths: [paths[2]],
+    } });
+    const explicit = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx' } });
+    const waiting = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-other' } });
+    const cloud = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex' } });
+    const remote = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
+    await tick();
+    await waitForFailure(omitted.jobId);
+    await vi.waitFor(() => expect(stubs.generateVideoRemote).toHaveBeenCalled());
+    expect(stubs.generateVideo.mock.calls.map(([params]) => params.jobId)).toEqual([explicit.jobId]);
+    expect(stubs.generateImageCodex).toHaveBeenCalledWith(expect.objectContaining({ jobId: cloud.jobId }));
+    expect(stubs.generateVideoRemote).toHaveBeenCalledWith(expect.objectContaining({ jobId: remote.jobId }));
+    expect(mediaJobQueue.getJob(waiting.jobId)).toMatchObject({ status: 'queued', position: 2 });
+    expect(mediaJobQueue.getJob(omitted.jobId).error).toContain('Example settings could not be loaded');
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(readJobs().filter((job) => job.id === omitted.jobId)).toMatchObject([{ status: 'failed' }]);
+    for (const path of paths) expect(existsSync(path)).toBe(false);
+    const res = { write: vi.fn(), req: { on: vi.fn() }, writeHead: vi.fn(), flushHeaders: vi.fn(), end: vi.fn() };
+    mediaJobQueue.attachSseClient(omitted.jobId, res);
+    expect(res.write.mock.calls.flat().join('')).toContain('Could not prepare local video model');
+    videoGenEvents.emit('completed', { generationId: explicit.jobId });
+    await tick();
+    expect(mediaJobQueue.getJob(waiting.jobId).status).toBe('running');
+    videoGenEvents.emit('completed', { generationId: waiting.jobId });
+    await flush();
+    resolveModel.mockResolvedValue({ model: { id: 'example-mlx', runtime: 'mlx_video' } });
+    const repaired = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'after repair' } });
+    await tick();
+    expect(mediaJobQueue.getJob(repaired.jobId).status).toBe('running');
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.listJobs().filter((job) => job.id === omitted.jobId)).toHaveLength(1);
+    mediaJobQueue.mediaJobEvents.off('failed', failed);
+  });
+
+  it('restores a mixed snapshot without rejecting boot and resolves the failed default once for the batch', async () => {
+    const paths = stage();
+    resolveModel.mockRejectedValue(new Error('Example default unavailable'));
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [
+      { id: 'saved-omitted', kind: 'video', status: 'queued', params: { uploadedTempPath: paths[0], audioFilePath: paths[1], uploadedTempPaths: [paths[2]] } },
+      { id: 'saved-empty', kind: 'video', status: 'queued', params: { modelId: '' } },
+      { id: 'saved-explicit', kind: 'video', status: 'queued', params: { modelId: 'example-mlx' } },
+      { id: 'saved-null', kind: 'video', status: 'queued', params: { modelId: null } },
+      { id: 'saved-cloud', kind: 'image', status: 'queued', params: { mode: 'codex' } },
+      { id: 'saved-remote', kind: 'video', status: 'queued', params: { remoteMedia: remoteVideoMediaParams() } },
+    ] }));
+    await expect(mediaJobQueue.initMediaJobQueue()).resolves.toBeUndefined();
+    await tick();
+    expect(resolveModel).toHaveBeenCalledTimes(1);
+    for (const id of ['saved-omitted', 'saved-empty']) {
+      expect(readJobs().filter((job) => job.id === id)).toMatchObject([{ status: 'failed', error: expect.stringContaining('Example default unavailable') }]);
+    }
+    expect(mediaJobQueue.getJob('saved-explicit').status).toBe('running');
+    expect(mediaJobQueue.getJob('saved-cloud').status).toBe('running');
+    expect(mediaJobQueue.getJob('saved-remote').status).toBe('running');
+    expect(mediaJobQueue.getJob('saved-null')).toMatchObject({ status: 'queued', params: { modelId: null }, position: 2 });
+    for (const path of paths) expect(existsSync(path)).toBe(false);
+  });
+
+  it('limits catalog failures to local videos while restored cloud and remote work dispatch', async () => {
+    const { getVideoModels } = await import('../../lib/mediaModels.js');
+    getVideoModels.mockImplementationOnce(() => { throw new Error('Example catalog unavailable'); });
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [
+      { id: 'catalog-local', kind: 'video', status: 'queued', params: { modelId: 'example-mlx' } },
+      { id: 'catalog-default', kind: 'video', status: 'queued', params: {} },
+      { id: 'catalog-cloud', kind: 'image', status: 'queued', params: { mode: 'codex' } },
+      { id: 'catalog-remote', kind: 'video', status: 'queued', params: { remoteMedia: remoteVideoMediaParams() } },
+    ] }));
+    await expect(mediaJobQueue.initMediaJobQueue()).resolves.toBeUndefined();
+    await tick();
+    for (const id of ['catalog-local', 'catalog-default']) {
+      expect(readJobs().filter((job) => job.id === id)).toMatchObject([{ status: 'failed', error: expect.stringContaining('Example catalog unavailable') }]);
+    }
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(resolveModel).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob('catalog-cloud').status).toBe('running');
+    expect(mediaJobQueue.getJob('catalog-remote').status).toBe('running');
+  });
+
+  it.each(['cancel', 'shutdown'])('preserves %s ownership while default preparation is awaiting', async (action) => {
+    await mediaJobQueue.initMediaJobQueue();
+    let rejectModel;
+    const pending = new Promise((_, reject) => { rejectModel = reject; });
+    resolveModel.mockReturnValue(pending);
+    const paths = stage();
+    const failed = vi.fn();
+    mediaJobQueue.mediaJobEvents.on('failed', failed);
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { uploadedTempPath: paths[0] } });
+    await tick();
+    expect(resolveModel).toHaveBeenCalledTimes(1);
+    if (action === 'cancel') await mediaJobQueue.cancelJob(jobId);
+    else mediaJobQueue.quiesceMediaJobQueue();
+    rejectModel(new Error('Example default unavailable'));
+    await tick();
+    expect(failed).not.toHaveBeenCalled();
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId).status).toBe(action === 'cancel' ? 'canceled' : 'queued');
+    expect(existsSync(paths[0])).toBe(action === 'shutdown');
+    expect(readJobs().filter((job) => job.id === jobId)).toHaveLength(1);
+    mediaJobQueue.mediaJobEvents.off('failed', failed);
+  });
+
+  it('does not prepare or fail an admission before its snapshot settles', async () => {
+    await mediaJobQueue.initMediaJobQueue();
+    resolveModel.mockRejectedValue(new Error('Example default unavailable'));
+    const release = holdNextWrite();
+    const admission = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    await vi.advanceTimersByTimeAsync(150);
+    await vi.dynamicImportSettled();
+    expect(resolveModel).not.toHaveBeenCalled();
+    expect(mediaJobQueue.listJobs()[0].status).toBe('queued');
+    release();
+    const { jobId, status } = await admission;
+    expect(status).toBe('queued');
+    await tick();
+    await waitForFailure(jobId);
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
   });
 });
 
