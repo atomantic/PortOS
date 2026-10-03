@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { goalLiveStamp, reconcileGoalTombstones, tombstoneGoal } from './goalTombstones.js';
+import { reconcileGoalTombstones, tombstoneGoal } from './goalTombstones.js';
 
 const goal = (id, parentId = null, updatedAt = '2026-01-01T00:00:00.000Z') => ({ id, parentId, updatedAt });
 const tombstone = (id, deletedAt = '2026-01-05T00:00:00.000Z') => ({ id, deletedAt });
@@ -51,12 +51,5 @@ describe('tombstoneGoal', () => {
     const doc = {};
     tombstoneGoal(doc, { title: 'No id' });
     expect(doc).toEqual({});
-  });
-});
-
-describe('goalLiveStamp', () => {
-  it('is the newer of createdAt and updatedAt, and null when neither parses', () => {
-    expect(goalLiveStamp({ createdAt: '2026-02-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' })).toBe('2026-02-01T00:00:00.000Z');
-    expect(goalLiveStamp({ createdAt: 'nope' })).toBeNull();
   });
 });

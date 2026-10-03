@@ -47,7 +47,7 @@ const KEY_FIELD = 'id';
  * The newer of a goal's `createdAt` and `updatedAt` — the instant a deletion has
  * to beat. Null for a legacy goal carrying neither stamp.
  */
-export function goalLiveStamp(goal) {
+function goalLiveStamp(goal) {
   const { createdAt, updatedAt } = goal || {};
   if (compareNewerWins(createdAt, updatedAt)) return createdAt;
   return parseTsMs(updatedAt) === null ? null : updatedAt;
