@@ -35,12 +35,12 @@ export function createVideoHolds() {
       }
       if (!readable) {
         // Unknown hold metadata cannot identify a safe local video cohort.
-        // Cover all local video, including new submissions, while other kinds
-        // recover normally. The queue latches persistence off to preserve the
+        // Cover all local video. The queue also disables dispatch and admission
+        // because its writer is latched off to preserve the
         // original file; this recovery hold exists only in this process.
         recoveryHold = { id: randomUUID(), scope: 'local-video', modelId: '*', runtime: '*',
           classification: 'invalid-hold-metadata', heldAt: new Date().toISOString(),
-          cause: 'Saved video holds are damaged. Repair the queue snapshot and restart to restore persistence. Resume releases all local video holds for this session.' };
+          cause: 'Saved video holds are damaged. Repair the queue snapshot and restart to restore persistence and dispatch.' };
       }
       return readable;
     },
