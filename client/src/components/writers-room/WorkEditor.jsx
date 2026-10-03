@@ -965,6 +965,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 readingTheme={readingTheme}
                 activeSceneId={activeSceneId}
                 hotRef={hotRef}
+                pinnedToken={pop?.pinned ? pop : null}
                 hotScene={hotScene}
                 onTokenEnter={handleTokenEnter}
                 onTokenLeave={handleTokenLeave}

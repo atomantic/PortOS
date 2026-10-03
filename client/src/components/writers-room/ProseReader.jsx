@@ -72,6 +72,7 @@ export default function ProseReader({
   readingTheme = 'dark',
   activeSceneId = null,
   hotRef = null,
+  pinnedToken = null,
   hotScene = null,
   onTokenEnter,
   onTokenLeave,
@@ -145,6 +146,7 @@ export default function ProseReader({
                     {renderTokenized(b.text, {
                       entries,
                       hotRef,
+                      pinnedToken,
                       onTokenEnter,
                       onTokenLeave,
                       onTokenClick,
