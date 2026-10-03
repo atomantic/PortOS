@@ -999,7 +999,7 @@ describe('dumpPostgres status classification', () => {
       await flush();
       proc.emit('close', 0);
       await p;
-      expect(spawn).toHaveBeenCalledWith('/custom/bin/pg_dump', expect.any(Array), expect.any(Object));
+      expect(spawn).toHaveBeenCalledWith('/custom/bin/pg_dump', expect.arrayContaining(['--no-comments']), expect.any(Object));
     } finally {
       delete process.env.PORTOS_PGDUMP;
       // clearAllMocks() doesn't reset implementations — restore the null default
@@ -1628,6 +1628,33 @@ describe('restorePostgres', () => {
 
     // A later swap on the backup media must not reach psql: it replays the
     // private copy the admission read wrote, and the copy is removed afterwards.
+    it('verifies original integrity and receipts while replaying only extension-comment normalization', async () => {
+      const comment = "COMMENT ON EXTENSION vector IS 'provisioned extension';";
+      const extensionDrop = 'DROP EXTENSION IF EXISTS vector;';
+      const sql = DUMP_HEADER + extensionDrop + '\n' + comment + '\n' + DUMP_TABLES + DUMP_TRAILER;
+      const originalHash = createHash('sha256').update(sql).digest('hex');
+      vi.spyOn(fs, 'readFile').mockImplementation(async path => {
+        if (String(path).endsWith('manifest.json')) return JSON.stringify({ files: { '../portos-db.sql': originalHash } });
+        throw new Error('Unexpected read');
+      });
+      mockDumpStream(sql);
+      const proc = fakeProc();
+      let replayed;
+      spawn.mockImplementation((_bin, args) => {
+        const path = args[args.indexOf('-f') + 1];
+        replayed = { path, sql: readFileSync(path, 'utf8') };
+        expect(args.at(-1)).toContain(originalHash);
+        expect(readRecoveryJournal().dumpSha256).toBe(originalHash);
+        return proc;
+      });
+      const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+      proc.emit('close', 0);
+      expect(await pending).toMatchObject({ status: 'ok', dryRun: false });
+      expect(replayed.sql).toBe(sql.replace(comment, '').replace(extensionDrop, ''));
+      expect(existsSync(replayed.path)).toBe(false);
+    });
+
     it('replays exactly the admitted bytes from a private spool, never the snapshot path', async () => {
       mockLegacyDumpRead(COMPLETE_DUMP, `${DUMP_HEADER}COMMIT;\n${DUMP_TRAILER}`);
       const proc = fakeProc();

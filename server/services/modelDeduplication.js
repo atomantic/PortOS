@@ -21,9 +21,11 @@ const missing = (error) => {
   throw error;
 };
 const invalid = (message) => new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
+// File identifiers can exceed Number's exact integer range on Windows.
+// Keep stats exact internally; convert only user-facing sizes to numbers.
 const identity = (info) => `${info.dev}:${info.ino}`;
 const unchanged = (a, b) => identity(a) === identity(b) && a.size === b.size
-  && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+  && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 
 async function directories(root) {
   return (await fs.readdir(root, { withFileTypes: true }).catch(missing) || [])
@@ -32,7 +34,7 @@ async function directories(root) {
 
 async function rootsForInstall() {
   const pinokio = resolve(process.env.PINOKIO_HOME || process.env.PINOKIO_PATH || join(homedir(), 'pinokio'));
-  if (!(await fs.stat(pinokio).catch(missing))?.isDirectory()) return null;
+  if (!(await fs.stat(pinokio, { bigint: true }).catch(missing))?.isDirectory()) return null;
   const peers = await directories(join(pinokio, 'drive', 'drives', 'peers'));
   const apps = await directories(join(pinokio, 'api'));
   const external = [
@@ -66,7 +68,7 @@ async function inventory(roots) {
     if (++count > 50000 || depth > 16) throw invalid('Model scan limit reached; narrow the model roots and retry.');
     const real = await fs.realpath(path).catch(missing);
     if (!real || !roots.some((root) => real === root || isPathInsideDir(root, real))) return;
-    const info = await fs.stat(real).catch(missing);
+    const info = await fs.stat(real, { bigint: true }).catch(missing);
     if (!info) return;
     if (info.isDirectory()) {
       if (visited.has(real)) return;
@@ -106,11 +108,11 @@ export async function scanModelDuplicates({ roots } = {}) {
       if (!alreadyLinked && await hash(source) !== await hash(target)) continue;
       // A target with other hardlink names cannot release blocks by replacing
       // this single name. Leave those aliases untouched and report zero savings.
-      const reclaimableBytes = alreadyLinked || target.info.nlink > 1 ? 0 : target.info.blocks * 512;
+      const reclaimableBytes = alreadyLinked || target.info.nlink > 1n ? 0 : Number(target.info.blocks) * 512;
       items.push({
         sourcePath: source.path, targetPath: target.path, model: target.model,
-        sizeBytes: target.info.size, reclaimableBytes, alreadyLinked,
-        canLink: !alreadyLinked && target.info.nlink === 1 && source.info.dev === target.info.dev
+        sizeBytes: Number(target.info.size), reclaimableBytes, alreadyLinked,
+        canLink: !alreadyLinked && target.info.nlink === 1n && source.info.dev === target.info.dev
           && source.info.mode === target.info.mode && source.info.uid === target.info.uid && source.info.gid === target.info.gid,
       });
       seen.add(target.real);
@@ -126,7 +128,7 @@ async function validatedFile(path, roots) {
   }
   const real = await fs.realpath(path).catch(missing);
   if (!real || !roots.some((root) => isPathInsideDir(root, real))) throw invalid('Unsafe or missing model link.');
-  const info = await fs.stat(real);
+  const info = await fs.stat(real, { bigint: true });
   if (!info.isFile() || info.size < MIN_BYTES) throw invalid('Expected a model weight file of at least 10 MB.');
   return { path, real, info };
 }
@@ -151,7 +153,7 @@ async function performRectification(pairs, roots) {
     if (targets.has(target.real)) continue;
     targets.add(target.real);
     if (identity(source.info) === identity(target.info)) continue;
-    if (target.info.nlink !== 1) throw invalid('Target has additional hardlinks; no space can be reclaimed safely.');
+    if (target.info.nlink !== 1n) throw invalid('Target has additional hardlinks; no space can be reclaimed safely.');
     if (source.info.mode !== target.info.mode || source.info.uid !== target.info.uid || source.info.gid !== target.info.gid) {
       throw invalid('File permissions or ownership differ; linking would change application access.');
     }
@@ -165,8 +167,8 @@ async function performRectification(pairs, roots) {
   if (prepared.some(({ source }) => targets.has(source.real))) throw invalid('Overlapping source and target paths.');
   const sourceStates = new Map();
   for (const { source, target } of prepared) {
-    const sourceNow = await fs.stat(source.real);
-    const targetNow = await fs.stat(target.real);
+    const sourceNow = await fs.stat(source.real, { bigint: true });
+    const targetNow = await fs.stat(target.real, { bigint: true });
     if (!unchanged(sourceStates.get(source.real) || source.info, sourceNow) || !unchanged(target.info, targetNow)
       || await fs.realpath(source.path) !== source.real || await fs.realpath(target.path) !== target.real) {
       throw invalid('Model changed since verification; rescan before linking.');
@@ -177,8 +179,8 @@ async function performRectification(pairs, roots) {
       await fs.unlink(temporary);
       throw error;
     });
-    sourceStates.set(source.real, await fs.stat(source.real));
-    results.push({ ...pairs.find((pair) => pair.targetPath === target.path), reclaimedBytes: target.info.blocks * 512 });
+    sourceStates.set(source.real, await fs.stat(source.real, { bigint: true }));
+    results.push({ ...pairs.find((pair) => pair.targetPath === target.path), reclaimedBytes: Number(target.info.blocks) * 512 });
   }
   return { success: true, reclaimedBytes: results.reduce((sum, result) => sum + result.reclaimedBytes, 0), results };
 }

@@ -140,7 +140,7 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     expect(alive(writer.pid)).toBe(false);
     const [dump] = stubs.invocations('pg_dump');
     const [load] = stubs.invocations('psql');
-    expect(dump).toBe(`pg_dump ${endpointArgs(source)} --no-owner --no-privileges --if-exists --clean`);
+    expect(dump).toBe(`pg_dump ${endpointArgs(source)} --no-owner --no-privileges --no-comments --if-exists --clean`);
     expect(load).toBe(`psql ${endpointArgs(target)} -v ON_ERROR_STOP=1 --single-transaction`);
     // Inherited libpq endpoint/option variables never reach the client tools.
     expect(stubs.receivedVariables()).toEqual(['PGPASSWORD']);

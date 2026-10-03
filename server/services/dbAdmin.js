@@ -736,7 +736,7 @@ async function exportDatabaseImpl(backend) {
     }
     const result = await runCmd(pgDumpBin, [
       '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
-      '--no-owner', '--no-privileges', '--if-exists', '--clean', '-f', dumpFile
+      '--no-owner', '--no-privileges', '--no-comments', '--if-exists', '--clean', '-f', dumpFile
     ], 120_000, env);
     if (result.exitCode !== 0) {
       throw new ServerError('Export failed', { status: 500, context: { details: result.stderr || result.stdout } });
