@@ -18,7 +18,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, atomicWrite, PATHS } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -128,16 +128,24 @@ io.use((socket, next) => next(lifecycle.isStopping() ? new Error('Runner is shut
 async function persistCompletion(agentId, output, metadata) {
   const agentDir = join(AGENTS_DIR, agentId);
   await ensureDir(agentDir);
-  await writeFile(join(agentDir, 'output.txt'), output);
+  // atomicWrite (temp + rename): a crash mid-write must not leave a torn file
+  // that the next completion attempt then chokes on.
+  await atomicWrite(join(agentDir, 'output.txt'), output);
   if (!metadata) return;
   const metadataPath = join(agentDir, 'metadata.json');
-  const existing = JSON.parse(await readFile(metadataPath, 'utf-8').catch(err => {
-    if (err.code === 'ENOENT') return '{}';
+  const existing = await readFile(metadataPath, 'utf-8').then(JSON.parse).catch(err => {
+    if (err.code === 'ENOENT') return {};
+    // Unreadable/corrupt prior metadata must not block recording the terminal
+    // result — the new fields below are the authoritative completion evidence.
+    if (err instanceof SyntaxError) {
+      console.warn(`⚠️ Agent ${agentId} metadata.json is corrupt (${err.message}) — rewriting from completion data`);
+      return {};
+    }
     throw err;
-  }));
-  await writeFile(metadataPath, JSON.stringify({
+  });
+  await atomicWrite(metadataPath, {
     ...existing, agentId, ...metadata, outputSize: Buffer.byteLength(output),
-  }, null, 2));
+  });
 }
 
 /**

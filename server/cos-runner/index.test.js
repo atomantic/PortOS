@@ -214,3 +214,21 @@ describe('cos-runner output — ANSI decoloring parity with spawnDirectly', () =
     expect(RUNNER_SRC).toMatch(/if \(!trimmedDecolored \|\| isKnownCliStderrNoise\(trimmedDecolored\)\) return;/);
   });
 });
+
+describe('cos-runner persistCompletion — crash-safe completion evidence', () => {
+  const body = RUNNER_SRC.slice(
+    RUNNER_SRC.indexOf('async function persistCompletion'),
+    RUNNER_SRC.indexOf('Emit event to connected')
+  );
+
+  it('writes output.txt and metadata.json atomically, not via in-place writeFile', () => {
+    expect(body).toMatch(/atomicWrite\(join\(agentDir, 'output\.txt'\)/);
+    expect(body).toMatch(/atomicWrite\(metadataPath,/);
+    expect(body).not.toMatch(/\bwriteFile\(/);
+  });
+
+  it('tolerates a corrupt prior metadata.json instead of throwing on JSON.parse', () => {
+    expect(body).toMatch(/\.then\(JSON\.parse\)\.catch\(/);
+    expect(body).toMatch(/err instanceof SyntaxError/);
+  });
+});
