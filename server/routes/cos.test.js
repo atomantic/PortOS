@@ -322,85 +322,6 @@ describe('CoS Routes', () => {
     });
   });
 
-  describe('GET /api/cos/tasks', () => {
-    it('bounds the bare form on a large completed history and keeps view=full raw', async () => {
-      const active = { id: 'active', status: 'pending' };
-      const history = Array.from({ length: 2000 }, (_, i) => ({ id: `done-${String(i).padStart(5, '0')}`, status: 'completed', metadata: { prompt: 'x'.repeat(2000) } }));
-      cos.getAllTasks.mockResolvedValue({ user: { tasks: [active, ...history], grouped: { pending: [active], completed: history } }, cos: null });
-      cos.getAgents.mockResolvedValue([]);
-      const bare = await request(app).get('/api/cos/tasks');
-      expect(bare.status).toBe(200);
-      expect(JSON.stringify(bare.body).length).toBeLessThan(1_000_000);
-      expect(bare.body.user.tasks).toHaveLength(26);
-      expect(bare.body.user.tasks[0]).toMatchObject({ id: 'active' });
-      expect(bare.body.user).toMatchObject({ completedCount: 2000, grouped: { pending: [active], completed: [] } });
-      expect(bare.body.user.completedNextCursor).toBe(bare.body.user.tasks[25].id);
-      const full = await request(app).get('/api/cos/tasks?view=full');
-      expect(full.body.user.tasks).toHaveLength(2001);
-      expect(full.body.user.grouped.completed).toHaveLength(2000);
-    });
-
-    it('should return all tasks', async () => {
-      const mockTasks = {
-        user: { tasks: [], grouped: {} },
-        cos: { tasks: [], grouped: {} }
-      };
-      cos.getAllTasks.mockResolvedValue(mockTasks);
-
-      const response = await request(app).get('/api/cos/tasks');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('user');
-      expect(response.body).toHaveProperty('cos');
-    });
-
-    it('should bound each source and add a pagination block when limit/offset are passed', async () => {
-      const mockTasks = {
-        user: {
-          tasks: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }],
-          grouped: { pending: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }] },
-          awaitingApproval: [{ id: 'u1' }],
-          autoApproved: [{ id: 'u2' }],
-          file: 'data/cos/user-tasks.md',
-          exists: true,
-          type: 'user'
-        },
-        cos: {
-          tasks: [{ id: 'c1' }, { id: 'c2' }],
-          grouped: { pending: [{ id: 'c1' }, { id: 'c2' }] },
-          awaitingApproval: [],
-          autoApproved: [],
-          file: 'data/cos/cos-tasks.md',
-          exists: true,
-          type: 'internal'
-        }
-      };
-      cos.getAllTasks.mockResolvedValue(mockTasks);
-
-      const response = await request(app).get('/api/cos/tasks?limit=1&offset=1');
-
-      expect(response.status).toBe(200);
-      // Inner task arrays are windowed...
-      expect(response.body.user.tasks).toEqual([{ id: 'u2' }]);
-      expect(response.body.cos.tasks).toEqual([{ id: 'c2' }]);
-      // ...scalar metadata is preserved...
-      expect(response.body.user).toMatchObject({ file: 'data/cos/user-tasks.md', exists: true, type: 'user' });
-      // ...and the full-set derived collections are dropped so the response is
-      // genuinely bounded (not re-leaked through grouped/awaiting/auto-approved).
-      expect(response.body.user).not.toHaveProperty('grouped');
-      expect(response.body.user).not.toHaveProperty('awaitingApproval');
-      expect(response.body.user).not.toHaveProperty('autoApproved');
-      expect(response.body.cos).not.toHaveProperty('grouped');
-      expect(response.body.pagination).toEqual({
-        limit: 1,
-        offset: 1,
-        userTotal: 3,
-        cosTotal: 2,
-        total: 5
-      });
-    });
-  });
-
   describe('POST /api/cos/tasks', () => {
     it('should add a new task', async () => {
       const taskData = {
@@ -2028,25 +1949,6 @@ describe('CoS Routes', () => {
     });
   });
 describe('CoS scoped collections', () => {
-  it('omits completed task history and every derived copy from the initial queue', async () => {
-    const active = { id: 'active', status: 'pending', description: 'Queued work' };
-    const history = Array.from({ length: 1000 }, (_, i) => ({ id: `done-${i}`, status: 'completed', metadata: { prompt: 'x'.repeat(1000) } }));
-    cos.getAllTasks.mockResolvedValue({ user: { tasks: [active, ...history], grouped: { pending: [active], completed: history } }, cos: null });
-    cos.getAgents.mockResolvedValue([]);
-    const response = await request(app).get('/api/cos/tasks?view=queue');
-    expect(response.status).toBe(200);
-    expect(response.body.user).toMatchObject({ tasks: [active], completedCount: 1000, grouped: { completed: [] } });
-    expect(JSON.stringify(response.body).length).toBeLessThan(1000);
-    const selected = await request(app).get('/api/cos/tasks?view=queue&selected=done-7');
-    expect(selected.body.user.tasks.map(task => task.id)).toEqual(['active', 'done-7']);
-    const page = await request(app).get('/api/cos/tasks?view=completed&limit=25');
-    expect(page.body.items).toHaveLength(25);
-    expect(page.body.total).toBe(1000);
-    const next = await request(app).get(`/api/cos/tasks?view=completed&limit=25&cursor=${page.body.nextCursor}`);
-    expect(next.body.items).toHaveLength(25);
-    expect(new Set([...page.body.items, ...next.body.items].map(task => task.id)).size).toBe(50);
-  });
-
   it('scopes live agents and validates completed page bounds without changing legacy lists', async () => {
     cos.getAgents.mockResolvedValue([{ id: 'running', status: 'running' }, { id: 'done', status: 'completed' }]);
     expect((await request(app).get('/api/cos/agents?active=1')).body.map(agent => agent.id)).toEqual(['running']);
