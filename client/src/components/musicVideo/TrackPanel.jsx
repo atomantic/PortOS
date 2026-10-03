@@ -6,6 +6,7 @@ import YoutubeImportControls from './YoutubeImportControls.jsx';
 import VocalStemControl from './VocalStemControl.jsx';
 import SoundBedControl from './SoundBedControl.jsx';
 import { trackSourceLabel } from '../../lib/trackProvenance.js';
+import { trackOptionLabels } from '../../utils/trackOptionLabels.js';
 
 /**
  * The project's audio: pick an existing library track or import fresh audio from
@@ -29,6 +30,7 @@ export default function TrackPanel({
   // Where the linked track's audio came from (e.g. a Suno export, #8967).
   const sourceLabel = trackSourceLabel(tracks.find((t) => t.id === project.trackId));
   const midiFile = project.midiTranscription?.filename;
+  const optionLabels = trackOptionLabels(tracks);
   return (
     <>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
@@ -44,7 +46,7 @@ export default function TrackPanel({
           title={blockedMessage || undefined}
           className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 min-h-[44px] sm:min-h-0">
           <option value="">Change track…</option>
-          {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
+          {tracks.map((t) => <option key={t.id} value={t.id}>{optionLabels.get(t.id)}</option>)}
         </select>
         <YoutubeImportControls
           url={youtube.editUrl} onUrlChange={(e) => youtube.setEditUrl(e.target.value)}
