@@ -83,17 +83,16 @@ describe('OrchestrationTab', () => {
     });
   });
 
-  it('allows deleting non-builtin profiles', async () => {
-    window.confirm = vi.fn(() => true);
+  it('confirms inline before deleting a non-builtin profile', async () => {
     api.deleteOrchestrationProfile.mockResolvedValue({ success: true });
 
     render(<OrchestrationTab />);
     await waitFor(() => expect(screen.getByText('Custom Team')).toBeTruthy());
 
-    const deleteBtn = screen.getByLabelText('Delete profile Custom Team');
-    fireEvent.click(deleteBtn);
+    fireEvent.click(screen.getByLabelText('Delete profile Custom Team'));
+    expect(api.deleteOrchestrationProfile).not.toHaveBeenCalled();
 
-    expect(window.confirm).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => {
       expect(api.deleteOrchestrationProfile).toHaveBeenCalledWith('custom-team');
     });

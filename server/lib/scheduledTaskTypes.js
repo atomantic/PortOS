@@ -128,6 +128,14 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // Metered spend: paid API/model calls, unbounded cloud scans, storage tiers,
   // over-provisioning. Distinct from `performance` (latency and throughput).
   'cost-efficiency',
+  // Work started and never finished: stubs reachable from the UI, disabled or
+  // "coming soon" controls, settings nothing reads. Decides finish/hide/remove.
+  // Distinct from `simplify`, which deletes code with no user meaning.
+  'feature-completeness',
+  // Multi-step workflows that strand their record when a follow-up step fails
+  // or the tab reloads. Distinct from `ui-bugs` (one click on a fresh page) and
+  // `error-handling` (per-call failure handling).
+  'workflow-recovery',
   // Audits `git stash list` for {appName} and drops entries already superseded
   // by (or a subset of) current `main`/HEAD, or that are stale/abandoned scratch
   // work — without discarding real unlanded work. On-demand only (no cadence

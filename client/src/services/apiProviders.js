@@ -194,7 +194,7 @@ export const serveProviderModel = (id, options) => request(
 );
 
 // Provider status (usage limits, availability)
-export const getProviderStatuses = () => request('/providers/status');
+export const getProviderStatuses = (options) => request('/providers/status', options);
 export const recoverProvider = (id, options) => request(`/providers/${id}/status/recover`, { method: 'POST', ...options });
 
 // Codex / ChatGPT subscription account (#5589). The Codex app-server owns the

@@ -58,6 +58,8 @@ the operator's live checkout.
 | `reliability` | Shutdown, health checks, backpressure, job leasing, mixed-version deploys | `resilience`, `reliability` | file | |
 | `privacy` | Exposure, minimization, retention and erasure of personal data | `privacy` | file | |
 | `cost-efficiency` | Metered spend: paid calls, unbounded scans, over-provisioning | `performance`, `cost` | file | |
+| `feature-completeness` | Work started and never finished, offered to users anyway | `bug`, `incomplete` | file | |
+| `workflow-recovery` | Multi-step workflows that strand their record between steps | `bug`, `workflow` | file | |
 
 ## Why the boundaries are explicit
 
