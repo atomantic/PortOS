@@ -1520,6 +1520,8 @@ async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
       requireKnownLiveness: true,
     };
     if (worktreeOwnershipReason(ownership)) continue;
+    const gitFile = await lstat(join(worktreePath, '.git')).catch(() => null);
+    if (!gitFile?.isFile()) continue;
 
     // Ask Git for its common directory and actual registration, rather than
     // inferring a parent from the spelling of a .git file. Relative pointers,
@@ -1527,11 +1529,16 @@ async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
     const commonDir = await execGit(['rev-parse', '--git-common-dir'], worktreePath)
       .then(r => r.stdout.trim() ? resolve(worktreePath, r.stdout.trim()) : null).catch(() => null);
     if (!commonDir) continue;
+    // Git expands Windows short (8.3) aliases even where Node's realpath
+    // keeps them. Compare Git's own spelling with its registration output.
+    const gitWorktreePath = await execGit(['rev-parse', '--show-toplevel'], worktreePath)
+      .then(r => r.stdout.trim()).catch(() => null);
+    if (!gitWorktreePath) continue;
     const registrations = await listWorktrees(worktreePath).catch(() => []);
-    const wt = registrations.find(candidate => pathsEqual(candidate.path, worktreePath));
+    const wt = registrations.find(candidate => pathsEqual(candidate.path, gitWorktreePath));
     const primary = registrations[0];
     if (!wt || wt.bare || wt.detached || wt.prunable || !wt.branch) continue;
-    if (!primary || primary.bare || pathsEqual(primary.path, worktreePath)) continue;
+    if (!primary || primary.bare || pathsEqual(primary.path, gitWorktreePath)) continue;
     if (worktreeOwnershipReason({ ...ownership, locked: wt.locked })) continue;
 
     const parentRepo = primary.path;

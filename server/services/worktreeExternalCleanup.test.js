@@ -1,7 +1,7 @@
 /** Real separate-repository fixtures for the public scheduled cleanup consumer. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, realpathSync } from 'fs';
-import { mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, symlink, unlink, writeFile } from 'fs/promises';
 import { join, relative } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { materializeGitRepo, resetGitWorktreeSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
@@ -9,10 +9,15 @@ import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { cleanupOrphanedWorktrees } from './worktreeManager.js';
 
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, realpathSync: path => fault.pathAlias && (path === fault.aliasTarget || path === fault.pathAlias) ? path : actual.realpathSync(path) };
+});
+
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-external-cleanup-'),
 }));
-const fault = vi.hoisted(() => ({ command: null, cwd: null, successfulMatches: 0, calls: [] }));
+const fault = vi.hoisted(() => ({ command: null, cwd: null, successfulMatches: 0, pathAlias: null, aliasTarget: null, registrationPath: null, calls: [] }));
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
@@ -25,7 +30,16 @@ vi.mock('../lib/execGit.js', async (importOriginal) => {
       if (options?.ignoreExitCode) return { stdout: '', stderr: 'fixture read failure', exitCode: 1 };
       throw new Error('fixture read failure');
     }
-    return actual.execGit(args, cwd, options);
+    const result = await actual.execGit(args, cwd, options);
+    // Model Git's expanded path spelling where Node retains a filesystem alias
+    // (Windows 8.3 paths). Both names address the same real disposable checkout.
+    if (fault.pathAlias && args[0] === 'worktree' && args[1] === 'list') {
+      result.stdout = result.stdout.replaceAll(fault.registrationPath.replace(/\\/g, '/'), fault.pathAlias.replace(/\\/g, '/'));
+    }
+    if (fault.pathAlias && cwd === fault.aliasTarget && args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+      result.stdout = fault.pathAlias.replace(/\\/g, '/') + '\n';
+    }
+    return result;
   } };
 });
 
@@ -60,6 +74,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     fault.command = null;
     fault.cwd = null;
     fault.successfulMatches = 0;
+    fault.pathAlias = null;
+    fault.aliasTarget = null;
+    fault.registrationPath = null;
     await resetGitWorktreeSandbox(external, initialHead);
     await rm(PATHS.worktrees, { recursive: true, force: true });
     await mkdir(PATHS.worktrees, { recursive: true });
@@ -88,6 +105,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     expect(await branchExists('agent-unmerged')).toBe(true);
     expect(existsSync(merged)).toBe(false);
     expect(await branchExists('agent-merged')).toBe(false);
+  });
+
+  it('matches Git registration spelling when Node retains another alias for the same checkout', async () => {
+    const path = await addTree('agent-path-alias');
+    const aliasRoot = join(root(), 'git-spelling');
+    await mkdir(aliasRoot, { recursive: true });
+    const alias = join(aliasRoot, 'agent-path-alias');
+    await symlink(path, alias, 'junction');
+    fault.registrationPath = (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim();
+    fault.aliasTarget = path;
+    fault.pathAlias = alias;
+    expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(1);
+    expect(existsSync(path)).toBe(false);
+    expect(await branchExists('agent-path-alias')).toBe(false);
+    await unlink(alias);
   });
 
   it('resolves a relative .git pointer through Git rather than assuming an absolute parent path', async () => {
