@@ -7,6 +7,7 @@ const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: 
 const fieldClass = 'mt-1 w-full rounded border border-port-border bg-port-bg p-2 text-sm';
 const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 text-sm disabled:opacity-50';
 const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', proof: 'Animated proof' };
+const EMPTY_PLAYBACK = { watched: false, method: 'playback', energyComparison: '', timecodedNotes: '', visualReview: '', audioReview: '', limitations: '' };
 
 /** Editable planning content and explicit operator decisions for every render mode. */
 // `framed={false}` drops the card chrome and heading for a host that supplies them (the page's collapsible section).
@@ -22,7 +23,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const [feedback, setFeedback] = useState({ stage: 'art', target: '', text: '', decision: 'request-changes' });
   const [resolutions, setResolutions] = useState({});
   const [importError, setImportError] = useState(null);
-  const [playbackReview, setPlaybackReview] = useState({ identity: null, watched: false, energyComparison: '', timecodedNotes: '' });
+  const [playbackReview, setPlaybackReview] = useState({ ...EMPTY_PLAYBACK, identity: null });
   const [startSec, setStartSec] = useState(project.productionReview?.proof?.startSec || 0);
   const [endSec, setEndSec] = useState(project.productionReview?.proof?.endSec || Math.min(20, project.audioAnalysis?.durationSec || 20));
   const ready = review.readiness;
@@ -41,14 +42,21 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const matchingRecordedReview = ready?.proof.approved && recordedProofReview?.excerptId === excerpt?.id
     && recordedProofReview?.filename === excerpt?.filename ? recordedProofReview : null;
   useEffect(() => { setPlaybackReview(current => current.identity === proofIdentity ? current
-    : { identity: proofIdentity, watched: false, energyComparison: '', timecodedNotes: '' }); }, [proofIdentity]);
-  const playback = playbackReview.identity === proofIdentity ? playbackReview : { watched: false, energyComparison: '', timecodedNotes: '' };
+    : { ...EMPTY_PLAYBACK, identity: proofIdentity }); }, [proofIdentity]);
+  const playback = playbackReview.identity === proofIdentity ? playbackReview : EMPTY_PLAYBACK;
   const setPlayback = patch => setPlaybackReview({ ...playback, identity: proofIdentity, ...patch });
   const playbackBlocked = proofMedia?.identity !== proofIdentity || !proofMedia?.ready || blocked || review.proof.active || !!ready?.proof.problems.length || excerpt?.status !== 'complete' || !excerpt.filename;
-  const playbackComplete = playback.watched && !!playback.energyComparison.trim()
+  const machineReview = playback.method === 'machine';
+  const evidenceComplete = machineReview
+    ? playback.visualReview.trim().length >= 40 && playback.audioReview.trim().length >= 40 && !!playback.limitations.trim()
+    : playback.watched;
+  const playbackComplete = evidenceComplete && !!playback.energyComparison.trim()
     && /(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(playback.timecodedNotes);
   const approve = stage => {
-    return review.approve(stage, stage === 'proof' ? { watchedWithAudio: true,
+    return review.approve(stage, stage === 'proof' ? { watchedWithAudio: !machineReview,
+      ...(machineReview ? { method: 'machine', machineEvidence: {
+        visualReview: playback.visualReview.trim(), audioReview: playback.audioReview.trim(), limitations: playback.limitations.trim(),
+      } } : {}),
       energyComparison: playback.energyComparison.trim(), timecodedNotes: playback.timecodedNotes.trim(),
       excerptId: excerpt.id, filename: excerpt.filename } : undefined);
   };
@@ -91,6 +99,26 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         <p className="mt-1 whitespace-pre-wrap text-sm">{matchingRecordedReview.energyComparison}</p>
         <p className="mt-2 whitespace-pre-wrap text-sm">{matchingRecordedReview.timecodedNotes}</p>
       </section>}
+      <label htmlFor={fieldId('review-method')} className="block text-sm">Review method
+        <select id={fieldId('review-method')} disabled={playbackBlocked} value={playback.method}
+          onChange={e => setPlayback({ method: e.target.value, watched: false })} className={fieldClass}>
+          <option value="playback">Playback with audio</option>
+          <option value="machine">Machine review with visual and audio evidence</option>
+        </select>
+      </label>
+      {machineReview && <fieldset className="space-y-3">
+        <legend className="text-sm font-medium">Machine review evidence</legend>
+        <p className="text-xs text-port-text-muted">Record the actual inspection method and observations for this exact proof. Frame checks alone cannot establish motion or audio alignment. No human playback is claimed.</p>
+        {[
+          ['visualReview', 'Visual and motion observations', 8000],
+          ['audioReview', 'Audio and alignment observations', 8000],
+          ['limitations', 'Review limitations', 4000],
+        ].map(([key, label, maxLength]) => <label key={key} htmlFor={fieldId(key)} className="block text-sm">{label}
+          <textarea id={fieldId(key)} rows={3} maxLength={maxLength} disabled={playbackBlocked} value={playback[key]}
+            onChange={e => setPlayback({ [key]: e.target.value })} className={fieldClass} />
+        </label>)}
+        <p className="text-xs text-port-text-muted">Visual and audio observations each need at least 40 characters; describe limitations explicitly.</p>
+      </fieldset>}
       <label htmlFor={fieldId('energy-comparison')} className="block text-sm">Playback energy compared with the saved plan
         <textarea id={fieldId('energy-comparison')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.energyComparison} onChange={e => setPlayback({ energyComparison: e.target.value })} className={fieldClass}
           placeholder="Chosen energy target; observed subject, prop and camera activity; where playback matches or misses the intended arc." />
@@ -100,12 +128,12 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
           placeholder="0:04 — subject turns on the downbeat; prop opens through 0:06; camera and type clear the lyric. Name any mismatch to revise." />
       </label>
       <p className="text-xs text-port-text-muted">Include at least one playback timestamp such as 0:04 or 4.5s. These notes are saved with this exact proof. A replacement proof requires a new comparison and acknowledgement.</p>
-      <label htmlFor={fieldId('watched')} className="flex gap-2 py-2 text-sm"><input id={fieldId('watched')} type="checkbox" checked={playback.watched}
-        disabled={playbackBlocked} onChange={e => setPlayback({ watched: e.target.checked })} />I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.</label>
+      {!machineReview && <label htmlFor={fieldId('watched')} className="flex gap-2 py-2 text-sm"><input id={fieldId('watched')} type="checkbox" checked={playback.watched}
+        disabled={playbackBlocked} onChange={e => setPlayback({ watched: e.target.checked })} />I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.</label>}
   </>;
   return <section id="mv-production-review" aria-label="Production review" className={framed ? 'rounded-lg border border-port-border bg-port-card p-3 space-y-3' : 'space-y-3'}>
     {framed && <h3 className="font-medium">Production review</h3>}
-    <p className="text-sm text-port-text-muted">Approve the visual direction, then the timed storyboard, then a watched animated proof. Approving a development file or rendering a draft does not approve production.</p>
+    <p className="text-sm text-port-text-muted">Approve the visual direction, then the timed storyboard, then the reviewed animated proof. Approving a development file or rendering a draft does not approve production.</p>
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
     <ol className="space-y-3">
       {Object.entries(labels).map(([key, label]) => <li key={key}><details open={window.location.hash === `#mv-review-${key}` || key === nextStage} id={`mv-review-${key}`} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
