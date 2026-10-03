@@ -5,6 +5,7 @@ import {
   AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
   autonomousStageOutput, autonomousStageRows, isAutonomousLive,
 } from '../../lib/musicVideoAutonomous.js';
+import AutoApproveFields from './AutoApproveFields.jsx';
 
 // The stages that report a sub-step while they run (the server's `stages[id].step`).
 const STEP_LABELS = { lyrics: AUTONOMOUS_LYRICS_STEP_LABELS, song: AUTONOMOUS_SONG_STEP_LABELS };
@@ -59,6 +60,10 @@ function StageOutput({ run, row, editableBelow }) {
 export default function AutonomousRunPanel({ project, auto, selectedStage = null, onSelectStage, framed = true }) {
   const run = project?.autonomousRun;
   const [edit, setEdit] = useState(null); // { for: stage, value } — the director's edit at a checkpoint
+  // "Auto-approve the rest": a grant sent with the next resume (password entered once, never kept).
+  const [autoApprove, setAutoApprove] = useState([]);
+  const [password, setPassword] = useState('');
+  const [grantError, setGrantError] = useState(null);
   if (!run) return null;
   const rows = autonomousStageRows(run);
   const live = isAutonomousLive(run);
@@ -74,6 +79,17 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
   // A stale or hand-edited `?run-stage=` that names no finished, viewable stage opens nothing.
   const selectedRow = rows.find((row) => row.id === selectedStage && row.status === 'done' && AUTONOMOUS_VIEWABLE_STAGES.includes(row.id)) || null;
   const selected = selectedRow?.id || null;
+  const grantBlocked = autoApprove.length > 0 && !password;
+  // Every resume path carries the grant when one is picked; a refused password shows inline.
+  const resume = (edits = {}) => {
+    if (!autoApprove.length) return auto.resume(edits);
+    const secret = password;
+    setPassword('');
+    setGrantError(null);
+    return auto.resume({ ...edits, autoApprove, password: secret }, { inline: true })
+      .then((res) => { setAutoApprove([]); return res; })
+      .catch((err) => { setGrantError(err?.message || 'Could not grant auto-approval'); });
+  };
 
   return (
     <section className={`${framed ? 'bg-port-card border border-port-border rounded-lg p-3 ' : ''}space-y-3 min-w-0`} aria-label="Autonomous run">
@@ -148,12 +164,12 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={auto.busy} onClick={() => auto.resume(changed ? { [editable.key]: draft } : {})} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
+            <button type="button" disabled={auto.busy || grantBlocked} onClick={() => resume(changed ? { [editable.key]: draft } : {})} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
               <Play size={14} aria-hidden="true" /> {changed ? 'Save edit & approve' : 'Approve & continue'}
             </button>
             {awaiting === 'song' && (
               // Discards this song and makes a new one (a new Suno generation spends credits), then pauses here again.
-              <button type="button" disabled={auto.busy} onClick={() => auto.resume({ retakeSong: true })} className={buttonClass}>
+              <button type="button" disabled={auto.busy || grantBlocked} onClick={() => resume({ retakeSong: true })} className={buttonClass}>
                 <RotateCcw size={14} aria-hidden="true" /> Retake song
               </button>
             )}
@@ -161,10 +177,22 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
         </div>
       )}
 
+      {(awaiting || canRetry) && (live || run.status === 'failed') && (
+        <AutoApproveFields
+          idPrefix="mv-run"
+          value={autoApprove}
+          onChange={(next) => { setAutoApprove(next); setGrantError(null); }}
+          password={password}
+          onPasswordChange={setPassword}
+          error={grantError}
+          granted={run.brief?.autoApprove || []}
+        />
+      )}
+
       {live || run.status === 'failed' ? (
         <div className="flex flex-wrap gap-2">
           {canRetry && !awaiting && (
-            <button type="button" disabled={auto.busy} onClick={() => auto.resume()} className={buttonClass}>
+            <button type="button" disabled={auto.busy || grantBlocked} onClick={() => resume()} className={buttonClass}>
               <Play size={14} aria-hidden="true" /> {run.status === 'failed' ? 'Retry' : 'Resume'}
             </button>
           )}

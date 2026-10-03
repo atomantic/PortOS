@@ -30,7 +30,9 @@ export default function DependencyImpactPanel({ project, busy, onRepair }) {
           return <li key={shot.sceneId}>{scene?.label || shot.sceneId}: {shot.reasons.join('; ')} → derived clip, composition and review evidence</li>;
         })}
       </ul>
-      <p>Up to {formatCount(result.estimate.maxGenerations)} clip submissions ({formatCount(result.estimate.outputSeconds)} seconds of footage); {formatCount(result.estimate.evidenceRebuilds)} evidence records need rebuilding or review. Historical assets are retained.</p>
+      <p>{result.estimate.maxGenerations > 0
+        ? `Up to ${formatCount(result.estimate.maxGenerations)} clip submissions (${formatCount(result.estimate.outputSeconds)} seconds of footage)`
+        : 'No new clips needed'}; {formatCount(result.estimate.evidenceRebuilds)} evidence records need rebuilding or review. Historical assets are retained.</p>
       {!result.shots.length && <p>Selected takes can be kept. Rebuild the draft and review it again; historical passing reviews cannot approve changed dependencies.</p>}
       <button type="button" disabled={busy || revisionActive} onClick={() => onRepair(result.basis)}
         className="min-h-[44px] rounded border border-port-border px-3 text-port-accent disabled:opacity-50">
