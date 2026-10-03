@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+import { ASYNC_UTIL_TIMEOUT_MS } from '../../test/timeouts.js';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
@@ -102,7 +103,7 @@ describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () =>
       await page.goto(`${origin}goals-test?${view}`);
       const provider = page.getByRole('combobox', { name: 'AI Provider' });
       const model = page.getByRole('combobox', { name: 'Model', exact: true });
-      await model.waitFor({ timeout: 15000 });
+      await model.waitFor({ timeout: ASYNC_UTIL_TIMEOUT_MS });
       for (const [width, height] of [[360, 800], [390, 844], [768, 1024], [1440, 900]]) {
         await page.setViewportSize({ width, height });
         for (const control of [provider, model, page.getByRole('button', { name: 'Organize', exact: true })]) {
