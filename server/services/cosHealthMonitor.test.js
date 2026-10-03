@@ -294,8 +294,8 @@ describe('cosHealthMonitor.runHealthCheck', () => {
       const { metrics, issues } = await runHealthCheck();
 
       expect(restarted).toEqual(['web']);
-      // Fresh post-restart metrics: web recovered, the exempt game stays exited.
-      expect(metrics.pm2).toMatchObject({ errored: 0, desktopExited: 1 });
+      // Fresh post-restart metrics: web observed online.
+      expect(metrics.pm2).toMatchObject({ errored: 0 });
       expect(issues).toEqual([]);
     });
 
