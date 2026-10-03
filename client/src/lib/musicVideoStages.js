@@ -5,6 +5,8 @@
  * strip and the tests all read the same answer.
  */
 import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
+import { AUTONOMOUS_STATUS_LABELS } from './musicVideoAutonomous.js';
+import { formatTimecode } from '../utils/formatters.js';
 
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Setup', title: 'Setup' },
@@ -16,8 +18,6 @@ export const MUSIC_VIDEO_STAGES = [
   { id: 'publish', label: 'Publish', title: 'Publish' },
 ];
 
-// Stages whose tab keeps the preview player docked beside the content.
-export const PREVIEW_STAGES = new Set(['board', 'compose', 'review']);
 
 export const isStageId = (value) => MUSIC_VIDEO_STAGES.some((stage) => stage.id === value);
 
@@ -54,14 +54,82 @@ export function projectSpend(project) {
 }
 
 /**
- * What the docked preview plays: the composition document when the project
- * renders as one, otherwise the newest finished draft excerpt, otherwise
- * nothing (the dock stays out of the way).
+ * Everything the docked preview can play, in the order it picks a default:
+ * the final render (its resolved `finalVideoSrc`), the composition document,
+ * then each finished draft excerpt, newest first. Each entry has a stable `id`
+ * (the `?play=` value) and a `label` for the source picker.
  */
-export function resolvePreviewSource(project) {
-  if (project?.composition?.mode === 'document' && project.composition.document) return { kind: 'document' };
-  const excerpt = [...(project?.excerpts || [])].reverse().find((e) => e.status === 'complete' && e.filename);
-  return excerpt ? { kind: 'excerpt', excerpt } : null;
+export function listPreviewSources(project, { finalVideoSrc = null } = {}) {
+  const sources = [];
+  if (project?.renderHistoryId && finalVideoSrc) {
+    sources.push({ id: 'final', kind: 'video', label: 'Final render', src: finalVideoSrc, startSec: 0, endSec: null });
+  }
+  if (project?.composition?.mode === 'document' && project.composition.document) {
+    sources.push({ id: 'document', kind: 'document', label: 'Composition (live)' });
+  }
+  const excerpts = (project?.excerpts || []).filter((e) => e.status === 'complete' && e.filename).reverse();
+  for (const excerpt of excerpts) {
+    sources.push({
+      id: `excerpt:${excerpt.id}`, kind: 'video', src: `/data/videos/${excerpt.filename}`,
+      startSec: excerpt.startSec, endSec: excerpt.endSec,
+      label: `Draft ${formatTimecode(excerpt.startSec)}–${formatTimecode(excerpt.endSec)}`,
+    });
+  }
+  return sources;
+}
+
+// A stopped run can be resumed as is; the others need the director first.
+const PRODUCTION_RUN_LABELS = {
+  running: 'Production running', stopped: 'Production paused', blocked: 'Production blocked',
+  'limit-reached': 'Production at its limit', 'needs-replan': 'Production needs a replan',
+};
+
+const APPROVAL_LABELS = { art: 'art', storyboard: 'storyboard', proof: 'proof' };
+
+/** One line for the production-approval gate: which of the three approvals the current revision holds. */
+export function approvalSummary(readiness) {
+  if (!readiness) return null;
+  const keys = Object.keys(APPROVAL_LABELS);
+  const approved = keys.filter((key) => readiness[key]?.approved).length;
+  const missing = keys.filter((key) => !readiness[key]?.approved).map((key) => APPROVAL_LABELS[key]);
+  return approved === keys.length ? 'All 3 approved' : `${approved} of 3 approved · needs ${missing.join(', ')}`;
+}
+
+/**
+ * The project's "where does it stand" line for the sticky header: the stage it
+ * is in (and whether that stage is waiting on the director), plus short facts
+ * for the autopilot run, the production run, the approvals and what there is to
+ * watch. `progress` is `deriveStages(…)`; `nextAction` is `deriveNextAction(…)`.
+ * Fact tones are `ok`, `warn` or `muted`.
+ */
+export function describeProjectStatus(project, { progress, nextAction = null, readiness = project?.productionReadiness } = {}) {
+  if (!project || !progress) return null;
+  const index = MUSIC_VIDEO_STAGES.findIndex((stage) => stage.id === progress.current);
+  const entry = progress.stages.find((stage) => stage.id === progress.current);
+  const allDone = progress.stages.every((stage) => stage.state === 'done');
+  // A goto into Production review is a human approval, not something the app does by itself.
+  const needsYou = entry?.state === 'blocked' || nextAction?.id === 'review-production' || nextAction?.id === 'approve-cast-sets';
+  const headline = allDone
+    ? 'Published'
+    : `Stage ${index + 1} of ${MUSIC_VIDEO_STAGES.length}: ${entry?.label || ''}${needsYou ? ' · needs you' : ''}`;
+  const facts = [];
+  const auto = project.autonomousRun;
+  if (auto) {
+    const label = auto.interrupted ? 'interrupted' : (AUTONOMOUS_STATUS_LABELS[auto.status] || auto.status).toLowerCase();
+    const tone = auto.status === 'completed' ? 'ok' : auto.status === 'running' && !auto.interrupted ? 'muted' : 'warn';
+    facts.push({ id: 'autopilot', label: `Autopilot ${label}`, tone });
+  }
+  const run = currentProductionRun(project);
+  if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
+    facts.push({ id: 'production', label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', tone: run.status === 'running' ? 'muted' : 'warn' });
+  }
+  const approvals = approvalSummary(readiness);
+  if (approvals) facts.push({ id: 'approvals', label: `Approvals: ${approvals}`, tone: readiness.readyForProduction ? 'ok' : 'warn' });
+  const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
+  if (project.renderHistoryId) facts.push({ id: 'render', label: 'Final render ready', tone: 'ok' });
+  else if (drafts) facts.push({ id: 'render', label: `${drafts} draft ${drafts === 1 ? 'excerpt' : 'excerpts'}, no final render`, tone: 'muted' });
+  else facts.push({ id: 'render', label: 'Nothing rendered yet', tone: 'muted' });
+  return { headline, tone: allDone ? 'ok' : needsYou ? 'warn' : 'muted', facts };
 }
 
 /** Resolve the `:stage` route param; an unknown or missing value is null. */

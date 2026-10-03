@@ -41,7 +41,7 @@ export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onAppro
   const openNotes = (sheet?.notes || []).filter((n) => !n.resolvedAt).length;
   const tone = stage.status === 'review' ? 'warning' : stage.status === 'approved' ? 'success' : stage.status === 'failed' ? 'error' : 'muted';
   return (
-    <div className={`rounded border p-2 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
+    <div className={`rounded-lg border bg-port-card p-3 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
       <div className="flex flex-wrap items-center gap-2">
         <Users size={14} className="text-port-accent shrink-0" aria-hidden="true" />
         <span className="text-sm font-medium">Cast &amp; Sets check-in</span>

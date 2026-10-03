@@ -620,9 +620,9 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/ai', true], ['/ai/presets', true], ['/ai/presets/codex', true], ['/ai/harnesses', true], ['/ai/services/ollama', true], ['/ai/edit/codex', true], ['/airlock', false],
     ['/pipeline', false], ['/pipeline/series/s1', true],
     ['/local-llm', false], ['/local-llm/m', true],
-    // Music owns the same full-bleed title/tab/body shell as Media Gen, but
-    // its similarly named Music Video route is classified independently.
-    ['/music', true], ['/music/generate', true], ['/music-video', false],
+    // Music owns the same full-bleed title/tab/body shell as Media Gen; Music
+    // Video has its own full-width rule, which a sibling prefix must not hit.
+    ['/music', true], ['/music/generate', true], ['/music-video', true], ['/music-video/p1/board', true], ['/music-videos', false],
     // Video workspace index owns its own scroll; Generate Video uses the
     // Media Gen tab shell and must stay full-width with it. `/video-gen` is
     // a legacy redirect, not a page with an internal scroller.

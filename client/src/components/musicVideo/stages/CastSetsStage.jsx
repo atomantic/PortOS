@@ -10,18 +10,16 @@ export default function CastSetsStage({ board }) {
   return (
     <div className="min-w-0 space-y-3">
       {project.castAndSets ? (
-        <div className="rounded-lg border border-port-border bg-port-card p-3">
-          <CastAndSetsCheckin
-            project={project}
-            busy={locked || castSets.busy || kickoff.running}
-            onOpenSheet={board.openArtifact}
-            onApprove={board.approveCastAndSets}
-            onRegenerate={() => castSets.regenerate()}
-            onEditDirection={castSets.editDirection}
-            onResume={() => castSets.resume()}
-            onSkip={board.skipCastAndSets}
-          />
-        </div>
+        <CastAndSetsCheckin
+          project={project}
+          busy={locked || castSets.busy || kickoff.running}
+          onOpenSheet={board.openArtifact}
+          onApprove={board.approveCastAndSets}
+          onRegenerate={() => castSets.regenerate()}
+          onEditDirection={castSets.editDirection}
+          onResume={() => castSets.resume()}
+          onSkip={board.skipCastAndSets}
+        />
       ) : (
         <p className="rounded-lg border border-port-border bg-port-card p-3 text-sm text-port-text-muted">
           The autopilot builds the cast and sets — and stops for your check-in — before it plans the shots.

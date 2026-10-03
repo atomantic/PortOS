@@ -55,8 +55,9 @@ function StageOutput({ run, row, editableBelow }) {
  * read-only from its checklist row; the open row is the caller's URL state
  * (`selectedStage` / `onSelectStage`). Progress arrives over `music-video:autonomous` through
  * `useAutonomousMusicVideo`; this panel only renders the run it is given.
+ * `framed={false}` drops the card chrome and title for a host that supplies them.
  */
-export default function AutonomousRunPanel({ project, auto, selectedStage = null, onSelectStage }) {
+export default function AutonomousRunPanel({ project, auto, selectedStage = null, onSelectStage, framed = true }) {
   const run = project?.autonomousRun;
   const [edit, setEdit] = useState(null); // { for: stage, value } — the director's edit at a checkpoint
   // "Auto-approve the rest": a grant sent with the next resume (password entered once, never kept).
@@ -91,9 +92,9 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
   };
 
   return (
-    <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0" aria-label="Autonomous run">
+    <section className={`${framed ? 'bg-port-card border border-port-border rounded-lg p-3 ' : ''}space-y-3 min-w-0`} aria-label="Autonomous run">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="flex items-center gap-1 text-sm font-medium"><Wand2 size={15} className="text-port-accent" aria-hidden="true" /> Autonomous run</span>
+        {framed && <span className="flex items-center gap-1 text-sm font-medium"><Wand2 size={15} className="text-port-accent" aria-hidden="true" /> Autonomous run</span>}
         <span className={`text-sm ${tone}`}>{run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status}</span>
         {run.brief?.origin?.kind === 'schedule' && (
           <span className="text-xs text-port-text-muted">Scheduled{run.brief.origin.ideaTitle ? ` · from “${run.brief.origin.ideaTitle}”` : ''}</span>
