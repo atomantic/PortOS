@@ -99,7 +99,7 @@ const getEvents = async () => {
 
 const generateImageMock = vi.fn(async (params) => {
   const mode = params?.mode || 'external';
-  const generationId = `mock-${Math.random().toString(36).slice(2, 10)}`;
+  const generationId = params?.jobId || `mock-${Math.random().toString(36).slice(2, 10)}`;
   const result = { generationId, filename: 'mock.png', path: '/data/images/mock.png', mode };
   if (mode === 'local' || mode === 'codex') {
     // Fire the completion event after generateImage resolves so the tool
@@ -1234,6 +1234,45 @@ describe("image_generate", () => {
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/mock provider failure/);
     codexEnabledRef.value = false;
+  });
+
+  // The provider can emit its terminal event while generateImage is still
+  // awaiting (frame inspection) — the tool must have registered the supplied
+  // jobId before dispatch or the event is dropped and the call times out.
+  it("settles on a 'completed' event emitted before generateImage resolves", async () => {
+    generateImageMock.mockClear();
+    generateImageMock.mockImplementationOnce(async (params) => {
+      const events = await getEvents();
+      events.emit('completed', { generationId: 'foreign-job', filename: 'foreign.png', path: '/data/images/foreign.png' });
+      events.emit('completed', { generationId: params.jobId, filename: 'early.png', path: '/data/images/early.png' });
+      return { generationId: params.jobId, filename: 'early.png', path: '/data/images/early.png', mode: 'local' };
+    });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    expect(r.ok).toBe(true);
+    expect(r.filename).toBe("early.png");
+  });
+
+  it("settles on a 'failed' event emitted before generateImage resolves", async () => {
+    generateImageMock.mockClear();
+    generateImageMock.mockImplementationOnce(async (params) => {
+      const events = await getEvents();
+      events.emit('failed', { generationId: params.jobId, error: 'provider exited early' });
+      return { generationId: params.jobId, filename: 'x.png', path: '/data/images/x.png', mode: 'local' };
+    });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/provider exited early/);
+  });
+
+  it("detaches waiter listeners when dispatch rejects or the backend is synchronous", async () => {
+    const events = await getEvents();
+    const before = events.listenerCount('completed') + events.listenerCount('failed');
+    generateImageMock.mockImplementationOnce(async () => { throw new Error('busy'); });
+    const rejected = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    expect(rejected.ok).toBe(false);
+    const sync = await dispatchTool("image_generate", { prompt: "a fox", provider: "external" });
+    expect(sync.ok).toBe(true);
+    expect(events.listenerCount('completed') + events.listenerCount('failed')).toBe(before);
   });
 });
 

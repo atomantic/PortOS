@@ -1,8 +1,9 @@
 /**
  * Shared completion waiter for `imageGenEvents` — used wherever a route or
  * voice tool awaits a single image-gen job by `generationId`. Two contracts
- * the helper enforces: (1) listeners attach BEFORE `generateImage` returns
- * so a fast job can't emit `completed` first, and (2) listeners detach on
+ * the helper enforces: (1) callers allocate a job ID, `register()` it, and pass
+ * it as `jobId` BEFORE calling `generateImage` — events are dropped until
+ * registration, and a job can finish while the dispatcher is still awaiting, and (2) listeners detach on
  * completion / failure / timeout so the global emitter doesn't accumulate
  * leaks. Always call `cleanup()` on the synchronous error path — `register`
  * may never run.

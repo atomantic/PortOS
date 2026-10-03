@@ -219,5 +219,44 @@ describe('sdapi routes — A1111-compatible surface', () => {
       // The completed event's seed wins over result.seed.
       expect(info.seed).toBe(4242);
     });
+
+    it('settles on a completed event emitted before generateImage resolves (jobId registered pre-dispatch)', async () => {
+      enabled();
+      imageGen.getMode.mockResolvedValue('local');
+      imageGen.generateImage.mockImplementation(async ({ jobId }) => {
+        realEmitter.emit('completed', { generationId: 'foreign-job', seed: 1 });
+        realEmitter.emit('completed', { generationId: jobId, seed: 777 });
+        return { generationId: jobId, filename: 'e.png', path: '/data/images/e.png', mode: 'local', seed: 1 };
+      });
+      tryReadFile.mockResolvedValue(Buffer.from('png'));
+
+      const r = await request(app).post('/sdapi/v1/txt2img').send({ prompt: 'early' });
+      expect(r.status).toBe(200);
+      expect(JSON.parse(r.body.info).seed).toBe(777);
+    });
+
+    it('surfaces a failed event emitted before generateImage resolves as GEN_FAILED, not a timeout', async () => {
+      enabled();
+      imageGen.getMode.mockResolvedValue('local');
+      imageGen.generateImage.mockImplementation(async ({ jobId }) => {
+        realEmitter.emit('failed', { generationId: jobId, error: 'provider exited' });
+        return { generationId: jobId, filename: 'f.png', path: '/data/images/f.png', mode: 'local' };
+      });
+
+      const r = await request(app).post('/sdapi/v1/txt2img').send({ prompt: 'early fail' });
+      expect(r.status).toBe(500);
+      expect(r.body.code).toBe('GEN_FAILED');
+      expect(r.body.error).toMatch(/provider exited/);
+    });
+
+    it('detaches waiter listeners when dispatch rejects', async () => {
+      enabled();
+      imageGen.getMode.mockResolvedValue('local');
+      const before = realEmitter.listenerCount('completed') + realEmitter.listenerCount('failed');
+      imageGen.generateImage.mockRejectedValue(new Error('busy'));
+      const r = await request(app).post('/sdapi/v1/txt2img').send({ prompt: 'x' });
+      expect(r.status).toBe(500);
+      expect(realEmitter.listenerCount('completed') + realEmitter.listenerCount('failed')).toBe(before);
+    });
   });
 });
