@@ -37,6 +37,7 @@
  */
 import { useEffect, useId, useMemo, useState } from 'react';
 import Modal from '../ui/Modal.jsx';
+import { sortProviderModels } from '../../utils/providerModels.js';
 import { FormField } from '../ui/FormField.jsx';
 import EffortSelect from '../cos/EffortSelect.jsx';
 import useProviderCatalog from '../../hooks/useProviderCatalog.js';
@@ -104,7 +105,7 @@ export default function ProviderComposePopover({
     return compatible ? initialService : '';
   };
   const selectedService = services.find((service) => service.slug === serviceSlug) || null;
-  const models = catalog.modelsFor(serviceSlug);
+  const models = sortProviderModels(catalog.modelsFor(serviceSlug));
   const effortLevels = catalog.effortLevelsFor(harnessId, model || null);
   const bootstraps = catalog.bootstraps || [];
   const bootstrapEligible = (method === 'cli' || method === 'tui') && bootstraps.length > 0;

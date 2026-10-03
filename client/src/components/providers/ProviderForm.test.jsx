@@ -310,6 +310,25 @@ describe('ProviderForm model access', () => {
     modelAccessHiddenCount: 1,
   };
 
+  it('alphabetizes preset model selects and access rows while preserving saved catalog order', async () => {
+    const catalog = Object.freeze(['Zulu', 'alpha', 'Beta']);
+    renderForm({ provider: {
+      ...scopedProvider, models: catalog, modelCatalog: catalog, defaultModel: 'Beta',
+      modelAccess: { mode: 'allow', patterns: ['*'] },
+    } });
+    switchTab('Models');
+    const select = screen.getByLabelText('Default Model');
+    expect([...select.options].map(option => option.value)).toEqual(['', 'alpha', 'Beta', 'Zulu']);
+    expect(select.value).toBe('Beta');
+    expect(screen.getAllByRole('button').filter(button => button.hasAttribute('aria-pressed'))
+      .map(button => button.textContent)).toEqual(['alpha', 'Beta', 'Zulu']);
+    fireEvent.click(screen.getByRole('button', { name: /Update Provider|Save/i }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalled());
+    expect(api.updateProvider.mock.calls[0][1].models).toEqual(['Zulu', 'alpha', 'Beta']);
+    expect(api.updateProvider.mock.calls[0][1].defaultModel).toBe('Beta');
+    expect(api.updateProvider.mock.calls[0][1].modelAccess.patterns).toEqual(['*']);
+  });
+
   it('saves the full advertised catalog, not the scoped view', async () => {
     renderForm({ provider: scopedProvider });
     switchTab('Models');
