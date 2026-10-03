@@ -854,23 +854,39 @@ describe('System Health Routes', () => {
       expect(response.body.cos).toMatchObject({ activeAgents: 2, queuedTasks: 1 });
     });
 
-    it('falls back to the daemon tally when the agent list cannot be read', async () => {
+    it('keeps the queue unknown and warns when the agent census cannot be read', async () => {
       getPendingTaskIds.mockResolvedValueOnce(['user/42']);
-      getAgents.mockRejectedValueOnce(new Error('state unreadable'));
+      getAgents.mockRejectedValueOnce(Object.assign(new Error('state unreadable'), { code: 'EIO' }));
 
       const response = await request(app).get('/api/system/health/details');
 
-      // No claim set to subtract, so the queue over-reports rather than hiding
-      // work — the safe direction — and active falls back rather than reading 0.
-      expect(response.body.cos).toMatchObject({ activeAgents: 1, queuedTasks: 1 });
+      // No claim set to subtract, so a reconciled queue count cannot be measured;
+      // active falls back to the daemon tally and daemon state stays accurate.
+      expect(response.body.cos).toMatchObject({ running: true, paused: false, activeAgents: 1, queuedTasks: null });
+      expect(response.body.overallHealth).not.toBe('healthy');
+      expect(response.body.warnings).toContainEqual(
+        { type: 'probe-unavailable', source: 'cos-agents', status: 'unavailable', severity: 'warning', message: 'Chief of Staff agent census unavailable', dismissible: false }
+      );
     });
 
-    it('reports an unreadable pending list as unknown rather than as an empty queue', async () => {
+    it('reports an unreadable pending list as unknown with a non-dismissible warning, then recovers', async () => {
       getPendingTaskIds.mockRejectedValueOnce(new Error('task file unreadable'));
+      getAgents.mockResolvedValueOnce([]);
 
-      const response = await request(app).get('/api/system/health/details');
+      const failed = await request(app).get('/api/system/health/details');
 
-      expect(response.body.cos.queuedTasks).toBeNull();
+      expect(failed.body.cos).toMatchObject({ running: true, queuedTasks: null });
+      expect(failed.body.overallHealth).not.toBe('healthy');
+      expect(failed.body.warnings).toContainEqual(
+        { type: 'probe-unavailable', source: 'cos-queue', status: 'unavailable', severity: 'warning', message: 'Chief of Staff queue unavailable', dismissible: false }
+      );
+
+      getPendingTaskIds.mockResolvedValueOnce([]);
+      getAgents.mockResolvedValueOnce([]);
+      const recovered = await request(app).get('/api/system/health/details');
+
+      expect(recovered.body.cos.queuedTasks).toBe(0);
+      expect(recovered.body.warnings.filter((w) => w.source === 'cos-queue' || w.source === 'cos-agents')).toEqual([]);
     });
   });
 });

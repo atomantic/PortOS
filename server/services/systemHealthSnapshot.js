@@ -67,6 +67,19 @@ async function loadHealthSettings() {
   };
 }
 
+// Last observed availability per CoS read ('cos-queue' / 'cos-agents'), so a
+// persistent failure logs once on entry and once on recovery, not on every read.
+const cosProbeAvailability = new Map();
+
+const probeErrorCode = (error) => (typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(error.code) ? error.code : 'unknown');
+
+function noteCosProbe(source, available, error) {
+  if (cosProbeAvailability.get(source) === available) return;
+  cosProbeAvailability.set(source, available);
+  if (available) console.log(`✅ CoS health probe recovered (source=${source})`);
+  else console.error(`❌ CoS health probe unavailable (source=${source}, code=${probeErrorCode(error)})`);
+}
+
 const patchHealth = (current, patch) => ({ ...current, health: { ...(current.health || {}), ...patch } });
 
 export async function getSystemHealthSnapshot() {
@@ -89,8 +102,14 @@ export async function getSystemHealthSnapshot() {
     // such field — `cosStatus.queueLength` never existed, so the widget's
     // "N queued" was dead and always rendered 0. Both reads ride the same
     // `loadState()`/parse caches `getStatus()` above already warmed.
-    cos.getPendingTaskIds().catch(() => null),
-    cos.getAgents().catch(() => null),
+    cos.getPendingTaskIds().then(
+      (ids) => { noteCosProbe('cos-queue', true); return ids; },
+      (error) => { noteCosProbe('cos-queue', false, error); return failedProbe; }
+    ),
+    cos.getAgents().then(
+      (agents) => { noteCosProbe('cos-agents', true); return agents; },
+      (error) => { noteCosProbe('cos-agents', false, error); return failedProbe; }
+    ),
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
     getCurrentVersion().catch(() => null),
@@ -192,6 +211,16 @@ export async function getSystemHealthSnapshot() {
   }
   if (cosStatus === failedProbe) {
     rawWarnings.push({ type: 'probe-unavailable', source: 'cos', status: 'unavailable', severity: 'warning', message: 'Chief of Staff status unavailable', dismissible: false });
+  }
+  // Queue and agent reads fail independently of getStatus(); only meaningful
+  // while the daemon status itself was readable (otherwise 'cos' already warns).
+  if (cosStatus !== failedProbe) {
+    if (cosPendingTaskIds === failedProbe) {
+      rawWarnings.push({ type: 'probe-unavailable', source: 'cos-queue', status: 'unavailable', severity: 'warning', message: 'Chief of Staff queue unavailable', dismissible: false });
+    }
+    if (cosAgents === failedProbe) {
+      rawWarnings.push({ type: 'probe-unavailable', source: 'cos-agents', status: 'unavailable', severity: 'warning', message: 'Chief of Staff agent census unavailable', dismissible: false });
+    }
   }
   if (pm2Processes === null) {
     rawWarnings.push({ type: 'probe-unavailable', source: 'pm2', status: 'unavailable', severity: 'warning', message: 'Process manager (PM2) status unavailable', dismissible: false });
@@ -324,14 +353,18 @@ export async function getSystemHealthSnapshot() {
   // A task a live agent already holds is active, not queued (lib/cosSpawnWindow.js).
   // An unreadable list degrades to null — unknown, which the widget hides —
   // rather than to a manufactured zero.
-  const heldByRunningAgent = runningAgentsByTaskId(cosAgents);
+  const agentsReadable = cosAgents !== failedProbe;
+  const queueReadable = cosPendingTaskIds !== failedProbe;
+  const heldByRunningAgent = agentsReadable ? runningAgentsByTaskId(cosAgents) : null;
   const cosInfo = cosStatus && cosStatus !== failedProbe ? {
     running: cosStatus.running,
     paused: cosStatus.paused,
-    activeAgents: cosAgents
+    activeAgents: agentsReadable
       ? cosAgents.filter((agent) => agent?.status === 'running').length
       : (cosStatus.activeAgents || 0),
-    queuedTasks: cosPendingTaskIds ? unclaimedTaskIds(cosPendingTaskIds, heldByRunningAgent).length : null
+    // Without the agent census the spawn-window subtraction is impossible, so
+    // the count is unknown rather than an over-reported "reconciled" figure.
+    queuedTasks: queueReadable && agentsReadable ? unclaimedTaskIds(cosPendingTaskIds, heldByRunningAgent).length : null
   } : null;
 
   const uptime = process.uptime();
