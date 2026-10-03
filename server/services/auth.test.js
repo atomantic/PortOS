@@ -55,6 +55,19 @@ afterEach(() => {
 });
 
 describe('auth service', () => {
+  it('derives audit identity from a valid session only, omits secrets and stops accepting revoked sessions', async () => {
+    const auth = await import('./auth.js');
+    const session = await auth.createSession({ label: 'agent' });
+    const expected = { kind: 'session', sessionId: session.id, label: 'agent' };
+    const bearer = { headers: { authorization: `Bearer ${session.token}` } };
+    expect(await auth.verifyRequestSessionIdentity(bearer)).toEqual(expected);
+    expect(await auth.verifyRequestSessionIdentity({ headers: { cookie: `portos_auth=${session.token}` } })).toEqual(expected);
+    expect(await auth.verifyRequestSessionIdentity({ headers: { authorization: 'Basic fixture' } })).toBeNull();
+    expect(await auth.verifyRequestSessionIdentity({ headers: {}, portosAuthContext: { authenticated: true } })).toBeNull();
+    await auth.revokeSessionById(session.id);
+    expect(await auth.verifyRequestSessionIdentity(bearer)).toBeNull();
+  });
+
   it('starts disabled when no password has been set', async () => {
     const auth = await import('./auth.js');
     expect(await auth.isAuthEnabled()).toBe(false);

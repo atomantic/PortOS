@@ -725,7 +725,6 @@ it('parks standalone code at real human gates and replaces a stale proof before 
 });
 
 describe('auto-approve the rest (brief.autoApprove)', () => {
-  const PROOF_NOTE = 'Auto-approved by the autonomous run (brief.autoApprove).';
   let actual;
   beforeEach(async () => {
     creativeReview.real = true;
@@ -755,14 +754,14 @@ describe('auto-approve the rest (brief.autoApprove)', () => {
   it('is granted only with operator authority, on start or on a resume of a parked run, and then approves clean art and storyboard itself', async () => {
     reviewFixture();
     await expect(service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], autoApprove: ['art'] }))
-      .rejects.toMatchObject({ status: 403, code: 'OPERATOR_REAUTH_REQUIRED' });
+      .rejects.toMatchObject({ status: 403, code: 'AUTH_REQUIRED' });
     expect(store.size).toBe(0);
 
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'] });
     await settled('needs-human');
     expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', brief: { autoApprove: [], autoApproveAuthorizedAt: null } });
     await expect(service.resumeAutonomousVideo('mv-auto', { autoApprove: ['art', 'storyboard'] }))
-      .rejects.toMatchObject({ status: 403, code: 'OPERATOR_REAUTH_REQUIRED' });
+      .rejects.toMatchObject({ status: 403, code: 'AUTH_REQUIRED' });
     expect(runOf()).toMatchObject({ status: 'needs-human', brief: { autoApprove: [] } });
     expect(doubles.approveProductionReview).not.toHaveBeenCalled();
 
@@ -799,18 +798,16 @@ describe('auto-approve the rest (brief.autoApprove)', () => {
     return renderProductionProof;
   };
 
-  it('waits for the proof render to finish, then approves that excerpt and starts the final render', async () => {
+  it('waits for the proof render then parks for substantive review even with a legacy proof grant', async () => {
     reviewFixture();
     await proofRenders({ status: 'complete', filename: 'proof-1.mp4' });
     await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' },
       autoApprove: ['art', 'storyboard', 'proof'] }, { autoApproveAuthorized: true });
-    await settled('completed');
-    expect(doubles.wait).toHaveBeenCalledOnce();
+    await settled('needs-human');
     expect(doubles.wait).toHaveBeenCalledWith(5000);
-    expect(approvals().proof).toMatchObject({ approvedBy: 'autopilot', proofReview: {
-      autoApproved: true, watchedWithAudio: false, excerptId: 'proof-1', filename: 'proof-1.mp4', energyComparison: PROOF_NOTE } });
-    expect(actual.productionReadiness(store.get('mv-auto')).readyForProduction).toBe(true);
-    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    expect(approvals().proof).toBeUndefined();
+    expect(actual.productionReadiness(store.get('mv-auto')).readyForProduction).toBe(false);
+    expect(doubles.renderVideo).not.toHaveBeenCalled();
   });
 
   it('fails the run with the excerpt error when the proof render fails', async () => {

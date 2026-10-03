@@ -13,7 +13,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-review-browser-') }));
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () => 'synthetic-instance' }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
-vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyPassword: async p => p === 'synthetic-password' }));
+vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyPassword: async p => p === 'synthetic-password', verifyRequestSessionIdentity: async () => ({ kind: 'session', sessionId: 'synthetic-browser', label: null }) }));
 let endpoint;
 vi.mock('../services/browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
@@ -97,8 +97,17 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    const password = page.getByLabel('Instance password for this approval');
-    await password.fill('synthetic-password'); await page.getByRole('button', { name: 'Approve art direction', exact: true }).click();
+    expect(await page.locator('input[type=password]').count()).toBe(0);
+    await page.getByRole('button', { name: 'Approve art direction', exact: true }).waitFor();
+    await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(b => b.textContent === 'Approve art direction')?.disabled);
+    if (process.env.MUSIC_VIDEO_REVIEW_EVIDENCE_DIR) {
+      await mkdir(process.env.MUSIC_VIDEO_REVIEW_EVIDENCE_DIR, { recursive: true });
+      await page.setViewportSize({ width: 390, height: 844 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: join(process.env.MUSIC_VIDEO_REVIEW_EVIDENCE_DIR, 'art-context-mobile.png'), fullPage: true });
+      await page.setViewportSize({ width: 1280, height: 1000 });
+    }
+    await page.getByRole('button', { name: 'Approve art direction', exact: true }).click();
     await page.getByText('Review feedback and revision history', { exact: true }).click();
     await page.getByLabel('Feedback stage').selectOption('storyboard');
     await page.getByLabel('Feedback target').fill('shot: chorus / operator');
@@ -107,11 +116,11 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     await page.getByText('Move the operator behind the threshold at the exit.', { exact: true }).waitFor();
     expect(await page.getByRole('button', { name: 'Approve lyric-timed storyboard' }).isDisabled()).toBe(true);
     await page.getByLabel('Resolution for shot: chorus / operator').fill('Reviewed the updated staging in the storyboard.');
-    await password.fill('synthetic-password'); await page.getByRole('button', { name: 'Resolve feedback after review' }).click();
+    await page.getByRole('button', { name: 'Resolve feedback after review' }).click();
     await page.getByText('Resolution: Reviewed the updated staging in the storyboard.', { exact: true }).waitFor();
     const beforeBoard = await page.evaluate(async id => (await fetch('/api/music-video/' + id + '/production-review')).json(), p.id);
     expect(beforeBoard.readiness.storyboard.problems).toEqual([]);
-    await password.fill('synthetic-password'); await page.getByRole('button', { name: 'Approve lyric-timed storyboard' }).click();
+    await page.getByRole('button', { name: 'Approve lyric-timed storyboard' }).click();
     await page.getByRole('button', { name: 'Render animated proof' }).click();
     await page.locator('video').waitFor({ timeout: 120000 });
     await page.locator('video').evaluate(async video => { await video.play(); await new Promise(r => setTimeout(r, 400)); video.pause(); });
@@ -119,7 +128,7 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
     await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
     await page.getByLabel('I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.').check();
-    await password.fill('synthetic-password'); await page.getByRole('button', { name: 'Approve animated proof' }).click();
+    await page.getByRole('button', { name: 'Approve animated proof' }).click();
     await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].filter(el => el.textContent === 'Approved for this revision').length === 3);
     const result = await store.getProject(p.id);
     expect(result.productionReview.feedback[0].resolvedAt).toBeTruthy();

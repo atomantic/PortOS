@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { Router } from 'express';
 import { musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema } from '../lib/musicVideoValidation.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionOperator, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionOperator, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -502,8 +502,8 @@ router.post('/:id/production-review/feedback', asyncHandler(async (req, res) => 
 }));
 router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionFeedbackResolutionSchema, req.body);
-  await requireProductionOperator(req);
-  res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution }));
+  const reviewer = await requireProductionReviewer(req);
+  res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution, reviewer }));
 }));
 router.get('/:id/production-review', asyncHandler(async (req, res) => {
   res.json(await getProductionReview(req.params.id));
@@ -531,8 +531,8 @@ router.post('/:id/production-review/prepare', asyncHandler(async (req, res) => {
 }));
 router.post('/:id/production-review/approve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionApprovalSchema, req.body);
-  await requireProductionOperator(req);
-  res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview }));
+  const reviewer = await requireProductionReviewer(req);
+  res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview, reviewer }));
 }));
 router.post('/:id/production-review/proof', asyncHandler(async (req, res) => {
   res.status(202).json(await renderProductionProof(req.params.id, validateRequest(musicVideoProductionProofSchema, req.body)));
@@ -898,12 +898,10 @@ router.post('/:id/production-runs/:runId/cancel', asyncHandler(async (req, res) 
 // `music-video:autonomous`. Optional checkpoints park it for approval. Only these
 // explicit requests (or the scheduled task) begin work — nothing at boot does.
 // A non-empty `autoApprove` lets the run approve those Production review stages
-// itself. That is the operator's authority, so the request re-enters the
-// instance password once (same check as an approval; never stored).
+// itself. Bind the grant to the authenticated session; proof still needs review evidence.
 const authorizeAutoApprove = async (req, autoApprove) => {
-  if (!autoApprove?.length) return false;
-  await requireProductionOperator(req);
-  return true;
+  if (autoApprove === undefined) return false;
+  return requireProductionReviewer(req);
 };
 router.post('/autonomous', asyncHandler(async (req, res) => {
   const { password: _password, ...input } = validateRequest(musicVideoAutonomousStartSchema, req.body || {});

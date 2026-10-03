@@ -110,6 +110,16 @@ export async function requireProductionOperator(req) {
   }
 }
 
+/** Creative decisions use an existing authenticated session, including agents.
+ * Auth-off, peer credentials and caller-supplied identities confer no authority.
+ */
+export async function requireProductionReviewer(req) {
+  const { isAuthEnabled, verifyRequestSessionIdentity } = await import('../auth.js');
+  const reviewer = await isAuthEnabled() && await verifyRequestSessionIdentity(req);
+  if (!reviewer) throw new ServerError('Sign in to PortOS before approving production or granting automatic planning approvals.', { status: 401, code: 'AUTH_REQUIRED' });
+  return reviewer;
+}
+
 export async function saveProductionDraft(id, draft) {
   const guard = await validateGuideSelection(await requireProject(id), () => draft.guideArtifactId);
   const { project } = await mutateProjectRecord(id, current => {

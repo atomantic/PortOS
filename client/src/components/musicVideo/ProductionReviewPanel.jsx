@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import ProductionReviewContext from './ProductionReviewContext.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
 
 const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
@@ -12,10 +13,12 @@ const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', pro
 export default function ProductionReviewPanel({ project, review, onOpenArtifact, framed = true }) {
   const fieldId = key => `mv-review-${project.id}-${key}`;
   const saved = project.productionReview?.draft || EMPTY;
+  const [visibleArt, setVisibleArt] = useState(null);
+  const [proofMedia, setProofMedia] = useState(null);
+  const artIdentity = JSON.stringify([project.id, saved.guideArtifactId, project.devArtifacts?.find(a => a.id === saved.guideArtifactId)?.version]);
   const [local, setLocal] = useState(null);
   const draft = local || saved;
   const dirty = !!local && JSON.stringify(local) !== JSON.stringify(saved);
-  const [password, setPassword] = useState('');
   const [feedback, setFeedback] = useState({ stage: 'art', target: '', text: '', decision: 'request-changes' });
   const [resolutions, setResolutions] = useState({});
   const [importError, setImportError] = useState(null);
@@ -41,40 +44,91 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     : { identity: proofIdentity, watched: false, energyComparison: '', timecodedNotes: '' }); }, [proofIdentity]);
   const playback = playbackReview.identity === proofIdentity ? playbackReview : { watched: false, energyComparison: '', timecodedNotes: '' };
   const setPlayback = patch => setPlaybackReview({ ...playback, identity: proofIdentity, ...patch });
-  const playbackBlocked = blocked || review.proof.active || !!ready?.proof.problems.length || excerpt?.status !== 'complete' || !excerpt.filename;
+  const playbackBlocked = proofMedia?.identity !== proofIdentity || !proofMedia?.ready || blocked || review.proof.active || !!ready?.proof.problems.length || excerpt?.status !== 'complete' || !excerpt.filename;
   const playbackComplete = playback.watched && !!playback.energyComparison.trim()
     && /(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(playback.timecodedNotes);
   const approve = stage => {
-    const secret = password; setPassword('');
-    return review.approve(stage, secret, stage === 'proof' ? { watchedWithAudio: true,
+    return review.approve(stage, stage === 'proof' ? { watchedWithAudio: true,
       energyComparison: playback.energyComparison.trim(), timecodedNotes: playback.timecodedNotes.trim(),
       excerptId: excerpt.id, filename: excerpt.filename } : undefined);
   };
 
+  const nextStage = ['art', 'storyboard', 'proof'].find(stage => !ready?.[stage].approved) || 'proof';
+  const proofContent = <>
+    <p className="text-xs text-port-text-muted break-words">Project v{project.version || 1} · proof revision {ready?.basis.proof?.slice(0, 12) || 'Loading…'} · {excerpt ? `Excerpt ${excerpt.id}` : 'No registered proof'}</p>
+    {excerpt && <p className="text-xs text-port-text-muted break-words">{excerpt.filename || excerpt.status} · {project.productionReview?.proof?.basis === ready?.basis.proof ? 'Current source revision' : 'Source changed — render a new proof'}</p>}
+
+      <p className="text-sm">Author the approved storyboard in Compose, then render a 10–45 second chorus with its entry and exit. Watch with sound at normal speed and compare the chosen energy target and timed choreography below against the actual subject, props, camera, typography and transitions. Check accents against beat and lyric anchors, readable holds and repeated-chorus escalation. A strong static frame does not prove the motion works.</p>
+      <section aria-label="Saved choreography for proof comparison" className="rounded border border-port-border bg-port-bg p-3">
+        <h4 className="text-sm font-medium">Saved energy target and timed choreography</h4>
+        <p className="mt-1 whitespace-pre-wrap text-sm">{saved.motionLanguage || 'Save an energy target and timed choreography in the planning editor before judging the proof.'}</p>
+        <p className="mt-2 text-xs text-port-text-muted">Compare playback with this saved plan. If the chosen energy or actions are missing, record revision feedback with a time range before approving.</p>
+      </section>
+      <div id="mv-review-render" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="flex flex-wrap items-end gap-2">
+        <label htmlFor={fieldId('proof-start')} className="text-sm">Proof start (seconds)<input id={fieldId('proof-start')} type="number" min="0" step="0.01" value={startSec} onChange={e => setStartSec(Number(e.target.value))} className={fieldClass} /></label>
+        <label htmlFor={fieldId('proof-end')} className="text-sm">Proof end (seconds)<input id={fieldId('proof-end')} type="number" min="0" step="0.01" value={endSec} onChange={e => setEndSec(Number(e.target.value))} className={fieldClass} /></label>
+        <button type="button" className={buttonClass} disabled={blocked || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec, kind: 'prototype' })}>Render feasibility prototype — unapproved</button>
+        <button type="button" className={buttonClass} disabled={blocked || !ready?.storyboard.approved || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec })}>Render animated proof</button>
+      </div>
+      {review.proof.occupied && !review.proof.active && <p role="status">Review evidence is rendering in another project. Wait for it to finish before starting another.</p>}
+      {review.proof.active && <p role="status">{review.proof.connected === false ? 'Connecting to review render…' : `Rendering review evidence — ${review.proof.percent ?? 0}%.`} Production approvals are separate.</p>}
+      <p className="text-xs text-port-text-muted">A feasibility prototype uses the current authored composition and master audio without approving the look or authorizing production. It can be made before art approval; it never becomes approved proof automatically.</p>
+      {prototype?.status === 'complete' && prototype.filename && <figure><video controls className="mt-2 w-full rounded" aria-label="Unapproved feasibility prototype" src={`/data/videos/${encodeURIComponent(prototype.filename)}`} /><figcaption className="text-sm">Unapproved feasibility prototype — separate from production proof</figcaption></figure>}
+      {excerpt?.status === 'complete'  && excerpt.filename && <video key={proofIdentity} controls className="mt-2 w-full rounded" aria-label="Animated proof with master audio" src={`/data/videos/${encodeURIComponent(excerpt.filename)}`}
+        onLoadedData={() => setProofMedia({ identity: proofIdentity, ready: true })}
+        onError={() => setProofMedia({ identity: proofIdentity, ready: false, error: true })} />}
+      {excerpt?.status === 'complete' && (proofMedia?.identity !== proofIdentity || !proofMedia.ready) && <p role={proofMedia?.identity === proofIdentity && proofMedia.error ? 'alert' : 'status'} className="text-sm">
+        {proofMedia?.identity === proofIdentity && proofMedia.error ? 'This proof could not be played. Restore the exact file or render a new proof before approving.' : 'Load and play this exact proof with sound before recording your review.'}
+      </p>}
+      {matchingRecordedReview && <section aria-label="Recorded proof review" className="rounded border border-port-border p-3">
+        <h4 className="text-sm font-medium">Recorded proof review</h4>
+        <p className="text-xs text-port-text-muted">{matchingRecordedReview.method === 'machine' ? 'Machine review — no human playback claimed' : 'Playback review'}</p>
+        {matchingRecordedReview.machineEvidence && <dl className="text-sm space-y-2">
+          <dt>Visual review</dt><dd>{matchingRecordedReview.machineEvidence.visualReview}</dd>
+          <dt>Audio review</dt><dd>{matchingRecordedReview.machineEvidence.audioReview}</dd>
+          <dt>Review limitations</dt><dd>{matchingRecordedReview.machineEvidence.limitations}</dd>
+        </dl>}
+        <p className="mt-1 whitespace-pre-wrap text-sm">{matchingRecordedReview.energyComparison}</p>
+        <p className="mt-2 whitespace-pre-wrap text-sm">{matchingRecordedReview.timecodedNotes}</p>
+      </section>}
+      <label htmlFor={fieldId('energy-comparison')} className="block text-sm">Playback energy compared with the saved plan
+        <textarea id={fieldId('energy-comparison')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.energyComparison} onChange={e => setPlayback({ energyComparison: e.target.value })} className={fieldClass}
+          placeholder="Chosen energy target; observed subject, prop and camera activity; where playback matches or misses the intended arc." />
+      </label>
+      <label htmlFor={fieldId('playback-notes')} className="block text-sm">Timecoded playback notes
+        <textarea id={fieldId('playback-notes')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.timecodedNotes} onChange={e => setPlayback({ timecodedNotes: e.target.value })} className={fieldClass}
+          placeholder="0:04 — subject turns on the downbeat; prop opens through 0:06; camera and type clear the lyric. Name any mismatch to revise." />
+      </label>
+      <p className="text-xs text-port-text-muted">Include at least one playback timestamp such as 0:04 or 4.5s. These notes are saved with this exact proof. A replacement proof requires a new comparison and acknowledgement.</p>
+      <label htmlFor={fieldId('watched')} className="flex gap-2 py-2 text-sm"><input id={fieldId('watched')} type="checkbox" checked={playback.watched}
+        disabled={playbackBlocked} onChange={e => setPlayback({ watched: e.target.checked })} />I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.</label>
+  </>;
   return <section id="mv-production-review" aria-label="Production review" className={framed ? 'rounded-lg border border-port-border bg-port-card p-3 space-y-3' : 'space-y-3'}>
     {framed && <h3 className="font-medium">Production review</h3>}
     <p className="text-sm text-port-text-muted">Approve the visual direction, then the timed storyboard, then a watched animated proof. Approving a development file or rendering a draft does not approve production.</p>
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
-    <ol className="grid gap-2 sm:grid-cols-3">
-      {Object.entries(labels).map(([key, label]) => <li key={key} id={`mv-review-${key}`} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
-        <strong className="text-sm">{label}</strong>
-        <p role="status" className="text-xs">{ready?.[key].approved ? 'Approved for this revision' : 'Human review required'}</p>
+    <ol className="space-y-3">
+      {Object.entries(labels).map(([key, label]) => <li key={key}><details open={window.location.hash === `#mv-review-${key}` || key === nextStage} id={`mv-review-${key}`} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
+        <summary className="cursor-pointer min-h-[44px] py-2 text-sm font-medium">{label}</summary>
+        <p role="status" className="text-xs">{ready?.[key].approved ? 'Approved for this revision' : 'Review required'}</p>
         {(ready?.[key].problems || []).map(problem => <p key={problem} className="mt-1 text-xs text-port-text-muted">{problem}</p>)}
+        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} basis={ready?.basis[key]} approved={ready?.[key].approved} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} />}
         <button type="button" className={`${buttonClass} mt-2`} onClick={() => approve(key)}
-          disabled={blocked || !password || ready?.[key].approved || !!ready?.[key].problems.length
+          disabled={blocked || (key === 'art' && visibleArt !== artIdentity) || ready?.[key].approved || !!ready?.[key].problems.length
             || (key === 'proof' && (playbackBlocked || !playbackComplete))}>
           Approve {label.toLowerCase()}
         </button>
-        {!blocked && !password && !ready?.[key].approved && !ready?.[key].problems.length && (key !== 'proof' || (!playbackBlocked && playbackComplete)) && <button type="button" className="block min-h-[44px] text-xs text-port-accent" onClick={() => {
-          const input = document.getElementById(fieldId('password'));
+
+        <button type="button" className={`${buttonClass} mt-2 ml-2`} onClick={() => {
+          setFeedback({ ...feedback, stage: key, decision: 'request-changes' });
+          const input = document.getElementById(fieldId('feedback-text'));
+          const fold = input?.closest('details'); if (fold) fold.open = true;
           input?.scrollIntoView({ block: 'center' }); input?.focus({ preventScroll: true });
-        }}>Enter your password to enable approval</button>}
-      </li>)}
+        }}>Request changes</button>
+      </details></li>)}
     </ol>
-    <label htmlFor={fieldId('password')} className="block text-sm">Instance password for this approval
-      <input id={fieldId('password')} type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} className={fieldClass} />
-    </label>
-    <p className="text-xs text-port-text-muted">Enter it yourself. API tokens cannot approve. Password-free installs can prepare drafts; set an instance password in Settings → Security before approval.</p>
+    <p className="text-xs text-port-text-muted">Your signed-in session can approve each reviewed stage. Authenticated agents can also review and approve. Proof approval requires recorded visual and audio evidence; publishing remains manual.</p>
+    {dirty && <p role="status" className="text-sm">Save your planning edits before approving this revision.</p>}
     <details>
       <summary className="cursor-pointer min-h-[44px] py-2 text-sm">Review feedback and revision history</summary>
       <p className="text-sm">Name a cast member, environment, shot, artifact or frame time. Structure acceptance records agreement on organization only; it never approves the art or authorizes production.</p>
@@ -96,8 +150,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         <details><summary className="cursor-pointer py-2 text-sm">Original reviewed content</summary><pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(project.productionReview.reviewedRevisions?.[item.basis]?.draft, null, 2)}</pre></details>
         {item.resolvedAt ? <p className="text-sm">Resolution: {item.resolution}</p> : <>
           <label htmlFor={fieldId(`resolution-${item.id}`)} className="block text-sm">Resolution for {item.target}<textarea id={fieldId(`resolution-${item.id}`)} className={fieldClass} value={resolutions[item.id] || ''} onChange={e => setResolutions({ ...resolutions, [item.id]: e.target.value })} /></label>
-          <button type="button" className={buttonClass} disabled={blocked || !password || !resolutions[item.id]?.trim()} onClick={async () => {
-            const secret = password; setPassword(''); await review.resolveFeedback(item.id, resolutions[item.id], secret);
+          <button type="button" className={buttonClass} disabled={blocked || !resolutions[item.id]?.trim()} onClick={async () => {
+            await review.resolveFeedback(item.id, resolutions[item.id]);
           }}>Resolve feedback after review</button>
         </>}
       </li>)}</ul>
@@ -202,41 +256,6 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {dirty && <p role="status" className="text-sm">Save edits before preparing, approving or rendering.</p>}
       </div>
     </details>
-    <details open={ready?.storyboard.approved && !ready?.proof.approved}>
-      <summary className="cursor-pointer min-h-[44px] py-2 text-sm">Animated chorus proof</summary>
-      <p className="text-sm">Author the approved storyboard in Compose, then render a 10–45 second chorus with its entry and exit. Watch with sound at normal speed and compare the chosen energy target and timed choreography below against the actual subject, props, camera, typography and transitions. Check accents against beat and lyric anchors, readable holds and repeated-chorus escalation. A strong static frame does not prove the motion works.</p>
-      <section aria-label="Saved choreography for proof comparison" className="rounded border border-port-border bg-port-bg p-3">
-        <h4 className="text-sm font-medium">Saved energy target and timed choreography</h4>
-        <p className="mt-1 whitespace-pre-wrap text-sm">{saved.motionLanguage || 'Save an energy target and timed choreography in the planning editor before judging the proof.'}</p>
-        <p className="mt-2 text-xs text-port-text-muted">Compare playback with this saved plan. If the chosen energy or actions are missing, record revision feedback with a time range before approving.</p>
-      </section>
-      <div id="mv-review-render" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="flex flex-wrap items-end gap-2">
-        <label htmlFor={fieldId('proof-start')} className="text-sm">Proof start (seconds)<input id={fieldId('proof-start')} type="number" min="0" step="0.01" value={startSec} onChange={e => setStartSec(Number(e.target.value))} className={fieldClass} /></label>
-        <label htmlFor={fieldId('proof-end')} className="text-sm">Proof end (seconds)<input id={fieldId('proof-end')} type="number" min="0" step="0.01" value={endSec} onChange={e => setEndSec(Number(e.target.value))} className={fieldClass} /></label>
-        <button type="button" className={buttonClass} disabled={blocked || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec, kind: 'prototype' })}>Render feasibility prototype — unapproved</button>
-        <button type="button" className={buttonClass} disabled={blocked || !ready?.storyboard.approved || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec })}>Render animated proof</button>
-      </div>
-      {review.proof.occupied && !review.proof.active && <p role="status">Review evidence is rendering in another project. Wait for it to finish before starting another.</p>}
-      {review.proof.active && <p role="status">{review.proof.connected === false ? 'Connecting to review render…' : `Rendering review evidence — ${review.proof.percent ?? 0}%.`} Production approvals are separate.</p>}
-      <p className="text-xs text-port-text-muted">A feasibility prototype uses the current authored composition and master audio without approving the look or authorizing production. It can be made before art approval; it never becomes approved proof automatically.</p>
-      {prototype?.status === 'complete' && prototype.filename && <figure><video controls className="mt-2 w-full rounded" aria-label="Unapproved feasibility prototype" src={`/data/videos/${encodeURIComponent(prototype.filename)}`} /><figcaption className="text-sm">Unapproved feasibility prototype — separate from production proof</figcaption></figure>}
-      {excerpt?.status === 'complete'  && excerpt.filename && <video controls className="mt-2 w-full rounded" aria-label="Animated proof with master audio" src={`/data/videos/${encodeURIComponent(excerpt.filename)}`} />}
-      {matchingRecordedReview && <section aria-label="Recorded proof review" className="rounded border border-port-border p-3">
-        <h4 className="text-sm font-medium">Recorded proof review</h4>
-        <p className="mt-1 whitespace-pre-wrap text-sm">{matchingRecordedReview.energyComparison}</p>
-        <p className="mt-2 whitespace-pre-wrap text-sm">{matchingRecordedReview.timecodedNotes}</p>
-      </section>}
-      <label htmlFor={fieldId('energy-comparison')} className="block text-sm">Playback energy compared with the saved plan
-        <textarea id={fieldId('energy-comparison')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.energyComparison} onChange={e => setPlayback({ energyComparison: e.target.value })} className={fieldClass}
-          placeholder="Chosen energy target; observed subject, prop and camera activity; where playback matches or misses the intended arc." />
-      </label>
-      <label htmlFor={fieldId('playback-notes')} className="block text-sm">Timecoded playback notes
-        <textarea id={fieldId('playback-notes')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.timecodedNotes} onChange={e => setPlayback({ timecodedNotes: e.target.value })} className={fieldClass}
-          placeholder="0:04 — subject turns on the downbeat; prop opens through 0:06; camera and type clear the lyric. Name any mismatch to revise." />
-      </label>
-      <p className="text-xs text-port-text-muted">Include at least one playback timestamp such as 0:04 or 4.5s. These notes are saved with this exact proof. A replacement proof requires a new comparison and acknowledgement.</p>
-      <label htmlFor={fieldId('watched')} className="flex gap-2 py-2 text-sm"><input id={fieldId('watched')} type="checkbox" checked={playback.watched}
-        disabled={playbackBlocked} onChange={e => setPlayback({ watched: e.target.checked })} />I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.</label>
-    </details>
+
   </section>;
 }

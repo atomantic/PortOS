@@ -51,14 +51,14 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
   };
   return { readiness: state?.owner === project ? state.readiness : null, busy, error, proof: { ...proof, occupied: proof.active, active: proof.active && proof.context === project?.id },
     feedback: body => call(() => addMusicVideoProductionFeedback(project.id, { ...body, basis: state?.readiness.basis[body.stage] }, { silent: true })),
-    resolveFeedback: (feedbackId, resolution, password) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution, password }, { silent: true })),
+    resolveFeedback: (feedbackId, resolution) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution }, { silent: true })),
     importDocumentShots: body => call(() => importMusicVideoDocumentShots(project.id, body, { silent: true })),
     importPlanning: source => call(() => importMusicVideoProductionPlanning(project.id, source, { silent: true })),
     bindShot: shotId => call(() => bindMusicVideoProductionShot(project.id, shotId, { silent: true })),
     save: draft => call(() => saveMusicVideoProductionDraft(project.id, draft, { silent: true })),
     prepare: () => call(() => prepareMusicVideoProductionReview(project.id, {}, { silent: true })),
-    approve: (stage, password, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
-      { stage, password, basis: state?.readiness.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
+    approve: (stage, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
+      { stage, basis: state?.readiness.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
     renderProof: window => proof.start({ id: project.id, window }, project.id),
   };
 }
