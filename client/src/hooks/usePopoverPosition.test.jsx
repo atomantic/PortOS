@@ -55,6 +55,31 @@ describe('usePopoverPosition', () => {
     expect(top).toBe('192px');
   });
 
+  it.each([['start', '500px'], ['center', '406px'], ['end', '312px']])(
+    'honors %s horizontal alignment without changing placement',
+    (align, left) => {
+      const { result } = renderHook(() => usePopoverPosition({ open: true, width: 288, align }));
+      act(() => {
+        result.current.triggerRef.current = fakeEl({ top: 400, bottom: 430, left: 500, right: 600 });
+        result.current.popoverRef.current = fakeEl({ height: 200 });
+        result.current.reposition();
+      });
+      expect(result.current.style).toEqual({ left, top: '192px', width: '288px' });
+    },
+  );
+
+  it('optionally limits tall help to the roomier side without covering its trigger', () => {
+    const { result } = renderHook(() => usePopoverPosition({ open: true, width: 288, position: 'below', constrainHeight: true }));
+    const popover = fakeEl({ height: 700 });
+    popover.getBoundingClientRect = () => ({ height: Math.min(700, parseFloat(popover.style.maxHeight) || 700) });
+    act(() => {
+      result.current.triggerRef.current = fakeEl({ top: 650, bottom: 680, left: 500, right: 600 });
+      result.current.popoverRef.current = popover;
+      result.current.reposition();
+    });
+    expect(result.current.style).toEqual({ left: '312px', top: '8px', width: '288px', maxHeight: '634px' });
+  });
+
   it("flips below the trigger when 'above' would overflow the top edge", () => {
     const { result } = renderHook(() => usePopoverPosition({ open: true, width: 288, gap: 8, position: 'above' }));
     act(() => {

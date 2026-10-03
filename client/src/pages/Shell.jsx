@@ -183,7 +183,7 @@ function PortosShellView() {
                 which is most of this page's audience. Costs no vertical space, and
                 sits outside the `font-mono` span so the prose isn't monospaced.
                 Opens downward: this row is at the top of a clipped full-width main. */}
-            <InfoTooltip label="About live TUI runs" align="end" placement="below" panelClassName="w-60">
+            <InfoTooltip label="About live TUI runs" align="end" placement="below" width={240}>
               {liveRunCount} live TUI run{liveRunCount > 1 ? 's' : ''}. Open one to watch it — you can type to
               answer or correct it, or Stop to end it. It won't idle-close while you have it open.
             </InfoTooltip>

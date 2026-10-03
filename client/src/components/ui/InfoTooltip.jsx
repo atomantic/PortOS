@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import usePopoverPosition from '../../hooks/usePopoverPosition';
+import useCancelableDebounce from '../../hooks/useCancelableDebounce';
+import useEscapeKey from '../../hooks/useEscapeKey';
 import { Info } from 'lucide-react';
 import useClickOutside from '../../hooks/useClickOutside';
 
@@ -19,81 +23,107 @@ import useClickOutside from '../../hooks/useClickOutside';
 // it survives blur. Pass `children` as the help text and `label` as the button's
 // accessible name.
 //
-// `placement` is which way the panel opens. It defaults to `above`, but a trigger
-// near the top of a page needs `below`: full-width routes render inside a
-// `relative overflow-hidden` <main> (see Layout.jsx), which clips a panel that
-// opens upward out of the viewport entirely.
+// Panels portal to body so glass-card stacking contexts and content scrollers
+// cannot obscure help. Placement flips and clamps to the viewport.
 export default function InfoTooltip({
   children,
   label = 'More information',
   className = '',
-  panelClassName = 'w-56',
+  panelClassName = '',
+  width = 224,
   iconSize = 14,
   align = 'center',
   placement = 'above',
 }) {
-  // `pinned` = a click/tap latched it open (survives blur until Escape / outside
-  // click / another click). `hovering` = the transient hover-or-focus reveal.
-  // The panel is visible when either is true — one derived `visible` flag.
   const [pinned, setPinned] = useState(false);
   const [hovering, setHovering] = useState(false);
+  const [focused, setFocused] = useState(false);
   const wrapRef = useRef(null);
   const panelId = useId();
-  const visible = pinned || hovering;
+  const visible = pinned || hovering || focused;
+  const [scheduleClose, cancelClose] = useCancelableDebounce();
+  const { triggerRef, popoverRef, style } = usePopoverPosition({
+    open: visible, width, minWidth: 0, gap: 6, position: placement, align, constrainHeight: true,
+    contentDeps: [children, panelClassName],
+  });
 
   const close = useCallback(() => {
+    cancelClose();
     setPinned(false);
     setHovering(false);
-  }, []);
+    setFocused(false);
+  }, [cancelClose]);
 
-  // Drive outside-click dismissal off `visible`, not just `pinned`: on touch a
-  // tap can synthesize a sticky hover (setting `hovering`) that some mobile
-  // browsers never clear with a matching mouseleave, so gating on `pinned` alone
-  // could strand the panel open on the very touch path this component targets.
-  useClickOutside(wrapRef, visible, close);
+  const onMouseEnter = () => {
+    cancelClose();
+    setHovering(true);
+  };
+  // A short grace period bridges the physical gap between trigger and portal.
+  const onMouseLeave = () => scheduleClose(() => setHovering(false), 150);
+  const onFocus = () => setFocused(true);
+  const onBlur = (event) => {
+    if (wrapRef.current?.contains(event.relatedTarget)
+      || popoverRef.current?.contains(event.relatedTarget)) return;
+    setFocused(false);
+  };
 
-  useEffect(() => {
-    if (!visible) return undefined;
-    const onKey = (e) => {
-      if (e.key === 'Escape') close();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [visible, close]);
+  useClickOutside([wrapRef, popoverRef], visible, close);
 
-  const alignClass = align === 'start'
-    ? 'left-0'
-    : align === 'end'
-      ? 'right-0'
-      : 'left-1/2 -translate-x-1/2';
-  const placementClass = placement === 'below' ? 'top-full mt-1.5' : 'bottom-full mb-1.5';
+  useEscapeKey(visible, () => {
+    // Return keyboard scroll focus before removing the portal.
+    if (popoverRef.current?.contains(document.activeElement)) triggerRef.current?.focus();
+    close();
+  });
 
   return (
     <div
       ref={wrapRef}
       className={`relative inline-flex ${className}`}
-      onMouseEnter={() => setHovering(true)}
-      onMouseLeave={() => setHovering(false)}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <button
+        ref={triggerRef}
         type="button"
         aria-label={label}
         aria-describedby={visible ? panelId : undefined}
-        onClick={() => setPinned((v) => !v)}
-        onFocus={() => setHovering(true)}
-        onBlur={() => setHovering(false)}
+        onClick={() => { if (pinned) close(); else setPinned(true); }}
+        onKeyDown={(event) => {
+          const panel = popoverRef.current;
+          if (event.key === 'Tab' && !event.shiftKey && panel?.scrollHeight > panel?.clientHeight) {
+            event.preventDefault();
+            panel.focus();
+          }
+        }}
+        onFocus={onFocus}
+        onBlur={onBlur}
         className="inline-flex shrink-0 items-center justify-center min-h-[44px] min-w-[44px] -my-[15px] rounded text-gray-500 transition-colors hover:text-gray-300 focus:text-gray-300 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent"
       >
         <Info size={iconSize} aria-hidden="true" />
       </button>
-      {visible && (
+      {visible && createPortal(
         <div
+          ref={popoverRef}
           id={panelId}
           role="tooltip"
-          className={`port-opaque-surface absolute ${placementClass} ${alignClass} z-50 rounded-lg border border-port-border bg-gray-800 px-3 py-2 text-xs text-gray-300 shadow-lg ${panelClassName}`}
+          tabIndex={0}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
+          onKeyDown={(event) => {
+            if (event.key === 'Tab') {
+              // Continue from the trigger's place in the caller's tab order.
+              triggerRef.current?.focus();
+              if (event.shiftKey) event.preventDefault();
+            }
+          }}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          style={{ ...style, visibility: style ? undefined : 'hidden' }}
+          className={`port-opaque-surface fixed z-[100] overflow-y-auto rounded-lg border border-port-border px-3 py-2 text-xs text-gray-300 shadow-lg ${panelClassName}`}
         >
           {children}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

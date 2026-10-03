@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 
 import InfoTooltip from './InfoTooltip';
 
@@ -28,18 +28,46 @@ describe('InfoTooltip', () => {
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
-  // A trigger near the top of a full-width route sits inside an
-  // `overflow-hidden` <main>, which clips an upward-opening panel out of view.
-  it('opens downward when placement is below, upward by default', () => {
-    const { unmount } = render(<InfoTooltip label="help" placement="below">Down</InfoTooltip>);
-    fireEvent.focus(screen.getByRole('button', { name: 'help' }));
-    expect(screen.getByRole('tooltip').className).toContain('top-full');
-    expect(screen.getByRole('tooltip').className).not.toContain('bottom-full');
-    unmount();
+  it('portals the panel outside caller clipping and keeps panel clicks and focus inside', () => {
+    const { container } = render(<InfoTooltip label="help" width={320} align="start">Portal help</InfoTooltip>);
+    const btn = screen.getByRole('button', { name: 'help' });
+    fireEvent.focus(btn);
+    const panel = screen.getByRole('tooltip');
+    expect(panel.parentElement).toBe(document.body);
+    expect(container.contains(panel)).toBe(false);
+    expect(panel.style.width).toBe('320px');
+    fireEvent.blur(btn, { relatedTarget: panel });
+    fireEvent.focus(panel);
+    fireEvent.mouseDown(panel);
+    expect(screen.getByRole('tooltip')).toBe(panel);
+    fireEvent.blur(panel);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
 
-    render(<InfoTooltip label="help">Up</InfoTooltip>);
-    fireEvent.focus(screen.getByRole('button', { name: 'help' }));
-    expect(screen.getByRole('tooltip').className).toContain('bottom-full');
+  it('bridges hover to the portal with a cancellable delay, while focused help stays open', () => {
+    vi.useFakeTimers();
+    try {
+      render(<InfoTooltip label="help">Hover bridge</InfoTooltip>);
+      const btn = screen.getByRole('button', { name: 'help' });
+      const wrap = btn.parentElement;
+      fireEvent.mouseEnter(wrap);
+      const panel = screen.getByRole('tooltip');
+      fireEvent.mouseLeave(wrap);
+      act(() => vi.advanceTimersByTime(100));
+      fireEvent.mouseEnter(panel);
+      act(() => vi.advanceTimersByTime(200));
+      expect(screen.getByRole('tooltip')).toBe(panel);
+      fireEvent.mouseLeave(panel);
+      act(() => vi.advanceTimersByTime(150));
+      expect(screen.queryByRole('tooltip')).toBeNull();
+      fireEvent.focus(btn);
+      fireEvent.mouseEnter(wrap);
+      fireEvent.mouseLeave(wrap);
+      act(() => vi.advanceTimersByTime(150));
+      expect(screen.getByRole('tooltip')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps a 44px minimum, non-shrinking hit area on the trigger button', () => {
@@ -64,6 +92,8 @@ describe('InfoTooltip', () => {
   it('closes on a second click (toggle) without stranding the panel visible', () => {
     render(<InfoTooltip label="help">Toggles</InfoTooltip>);
     const btn = screen.getByRole('button', { name: 'help' });
+    fireEvent.focus(btn);
+    fireEvent.mouseEnter(btn.parentElement);
     fireEvent.click(btn);
     expect(screen.getByRole('tooltip')).toBeTruthy();
     fireEvent.click(btn);

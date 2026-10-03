@@ -23,7 +23,7 @@ accessibility). Feature-specific components live under their own feature directo
 | `HunkDiff` | Hunked side-by-side diff for long texts, with unchanged runs collapsed. |
 | `ImageThumb` | List-card thumbnail with an icon fallback when the ref is missing or 404s. |
 | `InfiniteScrollFooter` | Shared scroll sentinel with loading, retry, end state and accessible manual Load more; pair with `usePagedCollection`. |
-| `InfoTooltip` | Focusable info/help tooltip — hover, keyboard focus, or tap; Esc to dismiss. |
+| `InfoTooltip` | Focusable info/help tooltip — hover, keyboard focus, or tap; opaque body portal with viewport-clamped numeric `width` (default 224), start/center/end alignment, keyboard scrolling, and Esc dismissal. |
 | `InlineConfirmRow` | Inline "question + confirm + cancel" row — PortOS's preferred alternative to `window.confirm`. |
 | `InlineDiff` | Stacked word-level diff — old row (red removals) over new row (green additions). |
 | `Kbd` | Keycap for rendering a keyboard key in help/cheatsheet UI. |
