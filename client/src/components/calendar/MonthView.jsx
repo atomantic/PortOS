@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import {CalendarDays, ChevronLeft, ChevronRight} from 'lucide-react';
 import { useCalendarWindowEvents } from '../../hooks/useCalendarWindowEvents';
 import CalendarWindowStatus from './CalendarWindowStatus';
 import EventDetail from './EventDetail';
-import Drawer from '../Drawer';
+import CalendarDayEvents from './CalendarDayEvents';
 import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay } from './calendarUtils';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
@@ -55,7 +55,7 @@ export default function MonthView({ accounts }) {
   const startDate = cells[0].date.toISOString();
   const endDate = new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1).toISOString();
   const windowEvents = useCalendarWindowEvents(startDate, endDate);
-  const { events, loading, complete } = windowEvents;
+  const { events, loading } = windowEvents;
 
   const navigate = (dir) => {
     updateParams({
@@ -81,16 +81,10 @@ export default function MonthView({ accounts }) {
   const dayTriggerRef = useRef(null);
   // Matching against the visible grid rejects impossible and stale day keys.
   const selectedDay = cells.find(cell => localDateKey(cell.date) === searchParams.get('day'));
-  const selectedDayEvents = [...(eventsByDay[selectedDay?.date.toDateString()] || [])]
-    .sort((a, b) => Number(b.isAllDay) - Number(a.isAllDay) || new Date(a.startTime) - new Date(b.startTime));
-  // Event details temporarily replace the day drawer, so preserve the original
-  // month trigger across that intermediate drawer's focus-restoration cycle.
-  useEffect(() => {
-    if (!selectedDay && !selectedEvent && dayTriggerRef.current) {
-      dayTriggerRef.current.focus();
-      dayTriggerRef.current = null;
-    }
-  }, [selectedDay, selectedEvent]);
+  const openDay = (cell, trigger) => {
+    dayTriggerRef.current = trigger;
+    updateParams({ month: monthKey, day: localDateKey(cell.date), event: null });
+  };
 
   const openEvent = (event) => updateParams({ month: monthKey, event: `${event.accountId}:${event.id}` });
 
@@ -146,17 +140,24 @@ export default function MonthView({ accounts }) {
               return (
                 <div
                   key={i}
-                  className={`min-h-[80px] p-1 border-b border-r border-port-border/50 ${
+                  className={`min-h-[80px] p-0 sm:p-1 min-w-0 border-b border-r border-port-border/50 ${
                     !cell.isCurrentMonth ? 'bg-port-bg/50' : ''
                   } ${i % 7 === 6 ? 'border-r-0' : ''}`}
                 >
-                  <div className={`text-xs mb-0.5 ${
-                    isToday
-                      ? 'bg-port-accent text-white rounded-full w-6 h-6 flex items-center justify-center'
-                      : cell.isCurrentMonth ? 'text-gray-300' : 'text-gray-600'
-                  }`}>
-                    {cell.date.getDate()}
-                  </div>
+                  {dayEvents.length > 0 ? (
+                    <button
+                      type="button"
+                      aria-label={`View day events for ${formatDateFull(cell.date)}`}
+                      onClick={e => openDay(cell, e.currentTarget)}
+                      className={`text-xs mb-0.5 w-[44px] h-[44px] flex items-center justify-center rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent ${isToday ? 'bg-port-accent text-white' : cell.isCurrentMonth ? 'text-gray-300' : 'text-gray-600'}`}
+                    >
+                      {cell.date.getDate()}
+                    </button>
+                  ) : (
+                    <div className={`text-xs mb-0.5 h-[44px] flex items-center pl-1 ${isToday ? 'text-port-accent' : cell.isCurrentMonth ? 'text-gray-300' : 'text-gray-600'}`}>
+                      {cell.date.getDate()}
+                    </div>
+                  )}
                   <div className="space-y-0.5">
                     {dayEvents.slice(0, 3).map(event => {
                       const evColor = colorMap.get(event.subcalendarId) || null;
@@ -181,10 +182,7 @@ export default function MonthView({ accounts }) {
                       <button
                         type="button"
                         aria-label={`View all ${dayEvents.length} events for ${formatDateFull(cell.date)}`}
-                        onClick={(e) => {
-                          dayTriggerRef.current = e.currentTarget;
-                          updateParams({ month: monthKey, day: localDateKey(cell.date), event: null });
-                        }}
+                        onClick={e => openDay(cell, e.currentTarget)}
                         className="w-full text-left text-[10px] text-port-accent pl-1 py-1 rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent"
                       >
                         +{dayEvents.length - 3} more
@@ -198,32 +196,16 @@ export default function MonthView({ accounts }) {
         </div>
       )}
 
-      <Drawer
-        open={!!selectedDay && !selectedEvent && (events.length > 0 || !loading)}
+      <CalendarDayEvents
+        date={selectedDay?.date}
+        windowEvents={windowEvents}
+        colorMap={colorMap}
+        themeMode={theme?.mode}
+        selectedEvent={selectedEvent}
+        triggerRef={dayTriggerRef}
+        onEvent={openEvent}
         onClose={() => updateParams({ day: null, event: null })}
-        title={selectedDay ? formatDateFull(selectedDay.date) : ''}
-        subtitle={`${selectedDayEvents.length} events${complete ? '' : ' loaded'}`}
-        closeLabel="Close day events"
-      >
-        <div className="space-y-2">
-          <CalendarWindowStatus {...windowEvents} />
-          {complete && selectedDayEvents.length === 0 && <p className="text-sm text-gray-400">No events available for this date.</p>}
-          {selectedDayEvents.map(event => (
-            <button
-              key={`${event.accountId}:${event.id}`}
-              type="button"
-              onClick={() => openEvent(event)}
-              className="w-full min-h-[44px] text-left px-3 py-2 rounded transition-colors hover:brightness-125"
-              style={eventChipStyle(colorMap.get(event.subcalendarId) || null, theme?.mode)}
-            >
-              <span className="block text-xs">{event.isAllDay ? 'All day'
-                : new Date(event.startTime).toDateString() === selectedDay.date.toDateString()
-                  ? formatTimeOfDay(event.startTime) : 'Continues'}</span>
-              <span className="block text-sm break-words">{event.title}</span>
-            </button>
-          ))}
-        </div>
-      </Drawer>
+      />
       {selectedEvent && <EventDetail event={selectedEvent} onClose={() => updateParams({ event: null })} />}
     </div>
   );
