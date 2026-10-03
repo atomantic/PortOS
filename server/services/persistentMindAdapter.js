@@ -84,8 +84,8 @@ const LOCAL_PROMPT_TOKENIZER_MARGIN = 0.9;
 // history) may take on a local window; the rest is the response contract,
 // capabilities, tool catalog and in-wake tool results.
 const LOCAL_CONTEXT_PROMPT_SHARE = 0.25;
-// The narrowest tool catalog a local-window rebuild may fall to. Tools that
-// already ran stay in full (requiredToolNames); the rest stay discoverable.
+// The narrowest tool catalog a local-window rebuild may fall to. Requested
+// and completed actions are priorities; only complete schemas that fit stay.
 const MIN_LOCAL_TOOL_PROMPT_CHARS = 6_000;
 // Per-result caps tried in order when completed tool results must shrink.
 const TOOL_RESULT_COMPACTION_CAPS = [2_000, 1_000, 500, 200];
@@ -565,30 +565,46 @@ export function createPersistentMindTurnAdapter() {
       const promptBudget = await resolvePersistentMindPromptBudget({ provider, model });
       // Set after the first tool round: what a continuation prompt carries.
       let continuation = null;
+      const requestedToolNames = new Map();
       const composeRoundPrompt = async (namePrompt) => {
         // Rebuilds never age the lease or trace (isUserTurn/trace omitted).
+        let exposedToolNames = [];
         const buildTools = (maxChars) => (continuation
           ? buildPersistentMindToolPrompt(continuation.capabilities, continuation.recipes, {
             turnId, maxChars, requiredToolNames: continuation.requiredToolNames,
+            requestedToolNames: [...requestedToolNames.keys()], onSelection: (names) => { exposedToolNames = names; },
           })
           : buildPersistentMindToolPrompt(taskAccess, recipeCatalog, { turnId, maxChars }));
+        const annotateActivationResults = () => {
+          for (const receipt of completedToolResults) {
+            if (receipt.state !== 'completed' || !['tools.activate', 'tools_activate'].includes(receipt.name)
+              || !Array.isArray(receipt.result?.requestedToolNames)) continue;
+            const exposed = receipt.result.requestedToolNames.filter((name) => exposedToolNames.includes(name));
+            const omitted = receipt.result.requestedToolNames.filter((name) => !exposedToolNames.includes(name));
+            receipt.result = { ...receipt.result, exposedToolNames: exposed, omittedToolNames: omitted,
+              schemaNote: omitted.length
+                ? 'Requested schemas are omitted by the current budget or grants. Identical reactivation will not fix this; select fewer or smaller actions.'
+                : 'Requested schemas are exposed in this continuation. Execute the selected action without repeating completed calls.' };
+          }
+        };
         const assemble = (toolPrompt, toolResults) => `${buildPersistentMindTurnPrompt({ ...turnPromptSections, toolCapabilityPrompt: toolPrompt })}${continuation
           ? `\n\n# Completed tool results\n${JSON.stringify(toolResults)}\n\n${continuation.suffix}`
           : ''}${namePrompt}`;
-        // A successful call proves only that its own schema was useful. Keep
-        // that schema (and the compact discovery index) for continuation; do
-        // not expand every sibling in the leased family.
+        // Prioritize explicitly requested next actions, then completed actions,
+        // within the existing cap; keep other granted actions discoverable.
         let toolPrompt = continuation ? await buildTools(MAX_CONTINUATION_TOOL_PROMPT_CHARS) : toolCapabilityPrompt;
+        if (continuation) annotateActivationResults();
         let toolResults = completedToolResults;
         let prompt = assemble(toolPrompt, toolResults);
         const limit = promptBudget?.maxPromptChars;
         if (!limit || prompt.length <= limit) return prompt;
         const untrimmedChars = prompt.length;
-        // 1. Narrow the tool catalog: schemas that already ran stay in full,
-        //    the rest stay listed as budget-limited and can be re-requested.
+        // 1. Narrow the tool catalog, preserving complete schemas that fit.
+        //    Receipts identify completed actions even if their schemas drop.
         const toolTarget = Math.max(Math.min(toolPrompt.length, MIN_LOCAL_TOOL_PROMPT_CHARS), toolPrompt.length - (prompt.length - limit));
         if (toolTarget < toolPrompt.length) {
           toolPrompt = await buildTools(toolTarget);
+          annotateActivationResults();
           prompt = assemble(toolPrompt, toolResults);
         }
         // 2. Compact completed tool results (previews, then per-call stubs).
@@ -735,7 +751,25 @@ export function createPersistentMindTurnAdapter() {
           toolBudget,
         });
         completedToolResults.push(...toolResults);
+        for (const receipt of toolResults) {
+          if (receipt.state === 'completed' && ['tools.activate', 'tools_activate'].includes(receipt.name)) {
+            for (const name of receipt.result?.requestedToolNames || []) {
+              requestedToolNames.set(name, receipt.result.targetFamilies?.[name]);
+            }
+          }
+          if (receipt.state === 'completed' && ['tools.deactivate', 'tools_deactivate'].includes(receipt.name)) {
+            const deactivated = new Set(receipt.result?.deactivated || []);
+            for (const [name, family] of requestedToolNames) {
+              if (deactivated.has(family)) requestedToolNames.delete(name);
+            }
+          }
+        }
         const liveCapabilities = normalizePersistentMindCapabilities((await loadState()).config?.persistentMindCapabilities);
+        // Once a targeted action completes its receipt, rather than its schema,
+        // prevents replay; leave room for the next requested action.
+        for (const receipt of toolResults) {
+          if (receipt.state === 'completed') requestedToolNames.delete(receipt.name);
+        }
         // Same turnId, isUserTurn/trace both omitted (default false): a tool
         // call may have just activated or renewed a family, so re-read the
         // live lease state, but this in-turn rebuild must never age it again
