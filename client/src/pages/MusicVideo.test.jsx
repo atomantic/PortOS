@@ -353,6 +353,59 @@ beforeEach(() => {
   ytSseStates.clear();
 });
 
+describe('MusicVideo project load recovery (#9761)', () => {
+  it.each(['/music-video', '/music-video/mv-2/board'])('keeps failures visible and recovers without changing %s', async (path) => {
+    let resolveRetry;
+    listMusicVideoProjects
+      .mockRejectedValueOnce(new Error('Connection unavailable'))
+      .mockRejectedValueOnce(new Error('Still unavailable'))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRetry = resolve; }));
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <LocationProbe />
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Connection unavailable');
+    expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('loc')).toHaveTextContent(path);
+    expect(listMusicVideoProjects).toHaveBeenCalledWith({ silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Still unavailable'));
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    fireEvent.click(retry);
+    expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
+    fireEvent.click(retry);
+    expect(listMusicVideoProjects).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
+
+    await act(async () => resolveRetry([PROJECT_NO_CLIP]));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('loc')).toHaveTextContent(path);
+    if (path === '/music-video') {
+      expect(screen.getByTestId('mv-project-grid')).toHaveTextContent(PROJECT_NO_CLIP.name);
+    } else {
+      expect(screen.getByRole('heading', { level: 2, name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /^Board/ })).toHaveAttribute('aria-selected', 'true');
+    }
+  });
+
+  it.each([
+    ['/music-video', /No music video projects yet/],
+    ['/music-video/missing-project', /Project not found/],
+  ])('shows absence only after a successful read at %s', async (path, message) => {
+    listMusicVideoProjects.mockResolvedValue(path === '/music-video' ? [] : [PROJECT_NO_CLIP]);
+    render(<MemoryRouter initialEntries={[path]}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+});
+
 describe('MusicVideo render control (#1760)', () => {
   it('enables Render and kicks off the job when a scene has a clip', async () => {
     await openProject(PROJECT_WITH_CLIP, 'review');
@@ -2410,4 +2463,3 @@ describe('MusicVideo main page project cards', () => {
     expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
   });
 });
-
