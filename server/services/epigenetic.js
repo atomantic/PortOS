@@ -1,14 +1,12 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile, unreadableStoreError } from '../lib/fileUtils.js';
+
+import { isPlainObject } from '../lib/objects.js';
 
 const DATA_DIR = PATHS.meatspace;
 const EPIGENETIC_FILE = join(DATA_DIR, 'epigenetic.json');
 
-const DEFAULT_DATA = {
-  interventions: {},
-  lastUpdated: null
-};
 
 /**
  * Curated neuroprotective interventions with evidence-based dosage ranges.
@@ -191,9 +189,16 @@ export const CURATED_INTERVENTIONS = [
 
 async function loadData() {
   await ensureDir(DATA_DIR);
-  const raw = await tryReadFile(EPIGENETIC_FILE);
-  if (!raw) return { ...DEFAULT_DATA };
-  return safeJSONParse(raw, { ...DEFAULT_DATA });
+  const data = await readJSONFile(EPIGENETIC_FILE, {
+    interventions: {},
+    lastUpdated: null
+  }, { strict: true });
+  if (!isPlainObject(data) || !isPlainObject(data.interventions)
+    || Object.values(data.interventions).some(intervention =>
+      !isPlainObject(intervention) || !Array.isArray(intervention.logs))) {
+    throw unreadableStoreError(EPIGENETIC_FILE);
+  }
+  return data;
 }
 
 async function saveData(data) {
