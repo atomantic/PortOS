@@ -79,6 +79,26 @@ describe('TabSheetView', () => {
       .toEqual([['C     ', 'Hello '], ['G', 'world']]);
   });
 
+  it('moves focus into the chord diagram, traps Tab, and restores focus on Escape', () => {
+    render(<TabSheetView text="C G" />);
+    const trigger = screen.getByRole('button', { name: 'C' });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: 'C chord voicing' });
+    const close = screen.getByRole('button', { name: 'Close chord diagram' });
+    expect(document.activeElement).toBe(close);
+
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    dialog.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(close);
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('keeps mid-word chords, rhythm marks and trailing changes intact in pasted pairs', () => {
     const { container } = render(<TabSheetView text={'  Am     | G/B          F\nPaper lanterns glow'} />);
     const chunks = [...container.querySelectorAll('[data-chord-lyric-chunk]')];
