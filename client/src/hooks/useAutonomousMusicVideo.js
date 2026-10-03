@@ -20,7 +20,7 @@ const OUTCOME_TOASTS = {
  * it applies the project the server pushes over `music-video:autonomous` (no
  * polling) and toasts the outcomes that need the director.
  *
- * Returns `{ busy, resume(edits?), stop(), cancel() }`.
+ * Returns `{ busy, resume(edits?, { inline }?), stop(), cancel() }`; an `inline` resume rejects instead of toasting.
  */
 export default function useAutonomousMusicVideo({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -47,7 +47,8 @@ export default function useAutonomousMusicVideo({ project, replaceProject } = {}
     return () => socket.off('music-video:autonomous', onAutonomous);
   }, [projectId]);
 
-  const call = (request) => {
+  // `inline: true` leaves the error to the caller (shown next to the control) instead of toasting it.
+  const call = (request, { inline = false } = {}) => {
     setBusy(true);
     return request()
       .then((res) => {
@@ -55,11 +56,15 @@ export default function useAutonomousMusicVideo({ project, replaceProject } = {}
         if (res?.run) lastStatus.current = { id: res.run.id, status: res.run.status };
         return res;
       })
-      .catch((err) => { toast.error(err?.message || 'Autonomous run request failed'); return null; })
+      .catch((err) => {
+        if (inline) throw err;
+        toast.error(err?.message || 'Autonomous run request failed');
+        return null;
+      })
       .finally(() => setBusy(false));
   };
 
-  const resume = (edits = {}) => call(() => resumeAutonomousMusicVideo(projectId, edits, { silent: true }));
+  const resume = (edits = {}, options = {}) => call(() => resumeAutonomousMusicVideo(projectId, edits, { silent: true }), options);
   const stop = () => call(() => stopAutonomousMusicVideo(projectId, { silent: true }));
   const cancel = () => call(() => cancelAutonomousMusicVideo(projectId, { silent: true }));
 
