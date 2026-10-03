@@ -65,7 +65,7 @@
  *     persistent-mind setup, agent-benchmark and JEV policy/head mutations
  *     require operator authority. Head training reads git/forge history;
  *     adoption/discard changes the classifier admitting agent work.
- *   - settings: feature toggles and the Eidoverse host bridge (they arm
+ *   - settings: other feature toggles and the Eidoverse host bridge (they arm
  *     PortOS's own integrations or open a listener), orchestration profiles,
  *     AI assignments and credentials (they choose among configured providers
  *     or store a key). The `PUT /api/settings` and `PUT /api/cos/config`
@@ -528,8 +528,11 @@ const bodyKeys = (body) => (body && typeof body === 'object' && !Array.isArray(b
 // `hostControlBodyGate` in services/authGate.js applies these after the body
 // parser, since `hostControlRouteGate` runs before it.
 const COMPILED_BODY_ROUTES = [
+  // Enabling this feature now launches its registered host executable.
+  ['PUT /api/settings/features/eidoverse', (body) => bodyKeys(body)],
   ['POST /api/local-llm/capability-tests/run', (body) => body?.testId === 'sandbox-repair' ? ['testId'] : []],
-  ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key))],
+  ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key)
+    || (key === 'instanceFeatures' && body.instanceFeatures?.eidoverse !== undefined))],
   ['PUT /api/cos/config', (body) => bodyKeys(body).filter((key) => !HOST_CONTROL_OPEN_COS_CONFIG_KEYS.includes(key))],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 

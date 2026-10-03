@@ -13,9 +13,11 @@ const mock = vi.hoisted(() => ({
   setEidoverseWorldsOrigin: vi.fn(),
   riggingReady: false,
   riggingThrows: false,
+  reconcileEidoverseRuntime: vi.fn(async () => ({ running: true })),
 }));
 
 const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('./eidoverseRuntime.js', () => ({ reconcileEidoverseRuntime: mock.reconcileEidoverseRuntime }));
 vi.mock('./userActions.js', () => ({ recordUserAction }));
 
 vi.mock('./settings.js', () => ({
@@ -95,6 +97,7 @@ describe('instance features', () => {
     mock.assertEidoverseInstalled.mockReset().mockResolvedValue({ installed: true });
     mock.setEidoverseWorldsOrigin.mockReset().mockResolvedValue({ appId: 'app-eidoverse' });
     mock.updateSettingsWith.mockReset();
+    mock.reconcileEidoverseRuntime.mockReset().mockResolvedValue({ running: true });
     mock.updateSettingsWith.mockImplementation(async (mutate) => {
       mock.settings = await mutate(structuredClone(mock.settings));
       return structuredClone(mock.settings);
@@ -170,6 +173,23 @@ describe('instance features', () => {
       enabled: false,
       source: 'explicit',
     });
+  });
+
+  it('reconciles after saving Eidoverse toggles and retains an enable when launch fails', async () => {
+    mock.reconcileEidoverseRuntime.mockImplementation(async () => {
+      expect(mock.settings.instanceFeatures.eidoverse.enabled).toBe(true);
+      throw new Error('Example runtime unavailable');
+    });
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await updateInstanceFeature('eidoverse', true);
+    expect(byId(result.features, 'eidoverse').enabled).toBe(true);
+    mock.reconcileEidoverseRuntime.mockImplementation(async () => {
+      expect(mock.settings.instanceFeatures.eidoverse.enabled).toBe(false);
+      return { running: false };
+    });
+    await updateInstanceFeature('eidoverse', false);
+    expect(mock.reconcileEidoverseRuntime).toHaveBeenCalledTimes(2);
+    errorLog.mockRestore();
   });
 
   it('fails closed for malformed persisted feature flags', async () => {

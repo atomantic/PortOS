@@ -404,16 +404,15 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // in bootstrapSequence.js.
   initCosAfterSpawner({ spawnerReady, initCos: () => cos.init() });
 
-  // World Design migrations are offline and leave a pending checkpoint. If the
-  // separately-managed Eidoverse process is already online, reconcile it now;
-  // otherwise leave the checkpoint for direct remediation in the Eidoverse UI.
-  // This is deterministic local projection only — never an AI provider call.
-  import('./eidoverseWorld.js')
-    .then(({ reconcilePendingEidoverseWorld }) => reconcilePendingEidoverseWorld())
+  // Restore only an installed, opted-in world, then its bridge, resident
+  // presence, and pending design. No install, download, or AI provider call.
+  // startBackgroundServices is disabled during smoke boot.
+  import('./eidoverseRuntime.js')
+    .then(({ reconcileEidoverseRuntime }) => reconcileEidoverseRuntime())
     .then((result) => {
-      if (result.reconciled) console.log('🌐 Reconciled pending Eidoverse World Design update');
+      if (result.running) console.log('🌐 Eidoverse runtime and resident presence restored');
     })
-    .catch(err => logBootstrapFailure('⚠️ Eidoverse World Design reconciliation deferred', err));
+    .catch(err => logBootstrapFailure('⚠️ Eidoverse startup deferred', err));
 
   // Initialize agent automation scheduler and action executor
   automationScheduler.init().catch(err => logBootstrapFailure('❌ Agent scheduler init failed', err));

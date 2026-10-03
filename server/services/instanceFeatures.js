@@ -322,6 +322,14 @@ export async function updateInstanceFeature(featureId, enabled) {
 
   await recordFeatureToggle(featureId, enabled);
 
+  if (featureId === 'eidoverse') {
+    // Use the same admission/readiness path as boot. A saved toggle remains
+    // saved even if the external runtime needs repair; never install here.
+    const { reconcileEidoverseRuntime } = await import('./eidoverseRuntime.js');
+    await reconcileEidoverseRuntime()
+      .catch((error) => console.error(`⚠️ Eidoverse startup deferred: ${error.message}`));
+  }
+
   const detected = await detectFeatureConfiguration();
   return {
     features: await attachSetupStatus(resolveInstanceFeatures(settings, { detected }), settings),

@@ -679,6 +679,11 @@ router.put('/', asyncHandler(async (req, res) => {
       current,
     );
   }, { actor: 'user' });
+  if (settingsPatch.instanceFeatures?.eidoverse !== undefined) {
+    const { reconcileEidoverseRuntime } = await import('../services/eidoverseRuntime.js');
+    await reconcileEidoverseRuntime()
+      .catch((err) => console.error(`⚠️ Eidoverse startup deferred: ${err.message}`));
+  }
   // A beeper save that flips `enabled` never armed the scheduler until a
   // restart. `startBeeperScheduler()` is the only thing that registers the
   // sweep, and it's reached exclusively through `reconcileBeeperArming` —
