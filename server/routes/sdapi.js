@@ -17,6 +17,7 @@
 
 import { Router } from 'express';
 
+import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { sdapiTxt2imgBodySchema } from '../lib/apiContractSchemas.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -175,13 +176,20 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
   // no-op there.
   const mode = await getMode();
   const isAsyncMode = mode === IMAGE_GEN_MODE.LOCAL || CLOUD_IMAGE_GEN_MODES.includes(mode);
+  // Allocate the correlation ID up front and register it BEFORE dispatch: a
+  // job-based provider can emit completed/failed while generateImage is still
+  // awaiting (frame inspection), and the waiter drops events until registered.
+  const jobId = isAsyncMode ? randomUUID() : undefined;
   const localWait = isAsyncMode
     ? createCompletionWaiter()
     : { register: () => {}, promise: Promise.resolve(), cleanup: () => {} };
 
+  if (jobId) localWait.register(jobId);
+
   let result;
   try {
     result = await generateImage({
+      ...(jobId ? { jobId } : {}),
       prompt,
       negativePrompt: negative_prompt,
       modelId,
@@ -198,7 +206,12 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
     throw err;
   }
 
-  localWait.register(result.generationId);
+  // Providers honor the supplied jobId; if one ever returns a different ID,
+  // follow it rather than waiting on a job nobody will report.
+  if (jobId && result.generationId && result.generationId !== jobId) {
+    console.warn(`⚠️ sdapi: provider returned generationId ${result.generationId} for supplied jobId ${jobId}`);
+    localWait.register(result.generationId);
+  }
   // Local mode: the completion event carries the actual seed used (mflux
   // generates a random one when the client didn't pass one). External mode
   // returns Promise.resolve() with no payload — fall back to result.seed

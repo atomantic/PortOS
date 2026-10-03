@@ -3,6 +3,7 @@
 // return a job descriptor and emit completion later, so this subscribes via the
 // imageGen waiter before kicking off the job.
 
+import { randomUUID } from 'crypto';
 import * as imageGen from '../../imageGen/index.js';
 import { createImageGenWaiter } from '../../imageGenWaiter.js';
 import { getSettings } from '../../settings.js';
@@ -95,9 +96,16 @@ export const MEDIA_TOOLS = [
       // running; a stuck job still can't leak listeners forever.
       const waiter = createImageGenWaiter({ timeoutMs: 21 * 60 * 1000 });
 
+      // Register the correlation ID before dispatch so a terminal event emitted
+      // while generateImage is still awaiting isn't dropped. External backends
+      // ignore jobId and take the synchronous short-circuit below.
+      const jobId = randomUUID();
+      waiter.register(jobId);
+
       let result;
       try {
         result = await imageGen.generateImage({
+          jobId,
           prompt: prompt.trim(),
           negativePrompt: negativePrompt?.trim() || undefined,
           width: w.value,
@@ -123,7 +131,10 @@ export const MEDIA_TOOLS = [
         };
       }
 
-      waiter.register(result.generationId);
+      if (result?.generationId && result.generationId !== jobId) {
+        console.warn(`⚠️ image_generate: provider returned generationId ${result.generationId} for supplied jobId ${jobId}`);
+        waiter.register(result.generationId);
+      }
       const ev = await waiter.promise.catch((errEv) => ({ __failed: true, ...errEv }));
       if (ev?.__failed) {
         return { ok: false, summary: `Image generation failed: ${ev.error || 'unknown'}` };
