@@ -62,6 +62,14 @@ describe('Toaster accessibility', () => {
     const glyph = status.querySelector('[aria-hidden="true"]');
     expect(glyph).toHaveTextContent('✓');
   });
+
+  // Regression: `toast.info` was missing while ~30 callers used it, so the
+  // music-video dependency repair threw `a.info is not a function` mid-flow.
+  it('announces an info toast politely', () => {
+    render(<Toaster />);
+    act(() => { toast.info('Rendering the revised draft'); });
+    expect(screen.getByRole('status')).toHaveTextContent('Rendering the revised draft');
+  });
 });
 
 describe('loading spinner', () => {
