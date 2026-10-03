@@ -446,6 +446,7 @@ export function listQueueJobs({ kind, owner, limit = 10 } = {}) {
     ...cloudRunning,
     ...remoteRunning,
     ...queue,
+    ...archive.filter((job) => job.durabilityPending),
   ].filter(matches);
   const recent = [];
   const finishedAt = (job) => new Date(job.completedAt || job.startedAt || job.queuedAt || 0).getTime();
@@ -467,19 +468,45 @@ export function listQueueJobs({ kind, owner, limit = 10 } = {}) {
 // (e.g. completed→running). Chaining ensures every snapshot reflects the
 // state at its enqueue time, in submission order.
 let persistChain = Promise.resolve();
+// Terminal outcomes stay private until the snapshot containing them succeeds.
+// Recovery commits storage only; it never invokes a generator again.
+const pendingTransitions = new Map();
+function stageTerminalTransition(job, apply, acknowledge) {
+  job.terminating = true;
+  const target = { ...job };
+  apply(target);
+  job.durabilityPending = { status: target.status, result: target.result, error: target.error,
+    completedAt: target.completedAt, progress: target.progress, statusMsg: target.statusMsg, videoFailure: target.videoFailure };
+  pendingTransitions.set(job, acknowledge);
+}
+async function persistTerminalTransition(job) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await persist();
+      return;
+    } catch (error) {
+      job.persistenceError = true;
+      mediaJobEvents.emit('changed', {});
+      if (attempt === 2) {
+        throw new ServerError('Media outcome is awaiting storage recovery; restore writable storage and flush the queue', {
+          status: 503, code: MEDIA_QUEUE_PERSIST_FAILED,
+        });
+      }
+    }
+  }
+}
 // Set when the boot read of JOBS_FILE was untrustworthy (#4115). Every persist()
 // writes the FULL in-memory snapshot, so persisting on top of a queue we failed
 // to restore would replace the real jobs file with whatever this process happens
 // to hold — the classic "unreadable read becomes an empty write". Latching the
-// writer off preserves the file for the user to recover or delete; the queue
-// still runs normally in memory for the life of the process.
+// writer off preserves the file for the user to recover or delete. Admission
+// and dispatch stay disabled because no transition can be made durable.
 let persistBlocked = false;
 function persist() {
-  // Blocked: nothing is written, but callers awaiting durability (enqueueJob)
-  // must not inherit a stale rejection from a write that predates the latch.
+  // A blocked writer cannot satisfy admission or transition durability.
   if (persistBlocked) {
     mediaJobEvents.emit('changed', {});
-    return persistChain.catch(() => {});
+    return Promise.reject(new Error('Media queue storage is blocked until its snapshot is repaired and the server restarts'));
   }
   // Every queue mutation, including holds, deletion and debounced progress,
   // converges here. Invalidate after the write settles so readers see the final
@@ -491,12 +518,13 @@ function persist() {
 }
 async function persistImpl() {
   const cutoff = Date.now() - COMPLETED_TTL_MS;
+  const pendingArchive = archive.filter((job) => job.durabilityPending);
   const trimmedArchive = archive
     .filter((j) => {
       const ts = j.completedAt ? new Date(j.completedAt).getTime() : Date.now();
-      return ts > cutoff;
+      return !j.durabilityPending && ts > cutoff;
     })
-    .slice(-MAX_PERSISTED_ARCHIVE);
+    .slice(-MAX_PERSISTED_ARCHIVE).concat(pendingArchive);
   // Mutate `archive` in place so subsequent reads see the trim too.
   archive.length = 0;
   archive.push(...trimmedArchive);
@@ -508,10 +536,19 @@ async function persistImpl() {
     ...archive,
   ];
   // Strip non-serializable bits.
-  const serializable = live.map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
+  const serializable = live.map((job) => ({ ...job, ...job.durabilityPending })).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }),
   );
+  const transitions = [...pendingTransitions];
   await atomicWrite(JOBS_FILE, { jobs: serializable, videoHolds: videoHolds.snapshot() });
+  for (const [job, acknowledge] of transitions) {
+    if (pendingTransitions.get(job) !== acknowledge) continue;
+    pendingTransitions.delete(job);
+    Object.assign(job, job.durabilityPending);
+    delete job.durabilityPending;
+    delete job.persistenceError;
+    await acknowledge();
+  }
 }
 
 export async function initMediaJobQueue() {
@@ -679,8 +716,10 @@ export async function initMediaJobQueue() {
       const entry = ensureSseEntry(j.id);
       broadcastSse(entry, { type: 'queued', position: j.position });
     }
-    await persist();
-    startWorker();
+    if (!persistBlocked) {
+      await persist();
+      startWorker();
+    }
   })();
   return initPromise;
 }
@@ -727,35 +766,10 @@ function startLaneJob(job, { lane }) {
   const label = lane === 'cloud'
     ? (job.params?.mode || 'cloud')
     : lane === 'remote' ? `remote ${job.kind}` : job.kind;
-  persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} start failed: ${e.message}`));
-  broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
-  mediaJobEvents.emit('started', job);
-  console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${label} started`);
-  (async () => {
-    try {
-      await runJob(job);
-    } catch (err) {
-      // runJob threw before its own terminal handlers ran (e.g. PYTHON
-      // not configured). Recover so a single bad job can't freeze its lane.
-      console.error(`❌ media-job [${job.id.slice(0, 8)}] ${label} runJob threw: ${err.message}`, err.stack || '');
-      if (job.status === 'running') {
-        job.status = job.cancelRequested ? 'canceled' : 'failed';
-        videoHolds.captureFailure(job, err);
-        // A ServerError carries a message the gen module wrote FOR the user, so
-        // surface it verbatim — every media surface renders `job.error`, and the
-        // "runJob threw:" prefix turned an actionable refusal into developer
-        // noise. Anything else is an unexpected crash and keeps the prefix so
-        // the origin stays obvious.
-        job.error = job.cancelRequested
-          ? 'Canceled'
-          : err instanceof ServerError ? err.message : `runJob threw: ${err.message}`;
-        job.completedAt = new Date().toISOString();
-        broadcastSse(ensureSseEntry(job.id), job.cancelRequested
-          ? { type: 'canceled', reason: job.error } : { type: 'error', error: job.error });
-        closeJobAfterDelay(sseJobs, job.id);
-        mediaJobEvents.emit(job.status, job);
-      }
-    }
+  let finalized = false;
+  function finalizeLane() {
+    if (finalized) return;
+    finalized = true;
     // Count once, after every terminal path (including pre-dispatch throws),
     // and before releasing the lane. Boot reconciliation never comes here.
     videoHolds.recordTerminal(job);
@@ -775,7 +789,43 @@ function startLaneJob(job, { lane }) {
     archive.push(job);
     recomputeQueuePositions();
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
-  })();
+  }
+  let markRunning;
+  trackOperation(dispatchOperations, new Promise((resolve) => { markRunning = resolve; }));
+  (async () => {
+    try {
+      await persist();
+      // Cancellation can win while the running snapshot is blocked.
+      if (job.cancelRequested && !isRemoteMediaJob(job)) throw new ServerError('Canceled before provider start');
+      broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
+      mediaJobEvents.emit('started', job);
+      console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${label} started`);
+      const lifecycle = runJob(job);
+      markRunning();
+      await lifecycle;
+    } catch (err) {
+      markRunning();
+      // runJob threw before its own terminal handlers ran (e.g. PYTHON
+      // not configured). Recover so a single bad job can't freeze its lane.
+      console.error(`❌ media-job [${job.id.slice(0, 8)}] ${label} runJob threw: ${err.message}`, err.stack || '');
+      if (job.status === 'running') {
+        stageTerminalTransition(job, (j) => {
+          j.status = j.cancelRequested ? 'canceled' : 'failed';
+          videoHolds.captureFailure(j, err);
+          j.error = j.cancelRequested ? 'Canceled' : err instanceof ServerError ? err.message : `runJob threw: ${err.message}`;
+          j.completedAt = new Date().toISOString();
+        }, () => {
+          broadcastSse(ensureSseEntry(job.id), job.cancelRequested
+            ? { type: 'canceled', reason: job.error } : { type: 'error', error: job.error });
+          closeJobAfterDelay(sseJobs, job.id);
+          mediaJobEvents.emit(job.status, job);
+          finalizeLane();
+        });
+        await trackTerminalOperation(persistTerminalTransition(job));
+      }
+    }
+    finalizeLane();
+  })().catch((error) => console.error(`❌ media-job [${job.id.slice(0, 8)}] storage settlement pending: ${error.message}`));
   return true;
 }
 
@@ -786,25 +836,24 @@ async function settleQueuedJob(job, { status, error }) {
   const idx = queue.indexOf(job);
   if (idx < 0 || job.status !== 'queued') return false;
   queue.splice(idx, 1);
-  job.status = status;
-  job.error = error;
-  job.completedAt = new Date().toISOString();
+  stageTerminalTransition(job, (j) => {
+    j.status = status;
+    j.error = error;
+    j.completedAt = new Date().toISOString();
+  }, () => {
+    trackTerminalOperation((async () => {
+      await safeUnlinkUpload(job.params?.uploadedTempPath);
+      await safeUnlinkUpload(job.params?.audioFilePath);
+      for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) await safeUnlinkUpload(p);
+      broadcastSse(ensureSseEntry(job.id), status === 'canceled'
+        ? { type: 'canceled', reason: error } : { type: 'error', error });
+      closeJobAfterDelay(sseJobs, job.id);
+      mediaJobEvents.emit(status, job);
+    })());
+  });
   archive.push(job);
   recomputeQueuePositions();
-  await trackTerminalOperation((async () => {
-    await safeUnlinkUpload(job.params?.uploadedTempPath);
-    await safeUnlinkUpload(job.params?.audioFilePath);
-    for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
-      await safeUnlinkUpload(p);
-    }
-    await persist().catch((e) => console.error(`❌ mediaJobQueue persist on queued ${status} failed: ${e.message}`));
-    broadcastSse(ensureSseEntry(job.id), status === 'canceled'
-      ? { type: 'canceled', reason: error } : { type: 'error', error });
-    closeJobAfterDelay(sseJobs, job.id);
-    mediaJobEvents.emit(status, job);
-    if (status === 'failed') console.error(`❌ media-job [${job.id.slice(0, 8)}] preparation failed: ${error}`);
-    else console.log(`🛑 media-job [${job.id.slice(0, 8)}] canceled (was queued)`);
-  })());
+  await trackTerminalOperation(persistTerminalTransition(job));
   return true;
 }
 
@@ -816,7 +865,8 @@ async function prepareQueuedVideos(jobs = queue.filter((job) => !job.admitting))
     if (dispatchQuiesced) break;
     if (!error || job.admitting) continue;
     await settleQueuedJob(job, { status: 'failed',
-      error: `Could not prepare local video model: ${error.message || String(error)}` });
+      error: `Could not prepare local video model: ${error.message || String(error)}` })
+      .catch((failure) => console.error(`❌ media preparation outcome awaiting storage: ${failure.message}`));
   }
 }
 
@@ -865,7 +915,7 @@ export function quiesceMediaJobQueue() {
 // should cancel them first.
 export function removeArchivedJob(jobId) {
   const idx = archive.findIndex((j) => j.id === jobId);
-  if (idx < 0) return false;
+  if (idx < 0 || archive[idx].durabilityPending) return false;
   archive.splice(idx, 1);
   // End any SSE clients still attached within the SSE_CLEANUP_DELAY_MS grace
   // window before dropping the entry — a bare `sseJobs.delete()` here would
@@ -1099,36 +1149,40 @@ async function runJobLifecycle(job, markDispatched) {
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
     await drainProgressPersist();
-    apply(job);
-    job.status = state;
-    if (state === 'completed') {
-      job.progress = 1;
-      job.statusMsg = 'Completed';
-    }
-    // failed/canceled intentionally retain the last mid-render progress/statusMsg
-    // (how far it got) — consumers gate the progress UI on status === 'running',
-    // so the residual values are not displayed for terminal jobs.
-    job.completedAt = new Date().toISOString();
-    if (job.params?.videoProduction) {
-      const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
-      const tag = job.params.videoProduction;
-      await settleVideoAttempt(tag.projectId, tag.attemptId, { jobId: job.id, status: job.params.videoProduction.submissionUncertain || (state === 'failed' && /timeout|timed out|interrupted/i.test(job.error || '')) ? 'uncertain' : state })
-        .catch(error => console.error(`❌ Video receipt could not settle: ${error.message}`));
-    }
-    // Wake the lane finalizer without polling. Some providers emit their
-    // terminal event just before their kickoff promise resolves; the promise
-    // retains that signal until runJob reaches the await below.
-    resolveTerminalState();
-    const logPrefix = state === 'completed' ? '✅' : state === 'canceled' ? '🛑' : '❌';
-    const logSuffix = state === 'failed' ? `: ${job.error}` : state === 'canceled' ? ' (was running)' : '';
-    console.log(`${logPrefix} media-job [${job.id.slice(0, 8)}] ${state}${logSuffix}`);
-    const ssePayload =
-      state === 'completed' ? { type: 'complete', result: job.result }
-      : state === 'canceled' ? { type: 'canceled', reason: job.error }
-      : { type: 'error', error: job.error };
-    broadcastSse(sseEntry, ssePayload);
-    closeJobAfterDelay(sseJobs, job.id);
-    mediaJobEvents.emit(state, job);
+    stageTerminalTransition(job, (job) => {
+      apply(job);
+      job.status = state;
+      if (state === 'completed') {
+        job.progress = 1;
+        job.statusMsg = 'Completed';
+      }
+      // failed/canceled intentionally retain the last mid-render progress/statusMsg
+      // (how far it got) — consumers gate the progress UI on status === 'running',
+      // so the residual values are not displayed for terminal jobs.
+      job.completedAt = new Date().toISOString();
+    }, async () => {
+      if (job.params?.videoProduction) {
+        const tag = job.params.videoProduction;
+        const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
+        await settleVideoAttempt(tag.projectId, tag.attemptId, { jobId: job.id, status: job.params.videoProduction.submissionUncertain || (state === 'failed' && /timeout|timed out|interrupted/i.test(job.error || '')) ? 'uncertain' : state })
+          .catch(error => console.error(`❌ Video receipt could not settle: ${error.message}`));
+      }
+      // Wake the lane finalizer without polling. Some providers emit their
+      // terminal event just before their kickoff promise resolves; the promise
+      // retains that signal until runJob reaches the await below.
+      resolveTerminalState();
+      const logPrefix = state === 'completed' ? '✅' : state === 'canceled' ? '🛑' : '❌';
+      const logSuffix = state === 'failed' ? `: ${job.error}` : state === 'canceled' ? ' (was running)' : '';
+      console.log(`${logPrefix} media-job [${job.id.slice(0, 8)}] ${state}${logSuffix}`);
+      const ssePayload =
+        state === 'completed' ? { type: 'complete', result: job.result }
+        : state === 'canceled' ? { type: 'canceled', reason: job.error }
+        : { type: 'error', error: job.error };
+      broadcastSse(sseEntry, ssePayload);
+      closeJobAfterDelay(sseJobs, job.id);
+      mediaJobEvents.emit(state, job);
+    });
+    await persistTerminalTransition(job);
   }
 
   const handlers = {
@@ -1523,6 +1577,12 @@ export async function cancelQueuedJobs({ kind } = {}) {
 
 // Cancel: drops a queued job, or sends SIGTERM to a running gen process.
 export async function cancelJob(jobId) {
+  const pending = findJob(jobId);
+  if (pending?.durabilityPending) {
+    await persistTerminalTransition(pending);
+    return pending.status === 'canceled' ? { ok: true, status: 'canceled' }
+      : { ok: false, code: 'ALREADY_TERMINAL', status: pending.status, error: 'Job is already finishing' };
+  }
   const queueIdx = queue.findIndex((j) => j.id === jobId);
   if (queueIdx >= 0) {
     const job = queue[queueIdx];
@@ -1553,7 +1613,7 @@ export async function cancelJob(jobId) {
     if (isRemoteMediaJob(runningJob)) {
       // Durable intent precedes the adapter call so boot recovery resumes
       // cancellation rather than silently resurrecting the remote render.
-      await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on remote cancel failed: ${e.message}`));
+      await persist();
     }
     if (mod?.cancel && mod.cancel(jobId) === false
       && (runningJob.providerInvoked || isRemoteMediaJob(runningJob))) {
@@ -1638,6 +1698,7 @@ export const MEDIA_QUEUE_FLUSH_TIMEOUT_MS = 2000;
 // the shutdown budget; never rejects, reporting the outcome instead.
 export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT_MS } = {}) {
   const drain = (async () => {
+    await persist();
     while (terminalOperations.size > 0) {
       await Promise.allSettled([...terminalOperations]);
     }
@@ -1666,6 +1727,7 @@ export function __resetForTests() {
   cloudRunning.length = 0;
   remoteRunning.length = 0;
   archive.length = 0;
+  pendingTransitions.clear();
   videoHolds.clear();
   sseJobs.clear();
   workerStarted = false;

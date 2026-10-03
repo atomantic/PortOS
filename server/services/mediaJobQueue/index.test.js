@@ -1988,7 +1988,9 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
 
     // …and so is every write the running queue would normally make.
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
-    await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'after a bad boot' } });
+    await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'after a bad boot' } }))
+      .rejects.toMatchObject({ status: 503, code: mediaJobQueue.MEDIA_QUEUE_PERSIST_FAILED });
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
     await flush();
     expect(
       readFileSync(file, 'utf8'),
@@ -2364,7 +2366,7 @@ describe('local video failure holds', () => {
     expect(mediaJobQueue.getJob(next).status).toBe('running');
   });
 
-  it('recovers independent work while damaged holds protect saved and new local video until explicit resume', async () => {
+  it('withholds dispatch and new admissions when damaged holds block durable snapshots', async () => {
     const file = join(tempDataDir, 'media-jobs.json');
     const savedVideos = ['retained-mlx', 'retained-cuda'];
     const snapshot = JSON.stringify({ jobs: [
@@ -2387,30 +2389,14 @@ describe('local video failure holds', () => {
     await tick();
     expect(stubs.generateVideo).not.toHaveBeenCalled();
     expect(mediaJobQueue.getJob('interrupted-video').status).toBe('failed');
-    expect(mediaJobQueue.getJob('saved-remote')).toMatchObject({ status: 'running', params: { remoteMedia: { reconcile: true } } });
-    expect(mediaJobQueue.getJob('saved-cloud').status).toBe('running');
-    expect(mediaJobQueue.getJob('saved-training')).toMatchObject({ status: 'running', params: { reattach: true } });
-    (await import('../loraTraining/events.js')).trainingEvents.emit('completed', { generationId: 'saved-training' });
-    await tick();
-    expect(mediaJobQueue.getJob('saved-image').status).toBe('running');
-    imageGenEvents.emit('completed', { generationId: 'saved-image' });
-    await flush();
-    const newlyQueued = await submit('example-other');
-    await tick();
-    const retainedIds = [...savedVideos, newlyQueued];
-    for (const id of retainedIds) expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'queued', hold: { scope: 'local-video', heldJobCount: 3 } });
-    expect(mediaJobQueue.isVideoModelHeld('example-cuda', 'cuda_video')).toBe(true);
-    expect(mediaJobQueue.isVideoModelHeld('example-other', 'mlx_video')).toBe(true);
-    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    for (const generate of [stubs.generateImage, stubs.generateImageCodex, stubs.generateAudioRemote, stubs.runTraining]) {
+      expect(generate).not.toHaveBeenCalled();
+    }
+    await expect(submit('example-other')).rejects.toMatchObject({ code: mediaJobQueue.MEDIA_QUEUE_PERSIST_FAILED });
     expect(readFileSync(file, 'utf8')).toBe(snapshot);
     const [recoveryHold] = mediaJobQueue.listVideoHolds();
-    expect(recoveryHold).toMatchObject({ scope: 'local-video', heldJobCount: 3 });
-    const { sanitizeJob } = await import('./sanitizeJob.js');
-    expect(sanitizeJob(mediaJobQueue.getJob(savedVideos[0])).hold).toEqual(recoveryHold);
-    expect(await mediaJobQueue.resumeVideoHold(recoveryHold.id)).toBe(true);
-    expect(mediaJobQueue.listVideoHolds()).toEqual([]);
-    for (const id of retainedIds) { await tick(); await finish(id, null); }
-    expect(stubs.generateVideo.mock.calls.map(([params]) => params.jobId)).toEqual(retainedIds);
+    expect(recoveryHold).toMatchObject({ scope: 'local-video' });
+    await expect(mediaJobQueue.resumeVideoHold(recoveryHold.id)).rejects.toThrow('storage is blocked');
     expect(readFileSync(file, 'utf8')).toBe(snapshot);
   });
 });
@@ -2476,6 +2462,7 @@ describe('local video preparation failures', () => {
     mediaJobQueue.attachSseClient(omitted.jobId, res);
     expect(res.write.mock.calls.flat().join('')).toContain('Could not prepare local video model');
     videoGenEvents.emit('completed', { generationId: explicit.jobId });
+    await flush(); // Durable terminal settlement releases the lane before the worker tick.
     await tick();
     expect(mediaJobQueue.getJob(waiting.jobId).status).toBe('running');
     videoGenEvents.emit('completed', { generationId: waiting.jobId });
@@ -2865,5 +2852,110 @@ describe('pending-job ceiling', () => {
     expect(waiting()).toBe(MAX_PENDING_MEDIA_JOBS - 1);
     await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'fits' } })).resolves.toMatchObject({ status: 'queued' });
     await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'full again' } })).rejects.toMatchObject(queueFull);
+  });
+});
+
+// #9737: a terminal UI outcome must describe a durable row, and provider
+// execution must never outrun the running snapshot that prevents local replay.
+describe('durable execution and terminal settlement', () => {
+  let storageWrite;
+  beforeEach(async () => {
+    storageWrite = atomicWriteSpy.getMockImplementation();
+    vi.useFakeTimers();
+    stubs.generateVideo.mockImplementation(async () => ({}));
+    await mediaJobQueue.initMediaJobQueue();
+  });
+  afterEach(() => { atomicWriteSpy.mockImplementation(storageWrite); vi.clearAllTimers(); vi.useRealTimers(); });
+
+  it('withholds generator execution until the running snapshot succeeds', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-cuda' } });
+    const release = holdNextWrite();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(persistedJobs().find((j) => j.id === jobId).status).toBe('queued');
+    release();
+    await flush();
+    expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+    expect(persistedJobs().find((j) => j.id === jobId).status).toBe('running');
+    videoGenEvents.emit('completed', { generationId: jobId });
+    await flush();
+  });
+
+  it('never dispatches after a failed running write and recovers only its storage settlement', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-cuda' } });
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    atomicWriteSpy.mockRejectedValue(new Error('disk full'));
+    await vi.advanceTimersByTimeAsync(200);
+    await flush();
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId).status).toBe('running');
+    expect(persistedJobs().find((j) => j.id === jobId).status).toBe('queued');
+    atomicWriteSpy.mockImplementation(realWrite);
+    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
+    expect(mediaJobQueue.getJob(jobId).status).toBe('failed');
+    expect(persistedJobs().find((j) => j.id === jobId).status).toBe('failed');
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+  });
+
+  it('rejects an undurable queued cancellation, retains uploads, and acknowledges once on recovery', async () => {
+    mediaJobQueue.quiesceMediaJobQueue();
+    const upload = join(tempDataDir, 'uploads', 'example.png');
+    mkdirSync(join(tempDataDir, 'uploads'), { recursive: true });
+    writeFileSync(upload, 'synthetic image');
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-cuda', uploadedTempPath: upload } });
+    const canceled = vi.fn();
+    mediaJobQueue.mediaJobEvents.on('canceled', canceled);
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    atomicWriteSpy.mockRejectedValue(new Error('disk full'));
+    await expect(mediaJobQueue.cancelJob(jobId)).rejects.toMatchObject({ status: 503, code: mediaJobQueue.MEDIA_QUEUE_PERSIST_FAILED });
+    expect(canceled).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId).status).toBe('queued');
+    expect(persistedJobs().find((j) => j.id === jobId).status).toBe('queued');
+    expect(existsSync(upload)).toBe(true);
+    const { sanitizeJob } = await import('./sanitizeJob.js');
+    expect(mediaJobQueue.listQueueJobs().map(sanitizeJob)).toEqual([expect.objectContaining({
+      id: jobId, status: 'queued', statusMsg: 'Outcome pending: media queue storage unavailable',
+    })]);
+    expect(mediaJobQueue.removeArchivedJob(jobId)).toBe(false);
+    atomicWriteSpy.mockImplementation(realWrite);
+    await expect(mediaJobQueue.cancelJob(jobId)).resolves.toEqual({ ok: true, status: 'canceled' });
+    await flush();
+    expect(canceled).toHaveBeenCalledTimes(1);
+    expect(existsSync(upload)).toBe(false);
+    vi.clearAllTimers();
+    mediaJobQueue.__resetForTests();
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(mediaJobQueue.getJob(jobId).status).toBe('canceled');
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+  });
+
+  it('withholds completion and its result until storage recovers without generating again', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-cuda' } });
+    await vi.advanceTimersByTimeAsync(200);
+    await flush();
+    const completed = vi.fn();
+    mediaJobQueue.mediaJobEvents.on('completed', completed);
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    atomicWriteSpy.mockRejectedValue(new Error('disk full'));
+    videoGenEvents.emit('completed', { generationId: jobId, output: 'example.mp4' });
+    await flush();
+    expect(completed).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'running' });
+    expect(mediaJobQueue.getJob(jobId).result).toBeUndefined();
+    expect(persistedJobs().find((j) => j.id === jobId).status).toBe('running');
+    atomicWriteSpy.mockImplementation(realWrite);
+    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
+    expect(completed).toHaveBeenCalledTimes(1);
+    expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'completed', result: { output: 'example.mp4' } });
+    vi.clearAllTimers();
+    mediaJobQueue.__resetForTests();
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(mediaJobQueue.getJob(jobId).status).toBe('completed');
+    expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
   });
 });
