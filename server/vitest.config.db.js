@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
 
 // Same reason as vitest.config.js: an inherited NODE_ENV (PM2 exports
 // 'development') is NOT overridden by vitest's own default, and the DB guards
@@ -6,64 +7,8 @@ import { defineConfig } from 'vitest/config';
 // wherever it is launched from (#4554).
 process.env.NODE_ENV = 'test';
 
-/**
- * The DB-backed test files, relative to this config's root (server/). Exported
- * as the single source of truth: this config's `include` uses it, and the drift
- * guard in lib/db.guards.test.js imports it to assert no checkHealth()-gated
- * suite is left out. `**\/db.test.js` only matches a file named exactly
- * `db.test.js` — a `<name>.db.test.js` suite is NOT auto-included and must be
- * listed explicitly below (the drift guard fails the build if you forget).
- */
-export const DB_TEST_INCLUDE = [
-  'services/voice/profiles.db.test.js',
-  'services/voice/studio.db.test.js',
-  '../scripts/perf/collectionFixture.db.test.js',
-  'services/appQuality.db.test.js',
-  '**/db.test.js',
-  'services/codeAnimation/stages.db.test.js',
-  'services/codeAnimation/sound.db.test.js',
-  'services/codeAnimation/acceptance.db.test.js',
-  'services/codeAnimation/stages.realBrowser.db.test.js',
-  'services/mediaAssetIndex/galleryCollections.db.test.js',
-  'services/dbAdmin.db.test.js',
-  'services/backup.db.test.js',
-  'services/catalogDB.test.js',
-  'services/catalogDB.facets.db.test.js',
-  'services/catalogDB.media.db.test.js',
-  'services/catalogSync.tombstoneRevival.db.test.js',
-  'services/catalogSync.pendingParents.db.test.js',
-  'services/humanActivity.db.test.js',
-  'services/postRunDb.db.test.js',
-  'services/userActions.db.test.js',
-  'services/memoryDB.db.test.js',
-  'services/memorySync.db.test.js',
-  'services/privacySubjects.db.test.js',
-  'services/privacyVault.db.test.js',
-  'services/privacyOrgs.db.test.js',
-  'services/privacyChanges.db.test.js',
-  'services/privacyBrokers.db.test.js',
-  'services/privacyOptOut.db.test.js',
-  'services/providerGraphStore.db.test.js',
-  'services/catalogCanonProjection.test.js',
-  'services/catalogRefResolver.test.js',
-  'lib/db/schema/beeper.db.test.js',
-  'services/beeperConversations.db.test.js',
-  'services/beeperTribe.db.test.js',
-  'services/tribe.db.test.js',
-  'services/tribePurge.db.test.js',
-  'services/beeperSync.db.test.js',
-  'services/creativeDirector/projectsDB.test.js',
-  'services/musicVideo/projectsDB.test.js',
-  'routes/catalog.test.js',
-  'routes/mindToolRecipes.db.test.js',
-  'routes/decks.db.test.js',
-  'services/decksSync.db.test.js',
-  'services/modelPinRecords.db.test.js',
-  'scripts/run-db-migrations.test.js',
-  'scripts/migrateMemoryToPg.db.test.js',
-  'lib/db/schema/audit.db.test.js',
-  'lib/db/schema/syncFeed.db.test.js',
-];
+// Compatibility export for the existing DB inventory guard.
+export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
 
 /**
  * DB-backed test config — runs ONLY the suites that talk to a real Postgres
@@ -79,11 +24,10 @@ export const DB_TEST_INCLUDE = [
  *    recognizes the `_test` suffix, so checkHealth() lets them connect and run
  *    (against the real `portos` DB they would skip — that's the safety guard).
  *
- * The default `vitest.config.js` ALSO matches these files, but there they skip
- * (PGDATABASE is unset → resolves to non-test `portos`). So `npm test` never
- * runs them; `npm run test:db` does, after `npm run setup:db:test`.
+ * The default `vitest.config.js` excludes the same inventory, so `npm test`
+ * never runs them; `npm run test:db` does, after `npm run setup:db:test`.
  *
- * Adding a new DB-backed test? Add it to `DB_TEST_INCLUDE` above — the
+ * Adding a new DB-backed test? Add it to `DB_TEST_INCLUDE` in scripts/lib/dbTestFiles.js — the
  * `*.db.test.js` naming convention is documentation, not a glob match, so a new
  * suite silently never runs until it's listed. db.guards.test.js fails if a
  * checkHealth consumer is left out.

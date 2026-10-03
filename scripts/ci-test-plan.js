@@ -6,6 +6,7 @@ import { join, posix } from 'path';
 import { staticImportSpecifiersFromSource } from '../server/lib/staticImportGraph.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
+import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
@@ -609,6 +610,8 @@ export function buildCiTestPlan(changedFiles, {
   // Repository-derived browser dependencies; null means discovery failed and
   // a shared-source change must retain conservative full coverage.
   clientDependencies = [],
+  // Includes literal deferred imports; null means discovery was inconclusive.
+  dbDependencies = [],
 } = {}) {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
@@ -805,6 +808,11 @@ export function buildCiTestPlan(changedFiles, {
       ? { mode: clientSources.length > 0 ? 'related' : 'files', files: [], sources: clientSources }
       : skippedRunner();
 
+  const dbTests = new Set(resolveDbTestFiles(trackedFiles));
+  const db = serverFiles.some((path) => dbTests.has(path))
+    || executable.some((path) => DB_RISK_RULES.some((rule) => rule.test(path)))
+    || serverSources.some((path) => dbDependencies === null || dbDependencies.includes(path));
+
   const windows = hasWindowsRiskFile(changed);
   const windowsMode = windows
     ? (serverSources.length > 0 ? 'related' : 'files')
@@ -820,7 +828,7 @@ export function buildCiTestPlan(changedFiles, {
     changedFiles: changed,
     server,
     client,
-    db: executable.some((path) => DB_RISK_RULES.some((rule) => rule.test(path))),
+    db,
     lint: {
       // Same deleted-path guard as directTests above — ESLint given a
       // nonexistent explicit path exits non-zero instead of skipping it.
@@ -983,6 +991,47 @@ function collectClientDependencies(trackedFiles, cwd) {
   return uniqueSorted([...seen].filter((path) => path.startsWith('server/lib/')));
 }
 
+// DB suites are excluded from ordinary Vitest related selection. Walk their
+// imports separately, including deferred literals, without importing test code
+// or Vitest (the planner runs before npm installation). Unreadable or unresolved
+// local imports and computed imports retain DB coverage for server sources.
+function collectDbDependencies(files, cwd) {
+  const known = new Set(files);
+  const pending = resolveDbTestFiles(files);
+  const seen = new Set();
+  const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
+  let inconclusive = false;
+  try {
+    for (let index = 0; index < pending.length; index++) {
+      const file = pending[index];
+      if (seen.has(file)) continue;
+      seen.add(file);
+      if (!MODULE_SOURCE_RE.test(file)) continue;
+      const source = readFileSync(join(cwd, file), 'utf8');
+      const specifiers = staticImportSpecifiersFromSource(source);
+      // Scan all import calls. A nonliteral expression cannot safely prove
+      // absence of a dependency; template literals are resolvable only when
+      // they contain no interpolation. Extra matches in comments widen safely.
+      for (const match of source.matchAll(/\bimport\s*\(\s*([^)]*)\)/g)) {
+        const literal = match[1].trim().match(/^(['"`])([^'"`]*?)\1\s*(?:,.*)?$/s);
+        if (!literal || literal[2].includes('${')) inconclusive = true;
+        else specifiers.push(literal[2]);
+      }
+      for (const specifier of specifiers) {
+        if (!specifier.startsWith('.')) continue;
+        const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
+        const dependencies = [path, ...extensions.map((extension) => `${path}${extension}`),
+          ...extensions.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
+        if (dependencies.length === 0) inconclusive = true;
+        pending.push(...dependencies);
+      }
+    }
+  } catch {
+    return null;
+  }
+  return inconclusive ? null : uniqueSorted([...seen]);
+}
+
 /**
  * Collect the repository-derived inputs that surround the pure plan builder.
  *
@@ -1042,7 +1091,12 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     ? collectClientDependencies(hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles, cwd)
     : [];
 
-  return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests, clientDependencies };
+  const dbDependencies = collectedChangedFiles.some((path) => isServerRunnerFile(path)
+    && MODULE_SOURCE_RE.test(path) && !isTestFile(path) && !isStructuralBarrel(path))
+    ? collectDbDependencies(hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles, cwd)
+    : [];
+
+  return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests, clientDependencies, dbDependencies };
 }
 
 function main() {
@@ -1066,7 +1120,7 @@ function main() {
     && (!Array.isArray(changedFilesOverride) || changedFilesOverride.some((path) => typeof path !== 'string'))) {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
-  const { changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies } = collectPlanInputs({
+  const { changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies } = collectPlanInputs({
     baseSha: base,
     forceFull,
     changedFiles: changedFilesOverride,
@@ -1078,6 +1132,7 @@ function main() {
     appRouteOnly: isRouteOnlyAppDiff(appDiff),
     pathContractTests,
     clientDependencies,
+    dbDependencies,
   }));
 }
 
