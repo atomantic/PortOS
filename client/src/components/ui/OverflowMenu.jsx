@@ -54,9 +54,12 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
   useClickOutside([wrapperRef, popoverRef], open, () => setOpen(false));
   useEscapeKey(open, () => close(true));
 
+  // Focus only once placement has made the menu visible. Reflow changes the
+  // coordinates, but must not reset the user's selection within the menu.
+  const ready = open && Boolean(style);
   useEffect(() => {
-    if (open) popoverRef.current?.querySelector(ITEM_SELECTOR)?.focus();
-  }, [open]);
+    if (ready) popoverRef.current?.querySelector(ITEM_SELECTOR)?.focus();
+  }, [ready]);
 
   // Nothing to demote (e.g. a row whose destructive actions are all withheld) —
   // render no trigger rather than an empty menu.

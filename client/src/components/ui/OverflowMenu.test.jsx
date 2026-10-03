@@ -5,6 +5,18 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import OverflowMenu from './OverflowMenu';
 
+const positioning = vi.hoisted(() => ({ controlled: false, style: null }));
+vi.mock('../../hooks/usePopoverPosition.js', async (importOriginal) => {
+  const original = await importOriginal();
+  return {
+    ...original,
+    default: (options) => {
+      const result = original.default(options);
+      return positioning.controlled ? { ...result, style: positioning.style } : result;
+    },
+  };
+});
+
 const items = (overrides = {}) => ([
   { id: 'archive', label: 'Archive', onSelect: vi.fn(), ...overrides.archive },
   { id: 'delete', label: 'Delete', tone: 'danger', onSelect: vi.fn(), ...overrides.delete },
@@ -78,6 +90,42 @@ describe('OverflowMenu', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('menu')).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it('waits for positioning before entering and preserves focus across repositioning', async () => {
+    positioning.controlled = true;
+    positioning.style = null;
+    try {
+      const user = userEvent.setup();
+      const menu = () => <OverflowMenu label="More actions" items={[...items({ archive: { disabled: true } }), { id: 'share', label: 'Share' }]} />;
+      const { rerender } = render(menu());
+      const trigger = screen.getByRole('button', { name: 'More actions' });
+      trigger.focus();
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByRole('menu', { hidden: true })).toHaveStyle({ visibility: 'hidden' });
+      expect(trigger).toHaveFocus();
+
+      positioning.style = { left: '8px', top: '48px', width: '176px' };
+      rerender(menu());
+      expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus();
+
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByRole('menuitem', { name: 'Share' })).toHaveFocus();
+      positioning.style = { ...positioning.style, top: '64px' };
+      rerender(menu());
+      expect(screen.getByRole('menuitem', { name: 'Share' })).toHaveFocus();
+
+      await user.keyboard('{Escape}');
+      positioning.style = null;
+      await user.keyboard('{Enter}');
+      expect(trigger).toHaveFocus();
+      positioning.style = { left: '8px', top: '48px', width: '176px' };
+      rerender(menu());
+      expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus();
+    } finally {
+      positioning.controlled = false;
+      positioning.style = null;
+    }
   });
 
   it('skips disabled items when moving focus and never fires their handler', async () => {
