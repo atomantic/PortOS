@@ -10,6 +10,11 @@ const lyricAt = (cues, t) => {
   return line?.text || '';
 };
 
+// A phone's collapsed mini-player has no picture to show, so it must not pull
+// every scene take into memory up front — iOS Safari kills the tab and offers
+// only "A problem repeatedly occurred". Without matchMedia, load eagerly.
+const startsDeferred = (collapsed) => collapsed && window.matchMedia?.('(min-width: 1024px)').matches === false;
+
 /**
  * Live preview of the project's composition document: the sandboxed iframe,
  * the song, play/scrub and the lyric line being sung. The iframe runs in an
@@ -29,6 +34,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [preview, setPreview] = useState(null);
   const [previewError, setPreviewError] = useState('');
   const [status, setStatus] = useState('');
+  const [wanted, setWanted] = useState(() => !startsDeferred(collapsed));
+  useEffect(() => { if (!collapsed) setWanted(true); }, [collapsed]);
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const iframeRef = useRef(null);
@@ -43,12 +50,12 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     setPreview(null);
     setPreviewError('');
     seekState.current = { inFlight: false, pending: null, ready: false };
-    if (!refresh) return () => { active = false; };
+    if (!refresh || !wanted) return () => { active = false; };
     getMusicVideoCompositionPreview(project.id, { silent: true, draft })
       .then((next) => { if (active) setPreview(next); })
       .catch((err) => { if (active) setPreviewError(err?.message || 'Could not build the preview'); });
     return () => { active = false; };
-  }, [project.id, refresh, draft]);
+  }, [project.id, refresh, draft, wanted]);
 
   const postSeek = useCallback((time) => {
     const frame = iframeRef.current?.contentWindow;

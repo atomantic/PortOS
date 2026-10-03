@@ -45,6 +45,21 @@ describe('CompositionPreviewPlayer', () => {
     expect(screen.queryByText(/Loading preview media/)).not.toBeInTheDocument();
   });
 
+  it('does not build the preview behind a collapsed phone mini-player until it is expanded', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn(() => ({ matches: false }));
+    try {
+      const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl={null} collapsed />);
+      await act(async () => {});
+      expect(api.getMusicVideoCompositionPreview).not.toHaveBeenCalled();
+      rerender(<CompositionPreviewPlayer project={project} audioUrl={null} collapsed={false} />);
+      await screen.findByTitle('Composition document preview');
+      expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it('runs the document in an opaque-origin sandbox and renders nothing without one', async () => {
     const { container, rerender } = render(<CompositionPreviewPlayer project={{ ...project, composition: { mode: 'document' } }} audioUrl={null} />);
     expect(container).toBeEmptyDOMElement();
