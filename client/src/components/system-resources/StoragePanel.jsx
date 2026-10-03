@@ -8,6 +8,7 @@ import useProviderModels from '../../hooks/useProviderModels.js';
 import { formatBytes, formatDateTime } from '../../utils/formatters.js';
 import * as api from '../../services/api.js';
 import toast from '../ui/Toast.jsx';
+import ProgressBar from '../ui/ProgressBar.jsx';
 
 const RISK_STYLE = {
   low: 'bg-port-success/10 text-port-success',
@@ -87,7 +88,7 @@ function Metric({ label, value, tone = 'text-white', className = '' }) {
 }
 
 function StorageAreas({ areas }) {
-  const max = Math.max(1, ...(areas || []).map((area) => area.sizeBytes || 0));
+  const max = Math.max(1, ...(areas || []).map((area) => Number.isFinite(area.sizeBytes) ? area.sizeBytes : 0));
   return (
     <section className="rounded-2xl border border-port-border bg-port-card p-4 sm:p-5">
       <div className="mb-4 flex items-center gap-2">
@@ -107,12 +108,17 @@ function StorageAreas({ areas }) {
               </div>
               <div className="shrink-0 text-sm font-semibold tabular-nums text-white">{storageSize(area.sizeBytes)}</div>
             </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-port-border/60">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-port-accent to-cyan-400"
-                style={{ width: area.status === 'unavailable' ? '0%' : `${Math.max(1, ((area.sizeBytes || 0) / max) * 100)}%` }}
-              />
-            </div>
+            <ProgressBar
+              className="mt-2"
+              track="borderMuted"
+              fillClassName="bg-gradient-to-r from-port-accent to-cyan-400"
+              percent={area.status === 'unavailable' || !Number.isFinite(area.sizeBytes)
+                ? null
+                : (area.sizeBytes / max) * 100}
+              indeterminateAnimation={false}
+              label={`${area.label} storage area size relative to largest known area`}
+              valueText={area.status === 'unavailable' || !Number.isFinite(area.sizeBytes) ? 'Unavailable' : undefined}
+            />
             {area.managePath && (
               <Link to={area.managePath} className="mt-2 inline-block text-xs text-port-accent hover:text-port-accent/80">
                 Manage {area.label.toLowerCase()} →

@@ -105,3 +105,34 @@ describe('StoragePanel AI triage freshness', () => {
     expect(screen.queryByText('Obsolete advice.')).not.toBeInTheDocument();
   });
 });
+
+describe('StoragePanel storage area meters', () => {
+  it('announces measured relative sizes and keeps unavailable sizes indeterminate', () => {
+    const report = {
+      ...makeReport('2026-08-16T00:00:00.000Z'),
+      storageAreas: [
+        { id: 'database', label: 'Database', sizeBytes: 500, status: 'ready', note: 'Primary records.' },
+        { id: 'empty', label: 'Empty area', sizeBytes: 0, status: 'ready', note: 'Measured empty area.' },
+        { id: 'models', label: 'Models', sizeBytes: null, status: 'unavailable', note: 'Model storage.' },
+      ],
+    };
+    render(
+      <MemoryRouter>
+        <StoragePanel report={report} loading={false} onRunReport={() => {}} onReport={() => {}} cleanup={cleanup} />
+      </MemoryRouter>,
+    );
+
+    const measured = screen.getByRole('progressbar', { name: 'Database storage area size relative to largest known area' });
+    expect(measured).toHaveAttribute('aria-valuenow', '100');
+    expect(measured).not.toHaveAttribute('aria-valuetext');
+
+    const empty = screen.getByRole('progressbar', { name: 'Empty area storage area size relative to largest known area' });
+    expect(empty).toHaveAttribute('aria-valuenow', '0');
+    expect(empty).not.toHaveAttribute('aria-valuetext');
+
+    const unavailable = screen.getByRole('progressbar', { name: 'Models storage area size relative to largest known area' });
+    expect(unavailable).not.toHaveAttribute('aria-valuenow');
+    expect(unavailable).toHaveAttribute('aria-valuetext', 'Unavailable');
+    expect(unavailable.firstElementChild.className).not.toContain('animate-pulse');
+  });
+});

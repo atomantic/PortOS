@@ -66,6 +66,20 @@ describe('ProgressBar', () => {
     },
   );
 
+  it('can give an indeterminate measurement a textual value', () => {
+    render(<ProgressBar percent={null} label="Database storage area size" valueText="Unavailable" />);
+    const bar = screen.getByRole('progressbar', { name: 'Database storage area size' });
+    expect(bar).not.toHaveAttribute('aria-valuenow');
+    expect(bar).toHaveAttribute('aria-valuetext', 'Unavailable');
+  });
+
+  it('can show an unavailable measurement without suggesting active progress', () => {
+    const { container } = render(<ProgressBar percent={null} label="Storage size" valueText="Unavailable" indeterminateAnimation={false} />);
+    expect(fillOf(container).className).toContain('w-0');
+    expect(fillOf(container).className).not.toContain('animate-pulse');
+    expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+  });
+
   it.each([
     ['accent', 'bg-port-accent'],
     ['accent2', 'bg-port-accent-2'],
@@ -89,6 +103,12 @@ describe('ProgressBar', () => {
     expect(bar.className).toContain('h-2');
     expect(bar.className).toContain('bg-port-border');
     expect(container.querySelector('.h-1\\.5')).toBeNull();
+  });
+
+  it('supports a muted border track and custom fill treatment', () => {
+    const { container } = render(<ProgressBar percent={50} track="borderMuted" fillClassName="bg-gradient-to-r from-port-accent to-cyan-400" label="x" />);
+    expect(screen.getByRole('progressbar').className).toContain('bg-port-border/60');
+    expect(fillOf(container).className).toContain('bg-gradient-to-r');
   });
 
   it('defaults to the small size on the card ground', () => {
