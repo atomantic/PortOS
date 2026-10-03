@@ -157,18 +157,25 @@ export default function AppQuality({ app, detail = false }) {
                 </select>
               </label>
             </div>
-            <table className="w-full text-sm text-left" aria-label="Category audit results">
-              <thead className="text-xs text-gray-400">
+            <table className="w-full text-sm text-left block sm:table" aria-label="Category audit results">
+              <thead className="text-xs text-gray-400 hidden sm:table-header-group">
                 <tr>
                   <th scope="col" className="py-1.5 px-2">Category</th>
                   <th scope="col" className="py-1.5 px-2">Score</th>
-                  <th scope="col" className="py-1.5 px-2 hidden sm:table-cell">Evidence</th>
+                  <th scope="col" className="py-1.5 px-2">Evidence</th>
                   <th scope="col" className="py-1.5 px-2"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
-              <tbody>{sortedCategories.map(category => <CategoryRow key={category.id} category={category}
-                below={score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score}
-                runLink={panelLink('run', category.id)} />)}</tbody>
+              <tbody className="block sm:table-row-group">
+                {sortedCategories.map(category => (
+                  <CategoryRow
+                    key={category.id}
+                    category={category}
+                    below={score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score}
+                    runLink={panelLink('run', category.id)}
+                  />
+                ))}
+              </tbody>
             </table>
           </section>
         )}
@@ -197,8 +204,8 @@ function CategoryRow({ category, below, runLink }) {
     {category.sourcePeerId || category.sourcePeerName ? ` · ${category.sourcePeerName || 'federated peer'}` : ''}
   </>;
   return (
-    <tr className={`border-t border-port-border align-middle${below ? ' bg-port-warning/10' : ''}${inapplicable ? ' text-gray-500' : ''}`}>
-      <th scope="row" className="py-1.5 px-2 font-medium">
+    <tr className={`grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 py-2.5 px-2 sm:px-0 sm:py-0 border-t border-port-border rounded-lg sm:rounded-none sm:table-row sm:align-middle${below ? ' bg-port-warning/10' : ''}${inapplicable ? ' text-gray-500' : ''}`}>
+      <th scope="row" className="font-medium text-left col-span-1 min-w-0 sm:table-cell sm:py-1.5 sm:px-2">
         <span className="inline-flex items-center gap-1.5">
           {category.label}
           {details && <InfoTooltip label={`${category.label} assessment details`} placement="below" align="start" panelClassName="w-72 max-h-64 overflow-auto font-normal">
@@ -208,12 +215,15 @@ function CategoryRow({ category, below, runLink }) {
           </InfoTooltip>}
         </span>
       </th>
-      <td className="py-1.5 px-2 tabular-nums">
-        <span className="whitespace-nowrap">{category.score == null ? '—' : `${category.score}/100`}</span>
-        <span className="block text-xs text-gray-400 sm:hidden">{evidence}</span>
+      <td className="tabular-nums text-right sm:text-left col-span-1 whitespace-nowrap sm:table-cell sm:py-1.5 sm:px-2">
+        <span className={`font-semibold sm:font-normal ${inapplicable ? 'text-gray-500' : 'text-white'}`}>
+          {category.score == null ? '—' : `${category.score}/100`}
+        </span>
       </td>
-      <td className="py-1.5 px-2 text-xs text-gray-400 hidden sm:table-cell">{evidence}</td>
-      <td className="py-1.5 px-2">
+      <td className="text-xs text-gray-400 col-span-1 min-w-0 sm:table-cell sm:py-1.5 sm:px-2">
+        {evidence}
+      </td>
+      <td className="col-span-1 sm:table-cell sm:py-1.5 sm:px-2">
         <div className="flex items-center justify-end gap-1">
           <Link to={runLink} aria-label={`Run ${category.label} check`} title="Run this check"
             className="inline-flex min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 items-center justify-center rounded border border-port-accent/60 bg-port-accent/10 p-1.5 text-port-accent hover:bg-port-accent/25">
