@@ -1,5 +1,6 @@
 import CodeAuthoringPicker from './CodeAuthoringPicker.jsx';
 import MediaModePicker from './MediaModePicker.jsx';
+import AutoApproveFields from './AutoApproveFields.jsx';
 import { useState } from 'react';
 import { Wand2 } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
@@ -32,28 +33,42 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   const [authoringReady, setAuthoringReady] = useState(false);
   const llm = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
+  // Kept out of the draft: the password rides one request and is cleared after it.
+  const [autoApprove, setAutoApprove] = useState([]);
+  const [password, setPassword] = useState('');
+  const [grantError, setGrantError] = useState(null);
   const patch = (next) => setDraft((d) => ({ ...d, ...next }));
   const toggleCheckpoint = (id) => patch({
     checkpoints: AUTONOMOUS_CHECKPOINT_IDS.filter((c) => (c === id ? !draft.checkpoints.includes(c) : draft.checkpoints.includes(c))),
   });
   const patchSuno = (next) => setDraft((d) => ({ ...d, suno: { ...d.suno, ...next } }));
   const sunoModelValid = draft.songSource !== 'suno' || isSunoModelValid(draft.suno.model);
-  const valid = draft.prompt.trim().length > 0 && authoringReady && sunoModelValid;
+  const valid = draft.prompt.trim().length > 0 && authoringReady && sunoModelValid && (!autoApprove.length || !!password);
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!valid || submitting) return;
     setSubmitting(true);
+    setGrantError(null);
+    const secret = password;
+    setPassword('');
     startAutonomousMusicVideo(
-      autonomousRequestFromDraft(draft, { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined, effort: effort || undefined }),
+      {
+        ...autonomousRequestFromDraft(draft, { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined, effort: effort || undefined }),
+        ...(autoApprove.length ? { autoApprove, password: secret } : {}),
+      },
       { silent: true },
     )
       .then(({ project }) => {
         setDraft(emptyAutonomousDraft());
+        setAutoApprove([]);
         toast.success('Autonomous music video started');
         onStarted(project);
       })
-      .catch((err) => toast.error(err?.message || 'Failed to start the autonomous music video'))
+      .catch((err) => {
+        if (String(err?.code || '').startsWith('OPERATOR_')) setGrantError(err.message);
+        else toast.error(err?.message || 'Failed to start the autonomous music video');
+      })
       .finally(() => setSubmitting(false));
   };
 
@@ -162,8 +177,17 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
               />
             ))}
           </div>
-          <p className="text-[11px] text-port-text-muted mt-1">Production still pauses for your art, storyboard and animated proof approvals.</p>
+          <p className="text-[11px] text-port-text-muted mt-1">Production still pauses for your art, storyboard and animated proof approvals unless you auto-approve them below.</p>
         </fieldset>
+
+        <AutoApproveFields
+          idPrefix="mv-auto"
+          value={autoApprove}
+          onChange={(next) => { setAutoApprove(next); setGrantError(null); }}
+          password={password}
+          onPasswordChange={setPassword}
+          error={grantError}
+        />
 
         {llm.providers.length > 0 && (
           <ProviderModelSelector

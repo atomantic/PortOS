@@ -130,7 +130,14 @@ export function assertProductionApproval(project, stage = 'proof') {
     { status: 409, code: 'MUSIC_VIDEO_APPROVAL_REQUIRED', context: { stage, readiness } });
 }
 
-export function approveProductionStage(project, { stage, basis, proofReview }) {
+/**
+ * `approvedBy: 'autopilot'` marks an approval the autonomous run made under the
+ * operator's `brief.autoApprove` grant. Its proof review is `autoApproved: true`:
+ * nobody watched it, so the watched/notes record is waived, but it must still
+ * name the current excerpt. The HTTP approval schema rejects both fields, so
+ * only the run (in-process) can set them.
+ */
+export function approveProductionStage(project, { stage, basis, proofReview, approvedBy }) {
   const readiness = productionReadiness(project);
   const expected = stage === 'proof'
     ? hash({ basis: readiness.basis.proof, excerptId: project.productionReview?.proof?.excerptId,
@@ -140,17 +147,17 @@ export function approveProductionStage(project, { stage, basis, proofReview }) {
   if (readiness[stage].problems.length) throw new ServerError(readiness[stage].problems.join(' '), { status: 409, code: 'MUSIC_VIDEO_REVIEW_INCOMPLETE' });
   if (stage === 'proof') {
     const excerpt = project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId);
-    if (proofReview?.watchedWithAudio !== true || !text(proofReview.energyComparison)
-      || !text(proofReview.timecodedNotes) || !/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(proofReview.timecodedNotes)) {
+    if (proofReview?.autoApproved !== true && (proofReview?.watchedWithAudio !== true || !text(proofReview.energyComparison)
+      || !text(proofReview.timecodedNotes) || !/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(proofReview.timecodedNotes))) {
       throw new ServerError('Play this proof with audio and record the energy comparison and timecoded choreography notes before approving.', { status: 409, code: 'MUSIC_VIDEO_PROOF_REVIEW_REQUIRED' });
     }
-    if (proofReview.excerptId !== excerpt?.id || proofReview.filename !== excerpt?.filename) {
+    if (proofReview.excerptId !== excerpt?.id || proofReview.filename !== excerpt?.filename || !excerpt?.filename) {
       throw new ServerError('The rendered proof changed. Play and review the new excerpt before approving.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
     }
   }
   return { ...project, productionReview: { ...project.productionReview,
     reviewedRevisions: { ...project.productionReview?.reviewedRevisions, [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } },
-    approvals: { ...project.productionReview?.approvals, [stage]: { basis: expected, approvedAt: new Date().toISOString(), ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) } } } };
+    approvals: { ...project.productionReview?.approvals, [stage]: { basis: expected, approvedAt: new Date().toISOString(), ...(approvedBy ? { approvedBy } : {}), ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) } } } };
 }
 
 /** Comments retain the exact reviewed draft, even after a replacement import. */
