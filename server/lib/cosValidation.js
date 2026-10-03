@@ -9,6 +9,7 @@
  * (flat); the barrel surfaces it as the `cosValidation` namespace.
  */
 import { z } from 'zod';
+import { MALFORMED_REVIEW_REASONS, REVIEW_FINISH_REASONS, MAX_REVIEW_RESPONSE_LENGTH } from './reviewerHealth.js';
 import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
 import { isPlainObject } from './objects.js';
 import { MIN_INTERVAL_MS, isValidLoopInterval } from './loopInterval.js';
@@ -695,6 +696,12 @@ export const codeReviewSettingsSchema = z.object({
     code: z.string().optional(),
     message: z.string().optional(),
     lastFailureAt: z.number().int().positive().optional(),
+    diagnostics: z.object({
+      reason: z.enum(MALFORMED_REVIEW_REASONS),
+      finishReason: z.enum(REVIEW_FINISH_REASONS),
+      responseLengthChars: z.number().int().min(0).max(MAX_REVIEW_RESPONSE_LENGTH).nullable(),
+      responseLengthCapped: z.boolean().nullable(),
+    }).strict().optional(),
   })).optional(),
   providerModels: z.preprocess(normalizeReviewerModels, z.record(z.string()).optional()),
   providerEfforts: z.preprocess(normalizeReviewerEfforts, z.record(z.string()).optional()),

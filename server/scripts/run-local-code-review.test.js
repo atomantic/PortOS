@@ -326,16 +326,17 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
   }
 }, 15000);
 
-it('keeps reviewer failure health on malformed output and clears it only after a validated findings verdict', async () => {
+it('projects malformed diagnostics through the bridge and health store, clearing them only after a validated verdict', async () => {
   const root = await mkdtemp(join(tmpdir(), 'review-verdict-bridge-'));
   const reviewer = 'provider:example-reviewer';
   const health = { code: 'REVIEWER_UNSUPPORTED', reason: 'configuration', lastFailureAt: 1 };
+  let finishReason;
   let content = '## Blocking\n\n- `example.js:12`: Hardcoding `allowUnconfined: true\nNo findings.';
   const api = createServer((request, response) => {
     request.resume();
     request.on('end', () => {
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ choices: [{ message: { content } }] }));
+      response.end(JSON.stringify({ choices: [{ finish_reason: finishReason, message: { content } }] }));
     });
   });
   await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
@@ -362,11 +363,28 @@ it('keeps reviewer failure health on malformed output and clears it only after a
       child.on('close', code => { clearTimeout(timeout); resolve({ code, stdout, stderr }); });
       child.stdin.end(JSON.stringify({ backend: reviewer, model: 'example-model', inheritDefaults: false, kind: 'claim-review', diff: 'example diff' }));
     });
-    const malformed = await runReview();
-    expect(malformed.code).toBe(1);
-    expect(JSON.parse(malformed.stdout)).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW' });
-    expect(JSON.parse(malformed.stdout)).not.toHaveProperty('findings');
-    expect(JSON.parse(await readFile(join(root, 'data/settings.json'), 'utf8')).codeReview.reviewerHealth[reviewer]).toEqual(health);
+    const cases = [
+      ['invalid_json', 'synthetic-private-output', 'length', 'length'],
+      ['oversized_content', 'x'.repeat(25000), 'stop', 'stop'],
+      ['invalid_envelope', '{"verdict":"clean","findings":[],"secret":"synthetic-secret"}', undefined, 'unknown'],
+      ['incomplete_finding', '{"verdict":"findings","findings":[{}]}', 'synthetic-private-metadata', 'unknown'],
+      ['verdict_findings_mismatch', '{"verdict":"findings","findings":[]}', undefined, 'unknown'],
+    ];
+    for (const [reason, responseContent, finish, normalizedFinish] of cases) {
+      content = responseContent;
+      finishReason = finish;
+      const malformed = await runReview();
+      expect(malformed.code).toBe(1);
+      const result = JSON.parse(malformed.stdout);
+      const diagnostics = { reason, finishReason: normalizedFinish, responseLengthChars: Math.min(content.length, 20001), responseLengthCapped: content.length > 20001 };
+      expect(result).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW', diagnostics });
+      expect(result).not.toHaveProperty('findings');
+      expect(result).not.toHaveProperty('verdict');
+      const persisted = JSON.parse(await readFile(join(root, 'data/settings.json'), 'utf8'));
+      expect(persisted.codeReview.reviewerHealth[reviewer]).toEqual({ code: 'MALFORMED_REVIEW', reason: 'malformed', lastFailureAt: expect.any(Number), diagnostics });
+      expect(malformed.stdout + malformed.stderr + JSON.stringify(persisted)).not.toContain(content);
+      expect(malformed.stdout + malformed.stderr + JSON.stringify(persisted)).not.toContain('synthetic-private-metadata');
+    }
     content = JSON.stringify({ verdict: 'findings', findings: [{ severity: 'blocking', location: 'example.js:12', outcome: 'Overlapping writes lose edits.', fix: 'Serialize writes.' }] });
     const completed = await runReview();
     expect(completed.code, completed.stderr).toBe(0);

@@ -3,6 +3,7 @@
  * Used by insightsService, identity, goalCheckIn, taste-questionnaire, etc.
  */
 
+import { normalizeReviewFinishReason } from '../lib/reviewerHealth.js';
 import { getAllProviders } from './providers.js';
 import { startAIOp } from './aiStatusEvents.js';
 import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
@@ -258,6 +259,7 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
   const promptTokens = Number.isFinite(data.usage?.prompt_tokens) ? data.usage.prompt_tokens : NaN;
   return {
     text: content,
+    finishReason: normalizeReviewFinishReason(data?.choices?.[0]?.finish_reason),
     tokens: Number.isFinite(completionTokens) ? completionTokens : undefined,
     ...(Number.isFinite(promptTokens) || Number.isFinite(completionTokens)
       ? { usage: {
@@ -528,7 +530,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   const first = await postChatCompletion(provider, model, body, opts);
   if (!first.error) {
     statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, throughput(first.tokens));
-    return { text: first.text, ...(first.usage ? { usage: first.usage } : {}) };
+    return { text: first.text, finishReason: first.finishReason, ...(first.usage ? { usage: first.usage } : {}) };
   }
 
   // Recover by retrying the call against `retryModel` (already loaded/healed),
@@ -538,7 +540,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     const retry = await postChatCompletion(provider, retryModel, body, opts);
     if (!retry.error) {
       statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, { model: retryModel, ...throughput(retry.tokens) });
-      return { text: retry.text, ...(retry.usage ? { usage: retry.usage } : {}) };
+      return { text: retry.text, finishReason: retry.finishReason, ...(retry.usage ? { usage: retry.usage } : {}) };
     }
     statusOp.error(retry.error, { model: retryModel });
     return { error: retry.error, ...(Number.isInteger(retry.status) ? { status: retry.status } : {}) };
