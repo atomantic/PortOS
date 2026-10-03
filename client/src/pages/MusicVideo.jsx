@@ -285,9 +285,12 @@ export default function MusicVideo() {
 
   useEffect(() => {
     loadProjects();
+  }, [loadProjects]);
+
+  useEffect(() => {
     listTracks({ silent: true }).then((t) => setTracks(t || [])).catch(() => setTracks([]));
     listUniverseNames({ silent: true }).then((u) => setUniverses(u || [])).catch(() => setUniverses([]));
-  }, [loadProjects]);
+  }, []);
 
   const trackName = useCallback((id) => tracks.find((t) => t.id === id)?.title || id || '—', [tracks]);
 
