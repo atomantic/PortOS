@@ -2338,6 +2338,22 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
     });
 
+    it('plays the final render first and keeps a picked draft across stage tabs', async () => {
+      const project = {
+        ...PROJECT_WITH_CLIP,
+        renderHistoryId: 'rh-9',
+        excerpts: [{ id: 'mve-1', startSec: 0, endSec: 10, status: 'complete', filename: 'excerpt-old.mp4', notes: [] }],
+      };
+      await openProject(project, 'setup');
+      const final = await screen.findByLabelText('Final render preview');
+      expect(final.getAttribute('src')).toBe('/data/videos/final.mp4');
+      fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'excerpt:mve-1' } });
+      await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
+      await openStage('board');
+      expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4');
+      expect(screen.queryByLabelText('Final render preview')).toBeNull();
+    });
+
     it('offers no preview when the project has neither a document nor a finished excerpt', async () => {
       await openProject(PROJECT_WITH_CLIP, 'board');
       expect(screen.queryByLabelText('Preview')).toBeNull();

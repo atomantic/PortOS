@@ -788,7 +788,9 @@ export default function MusicVideo() {
   }, [pendingAnchor, activeStage]);
   const goToStage = (stage, anchor = null) => {
     setPendingAnchor(anchor ? { stage, id: anchor } : null);
-    navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}`);
+    // The dock's picked source (`?play=`) follows the director across tabs.
+    const play = searchParams.get('play');
+    navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${play ? `?play=${encodeURIComponent(play)}` : ''}`);
   };
 
   // The docked preview: scene cards seek it; on a phone it is a mini-player

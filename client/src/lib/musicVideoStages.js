@@ -78,6 +78,12 @@ export function listPreviewSources(project, { finalVideoSrc = null } = {}) {
   return sources;
 }
 
+// A stopped run can be resumed as is; the others need the director first.
+const PRODUCTION_RUN_LABELS = {
+  running: 'Production running', stopped: 'Production paused', blocked: 'Production blocked',
+  'limit-reached': 'Production at its limit', 'needs-replan': 'Production needs a replan',
+};
+
 const APPROVAL_LABELS = { art: 'art', storyboard: 'storyboard', proof: 'proof' };
 
 /** One line for the production-approval gate: which of the three approvals the current revision holds. */
@@ -115,7 +121,7 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
   }
   const run = currentProductionRun(project);
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
-    facts.push({ id: 'production', label: run.status === 'running' ? 'Production running' : 'Production paused', tone: run.status === 'running' ? 'muted' : 'warn' });
+    facts.push({ id: 'production', label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', tone: run.status === 'running' ? 'muted' : 'warn' });
   }
   const approvals = approvalSummary(readiness);
   if (approvals) facts.push({ id: 'approvals', label: `Approvals: ${approvals}`, tone: readiness.readyForProduction ? 'ok' : 'warn' });

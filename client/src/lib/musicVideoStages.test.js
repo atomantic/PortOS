@@ -163,6 +163,15 @@ describe('describeProjectStatus', () => {
     ]);
   });
 
+  it('says why a stopped production run is waiting rather than calling every stop a pause', () => {
+    const fact = (status) => describeProjectStatus({ productionRuns: [{ id: 'r1', status }] }, { progress: stages('produce') })
+      .facts.find((entry) => entry.id === 'production').label;
+    expect(fact('stopped')).toBe('Production paused');
+    expect(fact('blocked')).toBe('Production blocked');
+    expect(fact('limit-reached')).toBe('Production at its limit');
+    expect(fact('needs-replan')).toBe('Production needs a replan');
+  });
+
   it('reports drafts and the final render', () => {
     const drafts = describeProjectStatus({ excerpts: [{ id: 'a', status: 'complete', filename: 'a.mp4' }] }, { progress: stages('review') });
     expect(drafts.headline).toBe('Stage 6 of 7: Review');
