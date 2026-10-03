@@ -62,7 +62,7 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
   const [edit, setEdit] = useState(null); // { for: stage, value } — the director's edit at a checkpoint
   // Planning approval authority is granted with the next explicit resume.
   const [autoApproveEdit, setAutoApproveEdit] = useState(null);
-  const autoApprove = autoApproveEdit?.runId === run?.id ? autoApproveEdit.value : (run?.brief?.autoApprove || []).filter(stage => stage !== 'proof');
+  const autoApprove = autoApproveEdit && autoApproveEdit.runId === run?.id ? autoApproveEdit.value : (run?.brief?.autoApprove || []).filter(stage => stage !== 'proof');
   const [grantError, setGrantError] = useState(null);
   if (!run) return null;
   const rows = autonomousStageRows(run);
@@ -81,7 +81,7 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
   const selected = selectedRow?.id || null;
   // Every resume path carries the selected grant and shows authorization failures inline.
   const resume = (edits = {}) => {
-    if (autoApproveEdit?.runId !== run.id) return auto.resume(edits);
+    if (!autoApproveEdit || autoApproveEdit.runId !== run.id) return auto.resume(edits);
     setGrantError(null);
     return auto.resume({ ...edits, autoApprove }, { inline: true })
       .then((res) => { setAutoApproveEdit(null); return res; })

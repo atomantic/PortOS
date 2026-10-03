@@ -98,18 +98,6 @@ export async function bindProductionShot(id, shotId) {
   return changed(project);
 }
 
-/** The existing password is reverified; agent session tokens are not approval authority.
- * This protects against delegated agents, not an adversary controlling the host or password.
- * No password is persisted and password-free installs fail closed for approvals.
- */
-export async function requireProductionOperator(req) {
-  const { isAuthEnabled, verifyPassword } = await import('../auth.js');
-  if (!await isAuthEnabled()) throw new ServerError('Set an instance password in Settings > Security before approving production. Draft editing remains available.', { status: 403, code: 'OPERATOR_PASSWORD_REQUIRED' });
-  if (req.headers?.authorization || !await verifyPassword(req.body?.password)) {
-    throw new ServerError('Enter the instance password yourself to approve this revision. Agent/API credentials cannot approve it.', { status: 403, code: 'OPERATOR_REAUTH_REQUIRED' });
-  }
-}
-
 /** Creative decisions use an existing authenticated session, including agents.
  * Auth-off, peer credentials and caller-supplied identities confer no authority.
  */

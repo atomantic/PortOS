@@ -1,6 +1,6 @@
 /**
  * Prepare external platform drafts for manual review and publication.
- * The authenticated operator route requires fresh password verification.
+ * Draft preparation requires an existing authenticated session, including agents.
  * PortOS never submits a draft; the operator publishes in the destination
  * platform and records its URL. Adapter preparation runs in a serialized,
  * dedicated browser tab. Existing drafts can be discarded or replaced.

@@ -15,6 +15,9 @@ vi.mock('../services/promptRunner.js', () => ({
   },
 }));
 
+const prepareExternalDraft = vi.hoisted(() => vi.fn(async () => ({ draftId: 'synthetic-external-draft' })));
+vi.mock('../services/musicVideo/publish/index.js', async original => ({ ...await original(), preparePublishDraft: prepareExternalDraft }));
+
 const ROOT = () => lazyTempDataRoot('mv-production-review-');
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
@@ -313,7 +316,11 @@ describe('human-reviewed Music Video workflow', () => {
     const result = await request(app).post(`${base}/publish/drafts/any-draft/submit`).set('authorization', 'Bearer synthetic-agent').send({ approved: true, password: 'synthetic-operator-password' });
     expect(result.status).toBe(403);
     expect(result.body.code).toBe('PUBLISH_MANUAL_REQUIRED');
-    expect((await request(app).post(`${base}/publish/youtube/prepare`).send({ approved: true })).status).toBe(403);
+    auth.authenticated = false;
+    expect((await request(app).post(`${base}/publish/youtube/prepare`).send({})).status).toBe(401);
+    auth.authenticated = true;
+    expect((await request(app).post(`${base}/publish/youtube/prepare`).set('authorization', 'Bearer synthetic-agent').send({})).status).toBe(200);
+    expect(prepareExternalDraft).toHaveBeenCalledWith(project.id, 'youtube', expect.any(Object));
   });
 });
 

@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { Router } from 'express';
 import { musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema } from '../lib/musicVideoValidation.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionOperator, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -748,7 +748,7 @@ router.put('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
 
 router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {
   const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
-  await requireProductionOperator(req);
+  await requireProductionReviewer(req);
   const { password: _password, ...body } = req.body || {};
   const options = validateRequest(musicVideoPublishPrepareSchema, body);
   res.json(await preparePublishDraft(req.params.id, target, options));

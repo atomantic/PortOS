@@ -26,7 +26,7 @@ export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
 export const AUTONOMOUS_AUTO_APPROVE_LABELS = Object.freeze({ art: 'Art', storyboard: 'Storyboard', proof: 'Proof' });
 
 export const AUTONOMOUS_STATUS_LABELS = Object.freeze({
-  running: 'Running', 'awaiting-approval': 'Waiting for your approval', 'needs-human': 'Needs you', stopped: 'Paused',
+  running: 'Running', 'awaiting-approval': 'Awaiting review', 'needs-human': 'Needs attention', stopped: 'Paused',
   completed: 'Finished', failed: 'Failed', canceled: 'Cancelled',
 });
 

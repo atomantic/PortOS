@@ -31,9 +31,8 @@ describe('PublishPostingPanel (#9282)', () => {
     const reddit = row('Reddit');
     fireEvent.change(within(reddit).getByLabelText('Subreddit'), { target: { value: 'SunoAI' } });
     fireEvent.change(within(reddit).getByLabelText('Post type'), { target: { value: 'link' } });
-    fireEvent.change(within(reddit).getByLabelText('Instance password to prepare Reddit'), { target: { value: 'synthetic-password' } });
     fireEvent.click(within(reddit).getByRole('button', { name: 'Fill draft' }));
-    expect(publishing.prepare).toHaveBeenCalledWith('reddit', { subreddit: 'SunoAI', kind: 'link', password: 'synthetic-password' });
+    expect(publishing.prepare).toHaveBeenCalledWith('reddit', { subreddit: 'SunoAI', kind: 'link' });
   });
 
   it('shows the filled draft and requires manual platform publication', () => {
