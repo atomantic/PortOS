@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
+import Banner from '../../ui/Banner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { timeAgo } from '../../../utils/formatters';
 import { sameJsonShape } from '../../../lib/sameJsonShape';
@@ -121,6 +122,8 @@ export default function LinksTab({ onRefresh }) {
   const [links, setLinks] = useState([]);
   const [buckets, setBuckets] = useState([]);
   const [loading, setLoading] = useState(true);
+  // A local action-refresh read (revert after a failed optimistic update) failed.
+  const [actionReadFailed, setActionReadFailed] = useState(false);
   const [filter, setFilter] = useState('all'); // all, repo, scanned, other, ungrouped
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState(null);
@@ -137,8 +140,15 @@ export default function LinksTab({ onRefresh }) {
   // from list views, search, and bucket boards). The server schema caps at
   // 5000, which is ample headroom for a single-user bookmark collection.
   const fetchLinks = useCallback(async () => {
-    const data = await api.getBrainLinks({ limit: 5000, silent: true }).catch(() => ({ links: [] }));
-    setLinks(data.links || []);
+    // On failure keep the last good snapshot and flag the collection as
+    // unavailable rather than substituting an empty (and authoritative-looking) list.
+    const data = await api.getBrainLinks({ limit: 5000, silent: true }).catch(() => null);
+    if (data) {
+      setLinks(data.links || []);
+      setActionReadFailed(false);
+    } else {
+      setActionReadFailed(true);
+    }
     setLoading(false);
   }, []);
 
@@ -159,7 +169,7 @@ export default function LinksTab({ onRefresh }) {
       })));
     return { updates };
   }, []);
-  const { data: changes, loading: reading } = useSocketResource(readChanges, {
+  const { data: changes, loading: reading, error: readError, refetch } = useSocketResource(readChanges, {
     events: LINK_EVENTS,
     matchesEvent: payload => typeof payload?.id === 'string',
     compare: sameJsonShape
@@ -193,6 +203,12 @@ export default function LinksTab({ onRefresh }) {
       return changed ? next : prev;
     });
   }, [changes, reading]);
+
+  const unavailable = Boolean(readError) || actionReadFailed;
+  const retryRead = () => {
+    if (actionReadFailed) fetchLinks();
+    refetch();
+  };
 
   // Client-side filter (type / bucket membership) then keyword search.
   const matchesFilter = (link) => {
@@ -553,6 +569,27 @@ export default function LinksTab({ onRefresh }) {
         onDragEnd={handleDragEnd}
         onDragCancel={handleDragCancel}
       >
+      {unavailable && (
+        <Banner
+          tone="error"
+          icon={AlertCircle}
+          title="Links unavailable"
+          className="mb-4"
+          actions={(
+            <button
+              type="button"
+              onClick={retryRead}
+              className="flex items-center gap-1 px-3 py-1.5 min-h-[40px] rounded border border-port-error/40 text-port-error hover:bg-port-error/10 text-xs"
+            >
+              <RefreshCw size={12} /> Retry
+            </button>
+          )}
+        >
+          {links.length > 0 || buckets.length > 0
+            ? 'Could not refresh your saved links. The list below may be out of date.'
+            : 'Could not load your saved links. This does not mean the collection is empty.'}
+        </Banner>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(340px,440px)] gap-6 items-start">
         {/* Left column: entry form, filters, and the full link list */}
         <div className="min-w-0 flex flex-col">
@@ -1078,7 +1115,7 @@ export default function LinksTab({ onRefresh }) {
           </div>
         )}
 
-        {links.length === 0 && (
+        {links.length === 0 && !unavailable && (
           <div className="text-center py-12 text-gray-500">
             <Link2 className="w-12 h-12 mx-auto mb-3 opacity-30" />
             <p>No links saved yet.</p>
