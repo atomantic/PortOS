@@ -36,7 +36,7 @@ vi.mock('../services/musicVideo/excerptRender.js', async original => ({ ...await
 const { default: router } = await import('./musicVideo.js');
 const store = await import('../services/musicVideo/projects.js');
 const { saveGeneratedDevArtifact } = await import('../services/musicVideo/devArtifactService.js');
-const { assertProductionApproval } = await import('../services/musicVideo/productionReview.js');
+const { assertProductionApproval, approveProductionStage, productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
 const app = express();
 app.use(express.json()); app.use('/api/music-video', router); app.use(errorMiddleware);
 let project, base, draft;
@@ -153,6 +153,25 @@ describe('human-reviewed Music Video workflow', () => {
     await save({ ...draft, visualLanguage: 'New orange direction' });
     expect((await read()).body.readiness.readyForProduction).toBe(false);
     expect((await request(app).post(`${base}/render`).send({})).status).toBe(409);
+  });
+
+  it('accepts an autonomous run\'s auto-approved proof for the current excerpt only, and never over HTTP', async () => {
+    expect((await approve('art')).status).toBe(200);
+    expect((await approve('storyboard')).status).toBe(200);
+    expect((await request(app).post(`${base}/production-review/proof`).send({ startSec: 0, endSec: 20 })).status).toBe(202);
+    const autoReview = { autoApproved: true, watchedWithAudio: false, excerptId: 'proof-fixture', filename: 'synthetic-proof.mp4',
+      energyComparison: 'Auto-approved by the autonomous run (brief.autoApprove).', timecodedNotes: '0:00 auto-approved' };
+    // The operator route cannot claim the waiver, even with the password.
+    expect((await approve('proof', { proofReview: autoReview })).status).toBe(400);
+    const current = await store.getProject(project.id);
+    const input = { stage: 'proof', basis: productionReviewBasis(current).proof, approvedBy: 'autopilot' };
+    expect(() => approveProductionStage(current, { ...input, proofReview: { ...autoReview, excerptId: 'older-proof' } }))
+      .toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_REVIEW_STALE' }));
+    expect(() => approveProductionStage(current, { ...input, proofReview: { ...autoReview, autoApproved: 'yes' } }))
+      .toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_PROOF_REVIEW_REQUIRED' }));
+    const approved = approveProductionStage(current, { ...input, proofReview: autoReview });
+    expect(approved.productionReview.approvals.proof).toMatchObject({ approvedBy: 'autopilot', proofReview: { autoApproved: true } });
+    expect(() => assertProductionApproval(approved)).not.toThrow();
   });
 
   it('distinguishes provisional/zero-length/missing lyrics from an explicit instrumental', async () => {

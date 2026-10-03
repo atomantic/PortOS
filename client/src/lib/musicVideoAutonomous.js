@@ -15,12 +15,15 @@ export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
   local: 'Local engine (Music Studio)',
 });
 
-export { AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousMedium } from '../../../server/lib/musicVideoAutonomous.js';
+export { AUTONOMOUS_AUTO_APPROVE_STAGES, AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousMedium } from '../../../server/lib/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
   ...Object.fromEntries(AUTONOMOUS_STAGES.map((stage) => [stage.id, stage.label])),
   cast: 'Cast & Sets',
 });
+
+// Production review stages the run may approve itself (`brief.autoApprove`).
+export const AUTONOMOUS_AUTO_APPROVE_LABELS = Object.freeze({ art: 'Art', storyboard: 'Storyboard', proof: 'Proof' });
 
 export const AUTONOMOUS_STATUS_LABELS = Object.freeze({
   running: 'Running', 'awaiting-approval': 'Waiting for your approval', 'needs-human': 'Needs you', stopped: 'Paused',

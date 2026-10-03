@@ -58,6 +58,15 @@ export const AUTONOMOUS_PROMPT_MAX = 4000;
 export const AUTONOMOUS_NAME_MAX = 200;
 export const AUTONOMOUS_ORIGINS = Object.freeze(['manual', 'schedule']);
 
+// The Production review stages a run may approve by itself once the operator
+// grants it (`brief.autoApprove`, set with the instance password on start or
+// resume). In review order; readiness checks still gate every one.
+export const AUTONOMOUS_AUTO_APPROVE_STAGES = Object.freeze(['art', 'storyboard', 'proof']);
+
+/** Known auto-approve stages, de-duplicated, in review order. */
+export const normalizeAutoApprove = (list) => AUTONOMOUS_AUTO_APPROVE_STAGES
+  .filter((stage) => Array.isArray(list) && list.includes(stage));
+
 export const AUTONOMOUS_DEFAULT_LIMITS = Object.freeze({ maxGenerations: 40, maxReviewAttempts: 3 });
 export const AUTONOMOUS_LIMIT_BOUNDS = Object.freeze({
   maxGenerations: Object.freeze({ min: 1, max: 500 }),

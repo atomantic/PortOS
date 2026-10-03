@@ -32,6 +32,14 @@ import { assertProductionApproval, productionReadiness, productionProofNeedsRend
  * Production is delegated: `produce` starts the server-owned production run (or
  * the code render) and finishes when that reports back over the `production`
  * event. Only explicit start/resume requests begin work.
+ *
+ * Production review (art → storyboard → proof) is a human gate: `produce` parks
+ * `needs-human` until it is approved. `brief.autoApprove` lets the operator hand
+ * the listed stages to the run instead — granted once, with the instance
+ * password, on the start or resume request (the route checks it; the service
+ * only accepts a grant the route authorized). An auto-approval still needs a
+ * clean readiness report for that stage, and the proof is approved only once
+ * its excerpt has actually rendered.
  */
 
 import { randomUUID } from 'crypto';
@@ -47,6 +55,7 @@ import {
   autonomousMedium,
   autonomousPool,
   nextAutonomousStage,
+  normalizeAutoApprove,
   normalizeAutonomousBrief,
   normalizeSunoOptions,
   sunoSongFields,
@@ -83,6 +92,9 @@ const defaults = {
   acceptDocument: async (...args) => (await import('./documentGeneration.js')).acceptMixedMediaDocument(...args),
   generateCode: async (...args) => (await import('./codeGeneration.js')).generateMusicVideoCode(...args),
   renderVideo: async (...args) => (await import('./render.js')).renderMusicVideo(...args),
+  // The operator route's persistence path, minus its password check (the grant was checked on start/resume).
+  approveProductionReview: async (...args) => (await import('./productionReviewService.js')).approveProductionReview(...args),
+  wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
 };
 let deps = { ...defaults };
 export function __setAutonomousDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
@@ -130,6 +142,75 @@ async function patchRun(projectId, fn) {
 }
 
 const stagePatch = (run, stage, patch) => ({ stages: { [stage]: { ...run.stages[stage], ...patch } } });
+
+// ---- production review auto-approval (brief.autoApprove) --------------------------
+
+const PROOF_POLL_MS = 5_000;
+const PROOF_WAIT_MAX_MS = 90 * 60_000;
+const autoApproves = (run, stage) => normalizeAutoApprove(run.brief.autoApprove).includes(stage);
+
+/**
+ * The brief fields for an auto-approve request: none when it lists no stage,
+ * else the stages plus when the operator granted them. A non-empty list the
+ * route did not authorize (operator password) is refused.
+ */
+function autoApproveGrant(list, authorized) {
+  const autoApprove = normalizeAutoApprove(list);
+  if (!autoApprove.length) return { autoApprove: [], autoApproveAuthorizedAt: null };
+  if (!authorized) throw runError(403, 'OPERATOR_REAUTH_REQUIRED', 'Enter the instance password yourself to let the run approve production review stages. Agent/API credentials cannot grant it.');
+  return { autoApprove, autoApproveAuthorizedAt: new Date().toISOString() };
+}
+
+/** Approve `stage` for the run when the brief allows it and its readiness is clean; returns the fresh project. */
+async function autoApproveStage(project, run, stage) {
+  if (!autoApproves(run, stage)) return project;
+  const readiness = productionReadiness(project);
+  if (readiness[stage].approved || readiness[stage].problems.length) return project;
+  await deps.approveProductionReview(project.id, { stage, basis: readiness.basis[stage], approvedBy: 'autopilot' });
+  console.log(`🤖 Autonomous music video ${short(run.id)} auto-approved ${stage} (brief.autoApprove)`);
+  return getProject(project.id);
+}
+
+/**
+ * Wait for the current proof excerpt to finish rendering (polls the record; the
+ * excerpt job runs on its own). Stops when the run is stopped or canceled; a
+ * failed render or a render past the cap fails the stage.
+ */
+async function awaitProofExcerpt(projectId, run) {
+  const polls = Math.ceil(PROOF_WAIT_MAX_MS / PROOF_POLL_MS);
+  for (let i = 0; ; i++) {
+    const project = await getProject(projectId);
+    const latest = projectAutonomousRun(project);
+    if (latest?.id !== run.id || latest.status !== 'running' || latest.processId !== PROCESS_ID) {
+      throw runError(409, 'NOT_RUNNING', 'The run was stopped while its proof rendered');
+    }
+    const excerptId = project.productionReview?.proof?.excerptId;
+    const excerpt = excerptId ? (project.excerpts || []).find((e) => e.id === excerptId) : null;
+    if (excerpt?.status === 'complete') return project;
+    if (excerpt && excerpt.status !== 'rendering') {
+      throw runError(500, 'PROOF_RENDER_FAILED', `The proof render failed: ${trimTo(excerpt.error || excerpt.status, 400)}`);
+    }
+    if (i >= polls) throw runError(504, 'PROOF_RENDER_TIMEOUT', 'The proof render did not finish within 90 minutes');
+    await deps.wait(PROOF_POLL_MS);
+  }
+}
+
+/** Approve the rendered proof for the run (brief lists `proof`); readiness problems are left for the assert to park on. */
+async function autoApproveProof(projectId, run) {
+  const project = await awaitProofExcerpt(projectId, run);
+  const readiness = productionReadiness(project);
+  if (readiness.proof.approved || readiness.proof.problems.length) return;
+  const excerptId = project.productionReview.proof.excerptId;
+  const excerpt = project.excerpts.find((e) => e.id === excerptId);
+  await deps.approveProductionReview(projectId, {
+    stage: 'proof', basis: readiness.basis.proof, approvedBy: 'autopilot',
+    proofReview: {
+      autoApproved: true, watchedWithAudio: false, excerptId, filename: excerpt.filename,
+      energyComparison: 'Auto-approved by the autonomous run (brief.autoApprove).', timecodedNotes: '0:00 auto-approved',
+    },
+  });
+  console.log(`🤖 Autonomous music video ${short(run.id)} auto-approved proof ${short(excerptId)} (brief.autoApprove)`);
+}
 
 // ---- stage executors -------------------------------------------------------------
 // Each returns `{ output }` (merged into run.output) or `{ output, wait: true }`
@@ -316,6 +397,14 @@ const STAGES = {
     }
     await prepareProductionReview(project.id);
     project = await getProject(project.id);
+    const artWasApproved = productionReadiness(project).art.approved;
+    project = await autoApproveStage(project, run, 'art');
+    if (!artWasApproved && productionReadiness(project).art.approved) {
+      // Preparing stops at the art gate; with art approved it drafts the storyboard.
+      await prepareProductionReview(project.id);
+      project = await getProject(project.id);
+    }
+    project = await autoApproveStage(project, run, 'storyboard');
     assertProductionApproval(project, 'storyboard');
     // The authoring stage's pin, else the run's code-authoring pin taken as
     // given (production checks it exactly), else the direction LLM.
@@ -334,6 +423,7 @@ const STAGES = {
       if (productionProofNeedsRender(project, readiness.basis.proof)) {
         await renderProductionProof(project.id, productionProofWindow(project));
       }
+      if (autoApproves(run, 'proof')) await autoApproveProof(project.id, run);
       assertProductionApproval(await getProject(project.id));
       const render = await deps.renderVideo(project.id);
       return { output: { renderJobId: render?.jobId || null } };
@@ -423,8 +513,8 @@ const emptyStages = () => Object.fromEntries(AUTONOMOUS_STAGE_IDS.map((id) => [i
  * Start a run from one prompt: creates the project (autonomous mode, no track
  * yet) and begins the pipeline in the background. Returns `{ project, run }`.
  */
-export async function startAutonomousVideo(input) {
-  const brief = normalizeAutonomousBrief(input);
+export async function startAutonomousVideo(input, { autoApproveAuthorized = false } = {}) {
+  const brief = { ...normalizeAutonomousBrief(input), ...autoApproveGrant(input?.autoApprove, autoApproveAuthorized) };
   if (!brief.prompt) throw runError(400, 'VALIDATION_ERROR', 'A prompt is required');
   const now = new Date().toISOString();
   const created = await deps.createProject({
@@ -458,7 +548,7 @@ export async function startAutonomousVideo(input) {
     updatedAt: now,
   };
   const out = await mutateProjectRecord(created.id, (current) => ({ project: { ...current, autonomousRun: run }, run }));
-  console.log(`🎬 Autonomous music video ${short(run.id)} started (${brief.tools.length} tool(s), ${brief.checkpoints.length} checkpoint(s)${brief.origin.kind === 'schedule' ? ', scheduled' : ''})`);
+  console.log(`🎬 Autonomous music video ${short(run.id)} started (${brief.tools.length} tool(s), ${brief.checkpoints.length} checkpoint(s)${brief.autoApprove.length ? `, auto-approve ${brief.autoApprove.join('/')}` : ''}${brief.origin.kind === 'schedule' ? ', scheduled' : ''})`);
   publish(out.project, out.run);
   advanceInBackground(created.id);
   return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -496,9 +586,11 @@ const assertAtSongCheckpoint = (run) => {
 // credit-spending choice) or a new local render on a new track.
 const SONG_OUTPUT_KEYS = ['trackId', 'sunoSongIds', 'songSource', 'songFallbackReason', 'localTrackId', 'localSongJobId'];
 
-export async function resumeAutonomousVideo(projectId, edits = {}) {
+export async function resumeAutonomousVideo(projectId, edits = {}, { autoApproveAuthorized = false } = {}) {
   const { run } = await requireRun(projectId);
   assertResumable(run);
+  // "Auto-approve the rest": replaces the brief's grant (an empty list clears it).
+  const grant = edits.autoApprove !== undefined ? autoApproveGrant(edits.autoApprove, autoApproveAuthorized) : null;
   const retake = edits.retakeSong === true;
   if (retake) assertAtSongCheckpoint(run);
   // Stop changes the record immediately, but its stage may still be settling.
@@ -518,7 +610,11 @@ export async function resumeAutonomousVideo(projectId, edits = {}) {
     const stage = retake ? 'song' : r.stage;
     return {
       status: 'running', awaiting: null, error: null, errorCode: null, processId: PROCESS_ID,
-      ...(edits.suno ? { brief: { ...r.brief, suno: normalizeSunoOptions({ ...r.brief.suno, ...edits.suno }) } } : {}),
+      ...(edits.suno || grant ? { brief: {
+        ...r.brief,
+        ...(edits.suno ? { suno: normalizeSunoOptions({ ...r.brief.suno, ...edits.suno }) } : {}),
+        ...(grant || {}),
+      } } : {}),
       output: {
         ...(retake ? Object.fromEntries(SONG_OUTPUT_KEYS.map((key) => [key, null])) : {}),
         ...(typeof edits.lyrics === 'string' ? { lyrics: edits.lyrics } : {}),
