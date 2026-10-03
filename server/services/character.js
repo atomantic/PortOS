@@ -178,7 +178,7 @@ function eventXpTotal(events) {
 // The residual is taken as a max, not a sum, because each input's baseline is the same
 // shared pre-ledger history, not an independent grant. Idempotent under redelivery — a
 // snapshot already folded in has residual 0 — and symmetric, so both peers converge.
-export function reconcileXp(inputs, mergedEvents) {
+function reconcileXp(inputs, mergedEvents) {
   let baseline = 0;
   for (const input of inputs) {
     baseline = Math.max(baseline, normalizeXp(input?.xp) - eventXpTotal(input?.events));
