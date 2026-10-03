@@ -118,19 +118,34 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
         {!isActive && (data?.installed || data?.configured) && (
           <>
             {/* Sync data from active into this backend */}
-            <button
-              onClick={() => setConfirmAction({
-                type: 'sync',
-                label: `Sync from ${activeLabel} to ${displayLabel}?`,
-                detail: `Copies data from the active ${activeLabel} database into ${displayLabel}. ${displayLabel} will be left in its current state (running or stopped).`,
-                action: () => runAction(`sync-${backend}`, syncDatabase, `Data synced from ${activeLabel} to ${displayLabel}`)
-              })}
-              disabled={busy}
-              className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white`}
-            >
-              <RotateCw size={12} />
-              Sync from {activeLabel}
-            </button>
+            {isRunning ? (
+              <button
+                onClick={() => setConfirmAction({
+                  type: 'sync',
+                  label: `Replace ${displayLabel} data with ${activeLabel} data?`,
+                  detail: `This replaces matching tables and their records in ${displayLabel} with a snapshot of ${activeLabel}; records are not merged. Back up ${displayLabel} first if you need to keep its current records. ${activeLabel} remains the active database.`,
+                  displayLabel,
+                  action: () => runAction(`sync-${backend}`, syncDatabase, `Data synced from ${activeLabel} to ${displayLabel}`)
+                })}
+                disabled={busy}
+                className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white`}
+              >
+                <RotateCw size={12} />
+                Replace data from {activeLabel}...
+              </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  disabled
+                  className={`${btnClass} bg-port-border/50 text-gray-500 cursor-not-allowed`}
+                  title={`${displayLabel} must be running to replace its data`}
+                >
+                  <RotateCw size={12} />
+                  Replace data from {activeLabel}...
+                </button>
+                <span className="text-xs text-gray-500">Start {displayLabel} before replacing its data</span>
+              </div>
+            )}
 
             {/* Destroy */}
             {canDestroy && (
@@ -139,6 +154,7 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
                   type: 'destroy',
                   label: `Destroy ${displayLabel} database and all its data?`,
                   detail: 'This permanently removes the database files. You can set it up again later.',
+                  displayLabel,
                   action: () => runAction(`destroy-${backend}`, () => destroyDatabase(backend), `${displayLabel} database destroyed`)
                 })}
                 disabled={busy}
@@ -500,6 +516,7 @@ export function DatabaseTab() {
                 type: 'migrate',
                 label: `Migrate from ${direction.source} to ${direction.target}?`,
                 detail: 'PortOS stops itself, transfers the data, and restarts on the new backend. This causes brief downtime and cannot be cancelled once the transfer starts.',
+                targetLabel: direction.target === 'docker' ? 'Docker' : 'Native',
                 action: () => handleMigrate(direction),
               })}
               onRecover={handleRecover}
@@ -519,7 +536,7 @@ export function DatabaseTab() {
             {/* Confirmation dialog */}
             {confirmAction && (
               <div className={`bg-port-bg border rounded-lg p-4 space-y-3 ${
-                confirmAction.type === 'destroy' ? 'border-port-error/30' : 'border-port-warning/30'
+                confirmAction.type === 'destroy' ? 'border-port-error/30' : confirmAction.type === 'sync' ? 'border-port-warning/30' : 'border-port-accent/20'
               }`}>
                 <p className="text-sm text-white">{confirmAction.label}</p>
                 {confirmAction.detail && (
@@ -532,11 +549,13 @@ export function DatabaseTab() {
                     className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
                       confirmAction.type === 'destroy'
                         ? 'bg-port-error/20 hover:bg-port-error/30 text-port-error'
-                        : 'bg-port-warning/20 hover:bg-port-warning/30 text-port-warning'
+                        : confirmAction.type === 'sync'
+                        ? 'bg-port-warning/20 hover:bg-port-warning/30 text-port-warning'
+                        : 'bg-port-accent/20 hover:bg-port-accent/30 text-port-accent'
                     }`}
                   >
                     {busy ? <BrailleSpinner /> : <ArrowRightLeft size={14} />}
-                    Confirm
+                    {confirmAction.type === 'destroy' ? `Delete ${confirmAction.displayLabel} database` : confirmAction.type === 'sync' ? `Replace ${confirmAction.displayLabel} data` : `Migrate to ${confirmAction.targetLabel}`}
                   </button>
                   <button
                     onClick={() => setConfirmAction(null)}
