@@ -474,71 +474,10 @@ async function getCharacterSnapshot() {
   return { data, checksum: computeChecksum(data) };
 }
 
+// Merge + persist live in the Character service so they share its mutation queue with local
+// edits (#9817); reading local state here and writing it back would race them.
 async function applyCharacterRemote(remoteData) {
-  if (!remoteData) return { applied: false, count: 0 };
-
-  const local = await readJSONFile(CHARACTER_FILE, null, { strict: true });
-  if (!local) {
-    // No local character — accept remote entirely, but strip every derived field (an older
-    // peer still sends `level`): they're derived on read now (#2673/#2674), so a stored value
-    // would be stale and would re-propagate in our own snapshot.
-    const accepted = characterService.stripDerivedFields(remoteData);
-    // Same accounting as the merge below, over a single input: a malformed remote `xp` lands as
-    // a valid number instead of null/NaN, and the counter never reads below its own ledger.
-    accepted.xp = characterService.reconcileXp([accepted], accepted.events);
-    await atomicWrite(CHARACTER_FILE, accepted);
-    console.log(`🔄 Character sync: accepted remote character`);
-    return { applied: true, count: 1 };
-  }
-
-  // Merge events by ID (union — never lose events)
-  const { merged: mergedEvents, changed: eventsChanged } = mergeArraysByKey(
-    local.events || [],
-    remoteData.events || [],
-    'id',
-    'timestamp'
-  );
-
-  // Sort events chronologically
-  mergedEvents.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
-
-  // Merge synced ticket/task arrays (union by value)
-  const mergedTickets = [...new Set([...(local.syncedJiraTickets || []), ...(remoteData.syncedJiraTickets || [])])];
-  const mergedTasks = [...new Set([...(local.syncedTaskIds || []), ...(remoteData.syncedTaskIds || [])])];
-
-  // Scalar fields: take from whichever is more recent
-  const localTs = local.updatedAt || '';
-  const remoteTs = remoteData.updatedAt || '';
-  const scalarSource = remoteTs > localTs ? remoteData : local;
-
-  const merged = {
-    ...local,
-    name: scalarSource.name ?? local.name,
-    class: scalarSource.class ?? local.class,
-    avatarPath: scalarSource.avatarPath ?? local.avatarPath,
-    // Reconciled from the merged event ledger, not Math.max: independent grants taken on
-    // different machines each survive in the event union and must each be counted (#9819).
-    xp: characterService.reconcileXp([local, remoteData], mergedEvents),
-    hp: scalarSource.hp,
-    maxHp: scalarSource.maxHp,
-    // `level` is age-derived on read (#2673), not persisted — never merge a stale peer level.
-    events: mergedEvents,
-    syncedJiraTickets: mergedTickets,
-    syncedTaskIds: mergedTasks,
-    updatedAt: remoteTs > localTs ? remoteTs : localTs
-  };
-  // Drop every derived field (level/ageYears/skills) that `...local` may have carried in from
-  // a legacy or hand-edited file — they're all derived on read now. Routed through the
-  // service's shared helper so a newly-derived field can't be forgotten at this site.
-  const persisted = characterService.stripDerivedFields(merged);
-
-  // A baseline-only change (no new event, older peer timestamp) still moves the counter.
-  if (eventsChanged || remoteTs > localTs || persisted.xp !== local.xp) {
-    await atomicWrite(CHARACTER_FILE, persisted);
-    console.log(`🔄 Character sync: merged ${mergedEvents.length} events`);
-    return { applied: true, count: mergedEvents.length };
-  }
-  return { applied: false, count: 0 };
+  return characterService.applyRemoteSnapshot(remoteData);
 }
 
 // --- Category: Digital Twin ---
