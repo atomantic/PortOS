@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {CalendarDays, ChevronLeft, ChevronRight, MapPin} from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
@@ -23,21 +23,28 @@ export default function DayView({ accounts }) {
   const [searchParams, updateParams] = useUrlParams();
   const { theme } = useThemeContext();
 
-  const fetchEvents = useCallback(async () => {
-    const startDate = date.toISOString();
-    const nextDay = new Date(date);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const endDate = nextDay.toISOString();
-    const data = await api.getCalendarEvents({ startDate, endDate, limit: 200 }).catch(() => ({ events: [] }));
-    setEvents(data?.events || []);
-    setLoading(false);
-  }, [date]);
-
-  useEffect(() => { fetchEvents(); }, [fetchEvents]);
   useEffect(() => {
+    let active = true;
+    let request = 0;
+    const fetchEvents = async () => {
+      const currentRequest = ++request;
+      const startDate = date.toISOString();
+      const nextDay = new Date(date);
+      nextDay.setDate(nextDay.getDate() + 1);
+      const endDate = nextDay.toISOString();
+      const data = await api.getCalendarEvents({ startDate, endDate, limit: 200 }).catch(() => ({ events: [] }));
+      if (!active || currentRequest !== request) return;
+      setEvents(data?.events || []);
+      setLoading(false);
+    };
+    setLoading(true);
+    fetchEvents();
     socket.on('calendar:sync:completed', fetchEvents);
-    return () => socket.off('calendar:sync:completed', fetchEvents);
-  }, [fetchEvents]);
+    return () => {
+      active = false;
+      socket.off('calendar:sync:completed', fetchEvents);
+    };
+  }, [date]);
 
   const navigate = (days) => {
     setDate(prev => {
@@ -45,14 +52,12 @@ export default function DayView({ accounts }) {
       d.setDate(d.getDate() + days);
       return d;
     });
-    setLoading(true);
   };
 
   const goToday = () => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     setDate(d);
-    setLoading(true);
   };
 
   const allDayEvents = useMemo(() => events.filter(e => e.isAllDay && eventOccursOnDay(e, date)), [events, date]);

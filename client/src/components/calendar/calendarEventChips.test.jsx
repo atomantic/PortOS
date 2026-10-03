@@ -256,6 +256,88 @@ describe.each([
   });
 });
 
+describe.each([
+  ['DayView', DayView, 'Next day'],
+  ['WeekView', WeekView, 'Next week'],
+])('%s event request ordering', (_name, View, nextLabel) => {
+  let requests;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 8, 8, 12));
+    requests = [];
+    api.getCalendarEvents.mockImplementation(params => new Promise(resolve => {
+      requests.push({ params, resolve });
+    }));
+  });
+
+  const resolveEvents = async (request, title) => {
+    const start = new Date(request.params.startDate);
+    start.setHours(10);
+    const end = new Date(start);
+    end.setHours(11);
+    await act(async () => request.resolve({ events: [{
+      ...TIMED, id: title, title, startTime: start.toISOString(), endTime: end.toISOString(),
+    }] }));
+  };
+
+  it('keeps the new date heading and events when the previous window resolves last', async () => {
+    await renderView(<View accounts={ACCOUNTS} />);
+    const oldHeading = screen.getByRole('heading', { level: 2 }).textContent;
+    fireEvent.click(screen.getByRole('button', { name: nextLabel }));
+    expect(requests).toHaveLength(2);
+    const newHeading = screen.getByRole('heading', { level: 2 }).textContent;
+    expect(newHeading).not.toBe(oldHeading);
+
+    await resolveEvents(requests[1], 'Example current event');
+    expect(chipFor('Example current event')).toBeInTheDocument();
+    await resolveEvents(requests[0], 'Example previous event');
+
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe(newHeading);
+    expect(chipFor('Example current event')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Example previous event/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the new window loading when an obsolete request finishes first', async () => {
+    await renderView(<View accounts={ACCOUNTS} />);
+    fireEvent.click(screen.getByRole('button', { name: nextLabel }));
+    await resolveEvents(requests[0], 'Example previous event');
+    expect(screen.getByText('Loading')).toBeInTheDocument();
+
+    await resolveEvents(requests[1], 'Example current event');
+    expect(screen.queryByText('Loading')).not.toBeInTheDocument();
+    expect(chipFor('Example current event')).toBeInTheDocument();
+  });
+
+  it('keeps Today usable when already showing the current window', async () => {
+    await renderView(<View accounts={ACCOUNTS} />);
+    await resolveEvents(requests[0], 'Example current event');
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+    if (requests.length > 1) await resolveEvents(requests[1], 'Example current event');
+    expect(screen.queryByText('Loading')).not.toBeInTheDocument();
+    expect(chipFor('Example current event')).toBeInTheDocument();
+  });
+
+  it('keeps the latest socket refresh and disposes its listener with pending work', async () => {
+    const mounted = render(<MemoryRouter><View accounts={ACCOUNTS} /></MemoryRouter>);
+    await resolveEvents(requests[0], 'Example initial event');
+    const refresh = socketMock.on.mock.calls.find(([event]) => event === 'calendar:sync:completed')[1];
+    act(() => { refresh(); refresh(); });
+    expect(requests).toHaveLength(3);
+
+    await resolveEvents(requests[2], 'Example refreshed event');
+    await resolveEvents(requests[1], 'Example superseded refresh');
+    expect(chipFor('Example refreshed event')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Example superseded refresh/ })).not.toBeInTheDocument();
+
+    act(() => { refresh(); });
+    mounted.unmount();
+    expect(socketMock.off).toHaveBeenCalledWith('calendar:sync:completed', refresh);
+    await resolveEvents(requests[3], 'Example late event');
+    expect(screen.queryByRole('button', { name: /Example late event/ })).not.toBeInTheDocument();
+  });
+});
+
 it('requests the next local midnight on a daylight-saving transition day', async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(2026, 2, 8, 12));
