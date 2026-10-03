@@ -6,6 +6,33 @@ import { createHash } from 'crypto';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async importOriginal =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('code-animation-stages-') }));
+// Inject faults only into render-source writes/removal; revision storage stays real.
+const stagingFaults = vi.hoisted(() => ({ write: false, cleanup: false }));
+vi.mock('fs/promises', async importOriginal => {
+  const real = await importOriginal();
+  return {
+    ...real,
+    open: async (path, flags, ...rest) => {
+      const handle = await real.open(path, flags, ...rest);
+      if (!stagingFaults.write || !String(path).replaceAll('\\', '/').includes('/render/')) return handle;
+      stagingFaults.write = false;
+      return {
+        writeFile: async bytes => {
+          await handle.writeFile(bytes);
+          throw Object.assign(new Error('Synthetic staging write failure'), { code: 'ENOSPC' });
+        },
+        sync: () => handle.sync(), close: () => handle.close(),
+      };
+    },
+    rm: async (path, ...rest) => {
+      if (stagingFaults.cleanup && String(path).replaceAll('\\', '/').includes('/render/')) {
+        stagingFaults.cleanup = false;
+        throw Object.assign(new Error('Synthetic cleanup refusal'), { code: 'EACCES' });
+      }
+      return real.rm(path, ...rest);
+    },
+  };
+});
 vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
@@ -61,6 +88,42 @@ const render = vi.fn(async () => ({ jobId: 'media-job', id: 'video-1', filename:
 const exists = path => access(path).then(() => true, () => false);
 
 describe.skipIf(!ready)('Production stage runs', () => {
+  it.each([true, false])('accounts for failed render-source staging when cleanup refusal is %s', async refuseCleanup => {
+    const { id, revision } = await project();
+    await patchProductionProject(id, { budgets: { diskBytes: revision.totalBytes * 2 } });
+    const unusedSample = vi.fn();
+    stagingFaults.write = true;
+    stagingFaults.cleanup = refuseCleanup;
+    let first;
+    try {
+      first = await startProductionStageRun(id, {}, { sample: unusedSample });
+      expect(await first.done).toBe('failed');
+    } finally {
+      stagingFaults.write = false;
+      stagingFaults.cleanup = false;
+    }
+    const saved = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+    expect(saved).toMatchObject({
+      id: first.run.id, status: 'failed',
+      data: {
+        reservedBytes: refuseCleanup ? revision.totalBytes : 0,
+        spent: { diskBytes: refuseCleanup ? revision.totalBytes : 0 },
+        error: { code: 'ENOSPC', message: 'Synthetic staging write failure' },
+      },
+    });
+    const directory = join(PATHS.data, 'code-animations', 'projects', id, 'runs', first.run.id, 'render', revision.id);
+    expect(await exists(directory)).toBe(refuseCleanup);
+    if (refuseCleanup) expect(await readFile(join(directory, 'index.html'), 'utf8')).toContain('FROZEN');
+    expect(unusedSample).not.toHaveBeenCalled();
+    expect((await getProductionProject(id)).candidateRevisionId).toBe(revision.id);
+    // Budget admission distinguishes retained bytes from confirmed cleanup.
+    const retrySample = vi.fn().mockRejectedValue(Object.assign(new Error('Synthetic sample failure'), { code: 'SAMPLE_FAILED' }));
+    const retry = await startProductionStageRun(id, {}, { sample: retrySample });
+    expect(await retry.done).toBe(refuseCleanup ? 'exhausted' : 'failed');
+    expect(retrySample).toHaveBeenCalledTimes(refuseCleanup ? 0 : 1);
+  });
+
+
   it('measures a real render, repairs it into a new immutable revision, and renders final only from passing evidence', async () => {
     const { id, revision } = await project();
     unfreeze.mockClear(); render.mockClear();
