@@ -24,6 +24,7 @@
  * routes cost $0.
  */
 
+import { selectLocalImageModelFromSettings } from '../imageGen/prepareParams.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { FAL_IMAGE_FAMILIES, buildFalImageRequest, falImageFamily } from '../../lib/falImageModels.js';
 import { resolveFalApiKey } from '../falQueue.js';
@@ -35,6 +36,10 @@ import { maxInputImages, supportsCloudModelOverride } from '../../lib/imageGenCa
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { RUNNER_FAMILIES } from '../../lib/runners.js';
 import { poolHasRoute, routeKey } from './production.js';
+
+const localImageModel = (route, env) => route.model
+  ? (env.imageModels || []).find((model) => model.id === route.model)
+  : selectLocalImageModelFromSettings(env.settings, '', env.imageModels || []);
 
 const describe = (route) => `${route.kind} ${route.mode}${route.model ? ` (${route.model})` : ''}`;
 const isMetered = (route) => MUSIC_VIDEO_AUTOMATION_TOOLS.some((t) => t.id === `${route.kind}:${route.mode}` && t.metered);
@@ -134,9 +139,9 @@ async function routeEligibility(route, env) {
     }
     if (route.mode === 'local') {
       if (!settings?.imageGen?.local?.pythonPath) return { ok: false, reason: 'The local image runtime is not configured in Settings' };
-      const model = (env.imageModels || []).find((m) => m.id === route.model);
-      if (!route.model || !model) return { ok: false, reason: `Local image model "${route.model || '(none)'}" is not installed` };
-      if (!isHardwareCompatible(model.hardwareCompatibility)) return { ok: false, reason: `Local image model "${route.model}" cannot run on this hardware` };
+      const model = localImageModel(route, env);
+      if (!model) return { ok: false, reason: `Local image model "${route.model || '(none)'}" is not installed` };
+      if (!isHardwareCompatible(model.hardwareCompatibility)) return { ok: false, reason: `Local image model "${model.id}" cannot run on this hardware` };
       return { ok: true, reason: null };
     }
     if (settings?.imageGen?.[route.mode]?.enabled !== true) {
@@ -177,9 +182,9 @@ function routeIncapableReason(route, requirement, env) {
       return `${describe(route)} takes at most ${limit} reference image${limit === 1 ? '' : 's'}; the visual spec conditions on ${requirement.conditioning}`;
     }
     if (route.mode === 'local') {
-      const model = (env.imageModels || []).find((m) => m.id === route.model);
+      const model = localImageModel(route, env);
       if (model?.runner !== RUNNER_FAMILIES.FLUX2 && model?.pipelineClass !== 'QwenImage21Pipeline') {
-        return `Local model "${route.model}" cannot use reference images (FLUX.2 and Qwen Image 2.1 only)`;
+        return `Local model "${model?.id || route.model || '(none)'}" cannot use reference images (FLUX.2 and Qwen Image 2.1 only)`;
       }
     }
   }

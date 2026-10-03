@@ -27,3 +27,28 @@ describe('local video pool eligibility', () => {
       .rejects.toThrow(/example-default.*cannot run on this hardware/);
   });
 });
+
+describe('local image pool eligibility', () => {
+  const route = { kind: 'image', mode: 'local' };
+  const imageEnv = (models, pin) => ({
+    ...envFor(() => {}), imageModels: models,
+    settings: { imageGen: { local: { pythonPath: '/opt/example/python', modelId: pin } } },
+  });
+  it('resolves a blank pin and checks reference conditioning against the same installed model', async () => {
+    const env = imageEnv([{ id: 'example-image', pipelineClass: 'QwenImage21Pipeline' }], 'example-image');
+    await expect(assertPoolEligible([route], env)).resolves.toBeUndefined();
+    const { chooseProductionRoute } = await import('./productionPool.js');
+    await expect(chooseProductionRoute({ pool: [route] }, { kind: 'image', conditioning: 1 }, env))
+      .resolves.toMatchObject({ route });
+    env.imageModels[0].pipelineClass = 'ExamplePipeline';
+    await expect(chooseProductionRoute({ pool: [route] }, { kind: 'image', conditioning: 1 }, env))
+      .resolves.toMatchObject({ route: null, reasons: [expect.stringContaining('example-image')] });
+  });
+  it('never falls back for an unavailable named pin, or accepts an incompatible default', async () => {
+    const env = imageEnv([{ id: 'example-image' }]);
+    await expect(assertPoolEligible([{ ...route, model: 'missing-image' }], env)).rejects.toThrow(/missing-image.*not installed/);
+    env.imageModels[0].hardwareCompatibility = { state: 'unavailable', reasons: ['needs a GPU'] };
+    await expect(assertPoolEligible([route], env)).rejects.toThrow(/example-image.*cannot run/);
+    await expect(assertPoolEligible([route], imageEnv([]))).rejects.toThrow(/not installed/);
+  });
+});
