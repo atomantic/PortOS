@@ -133,19 +133,24 @@ PortOS/
 
 ## Testing
 
+Run these commands from the repository root:
+
 ```bash
-# Run server tests
-cd server && npm test
+# Run server tests (Vitest, node environment)
+npm test --prefix server
 
-# Run client tests
-cd client && npm test
+# Run client tests (Vitest, happy-dom environment)
+npm test --prefix client
 
-# Provision and run the isolated DB-backed suites
+# Provision and run the isolated DB-backed suites (portos_test only)
 npm run setup:db:test
 npm run test:db
+```
 
-# Watch mode
-cd server && npm run test:watch
+For server watch mode, run this alternative from the repository root:
+
+```bash
+npm run test:watch --prefix server
 ```
 
 Pull requests into `main` run the tests for affected feature directories, with

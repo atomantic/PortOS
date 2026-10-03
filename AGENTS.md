@@ -21,9 +21,9 @@ Non-obvious invocations only — everything else is in `package.json` scripts.
 npm run install:all   # includes git submodule update --init --recursive
 
 # Root `npm test` runs both workspaces in sequence (server, then client). Run them
-# per workspace to scope to one — both are Vitest, with different environments:
-cd server && npm test            # Vitest (node) — ALSO globs ../scripts, ../lib, ../autofixer
-cd client && npm test            # Vitest (happy-dom) — component/unit tests
+# per workspace from the repository root to scope to one — both are Vitest:
+npm test --prefix server         # Vitest (node) — ALSO globs ../scripts, ../lib, ../autofixer
+npm test --prefix client         # Vitest (happy-dom) — component/unit tests
 # No NODE_ENV prefix needed: server/vitest.config.js FORCES NODE_ENV=test (#4554),
 # because PortOS runs under PM2 with NODE_ENV=development and a suite that
 # inherits it aims at the real Postgres.
