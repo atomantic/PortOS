@@ -194,7 +194,7 @@ describe('media authoring operator authority (#9512)', () => {
     }
     for (const [, body, service] of authoring) {
       expect(service).toHaveBeenCalledTimes(3);
-      if (body.providerId) expect(service).toHaveBeenLastCalledWith(expect.objectContaining(picker));
+      if (body.providerId) expect(service.mock.lastCall[0]).toEqual(expect.objectContaining(picker));
     }
   });
 

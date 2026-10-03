@@ -281,3 +281,44 @@ describe('AutonomousStartDrawer', () => {
     expect(api.startAutonomousMusicVideo.mock.calls[1][0]).toMatchObject({ songSource: 'local', localFallback: false });
   });
 });
+
+describe('auto-approve the rest', () => {
+  const refusal = () => Object.assign(new Error('Enter the instance password yourself to let the run approve production review stages.'), { status: 403, code: 'OPERATOR_REAUTH_REQUIRED' });
+
+  it('starts with the picked stages and the password, asking for the password only once a stage is picked, and shows a refusal inline', async () => {
+    api.startAutonomousMusicVideo.mockRejectedValueOnce(refusal()).mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
+    expect(screen.queryByLabelText('Instance password to grant this')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Proof', { selector: '#mv-auto-auto-approve-proof' }));
+    fireEvent.click(screen.getByLabelText('Art', { selector: '#mv-auto-auto-approve-art' }));
+    const submit = screen.getByRole('button', { name: /start autonomous video/i });
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Instance password to grant this'), { target: { value: 'wrong-password' } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Enter the instance password yourself'));
+    expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({ autoApprove: ['art', 'proof'], password: 'wrong-password' });
+    // The password is never kept for a retry.
+    expect(screen.getByLabelText('Instance password to grant this').value).toBe('');
+    fireEvent.change(screen.getByLabelText('Instance password to grant this'), { target: { value: 'synthetic-password' } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(2));
+    expect(api.startAutonomousMusicVideo.mock.calls[1][0]).toMatchObject({ autoApprove: ['art', 'proof'], password: 'synthetic-password' });
+  });
+
+  it('resumes a parked run with "auto-approve the rest", showing a refused password next to the control', async () => {
+    api.resumeAutonomousMusicVideo.mockRejectedValueOnce(refusal()).mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'needs-human', stage: 'produce', error: 'Review and approve the current art direction first.', brief: { origin: { kind: 'manual' }, autoApprove: [] } })} />);
+    for (const stage of ['storyboard', 'art', 'proof']) fireEvent.click(screen.getByLabelText(stage[0].toUpperCase() + stage.slice(1), { selector: `#mv-run-auto-approve-${stage}` }));
+    const resume = screen.getByRole('button', { name: /resume/i });
+    expect(resume.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Instance password to grant this'), { target: { value: 'wrong-password' } });
+    fireEvent.click(resume);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Enter the instance password yourself'));
+    expect(api.resumeAutonomousMusicVideo).toHaveBeenLastCalledWith('mv-1', { autoApprove: ['art', 'storyboard', 'proof'], password: 'wrong-password' }, { silent: true });
+    fireEvent.change(screen.getByLabelText('Instance password to grant this'), { target: { value: 'synthetic-password' } });
+    fireEvent.click(resume);
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenLastCalledWith('mv-1', { autoApprove: ['art', 'storyboard', 'proof'], password: 'synthetic-password' }, { silent: true }));
+  });
+});
