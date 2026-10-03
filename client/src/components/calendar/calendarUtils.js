@@ -1,3 +1,4 @@
+import { localDateKey } from '../../utils/formatters';
 import { chipColors } from '../../lib/chipContrast';
 
 /**
@@ -84,4 +85,13 @@ export function buildSubcalendarColorMap(accounts) {
     }
   }
   return map;
+}
+
+/** Validate a URL's calendar date at local midnight, falling back to today. */
+export function calendarDateFromParam(value) {
+  const parsed = /^[1-9]\d{3}-\d{2}-\d{2}$/.test(value || '') ? new Date(`${value}T00:00:00`) : null;
+  if (parsed && Number.isFinite(parsed.getTime()) && localDateKey(parsed) === value) return parsed;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today;
 }

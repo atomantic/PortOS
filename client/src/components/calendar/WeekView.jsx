@@ -1,15 +1,16 @@
-import { useState, useMemo } from 'react';
+import { useRef, useMemo } from 'react';
 import {CalendarDays, ChevronLeft, ChevronRight} from 'lucide-react';
 import { useCalendarWindowEvents } from '../../hooks/useCalendarWindowEvents';
 import CalendarWindowStatus from './CalendarWindowStatus';
 import EventDetail from './EventDetail';
+import CalendarDayEvents from './CalendarDayEvents';
 import ChronotypeOverlay from './ChronotypeOverlay';
-import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay } from './calendarUtils';
+import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay, calendarDateFromParam } from './calendarUtils';
 import { HOURS, PX_PER_HOUR, PX_PER_15MIN, START_HOUR, eventKey, getEventPosition, layoutEvents } from './calendarTimeGrid';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
 import { useThemeContext } from '../ThemeContext';
-import { formatMonthDay, formatWeekdayShort, formatDateShort, formatHourOfDay } from '../../utils/formatters';
+import { formatMonthDay, formatWeekdayShort, formatDateShort, formatHourOfDay, formatDateFull, localDateKey } from '../../utils/formatters';
 import useUrlParams from '../../hooks/useUrlParams';
 
 function getWeekStart(date) {
@@ -28,8 +29,11 @@ function getWeekDays(weekStart) {
 }
 
 export default function WeekView({ accounts }) {
-  const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
   const [searchParams, updateParams] = useUrlParams();
+  const weekParam = searchParams.get('week');
+  const weekStart = useMemo(() => getWeekStart(calendarDateFromParam(weekParam)), [weekParam]);
+  const weekKey = localDateKey(weekStart);
+  const dayTriggerRef = useRef(null);
   const { theme } = useThemeContext();
 
   const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart]);
@@ -42,16 +46,14 @@ export default function WeekView({ accounts }) {
   const { events, loading } = windowEvents;
 
   const navigate = (weeks) => {
-    setWeekStart(prev => {
-      const d = new Date(prev);
-      d.setDate(d.getDate() + weeks * 7);
-      return d;
-    });
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + weeks * 7);
+    updateParams({ week: localDateKey(d), day: null, event: null });
   };
 
-  const goToday = () => {
-    setWeekStart(getWeekStart(new Date()));
-  };
+  const goToday = () => updateParams({ week: localDateKey(getWeekStart(new Date())), day: null, event: null });
+  const openEvent = event => updateParams({ week: weekKey, event: `${event.accountId}:${event.id}` });
+  const selectedDay = weekDays.find(day => localDateKey(day) === searchParams.get('day'));
 
   const colorMap = useMemo(() => buildSubcalendarColorMap(accounts), [accounts]);
   const selectedEventKey = searchParams.get('event');
@@ -82,8 +84,8 @@ export default function WeekView({ accounts }) {
   return (
     <div className="space-y-4">
       {/* Nav header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <button aria-label="Previous week" onClick={() => navigate(-1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors">
             <ChevronLeft size={18} />
           </button>
@@ -115,19 +117,25 @@ export default function WeekView({ accounts }) {
         <div className="border border-port-border rounded-lg overflow-auto bg-port-card">
           {/* Day headers */}
           <div className="flex border-b border-port-border sticky top-0 bg-port-card z-10">
-            <div className="w-14 shrink-0" />
+            <div className="w-4 sm:w-14 shrink-0" />
             {weekDays.map((day, i) => {
               const isToday = day.toDateString() === todayStr;
               return (
-                <div
+                <button
                   key={i}
-                  className={`flex-1 text-center py-2 text-xs font-medium border-l border-port-border ${isToday ? 'text-port-accent' : 'text-gray-400'}`}
+                  type="button"
+                  aria-label={`View day events for ${formatDateFull(day)}`}
+                  onClick={e => {
+                    dayTriggerRef.current = e.currentTarget;
+                    updateParams({ week: weekKey, day: localDateKey(day), event: null });
+                  }}
+                  className={`flex-1 min-w-[44px] min-h-[44px] text-center py-2 text-xs font-medium border-l border-port-border ${isToday ? 'text-port-accent' : 'text-gray-400'}`}
                 >
                   <div>{formatWeekdayShort(day)}</div>
                   <div className={`text-lg ${isToday ? 'bg-port-accent text-white rounded-full w-8 h-8 flex items-center justify-center mx-auto' : ''}`}>
                     {day.getDate()}
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -135,7 +143,7 @@ export default function WeekView({ accounts }) {
           {/* All-day row */}
           {allDayByDay.some(d => d.length > 0) && (
             <div className="flex border-b border-port-border">
-              <div className="w-14 shrink-0 text-[10px] text-gray-500 text-right pr-1 pt-1">All day</div>
+              <div className="w-4 sm:w-14 shrink-0 text-[10px] text-gray-500 text-right pr-1 pt-1"><span className="hidden sm:inline">All day</span></div>
               {allDayByDay.map((dayEvents, i) => (
                 <div key={i} className="flex-1 border-l border-port-border p-0.5 min-h-[28px]">
                   {dayEvents.map(event => {
@@ -143,7 +151,7 @@ export default function WeekView({ accounts }) {
                     return (
                       <button
                         key={eventKey(event)}
-                        onClick={() => updateParams({ event: `${event.accountId}:${event.id}` })}
+                          onClick={() => openEvent(event)}
                         className="w-full text-left px-1 py-0.5 rounded text-[10px] truncate transition-colors hover:brightness-125"
                         style={eventChipStyle(adColor, theme?.mode)}
                       >
@@ -160,8 +168,9 @@ export default function WeekView({ accounts }) {
           <div className="relative">
             {HOURS.map(hour => (
               <div key={hour} className="flex border-b border-port-border/50 last:border-b-0" style={{ height: PX_PER_HOUR }}>
-                <div className="w-14 shrink-0 text-[10px] text-gray-500 text-right pr-1 -mt-1.5">
-                  {formatHourOfDay(hour)}
+                <div className="w-4 sm:w-14 shrink-0 text-[10px] text-gray-500 text-right pr-1 -mt-1.5">
+                  <span className="hidden sm:inline">{formatHourOfDay(hour)}</span>
+                  <span className="sm:hidden text-[8px]" aria-label={formatHourOfDay(hour)}>{hour}</span>
                 </div>
                 {weekDays.map((_, i) => (
                   <div key={i} className="flex-1 border-l border-port-border/50 flex flex-col">
@@ -178,12 +187,12 @@ export default function WeekView({ accounts }) {
             ))}
 
             {/* Chronotype energy zones (behind events) */}
-            <div className="absolute top-0 bottom-0 left-14 right-0">
+            <div className="absolute top-0 bottom-0 left-4 sm:left-14 right-0">
               <ChronotypeOverlay startHour={START_HOUR} pxPerHour={PX_PER_HOUR} />
             </div>
 
             {/* Events overlay per column */}
-            <div className="absolute top-0 bottom-0 left-14 right-0 flex">
+            <div className="absolute top-0 bottom-0 left-4 sm:left-14 right-0 flex">
               {eventsByDay.map((dayEvents, dayIndex) => {
                 const isToday = weekDays[dayIndex].toDateString() === todayStr;
                 const layout = layoutsByDay[dayIndex];
@@ -199,7 +208,7 @@ export default function WeekView({ accounts }) {
                       return (
                         <button
                           key={key}
-                        onClick={() => updateParams({ event: `${event.accountId}:${event.id}` })}
+                          onClick={() => openEvent(event)}
                           className={`absolute px-0.5 py-0.5 border-l-2 rounded text-left overflow-hidden transition-colors ${evColor ? 'hover:brightness-125' : 'hover:bg-port-accent/30'}`}
                           style={{
                             top,
@@ -231,6 +240,16 @@ export default function WeekView({ accounts }) {
         </div>
       )}
 
+      <CalendarDayEvents
+        date={selectedDay}
+        windowEvents={windowEvents}
+        colorMap={colorMap}
+        themeMode={theme?.mode}
+        selectedEvent={selectedEvent}
+        triggerRef={dayTriggerRef}
+        onEvent={openEvent}
+        onClose={() => updateParams({ day: null, event: null })}
+      />
       {selectedEvent && <EventDetail event={selectedEvent} onClose={() => updateParams({ event: null })} />}
     </div>
   );

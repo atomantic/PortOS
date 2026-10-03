@@ -1,24 +1,25 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {CalendarDays, ChevronLeft, ChevronRight, MapPin} from 'lucide-react';
 import { useCalendarWindowEvents } from '../../hooks/useCalendarWindowEvents';
 import CalendarWindowStatus from './CalendarWindowStatus';
 import EventDetail from './EventDetail';
+import CalendarDayEvents from './CalendarDayEvents';
 import ChronotypeOverlay from './ChronotypeOverlay';
-import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay } from './calendarUtils';
+import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay, calendarDateFromParam } from './calendarUtils';
 import { HOURS, PX_PER_HOUR, PX_PER_15MIN, START_HOUR, eventKey, getEventPosition, layoutEvents } from './calendarTimeGrid';
-import { formatDateFull, formatHourOfDay } from '../../utils/formatters';
+import { formatDateFull, formatHourOfDay, localDateKey } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
 import { useThemeContext } from '../ThemeContext';
 import useUrlParams from '../../hooks/useUrlParams';
 
 export default function DayView({ accounts }) {
-  const [date, setDate] = useState(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
-  });
   const [searchParams, updateParams] = useUrlParams();
+  const dateParam = searchParams.get('date');
+  const date = useMemo(() => calendarDateFromParam(dateParam), [dateParam]);
+  const dateKey = localDateKey(date);
+  const dayTriggerRef = useRef(null);
+  const selectedDay = searchParams.get('day') === dateKey ? date : null;
   const { theme } = useThemeContext();
 
   const nextDay = new Date(date);
@@ -27,18 +28,13 @@ export default function DayView({ accounts }) {
   const { events, loading } = windowEvents;
 
   const navigate = (days) => {
-    setDate(prev => {
-      const d = new Date(prev);
-      d.setDate(d.getDate() + days);
-      return d;
-    });
+    const d = new Date(date);
+    d.setDate(d.getDate() + days);
+    updateParams({ date: localDateKey(d), day: null, event: null });
   };
 
-  const goToday = () => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    setDate(d);
-  };
+  const goToday = () => updateParams({ date: localDateKey(new Date()), day: null, event: null });
+  const openEvent = event => updateParams({ date: dateKey, event: `${event.accountId}:${event.id}` });
 
   const allDayEvents = useMemo(() => events.filter(e => e.isAllDay && eventOccursOnDay(e, date)), [events, date]);
   const timedEvents = useMemo(() => events.filter(e => !e.isAllDay && eventOccursOnDay(e, date)), [events, date]);
@@ -60,8 +56,8 @@ export default function DayView({ accounts }) {
   return (
     <div className="space-y-4">
       {/* Nav header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <button aria-label="Previous day" onClick={() => navigate(-1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors">
             <ChevronLeft size={18} />
           </button>
@@ -74,6 +70,17 @@ export default function DayView({ accounts }) {
           Today
         </button>
       </div>
+
+      <button
+        type="button"
+        onClick={e => {
+          dayTriggerRef.current = e.currentTarget;
+          updateParams({ date: dateKey, day: dateKey, event: null });
+        }}
+        className="min-h-[44px] min-w-[44px] px-3 py-2 rounded bg-port-card border border-port-border text-port-accent hover:bg-port-border"
+      >
+        View day events
+      </button>
 
       <CalendarWindowStatus {...windowEvents} />
 
@@ -100,7 +107,7 @@ export default function DayView({ accounts }) {
                 return (
                   <button
                     key={`${event.accountId}-${event.id}`}
-                    onClick={() => updateParams({ event: `${event.accountId}:${event.id}` })}
+                    onClick={() => openEvent(event)}
                     className="w-full text-left px-3 py-2 rounded text-sm transition-colors hover:brightness-125"
                     style={eventChipStyle(adColor, theme?.mode)}
                   >
@@ -147,7 +154,7 @@ export default function DayView({ accounts }) {
                 return (
                   <button
                     key={key}
-                    onClick={() => updateParams({ event: `${event.accountId}:${event.id}` })}
+                    onClick={() => openEvent(event)}
                     className={`absolute px-1.5 py-0.5 border-l-2 rounded text-left overflow-hidden transition-colors ${eventColor ? 'hover:brightness-125' : 'hover:bg-port-accent/30'}`}
                     style={{
                       top,
@@ -182,6 +189,16 @@ export default function DayView({ accounts }) {
         </>
       )}
 
+      <CalendarDayEvents
+        date={selectedDay}
+        windowEvents={windowEvents}
+        colorMap={colorMap}
+        themeMode={theme?.mode}
+        selectedEvent={selectedEvent}
+        triggerRef={dayTriggerRef}
+        onEvent={openEvent}
+        onClose={() => updateParams({ day: null, event: null })}
+      />
       {selectedEvent && <EventDetail event={selectedEvent} onClose={() => updateParams({ event: null })} />}
     </div>
   );
