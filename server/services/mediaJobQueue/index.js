@@ -657,7 +657,7 @@ export async function initMediaJobQueue() {
     if (persistedJobs.length) {
       console.log(`📦 mediaJobQueue restored: ${queue.length} queued, ${archive.length} archived`);
     }
-    await videoHolds.resolveCohorts(queue);
+    await prepareQueuedVideos();
     videoHolds.updateQueued(queue);
     // Pre-seed terminal SSE payloads for each restart-failed job so that any
     // client that reconnects to /:jobId/events after a restart (the route
@@ -779,10 +779,51 @@ function startLaneJob(job, { lane }) {
   return true;
 }
 
+// Withdraw synchronously before cleanup yields: cancellation and preparation
+// can race, but only the caller that removes this exact waiting job owns it.
+// Shared by pre-dispatch failures and queued cancellation; no lane is claimed.
+async function settleQueuedJob(job, { status, error }) {
+  const idx = queue.indexOf(job);
+  if (idx < 0 || job.status !== 'queued') return false;
+  queue.splice(idx, 1);
+  job.status = status;
+  job.error = error;
+  job.completedAt = new Date().toISOString();
+  archive.push(job);
+  recomputeQueuePositions();
+  await trackTerminalOperation((async () => {
+    await safeUnlinkUpload(job.params?.uploadedTempPath);
+    await safeUnlinkUpload(job.params?.audioFilePath);
+    for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
+      await safeUnlinkUpload(p);
+    }
+    await persist().catch((e) => console.error(`❌ mediaJobQueue persist on queued ${status} failed: ${e.message}`));
+    broadcastSse(ensureSseEntry(job.id), status === 'canceled'
+      ? { type: 'canceled', reason: error } : { type: 'error', error });
+    closeJobAfterDelay(sseJobs, job.id);
+    mediaJobEvents.emit(status, job);
+    if (status === 'failed') console.error(`❌ media-job [${job.id.slice(0, 8)}] preparation failed: ${error}`);
+    else console.log(`🛑 media-job [${job.id.slice(0, 8)}] canceled (was queued)`);
+  })());
+  return true;
+}
+
+async function prepareQueuedVideos(jobs = queue.filter((job) => !job.admitting)) {
+  // An admission still waiting for its durable snapshot is not eligible for
+  // preparation or failure. Re-check after every await before withdrawing it.
+  const results = await videoHolds.resolveCohorts(jobs);
+  for (const { job, error } of results) {
+    if (dispatchQuiesced) break;
+    if (!error || job.admitting) continue;
+    await settleQueuedJob(job, { status: 'failed',
+      error: `Could not prepare local video model: ${error.message || String(error)}` });
+  }
+}
+
 async function drainLoop() {
   while (!dispatchQuiesced) {
-    const candidates = queue.slice();
-    await videoHolds.resolveCohorts(candidates);
+    const candidates = queue.filter((job) => !job.admitting);
+    await prepareQueuedVideos(candidates);
     // Shutdown may have begun while cohorts resolved; exit without promoting.
     if (dispatchQuiesced) break;
     videoHolds.updateQueued(queue);
@@ -1484,39 +1525,8 @@ export async function cancelQueuedJobs({ kind } = {}) {
 export async function cancelJob(jobId) {
   const queueIdx = queue.findIndex((j) => j.id === jobId);
   if (queueIdx >= 0) {
-    const [job] = queue.splice(queueIdx, 1);
-    // Multipart uploads (e.g. /api/video-gen with an image) hand us a path
-    // staged under PATHS.uploads. If we drop the job before it starts,
-    // runJob never gets a chance to delete it — clean up here so the
-    // uploads dir doesn't accumulate. safeUnlinkUpload constrains the
-    // delete to PATHS.uploads. audioFilePath is the same kind of staged
-    // upload (a2v/voice/video jobs) and would otherwise leak when the user
-    // cancels before the job starts.
-    await safeUnlinkUpload(job.params?.uploadedTempPath);
-    await safeUnlinkUpload(job.params?.audioFilePath);
-    for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
-      await safeUnlinkUpload(p);
-    }
-    job.status = 'canceled';
-    job.error = 'Canceled before start';
-    job.completedAt = new Date().toISOString();
-    // Archive so /api/media-jobs?status=canceled and the recent-reel UI
-    // can still find it within the 24h TTL. Mirrors the running-cancel path
-    // in startLaneJob's terminal handler.
-    archive.push(job);
-    // Removing a queued job shifts everyone behind it up one slot. Recompute
-    // + broadcast so clients still attached to those SSE streams see the new
-    // position immediately, instead of waiting for the next dequeue.
-    recomputeQueuePositions();
-    const sseEntry = ensureSseEntry(jobId);
-    // Emit `canceled` (not `error`) so clients can distinguish a user-
-    // initiated cancellation from a real failure. Mirror the event type
-    // emitted for running-job cancellation in runJob's failed handler.
-    broadcastSse(sseEntry, { type: 'canceled', reason: job.error });
-    closeJobAfterDelay(sseJobs, jobId);
-    mediaJobEvents.emit('canceled', job);
-    persist().catch(() => {});
-    console.log(`🛑 media-job [${jobId.slice(0, 8)}] canceled (was queued)`);
+    const job = queue[queueIdx];
+    await settleQueuedJob(job, { status: 'canceled', error: 'Canceled before start' });
     return { ok: true, status: 'canceled' };
   }
   // Cancel-while-running — check every lane.
