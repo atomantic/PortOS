@@ -10,10 +10,18 @@
  * The live service appends to `history.jsonl`, so routine action logging no
  * longer rewrites the full history file. The legacy file is renamed to
  * `history.json.bak-037` after conversion for manual recovery.
+ *
+ * Conversion writes the merged JSONL (existing lines first, then new legacy
+ * entries) to an exclusive temporary sibling, then renames it over
+ * `history.jsonl` before the legacy file is renamed aside. A destination I/O
+ * failure (open/write/finish) aborts: the temp file is removed, both original
+ * files stay byte-identical, and `up()` rejects so the runner leaves the
+ * migration pending for a retry after repair (#9784).
  */
 
 import { createReadStream, createWriteStream } from 'fs';
 import { mkdir, rename, rm, stat } from 'fs/promises';
+import { finished } from 'stream/promises';
 import { createInterface } from 'readline';
 import { join, relative } from 'path';
 import { writeJSONLines } from '../../server/lib/fileUtils.js';
@@ -113,17 +121,24 @@ async function streamLegacyEntries(legacyPath, onEntry) {
           else if (ch === '}') depth -= 1;
 
           if (depth === 0) {
+            let entry;
+            let parsed = false;
             try {
-              await onEntry(JSON.parse(buf));
+              entry = JSON.parse(buf);
+              parsed = true;
             } catch {
               invalid += 1;
             }
             inObject = false;
             buf = '';
+            // Outside the parse try: an onEntry (destination) failure is an
+            // operational error that aborts the stream, never a malformed entry.
+            if (parsed) await onEntry(entry);
           }
         }
         stream.resume();
       } catch (err) {
+        stream.destroy();
         reject(err);
       }
     });
@@ -131,11 +146,46 @@ async function streamLegacyEntries(legacyPath, onEntry) {
   });
 }
 
-function writeJsonlLine(out, entry) {
-  const line = `${JSON.stringify(entry)}\n`;
-  return new Promise((resolve, reject) => {
-    out.write(line, (err) => err ? reject(err) : resolve());
+/**
+ * Exclusive-create write stream whose `error` event is owned from the start,
+ * so an open/write failure surfaces as a rejected promise instead of an
+ * unhandled EventEmitter error that kills the process.
+ */
+function openExclusiveSink(path) {
+  const out = createWriteStream(path, { flags: 'wx' });
+  let streamError = null;
+  let created = false;
+  out.on('error', (err) => { streamError ??= err; });
+  out.once('open', () => { created = true; });
+
+  const write = (chunk) => new Promise((resolve, reject) => {
+    if (streamError) return reject(streamError);
+    out.write(chunk, (err) => (err ? reject(err) : resolve()));
   });
+  const close = async () => {
+    if (streamError) throw streamError;
+    out.end();
+    await finished(out);
+  };
+  // Wait for the fd to close so a later rm() cannot race a still-pending open.
+  const abort = () => new Promise((resolve) => {
+    if (out.closed) return resolve();
+    out.once('close', resolve);
+    out.destroy();
+  });
+  return { write, close, abort, wasCreated: () => created };
+}
+
+async function copyExistingJsonl(jsonlPath, sink) {
+  let last = null;
+  for await (const chunk of createReadStream(jsonlPath)) {
+    if (!chunk.length) continue;
+    await sink.write(chunk);
+    last = chunk[chunk.length - 1];
+  }
+  // A final line without its newline would otherwise fuse with the first
+  // converted entry.
+  if (last !== null && last !== 0x0a) await sink.write('\n');
 }
 
 export default {
@@ -161,31 +211,52 @@ export default {
     }
 
     const existingIds = await readExistingIds(jsonlPath);
-    if (!jsonlExists) await writeJSONLines(jsonlPath, []);
-
-    const out = createWriteStream(jsonlPath, { flags: 'a' });
+    const tmpPath = `${jsonlPath}.tmp-037-${process.pid}-${Date.now()}`;
+    const sink = openExclusiveSink(tmpPath);
     let skippedDuplicate = 0;
     let converted = 0;
-    const { skippedInvalid } = await streamLegacyEntries(legacyPath, async (entry) => {
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-        return;
+    let skippedInvalid;
+    let destinationError = null;
+    const discardTemp = async () => {
+      await sink.abort();
+      // Only remove a temp file this run created — never a pre-existing one
+      // that made the exclusive open fail.
+      if (sink.wasCreated()) await rm(tmpPath, { force: true });
+    };
+    try {
+      if (jsonlExists) await copyExistingJsonl(jsonlPath, sink);
+      const parsed = await streamLegacyEntries(legacyPath, async (entry) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+          return;
+        }
+        if (typeof entry.id === 'string' && existingIds.has(entry.id)) {
+          skippedDuplicate += 1;
+          return;
+        }
+        try {
+          await sink.write(`${JSON.stringify(entry)}\n`);
+        } catch (err) {
+          destinationError = err;
+          throw err;
+        }
+        converted += 1;
+        if (typeof entry.id === 'string') existingIds.add(entry.id);
+      }).catch((err) => {
+        if (destinationError) throw destinationError;
+        console.warn(`⚠️ migration 037: ${legacyPath} unreadable or not { entries: [...] } — skipping. Resolve manually before next boot.`);
+        return null;
+      });
+      if (parsed === null) {
+        await discardTemp();
+        return { ok: false, reason: 'unreadable' };
       }
-      if (typeof entry.id === 'string' && existingIds.has(entry.id)) {
-        skippedDuplicate += 1;
-        return;
-      }
-      await writeJsonlLine(out, entry);
-      converted += 1;
-      if (typeof entry.id === 'string') existingIds.add(entry.id);
-    }).catch((err) => {
-      out.end();
-      console.warn(`⚠️ migration 037: ${legacyPath} unreadable or not { entries: [...] } — skipping. Resolve manually before next boot.`);
-      return { __error: err };
-    });
-    await new Promise((resolve, reject) => out.end((err) => err ? reject(err) : resolve()));
-    if (skippedInvalid == null) {
-      if (!jsonlExists) await rm(jsonlPath, { force: true });
-      return { ok: false, reason: 'unreadable' };
+      skippedInvalid = parsed.skippedInvalid;
+      await sink.close();
+      await rename(tmpPath, jsonlPath);
+    } catch (err) {
+      await discardTemp();
+      console.error(`❌ migration 037: writing data/${JSONL_FILENAME} failed (${err.code ?? err.message}) — legacy history left in place; migration stays pending`);
+      throw err;
     }
 
     const finalBackupPath = await fileExists(backupPath)
