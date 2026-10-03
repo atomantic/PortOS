@@ -251,15 +251,15 @@ export const getChatgptArchive = (name, { preview, ...options } = {}) =>
   request(`/brain/import/chatgpt/archive/${encodeURIComponent(name)}${preview === 'images' ? '?preview=images' : ''}`, options);
 
 // Brain - Digests & Reviews
-export const getBrainLatestDigest = () => request('/brain/digest/latest');
-export const getBrainDigests = (limit = 10) => request(`/brain/digests?limit=${limit}`);
+export const getBrainLatestDigest = (options = {}) => request('/brain/digest/latest', options);
+export const getBrainDigests = (limit = 10, options = {}) => request(`/brain/digests?limit=${limit}`, options);
 export const runBrainDigest = (providerOverride, modelOverride, options = {}) => request('/brain/digest/run', {
   method: 'POST',
   body: JSON.stringify({ providerOverride, modelOverride }),
   ...options
 });
-export const getBrainLatestReview = () => request('/brain/review/latest');
-export const getBrainReviews = (limit = 10) => request(`/brain/reviews?limit=${limit}`);
+export const getBrainLatestReview = (options = {}) => request('/brain/review/latest', options);
+export const getBrainReviews = (limit = 10, options = {}) => request(`/brain/reviews?limit=${limit}`, options);
 export const runBrainReview = (providerOverride, modelOverride, options = {}) => request('/brain/review/run', {
   method: 'POST',
   body: JSON.stringify({ providerOverride, modelOverride }),
