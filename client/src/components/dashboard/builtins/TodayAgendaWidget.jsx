@@ -24,6 +24,7 @@ export default function TodayAgendaWidget({ dashboardState }) {
   const nextEvent = rows.find((r) => !r.event.isAllDay && !r.past)?.event;
   const remaining = rows.filter((r) => !r.past).length;
   const total = agenda.total ?? events.length;
+  const truncated = total > events.length;
 
   return (
     <Link
@@ -38,12 +39,19 @@ export default function TodayAgendaWidget({ dashboardState }) {
         </span>
       </div>
 
-      {events.length === 0 ? (
+      {events.length === 0 && !truncated ? (
         <div className="text-xs text-gray-500">Nothing on the calendar today 🎉</div>
       ) : (
         <>
-          <div className="text-xs text-gray-500 mb-2">
-            {remaining} of {total} event{total !== 1 ? 's' : ''} remaining
+          <div className="text-xs text-gray-500 mb-2 min-w-0 break-words">
+            {truncated ? (
+              <>
+                {remaining} of {events.length} shown event{events.length !== 1 ? 's' : ''} remaining
+                <span className="block">{total} event{total !== 1 ? 's' : ''} today</span>
+              </>
+            ) : (
+              <>{remaining} of {total} event{total !== 1 ? 's' : ''} remaining</>
+            )}
           </div>
           <ul className="space-y-1">
             {rows.map(({ event, past }) => (
@@ -65,7 +73,7 @@ export default function TodayAgendaWidget({ dashboardState }) {
               </li>
             ))}
           </ul>
-          {total > events.length && (
+          {truncated && (
             <div className="text-xs text-gray-500 mt-2">+{total - events.length} more</div>
           )}
         </>

@@ -52,5 +52,40 @@ describe('TodayAgendaWidget', () => {
       ],
     });
     expect(screen.getByText('+9 more')).toBeTruthy();
+    expect(screen.getByText('1 of 1 shown event remaining')).toBeTruthy();
+    expect(screen.getByText('10 events today')).toBeTruthy();
+  });
+
+  it('scopes a zero remaining count to the displayed page when every shown event has ended', () => {
+    renderWidget({
+      date: '2026-09-01',
+      accountCount: 1,
+      total: 10,
+      events: Array.from({ length: 8 }, (_, i) => ({
+        id: String(i), accountId: 'acc', title: `Finished ${i}`,
+        startTime: iso(-7200000), endTime: iso(-3600000), isAllDay: false, location: null,
+      })),
+    });
+
+    expect(screen.getByText('0 of 8 shown events remaining')).toBeTruthy();
+    expect(screen.getByText('10 events today')).toBeTruthy();
+    expect(screen.getByText('+2 more')).toBeTruthy();
+    expect(screen.getByRole('link').getAttribute('href')).toBe('/calendar/agenda');
+  });
+
+  it('shows the remaining count only for displayed events in a partial response', () => {
+    renderWidget({
+      date: '2026-09-01',
+      accountCount: 1,
+      total: 4,
+      events: [
+        { id: 'a', accountId: 'acc', title: 'Finished', startTime: iso(-7200000), endTime: iso(-3600000), isAllDay: false, location: null },
+        { id: 'b', accountId: 'acc', title: 'Upcoming', startTime: iso(3600000), endTime: iso(7200000), isAllDay: false, location: null },
+      ],
+    });
+
+    expect(screen.getByText('1 of 2 shown events remaining')).toBeTruthy();
+    expect(screen.getByText('4 events today')).toBeTruthy();
+    expect(screen.getByText('+2 more')).toBeTruthy();
   });
 });
