@@ -18,27 +18,41 @@ vi.mock('@react-three/drei', () => ({
   Text: () => null,
 }));
 
-const { toastError, organizeGoals, providerState } = vi.hoisted(() => ({
+const { toastError, organizeGoals, createGoal, providerState } = vi.hoisted(() => ({
   toastError: vi.fn(),
   organizeGoals: vi.fn(),
+  createGoal: vi.fn(),
   // Mutable so the organize tests can hand the view a selected provider (the
   // Organize button is disabled without one) while the rest keep the bare default.
-  providerState: { providers: [], selectedProviderId: '', selectedModel: '', availableModels: [] },
+  providerState: { selectedProviderId: '', selectedModel: '' },
 }));
 
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(() => {}, { error: toastError, success: () => {} }),
 }));
 vi.mock('../../services/api', () => ({
-  createGoal: vi.fn(),
+  createGoal,
   organizeGoals,
 }));
-vi.mock('../../hooks/useProviderModels', () => ({
-  default: () => ({
-    ...providerState,
-    setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(), loading: false,
-  }),
-}));
+vi.mock('../../hooks/useProviderModels', async () => {
+  const { useState } = await import('react');
+  const providers = [
+    { id: 'provider-1', name: 'Example Provider', models: ['example-model', 'example-alternate'] },
+    { id: 'provider-2', name: 'Other Provider', models: ['other-default', 'other-alternate'] },
+  ];
+  return {
+    default: () => {
+      const [selectedProviderId, setSelectedProviderId] = useState(providerState.selectedProviderId);
+      const [selectedModel, setSelectedModel] = useState(providerState.selectedModel);
+      return {
+        providers, selectedProviderId, selectedModel,
+        availableModels: providers.find(p => p.id === selectedProviderId)?.models || [],
+        setSelectedProviderId: id => { setSelectedProviderId(id); setSelectedModel(providers.find(p => p.id === id)?.models[0] || ''); },
+        setSelectedModel, loading: false,
+      };
+    },
+  };
+});
 
 // For lifecycle tests (#8108), the mock tracks whether edit state persists across goal switches.
 vi.mock('./GoalDetailPanel', async (importOriginal) => {
@@ -149,14 +163,12 @@ describe('handleOrganize error toasting', () => {
   // two error toasts on top of each other.
   beforeEach(() => {
     Object.assign(providerState, {
-      providers: [{ id: 'provider-1', name: 'Example Provider' }],
       selectedProviderId: 'provider-1',
       selectedModel: 'example-model',
-      availableModels: ['example-model'],
     });
   });
   afterEach(() => {
-    Object.assign(providerState, { providers: [], selectedProviderId: '', selectedModel: '', availableModels: [] });
+    Object.assign(providerState, { selectedProviderId: '', selectedModel: '' });
   });
 
   it('disables organization while a request is pending', async () => {
@@ -188,4 +200,29 @@ describe('handleOrganize error toasting', () => {
     expect(toastError).toHaveBeenCalledTimes(1);
     expect(toastError).toHaveBeenCalledWith('Failed to organize goals');
   });
+});
+
+// #9712: selecting the route must reach the request, without starting AI work
+// until Organize is clicked; a pending request still locks all three controls.
+it('organizes with the chosen provider and model only after submission', async () => {
+  const user = userEvent.setup();
+  let finish;
+  organizeGoals.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  await renderTree({ flat: DATA.flat.slice(0, 2) });
+  const provider = screen.getByRole('combobox', { name: 'AI Provider' });
+  await user.selectOptions(provider, 'provider-2');
+  const model = screen.getByRole('combobox', { name: 'Model' });
+  await user.selectOptions(model, 'other-alternate');
+  expect(organizeGoals).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole('button', { name: 'Organize' }));
+  expect(organizeGoals).toHaveBeenCalledWith(
+    { providerId: 'provider-2', model: 'other-alternate' }, { silent: true },
+  );
+  expect(provider).toBeDisabled();
+  expect(model).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Analyzing...' })).toBeDisabled();
+  await act(async () => { finish({ apexGoal: { existingId: null, suggestedTitle: 'Example apex' }, organization: [], suggestedSubApex: [] }); });
+  expect(screen.getByText('Goal Organization')).toBeInTheDocument();
+  expect(createGoal).not.toHaveBeenCalled();
 });

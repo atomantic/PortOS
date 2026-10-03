@@ -392,8 +392,8 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
             />
           </div>
           {(data?.flat?.length ?? 0) >= 2 && (
-            <div className="flex items-center gap-2">
-              <div className="hidden sm:block">
+            <div className="flex flex-wrap items-center gap-2 w-full min-w-0 sm:w-auto">
+              <div className="w-full min-w-0 sm:w-auto sm:flex-1">
                 <ProviderModelSelector
                   providers={providers}
                   selectedProviderId={selectedProviderId}
