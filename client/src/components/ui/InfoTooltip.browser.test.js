@@ -25,8 +25,12 @@ describe.skipIf(!chrome)('help above glass cards and clipped scrollers', () => {
   let browserTemp;
   let origin;
   beforeAll(async () => {
+    browserTemp = await mkdtemp(join(tmpdir(), 'tooltip-chrome-'));
     server = await createServer({
       configFile: false,
+      // Concurrent fixtures and linked worktrees must not replace each other's
+      // optimized dependencies in the shared node_modules/.vite cache.
+      cacheDir: join(browserTemp, 'vite-cache'),
       root: fileURLToPath(new URL('../../..', import.meta.url)),
       plugins: [react(), {
         name: 'tooltip-browser-fixture',
@@ -69,7 +73,6 @@ describe.skipIf(!chrome)('help above glass cards and clipped scrollers', () => {
     });
     await server.listen();
     origin = server.resolvedUrls.local[0];
-    browserTemp = await mkdtemp(join(tmpdir(), 'tooltip-chrome-'));
     browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--mute-audio'],
       env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
     });
@@ -88,9 +91,19 @@ describe.skipIf(!chrome)('help above glass cards and clipped scrollers', () => {
     async (viewport) => {
       const page = await browser.newPage({ viewport });
       try {
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        page.on('response', response => {
+          if (response.status() >= 400 && !response.url().endsWith('/favicon.ico')) errors.push(`HTTP ${response.status()}: ${new URL(response.url()).pathname}`);
+        });
         await page.goto(`${origin}tooltip-test`);
         const trigger = page.getByRole('button', { name: 'Quality help' });
-        await trigger.focus();
+        try {
+          await trigger.focus();
+        } catch (error) {
+          throw new Error(`Fixture did not render: ${errors.join('; ') || error.message}`, { cause: error });
+        }
+        expect(errors).toEqual([]);
         const panel = page.getByRole('tooltip');
         await panel.waitFor();
         expect(await page.locator('#summary').evaluate(el => getComputedStyle(el).backdropFilter)).toMatch(/blur\(/);
