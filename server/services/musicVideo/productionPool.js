@@ -157,10 +157,13 @@ async function routeEligibility(route, env) {
   }
   if (route.mode === 'local') {
     if (!settings?.imageGen?.local?.pythonPath) return { ok: false, reason: 'The local video runtime is not configured in Settings' };
-    if (!route.model) return { ok: false, reason: 'A local video route must name its model' };
-    const { model } = await env.resolveVideoModel(route.model);
-    if (!model) return { ok: false, reason: `Local video model "${route.model}" is not installed` };
-    if (!isHardwareCompatible(model.hardwareCompatibility)) return { ok: false, reason: `Local video model "${route.model}" cannot run on this hardware` };
+    // A blank pin is the install default. The renderer resolves that same
+    // omission, so refusing it here made "Install default" fail at Start.
+    const requested = typeof route.model === 'string' ? route.model.trim() : '';
+    const { model, modelId } = await env.resolveVideoModel(requested);
+    const label = requested || modelId || '(none)';
+    if (!model) return { ok: false, reason: `Local video model "${label}" is not installed` };
+    if (!isHardwareCompatible(model.hardwareCompatibility)) return { ok: false, reason: `Local video model "${label}" cannot run on this hardware` };
   }
   return { ok: true, reason: null };
 }

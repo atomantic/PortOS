@@ -22,6 +22,15 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   cancelAutonomousMusicVideo: vi.fn(),
 }));
 vi.mock('../../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'mb-1', name: 'Neon Rain' }]) }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  getVideoGenModelContext: vi.fn(async () => ({
+    models: [
+      { id: 'example-ltx', name: 'Example LTX' },
+      { id: 'example-wan', name: 'Example Wan' },
+    ],
+    defaultModel: 'example-ltx',
+  })),
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: ({ filter } = {}) => ({
@@ -38,6 +47,7 @@ import AutonomousRunPanel from './AutonomousRunPanel.jsx';
 import AutonomousStartDrawer from './AutonomousStartDrawer.jsx';
 import useAutonomousMusicVideo from '../../hooks/useAutonomousMusicVideo.js';
 import * as api from '../../services/apiMusicVideo.js';
+import { getVideoGenModelContext } from '../../services/apiImageVideo.js';
 
 const stages = (overrides = {}) => ({
   brief: { status: 'done' }, lyrics: { status: 'done' }, style: { status: 'pending' }, song: { status: 'pending' },
@@ -259,6 +269,38 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.click(submit);
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(1));
     expect(api.startAutonomousMusicVideo.mock.calls[0][0].suno).toEqual({ excludeStyles: 'metal', vocalGender: 'female', model: 'v6' });
+  });
+
+  it('offers local video models in a menu and pins only the one the director picks', async () => {
+    api.startAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    const model = screen.getByLabelText(/local video gen model/i);
+    expect(model.tagName).toBe('SELECT');
+    expect(await screen.findByRole('option', { name: 'Install default (Example LTX)' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Example Wan' })).toBeTruthy();
+    expect(model.value).toBe('');
+
+    fireEvent.change(model, { target: { value: 'example-wan' } });
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
+    fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
+    await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(1));
+    expect(api.startAutonomousMusicVideo.mock.calls[0][0].models).toEqual({ 'video:local': 'example-wan' });
+  });
+
+  it('keeps the local video field a menu when the catalog cannot load or is empty', async () => {
+    getVideoGenModelContext.mockRejectedValueOnce(new Error('offline'));
+    const { unmount } = render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    const failed = await screen.findByLabelText(/local video gen model/i);
+    expect(failed.tagName).toBe('SELECT');
+    expect(await screen.findByText('Could not load local video models.')).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Example Wan' })).toBeNull();
+    unmount();
+
+    getVideoGenModelContext.mockResolvedValueOnce({ models: [], defaultModel: null });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    expect(await screen.findByText('No local video models are compatible with this machine.')).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Install default (no compatible local model)' })).toBeTruthy();
   });
 
   it('offers the local song source, and the Suno-only fallback opt-in only while Suno is the source', async () => {

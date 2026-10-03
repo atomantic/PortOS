@@ -4,6 +4,15 @@ import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/re
 vi.mock('../../../../services/apiMoodBoard.js', () => ({
   listMoodBoardNames: vi.fn(async () => [{ id: 'mb-1', name: 'Neon Rain' }]),
 }));
+vi.mock('../../../../services/apiImageVideo.js', () => ({
+  getVideoGenModelContext: vi.fn(async () => ({
+    models: [
+      { id: 'example-ltx', name: 'Example LTX' },
+      { id: 'example-wan', name: 'Example Wan' },
+    ],
+    defaultModel: 'example-ltx',
+  })),
+}));
 vi.mock('../../../../hooks/useProviderModels', () => ({
   default: ({ filter } = {}) => ({
     providers: filter ? [{ id: 'fixture-api', name: 'Fixture API', type: 'api', enabled: true, defaultModel: 'fixture-model', models: ['fixture-model'] }].filter(filter) : [],
@@ -57,6 +66,24 @@ describe('MusicVideoAutopilotSettings', () => {
     fireEvent.click(screen.getByText('Save settings'));
     await waitFor(() => expect(onUpdate).toHaveBeenCalled());
     expect(onUpdate.mock.calls[0][1].taskMetadata.musicVideoAutopilot).toMatchObject({ mediaMode: 'code-only', songSource: 'local', localFallback: false });
+  });
+
+  it('keeps a saved local video model in the menu, including one the catalog no longer lists', async () => {
+    const onUpdate = vi.fn(async () => {});
+    const config = {
+      taskMetadata: { musicVideoAutopilot: { tools: ['video:local'], models: { 'video:local': 'retired-model' } } },
+    };
+    render(<MusicVideoAutopilotSettings taskType="music-video-autopilot" config={config} onUpdate={onUpdate} updating={false} setUpdating={() => {}} />);
+    const model = screen.getByLabelText(/local video gen model/i);
+    expect(model.tagName).toBe('SELECT');
+    expect(await screen.findByRole('option', { name: 'Example LTX' })).toBeTruthy();
+    expect(model.value).toBe('retired-model');
+    expect(screen.getByRole('option', { name: 'retired-model (unavailable on this machine)' })).toBeTruthy();
+
+    fireEvent.change(model, { target: { value: 'example-wan' } });
+    fireEvent.click(screen.getByText('Save settings'));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(onUpdate.mock.calls[0][1].taskMetadata.musicVideoAutopilot.models).toEqual({ 'video:local': 'example-wan' });
   });
 
   it('keeps a saved writer-LLM pin when saved before the provider catalog loads', async () => {
