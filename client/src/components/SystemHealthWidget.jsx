@@ -70,6 +70,8 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
   const { overallHealth, warnings, system, processes, apps, cos } = health;
   const diskProbeUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'disk');
   const cosProbeUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'cos');
+  const cosQueueUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'cos-queue');
+  const cosAgentsUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'cos-agents');
   const pm2ProbeUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'pm2');
 
   const healthStyle = HEALTH_STYLE[overallHealth] || { color: 'text-gray-400', bg: 'bg-gray-400/10', icon: Activity };
@@ -309,10 +311,14 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             </div>
             {cos?.running && !cosProbeUnavailable && (
               <div className="flex items-center gap-3 text-xs text-gray-500">
-                {cos.activeAgents > 0 && (
+                {cosAgentsUnavailable ? (
+                  <span className="text-port-warning">Agents unavailable</span>
+                ) : cos.activeAgents > 0 && (
                   <span className="text-port-accent">{cos.activeAgents} agent{cos.activeAgents !== 1 ? 's' : ''}</span>
                 )}
-                {cos.queuedTasks > 0 && (
+                {cosQueueUnavailable || cosAgentsUnavailable ? (
+                  <span className="text-port-warning">Queue unavailable</span>
+                ) : cos.queuedTasks > 0 && (
                   <span>{cos.queuedTasks} queued</span>
                 )}
               </div>

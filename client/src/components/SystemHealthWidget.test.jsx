@@ -103,6 +103,32 @@ describe('SystemHealthWidget', () => {
     expect(screen.queryByText('Stopped')).not.toBeInTheDocument();
   });
 
+  it('shows unavailable queue and agent telemetry without marking the daemon stopped', () => {
+    const warnings = [
+      { type: 'probe-unavailable', source: 'cos-queue', status: 'unavailable', severity: 'warning', message: 'Chief of Staff queue unavailable', dismissible: false },
+      { type: 'probe-unavailable', source: 'cos-agents', status: 'unavailable', severity: 'warning', message: 'Chief of Staff agent census unavailable', dismissible: false },
+    ];
+    renderWidget({ health: { ...HEALTH, warnings, cos: { running: true, paused: false, activeAgents: 0, queuedTasks: null } }, refetchHealth: vi.fn() });
+
+    expect(screen.getByText('Chief of Staff').parentElement).toHaveTextContent('Active');
+    expect(screen.getByText('Queue unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Agents unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Stopped')).not.toBeInTheDocument();
+  });
+
+  it('shows only the queue as unavailable when agents are readable, and clears on recovery', () => {
+    const warnings = [{ type: 'probe-unavailable', source: 'cos-queue', status: 'unavailable', severity: 'warning', message: 'Chief of Staff queue unavailable', dismissible: false }];
+    const { rerender } = renderWidget({ health: { ...HEALTH, warnings, cos: { running: true, paused: true, activeAgents: 2, queuedTasks: null } }, refetchHealth: vi.fn() });
+
+    expect(screen.getByText('Queue unavailable')).toBeInTheDocument();
+    expect(screen.getByText('2 agents')).toBeInTheDocument();
+    expect(screen.queryByText('Agents unavailable')).not.toBeInTheDocument();
+
+    rerender(<MemoryRouter><SystemHealthWidget dashboardState={{ health: { ...HEALTH, warnings: [], cos: { running: true, paused: true, activeAgents: 2, queuedTasks: 3 } } }} /></MemoryRouter>);
+    expect(screen.queryByText('Queue unavailable')).not.toBeInTheDocument();
+    expect(screen.getByText('3 queued')).toBeInTheDocument();
+  });
+
   it('keeps memory neutral while honoring configured disk thresholds', () => {
     const health = {
       ...HEALTH,
