@@ -17,6 +17,7 @@ import { getProviderById } from '../providers.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { whichFirst } from '../../lib/processEnv.js';
 import { PORTS } from '../../lib/ports.js';
+import { inspectVoiceAsset, isManagedVoiceAsset, isVoiceAssetUsable } from '../../lib/voiceModelAssets.js';
 
 export const pexec = promisify(execFile);
 
@@ -37,13 +38,23 @@ export const verifyBinaries = async (cfg) => {
   return { whisper, piper: piperResolved ?? piperOnPath, piperRequired };
 };
 
+// A model is ready only when it passes the completion contract
+// (lib/voiceModelAssets.js) — a file that merely exists may be a truncated
+// download. `*State` carries the verdict ('verified' | 'unverified' |
+// 'incomplete' | 'missing') so callers can tell "repair me" from "install me".
 export const verifyModels = (cfg) => {
   const modelPath = expandPath(cfg.stt.modelPath);
-  const out = { sttModel: existsSync(modelPath) ? modelPath : null };
+  const sttAsset = inspectVoiceAsset('whisper', modelPath);
+  const out = {
+    sttModel: isVoiceAssetUsable(sttAsset.state) ? modelPath : null,
+    sttModelState: sttAsset.state,
+  };
 
   if (cfg.tts.engine === 'piper') {
     const voicePath = expandPath(cfg.tts.piper.voicePath);
-    out.ttsVoice = existsSync(voicePath) ? voicePath : null;
+    const voiceAsset = inspectVoiceAsset('piper', voicePath);
+    out.ttsVoice = isVoiceAssetUsable(voiceAsset.state) ? voicePath : null;
+    out.ttsVoiceState = voiceAsset.state;
   } else {
     // Qwen3 runtime owns its model readiness.
     out.ttsVoice = null;
@@ -102,7 +113,11 @@ export const runSetupScript = async (cfg) => {
 export const downloadPiperVoice = async (voiceId, currentCfg) => {
   if (!voiceId || typeof voiceId !== 'string') throw new Error('voiceId required');
   const voicePath = piperVoiceTildePath(voiceId);
-  if (existsSync(expandPath(voicePath))) return { skipped: true, voicePath };
+  const absVoicePath = expandPath(voicePath);
+  // Only a receipted pair is done. A bare .onnx may be a truncated download
+  // (or lack its .onnx.json), and an unreceipted pair gets its receipt from the
+  // script — so both go through setup instead of being skipped.
+  if (inspectVoiceAsset('piper', absVoicePath).state === 'verified') return { skipped: true, voicePath };
   // Re-use the existing setup script but force it into Piper-only mode. The
   // script already short-circuits whisper steps when the model/binary are
   // present, so this is cheap on repeat invocations.
@@ -110,6 +125,10 @@ export const downloadPiperVoice = async (voiceId, currentCfg) => {
     ...currentCfg,
     tts: { engine: 'piper', piper: { voicePath } },
   });
+  const after = inspectVoiceAsset('piper', absVoicePath);
+  if (after.state !== 'verified') {
+    throw new Error(`Piper voice ${voiceId} is still not usable after setup (${after.reason || after.state})`);
+  }
   return { downloaded: true, voicePath };
 };
 
@@ -163,7 +182,11 @@ export const startWhisper = async (cfg) => {
   const whisperBin = await which('whisper-server');
   if (!whisperBin) throw new Error('whisper-server not on PATH — run scripts/setup-voice.sh');
   const modelPath = expandPath(cfg.stt.modelPath);
-  if (!existsSync(modelPath)) throw new Error(`whisper model missing: ${modelPath}`);
+  const modelAsset = inspectVoiceAsset('whisper', modelPath);
+  if (modelAsset.state === 'missing') throw new Error(`whisper model missing: ${modelPath}`);
+  if (!isVoiceAssetUsable(modelAsset.state)) {
+    throw new Error(`whisper model incomplete: ${modelPath} (${modelAsset.reason}) — run Save & Reconcile in Settings → Voice to repair it`);
+  }
 
   const url = new URL(cfg.stt.endpoint);
   const host = url.hostname;
@@ -408,18 +431,55 @@ export const reconcile = async (cfg, { allowSetup = true } = {}) => {
   const models = verifyModels(cfg);
   const piperMissing = bins.piperRequired && (!bins.piper || !models.ttsVoice);
   const webSpeech = cfg.stt?.engine === 'web-speech';
+  const coremlMissing = cfg.stt.coreml && !models.coreml;
+
+  // Boot is read-only: an asset that is present but incomplete is repaired by
+  // the user's next Save & Reconcile / voice download, never by a restart
+  // kicking off a surprise multi-hundred-MB transfer. Missing assets keep their
+  // existing first-install behavior.
+  if (!allowSetup) {
+    const repair = [];
+    if (bins.piperRequired && models.ttsVoiceState === 'incomplete') repair.push('piper');
+    if (!webSpeech && models.sttModelState === 'incomplete') repair.push('whisper');
+    if (repair.length) {
+      console.warn(`🎙️  voice: incomplete model download (${repair.join(', ')}) — run Save & Reconcile in Settings → Voice to repair`);
+      const setupRequired = repair.join(',');
+      if (webSpeech) {
+        await stopWhisper().catch(() => null);
+      } else if (!repair.includes('whisper') && bins.whisper && models.sttModel && !coremlMissing) {
+        return { ...await startWhisper(cfg), setupRequired };
+      }
+      return { setupRequired };
+    }
+  }
+
+  // Models that predate completion receipts are usable as-is, but only the
+  // setup script can establish their receipt (it may need a remote size check).
+  // Do that on a user-authorized pass, for files the script manages — a model
+  // at a user-chosen path is validated, never touched.
+  const sttNeedsReceipt = !webSpeech && models.sttModelState === 'unverified'
+    && isManagedVoiceAsset(expandPath(cfg.stt.modelPath), join(voiceHome(), 'models'));
+  const ttsNeedsReceipt = bins.piperRequired && models.ttsVoiceState === 'unverified'
+    && isManagedVoiceAsset(expandPath(cfg.tts.piper.voicePath), join(voiceHome(), 'voices'));
+  const adoptReceipts = async () => {
+    if (!allowSetup || !(sttNeedsReceipt || ttsNeedsReceipt)) return;
+    await runSetupScript(cfg).catch((err) => {
+      console.warn(`🎙️  voice: could not record model completion receipts: ${err.message}`);
+    });
+  };
 
   // Web Speech STT runs entirely in the browser — stop any leftover whisper
   // instance and skip STT provisioning. Piper voice provisioning still runs.
   if (webSpeech) {
     if (piperMissing) await runSetupScript(cfg);
+    else await adoptReceipts();
     await stopWhisper().catch(() => null);
     return { skipped: 'web-speech', piperProvisioned: piperMissing };
   }
 
-  const coremlMissing = cfg.stt.coreml && !models.coreml;
   const sttMissing = !bins.whisper || !models.sttModel || coremlMissing;
   if (piperMissing || sttMissing) await runSetupScript(cfg);
+  else await adoptReceipts();
 
   return startWhisper(cfg);
 };
