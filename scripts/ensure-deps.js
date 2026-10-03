@@ -8,7 +8,7 @@ import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { rebuildTrusted } from './trusted-rebuilds.js';
+import { rebuildTrusted, patchInstalledDependencies } from './trusted-rebuilds.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 // Node refuses to spawn npm's `.cmd` shim under `shell:false` (CVE-2024-27980),
 // so every npm spawn goes through this wrap. Safe to import before `npm install`
@@ -204,6 +204,10 @@ function main() {
       process.exit(1);
     }
   }
+
+  // A code-only upgrade can change an install-time patch without changing any
+  // manifest or lockfile. Repair warm trees too, before PM2 is ever started.
+  for (const { dir } of WORKSPACES) patchInstalledDependencies(dir);
 
   if (hashesDirty) saveHashes(storedHashes);
 

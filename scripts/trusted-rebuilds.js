@@ -24,6 +24,7 @@ import { fileURLToPath } from 'url';
 import { prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { applyGetUriFtpPatch } from './lib/getUriFtpPatch.js';
+import { applyBracesDepthPatch } from './lib/bracesDepthPatch.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -85,10 +86,12 @@ export const TRUSTED_REBUILDS = {
  * tree (get-uri's FTP adapter, #9462 — see scripts/lib/getUriFtpPatch.js). Rides
  * on this module because every managed install path already calls it after
  * `npm install` and `ignore-scripts=true` rules out a postinstall hook. Never
- * fatal: the FTP fallback is a compatibility fix, not a boot requirement, and a
- * get-uri release this patch does not recognize is reported rather than edited.
+ * fatal for the FTP compatibility fallback. The braces recursion guard is
+ * mandatory: unrecognized code or failed patch writes must stop the install.
  */
 export function patchInstalledDependencies(dir) {
+  const bracesStatus = applyBracesDepthPatch(join(dir, 'node_modules'));
+  if (bracesStatus === 'patched') console.log(`🩹 Patched braces recursion depth in ${dir}`);
   try {
     const status = applyGetUriFtpPatch(join(dir, 'node_modules'));
     if (status === 'patched') console.log(`🩹 Patched get-uri FTP LIST date fallback in ${dir}`);
