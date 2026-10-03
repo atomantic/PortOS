@@ -260,9 +260,15 @@ describe('NotificationDropdown', () => {
       expect(remove.className).toContain('min-w-[44px]');
       expect(remove.className).toContain('min-h-[44px]');
       expect(remove.className).toContain('shrink-0');
-      // Hover-to-reveal is sm+ only — touch has no hover to reveal it with.
-      expect(remove.className).toContain('sm:opacity-0');
-      expect(remove.className).not.toMatch(/(^|\s)opacity-/);
+      // Compact reveal is gated by actual hover capability, not viewport width.
+      expect(remove.className).toContain('[@media(hover:hover)]:sm:opacity-0');
+      expect(remove.className).toContain('[@media(hover:hover)]:sm:group-hover:opacity-100');
+      expect(remove.className).toContain('group-focus-within:opacity-100');
+      expect(remove.className).not.toMatch(/(^|\s)sm:opacity-/);
+
+      const markRead = screen.getByRole('button', { name: 'Mark notification as read: Notification 0' });
+      expect(markRead.className).toContain('min-h-[44px]');
+      expect(markRead.className).toContain('[@media(hover:hover)]:sm:min-h-0');
     });
 
     it('gives the bell trigger a 44px touch target on mobile and compact size on desktop', () => {
