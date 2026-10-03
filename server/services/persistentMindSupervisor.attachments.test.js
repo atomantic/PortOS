@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { PERSISTENT_MIND_LIMITS, createDefaultPersistentMindState } from '../lib/persistentMind.js';
 import { saveState } from './cosState.js';
 
@@ -277,7 +277,7 @@ describe('persistent mind image attachment lifecycle', () => {
 
     mocks.unlink.mockResolvedValue(undefined);
     const attachmentId = markerPath.split('.mind-pending-')[1];
-    mocks.readdir.mockResolvedValue([markerPath.split('/').pop(), `mind-${attachmentId}-diagram.png`]);
+    mocks.readdir.mockResolvedValue([basename(markerPath), `mind-${attachmentId}-diagram.png`]);
     mocks.stat.mockResolvedValue({ mtimeMs: Date.now() - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS - 1 });
     await expect(supervisor.cleanupPersistentMindAttachments())
       .resolves.toMatchObject({ success: true, removed: 1 });
@@ -296,7 +296,7 @@ describe('persistent mind image attachment lifecycle', () => {
     expect(mocks.unlink).not.toHaveBeenCalledWith(markerPath);
 
     const attachmentId = markerPath.split('.mind-pending-')[1];
-    mocks.readdir.mockResolvedValue([markerPath.split('/').pop(), `mind-${attachmentId}-diagram.png`]);
+    mocks.readdir.mockResolvedValue([basename(markerPath), `mind-${attachmentId}-diagram.png`]);
     mocks.stat.mockResolvedValue({ mtimeMs: Date.now() - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS - 1 });
     await expect(supervisor.cleanupPersistentMindAttachments())
       .resolves.toMatchObject({ success: true, removed: 1 });
@@ -308,7 +308,7 @@ describe('persistent mind image attachment lifecycle', () => {
     mocks.readdir.mockImplementation(async () => {
       const markerPath = mocks.writeFile.mock.calls[0]?.[0] || '';
       const attachmentId = markerPath.split('.mind-pending-')[1];
-      return attachmentId ? [markerPath.split('/').pop(), `mind-${attachmentId}-diagram.png`] : [];
+      return attachmentId ? [basename(markerPath), `mind-${attachmentId}-diagram.png`] : [];
     });
     let failCandidate = true;
     mocks.unlink.mockImplementation(async (path) => {
