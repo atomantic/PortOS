@@ -72,3 +72,11 @@ it('rejects symlink or short output instead of marking an unusable film complete
   await expect(encodeEidoverseComposition({ plan, project, audioPath: '/example/song.wav', outputPath: '/example/final.mp4' })).rejects.toMatchObject({ code: 'EIDOVERSE_OUTPUT_INVALID' });
   expect(runFfmpegProcess).not.toHaveBeenCalled();
 });
+
+it('does not start the song mux when cancellation arrives during output probing', async () => {
+  const plan = await prepareEidoverseRender(project);
+  const controller = new AbortController();
+  probeVideoDuration.mockImplementationOnce(async () => { controller.abort(); return 10; });
+  await expect(encodeEidoverseComposition({ plan, project, audioPath: '/example/song.wav', outputPath: '/example/final.mp4', signal: controller.signal })).rejects.toThrow();
+  expect(runFfmpegProcess).not.toHaveBeenCalled();
+});

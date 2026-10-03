@@ -109,6 +109,7 @@ export async function encodeEidoverseComposition({ plan, project, audioPath, out
     if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size === 0 || info.size > OUTPUT_LIMIT) throw new ServerError('Eidoverse produced an invalid video.', { status: 422, code: 'EIDOVERSE_OUTPUT_INVALID' });
     const [duration, geometry] = await Promise.all([probeVideoDuration(silent), probeVideoGeometry(silent)]);
     if (!Number.isFinite(duration) || Math.abs(duration - plan.durationSec) > 1 / plan.fps || geometry?.width !== plan.width || geometry?.height !== plan.height || Math.abs((geometry?.fps || 0) - plan.fps) > 0.01) throw new ServerError('Eidoverse output does not match the song duration and frame size.', { status: 422, code: 'EIDOVERSE_OUTPUT_INVALID' });
+    signal?.throwIfAborted();
     onProgress?.(0.9);
     const span = windowEnd - windowStart;
     const mux = await runFfmpegProcess({ bin: ffmpeg, signal, args: [
