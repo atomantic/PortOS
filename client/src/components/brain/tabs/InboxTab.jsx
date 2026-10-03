@@ -24,6 +24,8 @@ import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useLocalStorageBool } from '../../../hooks';
+import { useFailedCaptures } from '../../../hooks/useFailedCaptures';
+import FailedCaptureList from '../FailedCaptureList';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
 
 import {
@@ -74,6 +76,7 @@ export default function InboxTab({ onRefresh, settings }) {
   const [showDone, setShowDone] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [retryingId, setRetryingId] = useState(null);
+  const failedCaptures = useFailedCaptures();
   const inputRef = useRef(null);
   const tempIdCounter = useRef(0);
 
@@ -137,6 +140,45 @@ export default function InboxTab({ onRefresh, settings }) {
     return () => socket.off('brain:classified', handleClassified);
   }, [paged.refreshFirst, onRefresh]);
 
+  // Sends one capture. `payload` is the immutable request the submit built
+  // (text, note, creative flag, repo-intake options) so a Retry re-sends exactly
+  // what the user submitted, not whatever the composer holds now. A rejection
+  // keeps the payload in a persistent "Not saved" row (`failedId` refreshes the
+  // row a Retry came from instead of stacking a second one).
+  const sendCapture = async (payload, { failedId } = {}) => {
+    const tempId = `_pending_${++tempIdCounter.current}`;
+    setOptimisticEntries(prev => [{
+      id: tempId,
+      capturedText: payload.text,
+      status: 'classifying',
+      capturedAt: new Date().toISOString(),
+      ...(payload.creative ? { creative: true } : {})
+    }, ...prev]);
+
+    const captureOptions = { creative: payload.creative, repoIntake: payload.repoIntake };
+    if (payload.note) captureOptions.note = payload.note;
+    const result = await api.captureBrainThought(payload.text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
+      const message = err.message || 'Failed to capture thought';
+      toast.error(message);
+      setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
+      failedCaptures.fail(payload, message, failedId);
+      return null;
+    });
+    if (!result) return;
+
+    if (failedId) failedCaptures.discard(failedId);
+    if (result.inboxLog) {
+      setOptimisticEntries(prev => prev.map(e => e.id === tempId ? result.inboxLog : e));
+    } else {
+      setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
+    }
+    paged.refreshFirst();
+    // A capture that was just a URL is filed to Links synchronously — no
+    // brain:classified event follows, so announce the outcome here.
+    if (result.link) toast.success(result.message || 'Saved to Links');
+    onRefresh?.();
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const text = inputText.trim();
@@ -150,47 +192,26 @@ export default function InboxTab({ onRefresh, settings }) {
 
     // The server files a URL to Links regardless of the sticky Creative flag;
     // dropping it here keeps the optimistic entry matching what gets stored.
-    const asCreative = creative && !inputIsUrl;
-    const tempId = `_pending_${++tempIdCounter.current}`;
-    const optimisticEntry = {
-      id: tempId,
-      capturedText: text,
-      status: 'classifying',
-      capturedAt: new Date().toISOString(),
-      ...(asCreative ? { creative: true } : {})
-    };
-    setInputText('');
-    setOptimisticEntries(prev => [optimisticEntry, ...prev]);
-
     // `intakeFor` re-derives from the submitted text, so a sticky tick can't ride
     // along on a capture that is no longer a repo URL.
-    const captureOptions = {
-      creative: asCreative,
+    const payload = Object.freeze({
+      text,
+      note,
+      creative: creative && !inputIsUrl,
       repoIntake: repoIntake.intakeFor(text),
-    };
-    if (note) captureOptions.note = note;
-    const result = await api.captureBrainThought(text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
-      toast.error(err.message || 'Failed to capture thought');
-      setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
-      return null;
     });
-
+    // The note and study brief now live in the payload, so they clear with the
+    // composer rather than on acknowledgement (which could wipe the next draft's).
+    setInputText('');
+    setLinkNote('');
+    repoIntake.setStudyContext('');
+    await sendCapture(payload);
     if (inputRef.current) inputRef.current.dataset.lastSubmit = '';
+  };
 
-    if (result) {
-      if (result.inboxLog) {
-        setOptimisticEntries(prev => prev.map(e => e.id === tempId ? result.inboxLog : e));
-      } else {
-        setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
-      }
-      paged.refreshFirst();
-      // A capture that was just a URL is filed to Links synchronously — no
-      // brain:classified event follows, so announce the outcome here.
-      if (result.link) toast.success(result.message || 'Saved to Links');
-      setLinkNote('');
-      repoIntake.setStudyContext('');
-      onRefresh?.();
-    }
+  const handleRetryFailed = (failure, text) => {
+    if (!failedCaptures.markRetrying(failure.id)) return;
+    return sendCapture({ ...failure.payload, text }, { failedId: failure.id });
   };
 
   const handleResolve = async (entryId, destination) => {
@@ -439,6 +460,14 @@ export default function InboxTab({ onRefresh, settings }) {
         <RepoIntakeOptions
           idPrefix="inbox-capture-repo"
           {...repoIntake}
+        />
+        <FailedCaptureList
+          idPrefix="inbox-failed-capture"
+          failures={failedCaptures.failures}
+          getText={(f) => f.payload.text}
+          getNote={(f) => f.payload.note}
+          onRetry={handleRetryFailed}
+          onDiscard={failedCaptures.discard}
         />
       </form>
 

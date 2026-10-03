@@ -115,4 +115,64 @@ describe('Brain inbox capture', () => {
       }),
     }));
   });
+
+  describe('rejected capture recovery', () => {
+    const deferred = () => {
+      let resolve; let reject;
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+      return { promise, resolve, reject };
+    };
+
+    it('keeps the rejected text until an explicit Retry, without touching the next draft', async () => {
+      const first = deferred();
+      captureBrainThought.mockReturnValueOnce(first.promise);
+      render(<MemoryRouter><InboxTab /></MemoryRouter>);
+      const input = await screen.findByLabelText('New inbox thought');
+
+      fireEvent.change(input, { target: { value: 'invented thought A' } });
+      fireEvent.click(screen.getByLabelText('Capture thought'));
+      await waitFor(() => expect(input.value).toBe(''));
+      // The next draft is typed while A is still pending.
+      fireEvent.change(input, { target: { value: 'invented thought B' } });
+
+      first.reject(new Error('Server said no'));
+      const row = await screen.findByRole('group', { name: 'Not saved capture' });
+      expect(row.textContent).toContain('invented thought A');
+      expect(row.textContent).toContain('Server said no');
+      expect(input.value).toBe('invented thought B');
+      expect(captureBrainThought).toHaveBeenCalledTimes(1);
+
+      // Editing the failed row leaves the composer alone; Retry sends the edit once.
+      fireEvent.click(screen.getByRole('button', { name: /^Edit$/ }));
+      fireEvent.change(screen.getByLabelText('Edit unsaved capture'), { target: { value: 'invented thought A, fixed' } });
+      // Closing the editor keeps the edit.
+      fireEvent.click(screen.getByRole('button', { name: /Done editing/ }));
+      expect(screen.getByRole('group', { name: 'Not saved capture' }).textContent).toContain('invented thought A, fixed');
+      fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+      fireEvent.click(screen.getByRole('button', { name: /Retry|Retrying/ }));
+
+      await waitFor(() => expect(screen.queryByRole('group', { name: 'Not saved capture' })).toBeNull());
+      expect(captureBrainThought).toHaveBeenCalledTimes(2);
+      expect(captureBrainThought.mock.calls[1][0]).toBe('invented thought A, fixed');
+      expect(input.value).toBe('invented thought B');
+    });
+
+    it('lets the user discard a failed capture and keeps it on a second failure', async () => {
+      captureBrainThought.mockRejectedValue(new Error('Still down'));
+      render(<MemoryRouter><InboxTab /></MemoryRouter>);
+      const input = await screen.findByLabelText('New inbox thought');
+      fireEvent.change(input, { target: { value: 'invented thought C' } });
+      fireEvent.click(screen.getByLabelText('Capture thought'));
+      await screen.findByRole('group', { name: 'Not saved capture' });
+
+      fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+      await waitFor(() => expect(captureBrainThought).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByRole('button', { name: /Retry/ }).disabled).toBe(false));
+      expect(screen.getAllByRole('group', { name: 'Not saved capture' })).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole('button', { name: /Discard/ }));
+      expect(screen.queryByRole('group', { name: 'Not saved capture' })).toBeNull();
+      expect(captureBrainThought).toHaveBeenCalledTimes(2);
+    });
+  });
 });
