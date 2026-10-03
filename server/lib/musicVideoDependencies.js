@@ -27,12 +27,18 @@ const compositionRef = (project, startSec, endSec) => {
   const value = composition ? { ...composition,
     cues: (composition.cues || []).filter((cue) => intersects(cue, startSec, endSec)),
   } : null;
-  return { role: 'composition', assetId: 'composition', revision: checksum(value), startSec, endSec };
+  return { role: 'composition', assetId: 'composition', revision: checksum({ mediaMode: project.mediaMode || null, composition: value }), startSec, endSec };
 };
+
+const songRef = (project) => ({ role: 'song', assetId: 'master', revision: checksum({
+  trackId: project.trackId ?? null, uploadedAudioFilename: project.uploadedAudioFilename ?? null,
+  audioAnalysis: project.audioAnalysis ?? null, lyricCues: project.lyricCues || [],
+  lyricMarkers: project.lyricMarkers || [], phrases: project.phrases || [],
+}) });
 
 /** Evidence tracks its rendered window, selected layers and transitive take inputs. */
 export function captureMusicVideoEvidence(project, { sceneIds = null, startSec = 0, endSec = 36000, composition = true } = {}) {
-  const references = [];
+  const references = [songRef(project)];
   for (const scene of project.scenes || []) {
     if (sceneIds ? !sceneIds.includes(scene.sceneId) : !intersects(scene, startSec, endSec)) continue;
     references.push(layerRef(scene));
@@ -56,17 +62,19 @@ export function musicVideoDependencyChanges(project, dependencies) {
   if (!dependencies || dependencies.version !== MUSIC_VIDEO_DEPENDENCY_VERSION || !Array.isArray(dependencies.references)) {
     return [{ role: 'unknown', reason: 'Dependency evidence was not recorded; review again' }];
   }
-  const changes = [];
+  const changes = dependencies.references.some((ref) => ref.role === 'window') && !dependencies.references.some((ref) => ref.role === 'song')
+    ? [{ role: 'song', reason: 'Song dependency evidence was not recorded; review again' }] : [];
   for (const ref of dependencies.references) {
     let current;
     const scene = (project.scenes || []).find((entry) => entry.sceneId === ref.sceneId);
-    if (ref.role === 'window') current = { assetId: 'scene-set', revision: checksum((project.scenes || []).filter((scene) => intersects(scene, ref.startSec, ref.endSec)).map((scene) => scene.sceneId).sort()) };
+    if (ref.role === 'song') current = songRef(project);
+    else if (ref.role === 'window') current = { assetId: 'scene-set', revision: checksum((project.scenes || []).filter((scene) => intersects(scene, ref.startSec, ref.endSec)).map((scene) => scene.sceneId).sort()) };
     else if (ref.role === 'composition') current = compositionRef(project, ref.startSec, ref.endSec);
     else if (!scene) current = null;
     else if (slots[ref.role]) current = assetRef(scene, ref.role);
     else if (ref.role === 'layer') current = layerRef(scene);
     if (!current || current.assetId !== ref.assetId || current.revision !== ref.revision) {
-      changes.push({ ...ref, reason: `${ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'layer' ? 'Shot timing or composition layer' : 'Composition'} changed` });
+      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'layer' ? 'Shot timing or composition layer' : 'Composition'} changed` });
     }
   }
   return changes;

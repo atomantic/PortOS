@@ -1,3 +1,4 @@
+import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — pure record transforms (issue #1760, Phase 1).
  *
@@ -15,7 +16,7 @@
  */
 
 import { remapMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
@@ -30,7 +31,6 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
-import { isStr } from '../../lib/textUtils.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { normalizeLyricMarkers } from './lyricMarkers.js';
@@ -155,15 +155,17 @@ export function buildProjectRecord(input, { id, now }) {
     pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
     // The document pointer is set only by the import routes, never on create.
-    composition: input.composition ? withStoredCompositionDocument(normalizeComposition(input.composition), null) : null,
+    composition: input.composition || input.mediaMode ? withStoredCompositionDocument(normalizeComposition(input.composition || { mode: 'document' }), null) : null,
     // #8988 — optional sound-design bed mixed under the song.
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
-    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy),
+    mediaMode: musicVideoMediaMode(input),
+    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null)),
     scenes: [],
     renderHistoryId: null,
+    renderError: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
     // is additive rather than a record-shape migration.
     deleted: false,
@@ -183,7 +185,12 @@ export function cloneProjectRecord(source, {
   now,
   name,
   includeGeneratedMedia = true,
+  variant = 'revision',
 }) {
+  // Record metadata is independently editable; only immutable asset bytes are shared.
+  source = structuredClone(source);
+  const videoVariant = variant === 'video-generation';
+  if (videoVariant) includeGeneratedMedia = false;
   const nameMatch = typeof source.name === 'string' ? source.name.match(/^(.*?)(?:\s+v(\d+))?$/i) : null;
   const inferredVersion = Number(nameMatch?.[2]) || 1;
   const sourceVersion = Number.isInteger(source.version) && source.version > 0
@@ -209,7 +216,7 @@ export function cloneProjectRecord(source, {
     && scenes.length > 0
     && scenes.every((scene) => scene.referenceImageId && scene.videoHistoryId);
 
-  return {
+  const clone = {
     ...source,
     id,
     name: name?.trim() || `${baseName} v${version}`,
@@ -220,11 +227,17 @@ export function cloneProjectRecord(source, {
     createdAt: now,
     updatedAt: now,
     scenes,
-    ...(source.composition?.grade ? { composition: {
+    ...(source.composition ? { composition: {
       ...source.composition,
-      grade: { ...source.composition.grade, sections: (source.composition.grade.sections || []).map((section) => ({
+      ...(source.composition.codeVideo ? { codeVideo: { ...source.composition.codeVideo,
+        sections: source.composition.codeVideo.sections.map((section) => ({ ...section, id: sceneIdMap.get(section.id) ?? section.id })),
+      } } : {}),
+      ...(source.composition.reactiveSections ? { reactiveSections: source.composition.reactiveSections.map((section) => ({
+        ...section, sectionId: sceneIdMap.get(section.sectionId) ?? section.sectionId,
+      })) } : {}),
+      ...(source.composition.grade ? { grade: { ...source.composition.grade, sections: (source.composition.grade.sections || []).map((section) => ({
         ...section, sceneId: sceneIdMap.get(section.sceneId) ?? section.sceneId,
-      })) },
+      })) } } : {}),
     } } : {}),
     // #8980 — the treatment's shot directions and proofs follow the scenes to
     // their new ids; proof evidence the clone can't back is dropped.
@@ -246,6 +259,8 @@ export function cloneProjectRecord(source, {
     // A revision is in-progress work against the SOURCE's takes; the clone
     // starts with none (its carried-over notes can open a fresh one).
     revisions: [],
+    songRevision: null,
+    songRevisionHistory: [...(source.songRevisionHistory || []), ...(source.songRevision ? [source.songRevision] : [])],
     audioTimingRevisions: [],
     // #9102: an auto-review run is tied to the SOURCE's revisions/excerpts, so a
     // clone starts with none (terminal runs too — their links are source-scoped).
@@ -259,14 +274,44 @@ export function cloneProjectRecord(source, {
     // & Sets check-in keeps its direction and images, but its dispatch pin and
     // production link belong to the source — a working stage reads as
     // interrupted on the clone and can be resumed there.
+    productionReview: source.productionReview ? { feedback: source.productionReview.feedback || [], reviewedRevisions: source.productionReview.reviewedRevisions || {}, draft: { ...source.productionReview.draft, timingStatus: 'provisional',
+      storyboard: (source.productionReview.draft?.storyboard || []).map(shot => ({ ...shot, sceneId: sceneIdMap.get(shot.sceneId) || shot.sceneId })),
+      ...(videoVariant ? { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null } : {}),
+    }, approvals: {}, proof: null } : null,
     ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
     renderHistoryId: null,
+    renderError: null,
     renderDependencies: null,
+    // Publishing outputs and posted URLs belong to the source final render.
+    ...(source.publishKit ? { publishKit: null } : {}),
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
     renderPartialFilename: null,
     deleted: false,
     deletedAt: null,
+  };
+  if (!videoVariant) return clone;
+  // A footage adaptation starts with the same song and storyboard, but no
+  // procedural approvals, selected takes or running work. Nothing is dispatched.
+  const footageDirection = (direction) => ({ ...direction, route: 'generated',
+    medium: 'generated-footage', mediumPinned: false, mediumRationale: '' });
+  return {
+    ...clone,
+    mediaMode: 'code-images-video',
+    composition: { ...clone.composition, mode: 'composed' },
+    productionPolicy: normalizeMusicVideoProductionPolicy({ strategy: 'legacy' }),
+    castAndSets: null,
+    visualSpec: clone.visualSpec ? { ...clone.visualSpec, references: [], moodBoardId: null } : null,
+    concept: clone.concept ? { ...clone.concept, subjects: [], moodBoardStyle: '' } : null,
+    styleReferences: [],
+    ...(clone.automation ? { automation: { ...clone.automation, tools: [], moodBoardId: null } } : {}),
+    scenes: clone.scenes.map((scene) => ({ ...scene, visualLayer: 'footage',
+      ...(scene.direction ? { direction: footageDirection(scene.direction) } : {}),
+    })),
+    treatment: clone.treatment ? { ...clone.treatment, appliedRevision: null, basis: null,
+      shotDirections: clone.treatment.shotDirections.map(footageDirection),
+    } : null,
+    excerpts: [],
   };
 }
 
@@ -347,6 +392,7 @@ export function applyProjectPatch(project, patch) {
   // the flag set would render the old song's cut points against new audio.
   const trackChanged = ('trackId' in patch && patch.trackId !== project.trackId)
     || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
+  if ('mediaMode' in patch || patch.visualSpec || patch.styleReferences) assertMusicVideoMediaSelections({ ...project, ...mergedPatch });
   if (!trackChanged) return touch(project, mergedPatch);
   // A planned section belongs to the old audio too; clear its provenance so
   // the renderer does not preserve that plan's timing on the replacement song.
@@ -388,7 +434,10 @@ export function applyProjectPatch(project, patch) {
  * ready/rendering project shouldn't regress its lifecycle). The analysis shape
  * is validated so a hand-edited/legacy record can't store a malformed map.
  */
-export function setAudioAnalysis(project, analysis) {
+export function setAudioAnalysis(project, analysis, sourceProject) {
+  if (sourceProject && (project.trackId !== sourceProject.trackId || project.uploadedAudioFilename !== sourceProject.uploadedAudioFilename)) {
+    throw new ServerError('The audio changed during analysis. Analyze the selected master again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
+  }
   const validated = musicVideoAudioAnalysisSchema.parse(analysis);
   const status = project.status === 'draft' ? 'analyzed' : project.status;
   return touch(project, { audioAnalysis: validated, status });
@@ -491,6 +540,7 @@ export function applySceneUpdate(project, sceneId, patch) {
   if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {
     throw new ServerError('endSec must be >= startSec', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  assertMusicVideoMediaSelections({ ...project, scenes: [updated], visualSpec: null });
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
   const next = touch(project, { scenes: nextScenes });
@@ -675,8 +725,11 @@ export function mergeProjectRecord(local, remoteRaw) {
   // Development artifacts and the Cast & Sets checkpoint are wire-local too:
   // their files and jobs exist only on this install.
   if (Object.hasOwn(local, 'devArtifacts')) remote.devArtifacts = local.devArtifacts;
+  delete remote.productionReview;
+  if (Object.hasOwn(local, 'productionReview')) remote.productionReview = local.productionReview;
   if (Object.hasOwn(local, 'castAndSets')) remote.castAndSets = local.castAndSets;
   if (Object.hasOwn(local, 'autonomousRun')) remote.autonomousRun = local.autonomousRun;
+  if (Object.hasOwn(local, 'renderError')) remote.renderError = local.renderError;
   // The composition document's files live only on this install as well
   // (compositionDocument.js), so its pointer survives a newer remote body.
   if (local.composition?.document || local.composition?.documentDraft) {

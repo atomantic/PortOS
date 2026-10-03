@@ -143,7 +143,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useLiveSuggest` | Post-typing debounce for an imperative panel trigger: `{ registerTrigger, scheduleSuggest }` re-arms one `debounceMs` timer per keystroke and fires the registered fn only while `enabled` and still mounted. | An editor that asks a sibling AI panel to suggest once the writer pauses (WorkEditor ↔ LiveContinuationPanel). |
 | `useLockToggle` | Optimistic-PATCH lock toggle. | New "lock this field/stage/arc" button — use this, do not re-implement. |
 | `usePersistedOptions` | Registry for "saved default + per-run override" form options: one spec row per option (`{ defaultValue, read, clamp, persistOnEdit }`) owns the state, per-field dirty flag, hydrate-if-untouched pass and edited-only override collection. Returns `{ values, edit, hydrate, collectOverrides, inputProps }`, all identity-stable and ref-backed so a caller's `useCallback` needs one dep instead of one per option. | Any panel where each option must load a saved default, persist edits, and send ONLY edited fields as per-run overrides (AutopilotPanel) — use this instead of hand-copying the state/editedRef/hydrate/collect scaffold per option. |
-| `usePopoverPosition` | Viewport-clamped `{ left, top, width }` for a fixed-position portal popover anchored to a trigger; re-measures on open and rAF-coalesced on capture-phase scroll/resize. Returns `{ triggerRef, popoverRef, style, reposition }`; pass `anchorRef` to follow a parent-owned trigger. | Any portal-into-`<body>` menu/popover placed relative to a button (ThemeSwitcher, CollectionPickerShell) — use this instead of re-rolling the measure/flip/clamp/reflow plumbing. |
+| `usePopoverPosition` | Viewport-clamped `{ left, top, width }` for a fixed-position portal popover anchored to a trigger; re-measures on open and rAF-coalesced on capture-phase scroll/resize. Returns `{ triggerRef, popoverRef, style, reposition }`; pass `anchorRef` to follow a parent-owned trigger and `align` for start/center/end (default end); opt into `constrainHeight` to cap scrollable help to the roomier side of its trigger. | Any portal-into-`<body>` menu/popover placed relative to a button (ThemeSwitcher, CollectionPickerShell) — use this instead of re-rolling the measure/flip/clamp/reflow plumbing. |
 | `useScrollLock` | Body-scroll lock with ref-count. | Modals, drawers, lightboxes. |
 | `useSidebarResize` | Drag-to-resize split-pane width persisted to `localStorage`; returns `{ containerRef, width, maxWidth, onMouseDown, reset }` and caps the drag at `maxFraction` of the measured container. | A desktop sidebar/split pane with a draggable divider (WorkEditor's storyboard sidebar). |
 | `useSwipeNav` | Horizontal swipe prev/next. | Mobile swipe between siblings. |
@@ -163,6 +163,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
+| `useFailedCaptures` | Recoverable rejected Brain captures: `{ failures, fail(payload, error, id?), markRetrying(id), discard(id) }` keeps each failed submission's immutable payload apart from the composer's next draft; never re-sends by itself (the host's explicit Retry does). | A capture box that clears its input on submit (Inbox, Quick Capture) and must not lose the text when the server rejects it. Pair with `components/brain/FailedCaptureList`. |
 | `useLocalStorageBool` | Boolean `useState` mirrored to `localStorage`; returns `[value, setValue, toggle]`. | Per-user UI preference toggle, and any remembered disclosure (the SongBook viewer's Audio / Sheet controls / Chords used cards). |
 | `useNavWorkingSet` | Sidebar Pinned + Recent working set (localStorage MRU + pins); resolves stored paths to `{ path, label, icon }` rows via a `resolveNavEntry` arg. | Rendering the sidebar's Pinned/Recent sections. |
 
@@ -288,3 +289,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | `useGraphNodeDetail` | Selection-keyed graph record loading with render-time identity gating and late-response disposal. | Brain and CoS graph detail panels. |
 | `useModelLifecycle` | Targeted 3D model lifecycle reads, cancellation and bounded transient recovery. | Image-to-3D and procedural model views. |
+
+| `useMusicVideoProductionReview` | Server-authoritative art/storyboard/proof approvals and SSE proof rendering, with stale-readiness suppression. | Music Video production review. |
+
+| `useCalendarWindowEvents` | `useCalendarWindowEvents(startDate, endDate)` — sequential 200-event offset pages for a complete calendar window, account/event deduplication, retry and date/sync supersession. | Day/Week/Month grids; pair with CalendarWindowStatus to disclose incomplete availability. |

@@ -1,3 +1,4 @@
+import Banner from '../ui/Banner.jsx';
 import { useRef } from 'react';
 import { Film, Download, Maximize2 } from 'lucide-react';
 
@@ -83,4 +84,12 @@ export default function RenderStatusPanel({
       )}
     </div>
   );
+}
+
+/** Persisted failures survive reload; kickoff/SSE failures stay bound to their project. */
+export function RenderFailure({ project, renderJob }) {
+  if (renderJob?.active && renderJob.context === project.id) return null;
+  const error = renderJob?.failure?.projectId === project.id ? renderJob.failure.message
+    : project.status === 'failed' ? project.renderError : null;
+  return error ? <Banner tone="error" title="Render failed" className="break-words">{error}</Banner> : null;
 }

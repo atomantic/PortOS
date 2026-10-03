@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
+import { killProcessTree, prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { writeStepEnv, writeStepSummary } from './lib/githubOutput.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -170,12 +171,15 @@ export function structuredFailureDiagnostics(reportPath) {
  * stderr live (so a long CI job keeps showing progress) while also retaining
  * a bounded tail of the combined output for post-run crash detection.
  *
- * @returns {Promise<{status: number, output: string, error?: Error}>}
+ * @returns {Promise<{status: number, output: string, interrupted?: NodeJS.Signals, error?: Error}>}
  */
 export async function runNpm(scope, script, extraArgs) {
-  const reportDir = mkdtempSync(join(tmpdir(), 'portos-vitest-'));
+  const hostRoot = tmpdir();
+  sweepStaleRunRoots(hostRoot, { prefix: 'portos-vitest-' });
+  const reportDir = mkdtempSync(join(hostRoot, 'portos-vitest-'));
   const reportPath = join(reportDir, 'failures.json');
   try {
+    writeOwnerFile(reportDir);
     return await runNpmWithReport(scope, script, extraArgs, reportPath);
   } finally {
     rmSync(reportDir, { recursive: true, force: true });
@@ -190,7 +194,25 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
   // Windows checkout. See server/lib/bufferedSpawn.js.
   const { command, args: spawnArgs } = prepareCliSpawn('npm', args);
   return new Promise((resolve) => {
-    const child = spawn(command, spawnArgs, { env: process.env, cwd: repoRoot });
+    // npm is a launcher, not the entire test tree. Give this invocation its
+    // own POSIX group; Windows killProcessTree uses taskkill /T instead.
+    const processGroup = process.platform !== 'win32';
+    const child = spawn(command, spawnArgs, { env: process.env, cwd: repoRoot, detached: processGroup });
+    let interrupted;
+    let escalation;
+    let spawnError;
+    const cancel = (signal) => {
+      if (interrupted) return;
+      interrupted = signal;
+      killProcessTree(child, signal, { processGroup });
+      escalation = setTimeout(() => {
+        killProcessTree(child, 'SIGKILL', { processGroup });
+      }, 2000);
+    };
+    const onSigint = () => cancel('SIGINT');
+    const onSigterm = () => cancel('SIGTERM');
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
     let output = '';
     const tee = (stream, chunk) => {
       stream.write(chunk);
@@ -198,10 +220,20 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
     };
     child.stdout.on('data', (chunk) => tee(process.stdout, chunk));
     child.stderr.on('data', (chunk) => tee(process.stderr, chunk));
-    child.on('error', (error) => resolve({ status: 1, output, error }));
+    // A spawn error also emits close. Settle only there, after the pipes close.
+    child.on('error', (error) => { spawnError = error; });
     child.on('close', (code) => {
-      if (code !== 0) console.error(structuredFailureDiagnostics(reportPath));
-      resolve({ status: code ?? 1, output });
+      clearTimeout(escalation);
+      if (interrupted) {
+        // npm may close before a descendant that detached its stdio. Finish
+        // the owned group as well, including children that ignored SIGTERM.
+        killProcessTree(child, 'SIGKILL', { processGroup });
+      }
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+      const status = interrupted ? (interrupted === 'SIGINT' ? 130 : 143) : code ?? 1;
+      if (status !== 0) console.error(structuredFailureDiagnostics(reportPath));
+      resolve({ status, output, ...(interrupted ? { interrupted } : {}), ...(spawnError ? { error: spawnError } : {}) });
     });
   });
 }
@@ -216,6 +248,7 @@ async function spawnNpm(scope, script, extraArgs, label) {
     return 1;
   }
   if (result.status === 0) return 0;
+  if (result.interrupted) return result.status;
 
   const plan = planCrashRetry(scope, result.output);
   if (!plan.retry) {

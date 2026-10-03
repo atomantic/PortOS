@@ -17,16 +17,18 @@ const makeRoot = (name, { owner, ageMs = 0 } = {}) => {
   return root;
 };
 
-describe('sweepStaleRunRoots (#9113)', () => {
+describe.each(['pvt-', 'portos-vitest-'])('sweepStaleRunRoots (%s)', (prefix) => {
   it('removes a fresh root immediately when its owner is dead, keeps a live owner however old, and ages out pid-less roots at 6h', () => {
-    const dead = makeRoot('pvt-dead', { owner: '111 1000' });
-    const live = makeRoot('pvt-live', { owner: '222 1000', ageMs: STALE_ROOT_AGE_MS * 2 });
-    const noPidFresh = makeRoot('pvt-nopid-fresh');
-    const noPidOld = makeRoot('pvt-nopid-old', { ageMs: STALE_ROOT_AGE_MS + 60_000 });
-    const garbageOld = makeRoot('pvt-garbage', { owner: 'not a pid', ageMs: STALE_ROOT_AGE_MS + 60_000 });
+    const dead = makeRoot(prefix + 'dead', { owner: '111 1000' });
+    const live = makeRoot(prefix + 'live', { owner: '222 1000', ageMs: STALE_ROOT_AGE_MS * 2 });
+    const noPidFresh = makeRoot(prefix + 'nopid-fresh');
+    const noPidOld = makeRoot(prefix + 'nopid-old', { ageMs: STALE_ROOT_AGE_MS + 60_000 });
+    const garbageOld = makeRoot(prefix + 'garbage', { owner: 'not a pid', ageMs: STALE_ROOT_AGE_MS + 60_000 });
     const other = makeRoot('unrelated-old', { ageMs: STALE_ROOT_AGE_MS * 2 });
 
-    sweepStaleRunRoots(host, { probe: ({ pid }) => pid === 222 });
+    const otherPrefix = makeRoot(prefix === 'pvt-' ? 'portos-vitest-dead' : 'pvt-dead', { owner: '111 1000' });
+
+    sweepStaleRunRoots(host, { prefix, probe: ({ pid }) => pid === 222 });
 
     expect(existsSync(dead)).toBe(false);
     expect(existsSync(live)).toBe(true);
@@ -34,20 +36,21 @@ describe('sweepStaleRunRoots (#9113)', () => {
     expect(existsSync(noPidOld)).toBe(false);
     expect(existsSync(garbageOld)).toBe(false);
     expect(existsSync(other)).toBe(true);
+    expect(existsSync(otherPrefix)).toBe(true);
   });
 
   it('falls back to the age rule when liveness is undeterminable (probe returns null)', () => {
-    const fresh = makeRoot('pvt-unknown-fresh', { owner: '5 1' });
-    const old = makeRoot('pvt-unknown-old', { owner: '5 1', ageMs: STALE_ROOT_AGE_MS + 60_000 });
-    sweepStaleRunRoots(host, { probe: () => null });
+    const fresh = makeRoot(prefix + 'unknown-fresh', { owner: '5 1' });
+    const old = makeRoot(prefix + 'unknown-old', { owner: '5 1', ageMs: STALE_ROOT_AGE_MS + 60_000 });
+    sweepStaleRunRoots(host, { prefix, probe: () => null });
     expect(existsSync(fresh)).toBe(true);
     expect(existsSync(old)).toBe(false);
   });
 
   it('keeps a root owned by this very process (real probe, real owner file)', () => {
-    const root = makeRoot('pvt-self');
+    const root = makeRoot(prefix + 'self');
     writeOwnerFile(root);
-    sweepStaleRunRoots(host);
+    sweepStaleRunRoots(host, { prefix });
     expect(existsSync(root)).toBe(true);
   });
 });

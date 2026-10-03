@@ -432,3 +432,26 @@ export const previewMusicVideoAudioTiming = (id, data, options = {}) => request(
 export const applyMusicVideoAudioTiming = (id, data, options = {}) => request(`/music-video/${encodeURIComponent(id)}/audio-timing/apply`, {
   method: 'POST', body: JSON.stringify(data), ...options,
 });
+
+// Human-reviewed production planning and proof. These never accept approval state in a project PATCH.
+export const getMusicVideoProductionReview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, options);
+export const saveMusicVideoProductionDraft = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, { method: 'PUT', body: JSON.stringify(body), ...options });
+export const prepareMusicVideoProductionReview = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/prepare`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const approveMusicVideoProductionReview = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/approve`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const renderMusicVideoProductionProof = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/proof`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const importMusicVideoProductionPlanning = (id, source, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/import`, { method: 'POST', body: JSON.stringify({ source }), ...options });
+export const bindMusicVideoProductionShot = (id, shotId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/shots/${encodeURIComponent(shotId)}/bind`, { method: 'POST', ...options });
+
+export const addMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const resolveMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback/resolve`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Drafting is free; generation and candidate selection are separate explicit actions.
+export const saveMusicVideoSongRevision = (id, fields, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision`, { method: 'POST', body: JSON.stringify(fields), ...options });
+export const actOnMusicVideoSongRevision = (id, action, data, options = {}) => {
+  const config = { method: 'POST', body: JSON.stringify(data), ...options };
+  if (action === 'generate') return request(`/music-video/${encodeURIComponent(id)}/song-revision/generate`, config);
+  if (action === 'cancel') return request(`/music-video/${encodeURIComponent(id)}/song-revision/cancel`, config);
+  if (action === 'select') return request(`/music-video/${encodeURIComponent(id)}/song-revision/select`, config);
+  return Promise.reject(new Error('Unknown song revision action'));
+};
+
+export const importMusicVideoDocumentShots = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/document-shots`, { method: 'POST', body: JSON.stringify(body), ...options });

@@ -59,6 +59,8 @@ import {
   readPersistentMindVisibility,
 } from './persistentMindVisibility.js';
 import { readPersistentMindUserActionsPrompt } from './persistentMindUserActions.js';
+import { readPersistentMindVisitContinuationPrompt } from './persistentMindVisitContinuation.js';
+import { buildVisitReceiptEventData } from '../lib/persistentMindVisitReceipts.js';
 import {
   buildPersistentMindToolPrompt,
   readPersistentMindRecipeCatalog,
@@ -121,11 +123,14 @@ export const persistentMindResponseSchema = z.object({
   callRequest: persistentMindCallRequestSchema.nullable().optional().default(null),
 }).strict();
 
-const boundedToolResult = (result) => {
+const boundedToolResult = (result, toolName) => {
+  // Delegated artifacts need their full source; the context-window fitting
+  // below still compacts them explicitly when the selected mind cannot fit it.
+  const limit = ['sandbox.delegate', 'sandbox_delegate'].includes(toolName) ? 100_000 : MAX_TOOL_RESULT_CHARS;
   const serialized = JSON.stringify(result);
-  return serialized.length <= MAX_TOOL_RESULT_CHARS
+  return serialized.length <= limit
     ? result
-    : { truncated: true, preview: serialized.slice(0, MAX_TOOL_RESULT_CHARS) };
+    : { truncated: true, preview: serialized.slice(0, limit) };
 };
 
 const compactToolResult = (toolResult, cap) => {
@@ -221,13 +226,16 @@ const executeMindToolCalls = async ({ calls, turnId, wake, signal, capabilities,
           : `${candidate.name} ${result.state}`,
         tool: candidate.name,
         success: result.state === 'completed',
+        // Typed continuation receipt for an outbound visit (or its retirement) so
+        // a later wake can resume without the in-turn result (#9791).
+        ...buildVisitReceiptEventData({ toolName: candidate.name, args: candidate.arguments, state: result.state, result: result.result }),
       },
     });
     results.push({
       requestId: candidate.requestId || requestId,
       name: candidate.name,
       state: result.state,
-      ...(result.result !== undefined ? { result: boundedToolResult(result.result) } : {}),
+      ...(result.result !== undefined ? { result: boundedToolResult(result.result, candidate.name) } : {}),
       ...(result.error ? { error: result.error } : {}),
     });
   }
@@ -319,11 +327,11 @@ const currentWakeText = (wake, maintenancePrompt) => {
   return `This is a self-directed wake. There is NO human message and NO implied user request this turn — do not invent one (no workouts, weather, inbox triage, or phone calls unless tools/capabilities explicitly require them for the playbook). ${maintenancePrompt ? 'Read the development maintenance evidence first; act only on new exceptions, then return to the standing Eidoverse playbook.' : 'Continue the standing playbook: prefer eidoverse.status then one concrete Eidoverse/PortOS action, then a short working note.'}\nreason=${wake?.reason || 'scheduled reflection'}`;
 };
 
-export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, maintenancePrompt = '', issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({ enabled: false }), toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
+export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, maintenancePrompt = '', issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({ enabled: false }), toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', visitContinuationPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
   return `${context.text}
 
 ${visibilityPrompt}
-${userActionsPrompt ? `\n${userActionsPrompt}\n` : ''}
+${userActionsPrompt ? `\n${userActionsPrompt}\n` : ''}${visitContinuationPrompt ? `\n${visitContinuationPrompt}\n` : ''}
 ${maintenancePrompt ? `\n${maintenancePrompt}\n` : ''}
 # Current wake
 ${currentWakeText(wake, maintenancePrompt)}
@@ -521,6 +529,7 @@ export function createPersistentMindTurnAdapter() {
       // readPortos-gated user-actions.query tool.
       // Maintainers get aggregates, not automatic ledger summaries/transcript prose.
       const userActionsPrompt = root.config?.persistentMindMaintainer?.enabled ? '' : await readPersistentMindUserActionsPrompt();
+      const visitContinuationPrompt = await readPersistentMindVisitContinuationPrompt({ capabilities: taskAccess });
       let maintenancePrompt = '';
       if (root.config?.persistentMindMaintainer?.enabled) {
         const maintenance = await import('./persistentMindMaintenanceContext.js');
@@ -547,6 +556,7 @@ export function createPersistentMindTurnAdapter() {
         issueCapabilityPrompt,
         visibilityPrompt,
         userActionsPrompt,
+        visitContinuationPrompt,
         maintenancePrompt,
         callCapabilityPrompt,
       };

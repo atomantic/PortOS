@@ -1,0 +1,42 @@
+import { beforeEach, expect, it, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+vi.mock('../../services/apiMusicVideo.js', () => ({ updateMusicVideoProject: vi.fn() }));
+import { updateMusicVideoProject } from '../../services/apiMusicVideo.js';
+import EidoverseVideoPanel from './EidoverseVideoPanel.jsx';
+import { RenderStyleSelect, RenderFinalButton } from './ProjectActionGroups.jsx';
+const project = { id: 'example', uploadedAudioFilename: 'song.wav', audioAnalysis: { durationSec: 10 }, composition: { mode: 'eidoverse', textCues: [], style: { color: '#ffffff', font: 'sans' } } };
+beforeEach(() => { cleanup(); vi.clearAllMocks(); });
+it('offers Eidoverse as its own render style and saves the scene without generating footage', async () => {
+  const onRenderStyle = vi.fn();
+  render(<RenderStyleSelect project={project} onRenderStyle={onRenderStyle} />);
+  fireEvent.change(screen.getByLabelText('Render style'), { target: { value: 'eidoverse' } });
+  expect(onRenderStyle).toHaveBeenCalledWith('eidoverse');
+  const scene = { inlineScript: 'globalThis.setup = async () => {};' };
+  const saved = { ...project, composition: { ...project.composition, eidoverseScene: scene } };
+  updateMusicVideoProject.mockResolvedValue(saved);
+  const onProject = vi.fn();
+  render(<EidoverseVideoPanel project={project} onProject={onProject} />);
+  fireEvent.change(screen.getByLabelText(/Scene JSON/), { target: { value: JSON.stringify(scene) } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save scene' }));
+  await waitFor(() => expect(onProject).toHaveBeenCalledWith(saved));
+  expect(updateMusicVideoProject).toHaveBeenCalledWith('example', { composition: { ...project.composition, version: 1, posterSec: null, eidoverseScene: scene } }, { silent: true });
+});
+it('keeps failed saves editable with a visible error and does not claim success', async () => {
+  updateMusicVideoProject.mockRejectedValue(new Error('Scene assets are invalid'));
+  const onProject = vi.fn();
+  render(<EidoverseVideoPanel project={project} onProject={onProject} />);
+  fireEvent.change(screen.getByLabelText(/Scene JSON/), { target: { value: '{"inlineScript":"x"}' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save scene' }));
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Scene assets are invalid'));
+  expect(onProject).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Save scene' }).disabled).toBe(false);
+  expect(screen.queryByRole('status')).toBeNull();
+});
+it('allows final Eidoverse rendering with a saved scene and current approval without scene footage, and blocks a missing scene', () => {
+  const renderJob = { start: vi.fn(), active: false };
+  const view = render(<RenderFinalButton project={project} renderJob={renderJob} readiness={{ readyForProduction: true }} />);
+  expect(screen.getByRole('button', { name: 'Render final' }).disabled).toBe(true);
+  view.rerender(<RenderFinalButton project={{ ...project, composition: { ...project.composition, eidoverseScene: { inlineScript: 'x' } } }} renderJob={renderJob} readiness={{ readyForProduction: true }} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Render final' }));
+  expect(renderJob.start).toHaveBeenCalledWith('example');
+});

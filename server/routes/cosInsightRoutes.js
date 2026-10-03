@@ -32,7 +32,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
   const [tasksData, learningSummary, healthCheck, notificationsModule, pendingFeedbackCount, leftoverFindings, agents] = await Promise.all([
     cos.getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
     taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
-    (cachedHealth ? cos.getHealthStatus() : cos.runHealthCheck()).catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return { issues: [] }; }),
+    (cachedHealth ? cos.getHealthStatus() : cos.runHealthCheck()).catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return null; }),
     import('../services/notifications.js').catch(err => { console.error(`❌ Failed to load notifications: ${err.message}`); return null; }),
     cos.getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; }),
     detectIdleLeftoverBranches().catch(err => { console.error(`❌ Failed to detect leftover branches: ${err.message}`); return []; }),
@@ -81,8 +81,18 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
   }
 
   // 3. Health issues
-  const healthIssues = healthCheck?.issues || [];
-  if (healthIssues.length > 0) {
+  const healthUnavailable = !Array.isArray(healthCheck?.issues);
+  const healthIssues = healthUnavailable ? [] : healthCheck.issues;
+  if (healthUnavailable) {
+    insights.push({
+      type: 'health-unavailable',
+      priority: 'high',
+      icon: 'AlertTriangle',
+      title: 'CoS health unavailable',
+      description: 'Could not observe system health. Open Health and run a check to retry.',
+      action: { label: 'Check Health', route: '/cos/health' }
+    });
+  } else if (healthIssues.length > 0) {
     // `type`, not `severity` — runHealthCheck stamps issues `error`/`warning`
     // and never writes a `severity` field, so the old check matched nothing and
     // a process that failed to auto-restart banner'd at `medium` alongside a
@@ -203,7 +213,8 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
   res.json({
     insights: insights.slice(0, 5), // Max 5 insights
     hasActionableItems: insights.some(i => ['critical', 'high'].includes(i.priority)),
-    totalCount: insights.length
+    totalCount: insights.length,
+    unavailableSources: healthUnavailable ? [{ source: 'health', code: 'HEALTH_UNAVAILABLE' }] : []
   });
 }));
 

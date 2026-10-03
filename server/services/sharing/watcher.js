@@ -20,9 +20,13 @@ import { processManifest, processBacklog, handleUnshare, sharingEvents } from '.
 import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
 import { isManifestPruning, pruneBucketManifests } from './manifest.js';
 import { getInstanceId } from '../instanceIdentity.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 
 const watchers = new Map(); // bucketId → chokidar instance
 const backlogQueues = new Map(); // bucketId → { running: Promise, queued: Promise|null }
+const queueLifecycle = createFileWriteQueue();
+let shutdownAdmitted = false;
+let shutdownGeneration = 0;
 
 /**
  * Coalesce backlog-scan requests per bucket. A flood of records/ or assets/
@@ -60,9 +64,17 @@ function queueBacklog(bucketId) {
 }
 
 export async function attachWatcher(bucketId) {
+  // Admission is checked before queueing: work already admitted must finish so
+  // the queued teardown can see and close every handle it publishes.
+  if (shutdownAdmitted) throw new Error('Share bucket watchers are shut down');
+  return queueLifecycle(() => attachWatcherNow(bucketId));
+}
+
+async function attachWatcherNow(bucketId) {
   const existing = watchers.get(bucketId);
   if (existing) {
-    await existing.close().catch(() => {});
+    await existing.close();
+    watchers.delete(bucketId);
   }
   const bucket = await getBucket(bucketId);
   await ensureBucketLayout(bucket);
@@ -134,18 +146,33 @@ export async function attachWatcher(bucketId) {
 }
 
 export async function detachWatcher(bucketId) {
+  return queueLifecycle(() => detachWatcherNow(bucketId));
+}
+
+async function detachWatcherNow(bucketId) {
   const w = watchers.get(bucketId);
   if (!w) return;
-  await w.close().catch(() => {});
+  await w.close();
   watchers.delete(bucketId);
   sharingEvents.emit('watcher-detached', { bucketId });
 }
 
 export async function attachAllWatchers() {
+  const generation = shutdownGeneration;
+  return queueLifecycle(() => {
+    // An initialization queued before a newer shutdown must not reopen admission.
+    // A fresh initialization queues behind the prior teardown before reopening.
+    if (generation !== shutdownGeneration) return { attached: watchers.size };
+    shutdownAdmitted = false;
+    return attachAllWatchersNow();
+  });
+}
+
+async function attachAllWatchersNow() {
   const buckets = await listBuckets();
   const localInstanceId = await getInstanceId().catch(() => null);
   for (const b of buckets) {
-    await attachWatcher(b.id).catch((err) => {
+    await attachWatcherNow(b.id).catch((err) => {
       console.error(`❌ sharing.watcher: failed to attach bucket=${b.name}: ${err.message}`);
     });
     // Catch up on any manifests that arrived while we were offline.
@@ -164,10 +191,15 @@ export async function attachAllWatchers() {
 }
 
 export async function shutdownAllWatchers() {
-  const ids = [...watchers.keys()];
-  for (const id of ids) {
-    await detachWatcher(id).catch(() => {});
-  }
+  shutdownAdmitted = true;
+  shutdownGeneration++;
+  return queueLifecycle(async () => {
+    // Settle every close before releasing the queue, even when one fails. Failed
+    // handles remain tracked so a later teardown can retry without orphaning them.
+    const results = await Promise.allSettled([...watchers.keys()].map(detachWatcherNow));
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Failed to close share bucket watchers');
+  });
 }
 
 export function listAttachedWatchers() {

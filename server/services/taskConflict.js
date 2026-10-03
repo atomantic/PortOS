@@ -15,7 +15,7 @@ import { execGit } from '../lib/execGit.js';
  */
 async function getModifiedFiles(workspacePath) {
   const { stdout } = await execGit(['status', '--porcelain'], workspacePath);
-  return stdout.trim().split('\n')
+  return stdout.split('\n')
     .filter(Boolean)
     .map(line => line.substring(3).trim());
 }

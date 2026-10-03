@@ -1176,6 +1176,12 @@ export const restoreDbRequestSchema = z.object({
   dryRun: z.boolean().optional().default(true)
 });
 
+// Resume a committed snapshot database restore awaiting recovery (#9725). The
+// id must name the pending operation; recovery never replays the dump.
+export const restoreDbRecoverRequestSchema = z.object({
+  id: z.string().uuid(),
+}).strict();
+
 // Per-feature AI provider assignment: which configured CLI provider/model a
 // feature runs through (e.g. `settings.autofixer`, `settings.calendarSync`).
 // Empty string (UI "unset" sentinel) is coerced to undefined so it round-trips

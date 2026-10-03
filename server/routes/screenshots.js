@@ -22,11 +22,16 @@ router.post('/', asyncHandler(async (req, res) => {
   }
 
   const id = uuidv4();
+  // The server UUID always prefixes the stored name: clients (camera roll,
+  // screenshot tools) reuse names, and `SCREENSHOTS_DIR` is a shared bucket whose
+  // files are referenced by task records, so a repeat must never replace an
+  // earlier image. Sanitize BEFORE prefixing so a traversal-shaped name can't
+  // swallow the prefix.
   // Shared pipeline: decode → size cap → magic-byte sniff → detected extension →
   // containment guard → write. The client-supplied mimeType is deliberately
   // ignored; the bytes decide the type.
   const saved = await saveImageUpload(SCREENSHOTS_DIR, {
-    filename: filename || `screenshot-${id}`,
+    filename: `${id}-${sanitizeFilename(filename || 'screenshot')}`,
     data,
   }, { maxBytes: MAX_FILE_SIZE });
 

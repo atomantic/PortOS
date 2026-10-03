@@ -48,6 +48,7 @@ import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy, summari
 import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
 import { castAndSetsSettled } from './castAndSets.js';
+import { assertProductionApproval } from './productionReview.js';
 import { currentPilotPass, pilotClass, pilotInputBasis, pilotRepair, selectProductionPilots } from './productionPilot.js';
 
 const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
@@ -206,8 +207,8 @@ export function startProductionOnProject(project, {
     if (!project.scenes?.length || assets.conflicts.length) throw productionError(409, 'PRODUCTION_MEDIUM_CONFLICT', assets.conflicts.join(' ') || 'Approve a timed medium plan before starting production');
     if (!authoring?.providerId || !authoring?.model) throw productionError(422, 'PRODUCTION_AUTHORING_REQUIRED', 'Select a separate code-authoring provider and model');
   }
-  if (!codeFirst && project?.composition?.mode === 'code') {
-    throw productionError(409, 'PRODUCTION_UNSUPPORTED', 'A code-rendered project generates no footage — render it directly');
+  if (!codeFirst && ['code', 'eidoverse'].includes(project?.composition?.mode)) {
+    throw productionError(409, 'PRODUCTION_UNSUPPORTED', 'Use Compose and Production review for a standalone scene project: approve the storyboard, author the animation, then approve its chorus proof before rendering. Asset autopilot requires document composition.');
   }
   if (!Array.isArray(project?.audioAnalysis?.sections) || !project.audioAnalysis.sections.length) {
     throw productionError(409, 'NOT_ANALYZED', 'Analyze the song before starting production');
@@ -254,6 +255,7 @@ export function startProductionOnProject(project, {
 export function assertProductionStepOpen(project, runId, stepKey, { sceneId, kind, processId }) {
   const run = findProductionRun(project, runId);
   const step = run.steps.find((entry) => entry.key === stepKey);
+  if (step?.kind !== 'checkin') assertProductionApproval(project, 'storyboard');
   if (run.status !== 'running' || run.processId !== processId || !step || step.status !== 'reserved' || step.sceneId !== sceneId
     || JOB_KIND[step.kind] !== kind) {
     throw productionError(409, 'PRODUCTION_STEP_CLOSED', 'The production step was stopped or changed before submission');
@@ -266,6 +268,8 @@ export function assertProductionStepOpen(project, runId, stepKey, { sceneId, kin
       && !run.pilot.scenes.every((pilot) => currentPilotPass(project, pilot))))) {
     throw productionError(409, 'PRODUCTION_PILOT_REQUIRED', 'The pilot evidence changed before bulk submission');
   }
+  if (['image', 'video'].includes(kind) && run.pilot?.scenes?.length
+    && !run.pilot.scenes.some(pilot => pilot.sceneId === sceneId)) assertProductionApproval(project);
   assertProductionPilotRoute(project, run, sceneId, step.kind, step.route);
   if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first') {
     const plan = summarizeMusicVideoMediumPlan(project);

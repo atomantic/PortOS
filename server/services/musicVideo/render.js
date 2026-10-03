@@ -1,3 +1,5 @@
+import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { assertProductionApproval, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -41,7 +43,7 @@ import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLaye
 import { renderableCues, sectionCardCues } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
-import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch, renderSongComposition } from './compositionRender.js';
+import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes } from './performanceShot.js';
@@ -582,6 +584,7 @@ export function assertCurrentClipDependencies(project) {
 }
 
 export async function planMusicVideoRender(project) {
+  assertMusicVideoMediaSelections(project);
   assertCurrentClipDependencies(project);
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
@@ -625,33 +628,16 @@ export async function planMusicVideoRender(project) {
   return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed };
 }
 
-// An existing HTML composition directory is rendered through the music-video
-// owner (#9075). The caller names the directory; excerpts pass the master's
-// in-point as startSec. This is not the code-rendered project mode below.
-async function renderMusicVideoCode(projectId, { codeDirectory, startSec = 0 }) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const existingJob = projectRenders.get(projectId);
-  if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
-    throw new ServerError('Render already in progress for this project', {
-      status: 409, code: 'RENDER_IN_PROGRESS', context: { jobId: existingJob === PENDING ? null : existingJob },
-    });
-  }
-  projectRenders.set(projectId, PENDING);
-  const jobId = randomUUID();
-  try {
-    const audioPath = await resolveMasterAudioPath(project);
-    return await renderSongComposition({ project, directory: codeDirectory, jobId, audioPath, startSec });
-  } finally {
-    if (projectRenders.get(projectId) === PENDING) projectRenders.delete(projectId);
-  }
-}
-
 // Code-rendered mode (#9076) and the composition-document mode seek a
 // composition instead of concatenating footage. They share this module's job
 // map so the existing SSE and cancel routes apply. Code mode never asks a
 // footage model for pixels; a document draws the scenes' selected takes.
 const SEEKED_RENDERERS = Object.freeze({
+  eidoverse: {
+    label: 'Eidoverse Video', modelId: 'music-video-eidoverse',
+    prepare: async (project) => (await import('./eidoverseRender.js')).prepareEidoverseRender(project),
+    encode: async (input) => (await import('./eidoverseRender.js')).encodeEidoverseComposition(input),
+  },
   code: {
     label: 'code',
     modelId: 'music-video-code',
@@ -693,7 +679,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
   const renderingOn = await ensureInstanceId();
-  if (options.verifyCurrent) options.verifyCurrent(await getProject(projectId));
+  await assertCurrentRenderApproval(projectId, project, options);
   const jobId = randomUUID();
   const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
   const outputPath = join(PATHS.videos, filename);
@@ -706,21 +692,21 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   projectRenders.set(projectId, jobId);
   handOff();
   const priorStatus = project.status && project.status !== 'rendering' ? project.status : 'ready';
-  await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename }).catch((err) => {
+  await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename, renderError: null }).catch((err) => {
     console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
   });
   console.log(`🎬 Rendering ${renderer.label} music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} frames=${Math.round(plan.durationSec * plan.fps)} footage=off`);
   const { signal } = job.overlayAbort;
   const finish = async (patch) => {
     projectRenders.delete(projectId);
-    await updateProject(projectId, settledRender(patch.status, patch.extra || {})).catch((err) => {
+    await updateProject(projectId, settledRender(patch.status, { renderError: patch.status === 'failed' ? job.lastError?.slice(0, 2000) || 'Render failed' : null, ...patch.extra })).catch((err) => {
       console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
     });
     if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null });
     closeJobAfterDelay(jobs, jobId);
   };
   Promise.resolve().then(async () => {
-    if (options.verifyCurrent) options.verifyCurrent(await getProject(projectId));
+    await assertCurrentRenderApproval(projectId, project, options);
     if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
     return renderer.encode({
       plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
@@ -771,13 +757,22 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   return { jobId };
 }
 
-export async function renderMusicVideo(projectId, options = {}) {
-  if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
-    return renderMusicVideoCode(projectId, options);
+async function assertCurrentRenderApproval(projectId, preparedProject, options) {
+  const current = await getProject(projectId);
+  assertProductionApproval(current);
+  if (productionReviewBasis(current).proof !== productionReviewBasis(preparedProject).proof) {
+    throw new ServerError('The reviewed film changed during render preparation.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   }
+  await options.verifyCurrent?.(current);
+}
+
+export async function renderMusicVideo(projectId, options = {}) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-
+  assertProductionApproval(project);
+  if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
+    throw new ServerError('Import and select the composition document, then approve its animated proof before rendering.', { status: 409, code: 'MUSIC_VIDEO_UNREVIEWED_DIRECTORY' });
+  }
   const existingJob = projectRenders.get(projectId);
   if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
     throw new ServerError('Render already in progress for this project', {
@@ -812,6 +807,7 @@ export async function renderMusicVideo(projectId, options = {}) {
       .sort((a, b) => a.startSec - b.startSec);
     const composition = cues.length > 0 ? project.composition : null;
 
+    await assertCurrentRenderApproval(projectId, project, options);
     const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration };
     jobs.set(jobId, job);
     projectRenders.set(projectId, jobId);
@@ -826,7 +822,7 @@ export async function renderMusicVideo(projectId, options = {}) {
     // #9010: stamp this instance on the mark so a peer's boot recovery leaves
     // it alone, and record the output file so OUR boot recovery can delete the
     // partial a restart mid-encode leaves behind.
-    await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename }).catch((err) => {
+    await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename, renderError: null }).catch((err) => {
       console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
     });
 
@@ -982,7 +978,8 @@ export async function renderMusicVideo(projectId, options = {}) {
     renderTypographyOverlays({
       jobId, cues, style: { ...composition.style, graphicLanguage: project.treatment?.brief?.graphicLanguage }, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
-    }).then((overlays) => {
+    }).then(async (overlays) => {
+      await assertCurrentRenderApproval(projectId, project, options);
       signal.throwIfAborted();
       // Capture is over: from here a cancel kills the encode (job.process).
       job.overlayAbort = null;

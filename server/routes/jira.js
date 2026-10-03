@@ -59,9 +59,15 @@ const nonEmptyStringList = z.array(z.string().min(1)).min(1);
 const jiraLabelsSchema = z.object({ labels: nonEmptyStringList });
 const jiraSprintIssuesSchema = z.object({ issueKeys: nonEmptyStringList });
 
+const appIdSchema = z.string().regex(/^[A-Za-z0-9._-]+$/, 'appId contains invalid characters');
+
 const reportParamsSchema = z.object({
-  appId: z.string().regex(/^[A-Za-z0-9._-]+$/, 'appId contains invalid characters'),
+  appId: appIdSchema,
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD')
+});
+
+const generateReportSchema = z.object({
+  appId: appIdSchema.optional()
 });
 
 const router = express.Router();
@@ -397,7 +403,7 @@ router.get('/reports', asyncHandler(async (req, res) => {
  * Generate status report for a specific app or all JIRA-enabled apps
  */
 router.post('/reports/generate', asyncHandler(async (req, res) => {
-  const { appId } = req.body;
+  const { appId } = validateRequest(generateReportSchema, req.body);
 
   if (appId) {
     const app = await getAppById(appId);
@@ -420,7 +426,8 @@ router.post('/reports/generate', asyncHandler(async (req, res) => {
  * Get the latest report for an app
  */
 router.get('/reports/:appId/latest', asyncHandler(async (req, res) => {
-  const report = await jiraReports.getLatestReport(req.params.appId);
+  const { appId } = validateRequest(z.object({ appId: appIdSchema }), req.params);
+  const report = await jiraReports.getLatestReport(appId);
   if (!report) {
     throw new ServerError('No reports found for this app', { status: 404, code: 'NOT_FOUND' });
   }

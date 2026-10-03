@@ -36,6 +36,18 @@ function renderSelector(props = {}) {
 }
 
 describe('ProviderModelSelector', () => {
+  it('alphabetizes string and named model options without changing the selected model or catalog', () => {
+    const models = Object.freeze(['Zulu', { id: 'z-id', name: 'alpha' }, 'Beta']);
+    const onModelChange = vi.fn();
+    renderSelector({ availableModels: models, selectedModel: 'Beta', emptyModelOption: 'Default model', onModelChange });
+    const select = screen.getByRole('combobox', { name: 'Model' });
+    expect([...select.options].map(option => option.textContent)).toEqual(['Default model', 'alpha', 'Beta', 'Zulu']);
+    expect(select.value).toBe('Beta');
+    expect(onModelChange).not.toHaveBeenCalled();
+    fireEvent.change(select, { target: { value: 'z-id' } });
+    expect(onModelChange).toHaveBeenCalledWith('z-id');
+  });
+
   it('shows inherited provider, model and effort without writing overrides on mount', () => {
     const onProviderChange = vi.fn();
     const onModelChange = vi.fn();
@@ -124,7 +136,7 @@ describe('ProviderModelSelector', () => {
       availableModels: codexModels,
     });
     const modelSelect = screen.getAllByRole('combobox')[1];
-    expect([...modelSelect.querySelectorAll('option')].map((option) => option.value)).toEqual(codexModels);
+    expect([...modelSelect.querySelectorAll('option')].map((option) => option.value)).toEqual([...codexModels].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })));
     expect(modelSelect.value).toBe('gpt-6.1-sol');
   });
 
@@ -160,9 +172,9 @@ describe('ProviderModelSelector', () => {
     });
     const modelSelect = screen.getAllByRole('combobox')[1];
     const opts = [...modelSelect.querySelectorAll('option')];
-    expect(opts.map((o) => o.value)).toEqual(['mid', 'bare']);
+    expect(opts.map((o) => o.value)).toEqual(['bare', 'mid']);
     // `{ id }` with no name falls back to the id as the label.
-    expect(opts.map((o) => o.textContent)).toEqual(['Pretty Name', 'bare']);
+    expect(opts.map((o) => o.textContent)).toEqual(['bare', 'Pretty Name']);
   });
 
   it('skips nullish model entries instead of crashing (sparse/empty provider list)', () => {
@@ -271,7 +283,7 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
       selectionPolicy: { model: (model) => model !== 'tool-model' },
     });
     const modelSelect = screen.getAllByRole('combobox')[1];
-    expect([...modelSelect.options].map((option) => option.value)).toEqual(['tool-model', 'safe-model']);
+    expect([...modelSelect.options].map((option) => option.value)).toEqual(['safe-model', 'tool-model']);
     expect(modelSelect.querySelector('option[value="tool-model"]').disabled).toBe(true);
     expect(modelSelect.querySelector('option[value="tool-model"]').textContent).toMatch(/not permitted/i);
   });
@@ -288,7 +300,7 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
     });
     const [providerSelect, modelSelect] = screen.getAllByRole('combobox');
     expect(presetOptions(providerSelect).map((option) => option.value)).toEqual(['p1', 'p3']);
-    expect([...modelSelect.querySelectorAll('option')].map((option) => option.value)).toEqual(['too-large', 'small']);
+    expect([...modelSelect.querySelectorAll('option')].map((option) => option.value)).toEqual(['small', 'too-large']);
     expect(modelSelect.querySelector('option[value="too-large"]').disabled).toBe(true);
   });
 
@@ -319,7 +331,7 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
         highlightToolUse: true,
       });
       await waitFor(() =>
-        expect(modelLabels()).toEqual(['qwen3.6:35b · 🔧 tool use', 'gemma3:4b · ⚠ no known tool use']));
+        expect(modelLabels()).toEqual(['gemma3:4b · ⚠ no known tool use', 'qwen3.6:35b · 🔧 tool use']));
     });
 
     it('warns when the selected LOCAL model cannot call tools', async () => {
@@ -380,7 +392,7 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
         selectedModel: 'gemma3:4b',
         availableModels: ['qwen3.6:35b', 'gemma3:4b'],
       });
-      expect(modelLabels()).toEqual(['qwen3.6:35b', 'gemma3:4b']);
+      expect(modelLabels()).toEqual(['gemma3:4b', 'qwen3.6:35b']);
       expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
       // An unannotated picker must not pay for the capability scan either.
       expect(getToolUseModels).not.toHaveBeenCalled();
@@ -400,7 +412,7 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
         highlightToolUse: true,
       });
       await waitFor(() =>
-        expect(modelLabels()).toEqual(['phi4-mini:latest · 🔧 tool use', 'gemma3:4b · ⚠ no known tool use']));
+        expect(modelLabels()).toEqual(['gemma3:4b · ⚠ no known tool use', 'phi4-mini:latest · 🔧 tool use']));
       expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
     });
 
@@ -435,7 +447,7 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
       // A failed scan still settles, so the annotation appears — regex-only is
       // the best answer available, not a reason to go silent forever.
       await waitFor(() =>
-        expect(modelLabels()).toEqual(['qwen3.6:35b · 🔧 tool use', 'gemma3:4b · ⚠ no known tool use']));
+        expect(modelLabels()).toEqual(['gemma3:4b · ⚠ no known tool use', 'qwen3.6:35b · 🔧 tool use']));
       expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument();
     });
   });

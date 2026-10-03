@@ -1,14 +1,14 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile, unreadableStoreError } from '../lib/fileUtils.js';
+
+import { isPlainObject } from '../lib/objects.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DATA_DIR = PATHS.meatspace;
 const EPIGENETIC_FILE = join(DATA_DIR, 'epigenetic.json');
+const queueWrite = createFileWriteQueue();
 
-const DEFAULT_DATA = {
-  interventions: {},
-  lastUpdated: null
-};
 
 /**
  * Curated neuroprotective interventions with evidence-based dosage ranges.
@@ -191,9 +191,16 @@ export const CURATED_INTERVENTIONS = [
 
 async function loadData() {
   await ensureDir(DATA_DIR);
-  const raw = await tryReadFile(EPIGENETIC_FILE);
-  if (!raw) return { ...DEFAULT_DATA };
-  return safeJSONParse(raw, { ...DEFAULT_DATA });
+  const data = await readJSONFile(EPIGENETIC_FILE, {
+    interventions: {},
+    lastUpdated: null
+  }, { strict: true });
+  if (!isPlainObject(data) || !isPlainObject(data.interventions)
+    || Object.values(data.interventions).some(intervention =>
+      !isPlainObject(intervention) || !Array.isArray(intervention.logs))) {
+    throw unreadableStoreError(EPIGENETIC_FILE);
+  }
+  return data;
 }
 
 async function saveData(data) {
@@ -229,94 +236,102 @@ export function getRecommendations(markerCategories = []) {
  * Start tracking an intervention (curated or custom).
  */
 export async function addIntervention(intervention) {
-  const data = await loadData();
-  const id = intervention.id || randomUUID();
+  return queueWrite(async () => {
+    const data = await loadData();
+    const id = intervention.id || randomUUID();
 
-  // Check if it's a curated one
-  const curated = CURATED_INTERVENTIONS.find(c => c.id === id);
+    // Check if it's a curated one
+    const curated = CURATED_INTERVENTIONS.find(c => c.id === id);
 
-  data.interventions[id] = {
-    id,
-    name: intervention.name || curated?.name || 'Unknown',
-    category: intervention.category || curated?.category || 'custom',
-    dosage: intervention.dosage || '',
-    frequency: intervention.frequency || 'daily',
-    trackingUnit: intervention.trackingUnit || curated?.trackingUnit || 'dose',
-    startedAt: new Date().toISOString(),
-    active: true,
-    notes: intervention.notes || '',
-    logs: []
-  };
+    data.interventions[id] = {
+      id,
+      name: intervention.name || curated?.name || 'Unknown',
+      category: intervention.category || curated?.category || 'custom',
+      dosage: intervention.dosage || '',
+      frequency: intervention.frequency || 'daily',
+      trackingUnit: intervention.trackingUnit || curated?.trackingUnit || 'dose',
+      startedAt: new Date().toISOString(),
+      active: true,
+      notes: intervention.notes || '',
+      logs: []
+    };
 
-  await saveData(data);
-  console.log(`🧬 Epigenetic intervention tracked: ${data.interventions[id].name}`);
-  return data.interventions[id];
+    await saveData(data);
+    console.log(`🧬 Epigenetic intervention tracked: ${data.interventions[id].name}`);
+    return data.interventions[id];
+  });
 }
 
 /**
  * Log a daily entry for a tracked intervention.
  */
 export async function logEntry(interventionId, entry) {
-  const data = await loadData();
-  const intervention = data.interventions[interventionId];
-  if (!intervention) return { error: 'Intervention not found' };
+  return queueWrite(async () => {
+    const data = await loadData();
+    const intervention = data.interventions[interventionId];
+    if (!intervention) return { error: 'Intervention not found' };
 
-  const log = {
-    id: randomUUID(),
-    date: entry.date || new Date().toISOString().split('T')[0],
-    amount: entry.amount,
-    unit: intervention.trackingUnit,
-    notes: entry.notes || '',
-    loggedAt: new Date().toISOString()
-  };
+    const log = {
+      id: randomUUID(),
+      date: entry.date || new Date().toISOString().split('T')[0],
+      amount: entry.amount,
+      unit: intervention.trackingUnit,
+      notes: entry.notes || '',
+      loggedAt: new Date().toISOString()
+    };
 
-  // Avoid duplicate date entries — update existing
-  const existingIdx = intervention.logs.findIndex(l => l.date === log.date);
-  if (existingIdx >= 0) {
-    intervention.logs[existingIdx] = { ...intervention.logs[existingIdx], ...log };
-  } else {
-    intervention.logs.push(log);
-  }
+    // Avoid duplicate date entries — update existing
+    const existingIdx = intervention.logs.findIndex(l => l.date === log.date);
+    if (existingIdx >= 0) {
+      intervention.logs[existingIdx] = { ...intervention.logs[existingIdx], ...log };
+    } else {
+      intervention.logs.push(log);
+    }
 
-  // Keep logs sorted by date
-  intervention.logs.sort((a, b) => a.date.localeCompare(b.date));
+    // Keep logs sorted by date
+    intervention.logs.sort((a, b) => a.date.localeCompare(b.date));
 
-  await saveData(data);
-  console.log(`🧬 Logged ${log.amount} ${log.unit} of ${intervention.name} for ${log.date}`);
-  return log;
+    await saveData(data);
+    console.log(`🧬 Logged ${log.amount} ${log.unit} of ${intervention.name} for ${log.date}`);
+    return log;
+  });
 }
 
 /**
  * Update an intervention's settings.
  */
 export async function updateIntervention(interventionId, updates) {
-  const data = await loadData();
-  const intervention = data.interventions[interventionId];
-  if (!intervention) return { error: 'Intervention not found' };
+  return queueWrite(async () => {
+    const data = await loadData();
+    const intervention = data.interventions[interventionId];
+    if (!intervention) return { error: 'Intervention not found' };
 
-  if (updates.dosage !== undefined) intervention.dosage = updates.dosage;
-  if (updates.frequency !== undefined) intervention.frequency = updates.frequency;
-  if (updates.notes !== undefined) intervention.notes = updates.notes;
-  if (updates.active !== undefined) intervention.active = updates.active;
-  if (updates.name !== undefined) intervention.name = updates.name;
+    if (updates.dosage !== undefined) intervention.dosage = updates.dosage;
+    if (updates.frequency !== undefined) intervention.frequency = updates.frequency;
+    if (updates.notes !== undefined) intervention.notes = updates.notes;
+    if (updates.active !== undefined) intervention.active = updates.active;
+    if (updates.name !== undefined) intervention.name = updates.name;
 
-  await saveData(data);
-  console.log(`🧬 Updated intervention: ${intervention.name}`);
-  return intervention;
+    await saveData(data);
+    console.log(`🧬 Updated intervention: ${intervention.name}`);
+    return intervention;
+  });
 }
 
 /**
  * Delete an intervention and its logs.
  */
 export async function deleteIntervention(interventionId) {
-  const data = await loadData();
-  if (!data.interventions[interventionId]) return { error: 'Intervention not found' };
+  return queueWrite(async () => {
+    const data = await loadData();
+    if (!data.interventions[interventionId]) return { error: 'Intervention not found' };
 
-  const name = data.interventions[interventionId].name;
-  delete data.interventions[interventionId];
-  await saveData(data);
-  console.log(`🧬 Deleted intervention: ${name}`);
-  return { success: true };
+    const name = data.interventions[interventionId].name;
+    delete data.interventions[interventionId];
+    await saveData(data);
+    console.log(`🧬 Deleted intervention: ${name}`);
+    return { success: true };
+  });
 }
 
 /**

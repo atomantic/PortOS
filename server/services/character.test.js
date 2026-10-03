@@ -3,12 +3,21 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // In-memory backing for the character.json read/write so the test exercises the
 // real read-modify-save path without touching disk. `birthDate` drives the mocked
 // meatspace accessor so age-based level derivation is deterministic.
-const store = vi.hoisted(() => ({ value: null, birthDate: null, readable: true }));
+// `beforeWrite`, when set, is awaited just before a write lands so a test can park one writer
+// mid-persist and drive an interleaving deterministically (#9817). `jira` / `tasks` feed the
+// import-service stubs below.
+const store = vi.hoisted(() => ({
+  value: null, birthDate: null, readable: true, beforeWrite: null,
+  jira: { instances: {}, projects: [], tickets: [], beforeTickets: null },
+  tasks: { user: { tasks: [] }, cos: { tasks: [] }, before: null },
+}));
 
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { data: '/tmp/portos-test-data' },
   ensureDir: vi.fn(async () => {}),
-  readJSONFile: vi.fn(async (_file, fallback) => (store.value ?? fallback)),
+  // Independent snapshots, like the real JSON read — a shared object reference would hide the
+  // lost-update race by letting concurrent writers mutate the same record.
+  readJSONFile: vi.fn(async (_file, fallback) => (store.value ? JSON.parse(JSON.stringify(store.value)) : fallback)),
   writeFile: vi.fn(),
   // atomicWrite replaced the raw writeFile(JSON.stringify) site (#1837); route
   // it through the mocked fs/promises.writeFile so the in-memory store update
@@ -32,10 +41,22 @@ const FAKE_METRICS = [{ id: 'recordsCreated', label: 'Records Created', unit: 'c
 // A recognizable stand-in for the shared signal context, so the tests can assert BOTH
 // registries were handed the SAME one (the whole point of #2676's read-once contract).
 const FAKE_READ = vi.hoisted(() => vi.fn());
-vi.mock('./jira.js', () => ({}));
+vi.mock('./jira.js', () => ({
+  getInstances: vi.fn(async () => ({ instances: store.jira.instances })),
+  getProjects: vi.fn(async () => store.jira.projects),
+  getMyCurrentSprintTickets: vi.fn(async () => {
+    await store.jira.beforeTickets?.();
+    return store.jira.tickets;
+  }),
+}));
 // character.js reaches cosTaskStore for the one symbol it uses (getAllTasks); syncTaskXP
 // is not exercised here, so the stub only has to satisfy the static import.
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }) }));
+vi.mock('./cosTaskStore.js', () => ({
+  getAllTasks: async () => {
+    await store.tasks.before?.();
+    return { user: store.tasks.user, cos: store.tasks.cos };
+  },
+}));
 vi.mock('./characterSkills.js', () => ({
   getCharacterSkills: vi.fn(async () => FAKE_SKILLS),
 }));
@@ -55,6 +76,7 @@ vi.mock('./meatspace.js', () => ({
 
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn(async (_path, contents) => {
+    await store.beforeWrite?.();
     store.value = JSON.parse(contents);
   }),
 }));
@@ -521,5 +543,196 @@ describe('character setAvatar', () => {
     expect(updated.class).toBe('Wizard');
     // And it was actually persisted.
     expect(store.value.avatarPath).toBe('/data/images/avatar.png');
+  });
+});
+
+// #9817 — every read-modify-write enters ONE queue and re-reads inside it, so overlapping
+// requests / background jobs can't each persist a stale full document over the other.
+describe('Character mutation queue (#9817)', () => {
+  // Park the FIRST write until `release()`; later writes pass straight through. Lets a test
+  // start writer A, start writer B while A is mid-persist, then let both finish.
+  function parkFirstWrite() {
+    let release;
+    const gate = new Promise(r => { release = r; });
+    let parked = false;
+    let signalParked;
+    const parkedSignal = new Promise(r => { signalParked = r; });
+    store.beforeWrite = async () => {
+      if (parked) return;
+      parked = true;
+      signalParked();
+      await gate;
+    };
+    return { release, parkedSignal };
+  }
+
+  beforeEach(() => {
+    store.value = { name: 'Before', class: 'Wizard', xp: 100, hp: 15, maxHp: 15, events: [], syncedJiraTickets: [], syncedTaskIds: [], updatedAt: '2026-01-01T00:00:00.000Z' };
+    store.birthDate = null;
+    store.beforeWrite = null;
+    store.jira = { instances: {}, projects: [], tickets: [], beforeTickets: null };
+    store.tasks = { user: { tasks: [] }, cos: { tasks: [] }, before: null };
+  });
+
+  afterEach(() => { store.beforeWrite = null; });
+
+  it('keeps a name edit AND the XP gain (one event) when the edit lands while XP is persisting', async () => {
+    const { release, parkedSignal } = parkFirstWrite();
+    const xp = characterService.addXP(25, 'test', 'gain');
+    await parkedSignal;
+    const edit = characterService.updateCharacterFields({ name: 'After' });
+    // Let the queued edit start its (blocked-behind-XP) read before XP's write lands.
+    await new Promise(r => setTimeout(r, 0));
+    release();
+    await Promise.all([xp, edit]);
+
+    expect(store.value.name).toBe('After');
+    expect(store.value.xp).toBe(125);
+    expect(store.value.events.filter(e => e.type === 'xp')).toHaveLength(1);
+  });
+
+  it('keeps both when the edit starts first and XP follows', async () => {
+    const { release, parkedSignal } = parkFirstWrite();
+    const edit = characterService.updateCharacterFields({ name: 'After' });
+    await parkedSignal;
+    const xp = characterService.addXP(25, 'test', 'gain');
+    await new Promise(r => setTimeout(r, 0));
+    release();
+    await Promise.all([edit, xp]);
+
+    expect(store.value.name).toBe('After');
+    expect(store.value.xp).toBe(125);
+    expect(store.value.events.filter(e => e.type === 'xp')).toHaveLength(1);
+  });
+
+  it('preserves both of two overlapping local increments', async () => {
+    const { release, parkedSignal } = parkFirstWrite();
+    const a = characterService.addXP(10, 'a', 'A');
+    await parkedSignal;
+    const b = characterService.addXP(20, 'b', 'B');
+    await new Promise(r => setTimeout(r, 0));
+    release();
+    await Promise.all([a, b]);
+
+    expect(store.value.xp).toBe(130);
+    expect(store.value.events).toHaveLength(2);
+  });
+
+  it('a rejected mutation neither persists nor wedges the queue', async () => {
+    await expect(characterService.takeDamage('not-dice')).rejects.toThrow(/Invalid dice/);
+    store.beforeWrite = async () => { throw new Error('disk full'); };
+    await expect(characterService.addXP(5, 'x', 'x')).rejects.toThrow('disk full');
+    store.beforeWrite = null;
+
+    const ok = await characterService.addXP(7, 'x', 'x');
+    expect(ok.character.xp).toBe(107);
+    expect(store.value.xp).toBe(107);
+  });
+
+  it('reset is queued behind an in-flight mutation instead of being overwritten by it', async () => {
+    const { release, parkedSignal } = parkFirstWrite();
+    const xp = characterService.addXP(25, 'test', 'gain');
+    await parkedSignal;
+    const reset = characterService.resetCharacter();
+    await new Promise(r => setTimeout(r, 0));
+    release();
+    await Promise.all([xp, reset]);
+
+    expect(store.value.xp).toBe(0);
+    expect(store.value.events).toEqual([]);
+  });
+
+  describe('federation apply', () => {
+    const remote = (over = {}) => ({
+      name: 'Remote', class: 'Wizard', xp: 100, hp: 15, maxHp: 15,
+      events: [{ id: 'r1', type: 'xp', xp: 0, timestamp: '2026-02-01T00:00:00.000Z' }],
+      syncedJiraTickets: [], syncedTaskIds: [], updatedAt: '2000-01-01T00:00:00.000Z', level: 9, skills: [{ id: 'stale' }],
+      ...over,
+    });
+
+    it('a local edit racing a federation merge keeps union events and the newer scalar', async () => {
+      const { release, parkedSignal } = parkFirstWrite();
+      const edit = characterService.updateCharacterFields({ name: 'LocalEdit' });
+      await parkedSignal;
+      // Remote is OLDER than the local edit's fresh updatedAt, so the local name must win (LWW).
+      const apply = characterService.applyRemoteSnapshot(remote());
+      await new Promise(r => setTimeout(r, 0));
+      release();
+      await Promise.all([edit, apply]);
+
+      expect(store.value.name).toBe('LocalEdit');
+      expect(store.value.events.map(e => e.id)).toContain('r1');
+      expect(store.value.level).toBeUndefined();
+      expect(store.value.skills).toBeUndefined();
+    });
+
+    it('a newer remote scalar wins, and a local XP gain that raced it survives as an event', async () => {
+      const { release, parkedSignal } = parkFirstWrite();
+      const xp = characterService.addXP(25, 'test', 'gain');
+      await parkedSignal;
+      const apply = characterService.applyRemoteSnapshot(remote({ name: 'RemoteNewer', updatedAt: '2999-01-01T00:00:00.000Z' }));
+      await new Promise(r => setTimeout(r, 0));
+      release();
+      await Promise.all([xp, apply]);
+
+      expect(store.value.name).toBe('RemoteNewer');
+      expect(store.value.xp).toBe(125);
+      expect(store.value.events.filter(e => e.type === 'xp' && e.xp === 25)).toHaveLength(1);
+      expect(store.value.events.map(e => e.id)).toContain('r1');
+    });
+
+    it('accepts the remote record (derived fields stripped) when nothing exists locally', async () => {
+      store.value = null;
+      const result = await characterService.applyRemoteSnapshot(remote());
+      expect(result).toEqual({ applied: true, count: 1 });
+      expect(store.value.level).toBeUndefined();
+      expect(store.value.skills).toBeUndefined();
+      expect(store.value.name).toBe('Remote');
+    });
+
+    it('reports not-applied when the remote adds nothing', async () => {
+      const result = await characterService.applyRemoteSnapshot(remote({ events: [] }));
+      expect(result).toEqual({ applied: false, count: 0 });
+    });
+  });
+
+  describe('imports re-check deduplication after slow discovery', () => {
+    it('syncTaskXP does not double-grant a task another writer synced during discovery', async () => {
+      store.tasks.user = { tasks: [{ id: 't1', status: 'completed', title: 'One' }, { id: 't2', status: 'completed', title: 'Two' }] };
+      store.tasks.before = async () => {
+        // A concurrent writer (e.g. a federation merge) records t1 while discovery is in flight.
+        await characterService.applyRemoteSnapshot({
+          ...store.value, syncedTaskIds: ['t1'], updatedAt: '2999-01-01T00:00:00.000Z',
+        });
+      };
+      const result = await characterService.syncTaskXP();
+
+      expect(result.taskCount).toBe(1);
+      expect(result.totalXP).toBe(25);
+      expect(store.value.syncedTaskIds.sort()).toEqual(['t1', 't2']);
+      expect(store.value.xp).toBe(125);
+    });
+
+    it('syncJiraXP does not double-grant a ticket synced during discovery, and keeps a racing edit', async () => {
+      store.jira = {
+        instances: { main: {} },
+        projects: [{ key: 'PRJ' }],
+        tickets: [
+          { key: 'PRJ-1', summary: 'a', status: 'Done', storyPoints: 2 },
+          { key: 'PRJ-2', summary: 'b', statusCategory: 'Done' },
+          { key: 'PRJ-3', summary: 'c', status: 'In Progress' },
+        ],
+        beforeTickets: async () => {
+          await characterService.updateCharacterFields({ name: 'Edited' });
+          await characterService.applyRemoteSnapshot({ ...store.value, syncedJiraTickets: ['PRJ-1'], updatedAt: '2999-01-01T00:00:00.000Z' });
+        },
+      };
+      const result = await characterService.syncJiraXP();
+
+      expect(result.ticketCount).toBe(1);
+      expect(result.totalXP).toBe(50);
+      expect(store.value.name).toBe('Edited');
+      expect(store.value.syncedJiraTickets.sort()).toEqual(['PRJ-1', 'PRJ-2']);
+    });
   });
 });

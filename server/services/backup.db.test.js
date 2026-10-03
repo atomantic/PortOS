@@ -14,6 +14,29 @@ import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.
 // The real rewind rewrites this install's data/instances_sync_cursors.json.
 const rewindPostgresSyncCursors = vi.hoisted(() => vi.fn(async () => 0));
 vi.mock('./syncOrchestrator.js', () => ({ rewindPostgresSyncCursors }));
+// The restore recovery journal (#9725) lives in data/ and fences the pool; keep
+// it in a disposable data root, never the install's live tree.
+const dataRoot = vi.hoisted(() => ({ path: null }));
+vi.mock('../lib/paths.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir: osTmp } = await import('node:os');
+  dataRoot.path = mkdtempSync(join(osTmp(), 'portos-restore-db-data-'));
+  return { ...actual, PATHS: { ...actual.PATHS, data: dataRoot.path } };
+});
+const runDbMigrationsFault = vi.hoisted(() => ({ next: null }));
+vi.mock('../scripts/run-db-migrations.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    runDbMigrations: async (...args) => {
+      const fault = runDbMigrationsFault.next;
+      runDbMigrationsFault.next = null;
+      if (fault) throw fault;
+      return actual.runDbMigrations(...args);
+    },
+  };
+});
 
 // Load the service before timing restore assertions, as other integration
 // suites do. A cold module graph is setup, not database replay time.
@@ -55,6 +78,7 @@ afterAll(async () => {
   }
   await close();
   if (dest) await rm(dest, { recursive: true, force: true });
+  if (dataRoot.path) await rm(dataRoot.path, { recursive: true, force: true });
 });
 
 async function restore(dryRun = false, snapshotId = 'old-schema') {
@@ -134,6 +158,31 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect(issue.rows[0].data.stages.storyboards.scenes[0].id).toBeTruthy();
     expect((await query('SELECT id, applied_at FROM schema_migrations WHERE id <> $1 ORDER BY id', [pendingMigration])).rows).toEqual(appliedBefore.rows);
     expect(await runDbMigrations()).toBe(0);
+  });
+
+  // #9725: a committed replay whose repair fails keeps ordinary work fenced
+  // with its receipt and ORIGINAL floors, and recovery repairs without replay.
+  it('fences a committed replay whose migrations fail, then recovers from the receipt and original floors', async () => {
+    const { resumeDatabaseRestore } = await import('./backupRestoreRecovery.js');
+    const { databaseRestoreRecovery } = await import('../lib/db.js');
+    await query("SELECT nextval('memories_sync_feed_seq') FROM generate_series(1, 3)");
+    const floorBefore = BigInt((await feedSequenceValues()).memories_sync_feed_seq);
+    runDbMigrationsFault.next = new Error('injected migration fault');
+    const failed = await restore();
+    expect(failed).toMatchObject({ status: 'failed', reason: 'restore_schema_reconciliation', recovery: { stage: 'repairing' } });
+    const journal = databaseRestoreRecovery.read();
+    expect(journal.id).toBe(failed.recovery.id);
+    expect(BigInt(journal.feedPositions.find(p => p.sequencename === 'memories_sync_feed_seq').last_value)).toBe(floorBefore);
+    await expect(query('SELECT 1')).rejects.toMatchObject({ code: 'DATABASE_RESTORE_RECOVERY' });
+    expect(await restore(true)).toMatchObject({ status: 'failed', reason: 'restore_recovery_pending' });
+
+    expect(await resumeDatabaseRestore(journal.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+    expect(databaseRestoreRecovery.read()).toBeNull();
+    // The receipt committed with the replay, inside its transaction.
+    expect((await query('SELECT dump_sha256 FROM restore_receipts WHERE operation_id = $1', [journal.id])).rows)
+      .toEqual([{ dump_sha256: journal.dumpSha256 }]);
+    const next = (await query("SELECT nextval('memories_sync_feed_seq')::text AS v")).rows[0].v;
+    expect(BigInt(next)).toBeGreaterThan(floorBefore);
   });
 
   it('rolls back the reset and preserves rows and constraints when replay fails', async () => {

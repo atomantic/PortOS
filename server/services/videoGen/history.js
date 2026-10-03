@@ -50,11 +50,15 @@ export async function getHistoryItem(id) {
 // the freshest persisted array and returns the array to persist (return the
 // same reference after mutating it in place, or a new array). Any writer that
 // can race another on this file should route through here.
+// A mutator that found nothing to change returns `HISTORY_UNCHANGED` so the
+// file is not rewritten (an idempotent replay stays a true no-op).
+export const HISTORY_UNCHANGED = Symbol('video-history-unchanged');
 let historyWriteTail = Promise.resolve();
 export function mutateVideoHistory(mutator) {
   const run = historyWriteTail.then(async () => {
     const history = await loadHistory();
     const next = await mutator(Array.isArray(history) ? history : []);
+    if (next === HISTORY_UNCHANGED) return history;
     const toSave = Array.isArray(next) ? next : history;
     await saveHistory(toSave);
     return toSave;

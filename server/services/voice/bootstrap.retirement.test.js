@@ -1,6 +1,15 @@
 import { expect, it, vi } from 'vitest';
 
 vi.mock('fs', () => ({ existsSync: vi.fn(() => false) }));
+// These boot-flow tests model "the file is there" through the fs mock; asset
+// completion has its own coverage in voiceModelAssets.test.js.
+vi.mock('../../lib/voiceModelAssets.js', async (importOriginal) => {
+  const { existsSync: exists } = await import('fs');
+  return {
+    ...(await importOriginal()),
+    inspectVoiceAsset: (_kind, path) => (exists(path) ? { state: 'verified', reason: '' } : { state: 'missing', reason: '' }),
+  };
+});
 vi.mock('../../lib/processEnv.js', () => ({ whichFirst: vi.fn(async () => null) }));
 vi.mock('../pm2.js', () => ({ execPm2: vi.fn(async () => ({})), getAppStatus: vi.fn(async () => null) }));
 vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: vi.fn(async () => ({})) }));

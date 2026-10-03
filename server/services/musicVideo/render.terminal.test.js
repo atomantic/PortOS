@@ -1,3 +1,5 @@
+// Engine mechanics are isolated from the review contract, covered in route/orchestration suites.
+vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // #2386 — exactly-once terminal handling for the music-video renderer that
@@ -255,7 +257,7 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     prime('stamp-1');
     await renderMusicVideo('stamp-1');
     expect(updateProject).toHaveBeenCalledWith('stamp-1', {
-      status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: expect.stringMatching(/^music-video-stamp-1-\d+\.mp4$/),
+      status: 'rendering', renderingOn: 'inst-self', renderError: null, renderPartialFilename: expect.stringMatching(/^music-video-stamp-1-\d+\.mp4$/),
     });
   });
 

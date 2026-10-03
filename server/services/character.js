@@ -22,6 +22,7 @@ import { getBirthDateStrict } from './meatspace.js';
 import { getCharacterSkills } from './characterSkills.js';
 import { getCharacterMetrics } from './characterMetrics.js';
 import { createSignalContext } from './characterSignals.js';
+import { createMutex } from '../lib/asyncMutex.js';
 
 const CHARACTER_FILE = path.join(PATHS.data, 'character.json');
 
@@ -141,6 +142,50 @@ function legacyLevelFromXp(xp) {
   return 1;
 }
 
+// --- Cumulative XP accounting across federated histories (#9819) ---
+//
+// `xp` is a cumulative scalar that every grant writer (addXP/addEvent/syncJiraXP/syncTaskXP)
+// bumps alongside an identified event carrying the same amount. Two machines that each take
+// a grant while disconnected therefore hold counters that BOTH include the shared history but
+// each only one side's new grant — so the merge can neither take `Math.max` (drops the lesser
+// grant) nor sum the counters (double-counts the shared history). It reconciles from the
+// event ledger instead, and keeps whatever XP the ledger does not explain (a pre-event legacy
+// baseline, a hand-edited total) exactly once.
+
+// A usable XP quantity: a finite, non-negative number — anything else (NaN, a numeric string,
+// null, a negative) is an invalid historical value and counts as 0, never NaN.
+function normalizeXp(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+// XP represented by the IDENTIFIED events in `events`, each ID counted once (an event without
+// an id is not a ledger entry — its XP, if any, stays in the record's unrepresented residual).
+function eventXpTotal(events) {
+  if (!Array.isArray(events)) return 0;
+  const byId = new Map();
+  for (const event of events) {
+    if (typeof event?.id === 'string' && event.id !== '') byId.set(event.id, normalizeXp(event.xp));
+  }
+  let total = 0;
+  for (const xp of byId.values()) total += xp;
+  return total;
+}
+
+// Pure: the cumulative XP of a merge. `inputs` are the pre-merge `{ xp, events }` records
+// (local and remote); `mergedEvents` is their event union after the existing per-ID LWW.
+//   merged xp = max over inputs of each input's UNREPRESENTED residual (xp − its own ledger,
+//               floored at 0)  +  the ledger total of the merged events.
+// The residual is taken as a max, not a sum, because each input's baseline is the same
+// shared pre-ledger history, not an independent grant. Idempotent under redelivery — a
+// snapshot already folded in has residual 0 — and symmetric, so both peers converge.
+function reconcileXp(inputs, mergedEvents) {
+  let baseline = 0;
+  for (const input of inputs) {
+    baseline = Math.max(baseline, normalizeXp(input?.xp) - eventXpTotal(input?.events));
+  }
+  return baseline + eventXpTotal(mergedEvents);
+}
+
 function createEvent(type, description, overrides = {}) {
   return {
     id: crypto.randomUUID(),
@@ -178,15 +223,56 @@ export function createDefaultCharacter() {
   };
 }
 
+// ONE singleton mutation queue for character.json (#9817). Every read-modify-write — local
+// edits, XP/damage/rest/events, JIRA/task imports, reset, first-run initialization — and the
+// federation merge (applyRemoteSnapshot) enter it BEFORE reading, so two overlapping writers
+// can't each build on the same stale snapshot and have the later full-document replace erase the
+// earlier one. Only the persist step is inside the queue: slow discovery (JIRA/task lookups)
+// happens before entry and derived-field enrichment after exit.
+const withCharacterLock = createMutex();
+
 // Read the persisted record (no derived fields), creating the default on first access.
-// Mutating paths build on this so they never re-persist a derived age-level.
-async function loadRawCharacter() {
+// Caller MUST hold the character lock (the mutex is not re-entrant).
+async function readOrInitRaw() {
   const data = await readJSONFile(CHARACTER_FILE, null, { strict: true });
   if (data) return data;
   const character = createDefaultCharacter();
   await ensureDir(PATHS.data);
   await atomicWrite(CHARACTER_FILE, character);
   return character;
+}
+
+// Read-only path (getCharacter): lock-free when the record exists — atomicWrite replaces the
+// file whole, so a read never sees a torn document — and queued only for first-run init so it
+// can't race a mutator's own initialization.
+async function loadRawCharacter() {
+  const data = await readJSONFile(CHARACTER_FILE, null, { strict: true });
+  if (data) return data;
+  return withCharacterLock(readOrInitRaw);
+}
+
+// Strip derived fields, stamp updatedAt and atomically replace the file. Caller holds the lock.
+async function persistRaw(data) {
+  await ensureDir(PATHS.data);
+  // Never persist derived fields — level is age-derived on read (#2673); skills (#2674) and
+  // metrics (#2676) are usage-derived and per-machine. Stripping them keeps stale values off
+  // disk and out of the federated character snapshot.
+  const persist = stripDerivedFields(data);
+  persist.updatedAt = new Date().toISOString();
+  await atomicWrite(CHARACTER_FILE, persist);
+  return persist;
+}
+
+// Serialized read-modify-write. `mutate(character)` edits the FRESH record in place (and may
+// return a value); a throw aborts before anything is persisted and releases the queue, so a
+// rejected write never wedges later mutations. Enrichment runs after the lock is released.
+async function mutateCharacter(mutate) {
+  const { persisted, result } = await withCharacterLock(async () => {
+    const character = await readOrInitRaw();
+    const result = await mutate(character);
+    return { persisted: await persistRaw(character), result };
+  });
+  return { saved: await enrichCharacter(persisted), result };
 }
 
 // Attach the derived read-only fields to a raw record: `ageYears`/`level` from the canonical
@@ -237,11 +323,12 @@ export async function getCharacter(options = {}) {
 // record so the derived fan-out runs once — on the enriched record saveCharacter returns —
 // rather than once here and once again on save.
 export async function updateCharacterFields(patch = {}) {
-  const character = await loadRawCharacter();
-  for (const [key, value] of Object.entries(patch)) {
-    if (value !== undefined) character[key] = value;
-  }
-  return saveCharacter(character);
+  const { saved } = await mutateCharacter((character) => {
+    for (const [key, value] of Object.entries(patch)) {
+      if (value !== undefined) character[key] = value;
+    }
+  });
+  return saved;
 }
 
 // Federation wire projection: the persisted record plus a backward-compatible integer `level`
@@ -267,15 +354,95 @@ export async function getWireCharacter() {
   return { ...stripDerivedFields(raw), level: legacyLevelFromXp(raw.xp) };
 }
 
+// Replace the whole document with `data`. Queued, but a caller that read the record EARLIER and
+// saves it here still commits that stale snapshot — read-modify-write callers must use the
+// mutators in this module (they re-read inside the queue). Kept for whole-document replacement
+// (resetCharacter) and for tests.
 export async function saveCharacter(data) {
-  await ensureDir(PATHS.data);
-  // Never persist derived fields — level is age-derived on read (#2673); skills (#2674) and
-  // metrics (#2676) are usage-derived and per-machine. Stripping them keeps stale values off
-  // disk and out of the federated character snapshot.
-  const persist = stripDerivedFields(data);
-  persist.updatedAt = new Date().toISOString();
-  await atomicWrite(CHARACTER_FILE, persist);
-  return enrichCharacter(persist);
+  const persisted = await withCharacterLock(() => persistRaw(data));
+  return enrichCharacter(persisted);
+}
+
+// Fresh-start reset, queued with every other writer.
+export async function resetCharacter() {
+  return saveCharacter(createDefaultCharacter());
+}
+
+// Union events by id (LWW by timestamp on a shared id); returns { merged, changed }.
+function mergeEventsById(localEvents, remoteEvents) {
+  const byId = new Map(localEvents.map(e => [e.id, e]));
+  let changed = false;
+  for (const remote of remoteEvents) {
+    const local = byId.get(remote.id);
+    if (!local || (remote.timestamp || '') > (local.timestamp || '')) {
+      byId.set(remote.id, remote);
+      changed = true;
+    }
+  }
+  return { merged: Array.from(byId.values()), changed };
+}
+
+// Federation apply for the `character` sync category (called from dataSync.js). Reads local
+// state INSIDE the character queue so it can't interleave with a local mutation: events and
+// synced ticket/task ids are unioned, `xp` is reconciled from the event ledger (#9819), other scalars follow the newer
+// `updatedAt` (LWW). Derived fields are stripped from both the accepted-remote and merged
+// records so a stale age-level / per-machine skills set never lands on disk or re-federates.
+export async function applyRemoteSnapshot(remoteData) {
+  if (!remoteData) return { applied: false, count: 0 };
+
+  return withCharacterLock(async () => {
+    const local = await readJSONFile(CHARACTER_FILE, null, { strict: true });
+    if (!local) {
+      // No local character — accept remote entirely (an older peer still sends `level`).
+      await ensureDir(PATHS.data);
+      const accepted = stripDerivedFields(remoteData);
+      // Same accounting as the merge below, over a single input: a malformed remote `xp` lands
+      // as a valid number instead of null/NaN, and the counter never reads below its own ledger.
+      accepted.xp = reconcileXp([accepted], accepted.events);
+      await atomicWrite(CHARACTER_FILE, accepted);
+      console.log(`🔄 Character sync: accepted remote character`);
+      return { applied: true, count: 1 };
+    }
+
+    const { merged: mergedEvents, changed: eventsChanged } = mergeEventsById(
+      local.events || [],
+      remoteData.events || []
+    );
+    mergedEvents.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+
+    const mergedTickets = [...new Set([...(local.syncedJiraTickets || []), ...(remoteData.syncedJiraTickets || [])])];
+    const mergedTasks = [...new Set([...(local.syncedTaskIds || []), ...(remoteData.syncedTaskIds || [])])];
+
+    const localTs = local.updatedAt || '';
+    const remoteTs = remoteData.updatedAt || '';
+    const scalarSource = remoteTs > localTs ? remoteData : local;
+
+    const merged = {
+      ...local,
+      name: scalarSource.name ?? local.name,
+      class: scalarSource.class ?? local.class,
+      avatarPath: scalarSource.avatarPath ?? local.avatarPath,
+      // Reconciled from the merged event ledger, not Math.max: independent grants taken on
+      // different machines each survive in the event union and must each be counted (#9819).
+      xp: reconcileXp([local, remoteData], mergedEvents),
+      hp: scalarSource.hp,
+      maxHp: scalarSource.maxHp,
+      // `level` is age-derived on read (#2673), not persisted — never merge a stale peer level.
+      events: mergedEvents,
+      syncedJiraTickets: mergedTickets,
+      syncedTaskIds: mergedTasks,
+      updatedAt: remoteTs > localTs ? remoteTs : localTs
+    };
+
+    const persisted = stripDerivedFields(merged);
+    // A baseline-only change (no new event, older peer timestamp) still moves the counter.
+    if (eventsChanged || remoteTs > localTs || persisted.xp !== local.xp) {
+      await atomicWrite(CHARACTER_FILE, persisted);
+      console.log(`🔄 Character sync: merged ${mergedEvents.length} events`);
+      return { applied: true, count: mergedEvents.length };
+    }
+    return { applied: false, count: 0 };
+  });
 }
 
 // Persist a freshly-rendered avatar path onto the singleton character. Lets the
@@ -305,11 +472,10 @@ export function rollDice(notation) {
 }
 
 export async function addXP(amount, source, description) {
-  const character = await loadRawCharacter();
-  character.xp += amount;
-
-  character.events.push(createEvent('xp', description || `Gained ${amount} XP from ${source}`, { xp: amount }));
-  const saved = await saveCharacter(character);
+  const { saved } = await mutateCharacter((character) => {
+    character.xp += amount;
+    character.events.push(createEvent('xp', description || `Gained ${amount} XP from ${source}`, { xp: amount }));
+  });
 
   console.log(`✨ +${amount} XP (${source}) — total ${saved.xp} XP, level ${saved.level ?? '—'}`);
   // xp no longer drives level (level is age-derived, #2673) — an XP gain never levels up.
@@ -317,52 +483,39 @@ export async function addXP(amount, source, description) {
 }
 
 export async function takeDamage(diceNotation, description) {
-  const character = await loadRawCharacter();
   const roll = rollDice(diceNotation);
-
-  character.hp = Math.max(0, character.hp - roll.total);
-
-  character.events.push(createEvent('damage', description || `Took ${roll.total} damage (${diceNotation})`, {
-    damage: roll.total, diceNotation, diceRolls: roll.rolls
-  }));
-  const saved = await saveCharacter(character);
+  const { saved } = await mutateCharacter((character) => {
+    character.hp = Math.max(0, character.hp - roll.total);
+    character.events.push(createEvent('damage', description || `Took ${roll.total} damage (${diceNotation})`, {
+      damage: roll.total, diceNotation, diceRolls: roll.rolls
+    }));
+  });
 
   console.log(`💥 ${roll.total} damage (${diceNotation}: [${roll.rolls}]+${roll.modifier}) — ${saved.hp}/${saved.maxHp} HP`);
   return { character: saved, roll, totalDamage: roll.total };
 }
 
 export async function takeRest(type) {
-  const character = await loadRawCharacter();
-  const oldHp = character.hp;
+  const { saved, result: hpRecovered } = await mutateCharacter((character) => {
+    const oldHp = character.hp;
 
-  if (type === 'long') {
-    character.hp = character.maxHp;
-  } else {
-    character.hp = Math.min(character.maxHp, character.hp + Math.floor(character.maxHp * 0.25));
-  }
+    if (type === 'long') {
+      character.hp = character.maxHp;
+    } else {
+      character.hp = Math.min(character.maxHp, character.hp + Math.floor(character.maxHp * 0.25));
+    }
 
-  const hpRecovered = character.hp - oldHp;
-
-  character.events.push(createEvent('rest', `${type === 'long' ? 'Long' : 'Short'} rest — recovered ${hpRecovered} HP`, { hpRecovered }));
-  const saved = await saveCharacter(character);
+    const recovered = character.hp - oldHp;
+    character.events.push(createEvent('rest', `${type === 'long' ? 'Long' : 'Short'} rest — recovered ${recovered} HP`, { hpRecovered: recovered }));
+    return recovered;
+  });
 
   console.log(`🛏️ ${type} rest — recovered ${hpRecovered} HP (${saved.hp}/${saved.maxHp})`);
   return { character: saved, hpRecovered };
 }
 
 export async function addEvent(event) {
-  const character = await loadRawCharacter();
-  let roll = null;
-
-  if (event.xp) {
-    character.xp += event.xp;
-  }
-
-  if (event.diceNotation) {
-    roll = rollDice(event.diceNotation);
-    character.hp = Math.max(0, character.hp - roll.total);
-  }
-
+  const roll = event.diceNotation ? rollDice(event.diceNotation) : null;
   const logEntry = createEvent('custom', event.description, {
     xp: event.xp || 0,
     damage: roll ? roll.total : 0,
@@ -370,19 +523,23 @@ export async function addEvent(event) {
     diceRolls: roll ? roll.rolls : []
   });
 
-  character.events.push(logEntry);
-  const saved = await saveCharacter(character);
+  const { saved } = await mutateCharacter((character) => {
+    if (event.xp) character.xp += event.xp;
+    if (roll) character.hp = Math.max(0, character.hp - roll.total);
+    character.events.push(logEntry);
+  });
 
   console.log(`📝 Custom event: ${event.description}`);
   return { character: saved, event: logEntry, leveledUp: false };
 }
 
 export async function syncJiraXP() {
-  const character = await loadRawCharacter();
+  // Slow discovery (JIRA round-trips plus a rate-limit sleep) runs BEFORE the character queue
+  // so it can't hold up unrelated edits; the already-synced check is redone against the fresh
+  // record inside the queue (#9817), so a concurrent sync or federation merge can't double-grant.
   const config = await jiraService.getInstances();
   const instances = config.instances || {};
-  let totalXP = 0;
-  let ticketCount = 0;
+  const doneTickets = [];
 
   for (const [instanceId] of Object.entries(instances)) {
     let projects;
@@ -403,47 +560,52 @@ export async function syncJiraXP() {
         console.warn(`⚠️ Could not fetch tickets for ${project.key}`);
         continue;
       }
-
-      for (const ticket of tickets.filter(t => t.statusCategory === 'Done' || t.status === 'Done')) {
-        if (character.syncedJiraTickets.includes(ticket.key)) continue;
-
-        const xp = (ticket.storyPoints || 1) * 50;
-        character.xp += xp;
-        totalXP += xp;
-        ticketCount++;
-        character.syncedJiraTickets.push(ticket.key);
-        character.events.push(createEvent('xp', `JIRA ${ticket.key}: ${ticket.summary} (${ticket.storyPoints || 0} pts)`, { xp }));
-      }
+      doneTickets.push(...tickets.filter(t => t.statusCategory === 'Done' || t.status === 'Done'));
     }
   }
 
-  const saved = await saveCharacter(character);
+  const { saved, result } = await mutateCharacter((character) => {
+    character.syncedJiraTickets ??= [];
+    let totalXP = 0;
+    let ticketCount = 0;
+    for (const ticket of doneTickets) {
+      if (character.syncedJiraTickets.includes(ticket.key)) continue;
 
-  console.log(`🎫 Synced ${ticketCount} JIRA tickets for ${totalXP} XP`);
-  return { character: saved, ticketCount, totalXP, leveledUp: false };
+      const xp = (ticket.storyPoints || 1) * 50;
+      character.xp += xp;
+      totalXP += xp;
+      ticketCount++;
+      character.syncedJiraTickets.push(ticket.key);
+      character.events.push(createEvent('xp', `JIRA ${ticket.key}: ${ticket.summary} (${ticket.storyPoints || 0} pts)`, { xp }));
+    }
+    return { totalXP, ticketCount };
+  });
+
+  console.log(`🎫 Synced ${result.ticketCount} JIRA tickets for ${result.totalXP} XP`);
+  return { character: saved, ticketCount: result.ticketCount, totalXP: result.totalXP, leveledUp: false };
 }
 
 export async function syncTaskXP() {
-  const character = await loadRawCharacter();
   const { user: userTasks, cos: cosTasks } = await getAllTasks();
-  let totalXP = 0;
-  let taskCount = 0;
+  const completed = [...(userTasks.tasks || []), ...(cosTasks.tasks || [])].filter(t => t.status === 'completed');
 
-  const allTasks = [...(userTasks.tasks || []), ...(cosTasks.tasks || [])];
+  const { saved, result } = await mutateCharacter((character) => {
+    character.syncedTaskIds ??= [];
+    let totalXP = 0;
+    let taskCount = 0;
+    for (const task of completed) {
+      if (character.syncedTaskIds.includes(task.id)) continue;
 
-  for (const task of allTasks.filter(t => t.status === 'completed')) {
-    if (character.syncedTaskIds.includes(task.id)) continue;
+      const xp = 25;
+      character.xp += xp;
+      totalXP += xp;
+      taskCount++;
+      character.syncedTaskIds.push(task.id);
+      character.events.push(createEvent('xp', `Task: ${task.title || task.description || task.id}`, { xp }));
+    }
+    return { totalXP, taskCount };
+  });
 
-    const xp = 25;
-    character.xp += xp;
-    totalXP += xp;
-    taskCount++;
-    character.syncedTaskIds.push(task.id);
-    character.events.push(createEvent('xp', `Task: ${task.title || task.description || task.id}`, { xp }));
-  }
-
-  const saved = await saveCharacter(character);
-
-  console.log(`✅ Synced ${taskCount} tasks for ${totalXP} XP`);
-  return { character: saved, taskCount, totalXP, leveledUp: false };
+  console.log(`✅ Synced ${result.taskCount} tasks for ${result.totalXP} XP`);
+  return { character: saved, taskCount: result.taskCount, totalXP: result.totalXP, leveledUp: false };
 }

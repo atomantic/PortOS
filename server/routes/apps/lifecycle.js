@@ -28,6 +28,7 @@ import { parseEcosystemFromPath } from '../../services/streamingDetect.js';
 import { usesPm2, isDesktopType } from '../../services/appProcessTypes.js';
 import { detectAppIcon, isUsableSvg } from '../../services/appIconDetect.js';
 import { loadApp, pathExists, deriveUiPort } from './shared.js';
+import { EIDOVERSE_PROCESS_NAME, EIDOVERSE_MAX_MEMORY_RESTART } from '../../services/eidoverse.js';
 
 const router = Router();
 
@@ -161,7 +162,8 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
       }
       const result = await pm2Service.startWithCommand(name, app.repoPath, command, {
         pm2Home: app.pm2Home,
-        port: singleProcessPort
+        port: singleProcessPort,
+        ...(name === EIDOVERSE_PROCESS_NAME ? { maxMemoryRestart: EIDOVERSE_MAX_MEMORY_RESTART } : {}),
       })
         .catch(err => ({ success: false, error: err.message }));
       results[name] = result;

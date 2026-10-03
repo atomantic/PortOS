@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { Bot, Clapperboard, Pause, Play, X } from 'lucide-react';
 import AutomationBriefFields from './AutomationBriefFields.jsx';
 import Pill from '../ui/Pill.jsx';
+import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import MediumPlanSummary from './MediumPlanSummary.jsx';
 import { codeFirstProductionAssets } from '../../../../server/lib/musicVideoMediumPlan.js';
 import {
-  DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft, llmRouteLabel,
+  DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_LLM_STAGES, MUSIC_VIDEO_LLM_STAGE_LABELS, automationDraftFrom, automationFromDraft, llmRouteLabel,
 } from '../../lib/musicVideoAutomation.js';
 import { RESUMABLE_RUN_STATUSES, currentProductionRun } from '../../lib/musicVideoStages.js';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
@@ -34,11 +35,10 @@ const briefToolLabel = new Map(MUSIC_VIDEO_AUTOMATION_TOOLS.map((t) => [t.id, t.
 const actionClass = 'text-sm text-port-accent min-h-[44px] sm:min-h-0 px-1';
 const routeLabel = (route) => `${toolLabel.get(`${route.kind}:${route.mode}`) || `${route.kind} ${route.mode}`}${route.model ? ` · ${route.model}` : ''}`;
 
-// Code authoring runs one-shot and tool-free (server: isToolFreeOneShotProvider), which a
-// TUI provider never is — offering one here only sets up a refusal at Start.
-const AUTHORING_PROVIDERS = (provider) => provider.enabled !== false && provider.type !== 'tui';
-
-const ROUTE_LABELS = [['plan', 'Shot planning'], ['castAndSets', 'Cast & Sets direction']];
+const ROUTE_LABELS = [
+  ['brief', 'Creative brief'], ['lyrics', 'Lyrics draft'], ['lyricsReview', 'Lyrics review'],
+  ['plan', 'Shot planning'], ['castAndSets', 'Cast & Sets direction'],
+];
 
 const initialPool = (project) => {
   const fromBrief = (project?.automation?.tools || []).filter((id) => POOL_TOOL_IDS.has(id));
@@ -158,7 +158,7 @@ function RunView({ run, production, codeFirst, project }) {
 
 function StartForm({ project, production }) {
   const assets = codeFirstProductionAssets(project);
-  const author = useProviderModels({ allowDefault: false, silent: true, withEffort: true, filter: AUTHORING_PROVIDERS });
+  const author = useProviderModels({ allowDefault: false, silent: true, withEffort: true, filter: Boolean });
   const [authorEffort, setAuthorEffort] = useState('');
   const [pool, setPool] = useState(() => initialPool(project));
   const [directive, setDirective] = useState('');
@@ -174,7 +174,7 @@ function StartForm({ project, production }) {
   const hasImage = pool.some((id) => id.startsWith('image:'));
   const hasVideo = pool.some((id) => id.startsWith('video:'));
   const routesValid = assets ? (!assets.requiredRoutes.image || hasImage) && (!assets.requiredRoutes.video || hasVideo) : hasImage && hasVideo;
-  const valid = routesValid && (!assets || (project.scenes?.length > 0 && assets.conflicts.length === 0 && author.selectedProviderId && author.selectedModel))
+  const valid = routesValid && (!assets || (project.scenes?.length > 0 && assets.conflicts.length === 0 && supportsToolFreeOneShot(author.providers.find((entry) => entry.id === author.selectedProviderId)) && author.selectedProviderId && author.selectedModel))
     && Number.isInteger(maxGenerations) && maxGenerations >= 1 && maxGenerations <= 500
     && Number.isInteger(maxReviewAttempts) && maxReviewAttempts >= 1 && maxReviewAttempts <= 10
     && (capValue == null || (Number.isFinite(capValue) && capValue >= 0));
@@ -245,12 +245,12 @@ function StartForm({ project, production }) {
           onModelChange={author.setSelectedModel}
           effort={authorEffort}
           onEffortChange={setAuthorEffort}
-          label="Code authoring"
+          selectionPolicy={toolFreeOneShotSelectionPolicy} label="Code authoring"
           disabled={production.busy}
           modelDisabled={author.availableModels.length === 0}
           compact
         />}
-        {assets && <p className="text-port-text-muted">Authoring calls consume the generation limit. Unknown authoring prices require no dollar cap; a free/local authoring provider can use a cap. Reviews have a separate call limit.</p>}
+        {assets && <p className="text-port-text-muted">Choose an API provider or a server-verified tool-free CLI; TUI sessions cannot author. Authoring calls consume the generation limit. Unknown authoring prices require no dollar cap; a free/local authoring provider can use a cap. Reviews have a separate call limit.</p>}
         {providers.length > 0 && (
           <ProviderModelSelector
             providers={providers}
@@ -282,7 +282,7 @@ function BriefSection({ project, onSave, onKickoff, kickoffBusy, kickoffStep, ki
 
   const save = () => {
     setSaving(true);
-    const payload = automationFromDraft(draft);
+    const payload = automationFromDraft(draft, automation);
     // Back to Auto clears the saved pin explicitly: an absent key keeps it server-side.
     if (!payload.llm && automation?.llm) payload.llm = null;
     onSave(payload)
@@ -343,6 +343,12 @@ function BriefSection({ project, onSave, onKickoff, kickoffBusy, kickoffStep, ki
         <p className="text-xs text-port-text-muted break-words">
           Direction LLM: {automation.llm?.providerId ? llmRouteLabel(automation.llm) : 'Auto — a TUI provider when one is eligible'}
         </p>
+        {MUSIC_VIDEO_LLM_STAGES.some((stage) => automation.llmStages?.[stage]) && (
+          <p className="text-xs text-port-text-muted break-words">
+            Per stage: {MUSIC_VIDEO_LLM_STAGES.filter((stage) => automation.llmStages?.[stage])
+              .map((stage) => `${MUSIC_VIDEO_LLM_STAGE_LABELS[stage]} → ${llmRouteLabel(automation.llmStages[stage])}`).join(' · ')}
+          </p>
+        )}
         {ROUTE_LABELS.map(([stage, label]) => automation.routes?.[stage] && (
           <p key={stage} className="text-xs text-port-text-muted break-words">
             {label} ran on {llmRouteLabel(automation.routes[stage])}

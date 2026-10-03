@@ -44,6 +44,10 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'music-video:song-revision': {
+    direction: 'server-to-client', summary: 'A song revision changed; apply the persisted project snapshot.',
+    payloadSchema: { type: 'object', required: ['projectId', 'project'], properties: { projectId: { type: 'string' }, project: { type: 'object' } } },
+  },
   'voice-studio:changed': {
     direction: 'server-to-client', summary: 'Voice library or runtime setup changed; refetch authenticated state.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },

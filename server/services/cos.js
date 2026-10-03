@@ -93,9 +93,9 @@ export { runHealthCheck, getHealthStatus };
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
+import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
 export { getPendingTaskIds } from './cosTaskStore.js';
-export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
+export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
@@ -161,7 +161,7 @@ import {
 // Shared capacity and idle-review admission owner. The engines retain their
 // priority ordering and dispatch adapters; cosDequeue owns idle preparation's
 // capacity precheck and its committed handoff.
-import { admitIdleReviewTask, createDequeueCapacity, countRunningAgentsByLocalEndpoint } from './cosDequeue.js';
+import { admitFeatureAgentTasks, admitIdleReviewTask, createDequeueCapacity, countRunningAgentsByLocalEndpoint } from './cosDequeue.js';
 import { buildLocalEndpointSlotContext, localEndpointCapacityError } from './cosLocalEndpointSlots.js';
 import {
   initializePersistentMindSupervisor,
@@ -1040,12 +1040,15 @@ async function tryImmediateSpawn(task) {
 // that reads/mutates the per-cycle spawn capacity via `ctx.capacity` (the pure
 // tracker from cosDequeue.js) and emits `task:ready` for admitted tasks. This
 // mirrors the established `spawnPriorityN(ctx)` decomposition in
-// cosTaskGenerator.js's evaluateTasks (issue #2530).
+// cosTaskGenerator.js's evaluateTasks (issue #2530). `ctx` is frozen: a tier
+// returns the values a later tier needs and the orchestrator passes them on as
+// named arguments, so tier order cannot silently change what a tier reads.
 
 /**
  * Priority 0 — on-demand task requests (explicit user "Run"). Runs even while
- * paused. Loads the task schedule onto `ctx` (reused by Priority 2) and drains
- * the on-demand request queue, generating + persisting a task per request.
+ * paused. Drains the on-demand request queue, generating + persisting a task per
+ * request. Returns the schedule it loaded so the orchestrator can hand it to
+ * Priority 2's disabled-analysis-type gate (avoids a second load).
  */
 async function spawnDequeuePriority0OnDemand(ctx) {
   const { state, capacity, ignoreTaskId } = ctx;
@@ -1067,21 +1070,18 @@ async function spawnDequeuePriority0OnDemand(ctx) {
     addTaskOptions: { ignoreTaskId },
   });
 
-  // Stash the loaded schedule for Priority 2's disabled-analysis-type gate
-  // (avoids a second load).
-  ctx.taskSchedule = schedule;
+  return { schedule };
 }
 
 /**
- * Priority 1 — pending user tasks. Records `pendingUserTasks` /
- * `hasPendingUserTasks` on `ctx` for the idle tier below.
+ * Priority 1 — pending user tasks. Returns `hasPendingUserTasks`
+ * for the idle tier below.
  */
 async function spawnDequeuePriority1UserTasks(ctx) {
   const { instanceId, capacity } = ctx;
 
   const userTaskData = await getUserTasks();
   const pendingUserTasks = userTaskData.grouped?.pending || [];
-  ctx.hasPendingUserTasks = pendingUserTasks.length > 0;
 
   await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
     capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
@@ -1089,28 +1089,28 @@ async function spawnDequeuePriority1UserTasks(ctx) {
     emitSpawn: (task) => cosEvents.emit('task:ready', task),
     trackSpawn: (task) => capacity.trackSpawn(task),
   });
+
+  return { hasPendingUserTasks: pendingUserTasks.length > 0 };
 }
 
 /**
  * Priority 2 — auto-approved system tasks, gated by the CoS auto-run domain.
- * Resolves `ctx.cosAutonomyMode` and `ctx.autonomousSpawnCeiling` (used by the
- * idle tier) from the daily CoS budget (#711). `off`/`dry-run` withhold
+ * Returns `cosAutonomyMode` and `autonomousSpawnCeiling` (used by the
+ * idle tier) resolved from the daily CoS budget (#711). `off`/`dry-run` withhold
  * the unattended spawn; `dry-run` logs what execute mode would have run.
  */
-async function spawnDequeuePriority2AutoApproved(ctx) {
+async function spawnDequeuePriority2AutoApproved(ctx, { taskSchedule }) {
   const { state, instanceId, capacity } = ctx;
 
   const cosTaskData = await getCosTasks();
   const runningAgentEntries = Object.values(state.agents).filter((agent) => agent.status === 'running');
   const { cosAutonomyMode, autonomousActionsRemaining } = await resolveAutonomyBudget(state, runningAgentEntries);
   const autonomousSpawnCeiling = Math.min(capacity.availableSlots, capacity.spawned + autonomousActionsRemaining);
-  ctx.cosAutonomyMode = cosAutonomyMode;
-  ctx.autonomousSpawnCeiling = autonomousSpawnCeiling;
 
-  return admitAutoApprovedSystemTasks({
+  await admitAutoApprovedSystemTasks({
     state,
     cosTaskData,
-    taskSchedule: ctx.taskSchedule,
+    taskSchedule,
     cosAutonomyMode,
     autonomousSlotCeiling: autonomousSpawnCeiling,
     alreadySpawned: capacity.spawned,
@@ -1124,21 +1124,42 @@ async function spawnDequeuePriority2AutoApproved(ctx) {
       cosEvents.emit('task:ready', task);
     },
   });
+
+  return { cosAutonomyMode, autonomousSpawnCeiling };
 }
 
 /**
- * Priority 3 — idle review task, only when the daemon is completely idle this
+ * Priority 3.6 — due feature agents. Same shared admission pass as
+ * evaluateTasks, so an agent that comes due is dispatched by the next
+ * completion/queue event instead of waiting for a batch evaluation.
+ */
+async function spawnDequeuePriority36FeatureAgents(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
+  const { capacity } = ctx;
+  return admitFeatureAgentTasks({
+    spawnedCount: () => capacity.spawned,
+    hasPendingUserTasks,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
+  }, {
+    canSpawn: (task, ceiling) => capacity.canSpawn(task, ceiling),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
+}
+
+/**
+ * Priority 4 — idle review task, only when the daemon is completely idle this
  * cycle. The shared owner checks eligibility and capacity before preparation,
  * then performs the committed handoff.
  */
-async function spawnDequeuePriority3IdleReview(ctx) {
+async function spawnDequeuePriority4IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
   const { capacity } = ctx;
   return admitIdleReviewTask({
     state: ctx.state,
     alreadySpawned: capacity.spawned,
-    hasPendingUserTasks: ctx.hasPendingUserTasks,
-    cosAutonomyMode: ctx.cosAutonomyMode,
-    autonomousSlotCeiling: ctx.autonomousSpawnCeiling,
+    hasPendingUserTasks,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
     ignoreTaskId: ctx.ignoreTaskId,
   }, {
     canSpawn: (task, ceiling) => capacity.canSpawnCommitted(task, ceiling),
@@ -1163,11 +1184,14 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
  *
  * Triggered by: agent:completed, tasks:user:added, tasks:cos:added, status:resumed
  * Thin orchestrator: computes per-cycle capacity, then threads a shared `ctx`
- * through the four priority tiers in order (same order as evaluateTasks):
+ * through the priority tiers in order (same tiers/numbering as evaluateTasks;
+ * evaluateTasks' queue-regeneration step is
+ * batch-only and has no event-driven counterpart):
  *   0. On-demand requests (bypasses pause)
  *   1. User tasks
  *   2. Auto-approved system tasks
- *   3. Idle review task (if idleReviewEnabled)
+ *   3.6. Due feature agents
+ *   4. Idle review task (if idleReviewEnabled)
  * Returns silently when idle — no log noise.
  */
 /**
@@ -1245,35 +1269,32 @@ export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
 
   // Shared spawn context threaded through each priority tier. The tiers mutate
   // the running spawn total + per-project counts through `capacity` (whose
-  // `canSpawn`/`trackSpawn` close over that state), and stash cross-tier values
-  // (taskSchedule, hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling)
-  // on `ctx` as they resolve them.
-  const ctx = {
+  // `canSpawn`/`trackSpawn` close over that state). Frozen: cross-tier values
+  // (schedule, hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling) are
+  // returned by the tier that resolves them and passed on as named arguments.
+  const ctx = Object.freeze({
     state,
     instanceId,
     capacity,
-    hasPendingUserTasks: false,
-    taskSchedule: null,
-    cosAutonomyMode: null,
-    autonomousSpawnCeiling: availableSlots,
     ignoreTaskId
-  };
+  });
 
   // Priority 0 (on-demand) runs even when paused — an explicit user "Run"
   // bypasses the global pause.
-  await spawnDequeuePriority0OnDemand(ctx);
+  const { schedule: taskSchedule } = await spawnDequeuePriority0OnDemand(ctx);
 
   // Global pause stops every autonomous/scheduled/user tier below; only the
   // on-demand queue above (explicit user "Run") bypasses it.
   if (paused) return;
 
   // Priority 1 spends against the global slot cap.
-  await spawnDequeuePriority1UserTasks(ctx);
+  const { hasPendingUserTasks } = await spawnDequeuePriority1UserTasks(ctx);
 
-  // Priorities 2 and 3 spend against the lower autonomous ceiling that
-  // Priority 2 resolves onto `ctx.autonomousSpawnCeiling` from the daily budget.
-  await spawnDequeuePriority2AutoApproved(ctx);
-  await spawnDequeuePriority3IdleReview(ctx);
+  // Priorities 2, 3.6 and 4 spend against the lower autonomous ceiling that
+  // Priority 2 resolves `autonomousSpawnCeiling` from the daily budget.
+  const { cosAutonomyMode, autonomousSpawnCeiling } = await spawnDequeuePriority2AutoApproved(ctx, { taskSchedule });
+  await spawnDequeuePriority36FeatureAgents(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
+  await spawnDequeuePriority4IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
 
   if (capacity.spawned > 0) {
     const ids = capacity.spawnedTaskIds.join(', ');

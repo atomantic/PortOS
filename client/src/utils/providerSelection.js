@@ -84,6 +84,17 @@ export const toolFreeLocalSelectionPolicy = (
   ),
 });
 
+/** One-shot authoring permits direct APIs or a server-verified tool-free CLI.
+ * Never infer CLI support from a command name, and never admit a TUI session.
+ */
+export const supportsToolFreeOneShot = (provider) => provider?.enabled !== false
+  && (provider?.type === 'api' || provider?.type === 'cli' && provider.toolFreeOneShot === true);
+
+// No compose modes: an unmaterialized CLI combination has no server capability
+// annotation yet. Existing pins still render through the selector's saved-value
+// path, with incompatible records visible but disabled.
+export const toolFreeOneShotSelectionPolicy = Object.freeze({ provider: supportsToolFreeOneShot });
+
 // The two enforceable public-review postures. MIRROR of
 // `server/lib/agentExecutionProfiles.js`; a pr-reviewer stage names a posture
 // and the server publishes each provider's `publicReviewPostures` on

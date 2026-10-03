@@ -1,18 +1,9 @@
 /**
- * Music Video publishing (#9282): fill a platform's post in the PortOS Browser,
- * show the director what it will post, and post only when they press Post.
- *
- * `prepare` opens a NEW tab, runs the platform adapter's fill (never its
- * submit), screenshots the filled draft and parks it under a draft id.
- * `submit` requires that same live draft: a missing, expired or closed draft
- * is a 409 and nothing is posted. One browser operation runs at a time,
- * because keyboard input goes to whichever tab has focus. A logged-out
- * platform returns PUBLISH_LOGIN_REQUIRED; login, CAPTCHAs and 2FA are the
- * director's to do in the PortOS Browser.
- *
- * Posting results persist to `project.publishKit.posts[target] = { url, postedAt }`;
- * the director can add reception and notes, or record a post made by hand (#9287).
- * Only platforms the director turned on can be prepared.
+ * Prepare external platform drafts for manual review and publication.
+ * The authenticated operator route requires fresh password verification.
+ * PortOS never submits a draft; the operator publishes in the destination
+ * platform and records its URL. Adapter preparation runs in a serialized,
+ * dedicated browser tab. Existing drafts can be discarded or replaced.
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
@@ -108,7 +99,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       draft.timer.unref?.();
       drafts.set(id, draft);
       console.log(`📝 ${adapter.label} draft filled for music-video ${projectId.slice(0, 8)} [${id.slice(6, 14)}]`);
-      return { draftId: id, target, summary, screenshot: shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null };
+      return { draftId: id, target, summary, manualPublication: true, screenshot: shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null };
     } catch (err) {
       await page.close().catch(() => {});
       await browser.close().catch(() => {});
@@ -117,23 +108,12 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   });
 }
 
-/** Post a draft the director reviewed. Resolves `{ project, post }`. */
-export async function submitPublishDraft(projectId, draftId, deps = {}) {
-  const draft = drafts.get(draftId);
-  if (!draft || draft.projectId !== projectId) throw draftError('That draft is gone (posted, discarded or expired) — fill it again');
-  if (draft.page.isClosed?.()) { await closeDraft(draft); throw draftError('The draft tab was closed — fill it again'); }
-  const adapter = (deps.adapters || PUBLISH_ADAPTERS)[draft.target];
-  return serialize(async () => {
-    await draft.page.bringToFront();
-    const { url = null } = await adapter.submit(draft.page, draft.payload) || {};
-    await closeDraft(draft);
-    const post = { url, postedAt: new Date().toISOString() };
-    console.log(`🚀 Posted music-video ${projectId.slice(0, 8)} to ${adapter.label}${url ? `: ${url}` : ''}`);
-    const { project } = await mutateProjectRecord(projectId, (current) => {
-      const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
-      return { project: { ...current, publishKit: { ...kit, posts: { ...(kit.posts || {}), [draft.target]: post } } } };
-    });
-    return { project, post };
+/** Final publication is deliberately unavailable to agents and API callers.
+ * The operator reviews and publishes in the destination platform itself.
+ */
+export async function submitPublishDraft() {
+  throw new ServerError('Publish manually in the destination platform, then record the post link in PortOS.', {
+    status: 403, code: 'PUBLISH_MANUAL_REQUIRED',
   });
 }
 

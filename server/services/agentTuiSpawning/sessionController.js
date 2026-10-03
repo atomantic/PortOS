@@ -34,7 +34,6 @@ import { emitLog } from '../cosEvents.js';
 import { HOST_SHUTDOWN_REASON } from '../../lib/hostShutdown.js';
 import { missingSentinelLogMessage, parseSentinelPayload } from '../../lib/agentSentinel.js';
 import { SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
-import { prClaimWasVerified } from '../../lib/prDisposition.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
 import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector } from '../../lib/aiToolkit/errorDetection.js';
@@ -68,6 +67,7 @@ import {
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
   createInputReadyTracker,
+  shapeHasLoginShell,
   createStartupDialogAnswers,
   answerStartupDialogs,
   AGY_INPUT_READY_PATTERN,
@@ -115,7 +115,7 @@ function createPasteRetryController({
   write,
   paste,
   hasLiveChild,
-  directLaunch,
+  launchShape,
   prompt,
   tuiConfig,
   mcpBoot,
@@ -147,7 +147,7 @@ function createPasteRetryController({
   // Memoized on buffer identity because the marker poll re-asks every
   // PASTE_MARKER_POLL_MS for up to PASTE_COMMIT_PATIENCE_MS — ~300 ticks — while
   // a booting codex is silent, and the predicate is three full-buffer regex
-  // scans plus two whitespace-stripped copies of it. `postPasteBuffer` is only
+  // scans plus two whitespace-stripped copies of it. `pasteState.buffer` is only
   // ever rebound when output actually arrives, so an idle tick is a pointer
   // compare.
   let lastCommitBuffer = null;
@@ -160,11 +160,23 @@ function createPasteRetryController({
     return lastCommitVerdict;
   };
 
-  // Bounded post-paste accumulator. Lives from an attempt through its marker /
-  // verification windows and any bounded retry backoff, so delayed TUI output
-  // can still confirm the paste. Set to '' when an attempt fires; nulled when
-  // paste detection resolves, the next attempt replaces it, or the run ends.
-  let postPasteBuffer = null;
+  // Paste-confirmation state: which protocol window an attempt is in, plus the
+  // bounded post-paste output accumulated across it.
+  //   idle            no attempt in flight; incoming output is ignored
+  //   awaiting-marker attempt fired; waiting for the TUI's commit evidence
+  //   awaiting-verify commit wait elapsed with no evidence; short window for a
+  //                   late marker / prompt echo before declaring it swallowed
+  //   backoff         verification failed; waiting out the retry delay
+  // The buffer deliberately survives every phase change except `idle`, so
+  // delayed TUI output can still confirm a paste that looked failed. The
+  // transition helpers below are the ONLY writers of this object.
+  const pasteState = { phase: 'idle', buffer: '' };
+  const armAttempt = () => { pasteState.phase = 'awaiting-marker'; pasteState.buffer = ''; };
+  const beginVerify = () => { pasteState.phase = 'awaiting-verify'; };
+  // Retains the buffer: a marker painted after the verify window closes must
+  // still confirm this paste instead of letting the retry duplicate it.
+  const enterBackoff = () => { pasteState.phase = 'backoff'; };
+  const clearPaste = () => { pasteState.phase = 'idle'; pasteState.buffer = ''; };
   let pasteEnterTimer = null;
   let pasteVerifyTimer = null;
   let pasteRetryTimer = null;
@@ -225,12 +237,12 @@ function createPasteRetryController({
     // `^[[200~ …` session. If the shell has no live child, the command is gone:
     // fail loudly with whatever it printed instead of pasting into the shell.
     //
-    // A direct launch — runner mode, or a public-content stage spawned as its
-    // own PTY (#6159) — has no launch shell: the TUI IS the PTY process. "Does
-    // this pid have a live child?" is then the wrong question (claude may have
-    // zero children at paste time) and a TUI exit kills the PTY, firing onExit.
-    // Skip the probe there.
-    if (!directLaunch && !(await hasLiveChild())) {
+    // A launch shape with a login shell has an intermediate shell; without one
+    // (runner or direct), the TUI IS the PTY process and "does this pid have a
+    // live child?" is the wrong question (the TUI may have zero children at
+    // paste time). A TUI exit kills the PTY in those shapes, firing onExit.
+    // Skip the probe when there is no shell to host the TUI.
+    if (shapeHasLoginShell(launchShape) && !(await hasLiveChild())) {
       if (isFinalized()) return; // a real onExit may have finalized during the probe await
       await finishStartupFailure(
         'tui-exited-early',
@@ -264,10 +276,9 @@ function createPasteRetryController({
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
     if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     if (pasteRetryTimer) { clearTimeout(pasteRetryTimer); pasteRetryTimer = null; }
-    // Start capturing post-paste output. Set BEFORE writing the paste so
-    // every chunk that arrives in response gets appended. A failed verification
-    // deliberately keeps it through retry backoff so late output is not lost.
-    postPasteBuffer = '';
+    // Start capturing post-paste output. Armed BEFORE writing the paste so
+    // every chunk that arrives in response gets appended.
+    armAttempt();
     write(`\x1b[200~${prompt}\x1b[201~`);
     const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}/${PASTE_RETRY_MAX_ATTEMPTS}]` : '';
     appendLine(`📟 Prompt pasted into TUI session ${sessionLabel} (${reason})${attemptSuffix}`);
@@ -303,15 +314,16 @@ function createPasteRetryController({
           ? ` (waiting for ${tuiConfig.command} MCP servers to finish booting)`
           : '';
         appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms${bootNote}`);
-        // Keep the failed attempt's buffer live during the backoff. A busy TUI
-        // can paint its authoritative paste marker only after the verification
-        // window closes; dropping output in this gap made Codex stack duplicate
-        // prompt chips, then falsely report that none had rendered.
+        // The failed attempt's buffer stays live during the backoff (see
+        // enterBackoff). A busy TUI can paint its authoritative paste marker
+        // only after the verification window closes; dropping output in this
+        // gap made Codex stack duplicate prompt chips, then falsely report that
+        // none had rendered.
         pasteRetryTimer = setTimeout(() => {
           pasteRetryTimer = null;
           if (isFinalized()) return;
-          if (pasteConfirmed(postPasteBuffer || '')) {
-            postPasteBuffer = null;
+          if (pasteConfirmed(pasteState.buffer)) {
+            clearPaste();
             submitPaste();
             return;
           }
@@ -348,7 +360,7 @@ function createPasteRetryController({
       if (isFinalized()) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
-        postPasteBuffer = null;
+        clearPaste();
         return;
       }
       const elapsed = Date.now() - pasteSentAt;
@@ -357,49 +369,45 @@ function createPasteRetryController({
       // marker). Waiting on the full commit evidence rather than the marker
       // alone is what lets codex's patient first attempt (PASTE_COMMIT_PATIENCE_MS)
       // exit in ~200ms when the composer was live all along.
-      if ((pasteCommitted(postPasteBuffer || '') && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
+      if ((pasteCommitted(pasteState.buffer) && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
         || elapsed >= commitWaitMs()) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
-        // Capture the buffer before clearing, then confirm the paste (issue #2192).
-        const commitBuffer = postPasteBuffer || '';
-        postPasteBuffer = null;
+        // Confirm the paste (issue #2192).
+        const commitBuffer = pasteState.buffer;
         // Marker present (or text already visible, or nothing to verify) → the
         // paste landed; submit now. Trusting the marker here is what fixes the
         // multi-line-collapse false negative — Claude hides the pasted body text.
         // pasteConfirmed is a superset of the pasteCommitted exit above, so only
         // the commitWaitMs timeout can fall through to the verification window.
         if (pasteConfirmed(commitBuffer)) {
+          clearPaste();
           submitPaste();
           return;
         }
         // Markerless AND text not visible yet: give the prompt a short window to
         // render (a late marker also counts as confirmed) before declaring it
-        // swallowed. Resume accumulation for the verification window.
-        let verifyBuffer = commitBuffer;
+        // swallowed. Keep accumulating through the verification window.
         const verifyStartedAt = Date.now();
-        postPasteBuffer = commitBuffer;
+        beginVerify();
         pasteVerifyTimer = setInterval(() => {
           if (isFinalized()) {
             clearInterval(pasteVerifyTimer);
             pasteVerifyTimer = null;
-            postPasteBuffer = null;
+            clearPaste();
             return;
           }
-          verifyBuffer = postPasteBuffer || verifyBuffer;
           const verifyElapsed = Date.now() - verifyStartedAt;
-          const confirmed = pasteConfirmed(verifyBuffer);
+          const confirmed = pasteConfirmed(pasteState.buffer);
           // Submit once confirmed, or give up and retry/fail when the window expires.
           if (confirmed || verifyElapsed >= PASTE_VERIFY_WINDOW_MS) {
             clearInterval(pasteVerifyTimer);
             pasteVerifyTimer = null;
             if (confirmed) {
-              postPasteBuffer = null;
+              clearPaste();
               submitPaste();
             } else {
-              // Preserve the buffer through retry backoff so a delayed marker
-              // can still confirm this paste instead of triggering a duplicate.
-              postPasteBuffer = verifyBuffer;
+              enterBackoff();
               retryOrFailPaste();
             }
           }
@@ -409,21 +417,21 @@ function createPasteRetryController({
   };
 
   // handleData's own hook: accumulates PTY output while a paste attempt is
-  // awaiting its marker, verification, or retry backoff (see postPasteBuffer
-  // above). A no-op the rest of the time.
+  // awaiting its marker, verification, or retry backoff (see pasteState
+  // above). A no-op while idle.
   const ingestChunk = (stripped) => {
-    if (postPasteBuffer === null || !stripped) return;
+    if (pasteState.phase === 'idle' || !stripped) return;
     // Tail-bounded: see POST_PASTE_BUFFER_CAP for why a few screens is all the
     // commit predicates can use.
-    postPasteBuffer = (postPasteBuffer + stripped).slice(-POST_PASTE_BUFFER_CAP);
+    pasteState.buffer = (pasteState.buffer + stripped).slice(-POST_PASTE_BUFFER_CAP);
     // The retry backoff used to be a blind spot: output was discarded after
     // verification failed and before the next attempt began. A late marker or
     // prompt echo still proves the existing paste landed, so submit it now and
     // cancel the duplicate retry.
-    if (pasteRetryTimer && pasteConfirmed(postPasteBuffer)) {
+    if (pasteState.phase === 'backoff' && pasteRetryTimer && pasteConfirmed(pasteState.buffer)) {
       clearTimeout(pasteRetryTimer);
       pasteRetryTimer = null;
-      postPasteBuffer = null;
+      clearPaste();
       submitPaste();
     }
   };
@@ -437,7 +445,7 @@ function createPasteRetryController({
     if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     if (pasteRetryTimer) { clearTimeout(pasteRetryTimer); pasteRetryTimer = null; }
     if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
-    postPasteBuffer = null;
+    clearPaste();
   };
 
   return { sendPrompt, resubmit, ingestChunk, cancel };
@@ -473,7 +481,7 @@ export function createTuiSessionController({
   rawFile,
   executionId,
   laneName,
-  directLaunch,
+  launchShape,
   prOwnership,
   mergeGateIsOwed,
   spooler,
@@ -550,9 +558,9 @@ export function createTuiSessionController({
   const detectTruncatedResponse = createTruncatedResponseDetector();
   const truncationNudgeGate = createTruncationNudgeGate();
   // agy quitting back to its launch shell (see createAgyResumeGate). Only a
-  // login-shell launch has a shell to fall back to; a direct PTY dies with agy
-  // and finishes through handleExit instead.
-  const agyResumeGate = !directLaunch && isAntigravityCommand(tuiConfig.command) ? createAgyResumeGate() : null;
+  // login-shell launch has a shell to fall back to; runner/direct PTYs die with
+  // agy and finish through handleExit instead.
+  const agyResumeGate = shapeHasLoginShell(launchShape) && isAntigravityCommand(tuiConfig.command) ? createAgyResumeGate() : null;
   let agyResumeAwaitingComposer = false;
   // A request the TUI keeps retrying and the provider never answers. Every
   // reaper reads such a session as busy (the retry ladder repaints the screen),
@@ -644,11 +652,11 @@ export function createTuiSessionController({
   // paste into a startup banner, a trust menu, or a returned shell prompt.
   // agy enables bracketed paste on alt-screen entry, before its composer (and
   // before its trust gate) exists, so it needs the extra composer-footer gate.
-  // A direct launch pty.spawns the TUI itself (no launch shell), so the tracker
-  // must not wait for a shell paste-mode OFF that will never come.
+  // Runner/direct shapes pty.spawn the TUI itself (no launch shell), so the
+  // tracker must not wait for a shell paste-mode OFF that will never come.
   const inputReady = createInputReadyTracker({
     ...(isAntigravityCommand(tuiConfig.command) ? { readyTextPattern: AGY_INPUT_READY_PATTERN } : {}),
-    directLaunch,
+    launchShape,
   });
   // Which of the TUI's startup dialogs this session has already answered. One
   // record instead of four sibling booleans; the arms themselves live in
@@ -672,7 +680,7 @@ export function createTuiSessionController({
   // only as a recovery path, never duplicated into raw.txt.
   let receivedTuiOutput = false;
 
-  // The paste-attempt / submit-Enter machinery (postPasteBuffer, pasteEnterTimer,
+  // The paste-attempt / submit-Enter machinery (pasteState, pasteEnterTimer,
   // pasteVerifyTimer, submitEnterTimer) lives in createPasteRetryController
   // rather than this closure — see its own comment for why that cluster is
   // separated out. Created by attachSession() once sessionId/pid are known, and
@@ -801,11 +809,14 @@ export function createTuiSessionController({
    * for a cold recovery agent (`agentRepoStateVerification.js`) to do the
    * same merge later. See mergeGateContract.js for the decision table.
    *
+   * The caller (runFinishDecision) checks `mergeGateIsOwed` and the
+   * once-per-run `mergeGateReprompted` cap synchronously before calling, so a
+   * run that owes no merge finalizes without an extra await in its path.
+   *
    * @returns {Promise<boolean>} true when a re-prompt went out — the caller
    *   must NOT finalize this call; false means finalize normally.
    */
   const checkMergeGateCompliance = async (summary) => {
-    if (!mergeGateIsOwed || mergeGateReprompted) return false;
     const prProbe = await probeMergeGatePr();
     const verdict = resolveMergeGateVerdict({ prProbe, summary });
     if (verdict !== 'needs-reprompt') return false;
@@ -884,28 +895,29 @@ export function createTuiSessionController({
     if (sessionId && session.isAlive(sessionId)) session.kill(sessionId);
   };
 
-  const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
-    // A terminal check alone used to be the whole re-entrancy guard, safe
-    // because it was set SYNCHRONOUSLY as this function's first act. The
-    // merge-gate check below needs `ingestDoneSentinel`'s summary before it can
-    // decide whether to finalize at all, which pushes the terminal transition
-    // past several awaits — wide enough for a second trigger (the shell exiting
-    // right after the sentinel appears) to also pass the gate before the first
-    // call sets it, double-firing `finalizeAgent`. 'finishing' closes that
-    // window synchronously while staying NON-terminal, which is what
-    // `pasteController.resubmit()` depends on: a re-prompt must still be
-    // possible while this call is deciding.
-    //
-    // A trigger parked here while the first call is mid-decision is not
-    // discarded: it's the one call that could carry news the first call
-    // doesn't have (the shell exiting right in this window), so it's replayed
-    // once that call settles on "not finalizing after all" — see below.
-    if (isTerminal()) return;
-    if (sessionPhase === 'finishing') {
-      pendingFinish = { success, exitCode, error, reason };
-      return;
-    }
-    sessionPhase = 'finishing';
+  /**
+   * Decide what one finish() call does, as a single explicit verdict. Runs
+   * while `sessionPhase` is 'finishing'; finish() interprets the result and
+   * owns every phase transition and the parked-trigger replay, so a new exit
+   * here cannot strand the run in 'finishing' with its timers already cleared.
+   *
+   *   { type: 'abandon' }  — PortOS is going down; record no outcome.
+   *   { type: 'finalize' } — record the outcome.
+   *   { type: 'retry-later' | 'reprompt', replayParked } — NOT finalizing:
+   *     the session goes back to 'running', and a trigger parked during this
+   *     decision is replayed per `replayParked`:
+   *       'always'         — replay it; it may be the only news the session died.
+   *       'if-no-sentinel' — replay it only while no sentinel is present. A
+   *                          present sentinel means the agent finished, so a
+   *                          late exit carries no news; the recovery retry
+   *                          re-reads that sentinel instead.
+   *
+   * Order matters: `ingestDoneSentinel` runs before `checkMergeGateCompliance`,
+   * which mutates the sentinel state (clears `sentinelIngested`, deletes the
+   * file, re-arms the watcher) — so finish() reopens the phase only after this
+   * whole function settles.
+   */
+  const runFinishDecision = async ({ success }) => {
     // PortOS is going down. Whatever path got here — the PTY exiting under
     // TreeKill, a provider-signal failure, a paste that failed because the shell died —
     // the cause is the host restart, not the agent, so there is no outcome to
@@ -918,11 +930,10 @@ export function createTuiSessionController({
     // terminated must reach finalizeAgent to be recorded `user-terminated` —
     // abandoning it would leave the record `running` with no such mark, and boot
     // recovery's user-terminated skip would miss it and resurrect the run. And a
-    // run the user paused already has its own don't-finalize branch below, which
-    // owns the paused bookkeeping (pid unregister, active-run delete).
+    // run the user paused already has its own don't-finalize branch in finish(),
+    // which owns the paused bookkeeping (pid unregister, active-run delete).
     if (finalization.shouldAbandonRun({ agentId, sentinelPresent: sentinelPresent() })) {
-      await abandonForHostShutdown();
-      return;
+      return { type: 'abandon' };
     }
 
     // Ingest the .agent-done sentinel BEFORE any teardown decision, so its
@@ -935,15 +946,8 @@ export function createTuiSessionController({
 
     if (sentinelRecoveryPending) {
       sentinelRecoveryPending = false;
-      sessionPhase = 'running';
       scheduleSentinelRecoveryRetry();
-      if (pendingFinish && !sentinelPresent()) {
-        const replay = pendingFinish;
-        pendingFinish = null;
-        return finish(replay);
-      }
-      pendingFinish = null;
-      return;
+      return { type: 'retry-later', replayParked: 'if-no-sentinel' };
     }
 
     // Merge Gate contract check (#5876): only for a run that actually
@@ -952,22 +956,58 @@ export function createTuiSessionController({
     // is not the "the agent believes its Merge Gate is done" signal this
     // reads; re-prompting THAT would paste into a shell whose TUI child may
     // already be gone, parking the run on a nudge that can never land.
-    // Returns true (and this call does NOT finalize) exactly once, when the
-    // run owed a merge, the PR is open, and the summary names no blocker —
-    // see mergeGateContract.js for the full decision table.
-    if (success && sentinelSummary !== null && await checkMergeGateCompliance(sentinelSummary)) {
-      // Not finalizing — reopen the re-entrancy gate for the next completion
-      // signal the re-prompt is expected to produce. A trigger that arrived
-      // WHILE this call was deciding (parked by the 'finishing' guard above)
-      // is the only thing that could tell us the session actually died during
-      // that window, so replay it now rather than losing it — otherwise the
-      // run would sit waiting for a nudge with nothing left alive to receive it.
+    // True (and this call does NOT finalize) exactly once, when the run owed
+    // a merge, the PR is open, and the summary names no blocker — see
+    // mergeGateContract.js for the full decision table. The re-prompt expects
+    // a fresh completion signal; a trigger that arrived while this was
+    // deciding is the only thing that could say the session died meanwhile.
+    if (success && sentinelSummary !== null && mergeGateIsOwed && !mergeGateReprompted
+      && await checkMergeGateCompliance(sentinelSummary)) {
+      return { type: 'reprompt', replayParked: 'always' };
+    }
+
+    return { type: 'finalize' };
+  };
+
+  const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
+    // A terminal check alone used to be the whole re-entrancy guard, safe
+    // because it was set SYNCHRONOUSLY as this function's first act. The
+    // merge-gate check needs `ingestDoneSentinel`'s summary before it can
+    // decide whether to finalize at all, which pushes the terminal transition
+    // past several awaits — wide enough for a second trigger (the shell exiting
+    // right after the sentinel appears) to also pass the gate before the first
+    // call sets it, double-firing `finalizeAgent`. 'finishing' closes that
+    // window synchronously while staying NON-terminal, which is what
+    // `pasteController.resubmit()` depends on: a re-prompt must still be
+    // possible while this call is deciding.
+    //
+    // A trigger parked here while the first call is mid-decision is not
+    // discarded outright: the decision's `replayParked` policy says whether
+    // it is replayed once that call settles on "not finalizing after all".
+    if (isTerminal()) return;
+    if (sessionPhase === 'finishing') {
+      pendingFinish = { success, exitCode, error, reason };
+      return;
+    }
+    sessionPhase = 'finishing';
+
+    const decision = await runFinishDecision({ success });
+
+    if (decision.type === 'abandon') {
+      await abandonForHostShutdown();
+      return;
+    }
+
+    // Every other non-finalizing verdict shares this ONE epilogue: reopen the
+    // re-entrancy gate for the next completion signal, then replay or drop the
+    // parked trigger per the verdict's policy. A verdict without a policy
+    // replays — the safe default, since a dropped trigger can park the run.
+    if (decision.type !== 'finalize') {
       sessionPhase = 'running';
-      if (pendingFinish) {
-        const replay = pendingFinish;
-        pendingFinish = null;
-        return finish(replay);
-      }
+      const parked = pendingFinish;
+      pendingFinish = null;
+      const replay = parked && (decision.replayParked !== 'if-no-sentinel' || !sentinelPresent());
+      if (replay) return finish(parked);
       return;
     }
 
@@ -987,7 +1027,7 @@ export function createTuiSessionController({
     // chain, since lanes serialize related work. See agentRunFinalize.js.
     //
     // The abandon gate is consulted a second time here on purpose: the gate at
-    // the top of finish() ran before ingestDoneSentinel and the merge-gate probe,
+    // the top of runFinishDecision() ran before ingestDoneSentinel and the merge-gate probe,
     // which can take seconds, and a host restart that begins in that window is
     // still an interruption rather than an outcome (#3202).
     const duration = Date.now() - (agentData?.startedAt || Date.now());
@@ -1109,8 +1149,8 @@ export function createTuiSessionController({
         startedAt: agentData?.startedAt ?? null,
       });
       if (finalizeVerdict && typeof finalizeVerdict.success === 'boolean') cleanupSuccess = finalizeVerdict.success;
-      prClaimVerified = prClaimWasVerified(finalizeVerdict?.prVerdict);
-      branchProvenEmpty = finalizeVerdict?.prVerdict?.branchProvenEmpty === true;
+      if (finalizeVerdict?.prClaimVerified === true) prClaimVerified = true;
+      if (finalizeVerdict?.branchProvenEmpty === true) branchProvenEmpty = true;
     } finally {
       await releaseRunResources({ agentData, cleanupSuccess, prClaimVerified, branchProvenEmpty });
     }
@@ -1559,7 +1599,7 @@ export function createTuiSessionController({
       write: (keys) => session.write(sessionId, keys),
       paste: (text, options) => (sessionId ? session.paste(sessionId, text, options) : false),
       hasLiveChild: () => session.hasLiveChild(pid),
-      directLaunch,
+      launchShape,
       prompt,
       tuiConfig,
       mcpBoot,

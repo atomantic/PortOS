@@ -20,7 +20,10 @@ const mocks = vi.hoisted(() => ({
   promoteFoundation: vi.fn(),
   recordFoundation: vi.fn(),
   ensureInstanceId: vi.fn(),
+  delegateSandbox: vi.fn(),
 }));
+
+vi.mock('./sandboxDelegation.js', () => ({ delegateSandbox: (...args) => mocks.delegateSandbox(...args) }));
 
 const specs = [
   {
@@ -118,6 +121,23 @@ beforeEach(() => {
 });
 
 describe('cosToolRegistry', () => {
+  it('requires the independent delegation grant, validates the packet, and replays one accepted proposal', async () => {
+    const call = { requestId: 'sandbox-1', name: 'sandbox.delegate', arguments: {
+      providerId: 'free-api', model: 'openrouter/free', kind: 'text', task: 'Write a greeting',
+      context: 'One friendly sentence.', criteria: ['Greet the reader.'],
+    } };
+    const authority = { scope: 'mind', capabilities: { delegateSandbox: true } };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { createTasks: true } } })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    await expect(executeCosToolCall({ call, authority: { ...authority, scope: 'agent' } })).rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
+    await expect(executeCosToolCall({ call: { ...call, arguments: { ...call.arguments, shell: 'run' } }, authority })).rejects.toMatchObject({ code: 'TOOL_VALIDATION_ERROR' });
+    mocks.delegateSandbox.mockResolvedValue({ ok: true, outcome: 'accepted', trusted: false, proposal: 'Hello.' });
+    const first = await executeCosToolCall({ call, authority });
+    expect(first).toMatchObject({ state: 'completed', result: { trusted: false, proposal: 'Hello.' } });
+    expect(await executeCosToolCall({ call, authority })).toMatchObject({ duplicate: true });
+    expect(mocks.delegateSandbox).toHaveBeenCalledTimes(1);
+    expect(mocks.executeTasks).not.toHaveBeenCalled();
+    expect(await buildPersistentMindToolPrompt({ delegateSandbox: true, toolExposureAllSchemas: true })).toContain('sandbox.delegate');
+  });
   it('allows only a bounded mind-owned naming action under manageMind and deduplicates retries', async () => {
     const call = { requestId: 'name-1', name: 'mind.choose-name', arguments: { name: 'Example Star' } };
     const authority = { scope: 'mind', capabilities: { manageMind: true } };
@@ -334,6 +354,7 @@ describe('cosToolRegistry', () => {
   it('exports a compact canonical catalog and provider translations', () => {
     const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
     expect(catalog.tools.map((tool) => tool.name)).toEqual([
+      'sandbox.models', 'sandbox.delegate',
       'reports.fix', 'reports.next', 'reports.read', 'reports.record',
       'tools.activate', 'tools.deactivate',
       'mind.recipes.create', 'mind.recipes.list', 'mind.recipes.read', 'mind.recipes.update', 'mind.recipes.archive', 'mind.recipes.restore',
@@ -369,6 +390,7 @@ describe('cosToolRegistry', () => {
       'eidoverse.arm-controller',
       'eidoverse.retire-controller',
       'eidoverse.status',
+      'eidoverse.inspect-scene',
       'eidoverse.project',
       'eidoverse.augment',
       'eidoverse.say',

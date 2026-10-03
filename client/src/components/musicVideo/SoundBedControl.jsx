@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Waves } from 'lucide-react';
 import toast from '../ui/Toast';
 import { updateMusicVideoProject } from '../../services/apiMusicVideo.js';
+import { trackOptionLabels } from '../../utils/trackOptionLabels.js';
 
 const DEFAULT_VOLUME = 0.3;
 
@@ -19,6 +20,7 @@ export default function SoundBedControl({ project, tracks, disabled, onUpdated }
   const selectId = `mv-sound-bed-${project.id}`;
   const volumeId = `mv-sound-bed-volume-${project.id}`;
   const candidates = tracks.filter((t) => t.id !== project.trackId);
+  const optionLabels = trackOptionLabels(tracks);
 
   const save = (soundBed) => {
     setBusy(true);
@@ -44,7 +46,7 @@ export default function SoundBedControl({ project, tracks, disabled, onUpdated }
           onChange={(e) => save(e.target.value ? { trackId: e.target.value, volume } : null)}
           className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 max-w-[16rem] min-h-[44px] sm:min-h-0">
           <option value="">None — the song is the only audio</option>
-          {candidates.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
+          {candidates.map((t) => <option key={t.id} value={t.id}>{optionLabels.get(t.id)}</option>)}
         </select>
       </div>
       {bed && (

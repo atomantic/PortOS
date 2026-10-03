@@ -23,11 +23,15 @@ import { parseSeasonCoverOwner, slotKeyForVariant } from './owners.js';
 import * as seriesSvc from './series.js';
 import { fileCoverIntoAutoCollection } from './coverUniverseFiler.js';
 import { refreshSeriesCoverImage } from './seriesCoverImage.js';
+import { createHookRunTracker } from './filenameHookFactory.js';
 
 let registeredHandler = null;
+// Owned completion boundary for the fire-and-forget handler runs, including
+// the post-stamp collection filing — see `createHookRunTracker` (#9634).
+const runs = createHookRunTracker();
 
 const handler = (job) => {
-  void (async () => {
+  void runs.track((async () => {
     if (!job || job.kind !== 'image') return;
     const filename = job.result?.filename;
     if (typeof filename !== 'string' || !filename) return;
@@ -72,7 +76,7 @@ const handler = (job) => {
     }
   })().catch((err) => {
     console.error(`❌ seasonCover filename hook crashed: ${err?.message || err}`);
-  });
+  }));
 };
 
 export function initSeasonCoverFilenameHook() {
@@ -83,10 +87,13 @@ export function initSeasonCoverFilenameHook() {
 }
 
 export const __testing = {
-  reset() {
+  // Detach, then wait out in-flight runs so fixture teardown can't race them.
+  async reset() {
     if (registeredHandler) {
       mediaJobEvents.off('completed', registeredHandler);
       registeredHandler = null;
     }
+    await runs.drain();
   },
+  drain: runs.drain,
 };

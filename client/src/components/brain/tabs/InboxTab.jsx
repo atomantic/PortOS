@@ -24,6 +24,8 @@ import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useLocalStorageBool } from '../../../hooks';
+import { useFailedCaptures } from '../../../hooks/useFailedCaptures';
+import FailedCaptureList from '../FailedCaptureList';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
 
 import {
@@ -74,11 +76,12 @@ export default function InboxTab({ onRefresh, settings }) {
   const [showDone, setShowDone] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [retryingId, setRetryingId] = useState(null);
+  const failedCaptures = useFailedCaptures();
   const inputRef = useRef(null);
   const tempIdCounter = useRef(0);
 
   const fetchInboxPage = useCallback(async ({ cursor, signal }) => {
-    const data = await api.getBrainInbox({ cursor, limit: 50, signal }).catch(() => ({ items: [], entries: [] }));
+    const data = await api.getBrainInbox({ cursor, limit: 50, signal, silent: true });
     if (data.counts) {
       setServerCounts(data.counts);
     }
@@ -137,6 +140,45 @@ export default function InboxTab({ onRefresh, settings }) {
     return () => socket.off('brain:classified', handleClassified);
   }, [paged.refreshFirst, onRefresh]);
 
+  // Sends one capture. `payload` is the immutable request the submit built
+  // (text, note, creative flag, repo-intake options) so a Retry re-sends exactly
+  // what the user submitted, not whatever the composer holds now. A rejection
+  // keeps the payload in a persistent "Not saved" row (`failedId` refreshes the
+  // row a Retry came from instead of stacking a second one).
+  const sendCapture = async (payload, { failedId } = {}) => {
+    const tempId = `_pending_${++tempIdCounter.current}`;
+    setOptimisticEntries(prev => [{
+      id: tempId,
+      capturedText: payload.text,
+      status: 'classifying',
+      capturedAt: new Date().toISOString(),
+      ...(payload.creative ? { creative: true } : {})
+    }, ...prev]);
+
+    const captureOptions = { creative: payload.creative, repoIntake: payload.repoIntake };
+    if (payload.note) captureOptions.note = payload.note;
+    const result = await api.captureBrainThought(payload.text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
+      const message = err.message || 'Failed to capture thought';
+      toast.error(message);
+      setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
+      failedCaptures.fail(payload, message, failedId);
+      return null;
+    });
+    if (!result) return;
+
+    if (failedId) failedCaptures.discard(failedId);
+    if (result.inboxLog) {
+      setOptimisticEntries(prev => prev.map(e => e.id === tempId ? result.inboxLog : e));
+    } else {
+      setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
+    }
+    paged.refreshFirst();
+    // A capture that was just a URL is filed to Links synchronously — no
+    // brain:classified event follows, so announce the outcome here.
+    if (result.link) toast.success(result.message || 'Saved to Links');
+    onRefresh?.();
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const text = inputText.trim();
@@ -150,47 +192,26 @@ export default function InboxTab({ onRefresh, settings }) {
 
     // The server files a URL to Links regardless of the sticky Creative flag;
     // dropping it here keeps the optimistic entry matching what gets stored.
-    const asCreative = creative && !inputIsUrl;
-    const tempId = `_pending_${++tempIdCounter.current}`;
-    const optimisticEntry = {
-      id: tempId,
-      capturedText: text,
-      status: 'classifying',
-      capturedAt: new Date().toISOString(),
-      ...(asCreative ? { creative: true } : {})
-    };
-    setInputText('');
-    setOptimisticEntries(prev => [optimisticEntry, ...prev]);
-
     // `intakeFor` re-derives from the submitted text, so a sticky tick can't ride
     // along on a capture that is no longer a repo URL.
-    const captureOptions = {
-      creative: asCreative,
+    const payload = Object.freeze({
+      text,
+      note,
+      creative: creative && !inputIsUrl,
       repoIntake: repoIntake.intakeFor(text),
-    };
-    if (note) captureOptions.note = note;
-    const result = await api.captureBrainThought(text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
-      toast.error(err.message || 'Failed to capture thought');
-      setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
-      return null;
     });
-
+    // The note and study brief now live in the payload, so they clear with the
+    // composer rather than on acknowledgement (which could wipe the next draft's).
+    setInputText('');
+    setLinkNote('');
+    repoIntake.setStudyContext('');
+    await sendCapture(payload);
     if (inputRef.current) inputRef.current.dataset.lastSubmit = '';
+  };
 
-    if (result) {
-      if (result.inboxLog) {
-        setOptimisticEntries(prev => prev.map(e => e.id === tempId ? result.inboxLog : e));
-      } else {
-        setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
-      }
-      paged.refreshFirst();
-      // A capture that was just a URL is filed to Links synchronously — no
-      // brain:classified event follows, so announce the outcome here.
-      if (result.link) toast.success(result.message || 'Saved to Links');
-      setLinkNote('');
-      repoIntake.setStudyContext('');
-      onRefresh?.();
-    }
+  const handleRetryFailed = (failure, text) => {
+    if (!failedCaptures.markRetrying(failure.id)) return;
+    return sendCapture({ ...failure.payload, text }, { failedId: failure.id });
   };
 
   const handleResolve = async (entryId, destination) => {
@@ -343,14 +364,6 @@ export default function InboxTab({ onRefresh, settings }) {
     navigate('/catalog/ingest', { state: { prefill } });
   };
 
-  if (!paged.loaded && paged.loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <BrailleSpinner text="Loading" />
-      </div>
-    );
-  }
-
   // Compact per-status overview rendered in the desktop rail so the page reads
   // as a dashboard rather than a centered document.
   const overviewStats = [
@@ -370,7 +383,7 @@ export default function InboxTab({ onRefresh, settings }) {
     <div className="grid grid-cols-1 @5xl/inbox:grid-cols-[minmax(0,1fr)_360px] gap-4 content-start">
       {/* Capture input — spans both columns */}
       <form onSubmit={handleSubmit} className="@5xl/inbox:col-span-2">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             ref={inputRef}
             type="text"
@@ -382,16 +395,16 @@ export default function InboxTab({ onRefresh, settings }) {
             }}
             placeholder="One thought at a time..."
             aria-label="New inbox thought"
-            className="flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
+            className="min-w-0 basis-full @lg/inbox:basis-0 flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
           />
-          <VoiceCapture onTranscript={handleVoiceTranscript} />
+          <div className="min-w-0 max-w-full"><VoiceCapture onTranscript={handleVoiceTranscript} /></div>
           <button
             type="button"
             onClick={() => setCreative(v => !v)}
             aria-pressed={creative}
             aria-label="Toggle creative capture mode"
             disabled={inputIsUrl}
-            className={`px-3 py-3 rounded-lg border transition-colors flex items-center gap-1.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed ${creative
+            className={`shrink-0 min-w-11 min-h-11 justify-center px-3 py-3 rounded-lg border transition-colors flex items-center gap-1.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed ${creative
               ? 'bg-port-accent-2/20 text-port-accent-2 border-port-accent-2/40'
               : 'bg-port-card text-gray-400 border-port-border hover:text-gray-200'}`}
             title={inputIsUrl
@@ -404,7 +417,7 @@ export default function InboxTab({ onRefresh, settings }) {
           <button
             type="submit"
             disabled={!inputText.trim()}
-            className="px-4 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="shrink-0 min-w-11 min-h-11 justify-center px-4 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             title="Capture thought" aria-label="Capture thought"
           >
             <Send className="w-5 h-5" />
@@ -439,6 +452,14 @@ export default function InboxTab({ onRefresh, settings }) {
         <RepoIntakeOptions
           idPrefix="inbox-capture-repo"
           {...repoIntake}
+        />
+        <FailedCaptureList
+          idPrefix="inbox-failed-capture"
+          failures={failedCaptures.failures}
+          getText={(f) => f.payload.text}
+          getNote={(f) => f.payload.note}
+          onRetry={handleRetryFailed}
+          onDiscard={failedCaptures.discard}
         />
       </form>
 
@@ -488,6 +509,12 @@ export default function InboxTab({ onRefresh, settings }) {
             ))}
           </div>
         </div>
+
+        {!paged.loaded && paged.loading && (
+          <div role="status" className="p-3 text-sm text-gray-400">
+            <BrailleSpinner text="Loading inbox history" />
+          </div>
+        )}
 
         {/* Needs Review section */}
         {needsReviewEntries.length > 0 ? (
@@ -633,7 +660,7 @@ export default function InboxTab({ onRefresh, settings }) {
         ) : (
           <div className="hidden @5xl/inbox:flex items-center gap-2 p-3 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
             <CheckCircle size={16} className="text-port-success" />
-            Nothing needs review.
+            {paged.loaded ? 'Nothing needs review.' : 'Review counts pending.'}
           </div>
         )}
       </div>
@@ -916,7 +943,7 @@ export default function InboxTab({ onRefresh, settings }) {
               })}
 
               {filedEntries.length === 0 && (
-                <p className="text-gray-500 text-sm">No filed entries yet. Start capturing thoughts above.</p>
+                <p className="text-gray-500 text-sm">{paged.loaded ? 'No filed entries yet. Start capturing thoughts above.' : 'Inbox history is not available yet. You can capture thoughts above.'}</p>
               )}
             </div>
           )}

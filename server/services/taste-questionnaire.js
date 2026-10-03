@@ -10,14 +10,15 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, safeJSONParse, unreadableStoreError, PATHS } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { isPlainObject } from '../lib/objects.js';
 // `resolveTextProvider`, not `resolveAPIProvider`: every provider resolved here
 // goes straight to `callProviderAISimple`, which is the one path that can run a
 // ChatGPT-subscription record as a bounded text call. Callers that hand their
 // provider to the prompt runner must keep using the API-only resolver (#5590).
 import { resolveTextProvider, callProviderAISimple } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { buildPrompt } from './promptService.js';
 import { digitalTwinEvents } from './digital-twin-meta.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
@@ -379,37 +380,21 @@ export const TASTE_SECTIONS = {
 // DATA ACCESS
 // =============================================================================
 
+// taste-profile.json has exactly one write owner: this module. Every
+// read-modify-write cycle — local answers, section resets, summary writes, and
+// federation merges from digital-twin-sync.js — runs inside this single
+// file-wide queue, re-reads the durable file there, and publishes the cache only
+// after its write lands. An LLM call never runs inside the queue: summaries
+// capture their transcript, release it for the provider call, and re-enter to
+// verify the inputs are unchanged before saving (#9785).
+const queueProfileWrite = createFileWriteQueue();
+
+// The cache is only ever assigned inside the queue (cold load or post-write
+// publish), so a reader's stale disk read can never overwrite a newer write.
 let profileCache = null;
 
-// Invalidate the in-memory taste-profile cache. Federation sync writes
-// taste-profile.json directly (see digital-twin-sync.js applyDigitalTwinRemote);
-// without this the no-TTL cache would keep serving pre-sync data until the next
-// local save or a server restart — i.e. synced taste answers wouldn't appear.
-export function invalidateTasteProfileCache() {
-  profileCache = null;
-}
-
-async function loadTasteProfile() {
-  if (profileCache) return profileCache;
-
-  if (!existsSync(TASTE_PROFILE_FILE)) {
-    const defaultProfile = {
-      version: '1.0.0',
-      createdAt: null,
-      updatedAt: null,
-      sections: {},
-      profileSummary: null,
-      lastSessionAt: null
-    };
-    for (const sectionId of Object.keys(TASTE_SECTIONS)) {
-      defaultProfile.sections[sectionId] = { status: 'pending', responses: [], summary: null };
-    }
-    await saveTasteProfile(defaultProfile);
-    return defaultProfile;
-  }
-
-  const raw = await readFile(TASTE_PROFILE_FILE, 'utf-8');
-  const defaultProfile = {
+function createDefaultProfile() {
+  const profile = {
     version: '1.0.0',
     createdAt: null,
     updatedAt: null,
@@ -418,19 +403,95 @@ async function loadTasteProfile() {
     lastSessionAt: null
   };
   for (const sectionId of Object.keys(TASTE_SECTIONS)) {
-    defaultProfile.sections[sectionId] = { status: 'pending', responses: [], summary: null };
+    profile.sections[sectionId] = { status: 'pending', responses: [], summary: null };
   }
-  profileCache = safeJSONParse(raw, defaultProfile);
-  return profileCache;
+  return profile;
 }
 
-async function saveTasteProfile(profile) {
+async function loadTasteProfile() {
+  if (profileCache) return profileCache;
+  return queueProfileWrite(async () => {
+    if (profileCache) return profileCache;
+    profileCache = existsSync(TASTE_PROFILE_FILE)
+      ? safeJSONParse(await readFile(TASTE_PROFILE_FILE, 'utf-8'), createDefaultProfile())
+      : createDefaultProfile();
+    return profileCache;
+  });
+}
+
+// Read the durable profile for a mutation. Unlike the tolerant display read, a
+// present-but-corrupt file throws: rewriting defaults over it would erase every
+// stored answer. Call only from inside `queueProfileWrite`.
+async function readProfileForMutation() {
+  const raw = await readJSONFile(TASTE_PROFILE_FILE, null, { strict: true });
+  if (raw === null) return createDefaultProfile();
+  if (!isPlainObject(raw)) throw unreadableStoreError(TASTE_PROFILE_FILE);
+  if (!isPlainObject(raw.sections)) raw.sections = {};
+  return raw;
+}
+
+// Persist and publish. `touch: false` keeps a merged record's own `updatedAt`,
+// which the federation merge uses as its LWW clock. Call only from inside the queue.
+async function writeTasteProfile(profile, { touch = true } = {}) {
   if (!existsSync(DIGITAL_TWIN_DIR)) {
     await ensureDir(DIGITAL_TWIN_DIR);
   }
-  profile.updatedAt = now();
+  if (touch) profile.updatedAt = now();
   await atomicWrite(TASTE_PROFILE_FILE, profile);
   profileCache = profile;
+}
+
+function mutateTasteProfile(fn) {
+  return queueProfileWrite(async () => fn(await readProfileForMutation()));
+}
+
+/**
+ * Apply a federation merge to the current profile under the file-wide mutation
+ * boundary. `merge(local)` receives the durable record (null when absent) and
+ * returns `{ merged, changed }` — digital-twin-sync passes its `mergeTaste`, so
+ * the wire semantics stay owned there. Returns whether anything was written.
+ */
+export function applyTasteProfileMerge(merge) {
+  return queueProfileWrite(async () => {
+    const local = await readJSONFile(TASTE_PROFILE_FILE, null, { strict: true });
+    const { merged, changed } = merge(local);
+    if (!changed) return false;
+    await writeTasteProfile(merged, { touch: false });
+    return true;
+  });
+}
+
+// Order-insensitive identity of a transcript's inputs: the federation merge
+// re-sorts responses by questionId, which must not read as an answer change.
+function responsesFingerprint(responses) {
+  return JSON.stringify((Array.isArray(responses) ? responses : [])
+    .map(r => [r?.questionId ?? null, r?.answer ?? null])
+    .sort(([a], [b]) => String(a).localeCompare(String(b))));
+}
+
+function sectionsWithResponses(profile) {
+  return Object.entries(profile.sections).filter(([, data]) => data?.responses?.length > 0);
+}
+
+function overallFingerprint(profile) {
+  return JSON.stringify(sectionsWithResponses(profile)
+    .map(([sectionId, data]) => [sectionId, responsesFingerprint(data.responses)])
+    .sort(([a], [b]) => a.localeCompare(b)));
+}
+
+function staleSummaryError(scopeLabel) {
+  console.warn(`⚠️ Taste summary discarded: ${scopeLabel} answers changed during generation`);
+  return new ServerError(
+    `${scopeLabel} taste answers changed while the summary was generating. Generate the summary again to include the latest answers.`,
+    { status: 409, code: 'TASTE_SUMMARY_STALE' }
+  );
+}
+
+function buildTranscript(sectionId, responses) {
+  return responses.map(r => {
+    const qDef = findQuestionDef(sectionId, r.questionId);
+    return `Q: ${qDef?.text || r.questionId}\nA: ${r.answer}`;
+  }).join('\n\n');
 }
 
 // =============================================================================
@@ -550,54 +611,55 @@ export async function submitAnswer(sectionId, questionId, answer, { source, gene
   const config = TASTE_SECTIONS[sectionId];
   if (!config) throw new Error(`Unknown taste section: ${sectionId}`);
 
-  const profile = await loadTasteProfile();
-  if (!profile.sections[sectionId]) {
-    profile.sections[sectionId] = { status: 'pending', responses: [], summary: null };
-  }
+  const { sectionStatus, totalResponses } = await mutateTasteProfile(async (profile) => {
+    if (!profile.sections[sectionId]) {
+      profile.sections[sectionId] = { status: 'pending', responses: [], summary: null };
+    }
+    const section = profile.sections[sectionId];
 
-  // Prevent duplicate answers
-  const existing = profile.sections[sectionId].responses.find(r => r.questionId === questionId);
-  if (existing) {
-    existing.answer = answer;
-    existing.updatedAt = now();
-    if (source) existing.source = source;
-  } else {
-    const responseEntry = {
-      questionId,
-      answer,
-      answeredAt: now()
-    };
-    if (source) responseEntry.source = source;
-    if (generatedQuestion) responseEntry.generatedQuestion = generatedQuestion;
-    if (identityContextUsed) responseEntry.identityContextUsed = identityContextUsed;
-    profile.sections[sectionId].responses.push(responseEntry);
-  }
+    // Prevent duplicate answers
+    const existing = section.responses.find(r => r.questionId === questionId);
+    if (existing) {
+      existing.answer = answer;
+      existing.updatedAt = now();
+      if (source) existing.source = source;
+    } else {
+      const responseEntry = {
+        questionId,
+        answer,
+        answeredAt: now()
+      };
+      if (source) responseEntry.source = source;
+      if (generatedQuestion) responseEntry.generatedQuestion = generatedQuestion;
+      if (identityContextUsed) responseEntry.identityContextUsed = identityContextUsed;
+      section.responses.push(responseEntry);
+    }
 
-  if (!profile.createdAt) profile.createdAt = now();
-  profile.lastSessionAt = now();
+    if (!profile.createdAt) profile.createdAt = now();
+    profile.lastSessionAt = now();
 
-  // Update section status
-  const answeredCoreIds = new Set(
-    profile.sections[sectionId].responses
-      .filter(r => r.questionId.includes('-core-'))
-      .map(r => r.questionId)
-  );
-  const allCoreAnswered = config.questions.every(q => answeredCoreIds.has(q.id));
+    // Update section status
+    const answeredCoreIds = new Set(
+      section.responses
+        .filter(r => r.questionId.includes('-core-'))
+        .map(r => r.questionId)
+    );
+    const allCoreAnswered = config.questions.every(q => answeredCoreIds.has(q.id));
 
-  if (allCoreAnswered) {
-    // Check if all triggered follow-ups are also answered
-    const next = await getNextQuestionInternal(sectionId, profile);
-    profile.sections[sectionId].status = next ? 'in_progress' : 'completed';
-  } else {
-    profile.sections[sectionId].status = 'in_progress';
-  }
+    // Once every core question is in, the section completes when no triggered
+    // follow-up is still waiting.
+    section.status = allCoreAnswered && !getNextQuestionInternal(sectionId, profile) ? 'completed' : 'in_progress';
 
-  await saveTasteProfile(profile);
+    await writeTasteProfile(profile);
 
-  // Also update the AESTHETICS.md document with the response
-  await appendToAestheticsDoc(sectionId, config, questionId, answer);
+    // Also update the AESTHETICS.md document with the response — inside the
+    // boundary, since it is a read-modify-write of its own.
+    await appendToAestheticsDoc(sectionId, config, questionId, answer);
 
-  console.log(`🎨 Taste answer submitted: ${sectionId}/${questionId} (${profile.sections[sectionId].responses.length} responses)`);
+    return { sectionStatus: section.status, totalResponses: section.responses.length };
+  });
+
+  console.log(`🎨 Taste answer submitted: ${sectionId}/${questionId} (${totalResponses} responses)`);
 
   // Get the next question to return inline
   const nextQuestion = await getNextQuestion(sectionId);
@@ -605,8 +667,8 @@ export async function submitAnswer(sectionId, questionId, answer, { source, gene
   return {
     section: sectionId,
     questionId,
-    sectionStatus: profile.sections[sectionId].status,
-    totalResponses: profile.sections[sectionId].responses.length,
+    sectionStatus,
+    totalResponses,
     nextQuestion
   };
 }
@@ -644,22 +706,19 @@ export async function generateSectionSummary(sectionId, providerId, model) {
   const config = TASTE_SECTIONS[sectionId];
   if (!config) throw new Error(`Unknown taste section: ${sectionId}`);
 
-  const profile = await loadTasteProfile();
-  const sectionData = profile.sections[sectionId];
-  if (!sectionData?.responses?.length) {
-    throw new Error(`No responses to summarize for section: ${sectionId}`);
-  }
+  // Phase 1: capture an immutable transcript and the fingerprint of its inputs.
+  const { transcript, fingerprint } = await mutateTasteProfile(async (profile) => {
+    const responses = profile.sections[sectionId]?.responses;
+    if (!responses?.length) {
+      throw new Error(`No responses to summarize for section: ${sectionId}`);
+    }
+    return { transcript: buildTranscript(sectionId, responses), fingerprint: responsesFingerprint(responses) };
+  });
 
   const provider = await resolveTextProvider(providerId);
   if (!provider) throw new Error(NO_API_PROVIDER_HINT);
 
   const modelId = model || provider.defaultModel;
-
-  // Build Q&A transcript for analysis
-  const transcript = sectionData.responses.map(r => {
-    const qDef = findQuestionDef(sectionId, r.questionId);
-    return `Q: ${qDef?.text || r.questionId}\nA: ${r.answer}`;
-  }).join('\n\n');
 
   const prompt = `Analyze the following taste/preference interview responses about ${config.label} and produce a structured profile summary. Extract concrete preferences, patterns, anti-preferences, and aesthetic principles. Be specific — cite actual examples they mentioned.
 
@@ -702,9 +761,15 @@ Respond with a concise profile in this exact structure:
   const summary = result.text?.trim();
   if (!summary) throw new Error('AI returned empty summary');
 
-  // Store the summary
-  profile.sections[sectionId].summary = summary;
-  await saveTasteProfile(profile);
+  // Phase 2: the provider call ran outside the queue, so answers may have
+  // changed (a local edit, a reset, or an accepted peer sync). Save onto the
+  // CURRENT record only when this summary still describes it.
+  await mutateTasteProfile(async (profile) => {
+    const section = profile.sections[sectionId];
+    if (responsesFingerprint(section?.responses) !== fingerprint) throw staleSummaryError(config.label);
+    section.summary = summary;
+    await writeTasteProfile(profile);
+  });
 
   console.log(`🎨 Taste summary generated for ${sectionId}`);
 
@@ -715,29 +780,24 @@ Respond with a concise profile in this exact structure:
  * Generate an overall taste profile summary across all completed sections.
  */
 export async function generateOverallSummary(providerId, model) {
-  const profile = await loadTasteProfile();
-
-  const completedSections = Object.entries(profile.sections)
-    .filter(([, data]) => data.responses?.length > 0);
-
-  if (completedSections.length === 0) {
-    throw new Error('No taste responses to summarize. Complete at least one section first.');
-  }
+  // Phase 1: capture the combined transcript and the fingerprint of every input.
+  const { allTranscripts, fingerprint } = await mutateTasteProfile(async (profile) => {
+    const completedSections = sectionsWithResponses(profile);
+    if (completedSections.length === 0) {
+      throw new Error('No taste responses to summarize. Complete at least one section first.');
+    }
+    return {
+      allTranscripts: completedSections.map(([sectionId, data]) =>
+        `## ${TASTE_SECTIONS[sectionId]?.label || sectionId}\n\n${buildTranscript(sectionId, data.responses)}`
+      ).join('\n\n---\n\n'),
+      fingerprint: overallFingerprint(profile)
+    };
+  });
 
   const provider = await resolveTextProvider(providerId);
   if (!provider) throw new Error(NO_API_PROVIDER_HINT);
 
   const modelId = model || provider.defaultModel;
-
-  // Build combined transcript
-  const allTranscripts = completedSections.map(([sectionId, data]) => {
-    const config = TASTE_SECTIONS[sectionId];
-    const transcript = data.responses.map(r => {
-      const qDef = findQuestionDef(sectionId, r.questionId);
-      return `Q: ${qDef?.text || r.questionId}\nA: ${r.answer}`;
-    }).join('\n\n');
-    return `## ${config.label}\n\n${transcript}`;
-  }).join('\n\n---\n\n');
 
   const prompt = `Analyze the following taste/preference interview responses across multiple aesthetic domains and produce a unified taste profile. Identify cross-cutting themes, contradictions, and the person's core aesthetic identity.
 
@@ -776,11 +836,16 @@ ${allTranscripts}
   const summary = result.text?.trim();
   if (!summary) throw new Error('AI returned empty summary');
 
-  profile.profileSummary = summary;
-  await saveTasteProfile(profile);
-
-  // Also write to AESTHETICS.md as the definitive profile
-  await writeAestheticsDocument(summary, completedSections);
+  // Phase 2: save only if no section's answers changed during the provider call.
+  // A stale result is rejected before either the profile or the derived
+  // AESTHETICS.md is touched.
+  await mutateTasteProfile(async (profile) => {
+    if (overallFingerprint(profile) !== fingerprint) throw staleSummaryError('Some');
+    profile.profileSummary = summary;
+    await writeTasteProfile(profile);
+    // Also write to AESTHETICS.md as the definitive profile
+    await writeAestheticsDocument(summary, sectionsWithResponses(profile));
+  });
 
   digitalTwinEvents.emit('taste:profile-updated', { summary });
   console.log(`🎨 Overall taste profile generated`);
@@ -816,12 +881,12 @@ export async function getSectionResponses(sectionId) {
  * Reset a section (clear all responses)
  */
 export async function resetSection(sectionId) {
-  const profile = await loadTasteProfile();
-  if (profile.sections[sectionId]) {
+  await mutateTasteProfile(async (profile) => {
+    if (!profile.sections[sectionId]) return;
     profile.sections[sectionId] = { status: 'pending', responses: [], summary: null };
-    await saveTasteProfile(profile);
+    await writeTasteProfile(profile);
     console.log(`🎨 Taste section reset: ${sectionId}`);
-  }
+  });
   return { section: sectionId, status: 'reset' };
 }
 
@@ -926,11 +991,7 @@ export async function generatePersonalizedTasteQuestion(sectionId, providerId, m
 
   // Build existing responses transcript
   const profile = await loadTasteProfile();
-  const sectionData = profile.sections[sectionId] || { responses: [] };
-  const transcript = sectionData.responses.map(r => {
-    const qDef = findQuestionDef(sectionId, r.questionId);
-    return `Q: ${qDef?.text || r.questionId}\nA: ${r.answer}`;
-  }).join('\n\n');
+  const transcript = buildTranscript(sectionId, profile.sections[sectionId]?.responses || []);
 
   const prompt = `You are a thoughtful interviewer building an aesthetic taste profile for someone. You already know a lot about this person from their identity documents and previous responses. Your job is to ask ONE follow-up question about "${config.label}" that:
 

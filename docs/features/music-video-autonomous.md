@@ -1,6 +1,6 @@
 # Autonomous Music Video
 
-One prompt in, a finished music video out. The Music Video page's **Autonomous** entry point (and the `music-video-autopilot` scheduled task) starts a server-owned run that does everything the hand-driven flow asks you to set up first: it writes the creative brief, the lyrics and a mood board, makes the song (in Suno, or on this machine), and produces the video with the tools you allowed. Approval checkpoints are optional; with none chosen the run is fully unattended.
+One prompt in, a finished music video out. The Music Video page's **Autonomous** entry point (and the `music-video-autopilot` scheduled task) starts a server-owned run that does everything the hand-driven flow asks you to set up first: it writes the creative brief, the lyrics and a mood board, makes the song (in Suno, or on this machine), and produces the video with the tools you allowed. Song-writing checkpoints are optional. Production always pauses for revision-bound human review of the visual guide, lyric-timed storyboard and animated proof.
 
 ## Pipeline
 
@@ -11,12 +11,12 @@ brief → lyrics → style → song → analyze → produce
 | Stage | What happens | Costs |
 |---|---|---|
 | `brief` | One LLM call turns the prompt into a title, a musical description, a compact Suno style line, a visual concept and a mood-board spec. The project is renamed to the title. | one provider call |
-| `lyrics` | Original lyrics written against the musical description (skipped for an instrumental). | one provider call |
+| `lyrics` | Original lyrics written against the musical description (skipped for an instrumental). With the lyric review on, a second pass then reviews and revises the draft (see [Models per stage](#models-per-stage)). | one provider call (two with the review) |
 | `style` | A **Mood Board** (text notes + a composite look prompt and an avoid list) is created and linked as the project's mood board; the concept is set from the brief. No images are generated. | free |
 | `song` | The PortOS Browser drives the Suno web UI (custom mode: lyrics, style, title), only M4A is selected in Suno's Download UI and the completed audio is validated and imported directly into the music library, a Track is created, the take is recorded with `source: 'suno'`, and the project is linked to it. | Suno credits |
 | `song` (local) | `songSource: 'local'` renders the song with the on-device Music Designer engines instead (see [Local song source](#local-song-source)). | free (GPU time) |
 | `analyze` | The usual offline beat / tempo / section analysis. | free |
-| `produce` | **Footage** (any image/video tool picked): the existing server-owned production run (`/production-runs`) with a pool built from the picks, then the final render once it completes. **Code** (only `code:render`): a code-rendered video is authored and rendered directly. | per tool |
+| `produce` | **Footage** (any image/video tool picked): the existing server-owned production run (`/production-runs`) with a pool built from the picks, then the final render once it completes. **Code** (only `code:render`): a code-rendered video is authored after storyboard approval, renders a review proof, then waits for human proof approval before the final render. | per tool |
 
 State lives on the project as `autonomousRun` — install-local like `productionRuns` (stripped from the peer wire, not carried into a clone). Each stage settles in one serialized project write, so a crash resumes at the stage that did not settle. After a server restart a run is shown **interrupted** and nothing advances until you resume it (no cold-bootstrap provider calls).
 
@@ -29,7 +29,62 @@ State lives on the project as `autonomousRun` — install-local like `production
 - `song` — listen to the Suno song before the image/video quota is spent.
 - `cast` — flips the existing Cast & Sets check-in to *review* (the production run owns it).
 
-Approving can carry edits (`POST /api/music-video/:id/autonomous/resume` with `{ lyrics }` or `{ style }`).
+Approving can carry edits (`POST /api/music-video/:id/autonomous/resume` with `{ lyrics }`, `{ style }` or a `{ suno }` options patch).
+
+**Retake song.** At the `song` checkpoint the run panel also offers **Retake song** (`{ retakeSong: true }` on resume, combinable with the lyrics, style and `suno` edits). It discards the song from the run — its track link, Suno song ids, source and any local render — resets the `song` stage, makes a new song (a new Suno generation spends credits again) and parks at the `song` checkpoint once more. The rejected track stays in the music library; only the project's link to it is cleared, which keeps the lyric cues' text and clears their timings until the new song re-seeds them. A retake anywhere else is refused with 409 `NOT_AT_SONG_CHECKPOINT`.
+
+## Models per stage
+
+By default every LLM step runs on the one **direction LLM** (`providerId`/`model`/`effort` on the start request, stored as the brief's `llm`). A start request may instead route each step to its own provider, model and effort with `llmStages`:
+
+| Stage | Runs |
+|---|---|
+| `brief` | the creative brief |
+| `lyrics` | the lyric draft |
+| `lyricsReview` | the lyric review & revise pass |
+| `castAndSets` | the Cast & Sets direction call (production) |
+| `plan` | the shot plan's scene prompts (production) |
+| `authoring` | code authoring of a code-rendered video |
+
+For example, a cheap local model drafts the lyrics and a stronger one reviews them; one model plans the cast and scenes and a stronger one authors the animation code. Each step resolves its provider in a fixed order (`server/services/musicVideo/llmRoute.js`):
+
+1. a pin on the request itself (an explicit pick in a hand-driven panel);
+2. the stage's pin (`llmStages[stage]`) — the route records `source: 'stage'`;
+3. for `authoring` only, the run's separate code-authoring pin (`authoring`);
+4. the direction LLM (`llm`);
+5. an eligible TUI provider, then the install's active provider.
+
+A pin whose provider no longer exists gives way to the next one, and the route names it (`requestedProviderId`). `llmStages` is stored on the run's brief and copied into the project's automation brief, so the production stages started later (Cast & Sets, shot planning, code authoring) follow it too; each stage's last route is kept in the brief's `routes` (the autonomous text stages also keep theirs on the run output: `briefRoute`, `lyricsRoute`, `lyricsReviewRoute`). Code authoring is the exception: it runs inside production, whose creative basis includes the brief, so its route is not written back.
+
+**Lyric review.** Set `lyricsReview: true` (or pin `llmStages.lyricsReview`, which turns it on by itself) and the `lyrics` stage runs two steps — `draft` then `review`, shown as `stages.lyrics.step` — on the stage list's single `lyrics` entry. The review keeps the title, the section tags and roughly the same length, improves scansion, punch and argument, and adds no new topics. The run keeps the first draft (`output.lyricsDraft`), the revision (`output.lyrics`, what the `lyrics` checkpoint shows and Suno receives) and the reviewer's short critique (`output.lyricsReviewNotes`). The draft is stored before the review runs, so a failed review retries only the review.
+
+The start drawer and the scheduled task's settings show a collapsible **Models per stage** section with the lyric-review toggle; each stage offers *Default (use direction LLM)*. On an automation-first project, the autopilot brief (Produce tab → Edit brief, and the create drawer) offers the same section for the stages a saved project runs — Cast & Sets direction, shot plan and code authoring — next to the direction LLM picker; a patch merges per stage, and a stage set back to Default is sent as `null` to clear its pin.
+
+## Suno form options
+
+A start request (and the scheduled task's settings) may carry an optional `suno` object for Suno's Advanced form, stored on the run's brief:
+
+- `excludeStyles` — Suno's **Exclude styles** field (up to 500 characters). An explicit empty string clears whatever Suno kept from its previous draft; omitting it leaves the field as Suno has it.
+- `vocalGender` — `male` or `female`; clicks Suno's matching button. Not sent for an instrumental.
+- `model` — a model version such as `v6`; the driver opens the version menu only when the current version differs.
+
+All three live under Suno's **More Options** section (expanded on demand) or its version menu. Each is a no-op when unset. When the page has no such control (an older Suno UI) or the version menu does not list the requested model, the driver logs a warning and continues with Suno's current setting rather than failing the song. The start drawer shows these fields when Suno is the song source; a resume may patch them key by key (`null` clears one).
+
+## Production review
+
+The **Production review** panel is shared by the manual and autopilot paths. Prepare or import an unapproved planning draft, attach an actual visual sheet, and edit cast, environment, visual and motion direction. The implementation field records scene layers, geometry, rig/pose limits, materials, typography, camera/transition mechanics and performance constraints for the selected renderer. Static concept references communicate intent; they are never animated proof.
+
+Imported storyboard shots may remain unbound. Bind each to an existing Board scene or explicitly create its scene; an import never invents approval or verifies provisional timings. Vocal songs require bounded positive-duration word timings checked against the current master. An instrumental exception requires a rationale and cannot mask existing lyric cues.
+
+Art, storyboard and proof decisions bind to exact content. Changes invalidate affected downstream approvals. Targeted comments and requests for changes retain the original reviewed draft and scene snapshot; unresolved requests block the affected stage. Accepting structure records organizational agreement only. Regeneration receives unresolved feedback, and a human must resolve it and approve the revised content.
+
+Use **Render feasibility prototype — unapproved** to test a current authored composition before committing to its art direction. This makes a local 1–45 second excerpt and never grants production approval. After art and storyboard approval, render a 10–45 second representative chorus proof, watch with audio and approve that revision. Autopilot pauses at the same boundaries; queued provider work and final renders recheck approval before dispatch.
+
+Approval and feedback resolution require the operator to re-enter the existing instance password. Agent bearer credentials cannot authorize those operations. Password-free installs can draft and prototype; setting a password is required before production approval. This separates delegated agent credentials from operator authority; it does not defend against someone who controls the host or knows the password.
+
+External draft preparation also requires operator reauthentication. PortOS never submits a final post: review and publish on the destination platform, then record the resulting link. Existing projects and assets remain intact, but an older project's final render now requires the same production review.
+
+The local browser acceptance test (`server/routes/musicVideoProductionReview.browser.test.js`) exercises the real React controls, approval routes, native code renderer, ffmpeg output and video playback with synthetic data. It requires Chrome, ffmpeg and installed client dependencies; server-only CI skips this cross-workspace check. API and orchestration tests run independently of those visual-test prerequisites.
 
 ## Local song source
 
@@ -74,16 +129,16 @@ The Suno adapter fills the form through `placeholder` / role selectors and reads
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/api/music-video/autonomous` | Start (202 `{ project, run }`). Body: `prompt` plus optional `songSource` (`suno` default, or `local`), `localFallback`, `tools`, `models` (per-tool model pin), `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model` (brief + lyrics LLM), `authoring` (code-rendered video). |
+| `POST` | `/api/music-video/autonomous` | Start (202 `{ project, run }`). Body: `prompt` plus optional `songSource` (`suno` default, or `local`), `localFallback`, `suno` (Suno form options), `tools`, `models` (per-tool model pin), `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model`/`effort` (the direction LLM), `llmStages` (per-stage LLM pins), `lyricsReview`, `authoring` (code-rendered video). |
 | `GET` | `/api/music-video/:id/autonomous` | The run. |
-| `POST` | `/api/music-video/:id/autonomous/resume` | Approve the checkpoint, retry the stage that stopped, or resume an interrupted run. |
+| `POST` | `/api/music-video/:id/autonomous/resume` | Approve the checkpoint, retry the stage that stopped, or resume an interrupted run. Optional `lyrics`, `style`, `suno` edits; `retakeSong: true` at the song checkpoint. |
 | `POST` | `/api/music-video/:id/autonomous/stop` / `cancel` | Pause / cancel (also stops/cancels its production run). |
 
 Progress is pushed over the `music-video:autonomous` socket event (`{ projectId, runId, run, project }`).
 
 ## Scheduled task: `music-video-autopilot`
 
-A programmatic scheduled task (no agent). Each run picks the **oldest active Brain idea no earlier run used** (optionally only ideas carrying one of `ideaTags`), turns it into the prompt and starts an autonomous run with the task's saved settings (`taskMetadata.musicVideoAutopilot`: `songSource`, `localFallback`, `tools`, `models`, `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model`, `authoring`, `ideaTags`). Set a cadence on its Schedule card; Run Now fires it once.
+A programmatic scheduled task (no agent). Each run picks the **oldest active Brain idea no earlier run used** (optionally only ideas carrying one of `ideaTags`), turns it into the prompt and starts an autonomous run with the task's saved settings (`taskMetadata.musicVideoAutopilot`: `songSource`, `localFallback`, `suno`, `tools`, `models`, `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `llm`, `llmStages`, `lyricsReview`, `authoring`, `ideaTags`). Set a cadence on its Schedule card; Run Now fires it once.
 
 - It declines while a previous scheduled run is still live, so videos never pile up behind a slow Suno login or a long production.
 - An idea counts as used once its run is live or finished; a failed or canceled run leaves the idea available for the next fire.

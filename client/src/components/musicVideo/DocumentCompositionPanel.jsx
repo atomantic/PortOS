@@ -1,3 +1,6 @@
+import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
+import MediaModePicker from './MediaModePicker.jsx';
+import { musicVideoMediaMode, musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { useEffect, useState } from 'react';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { Download, FileArchive, FolderInput, LayoutTemplate, Unlink, Film, RotateCcw } from 'lucide-react';
@@ -136,7 +139,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   const {
     providers, selectedProviderId, selectedModel, availableModels, selectedProvider,
     setSelectedProviderId, setSelectedModel,
-  } = useProviderModels({ preselectDefaults: true, silent: true });
+  } = useProviderModels({ preselectDefaults: true, silent: true, filter: Boolean });
 
   useEffect(() => {
     let active = true;
@@ -172,6 +175,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   });
   const detach = confirmFirst('detach', () => run('detach', () => detachMusicVideoCompositionDocument(project.id, { silent: true }), 'Composition document detached'));
   const effectiveModel = selectedModel || selectedProvider?.defaultModel || '';
+  const authoringValid = supportsToolFreeOneShot(providers.find((entry) => entry.id === selectedProviderId)) && Boolean(selectedProviderId && effectiveModel);
   const provider = { providerId: selectedProviderId, model: effectiveModel };
   const selectedSectionValid = candidate?.sections?.some((section) => section.id === selectedSection) || false;
   const generate = () => run('generate', () => generateMusicVideoMixedMediaDocument(project.id, provider, { silent: true }), 'Candidate ready to review');
@@ -226,19 +230,27 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         </button>
       </div>
       <div className="space-y-2 rounded border border-port-border p-2">
+        <MediaModePicker value={musicVideoMediaMode(project)} disabled={!!busy} onChange={(mediaMode) => run('policy', () => updateMusicVideoProject(project.id, { mediaMode }, { silent: true }).then((project) => ({ project })), 'Media mode saved')} />
+        <label htmlFor="mv-doc-renderer" className="block text-xs text-port-text-muted">Authoring renderer</label>
+        <select id="mv-doc-renderer" disabled={!!busy} value={musicVideoDocumentRenderer(project)} className={inputCls}
+          onChange={(event) => run('renderer', () => updateMusicVideoProject(project.id, { composition: { ...compositionDraft(project), authoringRenderer: event.target.value } }, { silent: true }).then((project) => ({ project })), 'Renderer saved')}>
+          <option value="three">Three.js authored worlds</option><option value="canvas">Canvas layered scenes</option>
+        </select>
+        <p className="text-xs text-port-text-muted">Three.js: modeled geometry, lighting, articulated characters and camera, with a local font overlay. Generated Three.js worlds use geometry only; selected images/video require Canvas or an imported document. Preview and export share deterministic seek(t), 1080p at 24 fps by default. Native Code mode remains the limited 720p Canvas renderer. Local ES modules and fonts are packaged; remote imports are blocked. Document motion blur is honored on export.</p>
         <NarrativeEventsEditor key={`${project.id}-${JSON.stringify([project.composition?.narrativeEvents, project.composition?.reactiveSections])}`}
           project={project} sections={candidate?.sections || []} disabled={!!busy} onSave={saveEvents} onPendingChange={setEventPending} />
         <p className="text-xs text-port-text-muted">Generate from the approved treatment, song timing and selected project assets. Missing media is reported before any provider call.</p>
         {providers.length > 0 && <ProviderModelSelector
           providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel}
           availableModels={availableModels} onProviderChange={setSelectedProviderId} onModelChange={setSelectedModel}
-          label="Mixed-media code provider" disabled={!!busy} modelDisabled={availableModels.length === 0}
+          selectionPolicy={toolFreeOneShotSelectionPolicy} label="Mixed-media code provider" disabled={!!busy} modelDisabled={availableModels.length === 0}
           compact alwaysShowModel
         />}
-        <p className="text-xs text-port-text-muted">Code authoring uses {selectedProvider?.name || selectedProviderId || 'no provider selected'} / {effectiveModel || 'no model selected'}. Nothing is sent until you click.</p>
+        <p className="text-xs text-port-text-muted">Code authoring uses {selectedProvider?.name || selectedProviderId || 'no provider selected'} / {effectiveModel || 'no model selected'}. Nothing is sent until you click. API providers and server-verified tool-free CLIs can author; TUI sessions cannot.</p>
+        {!authoringValid && <p className="text-xs text-port-warning" role="status">Choose a compatible code authoring provider and model before generation.</p>}
         <div className="flex flex-wrap items-end gap-2">
-          <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || eventPending || !selectedProviderId || !effectiveModel} onClick={generate}>
-            <Film size={14} /> {busy === 'generate' ? 'Generating…' : 'Generate mixed-media composition'}
+          <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || eventPending || !authoringValid} onClick={generate}>
+            <Film size={14} /> {busy === 'generate' ? 'Generating…' : musicVideoDocumentRenderer(project) === 'three' ? 'Generate authored 3D composition' : 'Generate mixed-media composition'}
           </button>
           {candidate?.source && <>
             <div>
@@ -248,10 +260,10 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
                 {candidate.sections.map((section) => <option key={section.id} value={section.id}>{section.label || section.id} · {section.startSec}s</option>)}
               </select>
             </div>
-            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !selectedSectionValid || candidate.stale || !selectedProviderId || !effectiveModel} onClick={regenerate}>
+            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !selectedSectionValid || candidate.stale || !authoringValid} onClick={regenerate}>
               <RotateCcw size={14} /> {busy === 'regenerate' ? 'Regenerating…' : 'Regenerate section'}
             </button>
-            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !candidate.eventRevisionAvailable || !selectedProviderId || !effectiveModel} onClick={reviseEvents}>
+            <button type="button" className={buttonCls} disabled={!!busy || eventPending || !candidate.eventRevisionAvailable || !authoringValid} onClick={reviseEvents}>
               {busy === 'event-revision' ? 'Revising events…' : 'Revise events only'}
             </button>
           </>}

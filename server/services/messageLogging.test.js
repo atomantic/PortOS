@@ -10,6 +10,18 @@ vi.mock('../lib/fileUtils.js', async (original) => ({
   ...await original(),
   PATHS: { messages: '/mock/messages' },
   ensureDir: async () => {},
+  readJSONFile: async (path, defaultValue, options = {}) => {
+    const content = doubles.files.get(path);
+    if (content == null) return defaultValue;
+    try {
+      const parsed = JSON.parse(content);
+      if (options.allowArray === false && Array.isArray(parsed)) throw new Error('array not allowed');
+      return parsed;
+    } catch (error) {
+      if (options.strict) throw error;
+      return defaultValue;
+    }
+  },
   tryReadFile: async path => doubles.files.get(path) ?? null,
   atomicWrite: async (path, value) => { doubles.files.set(path, JSON.stringify(value)); }
 }));

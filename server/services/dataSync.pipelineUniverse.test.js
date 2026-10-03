@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { writeFileSync, mkdirSync, readFileSync, rmSync, readdirSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, readFileSync, rmSync, readdirSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -869,6 +869,75 @@ describe('dataSync — videoHistory category', () => {
     });
     const persisted = readJSON(VIDEO_HISTORY_PATH);
     expect(persisted.map((v) => v.id).sort()).toEqual(['local-only', 'remote-only', 'shared']);
+  });
+
+  describe('serialization with local history writers (#9814)', () => {
+    const ids = () => readJSON(VIDEO_HISTORY_PATH).map((v) => v.id).sort();
+    // A local completion that is mid-flight (holding the queue) when the
+    // inbound snapshot arrives; `release()` lets it finish.
+    async function startPausedLocalCompletion(history) {
+      let release;
+      const gate = new Promise((r) => { release = r; });
+      let entered;
+      const started = new Promise((r) => { entered = r; });
+      const done = history.mutateVideoHistory(async (list) => {
+        entered();
+        await gate;
+        return [row('local-done'), ...list];
+      });
+      await started;
+      return { release, done };
+    }
+
+    it('keeps base, local and remote rows when a snapshot lands while a completion is in flight', async () => {
+      const history = await import('./videoGen/history.js');
+      writeJSON(VIDEO_HISTORY_PATH, [row('base')]);
+      const local = await startPausedLocalCompletion(history);
+      const apply = dataSync.applyRemote('videoHistory', { videos: [row('remote')] });
+      local.release();
+      await Promise.all([local.done, apply]);
+      expect(ids()).toEqual(['base', 'local-done', 'remote']);
+    });
+
+    it('keeps all rows when the completion is queued behind the snapshot', async () => {
+      const history = await import('./videoGen/history.js');
+      writeJSON(VIDEO_HISTORY_PATH, [row('base')]);
+      const apply = dataSync.applyRemote('videoHistory', { videos: [row('remote')] });
+      const local = history.mutateVideoHistory((list) => [row('local-done'), ...list]);
+      await Promise.all([apply, local]);
+      expect(ids()).toEqual(['base', 'local-done', 'remote']);
+    });
+
+    it('keeps both peers\' unique rows when two snapshots apply concurrently', async () => {
+      writeJSON(VIDEO_HISTORY_PATH, [row('base')]);
+      await Promise.all([
+        dataSync.applyRemote('videoHistory', { videos: [row('peer-a')] }),
+        dataSync.applyRemote('videoHistory', { videos: [row('peer-b')] }),
+      ]);
+      expect(ids()).toEqual(['base', 'peer-a', 'peer-b']);
+    });
+
+    it('replay is a no-op: no write, count 0, hidden and id-less rows preserved', async () => {
+      const idless = { prompt: 'legacy no-id', filename: 'legacy.mp4' };
+      writeJSON(VIDEO_HISTORY_PATH, [row('v1', { hidden: true }), idless]);
+      const before = readFileSync(VIDEO_HISTORY_PATH, 'utf-8');
+      const mtimeBefore = statSync(VIDEO_HISTORY_PATH).mtimeMs;
+      await new Promise((r) => setTimeout(r, 10));
+      const result = await dataSync.applyRemote('videoHistory', { videos: [row('v1')] });
+      expect(result).toEqual({ applied: false, count: 0 });
+      expect(statSync(VIDEO_HISTORY_PATH).mtimeMs).toBe(mtimeBefore);
+      expect(readFileSync(VIDEO_HISTORY_PATH, 'utf-8')).toBe(before);
+    });
+
+    it('a rejected mutation leaves the queue usable and history intact', async () => {
+      const history = await import('./videoGen/history.js');
+      writeJSON(VIDEO_HISTORY_PATH, [row('base')]);
+      await expect(history.mutateVideoHistory(() => { throw new Error('boom'); })).rejects.toThrow('boom');
+      expect(ids()).toEqual(['base']);
+      const result = await dataSync.applyRemote('videoHistory', { videos: [row('remote')] });
+      expect(result.applied).toBe(true);
+      expect(ids()).toEqual(['base', 'remote']);
+    });
   });
 
   it('applyRemote LWW: newer remote createdAt wins for the same id', async () => {

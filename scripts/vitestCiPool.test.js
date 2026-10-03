@@ -9,10 +9,35 @@ import { vitestCiPool } from './vitestCiPool.js';
 
 describe('vitestCiPool', () => {
   const original = process.env.CI;
+  const originalPregate = process.env.PORTOS_PREGATE_MAX_WORKERS;
+  const restore = (key, value) => {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  };
 
   afterEach(() => {
-    if (original === undefined) delete process.env.CI;
-    else process.env.CI = original;
+    restore('CI', original);
+    restore('PORTOS_PREGATE_MAX_WORKERS', originalPregate);
+  });
+
+  it('bounds local pregate workers, never above the workspace cap', () => {
+    delete process.env.CI;
+    process.env.PORTOS_PREGATE_MAX_WORKERS = '3';
+    expect(vitestCiPool()).toEqual({ maxWorkers: 3 });
+    expect(vitestCiPool({ maxWorkers: 2 })).toEqual({ maxWorkers: 2 });
+    process.env.PORTOS_PREGATE_MAX_WORKERS = '16';
+    expect(vitestCiPool()).toEqual({ maxWorkers: 4 });
+  });
+
+  it('ignores a malformed pregate budget and lets CI win', () => {
+    delete process.env.CI;
+    for (const bad of ['0', '-1', 'abc', '2.5', '']) {
+      process.env.PORTOS_PREGATE_MAX_WORKERS = bad;
+      expect(vitestCiPool()).toEqual({});
+    }
+    process.env.CI = 'true';
+    process.env.PORTOS_PREGATE_MAX_WORKERS = '1';
+    expect(vitestCiPool()).toEqual({ maxWorkers: 4 });
   });
 
   it('leaves local runs unbounded', () => {

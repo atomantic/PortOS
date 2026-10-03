@@ -17,6 +17,21 @@ if (args.length === 0) {
       process.exit(1);
     }
   }
+  // A committed snapshot database restore awaiting repair (#9725). Finish it
+  // before any writer, scheduler or route can load: resolve an unknown replay
+  // outcome from its receipt, then repair. It never replays the dump. Anything
+  // short of a completed recovery (including an unreadable journal) refuses
+  // boot with the fence still closed; a restart alone is never success.
+  const { createDatabaseRestoreRecovery } = await import('./lib/databaseRestoreRecovery.js');
+  if (createDatabaseRestoreRecovery().isFenced()) {
+    const { resumeDatabaseRestore } = await import('./services/backupRestoreRecovery.js');
+    const result = await resumeDatabaseRestore().catch(err => ({ status: 'failed', reason: err.code || 'restore_recovery_error', error: err.message }));
+    if (result.status !== 'ok') {
+      console.error(`❌ Database restore recovery is still pending (${result.reason}); boot refused. ${result.error || ''}`.trim());
+      process.exit(1);
+    }
+    console.log(`💾 Database restore recovery finished at boot (${result.outcome})`);
+  }
   await import('./services/databaseBootFence.js');
   await import('./index.js');
 } else if (args.length === 2 && args[0] === '--verify-database') {

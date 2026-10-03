@@ -3,7 +3,8 @@
  * agent spawn but have no full-function test sibling:
  *
  * 1. `evaluateTasks` priority ordering — Priority 0 (on-demand) > Priority 1
- *    (user) > Priority 2 (auto-approved system) > Priority 3 (idle review).
+ *    (user) > Priority 2 (auto-approved system) > Priority 3.6 (feature agents) >
+ *    Priority 4 (idle review).
  *    Within a priority bucket tasks are taken in the order they appear in
  *    TASKS.md (the parser sorts nothing for the pending slice — file order is
  *    the tie-breaker).
@@ -1359,19 +1360,22 @@ describe('cos.js source — priority + capacity invariants', () => {
     //
     //   Priority 0 (onDemand)    — spawnDequeuePriority0OnDemand(ctx)
     //   Priority 1 (user)        — spawnDequeuePriority1UserTasks(ctx)
-    //   Priority 2 (autoSystem)  — spawnDequeuePriority2AutoApproved(ctx)
-    //   Priority 3 (idle)        — spawnDequeuePriority3IdleReview(ctx)
+    //   Priority 2 (autoSystem)  — spawnDequeuePriority2AutoApproved(ctx, { taskSchedule })
+    //   Priority 3.6 (features)  — spawnDequeuePriority36FeatureAgents(ctx, { ... })
+    //   Priority 4 (idle)        — spawnDequeuePriority4IdleReview(ctx, { ... })
     const fnBody = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
 
     const onDemandIdx = fnBody.indexOf('spawnDequeuePriority0OnDemand(ctx)');
     const userIdx     = fnBody.indexOf('spawnDequeuePriority1UserTasks(ctx)');
-    const autoSysIdx  = fnBody.indexOf('spawnDequeuePriority2AutoApproved(ctx)');
-    const idleIdx     = fnBody.indexOf('spawnDequeuePriority3IdleReview(ctx)');
+    const autoSysIdx  = fnBody.indexOf('spawnDequeuePriority2AutoApproved(ctx, { taskSchedule })');
+    const featureIdx  = fnBody.indexOf('spawnDequeuePriority36FeatureAgents(ctx, {');
+    const idleIdx     = fnBody.indexOf('spawnDequeuePriority4IdleReview(ctx, {');
 
     expect(onDemandIdx, 'spawnDequeuePriority0OnDemand must be invoked').toBeGreaterThan(-1);
     expect(userIdx, 'spawnDequeuePriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);
     expect(autoSysIdx, 'spawnDequeuePriority2AutoApproved must run after user tasks').toBeGreaterThan(userIdx);
-    expect(idleIdx, 'spawnDequeuePriority3IdleReview must run after auto-approved').toBeGreaterThan(autoSysIdx);
+    expect(featureIdx, 'spawnDequeuePriority36FeatureAgents must run after auto-approved').toBeGreaterThan(autoSysIdx);
+    expect(idleIdx, 'spawnDequeuePriority4IdleReview must run after feature agents').toBeGreaterThan(featureIdx);
   });
 
   it('evaluateTasks orchestrates the spawnPriority* tiers in priority order', () => {
@@ -1384,10 +1388,10 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     const onDemandIdx = fnBody.indexOf('spawnPriority0OnDemand(ctx)');
     const userIdx     = fnBody.indexOf('spawnPriority1UserTasks(ctx)');
-    const autoSysIdx  = fnBody.indexOf('spawnPriority2AutoApproved(ctx)');
+    const autoSysIdx  = fnBody.indexOf('spawnPriority2AutoApproved(ctx,');
     const queueIdx    = fnBody.indexOf('maybeQueueImprovementTasks(ctx)');
-    const featureIdx  = fnBody.indexOf('spawnPriority36FeatureAgents(ctx)');
-    const idleIdx     = fnBody.indexOf('spawnPriority4IdleReview(ctx)');
+    const featureIdx  = fnBody.indexOf('spawnPriority36FeatureAgents(ctx,');
+    const idleIdx     = fnBody.indexOf('spawnPriority4IdleReview(ctx,');
 
     expect(onDemandIdx, 'spawnPriority0OnDemand must be invoked').toBeGreaterThan(-1);
     expect(userIdx, 'spawnPriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);
@@ -1562,7 +1566,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     // bound. They emit and let the chokepoint hold.
     // Priorities 1 and 2 read from persisted queues, so skipping there is a
     // genuine defer — they keep the cap.
-    for (const tier of ['spawnDequeuePriority0OnDemand', 'spawnDequeuePriority3IdleReview']) {
+    for (const tier of ['spawnDequeuePriority0OnDemand', 'spawnDequeuePriority4IdleReview']) {
       const body = extractFnBody(COS_SRC, COS_SRC.indexOf(`async function ${tier}`));
       expect(body, `${tier} must admit via canSpawnCommitted`).toMatch(/canSpawnCommitted\(/);
     }
@@ -1575,10 +1579,10 @@ describe('cos.js source — priority + capacity invariants', () => {
   it('idle generator is fenced by spawned===0 / tasksToSpawn.length===0', () => {
     // Pin the strict-idle gate. If a refactor drops either fence, idle could
     // spawn alongside autoSystem and double-load the agent pool.
-    // dequeueNextTask's idle tier (spawnDequeuePriority3IdleReview) now routes
+    // dequeueNextTask's idle tier (spawnDequeuePriority4IdleReview) now routes
     // through the shared `isIdleTierEligible` predicate in cosDequeue.js
     // (issue #2530), whose body carries the `spawned === 0` fence.
-    const idleTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority3IdleReview'));
+    const idleTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority4IdleReview'));
     const idlePred = extractFnBody(DEQ_SRC, DEQ_SRC.indexOf('export function isIdleTierEligible'));
     // The generator engine's tiers are decomposed into named spawnPriority*
     // helpers (issue #1082), so its gate lives in `spawnPriority4IdleReview`

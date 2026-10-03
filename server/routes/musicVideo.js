@@ -11,6 +11,8 @@
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { Router } from 'express';
+import { musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema } from '../lib/musicVideoValidation.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionOperator, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -217,6 +219,31 @@ router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(project);
 }));
 
+router.post('/:id/song-revision', asyncHandler(async (req, res) => {
+  const { musicVideoSongDraftSchema } = await import('../lib/musicVideoValidation.js');
+  const fields = validateRequest(musicVideoSongDraftSchema, req.body);
+  const { saveSongRevision } = await import('../services/musicVideo/songRevision.js');
+  res.json(await saveSongRevision(req.params.id, fields));
+}));
+router.post('/:id/song-revision/generate', asyncHandler(async (req, res) => {
+  const { musicVideoSongActionSchema } = await import('../lib/musicVideoValidation.js');
+  const { revisionId } = validateRequest(musicVideoSongActionSchema, req.body);
+  const { generateSongRevision } = await import('../services/musicVideo/songRevision.js');
+  res.status(202).json(await generateSongRevision(req.params.id, revisionId));
+}));
+router.post('/:id/song-revision/cancel', asyncHandler(async (req, res) => {
+  const { musicVideoSongActionSchema } = await import('../lib/musicVideoValidation.js');
+  const { revisionId } = validateRequest(musicVideoSongActionSchema, req.body);
+  const { cancelSongRevision } = await import('../services/musicVideo/songRevision.js');
+  res.json(await cancelSongRevision(req.params.id, revisionId));
+}));
+router.post('/:id/song-revision/select', asyncHandler(async (req, res) => {
+  const { musicVideoSongSelectSchema } = await import('../lib/musicVideoValidation.js');
+  const { revisionId, songId } = validateRequest(musicVideoSongSelectSchema, req.body);
+  const { selectSongRevision } = await import('../services/musicVideo/songRevision.js');
+  res.json(await selectSongRevision(req.params.id, revisionId, songId));
+}));
+
 router.post('/:id/clone', asyncHandler(async (req, res) => {
   const options = validateRequest(musicVideoProjectCloneSchema, req.body || {});
   res.status(201).json(await cloneProject(req.params.id, options));
@@ -313,7 +340,7 @@ router.post('/:id/analyze/manual', asyncHandler(async (req, res) => {
   if (!analysis) {
     throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
   }
-  const updated = await setProjectAnalysis(project.id, analysis);
+  const updated = await setProjectAnalysis(project.id, analysis, project);
   res.json(updated);
 }));
 
@@ -468,6 +495,47 @@ router.post('/transcribe-midi/:jobId/cancel', (req, res) => {
 // videoTimeline). Per-project mutex returns 409 with the live jobId for re-attach.
 router.post('/:id/render', asyncHandler(async (req, res) => {
   res.json(await renderMusicVideo(req.params.id));
+}));
+
+router.post('/:id/production-review/feedback', asyncHandler(async (req, res) => {
+  res.json(await addProductionFeedback(req.params.id, validateRequest(musicVideoProductionFeedbackSchema, req.body)));
+}));
+router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoProductionFeedbackResolutionSchema, req.body);
+  await requireProductionOperator(req);
+  res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution }));
+}));
+router.get('/:id/production-review', asyncHandler(async (req, res) => {
+  res.json(await getProductionReview(req.params.id));
+}));
+router.post('/:id/production-review/document-shots', asyncHandler(async (req, res) => {
+  const { musicVideoDocumentShotsSchema } = await import('../lib/musicVideoValidation.js');
+  const input = validateRequest(musicVideoDocumentShotsSchema, req.body);
+  const { importDocumentShots } = await import('../services/musicVideo/productionReviewService.js');
+  res.json(await importDocumentShots(req.params.id, input));
+}));
+
+router.post('/:id/production-review/import', asyncHandler(async (req, res) => {
+  const { source } = validateRequest(musicVideoProductionImportSchema, req.body);
+  res.json(await importProductionPlanning(req.params.id, source));
+}));
+router.post('/:id/production-review/shots/:shotId/bind', asyncHandler(async (req, res) => {
+  res.json(await bindProductionShot(req.params.id, req.params.shotId));
+}));
+router.put('/:id/production-review', asyncHandler(async (req, res) => {
+  res.json(await saveProductionDraft(req.params.id, validateRequest(musicVideoProductionDraftSchema, req.body)));
+}));
+router.post('/:id/production-review/prepare', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsStartSchema, req.body || {});
+  res.json(await prepareProductionReview(req.params.id, input));
+}));
+router.post('/:id/production-review/approve', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoProductionApprovalSchema, req.body);
+  await requireProductionOperator(req);
+  res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview }));
+}));
+router.post('/:id/production-review/proof', asyncHandler(async (req, res) => {
+  res.status(202).json(await renderProductionProof(req.params.id, validateRequest(musicVideoProductionProofSchema, req.body)));
 }));
 
 // SSE progress stream for a render job. Two-segment path — distinct from the
@@ -680,7 +748,9 @@ router.put('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
 
 router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {
   const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
-  const options = validateRequest(musicVideoPublishPrepareSchema, req.body || {});
+  await requireProductionOperator(req);
+  const { password: _password, ...body } = req.body || {};
+  const options = validateRequest(musicVideoPublishPrepareSchema, body);
   res.json(await preparePublishDraft(req.params.id, target, options));
 }));
 

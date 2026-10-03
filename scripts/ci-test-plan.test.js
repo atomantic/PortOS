@@ -189,6 +189,40 @@ it('schedules the real client precision-copy import chain for a shared scoring c
     .toContain(join(cwd, source));
 });
 
+it('schedules the real taxonomy-to-validation consumer chain for a nested editorial leaf', () => {
+  const cwd = fileURLToPath(new URL('../', import.meta.url));
+  const source = 'server/lib/editorial/checkInfra/taxonomy.js';
+  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+  const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+
+  expect(plan.full).toBe(false);
+  expect(plan.server.mode).toBe('related');
+  expect(plan.server.sources).toEqual([source]);
+  // Explicit guards stay additive to the traversal.
+  expect(plan.server.files).toEqual(expect.arrayContaining(ALWAYS_RUN_TESTS.filter((path) => path.startsWith('server/'))));
+  // validation.test.js reaches the leaf only through pipelineValidation; it names
+  // neither the leaf nor the editorial feature, so only traversal selects it.
+  expect(plan.server.files).not.toContain('server/lib/validation.test.js');
+  expect(staticImportClosure(join(cwd, 'server/lib/validation.test.js')).files)
+    .toContain(join(cwd, source));
+});
+
+it('keeps exact-file selection for a test-only diff and traverses a nested feature leaf for a differently named consumer', () => {
+  const leaf = 'server/lib/widgets/inner/leaf.js';
+  const featureTest = 'server/lib/widgets/widgets.test.js';
+  // schemaHub.test.js reaches the leaf only through middle modules and shares no
+  // name with it or its feature: the plan must hand the leaf to the import graph.
+  const trackedFiles = [leaf, 'server/lib/middle.js', 'server/lib/schemaHub.test.js', featureTest];
+  const plan = buildCiTestPlan([leaf], { trackedFiles, clientDependencies: [] });
+  expect(plan.full).toBe(false);
+  expect(plan.server.mode).toBe('related');
+  expect(plan.server.sources).toEqual([leaf]);
+  expect(plan.server.files).toContain(featureTest);
+
+  const testOnly = buildCiTestPlan([featureTest], { trackedFiles, clientDependencies: [] });
+  expect(testOnly.server).toMatchObject({ mode: 'files', sources: [] });
+});
+
 it('carries transitive browser re-exports through the planner CLI and fails closed on unresolved edges', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-browser-deps-'));
   const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
@@ -235,6 +269,43 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
     write('server/lib/bridge.js', "export { value } from './missing.js';\n");
     expect(plan([leaf])).toMatchObject({ full: true, build: true, client_mode: 'full',
       reason: 'client dependency discovery unresolved' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('resolves local client imports of present untracked modules and still fails closed on missing ones', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-untracked-deps-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const leaf = 'server/lib/shared/leaf.js';
+  const inspect = () => {
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [leaf], cwd: root });
+    return buildCiTestPlan(inputs.changedFiles, inputs);
+  };
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write('client/src/lib/consumer.js', "import { widget } from './newWidget.js';\nexport { value } from '../../../server/lib/shared/leaf.js';\n");
+    write('client/src/lib/consumer.test.js', "import './consumer.js';\n");
+    git('add', '--all');
+
+    // newWidget.js exists but is not yet staged: still a resolvable local import.
+    write('client/src/lib/newWidget.js', 'export const widget = 1;\n');
+    expect(git('status', '--porcelain')).toContain('?? client/src/lib/newWidget.js');
+    const plan = inspect();
+    expect(plan.full).toBe(false);
+    expect(plan.client.mode).toBe('related');
+    expect(plan.client.sources).toContain(leaf);
+
+    // Control: a genuinely missing import still widens to a full plan.
+    rmSync(join(root, 'client/src/lib/newWidget.js'));
+    const missing = inspect();
+    expect(missing.full).toBe(true);
+    expect(missing.reason).toBe('client dependency discovery unresolved');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -471,7 +542,7 @@ describe('CI test impact planner', () => {
     expect(plan).toMatchObject({
       full: false,
       reason: 'targeted features: sprites',
-      server: { mode: 'files' },
+      server: { mode: 'related' },
       client: { mode: 'files' },
       db: false,
       lint: { mode: 'skip' },
@@ -550,7 +621,9 @@ describe('CI test impact planner', () => {
     ], { trackedFiles: TRACKED });
 
     expect(plan.full).toBe(false);
-    expect(plan.server.mode).toBe('files');
+    // A nested adapter still traverses its importers; the DB suite is additive.
+    expect(plan.server.mode).toBe('related');
+    expect(plan.server.sources).toContain('server/services/catalogDB/facets.js');
     expect(plan.db).toBe(true);
   });
 
@@ -713,8 +786,8 @@ describe('CI test impact planner', () => {
       });
 
       expect(plan.full).toBe(false);
-      expect(plan.server.mode).toBe('files');
-      expect(plan.server.sources).toEqual([]);
+      expect(plan.server.mode).toBe('related');
+      expect(plan.server.sources).toContain(REVIEW_LIFECYCLE_SOURCE);
       expect(plan.server.files).toEqual(expect.arrayContaining([
         REVIEW_LIFECYCLE_TEST,
         REVIEW_LOOP_OWNER,

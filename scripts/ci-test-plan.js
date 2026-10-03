@@ -735,9 +735,7 @@ export function buildCiTestPlan(changedFiles, {
   }
   const clientDependencySet = new Set(clientDependencies || []);
   const isClientSource = (path) => path.startsWith('client/') || clientDependencySet.has(path);
-  const sharedClientSources = jsSources.filter((path) => clientDependencySet.has(path));
   const features = uniqueSorted(jsSources.map(featureDirectory).filter(Boolean));
-  const unscopedSources = jsSources.filter((path) => !featureDirectory(path));
   const selectedTests = [
     ...directTests,
     ...fixtureTests,
@@ -779,8 +777,6 @@ export function buildCiTestPlan(changedFiles, {
 
   const hasServerSource = jsSources.some(isServerRunnerFile);
   const hasClientSource = jsSources.some(isClientSource);
-  const hasUnscopedServer = unscopedSources.some(isServerRunnerFile);
-  const hasUnscopedClient = sharedClientSources.length > 0 || unscopedSources.some(isClientSource);
 
   const serverSources = jsSources
     .filter(isServerRunnerFile)
@@ -789,11 +785,14 @@ export function buildCiTestPlan(changedFiles, {
     .filter(isClientSource)
     .filter((path) => clientDependencySet.has(path) || !isStructuralBarrel(path));
 
-  // Feature-directory plans already enumerate their boundary tests. Flat and
-  // shared modules use Vitest's import graph, except a barrel-only edit whose
-  // contract is completely covered by the structural export guard.
-  const serverMode = hasUnscopedServer && serverSources.length > 0 ? 'related' : 'files';
-  const clientMode = hasUnscopedClient && clientSources.length > 0 ? 'related' : 'files';
+  // Feature-name matches, basename contracts, direct tests and guards are
+  // additive explicit selectors; they never replace import-graph traversal. A
+  // nested feature leaf can be consumed by a differently named test in another
+  // area, so any behavioral source in a runner takes one 'related' invocation.
+  // Only a barrel-only edit (fully covered by the structural export guard) or a
+  // test-only diff keeps exact-file selection.
+  const serverMode = serverSources.length > 0 ? 'related' : 'files';
+  const clientMode = clientSources.length > 0 ? 'related' : 'files';
 
   const server = serverFiles.length > 0
     ? { mode: serverMode, files: serverFiles, sources: serverMode === 'related' ? serverSources : [] }
@@ -1007,6 +1006,14 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     ]).filter((path) => existsSync(join(cwd, path)))
     : trackedFiles;
 
+  // Present, non-ignored untracked sources are real local imports: without them
+  // a tracked importer of a not-yet-staged module looks unresolved and the
+  // dependency walk fails closed to a full plan. Local override mode only —
+  // committed CI inputs stay tracked-only.
+  const untrackedFiles = hasChangedFilesOverride
+    ? gitPaths(['ls-files', '-z', '--others', '--exclude-standard'], cwd).filter((path) => existsSync(join(cwd, path)))
+    : [];
+
   let appDiff = null;
   if (!forceFull && collectedChangedFiles.includes('client/src/App.jsx')) {
     const committedDiff = execFileSync(
@@ -1032,7 +1039,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
 
   const clientDependencies = collectedChangedFiles.some((path) => path.startsWith('server/lib/')
     && isExecutable(path) && !isTestFile(path))
-    ? collectClientDependencies(presentFiles, cwd)
+    ? collectClientDependencies(hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles, cwd)
     : [];
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests, clientDependencies };

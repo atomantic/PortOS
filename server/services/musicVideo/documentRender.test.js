@@ -12,6 +12,9 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
+vi.mock('../htmlComposition/encode.js', () => ({ encodeComposition: vi.fn(async () => { throw new Error('stop at encoder'); }) }));
+const { encodeComposition } = await import('../htmlComposition/encode.js');
+
 const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null } }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-stage-'),
@@ -88,6 +91,12 @@ const encode = (project, plan, jobId) => encodeDocumentComposition({ project, pl
 const scratchEntries = async () => (await readdir(join(PATHS.data, 'music-video-song-renders')).catch(() => []));
 
 describe('composition document staging', () => {
+  it('preserves the document shutter sampling contract through the shared encoder', async () => {
+    const { project, plan } = await fixture();
+    browser.contract = { durationSec: 30, fps: 24, width: 1920, height: 1080, motionBlur: 4, layout: false };
+    await expect(encode(project, plan, 'job-shutter')).rejects.toThrow('stop at encoder');
+    expect(encodeComposition).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ motionBlur: 4 }), expect.any(String), expect.any(Object));
+  });
   it('writes portos-mv.js with each scene\'s selected take (video first) and copies the files beside the page', async () => {
     const { project, plan } = await fixture();
     await expect(encode(project, plan, 'job-stage')).rejects.toThrow('stop after staging');
@@ -127,4 +136,17 @@ describe('composition document staging', () => {
     await expect(encode(project, plan, 'job-long')).rejects.toMatchObject({ code: 'COMPOSITION_DOCUMENT_CONTRACT' });
     expect(await scratchEntries()).toEqual([]);
   });
+});
+
+// Uniquely prevents an imported timeline from failing with only a generic schema message.
+it('explains fractional document frames before encoding without changing the imported duration', async () => {
+  const { project, plan } = await fixture();
+  browser.contract = { durationSec: 10.01, fps: 24, width: 1920, height: 1080 };
+  await expect(encode(project, plan, 'job-fractional')).rejects.toMatchObject({
+    code: 'COMPOSITION_DOCUMENT_FRAME_ALIGNMENT', status: 422,
+    message: expect.stringContaining('240/24 (10s)'),
+    context: { durationSec: 10.01, fps: 24, frames: 240.24 },
+  });
+  expect(browser.contract.durationSec).toBe(10.01);
+  expect(await scratchEntries()).toEqual([]);
 });

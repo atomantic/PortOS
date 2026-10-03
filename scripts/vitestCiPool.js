@@ -3,6 +3,9 @@
  * repositories are 4 vCPU / 16GB; uncapped forks oversubscribe those cores
  * during transform and swap.
  * Local `npm test` stays unbounded so a developer machine can use every core.
+ * `npm run pregate` is the exception: it exports PORTOS_PREGATE_MAX_WORKERS so
+ * several concurrent worktree gates share one host budget (#9773). The value
+ * can only LOWER a workspace's cap, never raise it past the proven one.
  *
  * fileParallelism stays at Vitest's default (true): four workers stay busy on
  * independent files. The DB suite already serializes files because those
@@ -11,8 +14,10 @@
  * Vitest 5 exposes `maxWorkers` only — there is no `minWorkers` / `minThreads`.
  */
 export function vitestCiPool({ maxWorkers = 4 } = {}) {
-  if (!process.env.CI) return {};
-  return { maxWorkers };
+  if (process.env.CI) return { maxWorkers };
+  const raw = process.env.PORTOS_PREGATE_MAX_WORKERS;
+  const pregate = /^[1-9]\d*$/.test(raw ?? '') ? Number(raw) : null;
+  return pregate === null ? {} : { maxWorkers: Math.min(maxWorkers, pregate) };
 }
 
 // Keep these public Chrome/ffmpeg contracts in the full/CI runner, but give
@@ -20,6 +25,8 @@ export function vitestCiPool({ maxWorkers = 4 } = {}) {
 export const EXCLUSIVE_CAPTURE_TESTS = [
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
+  'routes/musicVideoProductionReview.browser.test.js',
+  'routes/musicVideoRichAuthoring.browser.test.js',
 ];
 
 // Cutover's real subprocess proof has a four-second test budget. A retained

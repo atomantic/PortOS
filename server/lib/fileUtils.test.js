@@ -22,6 +22,7 @@ vi.mock('fs/promises', async (importOriginal) => {
     mkdir: vi.fn((...args) => actual.mkdir(...args)),
     readFile: vi.fn((...args) => actual.readFile(...args)),
     rename: vi.fn((...args) => actual.rename(...args)),
+    writeFile: vi.fn((...args) => actual.writeFile(...args)),
     readdir: vi.fn((...args) => actual.readdir(...args)),
     stat: vi.fn((...args) => actual.stat(...args)),
   };
@@ -1924,6 +1925,61 @@ describe('saveImageUpload (shared image upload pipeline)', () => {
     expect(saved.filename.length).toBe(255);
     expect(saved.filename.endsWith('.png')).toBe(true);
     expect(existsSync(saved.filePath)).toBe(true);
+  });
+
+  // #9721: the shared bucket's earlier images are referenced by task records, so
+  // a failed replacement must leave the prior bytes intact and no stage behind.
+  describe('publication failures (#9721)', () => {
+    const OLD = Buffer.concat([PNG, Buffer.from('previously stored image bytes')]);
+    const NEW = Buffer.concat([PNG, Buffer.from('replacement')]);
+
+    it('keeps the previous image intact when the write fails mid-way, then a retry succeeds', async () => {
+      writeFileSync(join(dir, 'diagram.png'), OLD);
+      const enospc = Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+      fsPromises.writeFile.mockImplementationOnce(async (path) => {
+        await fsPromises.appendFile(path, NEW.subarray(0, 5)); // partial bytes land, then the write rejects
+        throw enospc;
+      });
+      await expect(saveImageUpload(dir, { filename: 'diagram.png', data: b64(NEW) }, { maxBytes: 4096 }))
+        .rejects.toBe(enospc);
+      expect(readFileSync(join(dir, 'diagram.png'))).toEqual(OLD);
+      expect(readdirSync(dir)).toEqual(['diagram.png']);
+
+      const saved = await saveImageUpload(dir, { filename: 'diagram.png', data: b64(NEW) }, { maxBytes: 4096 });
+      expect(readFileSync(saved.filePath)).toEqual(NEW);
+      expect(readdirSync(dir)).toEqual(['diagram.png']);
+    });
+
+    it('keeps the previous image and removes the stage when the rename fails', async () => {
+      writeFileSync(join(dir, 'diagram.png'), OLD);
+      const eio = Object.assign(new Error('io error'), { code: 'EIO' });
+      fsPromises.rename.mockImplementationOnce(async () => { throw eio; });
+      await expect(saveImageUpload(dir, { filename: 'diagram.png', data: b64(NEW) }, { maxBytes: 4096 }))
+        .rejects.toBe(eio);
+      expect(readFileSync(join(dir, 'diagram.png'))).toEqual(OLD);
+      expect(readdirSync(dir)).toEqual(['diagram.png']);
+    });
+
+    it('leaves a stage that carries the owner prefix and image extension when cleanup also fails', async () => {
+      const prefix = 'mind-11111111-2222-3333-4444-555555555555-';
+      const eio = Object.assign(new Error('io error'), { code: 'EIO' });
+      fsPromises.rename.mockImplementationOnce(async () => { throw eio; });
+      const unlinkSpy = vi.spyOn(fsPromises, 'unlink').mockRejectedValueOnce(new Error('unlink denied'));
+      await expect(saveImageUpload(dir, { filename: `${prefix}a.png`, data: b64(NEW) }, { maxBytes: 4096, stagePrefix: prefix }))
+        .rejects.toBe(eio);
+      unlinkSpy.mockRestore();
+      const [left, ...rest] = readdirSync(dir);
+      expect(rest).toEqual([]);
+      expect(left.startsWith(prefix)).toBe(true);
+      expect(left.endsWith('.png')).toBe(true);
+    });
+
+    it('stages with a bounded name so a NAME_MAX-length final name still publishes', async () => {
+      const saved = await saveImageUpload(dir, { filename: `${'a'.repeat(300)}.png`, data: b64(NEW) }, { maxBytes: 4096 });
+      expect(saved.filename.length).toBe(255);
+      expect(readFileSync(saved.filePath)).toEqual(NEW);
+      expect(readdirSync(dir)).toEqual([saved.filename]);
+    });
   });
 
   it('strips directory components from a traversal-shaped filename', async () => {

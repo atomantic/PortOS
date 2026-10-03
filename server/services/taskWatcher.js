@@ -7,6 +7,7 @@
 
 import { watch } from 'chokidar';
 import { join } from 'path';
+import { isDeepStrictEqual } from 'util';
 import { cosEvents, getUserTasks, getCosTasks, getConfig } from './cos.js';
 import { PATHS } from '../lib/fileUtils.js';
 
@@ -204,6 +205,29 @@ async function handleCosTasksChange() {
   cosEvents.emit('tasks:cos:changed', current);
 }
 
+// Legacy parsed files can carry undefined-valued entries (a bare `undefined`
+// metadata value); the old JSON comparison dropped them, so treat them as absent.
+// Shallow copies share the prompt strings by reference - nothing is serialized.
+function withoutUndefined(obj) {
+  const out = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+function normalizeTask(task) {
+  const out = withoutUndefined(task);
+  if (out.metadata && typeof out.metadata === 'object' && !Array.isArray(out.metadata)) {
+    out.metadata = withoutUndefined(out.metadata);
+  }
+  return out;
+}
+
+function tasksEqual(a, b) {
+  return isDeepStrictEqual(normalizeTask(a), normalizeTask(b));
+}
+
 /**
  * Diff two task arrays to find changes
  */
@@ -224,7 +248,7 @@ function diffTasks(oldTasks, newTasks) {
       added.push(task);
     } else if (oldTask.status !== 'completed' && task.status === 'completed') {
       completed.push(task);
-    } else if (JSON.stringify(oldTask) !== JSON.stringify(task)) {
+    } else if (!tasksEqual(oldTask, task)) {
       modified.push({ old: oldTask, new: task });
     }
   }

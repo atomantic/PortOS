@@ -37,6 +37,20 @@ async function root(projectId, revisionId, create) {
   return path;
 }
 
+const RETAINED = Symbol('ownedStorageRetained');
+function markOwnedStorageRetained(error, cleanupError) {
+  if (error === null || typeof error !== 'object') return;
+  error[RETAINED] = true;
+  error.cleanupError = String(cleanupError?.code || cleanupError?.message || 'cleanup failed').slice(0, 200);
+}
+
+/**
+ * True when staging failed after creating its owned directory and the
+ * directory could not be confirmed removed, so its bytes still count against
+ * the project's disk budget. Absent (never created) or removed means releasable.
+ */
+export const ownedStorageRetained = error => Boolean(error?.[RETAINED]);
+
 export async function stageProjectFiles(projectId, revisionId, files) {
   const owned = await root(projectId, revisionId, true);
   try {
@@ -53,8 +67,15 @@ export async function stageProjectFiles(projectId, revisionId, files) {
       } finally { await handle.close(); }
     }
   } catch (error) {
-    // Only this invocation's exclusively-created directory can be removed.
-    await rm(owned, { recursive: true, force: true });
+    // Only this invocation's exclusively-created directory can be removed. If
+    // removal fails, the partial bytes stay on disk: keep the staging error
+    // (the real cause), flag it so the caller keeps the disk reservation, and
+    // attach a bounded cleanup message.
+    try {
+      await rm(owned, { recursive: true, force: true });
+    } catch (cleanupError) {
+      markOwnedStorageRetained(error, cleanupError);
+    }
     throw error;
   }
   return { relativePath: `code-animations/projects/${projectId}/revisions/${revisionId}` };
@@ -144,7 +165,11 @@ export async function stageRenderSource(projectId, runId, revisionId, files, ent
       await writeOwnedFile(join(owned, target), isEntry ? Buffer.from(prepareEntry(bytes.toString('utf8'))) : bytes);
     }
   } catch (error) {
-    await rm(owned, { recursive: true, force: true });
+    try {
+      await rm(owned, { recursive: true, force: true });
+    } catch (cleanupError) {
+      markOwnedStorageRetained(error, cleanupError);
+    }
     throw error;
   }
   return { directory: `code-animations/projects/${projectId}/runs/${runId}/render/${revisionId}` };

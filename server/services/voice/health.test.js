@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   authHeaders: vi.fn(() => ({})),
   fetchWithTimeout: vi.fn(async () => ({ ok: true, status: 200 })),
   checkSetup: vi.fn(async () => ({})),
+  inspectVoiceAsset: vi.fn(() => ({ state: 'verified', reason: '' })),
 }));
 
 vi.mock('fs', () => ({ existsSync: mocks.existsSync }));
@@ -25,6 +26,10 @@ vi.mock('./bootstrap.js', () => ({ which: mocks.which }));
 vi.mock('./llm.js', () => ({ resolveLlmEndpoint: mocks.resolveLlmEndpoint, authHeaders: mocks.authHeaders }));
 vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: mocks.fetchWithTimeout }));
 vi.mock('./facetimeBridge.js', () => ({ checkSetup: mocks.checkSetup }));
+vi.mock('../../lib/voiceModelAssets.js', () => ({
+  inspectVoiceAsset: mocks.inspectVoiceAsset,
+  isVoiceAssetUsable: (state) => state === 'verified' || state === 'unverified',
+}));
 
 const { checkAll, invalidateHealthCache } = await import('./health.js');
 
@@ -33,6 +38,20 @@ describe('voice health Piper probe', () => {
     invalidateHealthCache();
     vi.clearAllMocks();
     mocks.existsSync.mockReturnValue(true);
+    mocks.inspectVoiceAsset.mockReturnValue({ state: 'verified', reason: '' });
+  });
+
+  const piperCfg = () => ({
+    stt: { engine: 'web-speech', endpoint: '' },
+    llm: { provider: 'lmstudio' },
+    tts: { engine: 'piper', piper: { voicePath: '/voice/en.onnx' } },
+  });
+
+  it('does not report Piper ready for a voice whose download is incomplete', async () => {
+    mocks.inspectVoiceAsset.mockReturnValue({ state: 'incomplete', reason: 'sidecar config missing' });
+    const result = await checkAll(piperCfg());
+    expect(mocks.inspectVoiceAsset).toHaveBeenCalledWith('piper', '/voice/en.onnx');
+    expect(result.piper).toEqual({ ok: false, state: 'voice incomplete' });
   });
 
   it('uses the platform-specific Piper binary name for local detection', async () => {

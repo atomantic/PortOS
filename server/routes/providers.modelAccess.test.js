@@ -35,6 +35,16 @@ function appWith(providerService) {
 }
 
 describe('provider payloads carry the model-access-scoped catalog', () => {
+  it('offers an honest tool-free authoring capability, overriding stored claims', async () => {
+    const providers = [NVIDIA,
+      { id: 'headless', type: 'cli', command: 'claude', models: ['example-model'] },
+      { id: 'interactive', type: 'tui', command: 'claude', models: ['example-model'], toolFreeOneShot: true },
+      { id: 'agent', type: 'cli', command: 'codex', models: ['example-model'], toolFreeOneShot: true }];
+    const app = appWith({ getAllProviders: vi.fn().mockResolvedValue({ providers }) });
+    const res = await request(app).get('/api/providers');
+    expect(res.status).toBe(200);
+    expect(res.body.providers.map(p => [p.id, p.toolFreeOneShot])).toEqual([['nvidia-nim', true], ['headless', true], ['interactive', false], ['agent', false]]);
+  });
   it('GET / narrows models, keeps the full catalog, and still strips the key', async () => {
     const app = appWith({
       getAllProviders: vi.fn().mockResolvedValue({ activeProvider: 'nvidia-nim', providers: [NVIDIA] }),

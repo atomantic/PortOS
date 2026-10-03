@@ -1,5 +1,5 @@
 import DependencyImpactPanel from '../DependencyImpactPanel.jsx';
-import RenderStatusPanel from '../RenderStatusPanel.jsx';
+import RenderStatusPanel, { RenderFailure } from '../RenderStatusPanel.jsx';
 import ExcerptPanel from '../ExcerptPanel.jsx';
 import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
 import HandoffControls from '../HandoffControls.jsx';
@@ -17,11 +17,12 @@ export default function ReviewStage({ board }) {
   } = board;
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
+      <RenderFailure project={project} renderJob={renderJob} />
       <DependencyImpactPanel project={project} busy={revisions.busy} onRepair={revisions.repair} />
       <section id="mv-final-video" aria-label="Final render" className="rounded-lg border border-port-border bg-port-card p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-medium">Final render</h3>
-          <RenderFinalButton project={project} renderJob={renderJob} />
+          <RenderFinalButton project={project} renderJob={renderJob} readiness={board.productionReadiness} />
         </div>
         <RenderStatusPanel
           rendering={renderBound}

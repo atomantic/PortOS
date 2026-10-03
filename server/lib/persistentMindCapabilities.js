@@ -7,6 +7,7 @@
  */
 
 import { z } from 'zod';
+import { normalizeSandboxDelegationConfig, sandboxDelegationConfigSchema } from './sandboxDelegation.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import {
@@ -18,12 +19,12 @@ import {
   TOOL_ACTIVATION_LIMITS,
 } from './persistentMindToolActivation.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 14;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 15;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -59,6 +60,12 @@ export const PERSISTENT_MIND_CALL_LIMITS = Object.freeze({
 // agents. Keep this catalog beside the capability schema so the API and the UI
 // describe the same grants instead of maintaining a second client-only list.
 export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
+  Object.freeze({
+    id: 'sandbox.delegate', capability: 'delegateSandbox', name: 'Delegate to tool-free models',
+    kind: 'semantic-tools', defaultEnabled: false,
+    description: 'Send a complete context packet to an approved API worker and evaluate its proposal with a separately configured trusted API model.',
+    guardrails: ['Explicit worker allowlist and trusted evaluator; no route fallback', 'No shell, filesystem, browser, MCP, or tool dispatch in either model call', 'At most two worker/evaluation attempts per call; shared turn tool budget', 'Only supplied context leaves this install; omit private records and credentials', 'Evaluation is advisory; generated code and animation source are never executed'],
+  }),
   Object.freeze({
     id: 'reports.audit', capability: 'auditReports', name: 'Audit private CoS job reports', kind: 'semantic-tools', defaultEnabled: false,
     description: 'Read bounded completed-job evidence and record incremental process audits for explicitly scoped maintainer repositories.',
@@ -234,7 +241,7 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
 
 export const PERSISTENT_MIND_TOOL_BOUNDARIES = Object.freeze([
   'No arbitrary shell or file-system access',
-  "No raw HTTP proxy, browser controls, process control, or paid generation, and no external messaging except the granted voice.call-user action to the user's own configured handle the granted install-local eidoverse.say action, or explicit guest chat under visitEidoversePeers",
+  "No raw HTTP proxy, browser controls, process control, or paid generation except explicitly approved sandbox worker/evaluator routes, and no external messaging except the granted voice.call-user action to the user's own configured handle the granted install-local eidoverse.say action, or explicit guest chat under visitEidoversePeers",
   'No provider credentials or hidden reasoning tokens are exposed as tools',
 ]);
 
@@ -265,6 +272,8 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
   schemaVersion: z.number().int()
     .refine((value) => ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS.includes(value), 'unsupported persistent mind capabilities schema version')
     .optional(),
+  delegateSandbox: z.boolean().optional(),
+  sandboxDelegation: sandboxDelegationConfigSchema.optional(),
   createTasks: z.boolean().optional(),
   fileIssues: z.boolean().optional(),
   auditReports: z.boolean().optional(),
@@ -352,6 +361,8 @@ export const persistentMindTaskRequestSchema = z.object({
 export function createDefaultPersistentMindCapabilities() {
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
+    delegateSandbox: false,
+    sandboxDelegation: { workers: [], evaluator: null },
     createTasks: false,
     fileIssues: false,
     auditReports: false,
@@ -418,6 +429,8 @@ export function normalizePersistentMindCapabilities(raw) {
     : undefined;
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
+    delegateSandbox: source.delegateSandbox === true,
+    sandboxDelegation: normalizeSandboxDelegationConfig(source.sandboxDelegation),
     createTasks: source.createTasks === true,
     fileIssues: source.fileIssues === true,
     auditReports: source.auditReports === true,

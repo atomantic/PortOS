@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {CalendarDays, ChevronLeft, ChevronRight, MapPin} from 'lucide-react';
-import * as api from '../../services/api';
-import socket from '../../services/socket';
+import { useCalendarWindowEvents } from '../../hooks/useCalendarWindowEvents';
+import CalendarWindowStatus from './CalendarWindowStatus';
 import EventDetail from './EventDetail';
 import ChronotypeOverlay from './ChronotypeOverlay';
 import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay } from './calendarUtils';
@@ -18,26 +18,13 @@ export default function DayView({ accounts }) {
     d.setHours(0, 0, 0, 0);
     return d;
   });
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [searchParams, updateParams] = useUrlParams();
   const { theme } = useThemeContext();
 
-  const fetchEvents = useCallback(async () => {
-    const startDate = date.toISOString();
-    const nextDay = new Date(date);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const endDate = nextDay.toISOString();
-    const data = await api.getCalendarEvents({ startDate, endDate, limit: 200 }).catch(() => ({ events: [] }));
-    setEvents(data?.events || []);
-    setLoading(false);
-  }, [date]);
-
-  useEffect(() => { fetchEvents(); }, [fetchEvents]);
-  useEffect(() => {
-    socket.on('calendar:sync:completed', fetchEvents);
-    return () => socket.off('calendar:sync:completed', fetchEvents);
-  }, [fetchEvents]);
+  const nextDay = new Date(date);
+  nextDay.setDate(nextDay.getDate() + 1);
+  const windowEvents = useCalendarWindowEvents(date.toISOString(), nextDay.toISOString());
+  const { events, loading } = windowEvents;
 
   const navigate = (days) => {
     setDate(prev => {
@@ -45,14 +32,12 @@ export default function DayView({ accounts }) {
       d.setDate(d.getDate() + days);
       return d;
     });
-    setLoading(true);
   };
 
   const goToday = () => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     setDate(d);
-    setLoading(true);
   };
 
   const allDayEvents = useMemo(() => events.filter(e => e.isAllDay && eventOccursOnDay(e, date)), [events, date]);
@@ -90,7 +75,9 @@ export default function DayView({ accounts }) {
         </button>
       </div>
 
-      {loading ? (
+      <CalendarWindowStatus {...windowEvents} />
+
+      {loading && events.length === 0 ? (
         <div className="flex items-center justify-center py-12">
           <BrailleSpinner text="Loading" />
         </div>

@@ -93,9 +93,9 @@ async function executeGeneration({
       effort: requestedEffort || undefined,
       prompt,
       source: 'threejs-model-generation',
-      // CLI/TUI agents only need the gallery image and JSON contract. Keep
-      // their working directory in runtime data so a generation request cannot
-      // accidentally turn into a source-code editing session.
+      // Runtime-data cwd organizes output; it does not sandbox CLI/TUI tools.
+      // HTTP create/refine requires operator authority, including API requests
+      // that fall back to a tool-capable provider.
       cwd: PATHS.data,
       screenshots: provider.type === 'api' ? [sourcePath] : [],
       responseSchema: threejsSculptSpecSchema,

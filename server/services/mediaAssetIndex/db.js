@@ -26,7 +26,10 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { query } from '../../lib/db.js';
 import { dedupeByKey } from '../../lib/arrayUtils.js';
-import { imageToRow, videoToRow } from './logic.js';
+import {
+  imageToRow, videoToRow, compactGalleryRecord, compactSource, compactSourceToRow,
+  COMPACT_SOURCE_FIELDS, COMPACT_PREVIEW_KEY, COMPACT_PROMPT_CHARS,
+} from './logic.js';
 
 function rowToAsset(row) {
   if (!row) return null;
@@ -132,15 +135,53 @@ function assetFilter({ kind, q = '', hidden, filename, cleanedFrom, mediaKeys, e
   return { params, where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '' };
 }
 
+// The characters String.prototype.trim() removes, as a regex bracket body, so
+// the SQL "non-blank prompt" test agrees with logic.js (an all-whitespace
+// prompt falls back to metadata.prompt in both).
+const JS_TRIM_CLASS = String.raw`\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff`;
+const SOURCE_KEYS = COMPACT_SOURCE_FIELDS.map(field => `'${field}'`).join(', ');
+
+/**
+ * SQL twin of logic.js compactSource() for an indexed record, in one pass over
+ * its keys so the stored JSONB is decoded once: present keys only (an explicit
+ * JSON null survives, an absent key stays absent) plus the bounded preview
+ * source — prompt, else metadata.prompt. left() counts code points, never
+ * fewer than the UTF-16 units the JS preview cuts at, so the final preview is
+ * identical to one cut from the full prompt. Index rows are always objects
+ * (logic.js imageToRow), which jsonb_each requires.
+ */
+function compactSourceSql(column) {
+  const preview = (key, json) => `min(left(${json} #>> '{}', ${COMPACT_PROMPT_CHARS + 1})) FILTER (WHERE field.key = '${key}'
+      AND jsonb_typeof(${json}) = 'string' AND (${json} #>> '{}') ~ '[^${JS_TRIM_CLASS}]')`;
+  return `(SELECT COALESCE(jsonb_object_agg(field.key, field.value) FILTER (WHERE field.key IN (${SOURCE_KEYS})), '{}'::jsonb)
+      || jsonb_strip_nulls(jsonb_build_object('${COMPACT_PREVIEW_KEY}',
+        COALESCE(${preview('prompt', 'field.value')}, ${preview('metadata', "(field.value -> 'prompt')")})))
+    FROM jsonb_each(${column}) AS field)`;
+}
+
+// Compact rows are projected before SQL only without a search: search matches
+// words anywhere in the full stored metadata, beyond any preview.
+const projectsCompact = (compact, q = '') => Boolean(compact) && !String(q).trim();
+
+// Final row shape for a reader: full records, compact rows cut from full
+// records (search), or compact rows from a projected source (internal keys dropped).
+const rowShape = (compact, projected) => !compact ? data => data
+  : projected ? compactSourceToRow : compactGalleryRecord;
+
 // Videos stay authoritative in video-history: prompt/visibility edits and uploads
 // do not all refresh the derived index. Mixed pages join that snapshot in SQL,
 // rather than using stale video rows or downloading either full list to the client.
-function assetSource(params, videos, materialized = false) {
-  if (videos === undefined) return { cte: '', table: 'media_assets' };
-  params.push(JSON.stringify(videos.map(data => ({ data, createdAt: Number.isFinite(Date.parse(data.createdAt)) ? new Date(data.createdAt).toISOString() : new Date(0).toISOString() }))));
+// A compact source (#9676) carries only card/filter fields of either kind, so
+// neither the bound parameter nor the materialized CTE holds full detail bodies.
+function assetSource(params, videos, { materialized = false, compact = false } = {}) {
+  const data = compact ? `${compactSourceSql('data')} AS data` : 'data';
+  if (videos === undefined) return { cte: '', table: 'media_assets', data };
+  params.push(JSON.stringify(videos.map(video => ({ data: compact ? compactSource(video) : video,
+    createdAt: Number.isFinite(Date.parse(video.createdAt)) ? new Date(video.createdAt).toISOString() : new Date(0).toISOString() }))));
   return {
+    data: 'data',
     cte: `WITH gallery_assets AS ${materialized ? 'MATERIALIZED ' : ''}(
-      SELECT media_key, kind, ref, data, created_at FROM media_assets WHERE kind = 'image'
+      SELECT media_key, kind, ref, ${data}, created_at FROM media_assets WHERE kind = 'image'
       UNION ALL
       SELECT 'video:' || (value->'data'->>'id'), 'video', value->'data'->>'id', value->'data',
         (value->>'createdAt')::timestamptz
@@ -151,9 +192,10 @@ function assetSource(params, videos, materialized = false) {
 }
 
 /** List index rows. Omitting limit retains the legacy array contract. */
-export async function listAssets({ limit, offset = 0, videos, typed = false, orderedKeys, ...filters } = {}) {
+export async function listAssets({ limit, offset = 0, videos, typed = false, orderedKeys, compact = false, ...filters } = {}) {
+  const projected = projectsCompact(compact, filters.q);
   const { params, where } = assetFilter(filters);
-  const { cte, table } = assetSource(params, videos);
+  const { cte, table, data } = assetSource(params, videos, { compact: projected });
   let order = 'created_at DESC, media_key ASC';
   if (orderedKeys) {
     params.push(orderedKeys);
@@ -165,25 +207,27 @@ export async function listAssets({ limit, offset = 0, videos, typed = false, ord
     paging = ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
   }
   const result = await query(
-    `${cte}SELECT ${typed ? 'kind, ' : ''}data FROM ${table}${where} ORDER BY ${order}${paging}`, params,
+    `${cte}SELECT ${typed ? 'kind, ' : ''}${data} FROM ${table}${where} ORDER BY ${order}${paging}`, params,
   );
-  return result.rows.map(row => typed ? { kind: row.kind, data: row.data } : rowToAsset(row));
+  const shape = rowShape(compact, projected);
+  return result.rows.map(row => typed ? { kind: row.kind, data: shape(row.data) } : shape(rowToAsset(row)));
 }
 
 /** Count matching rows without materializing their JSONB payloads. */
-export async function countAssets({ videos, ...filters } = {}) {
+export async function countAssets({ videos, compact = false, ...filters } = {}) {
   const { params, where } = assetFilter(filters);
-  const { cte, table } = assetSource(params, videos);
+  const { cte, table } = assetSource(params, videos, { compact: projectsCompact(compact, filters.q) });
   const result = await query(`${cte}SELECT COUNT(*) AS count FROM ${table}${where}`, params);
   return parseInt(result.rows[0].count, 10);
 }
 
 /** One snapshot expansion serves the mixed page and every summary count. */
 export async function listMixedGalleryPage({
-  videos = [], limit = 60, offset = 0, orderedKeys, cover, countMediaKeys, ...filters
+  videos = [], limit = 60, offset = 0, orderedKeys, cover, countMediaKeys, compact = false, ...filters
 } = {}) {
   const params = [];
-  const { cte, table } = assetSource(params, videos, true);
+  const projected = projectsCompact(compact, filters.q);
+  const { cte, table } = assetSource(params, videos, { materialized: true, compact: projected });
   const predicate = options => assetFilter(options, params).where.slice(' WHERE '.length) || 'TRUE';
   const totalFilter = predicate(filters);
   const hiddenFilter = predicate({ ...filters, hidden: true });
@@ -211,7 +255,8 @@ export async function listMixedGalleryPage({
   const row = result.rows[0];
   const image = Number(row.image);
   const video = Number(row.video);
-  return { items: row.items, total: Number(row.total), hiddenTotal: Number(row.hiddenTotal),
+  const shape = rowShape(compact, projected);
+  return { items: row.items.map(item => ({ kind: item.kind, data: shape(item.data) })), total: Number(row.total), hiddenTotal: Number(row.hiddenTotal),
     counts: { image, video, all: image + video } };
 }
 

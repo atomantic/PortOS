@@ -545,6 +545,46 @@ describe('voice playback cancellation', () => {
       else delete navigator.audioSession;
     });
 
+    it('keeps a remounted capture active while the previous context is still closing', async () => {
+      const oldContext = new FakeAudioContext();
+      let finishClose;
+      vi.spyOn(oldContext, 'close').mockImplementation(() => new Promise((resolve) => { finishClose = resolve; }));
+      vi.spyOn(window, 'AudioContext').mockImplementationOnce(function () { return oldContext; });
+      await voiceClient.startContinuous();
+      const oldFrame = FakeAudioWorkletNode.last.port.onmessage;
+
+      const stopping = voiceClient.stopContinuous();
+      expect(voiceClient.isContinuous()).toBe(false);
+      await vi.waitFor(() => expect(finishClose).toBeTypeOf('function'));
+      const newTrack = { stop: vi.fn() };
+      getUserMedia.mockResolvedValueOnce({ getTracks: () => [newTrack] });
+      await voiceClient.startContinuous();
+      oldFrame?.({ data: new Float32Array([1, 1, 1, 1]) });
+
+      finishClose();
+      await stopping;
+      expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
+      expect(newTrack.stop).not.toHaveBeenCalled();
+      expect(voiceClient.isContinuous()).toBe(true);
+      expect(navigator.audioSession.type).toBe('play-and-record');
+    });
+
+    it('starts synchronous owner disposal before releasing its audio session', async () => {
+      const context = new FakeAudioContext();
+      const close = vi.spyOn(context, 'close').mockImplementation(() => {
+        expect(navigator.audioSession.type).toBe('play-and-record');
+        return Promise.resolve();
+      });
+      vi.spyOn(window, 'AudioContext').mockImplementationOnce(function () { return context; });
+      await voiceClient.startContinuous();
+
+      voiceClient.disposeCaptureOwner();
+
+      expect(close).toHaveBeenCalledOnce();
+      expect(navigator.audioSession.type).toBe('auto');
+      tracks.forEach((track) => expect(track.stop).toHaveBeenCalledOnce());
+    });
+
     // Each stage leaves a different set of acquired resources to unwind.
     it.each(['constructor', 'source', 'worklet node', 'connection', 'resume', 'module'])(
       'releases the microphone and permits retry after a %s failure', async (stage) => {

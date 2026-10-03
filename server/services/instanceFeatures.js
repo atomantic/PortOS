@@ -57,8 +57,8 @@ const DETECTORS = {
   },
   facetime: async () => {
     if (process.platform !== 'darwin') return false;
-    const { checkSetup } = await import('./voice/facetimeBridge.js');
-    const report = await checkSetup();
+    const { checkLocalSetup } = await import('./voice/facetimeBridge.js');
+    const report = await checkLocalSetup();
     return report.helper?.ok === 'ok' && report.identity?.ok === 'ok';
   },
   // Cheap and fail-closed: platform, app bundle and the EnableAPIServer pref —
@@ -321,6 +321,14 @@ export async function updateInstanceFeature(featureId, enabled) {
   }, { actor: 'user', skipUserAction: true });
 
   await recordFeatureToggle(featureId, enabled);
+
+  if (featureId === 'eidoverse') {
+    // Use the same admission/readiness path as boot. A saved toggle remains
+    // saved even if the external runtime needs repair; never install here.
+    const { reconcileEidoverseRuntime } = await import('./eidoverseRuntime.js');
+    await reconcileEidoverseRuntime()
+      .catch((error) => console.error(`⚠️ Eidoverse startup deferred: ${error.message}`));
+  }
 
   const detected = await detectFeatureConfiguration();
   return {

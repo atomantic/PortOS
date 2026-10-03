@@ -111,8 +111,8 @@ research access belong to the authoring route, never to execution.
 
 | Platform | Mechanism | Status |
 |---|---|---|
-| macOS | Seatbelt kernel sandbox (`/usr/bin/sandbox-exec`, deny-by-default profile) | Supported; proven on demand by the containment check |
-| Linux x64 / arm64 | bubblewrap namespaces and seccomp | Requires executable `/usr/bin/bwrap`, permitted unprivileged user namespaces and seccomp; proven on demand |
+| macOS | Seatbelt kernel sandbox (`/usr/bin/sandbox-exec`, deny-by-default profile) | Supported for the synthetic containment check; the official Blender 4.2.0 arm64 build cannot start under it, so Blender runs use Trusted local |
+| Linux x64 / arm64 | bubblewrap namespaces and seccomp | Requires executable `/usr/bin/bwrap`, permitted unprivileged user namespaces and seccomp; proven on demand. Not a project target: never run with real Blender |
 | Windows | None implemented | Refused |
 
 Each run gets a fresh UUID workspace under `data/code-animation-workspaces/`
@@ -205,6 +205,8 @@ adversarial checks. Cycles CPU can be substantially slower than GPU rendering.
 EEVEE availability must be established by its own actual render; no engine or
 execution mode is substituted silently. Seatbelt is deprecated by Apple and a
 host or Blender build may not work inside its profile; that lane stays refused.
+
+**Supported Blender path.** macOS (Apple silicon) in **Trusted local** mode is the supported way to run Blender code animations. Contained Blender is not a goal on macOS: the Seatbelt profile (no fork, no Mach services) cannot run the official build, and relaxing it would weaken the containment this mode exists to guarantee. Windows has no containment mechanism and no Blender lane; Linux is untested. Trusted local runs scene code with the operator's full host access, so run only source you trust.
 Memory and disk limits are watchdog-enforced, so brief overshoots are possible.
 
 ## Blender production adapter
@@ -299,9 +301,9 @@ backend came from Blender itself, and no engine was substituted.
   the fixtures in `blenderRender.test.js`; the real runtime was not made to emit
   malformed output.
 
-Not demonstrated: real contained-mode acceptance (Linux bubblewrap, or a macOS
-Blender build the Seatbelt profile can run), a GPU backend other than Metal, and
-cross-machine repeatability. The Cycles pilot was produced by the first revision of
+Not demonstrated, and not planned: contained-mode Blender acceptance on any platform
+(macOS Seatbelt cannot start Blender; Linux bubblewrap is not a project target) and a
+GPU backend other than Metal. Cross-machine repeatability is also unverified. The Cycles pilot was produced by the first revision of
 the acceptance script; the remaining runs used the current one, which calls the same
 `renderBlenderSequence`.
 

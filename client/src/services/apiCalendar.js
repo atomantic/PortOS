@@ -1,14 +1,14 @@
 import { request } from './apiCore.js';
 
 // Calendar
-export const getCalendarAccounts = () => request('/calendar/accounts');
+export const getCalendarAccounts = (options = {}) => request('/calendar/accounts', options);
 export const createCalendarAccount = (data, options = {}) => request('/calendar/accounts', { method: 'POST', body: JSON.stringify(data), ...options });
 export const updateCalendarAccount = (id, data, options = {}) => request(`/calendar/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data), ...options });
 export const deleteCalendarAccount = (id) => request(`/calendar/accounts/${id}`, { method: 'DELETE' });
 export const syncCalendarAccount = (accountId, options = {}) => request(`/calendar/sync/${accountId}`, { method: 'POST', ...options });
-export const getCalendarEvents = (params = {}) => {
+export const getCalendarEvents = (params = {}, options = {}) => {
   const str = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null)).toString();
-  return request(`/calendar/events${str ? `?${str}` : ''}`);
+  return request(`/calendar/events${str ? `?${str}` : ''}`, options);
 };
 export const getCalendarAgenda = (options = {}) => request('/calendar/agenda', options);
 export const getCalendarTokenStatus = () => request('/calendar/debug/token-status');

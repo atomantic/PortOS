@@ -1,3 +1,5 @@
+import { musicVideoMediaMode, musicVideoDocumentRenderer, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { assertProductionApproval } from './productionReview.js';
 /** User-triggered mixed-media document authoring. No provider runs on read or boot. */
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -28,6 +30,52 @@ function hasUnsafeReference(node) {
   return Object.entries(node).some(([key, value]) => key !== 'loc' && key !== 'start' && key !== 'end' && hasUnsafeReference(value));
 }
 
+// Three's convenience random functions hide Math.random or module-level RNG
+// state behind the namespace we supply. Track only that namespace and its
+// static aliases, so unrelated local methods with these names remain usable.
+function hasAmbientThreeRandom(fn) {
+  const random = new Set(['randInt', 'randFloat', 'randFloatSpread', 'seededRandom', 'generateUUID']);
+  const aliases = new Map([['ctx', new Set(['context'])]]);
+  const nodes = [];
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (node.type) nodes.push(node);
+    for (const [key, value] of Object.entries(node)) if (!['loc', 'start', 'end'].includes(key)) visit(value);
+  };
+  visit(fn.body);
+  const property = (node) => node.computed ? node.property?.value : node.property?.name;
+  const member = (kind, key) => kind === 'context' && key === 'THREE' ? 'three'
+    : kind === 'three' && key === 'MathUtils' ? 'math'
+      : kind === 'math' && random.has(key) ? 'random' : null;
+  const resolve = (node) => {
+    if (node?.type === 'Identifier') return aliases.get(node.name) || new Set();
+    if (['MemberExpression', 'OptionalMemberExpression'].includes(node?.type)) {
+      return new Set([...resolve(node.object)].map(kind => member(kind, property(node))).filter(Boolean));
+    }
+    return new Set();
+  };
+  const bind = (pattern, kinds) => {
+    if (pattern?.type === 'Identifier') {
+      const current = aliases.get(pattern.name) || new Set();
+      for (const kind of kinds) current.add(kind);
+      aliases.set(pattern.name, current);
+    } else if (pattern?.type === 'ObjectPattern') {
+      for (const field of pattern.properties) {
+        if (field.type !== 'ObjectProperty') continue;
+        const key = field.computed ? field.key.value : field.key.name || field.key.value;
+        bind(field.value, new Set([...kinds].map(kind => member(kind, key)).filter(Boolean)));
+      }
+    }
+  };
+  const bindings = nodes.filter(node => node.type === 'VariableDeclarator' || node.type === 'AssignmentExpression' && node.operator === '=');
+  // A bounded fixed point also covers aliases assigned after their declaration.
+  for (let pass = 0; pass <= bindings.length; pass++) {
+    for (const node of bindings) bind(node.id || node.left, resolve(node.init || node.right));
+  }
+  return nodes.some(node => resolve(node).has('random'));
+}
+
 // Only an exact function declaration is embedded as a literal in generated.js.
 // In particular, no model-supplied top-level statement ever runs in the page.
 function checkedFunction(source) {
@@ -40,6 +88,7 @@ function checkedFunction(source) {
     || fn.params.length !== 2 || fn.params[0]?.name !== 'ctx' || fn.params[1]?.name !== 'env') {
     throw fail('Return exactly function render(ctx, env) for each section', 'INVALID_SECTION_SOURCE');
   }
+  if (hasAmbientThreeRandom(fn)) throw fail('Three.js MathUtils random helpers depend on ambient state. Use deterministic arithmetic from env.t or env.frame instead.', 'NONDETERMINISTIC_SECTION');
   if (hasUnsafeReference(fn.body)) throw fail('A section must use only its drawing context and song-time inputs', 'NONDETERMINISTIC_SECTION');
   return source;
 }
@@ -48,7 +97,10 @@ function basisFor(project, includeEvents = true) {
   // These are all inputs that can change which pixels or authoring directions
   // a section means. A new candidate cannot publish across such an edit.
   const input = {
+    mediaMode: musicVideoMediaMode(project),
+    authoringRenderer: musicVideoDocumentRenderer(project),
     name: project.name || null,
+    productionDraft: project.productionReview?.draft || null,
     treatment: project.treatment || null,
     productionPolicy: project.productionPolicy || null,
     visualSpec: project.visualSpec || null,
@@ -93,6 +145,8 @@ function affectedEventSections(before, after) {
 }
 
 async function authoringContext(project) {
+  assertMusicVideoMediaSelections(project);
+  if (musicVideoDocumentRenderer(project) === 'three' && (project.scenes || []).some((scene) => scene.referenceImageId || scene.videoHistoryId)) throw fail('Generated Three.js worlds currently use geometry only. Use Canvas or import a document to compose selected media.', 'COMPOSITION_RENDERER_MEDIA_UNSUPPORTED');
   const plan = summarizeMusicVideoMediumPlan(project);
   if (plan.strategy === 'code-first' && plan.blocked) {
     throw fail(plan.unresolved.filter((item) => item.blocking).map((item) => item.message).join(' '), 'COMPOSITION_MEDIUM_PLAN_INCOMPLETE');
@@ -167,6 +221,7 @@ async function priorManifest(project) {
 async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
   const project = await getProject(projectId);
   if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
+  assertProductionApproval(project, 'storyboard');
   const context = await authoringContext(project);
   let prior = null;
   if (sectionId || eventRevision) {
@@ -189,17 +244,24 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     styleLines: await styleLinesFor(project),
   };
   const prompt = buildMixedMediaDocumentPrompt({
+    renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),
     title: project.name, song: { ...context.song, sections: context.song.sections.filter((section) => ids.includes(section.id)) }, palette: context.palette, treatment: project.treatment,
     visualSpec: project.visualSpec, scenes: context.scenes, styleLines: sharedStyle.styleLines,
     onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project),
   });
   const directedPrompt = feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt;
-  const run = await runModel({ providerId, model, effort, automation: project.automation, prompt: directedPrompt, source: 'music-video-document', beforeSubmit });
+  const run = await runModel({ providerId, model, effort, automation: project.automation, prompt: directedPrompt, source: 'music-video-document', beforeSubmit: async (submission) => {
+    const current = await getProject(projectId);
+    assertProductionApproval(current, 'storyboard');
+    verifyCurrent(current);
+    if (basisFor(current) !== context.basis) throw fail('The approved plan changed before authoring', 'COMPOSITION_DRAFT_STALE', 409);
+    await beforeSubmit?.(submission);
+  } });
   const updated = acceptedSections(run.text, ids);
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
   for (const [id, source] of updated) merged.set(id, source);
   const manifest = {
-    version: 1, basis: context.basis, structuralBasis: context.structuralBasis, baseDocumentDirectory: project.composition?.document?.directory || null,
+    version: 1, renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project), basis: context.basis, structuralBasis: context.structuralBasis, baseDocumentDirectory: project.composition?.document?.directory || null,
     changedSectionIds: [...new Set([...((prior && project.composition?.documentDraft) ? prior.manifest.changedSectionIds || [] : []), ...ids])],
     beforeSong: prior ? (project.composition?.documentDraft ? prior.manifest.beforeSong || prior.manifest.song : prior.manifest.song) : null,
     sharedStyle, song: context.song, palette: context.palette,
@@ -210,7 +272,9 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   const active = project.composition?.document?.directory || null;
   const draft = project.composition?.documentDraft?.directory || null;
   const result = await stageGeneratedDocument(projectId, generatedFiles(manifest), {
+    renderer: manifest.renderer,
     verifyCurrent: (current) => {
+      assertProductionApproval(current, 'storyboard');
       verifyCurrent(current);
       if (basisFor(current) !== context.basis || (current.composition?.document?.directory || null) !== active
         || (current.composition?.documentDraft?.directory || null) !== draft) {

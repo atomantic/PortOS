@@ -71,6 +71,19 @@ describe('QueuesPanel', () => {
     );
   });
 
+  // The bare `/api/cos/tasks` carries every completed task's full prompt twice
+  // (~144 MB on a long-lived install) and this panel refetches it on each task
+  // or agent event. The mocked API above cannot notice a dropped `view`, so pin
+  // the request itself: the queue projection is what keeps the read bounded.
+  it('reads the bounded queue projection, never the full completed history', async () => {
+    api.getCosTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+
+    renderPanel();
+    await screen.findByText('No pending agent tasks.');
+
+    expect(api.getCosTasks).toHaveBeenCalledWith(expect.objectContaining({ view: 'queue' }));
+  });
+
   // The spawn window: a task keeps `status: 'pending'` for a beat after its
   // agent registers as running, so the one task being worked was counted on BOTH
   // cards and still offered a "Run now" button for a run already underway. The

@@ -12,6 +12,7 @@ vi.mock('../../services/apiCodeAnimation', () => ({
   updateCodeAnimationProject: vi.fn(), importCodeAnimationPackage: vi.fn(), acceptCodeAnimationSource: vi.fn(),
   getCodeAnimationProjectBrief: vi.fn(), getCodeAnimationRevisionPackage: vi.fn(), listCodeAnimationProjectHistory: vi.fn(),
   startCodeAnimationStageRun: vi.fn(), cancelCodeAnimationStageRun: vi.fn(),
+  getCodeAnimationAcceptance: vi.fn(), acceptCodeAnimationOutput: vi.fn(),
 }));
 import * as api from '../../services/apiCodeAnimation';
 import socket from '../../services/socket';
@@ -49,6 +50,7 @@ beforeEach(() => {
   api.getCodeAnimationProject.mockResolvedValue(project);
   api.listCodeAnimationProjectHistory.mockResolvedValue(page());
   api.getCodeAnimationExecution.mockResolvedValue(execution());
+  api.getCodeAnimationAcceptance.mockResolvedValue({ accepted: null, runs: [] });
 });
 
 describe('Production project rendered interactions', () => {

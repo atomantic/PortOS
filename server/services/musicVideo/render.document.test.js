@@ -1,3 +1,5 @@
+// Engine mechanics are isolated from the review contract, covered in route/orchestration suites.
+vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
 /**
  * Render planning for the composition-document render style: a `document`
  * project takes the seeked path with its document folder, a full render and a
@@ -122,4 +124,35 @@ describe('composition-document render plan', () => {
     }
     expect(encodeDocumentComposition).not.toHaveBeenCalled();
   });
+});
+
+
+it('rejects a changed film between preparing its reviewed plan and starting the encoder', async () => {
+  const id = await documentProject();
+  await importDocumentTemplate(id);
+  encodeDocumentComposition.mockClear();
+  let changed = false;
+  await renderMusicVideo(id, { verifyCurrent: async () => {
+    if (changed) return;
+    changed = true;
+    await projects.mutateProjectRecord(id, project => ({ project: { ...project,
+      composition: { ...project.composition, posterSec: 2 },
+    } }));
+  } });
+  await vi.waitFor(async () => expect((await projects.getProject(id)).status).toBe('failed'));
+  expect(encodeDocumentComposition).not.toHaveBeenCalled();
+});
+
+// The API client can leave before the SSE failure: keep the reason on the record.
+it('persists a document failure for returning operators and clears it after a successful retry', async () => {
+  const id = await documentProject();
+  await importDocumentTemplate(id);
+  const message = 'Edit portosComposition.durationSec to a whole-frame duration and re-import the document.';
+  encodeDocumentComposition.mockRejectedValueOnce(new Error(message));
+  await renderMusicVideo(id);
+  await vi.waitFor(async () => expect(await projects.getProject(id)).toMatchObject({
+    status: 'failed', renderError: `Composition document render failed: ${message}`,
+  }));
+  await renderMusicVideo(id);
+  await vi.waitFor(async () => expect(await projects.getProject(id)).toMatchObject({ status: 'complete', renderError: null }));
 });

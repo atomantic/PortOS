@@ -1,3 +1,4 @@
+import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — project store backend dispatcher (#1760, Phase 1).
  *
@@ -159,6 +160,7 @@ async function seedTrackMetadataOnUpdate(id, patch) {
 }
 
 export async function createProject(input) {
+  assertMusicVideoMediaSelections(input);
   const seeded = await seedTrackMetadata(await seedVideoBackendDefault(input));
   const snapshotted = await withStyleSnapshots(seeded);
   const project = await (await selectBackend()).createProject(snapshotted);
@@ -189,8 +191,8 @@ export async function deleteProject(id) {
   return result;
 }
 
-export async function setProjectAnalysis(id, analysis) {
-  const next = await (await selectBackend()).setProjectAnalysis(id, analysis);
+export async function setProjectAnalysis(id, analysis, sourceProject) {
+  const next = await (await selectBackend()).setProjectAnalysis(id, analysis, sourceProject);
   emitRecordUpdated('musicVideoProject', id);
   return next;
 }

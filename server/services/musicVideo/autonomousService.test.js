@@ -1,3 +1,20 @@
+// Existing engine cases isolate the creative review boundary; explicit approval-flow
+// cases below switch to the real model and verify pause/resume without providers.
+const creativeReview = vi.hoisted(() => ({ real: false }));
+vi.mock('./productionReview.js', async (load) => {
+  const actual = await load();
+  return { ...actual,
+    assertProductionApproval: (...args) => creativeReview.real ? actual.assertProductionApproval(...args) : undefined,
+    productionReadiness: (...args) => creativeReview.real ? actual.productionReadiness(...args) : {
+      art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, basis: { proof: 'test-proof' }, readyForProduction: true,
+    },
+  };
+});
+vi.mock('./productionReviewService.js', () => ({
+  prepareProductionReview: vi.fn(async () => {}),
+  renderProductionProof: vi.fn(async () => ({ jobId: 'proof-example' })),
+  attachProductionPilotProof: vi.fn(async () => {}),
+}));
 /**
  * Fully-autonomous Music Video run — orchestration contract. The project store
  * is an in-memory double with the real store's serialized read-modify-write;
@@ -41,11 +58,12 @@ let doubles;
 const stub = (name, impl) => vi.fn(async (...args) => { calls.push(name); return impl(...args); });
 
 beforeEach(() => {
+  creativeReview.real = false;
   store.clear();
   calls = [];
   doubles = {
     createProject: stub('createProject', async (input) => {
-      const project = { id: 'mv-auto', ...input };
+      const project = { id: 'mv-auto', productionReview: { proof: { basis: 'test-proof', excerptId: 'test-proof' } }, excerpts: [{ id: 'test-proof', status: 'complete', filename: 'test-proof.mp4' }], ...input };
       store.set(project.id, clone(project));
       return project;
     }),
@@ -74,6 +92,8 @@ beforeEach(() => {
     analyzeSong: stub('analyze', async () => ({})),
     startProduction: stub('production', async () => ({ run: { id: 'mvpr-1' } })),
     generateCode: stub('code', async () => ({})),
+    generateDocument: stub('document', async () => ({ document: { directory: 'music-video/mv-auto/composition/example' } })),
+    acceptDocument: stub('accept-document', async (id, directory) => { store.get(id).composition.document = { directory }; return {}; }),
     renderVideo: stub('render', async () => ({ jobId: 'render-1' })),
   };
   service.__setAutonomousDepsForTests(doubles);
@@ -103,6 +123,51 @@ describe('startAutonomousVideo', () => {
     expect(doubles.attachAudio).toHaveBeenCalledWith('track-1', 'music-song-a.mp3', expect.objectContaining({ source: 'suno', durationSec: 187 }));
   });
 
+  it.each([
+    { mediaMode: 'code-images', explicit: true },
+    { mediaMode: 'code-images-video', explicit: false },
+  ])('passes the $mediaMode authoring pin through the real production preflight', async ({ mediaMode, explicit }) => {
+    const { buildProjectRecord } = await import('./projectsLogic.js');
+    const production = await import('./productionService.js');
+    const runner = await import('../promptRunner.js');
+    const authoring = { providerId: 'fixture-author', model: 'fixture-model', effort: 'high' };
+    const resolve = vi.spyOn(runner, 'resolveProviderAndModel').mockResolvedValue({
+      provider: { id: authoring.providerId, type: 'api', enabled: true }, selectedModel: authoring.model,
+    });
+    // Exercise actual authoring and pool validation against a synthetic image
+    // backend. The absent approved plan stops the run before any dispatch.
+    const isVideoModeUsable = vi.fn(() => false);
+    const loadEnv = vi.fn(async () => {
+      if (mediaMode === 'code-images') return { settings: { imageGen: { local: { pythonPath: '/opt/example/python' } } },
+        imageModels: [{ id: 'fixture-image' }], isVideoModeUsable };
+      throw Object.assign(new Error('Fixture stopped after authoring validation'), { code: 'FIXTURE_PREFLIGHT_COMPLETE' });
+    });
+    production.__setProductionDepsForTests({ loadEnv });
+    doubles.createProject.mockImplementation(async (input) => {
+      const project = buildProjectRecord(input, { id: 'mv-auto', now: '2026-01-01T00:00:00.000Z' });
+      store.set(project.id, clone(project));
+      return project;
+    });
+    doubles.startProduction.mockImplementation(production.startProduction);
+    doubles.resolveLlm.mockResolvedValue({ route: authoring });
+    try {
+      await service.startAutonomousVideo({ prompt: 'An authored world', mediaMode, models: { 'image:local': 'fixture-image' }, ...(explicit ? { authoring } : {}) });
+      await settled('failed');
+      expect(store.get('mv-auto')).toMatchObject({ composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first' } });
+      expect(resolve).toHaveBeenCalledWith(authoring);
+      expect(loadEnv).toHaveBeenCalledOnce();
+      expect(runOf().errorCode).toBe(mediaMode === 'code-images' ? 'PRODUCTION_MEDIUM_CONFLICT' : 'FIXTURE_PREFLIGHT_COMPLETE');
+      if (mediaMode === 'code-images') {
+        expect(isVideoModeUsable).not.toHaveBeenCalled();
+        expect(doubles.startProduction.mock.calls[0][1].pool).toEqual([{ kind: 'image', mode: 'local', model: 'fixture-image' }]);
+        expect(runOf().brief.tools).toEqual(['image:local', 'video:local']);
+      }
+    } finally {
+      resolve.mockRestore();
+      production.__setProductionDepsForTests({});
+    }
+  });
+
   it('finishes — and starts the final render — when the delegated production run completes', async () => {
     await service.startAutonomousVideo({ prompt: 'p' });
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
@@ -127,8 +192,10 @@ describe('startAutonomousVideo', () => {
     await settled('running').catch(() => {});
     await vi.waitFor(() => expect(calls).toContain('render'));
     expect(calls).not.toContain('production');
-    expect(doubles.generateCode).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm' });
-    expect(store.get('mv-auto').composition).toEqual({ mode: 'code' });
+    expect(calls).not.toContain('board');
+    expect(doubles.acceptDocument).toHaveBeenCalledWith('mv-auto', 'music-video/mv-auto/composition/example');
+    expect(doubles.generateDocument).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm' });
+    expect(store.get('mv-auto').composition).toMatchObject({ mode: 'document', authoringRenderer: 'three' });
     await settled('completed');
   });
 
@@ -139,11 +206,87 @@ describe('startAutonomousVideo', () => {
     expect(project.automation.llm).toEqual({ providerId: 'cloud', model: 'big', effort: 'low' });
     await vi.waitFor(() => expect(calls).toContain('production'));
 
-    // The run's pin is what gets resolved; what the resolver returns is what runs.
-    expect(doubles.resolveLlm).toHaveBeenCalledWith({ providerId: 'cloud', model: 'big', effort: 'low' });
+    // The run's pin is what gets resolved, per stage; what the resolver returns is what runs.
+    const runPins = { llm: { providerId: 'cloud', model: 'big', effort: 'low' }, llmStages: null };
+    expect(doubles.resolveLlm).toHaveBeenCalledWith({ stage: 'brief', automation: runPins });
+    expect(doubles.resolveLlm).toHaveBeenCalledWith({ stage: 'lyrics', automation: runPins });
     expect(doubles.draftCreativeBrief).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'claude-tui', model: 'opus', effort: 'high' }));
     expect(doubles.writeLyrics).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'claude-tui', model: 'opus', effort: 'high' }));
     expect(runOf().output).toMatchObject({ briefRoute: route, lyricsRoute: route });
+  });
+
+  it('drafts lyrics on the lyrics stage\'s model, then reviews and revises them on the review stage\'s model, and the checkpoint shows the revision', async () => {
+    const llmStages = { lyrics: { providerId: 'local-llm', model: 'small' }, lyricsReview: { providerId: 'cloud', model: 'big', effort: 'high' } };
+    const routeOf = (pin, source) => ({ providerId: pin.providerId, model: pin.model, effort: pin.effort || null, transport: 'api', source });
+    // A resolver double honoring the stage pin, like llmRoute.js does.
+    doubles.resolveLlm.mockImplementation(async ({ stage, automation }) => {
+      const pin = automation.llmStages?.[stage];
+      return pin ? { provider: { id: pin.providerId }, selectedModel: pin.model, route: routeOf(pin, 'stage') } : { provider: null, route: null };
+    });
+    doubles.reviewLyrics = stub('review', async () => ({ lyrics: '[verse]\nrain against the glass', notes: 'Tightened the verse.' }));
+    service.__setAutonomousDepsForTests(doubles);
+    const steps = [];
+    const onEvent = ({ run }) => { if (run.stages.lyrics.step) steps.push(run.stages.lyrics.step); };
+    musicVideoEvents.on('autonomous', onEvent);
+    try {
+      const { project } = await service.startAutonomousVideo({ prompt: 'p', llmStages, checkpoints: ['lyrics'] });
+      // The stage pins also reach the project's brief for the stages production runs later.
+      expect(project.automation.llmStages).toEqual({ lyrics: { ...llmStages.lyrics, effort: null }, lyricsReview: llmStages.lyricsReview });
+      await settled('awaiting-approval');
+    } finally {
+      musicVideoEvents.off('autonomous', onEvent);
+    }
+    expect(calls).toEqual(['createProject', 'brief', 'updateProject', 'lyrics', 'review']);
+    expect(doubles.writeLyrics).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'local-llm', model: 'small' }));
+    expect(doubles.reviewLyrics).toHaveBeenCalledWith(expect.objectContaining({
+      lyrics: '[verse]\nrain on glass', description: BRIEF.musicalDescription, providerId: 'cloud', model: 'big', effort: 'high',
+    }));
+    expect(steps).toEqual(expect.arrayContaining(['draft', 'review']));
+    // The checkpoint parks on the revision, keeping the draft and the critique beside it.
+    expect(runOf()).toMatchObject({ awaiting: 'lyrics', stages: { lyrics: { status: 'done', step: null } } });
+    expect(runOf().output).toMatchObject({
+      lyricsDraft: '[verse]\nrain on glass', lyrics: '[verse]\nrain against the glass', lyricsReviewNotes: 'Tightened the verse.',
+      lyricsRoute: routeOf(llmStages.lyrics, 'stage'), lyricsReviewRoute: routeOf(llmStages.lyricsReview, 'stage'),
+    });
+    // Each stage's route is kept on the project brief too.
+    expect(store.get('mv-auto').automation.routes).toMatchObject({ lyrics: { providerId: 'local-llm' }, lyricsReview: { providerId: 'cloud' } });
+
+    // Approving sends the revised lyrics to Suno.
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(doubles.generateSunoSong.mock.calls[0][0].lyrics).toBe('[verse]\nrain against the glass');
+  });
+
+  it('skips the lyric review unless the brief asks for it, and reviews on the direction LLM when only the toggle is set', async () => {
+    doubles.reviewLyrics = stub('review', async () => ({ lyrics: '[verse]\nrevised', notes: '' }));
+    service.__setAutonomousDepsForTests(doubles);
+    await service.startAutonomousVideo({ prompt: 'p', providerId: 'cloud', model: 'big' });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(calls).not.toContain('review');
+    expect(runOf().output).not.toHaveProperty('lyricsDraft');
+    expect(runOf().output.lyrics).toBe('[verse]\nrain on glass');
+
+    store.clear();
+    calls.length = 0;
+    await service.startAutonomousVideo({ prompt: 'p', providerId: 'cloud', model: 'big', lyricsReview: true });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    // No registry route resolves here, so both passes run on the run's own direction pin.
+    expect(doubles.reviewLyrics).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'cloud', model: 'big' }));
+    expect(runOf().output).toMatchObject({ lyricsDraft: '[verse]\nrain on glass', lyrics: '[verse]\nrevised', lyricsReviewNotes: '' });
+  });
+
+  it('retries only the review when the review fails after the draft was stored', async () => {
+    doubles.reviewLyrics = vi.fn()
+      .mockRejectedValueOnce(new Error('review provider down'))
+      .mockResolvedValueOnce({ lyrics: '[verse]\nrevised', notes: 'ok' });
+    service.__setAutonomousDepsForTests(doubles);
+    await service.startAutonomousVideo({ prompt: 'p', lyricsReview: true });
+    await settled('failed');
+    expect(runOf().output.lyricsDraft).toBe('[verse]\nrain on glass');
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(doubles.writeLyrics).toHaveBeenCalledTimes(1);
+    expect(runOf().output.lyrics).toBe('[verse]\nrevised');
   });
 
   it('falls back to the run\'s own pin when the provider registry cannot be read', async () => {
@@ -157,7 +300,7 @@ describe('startAutonomousVideo', () => {
   it('threads the authoring effort into code generation for a code-only brief', async () => {
     await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'prov', model: 'm', effort: 'medium' } });
     await vi.waitFor(() => expect(calls).toContain('render'));
-    expect(doubles.generateCode).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm', effort: 'medium' });
+    expect(doubles.generateDocument).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm', effort: 'medium' });
   });
 
   it('sends the Cast & Sets check-in to review only when the cast checkpoint is chosen', async () => {
@@ -192,6 +335,92 @@ describe('checkpoints', () => {
     await service.resumeAutonomousVideo('mv-auto', { lyrics: '[verse]\nedited line' });
     await vi.waitFor(() => expect(calls).toContain('production'));
     expect(doubles.generateSunoSong).toHaveBeenCalledWith(expect.objectContaining({ lyrics: '[verse]\nedited line' }), expect.any(Object));
+  });
+});
+
+describe('retaking the song at the song checkpoint', () => {
+  it('discards the song, re-runs the stage with the edited lyrics, style and Suno options, and parks there again', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['song'], suno: { excludeStyles: 'metal', vocalGender: 'female' } });
+    await settled('awaiting-approval');
+    expect(runOf()).toMatchObject({ awaiting: 'song', stage: 'analyze', output: { trackId: 'track-1', sunoSongIds: ['song-a', 'song-b'] } });
+    expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({ excludeStyles: 'metal', vocalGender: 'female', model: null }), expect.any(Object));
+    expect(store.get('mv-auto').trackId).toBe('track-1');
+
+    doubles.createTrack.mockResolvedValueOnce({ id: 'track-2' });
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      // A fresh request: the rejected take's ids are not offered for reuse.
+      expect(opts.songIds).toBeNull();
+      await opts.onSubmitted(['song-c', 'song-d']);
+      return { songId: 'song-d', songIds: ['song-c', 'song-d'], filename: 'music-song-d.m4a' };
+    });
+    const { run } = await service.resumeAutonomousVideo('mv-auto', {
+      retakeSong: true, lyrics: '[verse]\nnew words', style: 'darker synthwave', suno: { vocalGender: 'male', model: 'v6' },
+    });
+    expect(run).toMatchObject({ status: 'running', stage: 'song', awaiting: null, output: { trackId: null, sunoSongIds: null } });
+    await settled('awaiting-approval');
+    expect(runOf()).toMatchObject({
+      awaiting: 'song', stage: 'analyze',
+      brief: { suno: { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' } },
+      output: { trackId: 'track-2', sunoSongIds: ['song-c', 'song-d'], lyrics: '[verse]\nnew words', sunoStyle: 'darker synthwave' },
+    });
+    expect(runOf().stages.song).toMatchObject({ status: 'done' });
+    expect(doubles.generateSunoSong).toHaveBeenCalledTimes(2);
+    expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({
+      lyrics: '[verse]\nnew words', style: 'darker synthwave', excludeStyles: 'metal', vocalGender: 'male', model: 'v6',
+    }), expect.any(Object));
+    // The project was unlinked from the rejected track, then linked to the new one; analysis has not run.
+    expect(doubles.updateProject).toHaveBeenCalledWith('mv-auto', { trackId: null });
+    expect(store.get('mv-auto').trackId).toBe('track-2');
+    expect(calls).not.toContain('analyze');
+
+    // Approving the new take continues the pipeline as before.
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+  });
+
+  it('refuses a retake anywhere but the song checkpoint, leaving the run untouched', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['lyrics'] });
+    await settled('awaiting-approval');
+    const before = runOf();
+    await expect(service.resumeAutonomousVideo('mv-auto', { retakeSong: true })).rejects.toMatchObject({ status: 409, code: 'NOT_AT_SONG_CHECKPOINT' });
+    expect(runOf()).toEqual(before);
+    expect(calls).not.toContain('suno');
+  });
+
+  it('retakes a song whose export never finished: a run stopped in the song stage discards the dead ids and submits afresh', async () => {
+    let release;
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      await opts.onSubmitted(['song-dead-a', 'song-dead-b']);
+      opts.onProgress('exporting');
+      // Suno dropped the rows: the export hangs until the director stops the run.
+      await new Promise((resolve) => { release = resolve; });
+      throw Object.assign(new Error('cancelled'), { code: 'SUNO_AUDIO_CANCELLED' });
+    });
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['song'] });
+    await vi.waitFor(() => expect(runOf().output.sunoSongIds).toEqual(['song-dead-a', 'song-dead-b']));
+    await service.stopAutonomousVideo('mv-auto');
+    release();
+    await vi.waitFor(() => expect(runOf().status).toBe('stopped'));
+    expect(runOf().stage).toBe('song');
+
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      expect(opts.songIds).toBeNull();
+      await opts.onSubmitted(['song-e', 'song-f']);
+      return { songId: 'song-f', songIds: ['song-e', 'song-f'], filename: 'music-song-f.m4a' };
+    });
+    const { run } = await service.resumeAutonomousVideo('mv-auto', { retakeSong: true, style: 'industrial electro' });
+    expect(run).toMatchObject({ status: 'running', stage: 'song', output: { sunoSongIds: null, sunoStyle: 'industrial electro' } });
+    await settled('awaiting-approval');
+    expect(runOf()).toMatchObject({ awaiting: 'song', output: { sunoSongIds: ['song-e', 'song-f'] } });
+  });
+
+  it('applies a Suno options patch on a plain approval too', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['lyrics'], suno: { excludeStyles: 'metal', model: 'v5' } });
+    await settled('awaiting-approval');
+    await service.resumeAutonomousVideo('mv-auto', { suno: { model: null, vocalGender: 'female' } });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(runOf().brief.suno).toEqual({ excludeStyles: 'metal', vocalGender: 'female', model: null, maxMode: null });
+    expect(doubles.generateSunoSong).toHaveBeenCalledWith(expect.objectContaining({ excludeStyles: 'metal', vocalGender: 'female', model: null }), expect.any(Object));
   });
 });
 
@@ -421,4 +650,76 @@ describe('events and process pinning', () => {
     await service.__testing.advance('mv-auto');
     expect(calls.length).toBe(before);
   });
+});
+
+it('parks standalone code at real human gates and replaces a stale proof before final rendering', async () => {
+  creativeReview.real = true;
+  const { approveProductionStage, productionReviewBasis } = await vi.importActual('./productionReview.js');
+  const { renderProductionProof } = await import('./productionReviewService.js');
+  let proofNumber = 0;
+  doubles.analyzeSong.mockImplementation(async () => {
+    Object.assign(store.get('mv-auto'), {
+      audioAnalysis: { durationSec: 20, sections: [{ id: 'chorus', label: 'Chorus', startSec: 18, endSec: 20 }] },
+      scenes: [{ sceneId: 'shot', startSec: 0, endSec: 20, label: 'Chorus' }],
+      devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+      productionReview: { draft: {
+        cast: 'Paper dancer', environments: 'Theatre', visualLanguage: 'Ink silhouettes', motionLanguage: 'Slow orbit',
+        guideArtifactId: 'guide', lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.',
+        storyboard: [{ sceneId: 'shot', lyricCueIds: [], action: 'Dancer unfolds', staging: 'Wide theatre', camera: 'Orbit', transition: 'Fade' }],
+      } },
+    });
+  });
+  doubles.generateDocument.mockResolvedValue({ document: { directory: 'music-video/mv-auto/composition/example' } });
+  renderProductionProof.mockImplementation(async (_id, window) => {
+    const project = store.get('mv-auto');
+    const id = `proof-${++proofNumber}`;
+    project.excerpts = [{ id, status: 'complete', filename: `${id}.mp4` }];
+    project.productionReview.proof = { ...window, excerptId: id };
+    project.productionReview.proof.basis = productionReviewBasis(project).proof;
+    return { jobId: id };
+  });
+  const approve = stage => {
+    const project = store.get('mv-auto');
+    const excerpt = project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId);
+    store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage],
+      proofReview: stage === 'proof' ? { watchedWithAudio: true, excerptId: excerpt.id, filename: excerpt.filename,
+        energyComparison: 'Human fixture reviewed the intended energy.', timecodedNotes: '0:04 the chorus action lands.' } : undefined }));
+  };
+  await service.startAutonomousVideo({ prompt: 'Synthetic animation', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' } });
+  await settled('needs-human');
+  expect(doubles.generateDocument).not.toHaveBeenCalled();
+  expect(doubles.renderVideo).not.toHaveBeenCalled();
+  approve('art');
+  approve('storyboard');
+  await service.resumeAutonomousVideo('mv-auto');
+  await settled('needs-human');
+  expect(doubles.generateDocument).toHaveBeenCalledOnce();
+  expect(renderProductionProof).toHaveBeenCalledOnce();
+  expect(renderProductionProof).toHaveBeenLastCalledWith('mv-auto', { startSec: 0, endSec: 20 });
+  expect(doubles.renderVideo).not.toHaveBeenCalled();
+  store.get('mv-auto').excerpts[0].status = 'rendering';
+  await service.resumeAutonomousVideo('mv-auto');
+  await settled('needs-human');
+  expect(renderProductionProof).toHaveBeenCalledOnce();
+  for (const status of ['error', 'canceled']) {
+    store.get('mv-auto').excerpts[0].status = status;
+    store.get('mv-auto').excerpts[0].filename = null;
+    const callsBefore = renderProductionProof.mock.calls.length;
+    await service.resumeAutonomousVideo('mv-auto');
+    await settled('needs-human');
+    expect(renderProductionProof).toHaveBeenCalledTimes(callsBefore + 1);
+    expect(doubles.renderVideo).not.toHaveBeenCalled();
+  }
+  approve('proof');
+  store.get('mv-auto').composition.document.directory = 'music-video/mv-auto/composition/revised';
+  await service.resumeAutonomousVideo('mv-auto');
+  await settled('needs-human');
+  expect(renderProductionProof).toHaveBeenCalledTimes(4);
+  expect(doubles.renderVideo).not.toHaveBeenCalled();
+  approve('proof');
+  await service.resumeAutonomousVideo('mv-auto');
+  await settled('completed');
+  expect(doubles.renderVideo).toHaveBeenCalledOnce();
+  expect(doubles.generateDocument).toHaveBeenCalledOnce();
+  expect(doubles.startProduction).not.toHaveBeenCalled();
 });

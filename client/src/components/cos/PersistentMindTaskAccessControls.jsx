@@ -125,7 +125,7 @@ export default function PersistentMindTaskAccessControls({
     onSavingChange?.(true);
     try {
       await api.updateCosConfig({ persistentMindCapabilities: payload }, { silent: true });
-      onSaved?.(next);
+      onSaved?.({ ...capabilities, ...next });
       const option = OPTIONS.find((candidate) => candidate.key === key);
       toast.success(`${option?.label || 'Capability'} ${enabled ? 'enabled' : 'disabled'}`);
     } catch (error) {

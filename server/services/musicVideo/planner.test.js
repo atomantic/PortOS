@@ -211,6 +211,19 @@ describe('planShots', () => {
 });
 
 describe('buildScenePlanPrompt', () => {
+  it('carries the reviewed energy plan and actual musical anchors into autopilot shot choreography', () => {
+    const project = makeProject({ productionReview: { draft: { motionLanguage: 'Energy: playful. 0–4s: unfold on the downbeat; second chorus doubles the prop scale.', implementationPlan: 'Use a hinged prop and an analytic camera arc.' } } });
+    const { shots } = planShots(SECTIONS, { beats: BEATS, downbeats: DOWNBEATS });
+    const prompt = buildScenePlanPrompt(project, shots);
+    expect(prompt).toContain('SAVED ENERGY AND CHOREOGRAPHY DRAFT (planning does not grant approval)');
+    expect(prompt).toContain(project.productionReview.draft.motionLanguage);
+    expect(prompt).toContain(project.productionReview.draft.implementationPlan);
+    expect(prompt).toContain(`absolute time: ${shots[0].startSec}–${shots[0].endSec}s`);
+    expect(prompt).toContain('beats (seconds):');
+    expect(prompt).toContain('Repeated choruses must develop');
+    expect(prompt).toContain('motivated holds and long takes are valid');
+  });
+
   it('carries the automation brief guidance into the plan prompt', () => {
     const base = makeProject({ concept: {} });
     expect(buildScenePlanPrompt(base, [])).not.toContain('Director guidance');

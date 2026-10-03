@@ -1,3 +1,5 @@
+import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { productionFeedbackContext } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
@@ -150,6 +152,7 @@ async function chooseCastAndSetsRoute(project, { preferred = null, settings } = 
 // ---- direction ------------------------------------------------------------------
 
 async function loadContext(project) {
+  assertMusicVideoMediaSelections(project);
   const boardId = project?.visualSpec?.moodBoardId;
   const board = boardId ? await deps.loadBoard(boardId).catch(() => null) : null;
   const resolveItem = board ? await deps.boardItemImage() : null;
@@ -167,8 +170,8 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const { board, moodImages, track } = await loadContext(project);
-  // Request pin > the brief's saved LLM > an eligible TUI provider > the active one (llmRoute.js).
-  const { provider, selectedModel, route } = await deps.resolveProvider({ providerId, model, effort, automation: project.automation }).catch(() => ({ provider: null }));
+  // Request pin > the brief's Cast & Sets pin > its direction LLM > an eligible TUI provider > the active one (llmRoute.js).
+  const { provider, selectedModel, route } = await deps.resolveProvider({ providerId, model, effort, automation: project.automation, stage: 'castAndSets' }).catch(() => ({ provider: null }));
   if (!provider) return fail(projectId, 'No AI provider is available for the creative direction');
   if (provider.enabled === false) return fail(projectId, `The ${provider.name || provider.id} provider is disabled`);
   const previous = stage?.direction || null;
@@ -177,7 +180,7 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   // silently re-cast into the other medium.
   // A saved direction without a medium predates the procedural one: photographic.
   const medium = notes.length && previous ? (previous.medium || 'photographic') : castAndSetsMedium(project);
-  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium });
+  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium }) + productionFeedbackContext(project);
   let text;
   try {
     ({ text } = await deps.runPrompt({ provider, model: selectedModel, ...effortArg(route), prompt, source: 'music-video-cast-sets' }));
@@ -207,7 +210,7 @@ async function writePlan(projectId, { direction = null, moodImages = null, force
   const nextDirection = direction || stage.direction;
   // A procedural project whose brief names no image tool is code-only: nothing
   // is rendered, so no image backend is needed (or consulted).
-  const codeOnly = nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
+  const codeOnly = !musicVideoAllowsMedia(project, 'image') || nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
   const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes) });
   const renderKeys = affectedImageKeys(stage.plan || {}, plan, forceKeys);
   const settings = await deps.getSettings();
@@ -386,6 +389,14 @@ async function dispatchKey(projectId, key) {
 }
 
 const advancing = new Map();
+const backgroundWork = new Set();
+
+/** Drain owned work before a test replaces its queue/provider/store fixtures. */
+export async function __settleCastAndSetsForTests() {
+  while (backgroundWork.size || advancing.size) {
+    await Promise.allSettled([...backgroundWork, ...[...advancing.values()].map(entry => entry.promise)]);
+  }
+}
 
 /**
  * Dispatch every image whose inputs are ready; assemble the sheet once every
@@ -440,10 +451,11 @@ async function advanceOnce(projectId) {
 }
 
 function inBackground(label, projectId, fn) {
-  Promise.resolve().then(fn).catch(async (err) => {
+  const work = Promise.resolve().then(fn).catch(async (err) => {
     console.error(`❌ Music Video Cast & Sets ${short(projectId)} ${label} failed: ${err.message}`);
     await fail(projectId, `${label} failed: ${err.message}`).catch(() => {});
-  });
+  }).finally(() => backgroundWork.delete(work));
+  backgroundWork.add(work);
 }
 
 // ---- sheet ----------------------------------------------------------------------------
@@ -517,6 +529,7 @@ function applyApproval(project, now) {
     },
     concept: { ...(project.concept || {}), subjects: castAndSetsSubjects(project, stage) },
   };
+  assertMusicVideoMediaSelections(next);
   if (stage.artifactId && (next.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted)) {
     next = reviewDevArtifact(next, stage.artifactId, { status: 'approved' }, now).project;
   }
@@ -584,7 +597,9 @@ export async function regenerateCastAndSets(projectId, { notes = null, providerI
   const stage = project.castAndSets;
   if (!stage?.direction) throw new ServerError('There is no Cast & Sets sheet to regenerate yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
   const artifact = stage.artifactId ? (() => { try { return findDevArtifact(project, stage.artifactId); } catch { return null; } })() : null;
-  const source = Array.isArray(notes) ? notes : (artifact?.notes || []).filter((n) => !n.resolvedAt);
+  const reviewNotes = (project.productionReview?.feedback || []).filter(n => n.stage === 'art' && !n.resolvedAt)
+    .map(n => ({ target: `production-review:${n.target}`, text: n.text }));
+  const source = [...(Array.isArray(notes) ? notes : (artifact?.notes || []).filter((n) => !n.resolvedAt)), ...reviewNotes];
   if (!source.length) throw new ServerError('Add a note first — nothing says what to change', { status: 422, code: 'CAST_SETS_NO_NOTES' });
   const imageNotes = {};
   const directionNotes = [];

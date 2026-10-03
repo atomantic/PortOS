@@ -878,19 +878,18 @@ async function applyDocuments(documents, suppressed) {
 // taste-questionnaire and digital-twin-meta keep their own in-memory caches (the
 // taste cache has NO TTL), so a raw atomicWrite to their files would leave the UI
 // serving pre-sync data. Route those two through the owning services so the
-// cache invalidates (taste) and the cache refreshes + `meta:changed` fires
-// (meta). Dynamic import keeps those services — and taste's heavy digital-twin.js
+// cache is republished after the write (taste) and the cache refreshes +
+// `meta:changed` fires (meta). Dynamic import keeps those services — and taste's heavy digital-twin.js
 // barrel — out of this module's load path (mirrors dataSync's peerSync import).
 
+// Taste goes further than a cache refresh: taste-questionnaire owns the single
+// write queue for taste-profile.json, so the merge runs against the record as it
+// stands inside that queue. A raw write here would race a local answer, reset,
+// or a summary save and one side would silently drop the other's data (#9785).
 async function applyTaste(remoteTaste) {
   if (!isPlainObject(remoteTaste)) return 0;
-  const local = await readJSONFile(TASTE_FILE, null, { strict: true });
-  const { merged, changed } = mergeTaste(local, remoteTaste);
-  if (!changed) return 0;
-  await atomicWrite(TASTE_FILE, merged);
-  const { invalidateTasteProfileCache } = await import('./taste-questionnaire.js');
-  invalidateTasteProfileCache();
-  return 1;
+  const { applyTasteProfileMerge } = await import('./taste-questionnaire.js');
+  return (await applyTasteProfileMerge((local) => mergeTaste(local, remoteTaste))) ? 1 : 0;
 }
 
 async function applyMeta(remoteMeta) {

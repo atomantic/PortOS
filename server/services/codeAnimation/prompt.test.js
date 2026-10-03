@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCodeAnimationPrompt,
+  buildMusicVideoCodePrompt,
+  buildMixedMediaDocumentPrompt,
+  PACING_RULE,
   extractAnimationHtml,
   resolveFrameSize,
   CODE_ANIMATION_AUDIO_GLOBAL,
   CODE_ANIMATION_MESSAGES,
 } from './prompt.js';
+import { buildSongDocument } from '../musicVideo/codeTimeline.js';
 
 const format = { durationSeconds: 20, aspectRatio: '16:9', resolution: '1080p', fps: 30 };
 
@@ -132,5 +136,63 @@ describe('extractAnimationHtml', () => {
     expect(extractAnimationHtml('I cannot do that.')).toBeNull();
     expect(extractAnimationHtml('')).toBeNull();
     expect(extractAnimationHtml(null)).toBeNull();
+  });
+});
+
+// Exercise the production song adapter, not a prompt-only field nobody supplies.
+describe('music-video craft and measured choreography', () => {
+  const builders = [
+    ['native Canvas', buildMusicVideoCodePrompt],
+    ['document Canvas', input => buildMixedMediaDocumentPrompt({ ...input, renderer: 'canvas' })],
+    ['document Three.js', input => buildMixedMediaDocumentPrompt({ ...input, renderer: 'three' })],
+  ];
+  const samples = Array.from({ length: 600 }, (_, index) => index / 600);
+  const features = {
+    envelopes: { fps: 20, rms: samples, low: samples, mid: samples, high: samples },
+    onsets: { low: [0.75, 4.25], mid: [1.5], high: [2.75] }, truncatedAtSec: 30,
+  };
+  const project = {
+    audioAnalysis: { durationSec: 32, beats: [0, 0.5, 1, 1.5, 4], downbeats: [0, 4], features,
+      sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 32 }] },
+    lyricCues: [{ id: 'line', text: 'Open slowly', startSec: 1, endSec: 3,
+      words: [{ w: 'Open', startSec: 1.25, endSec: 2 }, { w: 'slowly', startSec: 2.25, endSec: 3 }] }],
+  };
+  const songSnapshot = prompt => JSON.parse(prompt.match(/^SONG[^\n]*\n([^\n]+)/m)[1]);
+
+  it.each(builders)('gives %s the shared craft bar and bounded real feature/word anchors', (_label, build) => {
+    const song = buildSongDocument(project);
+    const prompt = build({ title: 'Example measured choreography', song, palette: {}, scenes: [] });
+    expect(prompt).toContain('DIRECTION — make it feel like a studio short');
+    expect(prompt).toContain(PACING_RULE);
+    expect(prompt).toContain('SELF-REVIEW before you answer');
+    expect(prompt).toContain('step through render(ctx, env)');
+    expect(prompt).not.toContain('step through renderFrame');
+    expect(prompt.indexOf('SELF-REVIEW')).toBeLessThan(prompt.indexOf('OUTPUT:'));
+    expect(prompt).toContain('Follow the reviewed energy target and give each section a time-based action plan');
+    expect(prompt).toContain('Repeated choruses');
+    expect(prompt).toContain('does not require rapid cuts or constant motion');
+    expect(prompt).toContain("Preserve the host's lyric pass as the authority");
+    expect(prompt).toContain('never invent a kick, snare, drop, word timing or missing event');
+    const snapshot = songSnapshot(prompt);
+    expect(snapshot.beats).toEqual(project.audioAnalysis.beats);
+    expect(snapshot.downbeats).toEqual(project.audioAnalysis.downbeats);
+    expect(snapshot.lyrics[0].words[0]).toEqual({ text: 'Open', startSec: 1.25, endSec: 2 });
+    expect(snapshot.features.onsets).toEqual(features.onsets);
+    expect(snapshot.features.truncatedAtSec).toBe(30);
+    expect(snapshot.features.envelopes).toMatchObject({ fps: 20, sampleStride: 3 });
+    expect(snapshot.features.envelopes.low).toEqual(samples.filter((_, index) => index % 3 === 0));
+    expect(snapshot.features.envelopes.low.length).toBeLessThanOrEqual(240);
+    expect(song.features.envelopes.low).toEqual(samples); // runtime retains original sampling grid
+  });
+
+  it('does not manufacture features for a legacy or malformed analysis', () => {
+    for (const features of [null, { ...project.audioAnalysis.features, envelopes: { ...project.audioAnalysis.features.envelopes, low: [1.5] } }]) {
+      const song = buildSongDocument({ ...project, audioAnalysis: { ...project.audioAnalysis, features } });
+      for (const [, build] of builders) {
+        const prompt = build({ song, palette: {}, scenes: [] });
+        expect(songSnapshot(prompt).features).toBeNull();
+        expect(prompt).toContain('audio feature data is unavailable');
+      }
+    }
   });
 });

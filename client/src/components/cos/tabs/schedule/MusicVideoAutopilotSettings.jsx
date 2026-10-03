@@ -1,3 +1,6 @@
+import CodeAuthoringPicker from '../../../musicVideo/CodeAuthoringPicker.jsx';
+import MediaModePicker from '../../../musicVideo/MediaModePicker.jsx';
+import MusicVideoLlmStagesPicker from '../../../musicVideo/MusicVideoLlmStagesPicker.jsx';
 import { useEffect, useState } from 'react';
 import ToggleChip from '../../../ui/ToggleChip';
 import ProviderModelSelector from '../../../ProviderModelSelector';
@@ -59,7 +62,7 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
   return (
     <form onSubmit={handleSave} className="space-y-4">
       <p className="text-xs text-gray-500">
-        Each run turns the oldest unused Brain idea into a fully autonomous music video with these settings. Use Run Now under Global defaults to start one immediately.
+        Each run turns the oldest unused Brain idea into an authored music video with these settings, pausing for art, storyboard and animated proof approvals. Use Run Now under Global defaults to start one immediately.
       </p>
 
       <div>
@@ -71,6 +74,8 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
 
       <ToggleChip id="mv-ap-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
 
+      <MediaModePicker id="mv-auto-media-mode" value={draft.mediaMode} onChange={(mediaMode) => patch({ mediaMode })} />
+      <CodeAuthoringPicker value={draft.authoring} onChange={(authoring) => patch({ authoring })} disabled={updating} />
       <ToolPicker idPrefix="mv-ap" tools={draft.tools} models={draft.models} onChange={patch} />
 
       <MoodBoardPicker id="mv-ap-mood-board" value={draft.moodBoardId} onChange={(moodBoardId) => patch({ moodBoardId })} />
@@ -112,12 +117,21 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
           onEffortChange={setEffort}
           emptyProviderOption="Auto — a TUI provider when one is eligible"
           emptyModelOption="Provider default"
-          label="Writes the brief and lyrics"
+          label="Direction LLM (brief, lyrics and every stage on Default)"
           disabled={updating}
           modelDisabled={llm.availableModels.length === 0}
           compact
         />
       )}
+
+      <MusicVideoLlmStagesPicker
+        idPrefix="mv-ap"
+        value={draft.llmStages}
+        onChange={(llmStages) => patch({ llmStages })}
+        lyricsReview={draft.lyricsReview}
+        onLyricsReviewChange={(lyricsReview) => patch({ lyricsReview })}
+        disabled={updating}
+      />
 
       <button type="submit" disabled={updating} className="w-full bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
         {updating ? 'Saving…' : 'Save settings'}

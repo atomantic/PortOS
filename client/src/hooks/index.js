@@ -218,6 +218,7 @@ export { default as useUrlParams } from './useUrlParams.js';
 export * from './useValidTab.js';
 
 // === Storage & persistence ===
+export * from './useFailedCaptures.js';
 export * from './useLocalStorageBool.js';
 export * from './useNavWorkingSet.js';
 
@@ -269,3 +270,7 @@ export * from './useFableLoomRun.js';
 
 export { default as useGraphNodeDetail } from './useGraphNodeDetail.js';
 export * from './useModelLifecycle.js';
+
+export { default as useMusicVideoProductionReview } from './useMusicVideoProductionReview.js';
+
+export * from './useCalendarWindowEvents.js';

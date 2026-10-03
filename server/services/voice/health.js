@@ -8,6 +8,7 @@ import { which } from './bootstrap.js';
 import { resolveLlmEndpoint, authHeaders } from './llm.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { checkSetup as checkFaceTimeSetup } from './facetimeBridge.js';
+import { inspectVoiceAsset, isVoiceAssetUsable } from '../../lib/voiceModelAssets.js';
 
 const PROBE_TIMEOUT_MS = 1500;
 const CACHE_TTL_MS = 3000;
@@ -58,10 +59,12 @@ export const checkAll = async (cfg) => {
     // CLI-mode piper has no server to probe — check binary + selected voice.
     const localPiper = join(voiceHome(), 'piper', PIPER_BIN_NAME);
     const [hasBin, voicePath] = [existsSync(localPiper) || !!(await which('piper')), expandPath(voice.tts.piper?.voicePath || '')];
-    const hasVoice = voicePath && existsSync(voicePath);
-    out.piper = hasBin && hasVoice
+    // A voice file that exists may still be a truncated download or lack its
+    // .onnx.json sidecar — both fail at synthesis time, so neither is "ready".
+    const voiceAsset = voicePath ? inspectVoiceAsset('piper', voicePath) : { state: 'missing' };
+    out.piper = hasBin && isVoiceAssetUsable(voiceAsset.state)
       ? { ok: true, state: 'ready' }
-      : { ok: false, state: !hasBin ? 'no binary' : 'voice missing' };
+      : { ok: false, state: !hasBin ? 'no binary' : (voiceAsset.state === 'incomplete' ? 'voice incomplete' : 'voice missing') };
   }
 
   if (sttEngine === 'web-speech') {

@@ -54,10 +54,13 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
     imageMode: _imageMode, imageModelId: _imageModelId, productionRuns: _productionRuns,
     // Development artifacts and the Cast & Sets checkpoint name files and jobs
     // on this install only (services/musicVideo/devArtifacts.js, castAndSets.js).
-    devArtifacts: _devArtifacts, castAndSets: _castAndSets,
+    devArtifacts: _devArtifacts, castAndSets: _castAndSets, productionReview: _productionReview,
     // A fully-autonomous run names this install's providers, Suno songs and
     // production run (services/musicVideo/autonomousService.js).
     autonomousRun: _autonomousRun,
+    // Render diagnostics describe a job on this machine, never a peer job.
+    renderError: _renderError,
+    songRevision: _songRevision, songRevisionHistory: _songRevisionHistory,
     ...shared
   } = record;
   // A composition document names a folder on this install only

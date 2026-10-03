@@ -201,7 +201,10 @@ export function asyncHandler(fn) {
         // Expected high-volume 404s (e.g. speculative media-job archive
         // lookups) — already classified as benign; don't pollute server logs.
       } else if (error.status >= 500) {
-        console.error(logMsg, error.stack ? error.stack : '');
+        // Use the original Error's stack (from before normalization) when available
+        // so diagnostics point to the actual throwing function, not normalizeError.
+        const stack = error.originalStack || error.stack;
+        console.error(logMsg, stack ? stack : '');
       } else {
         // An empty `[]`/`{}` is truthy but summarizes to nothing — gate on the
         // summary so the line can't end in a dangling colon.
@@ -293,6 +296,16 @@ export function normalizeError(err) {
     return err;
   }
 
+  // Backstop: a raw schema `.parse()` that escaped a route is a client error,
+  // not a server crash. Routes should still use validateRequest().
+  if (err?.name === 'ZodError' && Array.isArray(err.issues)) {
+    return new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: err.issues.map(i => ({ path: i.path.join('.'), message: i.message })) }
+    });
+  }
+
   if (err instanceof Error) {
     const status = err.status || 500;
     const code = err.code || getErrorCode(status);
@@ -302,6 +315,11 @@ export function normalizeError(err) {
       { status, code, context, responseMessage: err.responseMessage },
     );
     if (normalized.message !== err.message) normalized.originalMessage = err.message;
+    // Preserve the original Error's stack for local server logging; the normalized
+    // ServerError's stack starts from the normalizeError call. Callers log this
+    // field when available instead of the normalized stack so diagnostics point
+    // to the actual throwing function, not the error handler.
+    normalized.originalStack = err.stack;
     return normalized;
   }
 

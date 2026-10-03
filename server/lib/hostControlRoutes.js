@@ -65,7 +65,7 @@
  *     persistent-mind setup, agent-benchmark and JEV policy/head mutations
  *     require operator authority. Head training reads git/forge history;
  *     adoption/discard changes the classifier admitting agent work.
- *   - settings: feature toggles and the Eidoverse host bridge (they arm
+ *   - settings: other feature toggles and the Eidoverse host bridge (they arm
  *     PortOS's own integrations or open a listener), orchestration profiles,
  *     AI assignments and credentials (they choose among configured providers
  *     or store a key). The `PUT /api/settings` and `PUT /api/cos/config`
@@ -309,6 +309,38 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/autonomous',
   'POST /api/music-video/:id/autonomous/resume',
 
+  // Media agents retain host tools; scratch cwd and output validation are not
+  // execution containment (#9667). Gate before uploads, stores or queue writes,
+  // including inference-first requests that can fall back to CLI/TUI.
+  'POST /api/image-gen/generate',
+  'POST /api/image-gen/avatar',
+  'POST /api/video-gen',
+  'POST /api/sprites/:id/reference/generate',
+  // Fork creates a record and immediately queues reference generation too.
+  'POST /api/sprites/:id/fork',
+  'POST /api/sprites/:id/walk/generate',
+  'POST /api/sprites/:id/tracks/:trackId/generate',
+  'POST /api/threejs-models',
+  'POST /api/threejs-models/:id/generate',
+  // Publication chooses and rewrites managed-app source.
+  'PUT /api/sprites/:id/publish-binding',
+  'POST /api/sprites/:id/atlas/publish',
+
+  // Auxiliary media entry points reach the same tool-capable agents (#9672):
+  // prompt refinement and image-to-prompt hand caller text/images to a provider
+  // that may fall back to a CLI/TUI; retry and run-now (re)dispatch an
+  // agent-backed queue job (retry merges caller prompt overrides); dataset
+  // generate/caption/slice use a cloud-agent render target or a CLI vision
+  // provider. Cancel, reads, dataset CRUD/uploads and strip-shared-fragments
+  // stay open.
+  'POST /api/media-jobs/refine-prompt',
+  'POST /api/media-jobs/prompt-from-media',
+  'POST /api/media-jobs/:id/retry',
+  'POST /api/media-jobs/:id/run-now',
+  'POST /api/lora-datasets/:id/generate',
+  'POST /api/lora-datasets/:id/caption',
+  'POST /api/lora-datasets/:id/slice-reference-sheet',
+
   // Code Animation contained execution (#9388): choosing the installed tool a
   // worker runs, and the containment check that spawns sandboxed processes.
   'PUT /api/code-animation/execution/tools',
@@ -496,8 +528,11 @@ const bodyKeys = (body) => (body && typeof body === 'object' && !Array.isArray(b
 // `hostControlBodyGate` in services/authGate.js applies these after the body
 // parser, since `hostControlRouteGate` runs before it.
 const COMPILED_BODY_ROUTES = [
+  // Enabling this feature now launches its registered host executable.
+  ['PUT /api/settings/features/eidoverse', (body) => bodyKeys(body)],
   ['POST /api/local-llm/capability-tests/run', (body) => body?.testId === 'sandbox-repair' ? ['testId'] : []],
-  ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key))],
+  ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key)
+    || (key === 'instanceFeatures' && body.instanceFeatures?.eidoverse !== undefined))],
   ['PUT /api/cos/config', (body) => bodyKeys(body).filter((key) => !HOST_CONTROL_OPEN_COS_CONFIG_KEYS.includes(key))],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 

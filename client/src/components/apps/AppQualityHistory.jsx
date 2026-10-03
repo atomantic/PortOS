@@ -37,7 +37,7 @@ export default function AppQualityHistory({ appId, categories = [] }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="flex items-center gap-1.5 text-sm font-medium">
           Quality over time
-          <InfoTooltip label="About quality history" placement="below" align="start" panelClassName="w-72">
+          <InfoTooltip label="About quality history" placement="below" align="start" width={288}>
             Daily snapshots (UTC), higher is healthier. Scores carry forward for up to 30 days; gaps mean no fresh evidence. Coverage changes can move the overall mean. Category views include provisional assessments.
             {state.data?.federation && ` Includes ${state.data.federation.available ?? 0} available full-sync peers; peer availability can change historical coverage.`}
           </InfoTooltip>

@@ -13,8 +13,8 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   updateProject: vi.fn(async (id, p) => ({ id, ...p })),
   deleteProject: vi.fn(async () => ({ ok: true })),
   setProjectAnalysis: vi.fn(async (id, analysis) => ({ id, audioAnalysis: analysis, status: 'analyzed' })),
-  addProjectScene: vi.fn(async (id, s) => ({ sceneId: 'mvs-1', order: 0, ...s })),
-  updateScene: vi.fn(async (id, sceneId, p) => ({ sceneId, ...p })),
+  addProjectScene: vi.fn(async (_id, s) => ({ sceneId: 'mvs-1', order: 0, ...s })),
+  updateScene: vi.fn(async (_id, sceneId, p) => ({ sceneId, ...p })),
   deleteScene: vi.fn(async (id) => ({ id, scenes: [] })),
   reorderProjectScenes: vi.fn(async (id, ids) => ({ id, scenes: ids.map((sceneId, order) => ({ sceneId, order })) })),
   // Scene split (#8977) — exercised against the real store in musicVideoSceneSplit.test.js.
@@ -58,8 +58,8 @@ vi.mock('../services/musicVideo/excerptRender.js', () => ({
 }));
 vi.mock('../services/musicVideo/excerptService.js', () => ({
   deleteExcerpt: vi.fn(async (id) => ({ id })),
-  addReviewNote: vi.fn(async (id, excerptId, input) => ({ project: { id }, note: { id: 'mvn-1', ...input } })),
-  editReviewNote: vi.fn(async (id, excerptId, noteId, patch) => ({ project: { id }, note: { id: noteId, ...patch } })),
+  addReviewNote: vi.fn(async (id, _excerptId, input) => ({ project: { id }, note: { id: 'mvn-1', ...input } })),
+  editReviewNote: vi.fn(async (id, _excerptId, noteId, patch) => ({ project: { id }, note: { id: noteId, ...patch } })),
   deleteReviewNote: vi.fn(async (id) => ({ id })),
 }));
 
@@ -156,6 +156,12 @@ describe('musicVideo routes', () => {
       name: 'Director Cut',
       includeGeneratedMedia: true,
     });
+  });
+
+  it('POST /:id/clone accepts an explicit video-generation variant', async () => {
+    const r = await request(app).post('/api/music-video/mv-1/clone').send({ variant: 'video-generation' });
+    expect(r.status).toBe(201);
+    expect(svc.cloneProject).toHaveBeenCalledWith('mv-1', { variant: 'video-generation' });
   });
 
   it('POST /:id/clone rejects unsupported options', async () => {
@@ -438,7 +444,7 @@ describe('musicVideo routes', () => {
       const r = await request(app).post('/api/music-video/mv-1/analyze');
       expect(r.status).toBe(200);
       expect(r.body.audioAnalysis).toEqual(analysis);
-      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis);
+      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis, { id: 'mv-1', trackId: 't1' });
     });
   });
 
@@ -474,7 +480,7 @@ describe('musicVideo routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.audioAnalysis).toEqual(analysis);
       expect(analyzeAudioFileManual).toHaveBeenCalledWith(expect.stringContaining('song.wav'), { bpm: 128, offsetSec: 0.25 });
-      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis);
+      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis, { id: 'mv-1', trackId: 't1' });
     });
 
     it('skips the ffmpeg decode and reuses cached sections/durationSec when a prior analysis exists', async () => {

@@ -32,6 +32,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 // Placement: `position: 'above'` prefers opening above the trigger and flips
 // below only when there isn't room above; `'below'` does the inverse. Both
 // clamp into the viewport with VIEWPORT_PADDING on every edge.
+// Horizontal alignment is 'start', 'center', or 'end' (the compatible default).
+// Opt into `constrainHeight` for scrollable help: cap to the chosen side's
+// available height, choosing the roomier side when the preferred side is too short.
 //
 // The reflow listener uses capture-phase scroll so scrolling ANY ancestor
 // (not just window) keeps the popover attached to its trigger, and coalesces
@@ -48,6 +51,8 @@ export default function usePopoverPosition({
   minWidth = 180,
   gap = 8,
   position = 'above',
+  align = 'end',
+  constrainHeight = false,
   anchorRef = null,
   contentDeps = [],
 } = {}) {
@@ -73,11 +78,30 @@ export default function usePopoverPosition({
     popover.style.width = `${w}px`;
 
     const triggerRect = trigger.getBoundingClientRect();
+    let effectivePosition = position;
+    let maxHeight;
+    if (constrainHeight) {
+      const viewportSpace = Math.max(0, viewportHeight - VIEWPORT_PADDING * 2);
+      const aboveSpace = Math.min(viewportSpace, Math.max(0, triggerRect.top - gap - VIEWPORT_PADDING));
+      const belowSpace = Math.min(viewportSpace, Math.max(0, viewportHeight - triggerRect.bottom - gap - VIEWPORT_PADDING));
+      // Measure natural height at the clamped width before choosing a side.
+      popover.style.maxHeight = `${viewportSpace}px`;
+      const height = popover.getBoundingClientRect().height;
+      const preferredSpace = position === 'above' ? aboveSpace : belowSpace;
+      if (height > preferredSpace) effectivePosition = aboveSpace > belowSpace ? 'above' : 'below';
+      maxHeight = `${effectivePosition === 'above' ? aboveSpace : belowSpace}px`;
+      popover.style.maxHeight = maxHeight;
+    }
     const popoverRect = popover.getBoundingClientRect();
 
     const maxLeft = viewportWidth - w - VIEWPORT_PADDING;
+    const alignedLeft = align === 'start'
+      ? triggerRect.left
+      : align === 'center'
+        ? (triggerRect.left + triggerRect.right - w) / 2
+        : triggerRect.right - w;
     const left = Math.min(
-      Math.max(triggerRect.right - w, VIEWPORT_PADDING),
+      Math.max(alignedLeft, VIEWPORT_PADDING),
       Math.max(VIEWPORT_PADDING, maxLeft),
     );
 
@@ -86,7 +110,7 @@ export default function usePopoverPosition({
     const wouldOverflowTop = aboveTop < VIEWPORT_PADDING;
     const wouldOverflowBottom = belowTop + popoverRect.height > viewportHeight - VIEWPORT_PADDING;
 
-    let top = position === 'above'
+    let top = effectivePosition === 'above'
       ? (wouldOverflowTop ? belowTop : aboveTop)
       : (wouldOverflowBottom ? aboveTop : belowTop);
 
@@ -94,13 +118,13 @@ export default function usePopoverPosition({
     top = Math.min(Math.max(top, VIEWPORT_PADDING), maxTop);
 
     setStyle((prev) => {
-      const next = { left: `${left}px`, top: `${top}px`, width: `${w}px` };
-      if (prev && prev.left === next.left && prev.top === next.top && prev.width === next.width) {
+      const next = { left: `${left}px`, top: `${top}px`, width: `${w}px`, ...(constrainHeight ? { maxHeight } : {}) };
+      if (prev && prev.left === next.left && prev.top === next.top && prev.width === next.width && prev.maxHeight === next.maxHeight) {
         return prev;
       }
       return next;
     });
-  }, [triggerRef, width, minWidth, gap, position]);
+  }, [triggerRef, width, minWidth, gap, position, align, constrainHeight]);
 
   // Measure synchronously on open (and on any content-height change) so the
   // popover paints in place; clear on close so the next open re-measures (and
@@ -118,7 +142,10 @@ export default function usePopoverPosition({
   useEffect(() => {
     if (!open) return undefined;
     let rafId = null;
-    const onReflow = () => {
+    const onReflow = (event) => {
+      // Scrolling help does not move its anchor. Re-measuring would briefly
+      // enlarge the live scroll container and clamp away its bottom scrollTop.
+      if (constrainHeight && event.type === 'scroll' && popoverRef.current?.contains(event.target)) return;
       if (rafId !== null) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
@@ -132,7 +159,7 @@ export default function usePopoverPosition({
       window.removeEventListener('resize', onReflow);
       window.removeEventListener('scroll', onReflow, true);
     };
-  }, [open, reposition]);
+  }, [open, reposition, constrainHeight]);
 
   return { triggerRef, popoverRef, style, reposition };
 }

@@ -138,6 +138,15 @@ describe('errorHandler.js', () => {
       expect(normalized.originalMessage).toContain('/private/install/data/example.json');
     });
 
+    it('maps a raw ZodError to a 400 VALIDATION_ERROR', async () => {
+      const { z } = await import('zod');
+      const parsed = z.object({ a: z.string() }).safeParse({});
+      const normalized = normalizeError(parsed.error);
+      expect(normalized.status).toBe(400);
+      expect(normalized.code).toBe('VALIDATION_ERROR');
+      expect(normalized.context.details[0].path).toBe('a');
+    });
+
     it('should convert string to ServerError', () => {
       const normalized = normalizeError('String error');
       expect(normalized instanceof ServerError).toBe(true);
@@ -560,6 +569,33 @@ describe('errorHandler.js', () => {
       const [line, stack] = errorSpy.mock.calls[0];
       expect(line).not.toContain('a: b');
       expect(stack).toBe(error.stack);
+    });
+
+    // Regression: a plain Error thrown from a service function must log its
+    // original stack location, not the normalizeError wrapper's stack. Use a
+    // named synthetic throwing function so the location is stable and visible
+    // in the stack trace.
+    it('preserves the original Error stack when normalizing a 500 error through asyncHandler', async () => {
+      const { req, res } = makeReqRes(null);
+
+      // Define a named function that throws a plain Error (not a ServerError).
+      function syntheticServiceFunction() {
+        throw new Error('Service error from syntheticServiceFunction');
+      }
+
+      await asyncHandler(async () => {
+        syntheticServiceFunction();
+      })(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const [, stack] = errorSpy.mock.calls[0];
+
+      // The logged stack must contain the original throwing function's name,
+      // not normalizeError. This proves the originalStack field was captured
+      // and used for logging.
+      expect(stack).toContain('syntheticServiceFunction');
+      expect(stack).not.toContain('normalizeError');
     });
   });
 

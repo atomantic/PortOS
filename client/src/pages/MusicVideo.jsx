@@ -1,3 +1,5 @@
+import ProductionReviewPanel from '../components/musicVideo/ProductionReviewPanel.jsx';
+import useMusicVideoProductionReview from '../hooks/useMusicVideoProductionReview.js';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film, Copy, Trash2, Wand2 } from 'lucide-react';
@@ -5,6 +7,7 @@ import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
+import Banner from '../components/ui/Banner.jsx';
 import {
   listMusicVideoProjects,
   createMusicVideoProject,
@@ -57,6 +60,7 @@ import AutonomousRunPanel from '../components/musicVideo/AutonomousRunPanel.jsx'
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import MusicVideoLayout from '../components/musicVideo/MusicVideoLayout.jsx';
+import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
 import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
@@ -123,6 +127,8 @@ export default function MusicVideo() {
   const [universes, setUniverses] = useState(null);
   const selectedId = routeProjectId || null;
   const [loading, setLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState(null);
+  const projectsLoadPending = useRef(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [arranging, setArranging] = useState(false);
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
@@ -130,7 +136,8 @@ export default function MusicVideo() {
   const [compositionSavePending, setCompositionSavePending] = useState(0);
   useEffect(() => { setStyleReferencesPending(false); }, [selectedId]);
   const [planning, setPlanning] = useState(false);
-  const [cloning, setCloning] = useState(false);
+  const [cloningId, setCloningId] = useState(null);
+  const cloning = !!cloningId;
   const [importingLyrics, setImportingLyrics] = useState(false);
   const [aligningLyrics, setAligningLyrics] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -143,13 +150,15 @@ export default function MusicVideo() {
   // unknown one) the tab is the stage the project was in when it was opened,
   // pinned so a stage completing mid-session doesn't move the user off the tab
   // they are working in — the header's next action tracks the project instead.
-  const progress = useMemo(() => deriveStages(selected), [selected]);
+  const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+  const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
+  const progress = useMemo(() => deriveStages(selected, productionReview.readiness), [selected, productionReview.readiness]);
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
   if (selected && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
   const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
   const activeStage = resolveStageParam(routeStage) || pinnedStage || progress.current;
 
-  const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+
   // Functional merges keyed on the captured projectId/sceneId so an async result
   // that resolves after the user edited the board can't clobber those edits with
   // a stale project snapshot. `patch` may be a function of the current record
@@ -185,9 +194,9 @@ export default function MusicVideo() {
   const renderJob = useMusicVideoRenderJob({
     onRendered: (projectId, result) => patchProject(projectId, (project) => ({
       renderHistoryId: result.id || project.renderHistoryId,
-      status: 'complete',
+      status: 'complete', renderError: null,
     })),
-    onFailed: (projectId) => patchProject(projectId, { status: 'failed' }),
+    onFailed: (projectId, renderError) => patchProject(projectId, { status: 'failed', renderError }),
   });
   // Draft excerpt render (#8986): a fast cue/cut preview of a chosen window,
   // separate from the full-render job/mutex above so a director can preview a
@@ -258,10 +267,27 @@ export default function MusicVideo() {
     navigate(id ? `/music-video/${id}` : '/music-video');
   };
 
+  const loadProjects = useCallback(async () => {
+    if (projectsLoadPending.current) return;
+    projectsLoadPending.current = true;
+    setLoading(true);
+    try {
+      const data = await listMusicVideoProjects({ silent: true });
+      setProjects(data || []);
+      setProjectsError(null);
+    } catch (err) {
+      setProjectsError(err?.message || 'Failed to load music video projects');
+    } finally {
+      projectsLoadPending.current = false;
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    listMusicVideoProjects({ silent: true })
-      .then((data) => { setProjects(data || []); setLoading(false); })
-      .catch((err) => { toast.error(err?.message || 'Failed to load music video projects'); setLoading(false); });
+    loadProjects();
+  }, [loadProjects]);
+
+  useEffect(() => {
     listTracks({ silent: true }).then((t) => setTracks(t || [])).catch(() => setTracks([]));
     listUniverseNames({ silent: true }).then((u) => setUniverses(u || [])).catch(() => setUniverses([]));
   }, []);
@@ -294,6 +320,7 @@ export default function MusicVideo() {
     // Only the ids go up: the server snapshots the universe/board style and track metadata into the concept.
     createMusicVideoProject({
       name: form.name.trim(),
+      mediaMode: form.mediaMode || 'code-images-video',
       mode: form.mode,
       trackId: form.trackId || null,
       concept: { universeId: form.universeId || null },
@@ -337,17 +364,21 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to delete project'));
   };
 
-  const handleClone = () => {
-    if (!selected || cloning) return;
-    setCloning(true);
-    cloneMusicVideoProject(selected.id, {}, { silent: true })
+  const handleClone = (optionsOrTarget = {}, maybeOptions = {}, songRevision = false) => {
+    const isTarget = optionsOrTarget && typeof optionsOrTarget.id === 'string';
+    const target = isTarget ? optionsOrTarget : selected;
+    const options = isTarget ? maybeOptions : (optionsOrTarget || {});
+
+    if (!target || cloningId) return;
+    setCloningId(target.id);
+    cloneMusicVideoProject(target.id, options, { silent: true })
       .then((project) => {
         setProjects((prev) => [...prev, project]);
-        navigate(`/music-video/${project.id}`);
+        navigate(`/music-video/${project.id}${songRevision === true ? "/setup" : ""}`);
         toast.success(`Created ${project.name}`);
       })
       .catch((err) => toast.error(err?.message || 'Failed to clone project'))
-      .finally(() => setCloning(false));
+      .finally(() => setCloningId(null));
   };
 
   // Resolves with the analyzed project, or null when analysis failed (toasted).
@@ -761,6 +792,7 @@ export default function MusicVideo() {
   const audioFilename = projectAudioFilename(selected);
   const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
   const nextAction = selected ? deriveNextAction(selected, {
+    readiness: productionReview.readiness,
     renderActive: renderTargetsSelected,
     renderProgress: renderJob.progress,
     renderPending: renderJob.pending,
@@ -791,9 +823,11 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
+    productionReadiness: productionReview.readiness,
     locked: creativeSetupPending || styleReferencesPending || compositionSavePending > 0,
     busy: { analyzing, planning, arranging, cloning },
     tracks,
+    onForkSong: () => handleClone({}, {}, true),
     trackName,
     audioFilename,
     audioUrl,
@@ -949,15 +983,24 @@ export default function MusicVideo() {
               </span>
             )}
             {selected && (
-              <span className="flex items-center gap-1">
+              <span className="flex flex-wrap items-center gap-1">
                 <button
                   type="button"
-                  onClick={handleClone}
+                  onClick={() => handleClone()}
                   disabled={cloning}
                   title={`Create an editable v${(selected.version || 1) + 1}; keep scene media attached and clear the final render`}
                   className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm disabled:opacity-50 sm:min-h-0 sm:min-w-0"
                 >
                   <Copy size={15} aria-hidden="true" /> <span className="max-sm:sr-only">{cloning ? 'Forking…' : `Fork v${(selected.version || 1) + 1}`}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleClone({ variant: 'video-generation' })}
+                  disabled={cloning}
+                  title="Keep the song and storyboard; start fresh cast, sets and mood board with footage rendering. No generation starts."
+                  className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm disabled:opacity-50 sm:min-h-0"
+                >
+                  Fork for video generation
                 </button>
                 {isConfirmingDelete(selected.id) ? (
                   <ConfirmButtonPair
@@ -1024,31 +1067,64 @@ export default function MusicVideo() {
       />
 
       <div>
-        {!selected && !loading && routeProjectId && (
+        {projectsError && (
+          <Banner tone="error" size="md" title="Music video projects unavailable" className="mb-4" actions={(
+            <button
+              type="button"
+              onClick={loadProjects}
+              disabled={loading}
+              className="min-h-[44px] rounded border border-port-error/30 px-3 py-2 text-sm disabled:opacity-50"
+            >
+              {loading ? 'Retrying…' : 'Retry'}
+            </button>
+          )}>
+            <p>{projectsError}</p>
+          </Banner>
+        )}
+        {!selected && !loading && !projectsError && routeProjectId && (
           <p className="text-sm text-port-text-muted">
             Project not found — it may have been deleted.{' '}
             <button onClick={() => navigate('/music-video')} className="text-port-accent underline">Back to projects</button>
           </p>
         )}
         {!selected && (loading || !routeProjectId) && (
-          <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
-            <p className="text-sm text-port-text-muted mb-3">Pick a project in the header, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
-            <div className="flex flex-wrap justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => setCreateOpen(true)}
-                className="inline-flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
-              >
-                <Plus size={15} /> New music video
-              </button>
-              <button
-                type="button"
-                onClick={() => setAutonomousOpen(true)}
-                className="inline-flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
-              >
-                <Wand2 size={15} /> Autonomous
-              </button>
-            </div>
+          <div className="space-y-6">
+            {/* The header already carries New project / Autonomous: keep the hint, not a second pair of buttons. */}
+            <p className="text-sm text-port-text-muted">Pick a project above, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
+
+            {loading ? (
+              <div className="text-center py-8 text-sm text-port-text-muted">
+                Loading projects…
+              </div>
+            ) : projectsError ? null : projects.length === 0 ? (
+              <div className="text-center py-6 text-sm text-port-text-muted">
+                No music video projects yet. Create your first project above to get started.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-port-text-muted">
+                    Projects ({projects.length})
+                  </h2>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="mv-project-grid">
+                  {projects.map((project) => (
+                    <MusicVideoProjectCard
+                      key={project.id}
+                      project={project}
+                      trackLabel={trackName(project.trackId)}
+                      onSelect={() => selectProject(project.id)}
+                      onClone={(options) => handleClone(project, options)}
+                      isConfirmingDelete={isConfirmingDelete(project.id)}
+                      onRequestDelete={() => handleDeleteRequest(project.id)}
+                      onConfirmDelete={() => confirmDelete(() => handleDelete(project.id))}
+                      onCancelDelete={cancelDelete}
+                      cloning={cloningId === project.id}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
         {selected && (
@@ -1070,11 +1146,12 @@ export default function MusicVideo() {
                 onToggleCollapsed={() => setDockCollapsed((c) => !c)}
               />
             ) : null}
-          >
-            <div className="space-y-3 min-w-0">
+            projectPanels={<div className="space-y-3 min-w-0">
               <AutonomousRunPanel key={`autonomous-${selected.id}`} project={selected} auto={autonomous} selectedStage={runStage} onSelectStage={setRunStage} />
-              <StageView key={selected.id} board={board} />
-            </div>
+              <ProductionReviewPanel key={`production-review-${selected.id}`} project={selected} review={productionReview} onOpenArtifact={openArtifact} />
+            </div>}
+          >
+            <StageView key={selected.id} board={board} />
           </MusicVideoLayout>
         )}
       </div>

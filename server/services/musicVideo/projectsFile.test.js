@@ -9,9 +9,9 @@ import { plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlat
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'mv-projects-file-test-'));
 const writeCounter = vi.hoisted(() => ({ project: 0, baseHash: 0 }));
@@ -341,4 +341,72 @@ it('roundtrips asset-bound plate evidence through the real serialized project st
   const changed = await file.getProject(project.id);
   expect(selectedPlatePasses(changed.scenes[0], 'run-example')).toBe(false);
   expect(changed.scenes[0].takes.find((take) => take.assetId === 'example.png').plateEvidence.verdict).toBe('pass');
+});
+
+describe('editable code revisions and footage variants', () => {
+  it('keeps scene-based code addressable in a revision and isolates subsequent edits', async () => {
+    const { prepareCodeRender } = await import('./codeRender.js');
+    const source = await file.createProject({ name: 'Example Animation', trackId: 'example-track' });
+    const scene = await file.addProjectScene(source.id, { startSec: 0, endSec: 4 });
+    const originalSource = 'function render(ctx) { ctx.fillRect(0, 0, 10, 10); }';
+    await file.updateProject(source.id, { composition: { mode: 'code',
+      codeVideo: { sections: [{ id: scene.sceneId, source: originalSource }] },
+      reactiveSections: [{ sectionId: scene.sceneId, gain: 0.2, maxGain: 0.3 }],
+    } });
+    const original = await file.getProject(source.id);
+    const revision = await file.cloneProject(source.id);
+    const sectionId = revision.scenes[0].sceneId;
+    expect(sectionId).not.toBe(scene.sceneId);
+    expect(prepareCodeRender(revision).song.sections[0].id).toBe(sectionId);
+    expect(revision.composition.codeVideo.sections).toEqual([{ id: sectionId, source: originalSource }]);
+    expect(revision.composition.reactiveSections[0].sectionId).toBe(sectionId);
+    await file.updateProject(revision.id, { composition: { ...revision.composition,
+      codeVideo: { sections: [{ id: sectionId, source: 'function render(ctx) { ctx.fillRect(0, 0, 20, 20); }' }] },
+    } });
+    expect((await file.getProject(revision.id)).composition.codeVideo).not.toEqual(original.composition.codeVideo);
+    expect(await file.getProject(source.id)).toEqual(original);
+  });
+
+  it('forks a document into independent photographic production with song, storyboard and immutable assets', async () => {
+    const { castAndSetsMedium } = await import('./castAndSetsDirection.js');
+    const { startProductionOnProject, nextProductionStep } = await import('./production.js');
+    const source = await file.createProject({ name: 'Example Film', trackId: 'example-track', mediaMode: 'code-images-video',
+      concept: { prompt: 'A journey home', subjects: [{ kind: 'character', name: 'Paper protagonist' }], moodBoardStyle: 'Paper world' },
+      visualSpec: { moodBoardId: 'board-original', references: [{ imageId: 'original.png', role: 'character' }] },
+      composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first' },
+      automation: { tools: ['code:render'], moodBoardId: 'board-original' },
+      lyricCues: [{ text: 'Example lyric', startSec: 0, endSec: 4 }],
+    });
+    await file.setProjectAnalysis(source.id, { durationSec: 4, bpm: 120, beats: [0, 0.5], downbeats: [0], sections: [{ label: 'Verse', startSec: 0, endSec: 4 }] });
+    const scene = await file.addProjectScene(source.id, { startSec: 0, endSec: 4, visualLayer: 'card', prompt: 'Journey home' });
+    await file.updateScene(source.id, scene.sceneId, { referenceImageId: 'source.png', videoHistoryId: 'source-video' });
+    await file.mutateProjectRecord(source.id, (project) => ({ project: { ...project,
+      composition: { ...project.composition, document: { directory: `music-video/${source.id}/composition/example-version`, entry: 'index.html' } },
+      castAndSets: { status: 'approved', direction: { medium: 'procedural' } },
+      publishKit: { master: { filename: 'source-final.mp4' }, posts: { youtube: { url: 'https://example.com/source' } } },
+      devArtifacts: [{ id: 'sheet-original', kind: 'cast-sets', file: 'music-video/example/dev/sheet/v1.html', versions: [{ version: 1 }] }],
+      treatment: { revision: 1, appliedRevision: 1, shotDirections: [{ sceneId: scene.sceneId, route: 'code-2d', medium: 'procedural', focalSubject: 'Traveler' }], proofs: [] },
+    } }));
+    const original = await file.getProject(source.id);
+    const fork = await file.cloneProject(source.id, { variant: 'video-generation', includeGeneratedMedia: true });
+    expect(fork).toMatchObject({ parentProjectId: source.id, rootProjectId: source.id,
+      trackId: original.trackId, audioAnalysis: original.audioAnalysis, lyricCues: original.lyricCues,
+      composition: { mode: 'composed', document: original.composition.document },
+      devArtifacts: original.devArtifacts, castAndSets: null, publishKit: null,
+      productionPolicy: { strategy: 'legacy', maxGeneratedVideoPercent: 100 },
+      visualSpec: { references: [], moodBoardId: null },
+      concept: { prompt: 'A journey home', subjects: [], moodBoardStyle: '' },
+    });
+    expect(fork.scenes[0]).toMatchObject({ startSec: 0, endSec: 4, visualLayer: 'footage', referenceImageId: null, videoHistoryId: null, takes: [] });
+    expect(fork.treatment.shotDirections[0]).toMatchObject({ sceneId: fork.scenes[0].sceneId, route: 'generated', medium: 'generated-footage', focalSubject: 'Traveler' });
+    expect(fork.treatment.appliedRevision).toBeNull();
+    expect(castAndSetsMedium(fork)).toBe('photographic');
+    // Planning is pure: no queue or provider is used by this test.
+    const started = startProductionOnProject(fork, { pool: [{ kind: 'image', mode: 'local' }, { kind: 'video', mode: 'local' }], processId: 'test-process', limits: { maxGenerations: 10, maxReviewAttempts: 1 } });
+    expect(nextProductionStep(started.project, started.run, { processId: 'test-process' }).type).toBe('plan-pilots');
+    await file.updateProject(fork.id, { visualSpec: { moodBoardId: 'board-variant' } });
+    await file.mutateProjectRecord(fork.id, (project) => ({ project: { ...project, castAndSets: { status: 'review', direction: { protagonist: { name: 'New cast' } } } } }));
+    expect((await file.getProject(fork.id)).visualSpec.moodBoardId).toBe('board-variant');
+    expect(await file.getProject(source.id)).toEqual(original);
+  });
 });

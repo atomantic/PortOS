@@ -23,7 +23,7 @@ init-db.sql, each with a one-line reason.
 
 | Module | Export(s) | Domain |
 |---|---|---|
-| `core.js` | `coreDdl` | Memory sync columns + the `schema_migrations` version tracker |
+| `core.js` | `coreDdl`, `restoreReceiptsDdl` | Memory sync columns + the `schema_migrations` version tracker + machine-local `restore_receipts` (snapshot restore replay receipts, #9725) |
 | `tribe.js` | `tribeDdl` | Tribe CRM — people, network-scoped identities (`tribe_identities`, the durable-handle truth table behind Beeper linking), touchpoints, memory links (machine-local) |
 | `humanActivity.js` | `humanActivityDdl` | Human-activity timeline event store (machine-local) |
 | `post.js` | `postDdl` | MeatSpace POST normalized runs and attempts (machine-local) |

@@ -247,7 +247,9 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
                 Urgent
               </span>
             )}
-            <ProvenanceChip {...insightProvenance(primaryInsight.type)} />
+            {primaryInsight.type === 'health-unavailable' ? (
+              <span className="text-xs text-port-warning">Observation failed</span>
+            ) : <ProvenanceChip {...insightProvenance(primaryInsight.type)} />}
           </div>
           {primaryInsight.description && !isExpanded && (
             <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">

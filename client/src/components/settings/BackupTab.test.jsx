@@ -8,6 +8,7 @@ vi.mock('../../services/api', () => ({
   triggerBackup: vi.fn(),
   getBackupSnapshots: vi.fn(),
   restoreDatabase: vi.fn(),
+  recoverDatabaseRestore: vi.fn(),
   deleteBackupSnapshot: vi.fn(),
   // FolderPicker imports `* as api` from the same module; it only calls this
   // when its picker is opened (never in these tests), but the mock defines it
@@ -34,6 +35,7 @@ import {
   triggerBackup,
   getBackupSnapshots,
   restoreDatabase,
+  recoverDatabaseRestore,
   deleteBackupSnapshot,
 } from '../../services/api';
 import toast from '../ui/Toast';
@@ -288,6 +290,47 @@ describe('BackupTab', () => {
       expect(toast.success).toHaveBeenCalledWith('Database restored from snap-2026-06-09', { icon: '💾' });
     });
 
+    // #9725: a committed restore whose repair failed stays fenced server-side;
+    // the tab must offer to RESUME it (never to repeat the restore).
+    it('surfaces a committed restore awaiting recovery and resumes exactly that operation', async () => {
+      withSnapshot();
+      const recovery = { id: '00000000-0000-4000-8000-000000000001', stage: 'repairing', snapshotId: 'snap-2026-06-09' };
+      restoreDatabase
+        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
+        .mockResolvedValueOnce({ status: 'failed', reason: 'restore_sync_resync', error: 'Peer sync could not be reset yet.', recovery });
+      recoverDatabaseRestore
+        .mockResolvedValueOnce({ status: 'failed', reason: 'restore_sync_resync', error: 'Still failing.', recovery })
+        .mockResolvedValueOnce({ status: 'ok', outcome: 'repaired' });
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
+      });
+      expect(toast.error).toHaveBeenCalledWith('Peer sync could not be reset yet.', { duration: Infinity });
+      expect(screen.getByText('Database restore needs recovery')).toBeInTheDocument();
+
+      const resume = screen.getByRole('button', { name: /Resume recovery/i });
+      await act(async () => { fireEvent.click(resume); });
+      expect(recoverDatabaseRestore).toHaveBeenLastCalledWith(recovery.id, { silent: true });
+      expect(toast.error).toHaveBeenLastCalledWith('Still failing.');
+      expect(screen.getByText('Database restore needs recovery')).toBeInTheDocument();
+
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Resume recovery/i })); });
+      await waitFor(() => expect(screen.queryByText('Database restore needs recovery')).toBeNull());
+      expect(restoreDatabase).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows a pending recovery reported by the status endpoint on load', async () => {
+      getBackupStatus.mockResolvedValue({ status: 'ok', defaultExcludes: [], pgBackup: null,
+        restoreRecovery: { pending: true, id: '00000000-0000-4000-8000-000000000001', stage: 'replaying', snapshotId: 'snap-1' } });
+      await renderTab({ openExclusions: false, openSnapshots: false });
+      expect(screen.getByText('Database restore needs recovery')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Resume recovery/i })).toBeEnabled();
+    });
+
     it('binds database preview and confirmation to the selected source', async () => {
       getBackupSnapshots.mockResolvedValue([
         ...Array.from({ length: 10 }, (_, index) => ({
@@ -334,41 +377,96 @@ describe('BackupTab', () => {
       }, { silent: true });
     });
 
-    it('explains that schema recovery failed after the dump committed', async () => {
+    it.each(['preview', 'confirmation'])('explains a preflight refusal at %s without admitting another restore', async (phase) => {
       withSnapshot();
-      restoreDatabase
-        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
-        .mockResolvedValueOnce({ status: 'failed', reason: 'restore_schema_reconciliation' });
+      const refusal = {
+        status: 'failed',
+        reason: 'restore_preflight',
+        error: 'Database contains unexpected objects, ownership, or dependencies. Restore was refused without changing data.',
+      };
+      if (phase === 'confirmation') {
+        restoreDatabase.mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 });
+      }
+      restoreDatabase.mockResolvedValueOnce(refusal);
       await renderTab();
+
       await act(async () => {
         fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
       });
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
-      });
-      expect(toast.success).not.toHaveBeenCalled();
+      if (phase === 'confirmation') {
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
+        });
+      }
+
       expect(toast.error).toHaveBeenCalledWith(
-        expect.stringMatching(/dump was applied.*not rolled back.*Restart PortOS/),
-        { duration: Infinity },
+        'Database restore was refused because the database contains unexpected objects, ownership, or dependencies. Nothing was changed. Check the server logs and resolve the reported database conflict before trying again. Details: ' + refusal.error
       );
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(restoreDatabase).toHaveBeenCalledTimes(phase === 'preview' ? 1 : 2);
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
 
-    it('toasts an error when the confirmed restore fails', async () => {
+    it.each(['preview', 'confirmation'])('keeps a lost %s response uncertain and preserves the request explanation', async (phase) => {
       withSnapshot();
-      restoreDatabase
-        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 }) // dry-run
-        .mockResolvedValueOnce({ status: 'failed', reason: 'pg_restore_error' }); // real restore fails
+      if (phase === 'confirmation') {
+        restoreDatabase.mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 });
+      }
+      restoreDatabase.mockRejectedValueOnce(new Error('Connection closed before the response arrived.'));
       await renderTab();
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i })); });
+      if (phase === 'confirmation') {
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Restore$/i })); });
+      }
 
-      await act(async () => {
-        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
-      });
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
-      });
-
-      expect(toast.error).toHaveBeenCalledWith('DB restore failed: pg_restore_error');
+      expect(toast.error).toHaveBeenCalledWith(
+        'Could not confirm the database restore result. Check Backup status and any recovery warning before starting another restore. Details: Connection closed before the response arrived.'
+      );
       expect(toast.success).not.toHaveBeenCalled();
+      expect(restoreDatabase).toHaveBeenCalledTimes(phase === 'preview' ? 1 : 2);
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
+    });
+
+    it.each([
+      ['preview', { status: 'failed', error: 'Additional restore details.' }],
+      ['confirmation', null],
+    ])('keeps an unknown %s result uncertain', async (phase, result) => {
+      withSnapshot();
+      if (phase === 'confirmation') {
+        restoreDatabase.mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 });
+      }
+      restoreDatabase.mockResolvedValueOnce(result);
+      await renderTab();
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i })); });
+      if (phase === 'confirmation') {
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Restore$/i })); });
+      }
+
+      expect(toast.error).toHaveBeenCalledWith(
+        'Database restore could not be confirmed. Check Backup status and the server logs for details.'
+          + (result?.error ? ` Details: ${result.error}` : '')
+      );
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
+    });
+
+    it('offers recovery when preview reports a pending uncertain restore', async () => {
+      withSnapshot();
+      const recovery = { id: '00000000-0000-4000-8000-000000000002', stage: 'replaying', snapshotId: 'snap-1' };
+      restoreDatabase.mockResolvedValueOnce({
+        status: 'failed', reason: 'restore_recovery_pending',
+        error: 'The previous restore outcome needs recovery.', recovery,
+      });
+      recoverDatabaseRestore.mockResolvedValueOnce({ status: 'ok', outcome: 'rolled_back' });
+      await renderTab();
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i })); });
+
+      expect(toast.error).toHaveBeenCalledWith('The previous restore outcome needs recovery.', { duration: Infinity });
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Resume recovery/i })); });
+      expect(recoverDatabaseRestore).toHaveBeenCalledWith(recovery.id, { silent: true });
+      expect(restoreDatabase).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText('Database restore needs recovery')).toBeNull();
     });
 
     it('aborts and toasts when the dry-run reports no dump', async () => {
@@ -420,7 +518,10 @@ describe('BackupTab', () => {
     // learns nothing changed instead of seeing an opaque reason code.
     it('explains an incomplete dump and does not open confirmation', async () => {
       withSnapshot();
-      restoreDatabase.mockResolvedValue({ status: 'failed', reason: 'dump_incomplete' });
+      restoreDatabase.mockResolvedValue({
+        status: 'failed', reason: 'dump_incomplete',
+        error: 'The snapshot database dump is incomplete (missing table example_records). Restore was refused without changing data.',
+      });
       await renderTab();
 
       await act(async () => {
@@ -428,7 +529,7 @@ describe('BackupTab', () => {
       });
 
       expect(restoreDatabase).toHaveBeenCalledTimes(1);
-      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/incomplete.*Nothing was changed/));
+      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/incomplete.*Nothing was changed.*missing table example_records/));
       expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
   });

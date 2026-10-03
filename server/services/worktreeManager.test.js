@@ -1,15 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'path';
 
-// Mock the git exec boundary so addWorktreeWithRetry's retry loop is testable
-// without touching a real repo. Pure helpers below don't call execGit, so the
-// mock is inert for them.
+// Stub every git operation; lifecycle tests exercise the real service without
+// creating, changing or removing a live repository.
 const execGitMock = vi.fn();
 vi.mock('../lib/execGit.js', () => ({ execGit: (...args) => execGitMock(...args) }));
 
-// removeWorktree's branch-preservation path needs the fs + git boundaries stubbed:
-// it checks the worktree dir exists, reads `git status`, and (for the resume gate)
-// asks git.js for the default branch. Pure helpers don't touch these.
+// Stub filesystem effects as well as git so destructive cleanup stays in fixtures.
 vi.mock('fs', () => ({
   existsSync: vi.fn().mockReturnValue(true),
   realpathSync: vi.fn((p) => p),
@@ -54,68 +51,14 @@ const {
   linkWorktreeDependencies,
   unlinkWorktreeDependencies,
   listWorktrees,
+  cleanupOrphanedWorktrees,
   WORKTREE_ADD_TIMEOUT_MS,
 } = await import('./worktreeManager.js');
 const { isPathInsideDir } = await import('../lib/fileUtils.js');
-const { worktreeOwnershipReason } = await import('../lib/worktreeOwnership.js');
 const { win32 } = await import('path');
-const { existsSync } = await import('fs');
-const { lstat, readdir, stat, readlink, symlink, unlink } = await import('fs/promises');
+const { existsSync, realpathSync } = await import('fs');
+const { lstat, readdir, rm, stat, readlink, symlink, unlink } = await import('fs/promises');
 const { PATHS } = await import('../lib/fileUtils.js');
-
-/**
- * Tests for the worktree manager service.
- * Tests the pure logic (branch naming, path construction) without actual git operations.
- */
-
-describe('Worktree Branch Naming', () => {
-  function buildBranchName(taskId, agentId, planId) {
-    return planId
-      ? `cos/${taskId}/${planId}/${agentId}`
-      : `cos/${taskId}/${agentId}`;
-  }
-
-  it('should include task ID and agent ID', () => {
-    const branch = buildBranchName('task-abc123', 'agent-12345678');
-    expect(branch).toBe('cos/task-abc123/agent-12345678');
-  });
-
-  it('should use cos/ prefix for namespacing', () => {
-    const branch = buildBranchName('task-xyz', 'agent-abcd');
-    expect(branch.startsWith('cos/')).toBe(true);
-  });
-
-  it('should handle system task IDs', () => {
-    const branch = buildBranchName('sys-001', 'agent-00000001');
-    expect(branch).toBe('cos/sys-001/agent-00000001');
-  });
-
-  it('should splice planId between taskId and agentId when provided', () => {
-    const branch = buildBranchName('task-abc', 'agent-xyz', 'extract-resolve-provider-helper');
-    expect(branch).toBe('cos/task-abc/extract-resolve-provider-helper/agent-xyz');
-  });
-
-  it('should fall back to the two-segment form when planId is empty', () => {
-    expect(buildBranchName('task-abc', 'agent-xyz', '')).toBe('cos/task-abc/agent-xyz');
-    expect(buildBranchName('task-abc', 'agent-xyz', undefined)).toBe('cos/task-abc/agent-xyz');
-  });
-});
-
-describe('Worktree Path Construction', () => {
-  function buildWorktreePath(baseDir, agentId) {
-    return `${baseDir}/${agentId}`;
-  }
-
-  it('should create path under worktrees directory', () => {
-    const path = buildWorktreePath('/data/cos/worktrees', 'agent-12345678');
-    expect(path).toBe('/data/cos/worktrees/agent-12345678');
-  });
-
-  it('should use agent ID as directory name', () => {
-    const path = buildWorktreePath('/data/cos/worktrees', 'agent-abcdef12');
-    expect(path.endsWith('agent-abcdef12')).toBe(true);
-  });
-});
 
 describe('Worktree dependency preparation', () => {
   const directories = ['client', 'server', 'admin', 'uninstalled', 'assets', '.hidden', 'node_modules', 'nested'];
@@ -191,194 +134,6 @@ describe('Worktree dependency preparation', () => {
     expect(unlink.mock.calls.map(([path]) => normalize(path)).sort()).toEqual([
       '/worktree/admin/node_modules', '/worktree/node_modules',
     ]);
-  });
-});
-
-describe('Worktree Porcelain Parsing', () => {
-  function parseWorktreeList(stdout) {
-    const worktrees = [];
-    let current = {};
-
-    for (const line of stdout.split('\n')) {
-      if (line.startsWith('worktree ')) {
-        if (current.path) worktrees.push(current);
-        current = { path: line.slice(9) };
-      } else if (line.startsWith('HEAD ')) {
-        current.head = line.slice(5);
-      } else if (line.startsWith('branch ')) {
-        current.branch = line.slice(7);
-      } else if (line === 'bare') {
-        current.bare = true;
-      } else if (line === 'detached') {
-        current.detached = true;
-      }
-    }
-    if (current.path) worktrees.push(current);
-
-    return worktrees;
-  }
-
-  it('should parse single worktree', () => {
-    const output = `worktree /Users/user/project
-HEAD abc1234567890
-branch refs/heads/main
-`;
-    const result = parseWorktreeList(output);
-    expect(result).toHaveLength(1);
-    expect(result[0].path).toBe('/Users/user/project');
-    expect(result[0].head).toBe('abc1234567890');
-    expect(result[0].branch).toBe('refs/heads/main');
-  });
-
-  it('should parse multiple worktrees', () => {
-    const output = `worktree /Users/user/project
-HEAD abc1234567890
-branch refs/heads/main
-
-worktree /data/cos/worktrees/agent-12345678
-HEAD def9876543210
-branch refs/heads/cos/task-abc/agent-12345678
-`;
-    const result = parseWorktreeList(output);
-    expect(result).toHaveLength(2);
-    expect(result[0].path).toBe('/Users/user/project');
-    expect(result[1].path).toBe('/data/cos/worktrees/agent-12345678');
-    expect(result[1].branch).toBe('refs/heads/cos/task-abc/agent-12345678');
-  });
-
-  it('should handle detached HEAD', () => {
-    const output = `worktree /Users/user/project
-HEAD abc1234567890
-detached
-`;
-    const result = parseWorktreeList(output);
-    expect(result).toHaveLength(1);
-    expect(result[0].detached).toBe(true);
-  });
-
-  it('should handle empty output', () => {
-    const result = parseWorktreeList('');
-    expect(result).toHaveLength(0);
-  });
-});
-
-describe('Persistent Worktree Path Construction', () => {
-  function buildPersistentWorktreePath(worktreesDir, featureAgentId) {
-    return join(worktreesDir, '..', 'feature-agents', featureAgentId, 'worktree');
-  }
-
-  it('should place worktree under feature-agents directory', () => {
-    const path = buildPersistentWorktreePath('/data/cos/worktrees', 'fa-abc12345');
-    expect(path).toContain('feature-agents');
-    expect(path).toContain('fa-abc12345');
-    expect(path.endsWith('worktree')).toBe(true);
-  });
-
-  it('should be separate from regular worktrees directory', () => {
-    const regularPath = '/data/cos/worktrees/agent-12345678';
-    const persistentPath = buildPersistentWorktreePath('/data/cos/worktrees', 'fa-abc12345');
-    const normalized = persistentPath.replace(/\\/g, '/');
-    expect(normalized).not.toContain('/worktrees/fa-');
-    expect(regularPath).not.toContain('feature-agents');
-  });
-
-  it('should use feature agent ID as parent directory', () => {
-    const result = buildPersistentWorktreePath('/data/cos/worktrees', 'fa-12345678');
-    const normalized = result.replace(/\\/g, '/');
-    expect(normalized).toContain('/fa-12345678/');
-  });
-});
-
-describe('Uncommitted Changes Detection', () => {
-  // Mirrors the dirty-file detection logic in removeWorktree
-  function hasDirtyFiles(porcelainOutput) {
-    return porcelainOutput.trim().length > 0;
-  }
-
-  it('should detect modified files as dirty', () => {
-    expect(hasDirtyFiles(' M src/index.js')).toBe(true);
-  });
-
-  it('should detect untracked files as dirty', () => {
-    expect(hasDirtyFiles('?? newfile.js')).toBe(true);
-  });
-
-  it('should detect staged files as dirty', () => {
-    expect(hasDirtyFiles('A  newfile.js')).toBe(true);
-  });
-
-  it('should detect multiple dirty files', () => {
-    expect(hasDirtyFiles(' M src/a.js\n M src/b.js\n?? src/c.js')).toBe(true);
-  });
-
-  it('should return false for clean worktree', () => {
-    expect(hasDirtyFiles('')).toBe(false);
-  });
-
-  it('should return false for whitespace-only output', () => {
-    expect(hasDirtyFiles('  \n  ')).toBe(false);
-  });
-});
-
-describe('Auto-generated Lockfile Detection', () => {
-  // Mirrors the lockfile-discard logic in removeWorktree
-  const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
-
-  function allAutoGenerated(porcelainOutput) {
-    const dirtyList = porcelainOutput.trim().split('\n').filter(l => l.trim());
-    if (dirtyList.length === 0) return false;
-    return dirtyList.every(line =>
-      AUTO_GENERATED_LOCKFILES.some(f => line.endsWith(f))
-    );
-  }
-
-  // Mirrors the path extraction regex in removeWorktree
-  function extractPath(porcelainLine) {
-    return porcelainLine.replace(/^\s*\S+\s+/, '');
-  }
-
-  it('should identify package-lock.json as auto-generated', () => {
-    expect(allAutoGenerated(' M autofixer/package-lock.json')).toBe(true);
-  });
-
-  it('should identify yarn.lock as auto-generated', () => {
-    expect(allAutoGenerated(' M yarn.lock')).toBe(true);
-  });
-
-  it('should identify pnpm-lock.yaml as auto-generated', () => {
-    expect(allAutoGenerated(' M pnpm-lock.yaml')).toBe(true);
-  });
-
-  it('should identify nested lockfiles as auto-generated', () => {
-    expect(allAutoGenerated(' M client/package-lock.json')).toBe(true);
-  });
-
-  it('should identify multiple lockfiles as all auto-generated', () => {
-    expect(allAutoGenerated(' M package-lock.json\n M server/package-lock.json')).toBe(true);
-  });
-
-  it('should return false when real files are mixed with lockfiles', () => {
-    expect(allAutoGenerated(' M package-lock.json\n M src/index.js')).toBe(false);
-  });
-
-  it('should return false for non-lockfile changes', () => {
-    expect(allAutoGenerated(' M src/index.js')).toBe(false);
-  });
-
-  it('should return false for empty output', () => {
-    expect(allAutoGenerated('')).toBe(false);
-  });
-
-  it('should extract path from porcelain line with leading space', () => {
-    expect(extractPath(' M autofixer/package-lock.json')).toBe('autofixer/package-lock.json');
-  });
-
-  it('should extract path from trimmed porcelain line (first line after .trim())', () => {
-    expect(extractPath('M autofixer/package-lock.json')).toBe('autofixer/package-lock.json');
-  });
-
-  it('should extract path from untracked file', () => {
-    expect(extractPath('?? package-lock.json')).toBe('package-lock.json');
   });
 });
 
@@ -470,47 +225,6 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
   });
 });
 
-describe('Broken Worktree Detection', () => {
-  // Mirrors the rev-parse validation logic in removeWorktree that prevents
-  // git status from resolving to a parent repo (e.g., PortOS) when the
-  // worktree's .git file is missing. Mirrors the realpath-normalization too
-  // so symlink-equivalent paths (/var <-> /private/var) don't false-positive.
-  function isBrokenWorktree(detectedToplevel, expectedWorktreePath, realpathFn = p => p) {
-    if (!detectedToplevel) return false;
-    if (detectedToplevel === expectedWorktreePath) return false;
-    try {
-      return realpathFn(detectedToplevel) !== realpathFn(expectedWorktreePath);
-    } catch {
-      return detectedToplevel !== expectedWorktreePath;
-    }
-  }
-
-  it('should detect worktree resolving to parent repo as broken', () => {
-    const worktreePath = '/data/cos/worktrees/agent-abc';
-    const detectedToplevel = '/Users/user/PortOS'; // parent repo
-    expect(isBrokenWorktree(detectedToplevel, worktreePath)).toBe(true);
-  });
-
-  it('should not flag valid worktree as broken', () => {
-    const worktreePath = '/data/cos/worktrees/agent-abc';
-    const detectedToplevel = '/data/cos/worktrees/agent-abc';
-    expect(isBrokenWorktree(detectedToplevel, worktreePath)).toBe(false);
-  });
-
-  it('should not flag as broken when rev-parse fails (null)', () => {
-    const worktreePath = '/data/cos/worktrees/agent-abc';
-    expect(isBrokenWorktree(null, worktreePath)).toBeFalsy();
-  });
-
-  it('should treat symlink-equivalent paths as the same worktree', () => {
-    // e.g. /var/folders/... resolves to /private/var/folders/... on macOS
-    const worktreePath = '/var/data/cos/worktrees/agent-abc';
-    const detectedToplevel = '/private/var/data/cos/worktrees/agent-abc';
-    const realpathFn = p => p.replace(/^\/var\//, '/private/var/');
-    expect(isBrokenWorktree(detectedToplevel, worktreePath, realpathFn)).toBe(false);
-  });
-});
-
 // Git reports POSIX separators on every platform, while PATHS.worktrees is
 // backslash-separated on Windows — so a bare `startsWith` matched nothing there:
 // `cleanupOrphanedWorktrees` skipped every CoS worktree and `reapMergedWorktrees`
@@ -538,66 +252,6 @@ describe('git-vs-PortOS path comparison', () => {
   it('reads the agent id off either separator', () => {
     expect(win32.basename('H:/repo/data/cos/worktrees/agent-abc')).toBe('agent-abc');
     expect(win32.basename('H:\\repo\\data\\cos\\worktrees\\agent-abc')).toBe('agent-abc');
-  });
-});
-
-describe('Orphaned Worktree Detection', () => {
-  function findOrphanedWorktrees(worktrees, worktreesDir, activeAgentIds) {
-    return worktrees.filter((wt) => worktreeOwnershipReason({
-      path: wt.path,
-      locked: wt.locked,
-      activeAgentIds,
-      roots: [{ path: worktreesDir, requireAgentId: true }],
-      requireKnownLiveness: true,
-    }) === null);
-  }
-
-  it('should identify worktrees without active agents', () => {
-    const worktrees = [
-      { path: '/project', branch: 'refs/heads/main' },
-      { path: '/data/cos/worktrees/agent-aaa', branch: 'refs/heads/cos/task-1/agent-aaa' },
-      { path: '/data/cos/worktrees/agent-bbb', branch: 'refs/heads/cos/task-2/agent-bbb' }
-    ];
-    const activeIds = new Set(['agent-aaa']);
-    const orphans = findOrphanedWorktrees(worktrees, '/data/cos/worktrees', activeIds);
-
-    expect(orphans).toHaveLength(1);
-    expect(orphans[0].path).toContain('agent-bbb');
-  });
-
-  it('should not include the main worktree', () => {
-    const worktrees = [
-      { path: '/project', branch: 'refs/heads/main' },
-      { path: '/data/cos/worktrees/agent-aaa', branch: 'refs/heads/cos/task-1/agent-aaa' }
-    ];
-    const orphans = findOrphanedWorktrees(worktrees, '/data/cos/worktrees', new Set());
-
-    expect(orphans).toHaveLength(1);
-    expect(orphans[0].path).not.toBe('/project');
-  });
-
-  it('should return empty when all worktrees have active agents', () => {
-    const worktrees = [
-      { path: '/data/cos/worktrees/agent-aaa', branch: 'refs/heads/cos/task-1/agent-aaa' }
-    ];
-    const activeIds = new Set(['agent-aaa']);
-    const orphans = findOrphanedWorktrees(worktrees, '/data/cos/worktrees', activeIds);
-
-    expect(orphans).toHaveLength(0);
-  });
-
-  it('never flags a human-driven /claim worktree as orphaned', () => {
-    const worktrees = [
-      { path: '/data/cos/worktrees/agent-bbb', branch: 'refs/heads/cos/task-2/agent-bbb' },
-      { path: '/data/cos/worktrees/claim-extract-compare-helpers', branch: 'refs/heads/claim/extract-compare-helpers' }
-    ];
-    // No active agents at all — the dead CoS agent IS an orphan, but the claim
-    // worktree must be left alone (it's owned by /claim's own cleanup).
-    const orphans = findOrphanedWorktrees(worktrees, '/data/cos/worktrees', new Set());
-
-    expect(orphans).toHaveLength(1);
-    expect(orphans[0].path).toContain('agent-bbb');
-    expect(orphans.some(o => o.path.includes('claim-'))).toBe(false);
   });
 });
 
@@ -714,6 +368,12 @@ describe('listWorktrees line endings', () => {
     'locked',
     'prunable',
     '',
+    'worktree /repo/detached',
+    'HEAD fed789',
+    'detached',
+    '',
+    'worktree /repo/bare',
+    'bare',
   ];
 
   it.each([['LF', '\n'], ['CRLF', '\r\n']])('parses %s porcelain identically', async (_label, eol) => {
@@ -721,7 +381,7 @@ describe('listWorktrees line endings', () => {
 
     const worktrees = await listWorktrees('/repo');
 
-    expect(worktrees).toHaveLength(2);
+    expect(worktrees).toHaveLength(4);
     // No stray \r anywhere — these values are compared against filesystem paths
     // and branch names, where a trailing carriage return matches nothing.
     expect(worktrees[0]).toMatchObject({ path: '/repo', head: 'abc123', branch: 'refs/heads/main' });
@@ -732,6 +392,13 @@ describe('listWorktrees line endings', () => {
       locked: true,
       prunable: true,
     });
+    expect(worktrees[2]).toEqual({ path: '/repo/detached', head: 'fed789', detached: true });
+    expect(worktrees[3]).toEqual({ path: '/repo/bare', bare: true });
+  });
+
+  it('returns an empty inventory when git lists no worktrees', async () => {
+    execGitMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+    expect(await listWorktrees('/repo')).toEqual([]);
   });
 });
 
@@ -989,24 +656,21 @@ describe('findAdoptableWorktreeForBranch (take over the tree that holds the bran
   });
 });
 
-describe('removeWorktree branch preservation for resume (#3167)', () => {
+describe('removeWorktree identity, dirt and branch preservation', () => {
   // Routes each git invocation this path makes to a scripted answer, keyed on the
   // subcommand, so a test only has to state what it cares about instead of
   // ordering every call. The preserve/delete decision itself comes from the
   // mocked `hasBranchMergeEvidence` (see the ./git.js mock at the top of this file).
-  function scriptGit({ porcelain = '', remoteTargetResolves = true } = {}) {
+  function scriptGit({ porcelain = '', remoteTargetResolves = true, detectedToplevel } = {}) {
     execGitMock.mockReset();
-    execGitMock.mockImplementation((args) => {
+    execGitMock.mockImplementation((args, cwd) => {
       const [sub] = args;
       // Whether this clone has an `origin/<default>` to prefer over the local branch.
       if (sub === 'rev-parse' && args[1] === '--verify' && String(args[2]).startsWith('origin/')) {
         return Promise.resolve({ stdout: remoteTargetResolves ? 'deadbeef' : '', stderr: '', exitCode: remoteTargetResolves ? 0 : 1 });
       }
       if (sub === 'rev-parse' && args[1] === '--show-toplevel') {
-        // Empty stdout → `detectedToplevel` is falsy, so removeWorktree SKIPS its
-        // broken-worktree check rather than taking that early-return branch (which
-        // deletes the branch itself and would mask what these tests assert).
-        return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+        return Promise.resolve({ stdout: detectedToplevel ?? cwd, stderr: '', exitCode: 0 });
       }
       if (sub === 'status') return Promise.resolve({ stdout: porcelain, stderr: '', exitCode: 0 });
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
@@ -1022,8 +686,83 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
     // check was NOT consulted, so recorded calls must not leak in from a prior test.
     hasBranchMergeEvidenceMock.mockReset();
     hasBranchMergeEvidenceMock.mockResolvedValue(false);
+    existsSync.mockReset().mockReturnValue(true);
+    realpathSync.mockReset().mockImplementation(p => p);
+    rm.mockClear();
     scriptGit();
   });
+
+  afterEach(() => {
+    realpathSync.mockReset().mockImplementation(p => p);
+  });
+
+  it('removes a broken tree resolving to the parent without trusting its dirty status', async () => {
+    scriptGit({ detectedToplevel: '/repo', porcelain: ' M src/parent-work.js' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+
+    expect(result).toEqual({ merged: false, removed: true, uncommittedSaved: false, warnings: [] });
+    expect(rm).toHaveBeenCalledWith(join(PATHS.worktrees, 'agent-x'), { recursive: true, force: true });
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'status')).toBe(false);
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
+  });
+
+  it('preserves dirt when git reports a symlink-equivalent worktree identity', async () => {
+    const worktreePath = join(PATHS.worktrees, 'agent-x');
+    const alias = join('/alias', 'agent-x');
+    realpathSync.mockImplementation(p => p === alias ? worktreePath : p);
+    scriptGit({ detectedToplevel: alias, porcelain: ' M src/index.js' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+
+    expect(result.removed).toBe(false);
+    expect(result.warnings.join(' ')).toContain('src/index.js');
+    expect(rm).not.toHaveBeenCalled();
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+  });
+
+  it('preserves work when identity lookup and status both fail', async () => {
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) =>
+      (args[0] === 'status' || (args[0] === 'rev-parse' && args[1] === '--show-toplevel'))
+        ? Promise.reject(new Error('not a git repository'))
+        : scripted(args, ...rest));
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+
+    expect(result.removed).toBe(false);
+    expect(result.warnings.join(' ')).toContain('git status failed');
+    expect(rm).not.toHaveBeenCalled();
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+  });
+
+  it('discards only lockfile churn before removing the worktree', async () => {
+    scriptGit({ porcelain: ' M client/package-lock.json\n M yarn.lock\n M pnpm-lock.yaml' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+
+    expect(result.removed).toBe(true);
+    expect(execGitMock).toHaveBeenCalledWith(
+      ['checkout', '--', 'client/package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'],
+      join(PATHS.worktrees, 'agent-x')
+    );
+    expect(execGitMock).toHaveBeenCalledWith(
+      ['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'], '/repo'
+    );
+  });
+
+  it.each(['?? src/new.js', 'A  src/staged.js', ' M package-lock.json\n M src/index.js'])(
+    'preserves authored changes (%s) without discarding any files', async porcelain => {
+      scriptGit({ porcelain });
+
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+
+      expect(result.removed).toBe(false);
+      expect(rm).not.toHaveBeenCalled();
+      expect(execGitMock.mock.calls.some(([args]) => ['checkout', 'worktree', 'branch'].includes(args[0]))).toBe(false);
+    }
+  );
 
   it('KEEPS the branch when it is not yet merged into the default branch', async () => {
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', {
@@ -1050,10 +789,10 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
   it('calls an empty branch unused instead of already merged', async () => {
     hasBranchMergeEvidenceMock.mockResolvedValue(true);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    execGitMock.mockImplementation((args) => {
+    execGitMock.mockImplementation((args, cwd) => {
       if (args[0] === 'rev-list') return Promise.resolve({ stdout: '0\n', stderr: '', exitCode: 0 });
       if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
-        return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+        return Promise.resolve({ stdout: cwd, stderr: '', exitCode: 0 });
       }
       if (args[0] === 'status') return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
       if (args[0] === 'rev-parse' && args[1] === '--verify') {
@@ -1316,12 +1055,33 @@ describe('createWorktree upstream safety (#4172)', () => {
   });
 
   it('creates the branch with --no-track so git cannot record refs/heads/main as its upstream', async () => {
-    await createWorktree('agent-1', '/repo', 'task-1');
+    const result = await createWorktree('agent-1', '/repo', 'task-1');
 
-    const [add] = argsFor(a => a[0] === 'worktree' && a[1] === 'add');
-    expect(add).toContain('--no-track');
-    // The flag has to precede -b: it configures the branch being created.
-    expect(add.indexOf('--no-track')).toBeLessThan(add.indexOf('-b'));
+    expect(result).toMatchObject({
+      worktreePath: join(PATHS.worktrees, 'agent-1'),
+      branchName: 'cos/task-1/agent-1',
+      baseBranch: 'main',
+      instanceId: 'instance-1',
+    });
+    expect(execGitMock).toHaveBeenCalledWith(
+      ['worktree', 'add', '--no-track', '-b', 'cos/task-1/agent-1', join(PATHS.worktrees, 'agent-1'), 'origin/main'],
+      '/repo', expect.objectContaining({ timeout: WORKTREE_ADD_TIMEOUT_MS })
+    );
+
+  });
+
+  it.each([
+    ['issue-42', 'cos/sys-1/issue-42/agent-plan'],
+    ['', 'cos/sys-1/agent-plan'],
+  ])('creates and returns the branch for planId %j', async (planId, branchName) => {
+    const worktreePath = join(PATHS.worktrees, 'agent-plan');
+
+    expect(await createWorktree('agent-plan', '/repo', 'sys-1', { planId }))
+      .toMatchObject({ worktreePath, branchName });
+    expect(execGitMock).toHaveBeenCalledWith(
+      ['worktree', 'add', '--no-track', '-b', branchName, worktreePath, 'origin/main'],
+      '/repo', expect.objectContaining({ timeout: WORKTREE_ADD_TIMEOUT_MS })
+    );
   });
 
   it('keeps dependency-update worktrees detached from source dependencies', async () => {
@@ -1481,10 +1241,13 @@ describe('createWorktree upstream safety (#4172)', () => {
   // stranded tree there blocks every retry with "already exists" until a human
   // prunes it, so the undo has to happen here rather than being left to a sweeper.
   it('creates the persistent feature-agent branch with --no-track too', async () => {
-    await createPersistentWorktree('fa-1', '/repo', 'feature/x', 'main');
-
-    const [add] = argsFor(a => a[0] === 'worktree' && a[1] === 'add');
-    expect(add).toContain('--no-track');
+    const worktreePath = join(PATHS.worktrees, '..', 'feature-agents', 'fa-1', 'worktree');
+    expect(await createPersistentWorktree('fa-1', '/repo', 'feature/x', 'main'))
+      .toEqual({ worktreePath, branchName: 'feature/x', baseBranch: 'main' });
+    expect(execGitMock).toHaveBeenCalledWith(
+      ['worktree', 'add', '--no-track', '-b', 'feature/x', worktreePath, 'origin/main'],
+      '/repo', expect.objectContaining({ timeout: WORKTREE_ADD_TIMEOUT_MS })
+    );
   });
 
   it('undoes the persistent add when the upstream cannot be made safe', async () => {
@@ -1495,5 +1258,56 @@ describe('createWorktree upstream safety (#4172)', () => {
 
     expect(argsFor(a => a[0] === 'worktree' && a[1] === 'remove')).toHaveLength(1);
     expect(argsFor(a => a[0] === 'branch' && a[1] === '-D')).toHaveLength(1);
+  });
+});
+
+describe('cleanupOrphanedWorktrees ownership and removal', () => {
+  const tree = agentId => join(PATHS.worktrees, agentId);
+
+  beforeEach(() => {
+    existsSync.mockReset().mockReturnValue(true);
+    readdir.mockReset().mockResolvedValue([]);
+    rm.mockClear();
+    getDefaultBranchMock.mockResolvedValue('main');
+    execGitMock.mockReset();
+  });
+
+  afterEach(() => { readdir.mockReset().mockResolvedValue([]); });
+
+  it('removes only the clean inactive agent and preserves active, human, locked and dirty trees', async () => {
+    const entries = [
+      { path: '/repo', branch: 'main' },
+      { path: join(PATHS.worktrees + '-old', 'agent-outside'), branch: 'outside' },
+      { path: tree('agent-active'), branch: 'cos/task/agent-active' },
+      { path: tree('claim-issue-42'), branch: 'claim/issue-42' },
+      { path: tree('agent-locked'), branch: 'cos/task/agent-locked', locked: true },
+      { path: tree('agent-dead'), branch: 'cos/task/agent-dead' },
+      { path: tree('agent-dirty'), branch: 'cos/task/agent-dirty' },
+    ];
+    const stdout = entries.flatMap(entry => [
+      'worktree ' + entry.path, 'HEAD abc123', 'branch refs/heads/' + entry.branch,
+      ...(entry.locked ? ['locked protected'] : []), '',
+    ]).join('\n');
+    // Include the same on-disk entries in the external-repo scan: ownership
+    // holds must survive that second pass too.
+    readdir.mockResolvedValue(entries.slice(2).map(entry => ({
+      name: win32.basename(entry.path), isDirectory: () => true,
+    })));
+    execGitMock.mockImplementation((args, cwd) => {
+      if (args[0] === 'worktree' && args[1] === 'list') return Promise.resolve({ stdout });
+      if (args[0] === 'rev-parse') return Promise.resolve({ stdout: args[1] === '--show-toplevel' ? cwd : 'main' });
+      if (args[0] === 'status') return Promise.resolve({ stdout: cwd === tree('agent-dirty') ? ' M src/work.js' : '' });
+      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '0' });
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    });
+
+    expect(await cleanupOrphanedWorktrees('/repo', new Set(['agent-active']))).toBe(1);
+    expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'worktree' && args[1] === 'remove'))
+      .toEqual([[['worktree', 'remove', tree('agent-dead'), '--force'], '/repo']]);
+    expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'branch' && args[1] === '-D'))
+      .toEqual([[['branch', '-D', 'cos/task/agent-dead'], '/repo']]);
+    expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'status').map(([, cwd]) => cwd))
+      .toEqual([tree('agent-dead'), tree('agent-dirty')]);
+    expect(rm).not.toHaveBeenCalled();
   });
 });

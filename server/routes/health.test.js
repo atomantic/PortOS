@@ -68,7 +68,7 @@ vi.mock('../services/cos.js', () => ({
 }));
 
 vi.mock('../lib/db.js', () => ({
-  checkHealth: vi.fn().mockResolvedValue({ connected: false, hasSchema: false })
+  checkHealth: vi.fn().mockResolvedValue({ connected: false, hasSchema: false, hasCatalogSchema: false })
 }));
 
 // The build stamp is read from the checkout the suite happens to run in, so
@@ -157,6 +157,42 @@ describe('System Health Routes', () => {
     expect(response.body).toHaveProperty('system');
     expect(response.body).toHaveProperty('apps');
     expect(response.body).toHaveProperty('overallHealth');
+  });
+
+  it('warns when connected=true, hasSchema=true but hasCatalogSchema=false', async () => {
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true, hasCatalogSchema: false });
+    const response = await request(app).get('/api/system/health/details');
+
+    expect(response.status).toBe(200);
+    expect(response.body.overallHealth).toBe('warning');
+    expect(response.body.warnings).toContainEqual({
+      type: 'database',
+      severity: 'warning',
+      message: 'PostgreSQL connected and schema available but Catalog tables missing — open Settings → Database to troubleshoot'
+    });
+  });
+
+  it('recovers from catalog-only schema failure when hasCatalogSchema is restored', async () => {
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true, hasCatalogSchema: false });
+    const failed = await request(app).get('/api/system/health/details');
+    expect(failed.body.overallHealth).toBe('warning');
+    const warnings = failed.body.warnings.filter(w => w.type === 'database');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('Catalog tables missing');
+
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true, hasCatalogSchema: true });
+    const recovered = await request(app).get('/api/system/health/details');
+    expect(recovered.body.overallHealth).toBe('healthy');
+    expect((recovered.body.warnings || []).filter(w => w.type === 'database')).toHaveLength(0);
+  });
+
+  it('handles backward compatibility when hasCatalogSchema is omitted (undefined)', async () => {
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
+    const response = await request(app).get('/api/system/health/details');
+
+    expect(response.status).toBe(200);
+    expect(response.body.overallHealth).toBe('healthy');
+    expect((response.body.warnings || []).filter(w => w.type === 'database')).toHaveLength(0);
   });
 
   it('reports an unreadable app aggregate without leaking details, then recovers to a healthy empty registry', async () => {
@@ -818,23 +854,39 @@ describe('System Health Routes', () => {
       expect(response.body.cos).toMatchObject({ activeAgents: 2, queuedTasks: 1 });
     });
 
-    it('falls back to the daemon tally when the agent list cannot be read', async () => {
+    it('keeps the queue unknown and warns when the agent census cannot be read', async () => {
       getPendingTaskIds.mockResolvedValueOnce(['user/42']);
-      getAgents.mockRejectedValueOnce(new Error('state unreadable'));
+      getAgents.mockRejectedValueOnce(Object.assign(new Error('state unreadable'), { code: 'EIO' }));
 
       const response = await request(app).get('/api/system/health/details');
 
-      // No claim set to subtract, so the queue over-reports rather than hiding
-      // work — the safe direction — and active falls back rather than reading 0.
-      expect(response.body.cos).toMatchObject({ activeAgents: 1, queuedTasks: 1 });
+      // No claim set to subtract, so a reconciled queue count cannot be measured;
+      // active falls back to the daemon tally and daemon state stays accurate.
+      expect(response.body.cos).toMatchObject({ running: true, paused: false, activeAgents: 1, queuedTasks: null });
+      expect(response.body.overallHealth).not.toBe('healthy');
+      expect(response.body.warnings).toContainEqual(
+        { type: 'probe-unavailable', source: 'cos-agents', status: 'unavailable', severity: 'warning', message: 'Chief of Staff agent census unavailable', dismissible: false }
+      );
     });
 
-    it('reports an unreadable pending list as unknown rather than as an empty queue', async () => {
+    it('reports an unreadable pending list as unknown with a non-dismissible warning, then recovers', async () => {
       getPendingTaskIds.mockRejectedValueOnce(new Error('task file unreadable'));
+      getAgents.mockResolvedValueOnce([]);
 
-      const response = await request(app).get('/api/system/health/details');
+      const failed = await request(app).get('/api/system/health/details');
 
-      expect(response.body.cos.queuedTasks).toBeNull();
+      expect(failed.body.cos).toMatchObject({ running: true, queuedTasks: null });
+      expect(failed.body.overallHealth).not.toBe('healthy');
+      expect(failed.body.warnings).toContainEqual(
+        { type: 'probe-unavailable', source: 'cos-queue', status: 'unavailable', severity: 'warning', message: 'Chief of Staff queue unavailable', dismissible: false }
+      );
+
+      getPendingTaskIds.mockResolvedValueOnce([]);
+      getAgents.mockResolvedValueOnce([]);
+      const recovered = await request(app).get('/api/system/health/details');
+
+      expect(recovered.body.cos.queuedTasks).toBe(0);
+      expect(recovered.body.warnings.filter((w) => w.source === 'cos-queue' || w.source === 'cos-agents')).toEqual([]);
     });
   });
 });

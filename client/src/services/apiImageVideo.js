@@ -344,7 +344,7 @@ export async function generateVideo(fields) {
 
 // Video timeline projects (non-linear editor)
 export const listTimelineProjects = () => request('/video-timeline/projects');
-export const getTimelineProject = (id) => request(`/video-timeline/projects/${encodeURIComponent(id)}`);
+export const getTimelineProject = (id, options) => request(`/video-timeline/projects/${encodeURIComponent(id)}`, options);
 export const createTimelineProject = (name, options = {}) => request('/video-timeline/projects', {
   method: 'POST',
   body: JSON.stringify({ name }),

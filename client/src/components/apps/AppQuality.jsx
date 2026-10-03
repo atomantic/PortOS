@@ -108,7 +108,7 @@ export default function AppQuality({ app, detail = false }) {
           <div className="min-w-0">
             <h3 className="flex items-center gap-1.5 font-semibold text-white">
               {label}
-              <InfoTooltip label="How the quality score works" placement="below" align="start" panelClassName="w-80">
+              <InfoTooltip label="How the quality score works" placement="below" align="start" width={320}>
                 <p>Equal-weight mean of broad, medium/high-confidence assessments from the last 30 days. Missing, partial, low-confidence and stale assessments are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
                 <p className="mt-1.5">Scores are the auditing agent’s evidence-based judgment, not an issue count: 90–100 no material defect · 70–89 localized debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure. A run with no findings can score below 100.</p>
                 {federation && <p className="mt-1.5">Unified score: the newest assessment per category across this install and sync peers with the same repository. Offline peers do not contribute.</p>}
@@ -157,18 +157,25 @@ export default function AppQuality({ app, detail = false }) {
                 </select>
               </label>
             </div>
-            <table className="w-full text-sm text-left" aria-label="Category audit results">
-              <thead className="text-xs text-gray-400">
+            <table className="w-full text-sm text-left block sm:table" aria-label="Category audit results">
+              <thead className="text-xs text-gray-400 hidden sm:table-header-group">
                 <tr>
                   <th scope="col" className="py-1.5 px-2">Category</th>
                   <th scope="col" className="py-1.5 px-2">Score</th>
-                  <th scope="col" className="py-1.5 px-2 hidden sm:table-cell">Evidence</th>
+                  <th scope="col" className="py-1.5 px-2">Evidence</th>
                   <th scope="col" className="py-1.5 px-2"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
-              <tbody>{sortedCategories.map(category => <CategoryRow key={category.id} category={category}
-                below={score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score}
-                runLink={panelLink('run', category.id)} />)}</tbody>
+              <tbody className="block sm:table-row-group">
+                {sortedCategories.map(category => (
+                  <CategoryRow
+                    key={category.id}
+                    category={category}
+                    below={score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score}
+                    runLink={panelLink('run', category.id)}
+                  />
+                ))}
+              </tbody>
             </table>
           </section>
         )}
@@ -197,23 +204,26 @@ function CategoryRow({ category, below, runLink }) {
     {category.sourcePeerId || category.sourcePeerName ? ` · ${category.sourcePeerName || 'federated peer'}` : ''}
   </>;
   return (
-    <tr className={`border-t border-port-border align-middle${below ? ' bg-port-warning/10' : ''}${inapplicable ? ' text-gray-500' : ''}`}>
-      <th scope="row" className="py-1.5 px-2 font-medium">
+    <tr className={`grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 py-2.5 px-2 sm:px-0 sm:py-0 border-t border-port-border rounded-lg sm:rounded-none sm:table-row sm:align-middle${below ? ' bg-port-warning/10' : ''}${inapplicable ? ' text-gray-500' : ''}`}>
+      <th scope="row" className="font-medium text-left col-span-1 min-w-0 sm:table-cell sm:py-1.5 sm:px-2">
         <span className="inline-flex items-center gap-1.5">
           {category.label}
-          {details && <InfoTooltip label={`${category.label} assessment details`} placement="below" align="start" panelClassName="w-72 max-h-64 overflow-auto font-normal">
+          {details && <InfoTooltip label={`${category.label} assessment details`} placement="below" align="start" width={288} panelClassName="font-normal">
             {category.summary && <p className="break-words">{category.summary}</p>}
             {category.totalFiles > 0 && <p className="mt-1">{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</p>}
             {category.id === 'better-dependency-freedom' && <p className="mt-1">Assesses whether packages earn their place; dependency count carries no automatic penalty.</p>}
           </InfoTooltip>}
         </span>
       </th>
-      <td className="py-1.5 px-2 tabular-nums">
-        <span className="whitespace-nowrap">{category.score == null ? '—' : `${category.score}/100`}</span>
-        <span className="block text-xs text-gray-400 sm:hidden">{evidence}</span>
+      <td className="tabular-nums text-right sm:text-left col-span-1 whitespace-nowrap sm:table-cell sm:py-1.5 sm:px-2">
+        <span className={`font-semibold sm:font-normal ${inapplicable ? 'text-gray-500' : 'text-white'}`}>
+          {category.score == null ? '—' : `${category.score}/100`}
+        </span>
       </td>
-      <td className="py-1.5 px-2 text-xs text-gray-400 hidden sm:table-cell">{evidence}</td>
-      <td className="py-1.5 px-2">
+      <td className="text-xs text-gray-400 col-span-1 min-w-0 sm:table-cell sm:py-1.5 sm:px-2">
+        {evidence}
+      </td>
+      <td className="col-span-1 sm:table-cell sm:py-1.5 sm:px-2">
         <div className="flex items-center justify-end gap-1">
           <Link to={runLink} aria-label={`Run ${category.label} check`} title="Run this check"
             className="inline-flex min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 items-center justify-center rounded border border-port-accent/60 bg-port-accent/10 p-1.5 text-port-accent hover:bg-port-accent/25">

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { previewMusicVideoAudioTiming, applyMusicVideoAudioTiming } from '../../services/apiMusicVideo.js';
 import { formatCount } from '../../utils/formatters.js';
+import { trackOptionLabels } from '../../utils/trackOptionLabels.js';
 
 const seconds = (value) => value == null ? '—' : `${Number(value).toFixed(2)}s`;
 
@@ -12,6 +13,7 @@ export default function AudioTimingPanel({ project, tracks, onApplied, disabled 
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const optionLabels = trackOptionLabels(tracks || []);
   const generation = useRef(0);
   const change = (fn) => { generation.current++; setPreview(null); setError(''); fn(); };
   const cancel = () => change(() => { setOpen(false); });
@@ -39,7 +41,7 @@ export default function AudioTimingPanel({ project, tracks, onApplied, disabled 
         <label htmlFor="audio-timing-track" className="block text-sm">Edited track</label>
         <select id="audio-timing-track" value={targetTrackId} onChange={(event) => change(() => setTargetTrackId(event.target.value))} className="w-full rounded border border-port-border bg-port-bg p-2">
           <option value="">Choose a library track</option>
-          {(tracks || []).filter((track) => track.audioFilename && track.id !== project.trackId).map((track) => <option key={track.id} value={track.id}>{track.title || track.id}</option>)}
+          {(tracks || []).filter((track) => track.audioFilename && track.id !== project.trackId).map((track) => <option key={track.id} value={track.id}>{optionLabels.get(track.id)}</option>)}
         </select>
         {intervals.map((row, index) => (
           <div key={index} className="flex flex-wrap items-end gap-2">

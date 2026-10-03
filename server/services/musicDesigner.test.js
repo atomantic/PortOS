@@ -17,7 +17,7 @@ vi.mock('./promptRunner.js', async () => ({
 import { resolveProviderAndModel } from './promptRunner.js';
 import {
   DEFAULT_DESCRIBE_TEMPLATE, DEFAULT_LYRICS_TEMPLATE,
-  buildDescribePrompt, buildLyricsPrompt, describeMusic, writeLyrics,
+  buildDescribePrompt, buildLyricsPrompt, describeMusic, reviewLyrics, writeLyrics,
 } from './musicDesigner.js';
 
 const lastRunArgs = () => ai.runPromptThroughProvider.mock.calls.at(-1)[0];
@@ -159,5 +159,39 @@ describe('writeLyrics', () => {
   it('throws LLM_EMPTY on a blank response', async () => {
     ai.runPromptThroughProvider.mockResolvedValue({ text: '', model: null });
     await expect(writeLyrics({ description: 'x' })).rejects.toMatchObject({ code: 'LLM_EMPTY', status: 502 });
+  });
+});
+
+describe('reviewLyrics', () => {
+  const DRAFT = '[verse]\nrain on the glass\n[chorus]\nhold on';
+
+  it('sends the draft with its editing constraints and splits the answer into revised lyrics and notes', async () => {
+    ai.runPromptThroughProvider.mockResolvedValue({ text: '[verse]\nrain against the glass\n[chorus]\nhold on, hold on\n---\nThe chorus was flat; doubled the hook.', model: 'ran-model' });
+    const out = await reviewLyrics({ lyrics: DRAFT, description: 'melancholic synthwave', guidance: 'keep it hopeful', providerId: 'p', model: 'm', effort: 'high' });
+    expect(out).toEqual({
+      lyrics: '[verse]\nrain against the glass\n[chorus]\nhold on, hold on',
+      notes: 'The chorus was flat; doubled the hook.',
+      llm: { provider: 'fake-provider', model: 'ran-model' },
+    });
+    const { prompt, source, effort } = lastRunArgs();
+    expect(source).toBe('music-lyrics-review');
+    expect(effort).toBe('high');
+    expect(prompt).toContain(DRAFT);
+    expect(prompt).toContain('melancholic synthwave');
+    expect(prompt).toMatch(/Keep the title/);
+    expect(prompt).toMatch(/section tag/);
+    expect(prompt).toMatch(/Never add new topics/);
+  });
+
+  it('treats an answer with no separator as all lyrics (empty notes), unwrapping a fence', async () => {
+    ai.runPromptThroughProvider.mockResolvedValue({ text: '```\n[verse]\nrain against the glass\n```', model: 'ran-model' });
+    expect(await reviewLyrics({ lyrics: DRAFT })).toMatchObject({ lyrics: '[verse]\nrain against the glass', notes: '' });
+  });
+
+  it('refuses an empty draft before calling a provider, and an empty revision after', async () => {
+    await expect(reviewLyrics({ lyrics: '  ' })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    expect(ai.runPromptThroughProvider).not.toHaveBeenCalled();
+    ai.runPromptThroughProvider.mockResolvedValue({ text: '---\nonly notes', model: 'ran-model' });
+    await expect(reviewLyrics({ lyrics: DRAFT })).rejects.toMatchObject({ code: 'LLM_EMPTY' });
   });
 });

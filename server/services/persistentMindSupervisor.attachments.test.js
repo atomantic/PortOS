@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { PERSISTENT_MIND_LIMITS, createDefaultPersistentMindState } from '../lib/persistentMind.js';
+import { saveState } from './cosState.js';
 
 const mocks = vi.hoisted(() => ({
   root: null,
@@ -128,6 +129,7 @@ describe('persistent mind image attachment lifecycle', () => {
   beforeEach(() => {
     vi.useRealTimers();
     mocks.root = makeRoot();
+    vi.mocked(saveState).mockImplementation(async (state) => { mocks.root = state; });
     mocks.scheduled.clear();
     mocks.emitted.length = 0;
     mocks.updateInProgress = false;
@@ -253,6 +255,80 @@ describe('persistent mind image attachment lifecycle', () => {
     expect(mocks.root.persistentMind.pendingAttachments).toEqual([]);
   });
 
+  it('keeps the marker after state-save failure until image rollback succeeds', async () => {
+    const persistedRoot = structuredClone(mocks.root);
+    vi.mocked(saveState).mockImplementation(async (state) => {
+      if (state.persistentMind.pendingAttachments.length) {
+        mocks.root = persistedRoot;
+        throw Object.assign(new Error('state unavailable'), { code: 'EIO' });
+      }
+      mocks.root = state;
+    });
+    mocks.unlink.mockImplementation(async (path) => {
+      if (path.endsWith('mind-attachment-1.png')) throw Object.assign(new Error('image locked'), { code: 'EPERM' });
+    });
+
+    await expect(supervisor.createPersistentMindAttachment({ filename: 'diagram.png', data: 'encoded-image' }))
+      .rejects.toMatchObject({ message: 'state unavailable', code: 'EIO' });
+
+    const markerPath = mocks.writeFile.mock.calls[0][0];
+    expect(mocks.unlink).toHaveBeenCalledWith('/tmp/portos-mind-attachments/mind-attachment-1.png');
+    expect(mocks.unlink).not.toHaveBeenCalledWith(markerPath);
+
+    mocks.unlink.mockResolvedValue(undefined);
+    const attachmentId = markerPath.split('.mind-pending-')[1];
+    mocks.readdir.mockResolvedValue([basename(markerPath), `mind-${attachmentId}-diagram.png`]);
+    mocks.stat.mockResolvedValue({ mtimeMs: Date.now() - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS - 1 });
+    await expect(supervisor.cleanupPersistentMindAttachments())
+      .resolves.toMatchObject({ success: true, removed: 1 });
+    expect(mocks.unlink).toHaveBeenCalledWith(markerPath);
+  });
+
+  it('keeps the marker when partial image persistence cannot be enumerated', async () => {
+    mocks.saveImageUpload.mockImplementation(async () => {
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    });
+    mocks.readdir.mockRejectedValue(Object.assign(new Error('directory unavailable'), { code: 'EIO' }));
+
+    await expect(supervisor.createPersistentMindAttachment({ filename: 'diagram.png', data: 'encoded-image' }))
+      .rejects.toMatchObject({ message: 'disk full', code: 'ENOSPC' });
+    const markerPath = mocks.writeFile.mock.calls[0][0];
+    expect(mocks.unlink).not.toHaveBeenCalledWith(markerPath);
+
+    const attachmentId = markerPath.split('.mind-pending-')[1];
+    mocks.readdir.mockResolvedValue([basename(markerPath), `mind-${attachmentId}-diagram.png`]);
+    mocks.stat.mockResolvedValue({ mtimeMs: Date.now() - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS - 1 });
+    await expect(supervisor.cleanupPersistentMindAttachments())
+      .resolves.toMatchObject({ success: true, removed: 1 });
+    expect(mocks.unlink).toHaveBeenCalledWith(markerPath);
+  });
+
+  it('keeps the marker when deleting a partial image fails, then reaps it on retry', async () => {
+    mocks.saveImageUpload.mockRejectedValue(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+    mocks.readdir.mockImplementation(async () => {
+      const markerPath = mocks.writeFile.mock.calls[0]?.[0] || '';
+      const attachmentId = markerPath.split('.mind-pending-')[1];
+      return attachmentId ? [basename(markerPath), `mind-${attachmentId}-diagram.png`] : [];
+    });
+    let failCandidate = true;
+    mocks.unlink.mockImplementation(async (path) => {
+      if (failCandidate && path.endsWith('-diagram.png')) {
+        failCandidate = false;
+        throw Object.assign(new Error('image locked'), { code: 'EPERM' });
+      }
+    });
+
+    await expect(supervisor.createPersistentMindAttachment({ filename: 'diagram.png', data: 'encoded-image' }))
+      .rejects.toMatchObject({ message: 'disk full', code: 'ENOSPC' });
+    const markerPath = mocks.writeFile.mock.calls[0][0];
+    expect(mocks.unlink).not.toHaveBeenCalledWith(markerPath);
+
+    mocks.stat.mockResolvedValue({ mtimeMs: Date.now() - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS - 1 });
+    await expect(supervisor.cleanupPersistentMindAttachments())
+      .resolves.toMatchObject({ success: true, removed: 1 });
+    expect(mocks.unlink).toHaveBeenCalledWith(markerPath);
+  });
+
   it('retains claimed metadata when a leftover marker cannot be removed', async () => {
     const claimed = uploadRecord({ attachmentId: 'claimed-old', filename: 'mind-claimed-old.png', claimedBy: 'completed-message', expiresAt: null });
     mocks.root.persistentMind.pendingAttachments = [claimed];
@@ -328,6 +404,43 @@ describe('persistent mind image attachment lifecycle', () => {
     await expect(supervisor.cleanupPersistentMindAttachments({ now: Date.parse('2026-08-27T00:00:00.000Z') }))
       .resolves.toMatchObject({ success: true, removed: 1, examined: 1 });
     expect(mocks.unlink).toHaveBeenCalledTimes(1);
+    expect(mocks.root.persistentMind.pendingAttachments).toEqual([]);
+  });
+
+  it.each(['EACCES', 'EIO', 'EBUSY'])('preserves a valid pending image through cleanup and admission while reads fail with %s', async (code) => {
+    mocks.root.persistentMind.pendingAttachments = [
+      uploadRecord(),
+      uploadRecord({ attachmentId: 'expired', filename: 'mind-expired.png', expiresAt: '2026-08-26T00:00:00.000Z' }),
+    ];
+    mocks.readFile.mockRejectedValue(Object.assign(new Error('storage unavailable'), { code }));
+
+    await expect(supervisor.cleanupPersistentMindAttachments({ now: Date.parse('2026-08-27T00:00:00.000Z') }))
+      .resolves.toMatchObject({ success: true, removed: 1, examined: 2 });
+    expect(mocks.unlink).toHaveBeenCalledTimes(1);
+    expect(mocks.unlink.mock.calls[0][0]).toContain('mind-expired.png');
+    expect(mocks.root.persistentMind.pendingAttachments).toMatchObject([{ attachmentId: 'attachment-1' }]);
+
+    // Unrelated text admission is not blocked by the unreadable image.
+    expect(await supervisor.enqueuePersistentMindMessage({ id: 'text-only', text: 'Hello.' })).toMatchObject({ success: true });
+
+    const unavailable = await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Look.', images: ['attachment-1'] });
+    expect(unavailable).toMatchObject({ success: false, code: 'ATTACHMENT_UNAVAILABLE', status: 503 });
+    expect(unavailable.error).not.toMatch(/missing|invalid|corrupt/i);
+    expect(mocks.root.persistentMind.pendingAttachments).toMatchObject([{ attachmentId: 'attachment-1' }]);
+    expect(mocks.root.persistentMind.pendingAttachments[0].claimedBy).toBeNull();
+
+    // Recovery: same attachment id is admitted without a new upload.
+    mocks.readFile.mockResolvedValue(PNG);
+    expect(await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Look.', images: ['attachment-1'] }))
+      .toMatchObject({ success: true });
+    expect(mocks.root.persistentMind.pendingAttachments).toMatchObject([{ attachmentId: 'attachment-1', claimedBy: 'message-1' }]);
+  });
+
+  it('still removes a pending image whose file is definitively missing (ENOENT)', async () => {
+    mocks.root.persistentMind.pendingAttachments = [uploadRecord()];
+    mocks.readFile.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+    await expect(supervisor.cleanupPersistentMindAttachments())
+      .resolves.toMatchObject({ success: true, removed: 1, examined: 1 });
     expect(mocks.root.persistentMind.pendingAttachments).toEqual([]);
   });
 

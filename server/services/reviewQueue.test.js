@@ -661,6 +661,18 @@ describe('reviewQueue.buildQueue', () => {
     });
   });
 
+  it('offers a PortOS-scoped resolve-with-agent task on non-process health alerts', async () => {
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([
+      { id: 'learning_skipped:all', type: 'learning_health', severity: 'high', title: '1 task type being skipped: auto-fix', detail: 'Very low success rates', link: '/cos/learning' }
+    ]);
+    const queue = await buildQueue();
+    const row = queue.items.find(i => i.id === 'health:learning_skipped:all');
+    expect(row.investigation).toMatchObject({ app: 'portos-default', label: 'Resolve with agent' });
+    expect(row.investigation.prompt).toContain('health:learning_skipped:all');
+    expect(row.investigation.prompt).toContain('FALSE ALARM');
+    expect(row.investigation.prompt).toContain('/api/review/queue/resolve');
+  });
+
   it('offers a process investigation in the registered owning app with full evidence', async () => {
     apps.getAllApps.mockResolvedValue([{ id: 'example-app', name: 'Example App', repoPath: '/repos/example', pm2ProcessNames: ['example-worker'] }]);
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { writeFile, readdir, stat } from 'fs/promises';
+import { writeFile, readdir, stat, rm } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { join, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
@@ -18,6 +18,9 @@ import { toTargetName } from '../services/xcodeScripts.js';
 import { scaffoldPortOS } from './scaffoldPortOS.js';
 
 const execAsync = promisify(exec);
+
+// Bound dependency installs so a stalled registry can't strand the request.
+const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -279,9 +282,37 @@ async function scaffoldApp(req, res) {
     steps.push({ name, status, error, timestamp: Date.now() });
   };
 
-  // Create directory
+  // Create directory. Everything from here until the app is registered runs
+  // under a rollback guard: a failed attempt must not leave a partial directory
+  // behind, or a retry with the same name is blocked by DIR_EXISTS.
   await ensureDir(repoPath);
   addStep('Create directory', 'done');
+
+  let app;
+  try {
+    app = await buildAndRegisterApp({ name, template, dirName, parentDir, repoPath, uiPort, apiPort, createGitHubRepo, githubOrg, addStep });
+  } catch (err) {
+    await rm(repoPath, { recursive: true, force: true })
+      .catch(rmErr => console.error(`❌ Failed to clean up partial scaffold ${repoPath}: ${rmErr.message}`));
+    console.error(`❌ Scaffold of ${dirName} failed, removed partial directory: ${err.message}`);
+    throw err;
+  }
+
+  notifyAppsChanged('create', app.id);
+  addStep('Register in PortOS', 'done');
+
+  res.json({
+    success: true,
+    app,
+    repoPath,
+    steps
+  });
+}
+
+// Generate template files, install, git-init, and register the app. Returns the
+// registered app; throws before registration on any failure so the caller can
+// roll back the directory.
+async function buildAndRegisterApp({ name, template, dirName, parentDir, repoPath, uiPort, apiPort, createGitHubRepo, githubOrg, addStep }) {
 
   // Generate project files based on template
   if (template === 'vite-react' || template === 'vite-express') {
@@ -439,7 +470,7 @@ module.exports = {
   // Run npm install (skip for Xcode projects — no npm)
   if (template !== 'ios-native' && template !== 'xcode-multiplatform') {
     const installCmd = template === 'portos-stack' ? 'npm run install:all' : 'npm install';
-    const { stderr: installErr } = await execAsync(installCmd, { cwd: repoPath })
+    const { stderr: installErr } = await execAsync(installCmd, { cwd: repoPath, timeout: INSTALL_TIMEOUT_MS })
       .catch(err => ({ stderr: err.message }));
 
     if (installErr && !installErr.includes('npm warn')) {
@@ -586,16 +617,7 @@ Thumbs.db
     envFile: '.env'
   });
 
-  notifyAppsChanged('create', app.id);
-
-  addStep('Register in PortOS', 'done');
-
-  res.json({
-    success: true,
-    app,
-    repoPath,
-    steps
-  });
+  return app;
 }
 
 // POST /api/scaffold - Create a new app from template

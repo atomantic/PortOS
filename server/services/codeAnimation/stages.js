@@ -22,7 +22,7 @@ import { emitCodeAnimationChanged } from '../socket.js';
 import { analyzeEvidence, evaluateVerdict } from './evidence.js';
 import { buildExportShim, injectExportShim } from './export.js';
 import * as store from './projectStore.js';
-import { readProjectFiles, sourceHashOf, stageProjectFiles, stageRenderSource, writeRunArtifact } from './projectFiles.js';
+import { ownedStorageRetained, readProjectFiles, sourceHashOf, stageProjectFiles, stageRenderSource, writeRunArtifact } from './projectFiles.js';
 import { checkSoundConsent, produceSoundtrack, muxSoundtrack } from './sound.js';
 import { renderViaMediaQueue, sampleFilm } from './stageRender.js';
 import { resolveBlenderExecution } from './execution.js';
@@ -133,8 +133,18 @@ async function stageRevision(ctx, revision) {
   const entryPath = (revision.manifest.renderer.kind === 'blender'
     ? revision.manifest.entrypoints.find(item => item.role === 'scene') || entryOf(revision.manifest) : entryOf(revision.manifest)).path;
   if (ctx.state.renderer) return { ...revision, files, staged: revision.storage.relativePath, entryPath };
-  const staged = await stageRenderSource(ctx.projectId, ctx.runId, revision.id, files, entryPath, prepareEntry(revision.manifest));
-  return { ...revision, files, staged: staged.directory, entryPath };
+  try {
+    const staged = await stageRenderSource(ctx.projectId, ctx.runId, revision.id, files, entryPath, prepareEntry(revision.manifest));
+    return { ...revision, files, staged: staged.directory, entryPath };
+  } catch (error) {
+    // Finish persists this release only when staging left no owned storage.
+    // A refused cleanup keeps its bytes reserved and preserves the root cause.
+    if (!ownedStorageRetained(error)) {
+      ctx.state.reservedBytes -= revision.totalBytes;
+      ctx.state.spent.diskBytes -= revision.totalBytes;
+    }
+    throw error;
+  }
 }
 
 async function blenderSequence(ctx, revision, signal, phase, options = {}) {

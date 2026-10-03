@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Check, Square, CheckSquare } from 'lucide-react';
 import { FormField } from '../ui/FormField';
 import { formatCount } from '../../utils/formatters';
+import { sortProviderModels } from '../../utils/providerModels.js';
 import {
   MODEL_ACCESS_MODES,
   MODEL_ACCESS_MODE_LABELS,
@@ -34,6 +35,7 @@ import {
  */
 export default function ProviderModelAccess({ catalog, value, onChange, configuredModels }) {
   const [patternDraft, setPatternDraft] = useState(null);
+  const sortedCatalog = useMemo(() => sortProviderModels(catalog), [catalog]);
 
   const policy = value || NO_MODEL_ACCESS;
   const patterns = policy.patterns || NO_MODEL_ACCESS.patterns;
@@ -126,7 +128,7 @@ export default function ProviderModelAccess({ catalog, value, onChange, configur
                 >Clear</button>
               </div>
               <div className="max-h-64 overflow-y-auto border border-port-border rounded-lg divide-y divide-port-border">
-                {catalog.map(model => (
+                {sortedCatalog.map(model => (
                   <button
                     key={model}
                     type="button"

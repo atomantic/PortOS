@@ -1,3 +1,4 @@
+import MediaModePicker from './MediaModePicker.jsx';
 import { Bot, Clapperboard, Plus, Music, Sparkles, FileText, CheckCircle2 } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
@@ -5,6 +6,7 @@ import AutomationBriefFields from './AutomationBriefFields.jsx';
 import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
 import { trackSourceLabel } from '../../lib/trackProvenance.js';
 import { formatDurationSec } from '../../utils/formatters.js';
+import { trackOptionLabels } from '../../utils/trackOptionLabels.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const MODES = [
@@ -20,6 +22,7 @@ const MODES = [
  */
 export default function CreateProjectDrawer({ open, onClose, form, onFormChange, tracks, universes, trackName, youtube, onSubmit, submitting }) {
   const autopilot = form.mode === 'autonomous';
+  const optionLabels = trackOptionLabels(tracks || []);
   const selectedTrack = (tracks || []).find((t) => t.id === form.trackId) || null;
   const sourceLabel = trackSourceLabel(selectedTrack);
 
@@ -64,7 +67,7 @@ export default function CreateProjectDrawer({ open, onClose, form, onFormChange,
             <option value="">— choose from music library —</option>
             {(tracks || []).map((t) => (
               <option key={t.id} value={t.id}>
-                {t.title || t.id}{t.artist ? ` · ${t.artist}` : ''}
+                {optionLabels.get(t.id)}
               </option>
             ))}
           </select>
@@ -125,6 +128,7 @@ export default function CreateProjectDrawer({ open, onClose, form, onFormChange,
 
         {/* 2. Project Name */}
         <div>
+          <MediaModePicker value={form.mediaMode} onChange={(mediaMode) => onFormChange({ mediaMode })} />
           <label htmlFor="mv-name" className="block text-xs text-port-text-muted mb-1">Name</label>
           <input
             id="mv-name"

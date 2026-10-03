@@ -1,0 +1,64 @@
+import { useEffect, useRef, useState } from 'react';
+import { importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
+  approveMusicVideoProductionReview, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
+  cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback } from '../services/apiMusicVideo.js';
+import useSseJobSlot from './useSseJobSlot.js';
+
+/** Server-authoritative approvals; changing any project input hides stale readiness immediately. */
+export default function useMusicVideoProductionReview({ project, replaceProject }) {
+  const latest = useRef(project);
+  latest.current = project;
+  const seenProofJobs = useRef(new Set());
+  const [state, setState] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let active = true;
+    if (project?.id) getMusicVideoProductionReview(project.id, { silent: true })
+      .then(result => { if (active) setState({ owner: project, readiness: result.readiness }); })
+      .catch(err => { if (active) setError(err.message); });
+    return () => { active = false; };
+  }, [project]);
+  const refresh = async id => {
+    const owner = latest.current;
+    if (owner?.id !== id) return;
+    const result = await getMusicVideoProductionReview(id, { silent: true });
+    if (latest.current === owner) replaceProject(result.project);
+  };
+  const proof = useSseJobSlot({
+    startRequest: ({ id, window }) => renderMusicVideoProductionProof(id, window, { silent: true }),
+    eventsUrl: musicVideoExcerptRenderEventsUrl, cancelRequest: cancelMusicVideoExcerptRender,
+    readPercent: frame => Number.isFinite(frame.progress) ? frame.progress * 100 : undefined,
+    onKickoffSuccess: (job, { id }) => { seenProofJobs.current.add(job); refresh(id).catch(err => setError(err.message)); },
+    onComplete: (_frame, id) => { refresh(id).catch(err => setError(err.message)); },
+    errorFallback: 'The proof render failed',
+  });
+  useEffect(() => {
+    const refs = [project?.productionReview?.proof?.excerptId, project?.productionReview?.prototype?.excerptId];
+    const excerpt = project?.excerpts?.find(e => refs.includes(e.id) && e.status === 'rendering' && e.jobId);
+    if (excerpt && !seenProofJobs.current.has(excerpt.jobId) && proof.attach(excerpt.jobId, project.id)) seenProofJobs.current.add(excerpt.jobId);
+  }, [project, proof.active]);
+  const call = async operation => {
+    if (!project || busy) return null;
+    const owner = project;
+    setBusy(true); setError(null);
+    try {
+      const result = await operation();
+      if (latest.current === owner) replaceProject(result.project);
+      return result;
+    } catch (err) { if (latest.current === owner) setError(err.message); return null; }
+    finally { setBusy(false); }
+  };
+  return { readiness: state?.owner === project ? state.readiness : null, busy, error, proof,
+    feedback: body => call(() => addMusicVideoProductionFeedback(project.id, { ...body, basis: state?.readiness.basis[body.stage] }, { silent: true })),
+    resolveFeedback: (feedbackId, resolution, password) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution, password }, { silent: true })),
+    importDocumentShots: body => call(() => importMusicVideoDocumentShots(project.id, body, { silent: true })),
+    importPlanning: source => call(() => importMusicVideoProductionPlanning(project.id, source, { silent: true })),
+    bindShot: shotId => call(() => bindMusicVideoProductionShot(project.id, shotId, { silent: true })),
+    save: draft => call(() => saveMusicVideoProductionDraft(project.id, draft, { silent: true })),
+    prepare: () => call(() => prepareMusicVideoProductionReview(project.id, {}, { silent: true })),
+    approve: (stage, password, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
+      { stage, password, basis: state?.readiness.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
+    renderProof: window => proof.start({ id: project.id, window }, project.id),
+  };
+}

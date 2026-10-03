@@ -35,6 +35,13 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
   };
 });
 
+// This page suite exercises existing controls with production approvals already granted.
+// ProductionReviewPanel and route integration suites exercise the real approval refusals.
+vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: () => ({
+  readiness: { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
+  busy: false, error: null, proof: { active: false }, save: vi.fn(), prepare: vi.fn(), approve: vi.fn(), renderProof: vi.fn(),
+}) }));
+
 vi.mock('../services/apiMusicVideo.js', () => ({
   listMusicVideoProjects: vi.fn(async () => []),
   createMusicVideoProject: vi.fn(),
@@ -340,9 +347,63 @@ beforeEach(() => {
   // Keep the real artifact iframe and src assertions without navigating to its API URL.
   window.happyDOM.settings.navigation.disableChildFrameNavigation = true;
   vi.clearAllMocks();
+  getMusicVideoProject.mockImplementation(async id => (await listMusicVideoProjects()).find(project => project.id === id));
   sseState.latest = null;
   sseState.closed = false;
   ytSseStates.clear();
+});
+
+describe('MusicVideo project load recovery (#9761)', () => {
+  it.each(['/music-video', '/music-video/mv-2/board'])('keeps failures visible and recovers without changing %s', async (path) => {
+    let resolveRetry;
+    listMusicVideoProjects
+      .mockRejectedValueOnce(new Error('Connection unavailable'))
+      .mockRejectedValueOnce(new Error('Still unavailable'))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRetry = resolve; }));
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <LocationProbe />
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Connection unavailable');
+    expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('loc')).toHaveTextContent(path);
+    expect(listMusicVideoProjects).toHaveBeenCalledWith({ silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Still unavailable'));
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    fireEvent.click(retry);
+    expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
+    fireEvent.click(retry);
+    expect(listMusicVideoProjects).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
+
+    await act(async () => resolveRetry([PROJECT_NO_CLIP]));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('loc')).toHaveTextContent(path);
+    if (path === '/music-video') {
+      expect(screen.getByTestId('mv-project-grid')).toHaveTextContent(PROJECT_NO_CLIP.name);
+    } else {
+      expect(screen.getByRole('heading', { level: 2, name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /^Board/ })).toHaveAttribute('aria-selected', 'true');
+    }
+  });
+
+  it.each([
+    ['/music-video', /No music video projects yet/],
+    ['/music-video/missing-project', /Project not found/],
+  ])('shows absence only after a successful read at %s', async (path, message) => {
+    listMusicVideoProjects.mockResolvedValue(path === '/music-video' ? [] : [PROJECT_NO_CLIP]);
+    render(<MemoryRouter initialEntries={[path]}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
 });
 
 describe('MusicVideo render control (#1760)', () => {
@@ -444,6 +505,15 @@ describe('MusicVideo render control (#1760)', () => {
     expect(toast.error).toHaveBeenCalledWith('Renderer stopped');
     expect(screen.getByLabelText('Project').querySelector('option[value="mv-1"]')).toHaveTextContent('failed');
     expect(screen.getByLabelText('Project').querySelector('option[value="mv-other"]')).toHaveTextContent('ready');
+    expect(screen.queryByText('Renderer stopped')).not.toBeInTheDocument();
+    await selectProject(PROJECT_WITH_CLIP.id);
+    await openStage('review');
+    expect(screen.getByText('Renderer stopped')).toBeInTheDocument();
+    await openStage('compose');
+    expect(screen.getByText('Renderer stopped')).toBeInTheDocument();
+    await selectProject(other.id);
+    await openStage('review');
+
 
     sseState.latest = null;
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
@@ -929,7 +999,7 @@ describe('MusicVideo project video renderer', () => {
       expect(await screen.findByText(/Split the scene on a lyric or phrase boundary/)).toBeTruthy();
       fireEvent.click(await screen.findByRole('button', { name: /Split on lyric boundaries/ }));
       await waitFor(() => expect(splitMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', 'fal', expect.anything()));
-      expect(await screen.findByText('Verse · 2/2')).toBeTruthy();
+      expect(await screen.findByText('Verse · 2/2', { selector: ':not(option)' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: /Split on lyric boundaries/ })).toBeNull();
     });
 
@@ -993,6 +1063,16 @@ describe('MusicVideo restricted-model license gate', () => {
 });
 
 describe('MusicVideo project versions', () => {
+  it('forks for video generation without rendering or modifying the source', async () => {
+    cloneMusicVideoProject.mockResolvedValue({ ...PROJECT_WITH_CLIP, id: 'mv-footage', name: 'Footage Variant', version: 2, composition: { mode: 'composed' } });
+    await openProject({ ...PROJECT_WITH_CLIP, composition: { mode: 'document' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Fork for video generation' }));
+    await waitFor(() => expect(cloneMusicVideoProject).toHaveBeenCalledWith('mv-1', { variant: 'video-generation' }, { silent: true }));
+    await screen.findByRole('heading', { level: 2, name: 'Footage Variant' });
+    expect(renderMusicVideoProject).not.toHaveBeenCalled();
+    expect(updateMusicVideoProject).not.toHaveBeenCalled();
+  });
+
   it('forks the open project and navigates to the editable next version', async () => {
     cloneMusicVideoProject.mockResolvedValue({
       ...PROJECT_WITH_CLIP,
@@ -1670,8 +1750,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
     await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: reviewing, stage: reviewing.castAndSets });
-    // The check-in lives on the Cast & Sets tab; the header offers its approval.
-    expect(screen.getByRole('button', { name: 'Approve cast & sets' })).toBeEnabled();
+    // Existing Cast & Sets controls still apply references; Production review separately authorizes work.
     await openStage('cast-sets');
     expect(await screen.findByText('Waiting for your check-in.')).toBeTruthy();
     await settle();
@@ -2060,6 +2139,29 @@ describe('MusicVideo stage tabs (#9243)', () => {
   );
   const selectedTab = () => screen.getByRole('tab', { selected: true });
 
+  it('puts the selected stage before shared run/review panels and preserves review drafts when tabs change', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
+      autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
+    }]);
+    renderAt('/music-video/mv-1/cast-sets');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    const review = screen.getByRole('region', { name: 'Production review' });
+    fireEvent.click(within(review).getByText('Edit visual guide and storyboard'));
+    const castDraft = within(review).getByLabelText('Cast guide');
+    fireEvent.change(castDraft, { target: { value: 'Example unsaved cast direction' } });
+
+    for (const stage of ['board', 'produce', 'cast-sets']) {
+      await openStage(stage);
+      const panel = screen.getByRole('tabpanel');
+      expect(within(panel).getByRole('heading', { level: 3, name: selectedTab().textContent })).toBeInTheDocument();
+      for (const shared of [screen.getByRole('region', { name: 'Autonomous run' }), review]) {
+        expect(panel.contains(shared)).toBe(false);
+        expect(panel.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+      expect(within(review).getByLabelText('Cast guide')).toHaveValue('Example unsaved cast direction');
+    }
+  });
+
   it('uses the newly selected project making-of notes and links when drafting publication copy', async () => {
     const first = { ...PROJECT_WITH_CLIP, publishKit: { notes: 'Example first story', links: { youtube: 'https://example.com/first' } } };
     const second = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Example Other Project', publishKit: { notes: 'Example second story', links: { youtube: 'https://example.com/second' } } };
@@ -2153,7 +2255,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
     });
 
-    it('approves the Cast & Sets check-in it is waiting on, from any tab', async () => {
+    it('keeps the Cast & Sets reference check-in available from its tab', async () => {
       const waiting = {
         ...PROJECT_ANALYZED, scenes: [], lyricCues: [], automation: { tools: ['image:local'], guidance: '', budgetUsd: null },
         castAndSets: { status: 'review', revision: 1, plan: {}, images: {} },
@@ -2163,7 +2265,8 @@ describe('MusicVideo stage tabs (#9243)', () => {
       importMusicVideoTrackLyrics.mockResolvedValue({ project: approved, imported: 0, markers: 0 });
       planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 1, promptsSeeded: false });
       await openProject(waiting, 'setup');
-      fireEvent.click(screen.getByRole('button', { name: 'Approve cast & sets' }));
+      await openStage('cast-sets');
+      fireEvent.click(screen.getByRole('button', { name: /Approve & continue/ }));
       await waitFor(() => expect(approveMusicVideoCastAndSets).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalled());
     });
@@ -2262,4 +2365,102 @@ it('waits for a grade save before rendering and keeps the saved look when a late
   fireEvent.change(screen.getByLabelText('Default section look'), { target: { value: 'golden-hour' } });
   await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Grade save unavailable'));
   expect(screen.getByLabelText('Default section look').value).toBe('teal-night');
+});
+
+describe('MusicVideo main page project cards', () => {
+  it('renders richly detailed cards for each project below the new project card', async () => {
+    const projectWithRender = {
+      ...PROJECT_WITH_CLIP,
+      id: 'mv-render-1',
+      name: 'Electric Skyline',
+      status: 'complete',
+      renderHistoryId: 'rh-final-1',
+      audioAnalysis: { bpm: 124, durationSec: 210 },
+      videoSettings: { backend: 'fal', modelId: 'hunyuan_video', generationMode: 'image', audioReactiveLora: 'reactive.safetensors' },
+      concept: { universeId: 'cyber-tokyo', style: 'hyper-detailed synthwave' },
+      visualSpec: { palette: ['#ff0055', '#00ffee'], references: [] },
+      vocalStemFilename: 'electric-vocals.wav',
+      midiTranscription: 'electric-midi.mid',
+    };
+    listMusicVideoProjects.mockResolvedValueOnce([projectWithRender, PROJECT_NO_CLIP]);
+    renderMV();
+
+    // The header's New project button is the only one (no duplicate card buttons)
+    expect(await screen.findByRole('button', { name: /New project/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /New music video/i })).toBeNull();
+
+    // Project cards grid exists below new project card
+    const grid = await screen.findByTestId('mv-project-grid');
+    expect(grid).toBeInTheDocument();
+
+    // Richly detailed cards rendered
+    expect(within(grid).getByText('Electric Skyline')).toBeInTheDocument();
+    expect(within(grid).getByText('No Clips')).toBeInTheDocument();
+
+    // Rich configuration options and status on Electric Skyline card
+    const card = screen.getByTestId('mv-project-card-mv-render-1');
+    expect(within(card).getByText('complete')).toBeInTheDocument();
+    expect(within(card).getByText('124 BPM')).toBeInTheDocument();
+    expect(within(card).getByText('fal')).toBeInTheDocument();
+    expect(within(card).getByText('hunyuan_video')).toBeInTheDocument();
+    expect(within(card).getByText('I2V')).toBeInTheDocument();
+    expect(within(card).getByText('Reactive')).toBeInTheDocument();
+    expect(within(card).getByText('Vocal Stem')).toBeInTheDocument();
+    expect(within(card).getByText('MIDI')).toBeInTheDocument();
+    expect(within(card).getByText('cyber-tokyo')).toBeInTheDocument();
+    expect(within(card).getByText(/hyper-detailed synthwave/i)).toBeInTheDocument();
+    expect(within(card).getByText('Final video')).toBeInTheDocument();
+  });
+
+  it('navigates to project when clicking Open on its card', async () => {
+    listMusicVideoProjects.mockResolvedValueOnce([PROJECT_WITH_CLIP]);
+    renderMV();
+
+    const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);
+    const openBtn = within(card).getByRole('button', { name: /^Open$/i });
+
+    await act(async () => {
+      fireEvent.click(openBtn);
+    });
+
+    // Navigates and loads the project board
+    expect(await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+  });
+
+  it('handles forking a project directly from its card', async () => {
+    cloneMusicVideoProject.mockResolvedValueOnce({
+      ...PROJECT_WITH_CLIP,
+      id: 'mv-cloned-1',
+      name: 'Neon Run (v2)',
+      version: 2,
+    });
+    listMusicVideoProjects.mockResolvedValueOnce([PROJECT_WITH_CLIP]);
+    renderMV();
+
+    const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);
+
+    const forkBtn = within(card).getByRole('button', { name: /Fork/i });
+    await act(async () => {
+      fireEvent.click(forkBtn);
+    });
+    expect(cloneMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, {}, { silent: true });
+  });
+
+  it('handles deleting a project directly from its card with confirmation', async () => {
+    deleteMusicVideoProject.mockResolvedValueOnce({ ok: true });
+    listMusicVideoProjects.mockResolvedValueOnce([PROJECT_WITH_CLIP]);
+    renderMV();
+
+    const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);
+
+    const deleteBtn = within(card).getByRole('button', { name: `Delete project ${PROJECT_WITH_CLIP.name}` });
+    fireEvent.click(deleteBtn);
+    expect(within(card).getByText('Delete?')).toBeInTheDocument();
+
+    const confirmBtn = within(card).getByRole('button', { name: `Confirm delete project ${PROJECT_WITH_CLIP.name}` });
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+    expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
+  });
 });

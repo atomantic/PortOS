@@ -245,7 +245,7 @@ describe('Apps Lifecycle Routes', () => {
         repoPath: '/path/to/repo',
         uiPort: 8940,
         apiPort: 8940,
-        pm2ProcessNames: ['worlds'],
+        pm2ProcessNames: ['eidoverse-worlds'],
         startCommands: ['bun --env-file=.env.portos server/server.ts']
       };
       appsService.getAppById.mockResolvedValue(mockApp);
@@ -256,8 +256,8 @@ describe('Apps Lifecycle Routes', () => {
 
       expect(response.status).toBe(200);
       expect(pm2Service.startWithCommand).toHaveBeenCalledWith(
-        'worlds', '/path/to/repo', 'bun --env-file=.env.portos server/server.ts',
-        expect.objectContaining({ port: 8940 })
+        'eidoverse-worlds', '/path/to/repo', 'bun --env-file=.env.portos server/server.ts',
+        expect.objectContaining({ port: 8940, maxMemoryRestart: '2G' })
       );
     });
 

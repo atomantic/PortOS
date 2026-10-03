@@ -354,6 +354,24 @@ describe('applyProjectPatch', () => {
     expect(legacy.automation).toEqual({ tools: ['image:codex'], guidance: 'h', budgetUsd: null, checkins: { castAndSets: 'review' } });
   });
 
+  it('merges per-stage LLM pins stage by stage: absent keeps, null clears one stage, null for the whole map clears them all', () => {
+    const lyrics = { providerId: 'local-llm', model: 'small', effort: null };
+    const plan = { providerId: 'claude-tui', model: 'opus', effort: 'high' };
+    const created = buildProjectRecord({ name: 'Auto', mode: 'autonomous', automation: { tools: ['image:codex'], llmStages: { lyrics, bogus: plan, plan: { model: 'orphan' } } } }, { id: 'mv-a', now: 'n' });
+    // Unknown stages and a pin with no provider are dropped.
+    expect(created.automation.llmStages).toEqual({ lyrics });
+
+    const added = applyProjectPatch(created, { automation: { llmStages: { plan } } });
+    expect(added.automation.llmStages).toEqual({ lyrics, plan });
+    // An unrelated brief edit keeps every stage pin.
+    expect(applyProjectPatch(added, { automation: { guidance: 'darker' } }).automation.llmStages).toEqual({ lyrics, plan });
+
+    expect(applyProjectPatch(added, { automation: { llmStages: { lyrics: null } } }).automation.llmStages).toEqual({ plan });
+    // Clearing the last stage drops the field rather than storing an empty map.
+    expect('llmStages' in applyProjectPatch(created, { automation: { llmStages: { lyrics: null } } }).automation).toBe(false);
+    expect('llmStages' in applyProjectPatch(added, { automation: { llmStages: null } }).automation).toBe(false);
+  });
+
   it('persists explicit renderer settings and merges later partial changes', () => {
     const project = buildProjectRecord({
       name: 'A',
@@ -654,6 +672,7 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
       id: 'mv-1',
       updatedAt: '2026-01-01T00:00:00Z',
       name: 'local',
+      renderError: 'Example local document failure',
       imageMode: 'codex',
       imageModelId: 'example-image-model',
       videoSettings: { backend: 'local', modelId: 'local-model', grokDuration: 5 },
@@ -662,6 +681,7 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
       id: 'mv-1',
       updatedAt: '2026-01-05T00:00:00Z',
       name: 'remote edit',
+      renderError: 'Peer failure must stay on peer',
       videoSettings: { modelId: 'shared-model', grokDuration: 10 },
     };
 
@@ -669,6 +689,7 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
 
     expect(r.remoteWins).toBe(true);
     expect(r.next.name).toBe('remote edit');
+    expect(r.next.renderError).toBe('Example local document failure');
     expect(r.next.imageMode).toBe('codex');
     expect(r.next.imageModelId).toBe('example-image-model');
     expect(r.next.videoSettings).toEqual({

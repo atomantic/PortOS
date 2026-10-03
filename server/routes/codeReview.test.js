@@ -285,6 +285,15 @@ describe('POST /api/code-review/local', () => {
     expect(res.body.context).toEqual({ backend: 'lmstudio', model: 'm' })
   })
 
+  it('projects malformed diagnostics in the HTTP error without reporting review success', async () => {
+    const diagnostics = { reason: 'invalid_json', finishReason: 'unknown', responseLengthChars: 13, responseLengthCapped: false }
+    codeReviewSvc.runLocalCodeReview.mockResolvedValue({ ok: false, backend: 'ollama', model: 'm', code: 'MALFORMED_REVIEW', diagnostics, error: 'No usable code-review verdict.' })
+    const res = await request(makeApp()).post('/api/code-review/local').send({ backend: 'ollama', model: 'm', diff: 'example diff' })
+    expect(res.status).toBe(502)
+    expect(res.body.context).toEqual({ backend: 'ollama', model: 'm', code: 'MALFORMED_REVIEW', diagnostics })
+    expect(codeReviewSvc.reportReviewerSuccess).not.toHaveBeenCalled()
+  })
+
   it('returns 200 with findings on success', async () => {
     codeReviewSvc.runLocalCodeReview.mockResolvedValue({
       ok: true,

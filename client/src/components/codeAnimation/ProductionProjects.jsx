@@ -16,6 +16,7 @@ import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import ProductionProjectForm from './ProductionProjectForm';
 import ProductionPreflight from './ProductionPreflight';
 import ProductionContainment from './ProductionContainment';
+import ProductionAcceptance from './ProductionAcceptance';
 import ProductionStageRuns, { isStageRun } from './ProductionStageRuns';
 
 const EVENTS = ['code-animation:changed'];
@@ -138,6 +139,7 @@ export default function ProductionProjects() {
         <p className="text-xs text-gray-400">Requested model: {project.localSettings?.model || 'Unspecified'} · Mode: {project.localSettings?.mode || 'Unspecified'}</p>
         <ProductionStageRuns project={project} runs={history.items.filter(isStageRun)} disabled={busy || dirty}
           onRunStarted={run => history.setItems(previous => [{ id: run.id, status: run.status, data: run, createdAt: new Date().toISOString() }, ...previous.filter(item => item.id !== run.id)])} />
+        <ProductionAcceptance key={project.id} projectId={project.id} disabled={busy || dirty} onProject={applyProject} onDownloadSource={download} />
         <ul className="space-y-2">
           {history.items.filter(run => !isStageRun(run)).map(run => <li key={run.id} className="min-w-0 space-y-1 rounded border border-port-border p-3">
             <div className="flex flex-wrap justify-between gap-2 text-sm"><span>Package import · {run.status}</span><span>{timeAgo(run.createdAt)}</span></div>

@@ -101,6 +101,7 @@ import {
   getUserTasks,
   getCosTasks,
   getAllTasks,
+  getTaskView,
   getPendingTaskIds,
   getTaskDiagnostics,
   getTasks,
@@ -365,6 +366,145 @@ describe('cosTaskStore parsed-task cache (#3497)', () => {
     expect(second.tasks).toHaveLength(1);
     expect(second.tasks[0].description).toBe('pristine');
     expect(second.tasks[0].metadata.injected).toBeUndefined();
+  });
+});
+
+// Bounded task views (#9677). The HTTP queue/bare/completed/window reads select
+// from the parsed snapshot BEFORE cloning, so archived prompt bodies are never
+// copied for a response that does not carry them. Each view is checked against a
+// projection of the raw getAllTasks() truth (the contract the route used to build
+// itself) plus the instrumented size of what was actually cloned.
+describe('cosTaskStore.getTaskView (#9677)', () => {
+  const PROMPT = Array(400).fill('Archived prompt body.').join(' ');
+  const row = (type, n, status, extra = {}) => ({
+    id: `task-${type}-${String(n).padStart(4, '0')}`, description: `Example ${type} task ${n}`, status, priority: 'MEDIUM',
+    metadata: { prompt: status === 'completed' ? PROMPT : 'Open prompt.' }, ...extra
+  });
+  const seed = (completedPerSource = 60) => {
+    const archived = (type) => Array.from({ length: completedPerSource }, (_, n) => row(type, n, 'completed'));
+    mock.files.set(USER_FILE, generateTasksMarkdown([
+      row('user', 1000, 'pending'), ...archived('user'), row('user', 1001, 'in_progress'), row('user', 1002, 'blocked'),
+    ]));
+    mock.files.set(COS_FILE, generateTasksMarkdown([
+      row('cos', 1000, 'pending', { approvalRequired: false, autoApproved: true }), ...archived('cos'),
+      row('cos', 1001, 'pending', { approvalRequired: true, autoApproved: false }),
+    ]));
+  };
+  const desc = (a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+  const withSpy = async (fn) => {
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    try {
+      const result = await fn();
+      const cloned = clone.mock.calls.reduce((sum, [value]) => sum + JSON.stringify(value).length, 0);
+      return { result, cloned };
+    } finally { clone.mockRestore(); }
+  };
+
+  it('bare view equals the raw store minus archived rows beyond the first page, and clones only that page', async () => {
+    seed();
+    const raw = await getAllTasks();
+    const { result, cloned } = await withSpy(() => getTaskView({ kind: 'bare' }));
+    for (const key of ['user', 'cos']) {
+      const all = raw[key];
+      const open = all.tasks.filter(t => t.status !== 'completed');
+      const page = all.tasks.filter(t => t.status === 'completed').sort(desc).slice(0, 25);
+      expect(result[key]).toEqual({
+        ...all, tasks: [...open, ...page], completedCount: 60, completedNextCursor: page[24].id,
+        grouped: { ...all.grouped, completed: [] },
+        ...(key === 'cos' ? { autoApproved: all.autoApproved, awaitingApproval: all.awaitingApproval } : {}),
+      });
+    }
+    const rawBytes = JSON.stringify(raw).length;
+    // 2 sources x (4 open + 25 page) of 120 rows: well under half the raw payload.
+    expect(cloned).toBeLessThan(rawBytes * 0.3);
+    console.log(`bounded bare clone: ${cloned} of ${rawBytes} bytes`);
+  });
+
+  it('queue view clones no archived prompt unless one is selected, then exactly that row', async () => {
+    seed();
+    const raw = await getAllTasks();
+    const queue = await withSpy(() => getTaskView({ kind: 'queue' }));
+    expect(queue.result.user.tasks.map(t => t.id)).toEqual(['task-user-1000', 'task-user-1001', 'task-user-1002']);
+    expect(queue.result.user.completedCount).toBe(60);
+    expect(queue.result.user.grouped.completed).toEqual([]);
+    expect(queue.result.cos.awaitingApproval.map(t => t.id)).toEqual(['task-cos-1001']);
+    expect(queue.cloned).toBeLessThan(JSON.stringify(raw.user.tasks.slice(0, 4)).length * 4);
+    expect(JSON.stringify(queue.result)).not.toContain('Archived prompt body');
+
+    const picked = await getTaskView({ kind: 'queue', selected: 'task-user-0007' });
+    // File order is kept: the selected archived row stays where the file put it.
+    expect(picked.user.tasks.map(t => t.id)).toEqual(raw.user.tasks.filter(t => t.status !== 'completed' || t.id === 'task-user-0007').map(t => t.id));
+    expect(picked.user.grouped.completed.map(t => t.id)).toEqual(['task-user-0007']);
+    expect(picked.user.tasks.find(t => t.id === 'task-user-0007')).toEqual(raw.user.tasks.find(t => t.id === 'task-user-0007'));
+    expect(picked.cos.tasks.every(t => t.status !== 'completed')).toBe(true);
+  });
+
+  it('completed view reads one source, pages by cursor, and clones just the page', async () => {
+    seed();
+    const raw = await getAllTasks();
+    const expectedIds = raw.cos.tasks.filter(t => t.status === 'completed').sort(desc).map(t => t.id);
+    const first = await withSpy(() => getTaskView({ kind: 'completed', source: 'internal', limit: 10 }));
+    expect(first.result.items.map(t => t.id)).toEqual(expectedIds.slice(0, 10));
+    expect(first.result).toMatchObject({ total: 60, nextCursor: expectedIds[9] });
+    expect(first.cloned).toBeLessThan(JSON.stringify(raw.cos.tasks).length / 5);
+    const next = await getTaskView({ kind: 'completed', source: 'internal', limit: 10, cursor: first.result.nextCursor });
+    expect(next.items.map(t => t.id)).toEqual(expectedIds.slice(10, 20));
+    const tail = await getTaskView({ kind: 'completed', source: 'user', limit: 100, cursor: 'task-user-0003' });
+    expect(tail).toMatchObject({ total: 60, nextCursor: null });
+    expect(tail.items.map(t => t.id)).toEqual(['task-user-0002', 'task-user-0001', 'task-user-0000']);
+  });
+
+  it('window view slices in file order with true totals and scalar metadata only', async () => {
+    seed();
+    const raw = await getAllTasks();
+    const { result, cloned } = await withSpy(() => getTaskView({ kind: 'window', offset: 2, limit: 3 }));
+    expect(result.user).toEqual({ file: USER_FILE, exists: true, type: 'user', tasks: raw.user.tasks.slice(2, 5) });
+    expect(result.cos.tasks).toEqual(raw.cos.tasks.slice(2, 5));
+    expect(result.totals).toEqual({ user: raw.user.tasks.length, cos: raw.cos.tasks.length });
+    expect(cloned).toBeLessThan(JSON.stringify(raw).length / 10);
+  });
+
+  it('missing files keep the getUserTasks/getCosTasks shape', async () => {
+    const raw = await getAllTasks();
+    const bare = await getTaskView({ kind: 'bare' });
+    expect(bare.user).toMatchObject({ tasks: [], exists: false, type: 'user', completedCount: 0, completedNextCursor: null });
+    expect(bare.cos.autoApproved).toBeUndefined();
+    expect(raw.cos.autoApproved).toBeUndefined();
+    expect((await getTaskView({ kind: 'queue' })).cos.completedCount).toBe(0);
+    expect(await getTaskView({ kind: 'completed', source: 'user', limit: 5 })).toEqual({ items: [], total: 0, nextCursor: null });
+    expect((await getTaskView({ kind: 'window', offset: 0, limit: 5 })).totals).toEqual({ user: 0, cos: 0 });
+  });
+
+  it('never leaks the cache: caller mutation, internal writes and same-size external edits', async () => {
+    seed(30);
+    const first = await getTaskView({ kind: 'bare' });
+    first.user.tasks[0].description = 'mutated in place';
+    first.user.tasks.push({ id: 'ghost' });
+    first.user.grouped.pending.length = 0;
+    const page = await getTaskView({ kind: 'completed', source: 'user', limit: 5 });
+    page.items[0].metadata.prompt = 'poisoned';
+
+    const again = await getTaskView({ kind: 'bare' });
+    expect(again.user.tasks.find(t => t.id === 'ghost')).toBeUndefined();
+    expect(again.user.tasks[0].description).toBe('Example user task 1000');
+    expect(again.user.grouped.pending).toHaveLength(1);
+    expect((await getTaskView({ kind: 'completed', source: 'user', limit: 5 })).items[0].metadata.prompt).toBe(PROMPT);
+
+    // Internal write: the derived partitions drop with the snapshot.
+    await updateTask('task-user-1000', { status: 'completed' }, 'user');
+    const written = await getTaskView({ kind: 'queue' });
+    expect(written.user.tasks.map(t => t.id)).toEqual(['task-user-1001', 'task-user-1002']);
+    expect(written.user.completedCount).toBe(31);
+
+    // External same-size edit with a moved stamp (a peer/editor flips a status).
+    const text = mock.files.get(USER_FILE);
+    mock.files.set(USER_FILE, text.replace('- [~] #task-user-1001', '- [x] #task-user-1001'));
+    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 5000);
+    const external = await getTaskView({ kind: 'queue' });
+    expect(external.user.tasks.map(t => t.id)).toEqual(['task-user-1002']);
+    expect(external.user.completedCount).toBe(32);
+    mock.files.delete(USER_FILE);
+    expect((await getTaskView({ kind: 'bare' })).user.exists).toBe(false);
   });
 });
 

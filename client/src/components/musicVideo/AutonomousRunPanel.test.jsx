@@ -24,8 +24,12 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
 vi.mock('../../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'mb-1', name: 'Neon Rain' }]) }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
-  default: () => ({
-    providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
+  default: ({ filter } = {}) => ({
+    providers: filter ? [
+      { id: 'fixture-api', name: 'Fixture API', type: 'api', enabled: true, defaultModel: 'fixture-model', models: ['fixture-model'] },
+      { id: 'fixture-tui', name: 'Fixture TUI', type: 'tui', enabled: true },
+      { id: 'fixture-cli', name: 'Unverified CLI', type: 'cli', enabled: true },
+    ].filter(filter) : [], selectedProviderId: '', selectedModel: '', availableModels: filter ? ['fixture-model'] : [],
     setSelectedProviderId: () => {}, setSelectedModel: () => {},
   }),
 }));
@@ -100,6 +104,17 @@ describe('AutonomousRunPanel', () => {
   it('offers the Suno style line to edit at the style checkpoint (the last stop before Suno is used)', async () => {
     render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'style' })} />);
     expect(screen.getByLabelText(/suno style \(edit before continuing\)/i).value).toBe('synthwave');
+  });
+
+  it('offers a song retake only at the song checkpoint', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    const { unmount } = render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'lyrics' })} />);
+    expect(screen.queryByRole('button', { name: /retake song/i })).toBeNull();
+    unmount();
+
+    render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'song', stage: 'analyze' })} />);
+    fireEvent.click(screen.getByRole('button', { name: /retake song/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { retakeSong: true }, { silent: true }));
   });
 
   it('offers a retry for a run that needs the director, and shows why', async () => {
@@ -189,7 +204,7 @@ describe('AutonomousRunPanel stage output', () => {
 });
 
 describe('AutonomousStartDrawer', () => {
-  it('starts a run from the prompt alone, sending the free tools, no checkpoints and no blank optionals', async () => {
+  it('requires an explicit compatible code author before starting with the free tools', async () => {
     api.startAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-new', name: 'New' }, run: baseRun() });
     const onStarted = vi.fn();
     render(<AutonomousStartDrawer open onClose={() => {}} onStarted={onStarted} />);
@@ -197,14 +212,19 @@ describe('AutonomousStartDrawer', () => {
     const submit = screen.getByRole('button', { name: /start autonomous video/i });
     expect(submit.disabled).toBe(true);
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: '  a courier crosses a rainy city  ' } });
+    expect(submit.disabled).toBe(true);
+    expect(screen.queryByRole('option', { name: 'Fixture TUI' })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Unverified CLI' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
     fireEvent.click(submit);
 
     await waitFor(() => expect(onStarted).toHaveBeenCalledWith({ id: 'mv-new', name: 'New' }));
     const [body, options] = api.startAutonomousMusicVideo.mock.calls[0];
     expect(options).toEqual({ silent: true });
     expect(body).toEqual({
-      prompt: 'a courier crosses a rainy city', songSource: 'suno', localFallback: false, instrumental: false, tools: ['image:local', 'video:local'],
+      prompt: 'a courier crosses a rainy city', mediaMode: 'code-images-video', songSource: 'suno', localFallback: false, instrumental: false, tools: ['image:local', 'video:local'],
       budgetUsd: null, limits: { maxGenerations: 40 }, checkpoints: [],
+      authoring: { providerId: 'fixture-api', model: 'fixture-model' },
     });
   });
 
@@ -217,6 +237,7 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.change(screen.getByLabelText(/budget cap/i), { target: { value: '12' } });
     await waitFor(() => expect(screen.getByRole('option', { name: 'Neon Rain' })).toBeTruthy());
     fireEvent.change(screen.getByLabelText('Mood board'), { target: { value: 'mb-1' } });
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
     fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalled());
     expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({
@@ -224,11 +245,28 @@ describe('AutonomousStartDrawer', () => {
     });
   });
 
+  it('sends the Suno form options only when set, and blocks an unrecognizable model version', async () => {
+    api.startAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
+    const submit = screen.getByRole('button', { name: /start autonomous video/i });
+    fireEvent.change(screen.getByLabelText('Suno model'), { target: { value: 'latest' } });
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Suno model'), { target: { value: 'v6' } });
+    fireEvent.change(screen.getByLabelText('Exclude styles'), { target: { value: ' metal ' } });
+    fireEvent.change(screen.getByLabelText('Vocal gender'), { target: { value: 'female' } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(1));
+    expect(api.startAutonomousMusicVideo.mock.calls[0][0].suno).toEqual({ excludeStyles: 'metal', vocalGender: 'female', model: 'v6' });
+  });
+
   it('offers the local song source, and the Suno-only fallback opt-in only while Suno is the source', async () => {
     api.startAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
     render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
     fireEvent.click(screen.getByLabelText(/render locally if suno is unavailable/i));
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
     fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(1));
     expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({ songSource: 'suno', localFallback: true });
@@ -236,6 +274,7 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.change(screen.getByLabelText('Song source'), { target: { value: 'local' } });
     expect(screen.queryByLabelText(/render locally if suno is unavailable/i)).toBeNull();
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
     fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(2));
     // The stale fallback tick must not ride along once Suno is no longer the source.

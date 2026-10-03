@@ -677,7 +677,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v18 = named narrative event anchors and bounded section reactivity. Older
   // composition normalizers drop these fields on edit. Absent remains legacy;
   // no stored row rewrite is needed. Document manifests remain wire-local.
-  musicVideoProjects: 18,
+  // v19 pins whole-workflow media policy; older peers cannot enforce it.
+  // v20 adds the Eidoverse render mode and scene source. Older normalizers
+  // would collapse the mode to footage and discard the authored scene.
+  musicVideoProjects: 20,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

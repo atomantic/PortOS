@@ -6,13 +6,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
   readJSONFile: vi.fn(),
   PATHS: { cos: '/tmp/test/cos' },
-  // atomicWrite replaced the raw writeFile(JSON.stringify) site (#1837); route
-  // it through the mocked fs/promises.writeFile so writeFile.toHaveBeenCalled holds.
-  atomicWrite: vi.fn(async (filePath, data) => {
-    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
-    const { writeFile } = await import('fs/promises');
-    return writeFile(filePath, payload);
-  })
+  atomicWrite: vi.fn()
 }));
 
 vi.mock('fs/promises', () => ({
@@ -27,19 +21,152 @@ vi.mock('fs', () => ({
 const { SLASHDO_COMMAND_NAMES, getSlashdoWorkflow } = await import('../lib/slashdoCatalog.js');
 
 // Import after mocking
-const { readJSONFile } = await import('../lib/fileUtils.js');
+const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
 const { writeFile } = await import('fs/promises');
 const {
   getAllTemplates,
   getPopularTemplates,
   recordTemplateUsage,
   createTemplate,
+  createTemplateFromTask,
+  updateTemplate,
   deleteTemplate
 } = await import('./taskTemplates.js');
 
 describe('taskTemplates service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    writeFile.mockReset().mockResolvedValue();
+    readJSONFile.mockReset();
+    // Keep the persistence double stable while several saves overlap.
+    atomicWrite.mockImplementation(async (filePath, data) => writeFile(filePath, JSON.stringify(data)));
+  });
+
+  describe('concurrent mutations (#9787)', () => {
+    const template = { id: 'user-example', name: 'Original', description: 'Example', isBuiltin: false };
+
+    // Every read gets a separate durable snapshot, as a JSON file read does.
+    function usePersistence(state) {
+      let durable = JSON.stringify(state);
+      readJSONFile.mockImplementation(async () => JSON.parse(durable));
+      writeFile.mockImplementation(async (_path, payload) => { durable = payload; });
+    }
+
+    function holdNextWrite(failure) {
+      const started = Promise.withResolvers();
+      const gate = Promise.withResolvers();
+      const persist = writeFile.getMockImplementation();
+      writeFile.mockImplementationOnce(async (...args) => {
+        started.resolve();
+        await gate.promise;
+        if (failure) throw failure;
+        return persist(...args);
+      });
+      return { started: started.promise, release: gate.resolve };
+    }
+
+    it('preserves an authored edit when usage overlaps its pending save', async () => {
+      usePersistence({ userTemplates: [template], usage: {} });
+      const pending = holdNextWrite();
+      const edit = updateTemplate(template.id, { name: 'Edited' });
+      await pending.started;
+      const use = recordTemplateUsage(template.id);
+      pending.release();
+
+      const [edited, count] = await Promise.all([edit, use]);
+      expect(edited.name).toBe('Edited');
+      expect(count).toBe(1);
+      expect((await getAllTemplates()).find(t => t.id === template.id))
+        .toMatchObject({ name: 'Edited', useCount: 1 });
+    });
+
+    it('preserves both concurrent usage increments', async () => {
+      usePersistence({ userTemplates: [template], usage: {} });
+      const pending = holdNextWrite();
+      const first = recordTemplateUsage(template.id);
+      await pending.started;
+      const second = recordTemplateUsage(template.id);
+      pending.release();
+
+      expect(await Promise.all([first, second])).toEqual([1, 2]);
+      expect((await getAllTemplates()).find(t => t.id === template.id).useCount).toBe(2);
+    });
+
+    it('does not restore a deleted template when usage was queued after deletion', async () => {
+      usePersistence({ userTemplates: [template], usage: { [template.id]: 3 } });
+      const pending = holdNextWrite();
+      const deletion = deleteTemplate(template.id);
+      await pending.started;
+      const use = recordTemplateUsage(template.id);
+      pending.release();
+
+      const [deleted, count] = await Promise.all([deletion, use]);
+      expect(deleted.success).toBe(true);
+      expect(count).toBe(1);
+      expect((await getAllTemplates()).find(t => t.id === template.id)).toBeUndefined();
+    });
+
+    it('shares admission across usage, create-from-task, edits and deletion of different templates', async () => {
+      const removed = { ...template, id: 'user-removed' };
+      usePersistence({ userTemplates: [template, removed], usage: {} });
+      const pending = holdNextWrite();
+      const use = recordTemplateUsage('builtin-do-plan-task');
+      await pending.started;
+      const creation = createTemplateFromTask({ description: 'Example task', context: 'Example context' }, 'Saved task');
+      const edit = updateTemplate(template.id, { name: 'Edited' });
+      const deletion = deleteTemplate(removed.id);
+      pending.release();
+
+      const [, created] = await Promise.all([use, creation, edit, deletion]);
+      const saved = await getAllTemplates();
+      expect(saved.find(t => t.id === 'builtin-do-plan-task').useCount).toBe(1);
+      expect(saved.find(t => t.id === template.id).name).toBe('Edited');
+      expect(saved.find(t => t.id === removed.id)).toBeUndefined();
+      expect(saved.find(t => t.id === created.id))
+        .toMatchObject({ name: 'Saved task', description: 'Example task', context: 'Example context', category: 'from-task' });
+    });
+
+    it('propagates a rejected save and lets the next mutation read unchanged durable state', async () => {
+      usePersistence({ userTemplates: [template], usage: {} });
+      const failure = new Error('Synthetic persistence failure');
+      const pending = holdNextWrite(failure);
+      const edit = updateTemplate(template.id, { name: 'Not saved' });
+      const resultsPromise = Promise.allSettled([edit, recordTemplateUsage(template.id)]);
+      await pending.started;
+      pending.release();
+
+      const results = await resultsPromise;
+      expect(results[0]).toEqual({ status: 'rejected', reason: failure });
+      expect(results[1]).toEqual({ status: 'fulfilled', value: 1 });
+      expect((await getAllTemplates()).find(t => t.id === template.id))
+        .toMatchObject({ name: 'Original', useCount: 1 });
+    });
+
+    it('does not retain a failed first creation in the empty-store defaults', async () => {
+      usePersistence(null);
+      const failure = new Error('Synthetic persistence failure');
+      writeFile.mockRejectedValueOnce(failure);
+      await expect(createTemplate({ name: 'Not saved', description: 'Example' })).rejects.toBe(failure);
+
+      const created = await createTemplateFromTask({ description: 'Example task' }, 'Saved task');
+      expect((await getAllTemplates()).filter(t => !t.isBuiltin)).toEqual([{ ...created, useCount: 0 }]);
+    });
+
+    it('preserves strict-read errors without poisoning later queued work', async () => {
+      usePersistence({ userTemplates: [template], usage: {} });
+      const failure = new Error('Synthetic unreadable state');
+      readJSONFile.mockRejectedValueOnce(failure);
+      const results = await Promise.allSettled([
+        updateTemplate(template.id, { name: 'Not saved' }),
+        recordTemplateUsage(template.id)
+      ]);
+
+      expect(results[0]).toEqual({ status: 'rejected', reason: failure });
+      expect(results[1]).toEqual({ status: 'fulfilled', value: 1 });
+      expect(readJSONFile).toHaveBeenCalledWith(expect.any(String), null, { strict: true });
+      expect((await getAllTemplates()).find(t => t.id === template.id))
+        .toMatchObject({ name: 'Original', useCount: 1 });
+    });
   });
 
   describe('getAllTemplates', () => {

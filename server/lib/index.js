@@ -20,6 +20,7 @@ export * from './appPromptPlaceholders.js';
 export * from './appDeployFlags.js';
 export * from './apiContractSchemas.js';
 export * from './codeAnimationPackage.js';
+export * from './codeAnimationAcceptance.js';
 export * from './codeAnimationContainment.js';
 export * from './autonomousJobTask.js';
 export * from './asyncApiSpec.js';
@@ -161,6 +162,7 @@ export * from './universeBibleCompleteness.js';
 export * from './universeBibleLimits.js';
 export * from './universeMarkdown.js';
 export * from './universePromptRenderers.js';
+export * from './universeExpandMerge.js';
 export * from './universeVisualStyle.js';
 export * from './writersRoomPresets.js';
 export * from './writersRoomStylePresets.js';
@@ -341,6 +343,7 @@ export * from './zipWriter.js';
 
 // === Process execution ===
 export * from './agentGuard/index.js';
+export * from './agentFinalVerdict.js';
 export * from './agentOutcome.js';
 export * from './cosAgentCompletionOrder.js';
 export * from './cosAgentFeedback.js';
@@ -715,6 +718,7 @@ export * from './testHelper.js';
 export * from './videoFailure.js';
 
 export * from './eidoverseCityLayout.js';
+export * from './eidoverseSceneInspection.js';
 export * from './eidoverseCitySurface.js';
 export * from './fableLoomShots.js';
 export * from './eidoverseIslandLandscape.js';
@@ -736,6 +740,7 @@ export * from './videoTimelineFades.js';
 // `tokenize` collides with `bm25.js`'s own tokenizer — namespaced like `runners`.
 export * as voiceEcho from './voiceEcho.js';
 export * from './voiceEngines.js';
+export * from './voiceModelAssets.js';
 export * from './httpCompression.js';
 
 export * from './auditQuality.js';
@@ -774,6 +779,8 @@ export * from './databaseAuthority.js';
 
 export * from './databaseMaintenanceJournal.js';
 
+export * from './databaseRestoreRecovery.js';
+
 export * from './databaseWriterRegistry.js';
 
 export * from './musicVideoCreativeContext.js';
@@ -809,6 +816,10 @@ export * from './codeAnimationProjects.js';
 export * from './musicVideoNarrativeEvents.js';
 
 export * from './persistentMindContextEvents.js';
+export * from './persistentMindVisitReceipts.js';
 
 export * from './scheduleExecutionFieldsValidation.js';
 export * from './codeAnimationSound.js';
+
+export * from './musicVideoMediaPolicy.js';
+export * from './sandboxDelegation.js';

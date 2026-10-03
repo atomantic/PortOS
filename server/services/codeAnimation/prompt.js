@@ -310,6 +310,36 @@ const CODE_VIDEO_RULES = `RUNTIME CONTRACT (the host already supplies this — w
 - Determinism: no Math.random, Date.now, performance.now, getRandomValues, fetch, WebSocket, XMLHttpRequest, import, or require. Per-frame jitter must use env.frame (the integer frame index), never continuous env.t, so motion-blur sub-frames stay coherent.
 - Canvas 2D only. No external assets, fonts, or network.`;
 
+// Share the studio craft bar with section authors without asking them to own
+// playback, redraw the lyric pass, or invent analyzed musical events.
+const MUSIC_VIDEO_DIRECTION = DIRECTION
+  .replace("where it gives none, time the beats yourself: establish → develop → climax → resolve", "use the supplied section, beat, downbeat and lyric-word times; choose authored action spans within them without inventing analyzed events")
+  .replace("- Endings: the player loops the film — when the brief ends by returning to its opening, match the final frame's framing, lighting, and motion to t=0 so the cut back feels intentional.", "- Endings: resolve the authored action at the supplied song ending; match the opening only when the approved brief requests a loop.");
+const MUSIC_VIDEO_SELF_REVIEW = SELF_REVIEW
+  .replace("step through renderFrame at every beat's key frame", 'step through render(ctx, env) on the host timeline at every supplied anchor and action key frame')
+  .replace('empty or static stretches', 'unmotivated empty or static stretches');
+const MUSIC_VIDEO_CHOREOGRAPHY = `MUSICAL CHOREOGRAPHY — author a timed performance, not a looping backdrop:
+- Follow the reviewed energy target and give each section a time-based action plan: what the subject does, how props respond, how the camera stages or reveals it, and how permitted non-lyric typography supports it. Use env.t/localT with explicit anticipation, action, follow-through and settling spans. Preserve the host's lyric pass as the authority: never redraw lyric words or event labels; stage the world around their readable space.
+- Ground meaningful actions and reveals in the supplied beats, downbeats and timed lyric words (startSec/endSec). Use supplied band onsets for actual accents; never invent a kick, snare, drop, word timing or missing event. If only a line timing exists, treat it as a line anchor, not separate invented word timings.
+- When song.features is present, envelopes.rms/low/mid/high are normalized 0..1 energy channels on envelopes.fps; runtime sample i is at i/fps seconds. Use those measured channels to shape bounded subject/prop amplitude, camera intensity and permitted typography emphasis. The prompt snapshot may evenly sample envelopes: sample k is at k*sampleStride/fps, while runtime env.song keeps the original grid. Listed onsets are measured times, not envelope peaks inferred by the author. Respect truncatedAtSec and do not extend missing measurements.
+- When song.features is null, audio feature data is unavailable: use only supplied beat/lyric/section anchors and explicitly authored motion, with no claimed spectral or instrumental reaction. Feature names alone are not measurements. Missing anchors stay missing; never fabricate analyzer results.
+- Repeated choruses keep a recognizable motif but escalate or deliberately change subject action, prop interaction, staging, camera reveal or scale. Vary the narrative consequence, not merely the particle color or animation seed.
+- The 3–5 second visual-payoff pacing rule does not require rapid cuts or constant motion. A change of expression, a prop consequence, a reveal or intentional stillness can carry the beat. Hold for tenderness, anticipation or silence when the music and approved direction call for it; make each hold purposeful, with a legible entry and release. Reactive accents must respect env.reactiveGain when supplied and never defeat a host silence hold.`;
+
+function promptFeatures(features) {
+  if (!features?.envelopes || !features?.onsets) return null;
+  const channels = ['rms', 'low', 'mid', 'high'];
+  const stride = Math.max(1, Math.ceil(Math.max(...channels.map(key => features.envelopes[key]?.length || 0)) / 240));
+  return {
+    envelopes: { fps: features.envelopes.fps, sampleStride: stride,
+      ...Object.fromEntries(channels.map(key => [key, (features.envelopes[key] || []).filter((_, index) => index % stride === 0).slice(0, 240)])),
+    },
+    onsets: Object.fromEntries(['low', 'mid', 'high'].map(key => [key, (features.onsets[key] || []).slice(0, 200)])),
+    onsetTimesTruncated: ['low', 'mid', 'high'].some(key => features.onsets[key]?.length > 200),
+    truncatedAtSec: features.truncatedAtSec ?? null,
+  };
+}
+
 function promptSong(song) {
   return {
     durationSec: song.durationSec,
@@ -318,7 +348,8 @@ function promptSong(song) {
     lyrics: (song.lyrics || []).slice(0, 400),
     beats: (song.beats || []).slice(0, 400),
     downbeats: (song.downbeats || []).slice(0, 200),
-    featureNames: song.featureNames || [],
+    featureNames: (song.featureNames || []).slice(0, 40),
+    features: promptFeatures(song.features),
     narrativeEvents: song.narrativeEvents || [],
     reactiveSections: song.reactiveSections || [],
   };
@@ -338,12 +369,15 @@ export function buildMusicVideoCodePrompt({ title = '', palette, song, styleLine
   return [
     `You write Canvas 2D section functions for a code-rendered music video${title ? ` titled "${trimTo(title, 200)}"` : ''}. The host seeks them against the song. No footage generation.`,
     CODE_VIDEO_RULES,
+    MUSIC_VIDEO_DIRECTION,
+    MUSIC_VIDEO_CHOREOGRAPHY,
     `PALETTE:\n${JSON.stringify(palette)}`,
     styleLines.length ? `STYLE SOURCE:\n${styleLines.join('\n')}` : '',
     directionContext ? `APPROVED CAST & SETS DEFINITIONS AND RULES:\n${directionContext}` : '',
     `SONG (song.json):\n${JSON.stringify(promptSong(song))}`,
     `SECTIONS:\n${brief}`,
     scope,
+    MUSIC_VIDEO_SELF_REVIEW,
     'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML document, no explanation.',
   ].filter(Boolean).join('\n\n');
 }
@@ -367,12 +401,15 @@ export function extractCodeSections(text) {
 }
 
 /** Author only bounded drawing functions; the host owns the page and media. */
-export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment, visualSpec, scenes, styleLines = [], onlySectionId = null, sharedStyle = null, directionContext = '' }) {
+export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment, visualSpec, scenes, styleLines = [], onlySectionId = null, sharedStyle = null, directionContext = '', renderer = 'canvas', mediaMode = 'code-images-video' }) {
   const sections = (song.sections || []).filter((section) => !onlySectionId || section.id === onlySectionId);
   return [
-    `Write original Canvas 2D section functions for a mixed-media music-video document titled ${JSON.stringify(trimTo(title, 200))}. The host owns the document, song clock, selected local media and lyric pass. Return code functions only; do not request or generate image/video assets.`,
-    CODE_VIDEO_RULES.replace('- Canvas 2D only. No external assets, fonts, or network.', '- Canvas 2D only. No network, remote URLs, filesystem paths or font loading. The host binds only the listed selected project assets; draw over footage/stills without obscuring them, and draw the entire frame for card scenes.'),
-    'env additionally has mediaKind (video, image or null) and visualLayer (footage, still or card). The host has already drawn the selected media at its in/out time. Do not read DOM or load assets in a section function. Use seeded arithmetic from env.frame for visual motion. Keep repeated hooks related but deliberately vary their action.',
+    `MEDIA POLICY: ${mediaMode}. Code always authors composition, staging, characters, camera, text, motion and timing. Never generate guide images in code-only mode.`,
+    renderer === 'three' ? `Write complete authored Three.js worlds, one function render(ctx, env) per section. ctx = { THREE, scene, camera, text }; THREE is the installed locally packaged library; scene is a fresh Scene on EACH seek, camera a PerspectiveCamera, text a transparent Canvas2D overlay with local MV Mono font. Build modeled characters with articulated limbs and expressive poses, environments with depth/lighting/shadows, props, narrative action and camera choreography. Position every object analytically from env.t/localT; no simulation accumulation. Add geometry/lights to ctx.scene and set ctx.camera explicitly. Use ctx.text for designed typography. Render fills the whole frame; a particle field or text overlays alone are not a scene. Do not create a renderer, DOM elements, textures loaded from files, or another clock. env provides t, localT, frame, width, height, song, section, palette, safe, events and reactiveGain. No imports, require, fetch, Math.random, Date, performance, globalThis, window, document or external assets. The host draws aligned subtitles after your text; reserve lower title-safe space. Use reusable local functions within each section for anatomy and world construction.` : `Write original Canvas 2D section functions for a mixed-media music-video document titled ${JSON.stringify(trimTo(title, 200))}. The host owns the document, song clock, selected local media and lyric pass. Return code functions only; do not request or generate image/video assets.`,
+    renderer === 'three' ? '' : CODE_VIDEO_RULES.replace('- Canvas 2D only. No external assets, fonts, or network.', '- Canvas 2D only. No network, remote URLs, filesystem paths or font loading. The host binds only the listed selected project assets; draw over footage/stills without obscuring them, and draw the entire authored world for card scenes, including characters, environments, camera staging, lighting and narrative actions. Local packaged fonts MV Mono, MV Cond and MV Stencil are available; authored titles are allowed, but do not duplicate host subtitles.'),
+    MUSIC_VIDEO_DIRECTION,
+    MUSIC_VIDEO_CHOREOGRAPHY,
+    renderer === 'three' ? 'The authored Three.js world receives no selected-media handles; all visual staging uses geometry and the host text overlay.' : 'env additionally has mediaKind (video, image or null) and visualLayer (footage, still or card). The host has already drawn the selected media at its in/out time. Do not read DOM or load assets in a section function. Use seeded arithmetic from env.frame for visual motion. Keep repeated hooks related but deliberately vary their action.',
     'NARRATIVE CLOCK: song.narrativeEvents are resolved absolute startFrame/endFrame bindings. env.events supplies active events with progress and counter value; env.reactiveGain is bounded by the section gain/maxGain and is zero during silence. The host freezes song time, media and graphics for silence, and draws exact event text/counters/motif labels after your function. Use the narrativeFunction, motif and mediumRationale to motivate your graphic actions; do not duplicate event text or infer new onsets. Prefer code/stills/selected media for exact text and graphics. Footage is for actions that need it and must already be selected.',
     `SHARED STYLE CONTRACT:\n${JSON.stringify(sharedStyle || { palette, treatment: { brief: treatment?.brief || null, motifs: treatment?.arc?.motifs || [], styleLook: treatment?.styleLook || null }, visualSpec, styleLines })}`,
     directionContext ? `APPROVED CAST & SETS DEFINITIONS AND RULES:\n${directionContext}` : '',
@@ -380,6 +417,7 @@ export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment,
     `APPROVED SCENE ASSIGNMENTS AND LOCAL ASSET IDS:\n${JSON.stringify(scenes)}`,
     `SECTIONS TO AUTHOR:\n${JSON.stringify(sections)}`,
     onlySectionId ? `Revise only section ${JSON.stringify(onlySectionId)}. Preserve the shared style contract and other sections.` : 'Return one function for each listed section id. Describe a specific visual action for each scene and a distinct entry/exit transition in its function.',
+    MUSIC_VIDEO_SELF_REVIEW,
     'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML, no assets, no explanation.',
   ].filter(Boolean).join('\n\n');
 }

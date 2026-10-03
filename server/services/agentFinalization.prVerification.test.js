@@ -549,7 +549,7 @@ describe('finalizeAgent — a PR-shaped run with no PR is not a success (#3358)'
     expect(findPullRequestForBranchMock).toHaveBeenCalledWith('cos/sys-1/agent-1', { cwd: '/w', env: null });
     const [, result] = completeAgentMock.mock.calls[0];
     expect(result).toMatchObject({ success: true, validationPassed: true });
-    expect(finalized.prVerdict).toMatchObject({ ok: true, branch: 'cos/sys-1/agent-1', branchProvenEmpty: true });
+    expect(finalized.cleanupEvidence).toMatchObject({ ok: true, branch: 'cos/sys-1/agent-1', branchProvenEmpty: true });
   });
 
   it('leaves validation undeclared when a marked no-op audit cannot reach the forge', async () => {
@@ -735,7 +735,7 @@ describe('finalizeAgent — records the PR verdict in the lifecycle ledger', () 
         branchProvenEmpty: true,
       })
     })]);
-    expect(finalized.prVerdict).toMatchObject({ branch: 'cos/sys-1/agent-1', branchProvenEmpty: true });
+    expect(finalized.cleanupEvidence).toMatchObject({ branch: 'cos/sys-1/agent-1', branchProvenEmpty: true });
   });
 
   it('does not record a premature miss while cleanup can still create a PR', async () => {
@@ -753,7 +753,7 @@ describe('finalizeAgent — records the PR verdict in the lifecycle ledger', () 
     expect(prVerified()).toHaveLength(0);
     // The auxiliary proof is deliberately not returned for a non-empty branch:
     // cleanup still owns the backstop PR creation and must be free to ask again.
-    expect(finalized.prVerdict).toEqual({ ok: true });
+    expect(finalized.cleanupEvidence).toEqual({ ok: true });
   });
 
   it('writes NOTHING when the check itself threw', async () => {
@@ -988,7 +988,7 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
     const [, completion] = completeAgentMock.mock.calls[0];
     expect(completion.success).toBe(success);
     if (completionReason) expect(completion.completionReason).toBe(completionReason);
-    expect(finalized.prVerdict).toEqual(cleanupEvidence);
+    expect(finalized.cleanupEvidence).toEqual(cleanupEvidence);
     expect(prVerified().map((e) => e.data)).toEqual(ledger ? [ledger] : []);
   });
 
@@ -1005,7 +1005,7 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
     git.ahead = 0;
     findPullRequestForBranchMock.mockResolvedValue(noPr);
     const proven = await finalize({ prExpected: false, task: auditTask() });
-    expect(proven.prVerdict).toEqual({ ok: true, branch: 'cos/sys-1/agent-1', branchProvenEmpty: true });
+    expect(proven.cleanupEvidence).toEqual({ ok: true, branch: 'cos/sys-1/agent-1', branchProvenEmpty: true });
     expect(prVerified().map((e) => e.data)).toEqual([
       { verified: true, branch: 'cos/sys-1/agent-1', category: null, branchProvenEmpty: true },
     ]);
@@ -1015,7 +1015,7 @@ describe('finalizeAgent — completion, ledger and cleanup evidence agree per ou
     const unproven = await finalize({ prExpected: false, task: auditTask() });
     const [, completion] = completeAgentMock.mock.calls[0];
     expect(completion.success).toBe(true);
-    expect(unproven.prVerdict).toEqual({ ok: true });
+    expect(unproven.cleanupEvidence).toEqual({ ok: true });
     expect(prVerified()).toHaveLength(0);
   });
 });

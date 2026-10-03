@@ -2,31 +2,22 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vites
 import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makePathsProxy, mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
+import { makePathsProxy, mockNoPeerSync, mockNoPeers, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
 const roots = new Set();
-const pendingTests = new Set();
-
-// Vitest's fail-fast cancellation settles its wrapper before the async test
-// body stops. Own that body until its writes settle before removing fixtures.
-function promotionTest(name, body) {
-  it(name, (context) => {
-    const pending = Promise.resolve().then(() => body(context));
-    pendingTests.add(pending);
-    pending.then(() => pendingTests.delete(pending), () => pendingTests.delete(pending));
-    return pending;
-  });
-}
+// Fail-fast cancellation can leave a test body writing into its fixture root;
+// drain every owned body before removing the roots (see ownTestBodies).
+const owned = ownTestBodies(it);
+const promotionTest = owned.it;
 
 async function cleanupFixtures() {
-  const settled = await Promise.allSettled([...pendingTests]);
-  for (const root of roots) {
-    rmSync(root, { recursive: true, force: true });
-    roots.delete(root);
+  try {
+    await owned.drain();
+  } finally {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+    roots.clear();
   }
-  const failures = settled.filter(result => result.status === 'rejected').map(result => result.reason);
-  if (failures.length) throw new AggregateError(failures, 'Interrupted promotion test failed');
 }
 
 vi.mock('../../lib/fileUtils.js', async () => {

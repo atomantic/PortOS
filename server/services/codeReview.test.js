@@ -63,7 +63,7 @@ import {
   __resetReviewerCliInstalledCache,
   __resetThinkingUnsupportedCache,
 } from './codeReview.js'
-import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS } from '../lib/cosValidation.js'
+import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, codeReviewSettingsSchema } from '../lib/cosValidation.js'
 import { taskObjective } from '../lib/goalFidelity.js'
 import { updateSettingsWith } from './settings.js'
 
@@ -369,6 +369,36 @@ describe('codeReview helpers', () => {
       expect(vi.mocked(updateSettingsWith).mock.lastCall[1]).toEqual({ skipUserAction: true })
       expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({})
       expect(await getReviewerConfigHealth()).toEqual({ status: 'ok', configFaults: {} })
+    })
+
+    it('persists and reports only safe malformed diagnostics without pausing or changing reviewer policy', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['ollama'], optionalReviewers: ['ollama'] } }
+      const config = structuredClone(mockedSettings.current.codeReview)
+      await reportReviewerFailure('ollama', {
+        code: 'MALFORMED_REVIEW', error: 'synthetic-private-output',
+        diagnostics: { reason: 'invalid_json', finishReason: 'synthetic-secret', responseLengthChars: 50000, output: 'synthetic-private-output' },
+      }, 100)
+      const diagnostics = { reason: 'invalid_json', finishReason: 'unknown', responseLengthChars: 20001, responseLengthCapped: true }
+      expect(mockedSettings.current.codeReview).toEqual({ ...config, reviewerHealth: {
+        ollama: { code: 'MALFORMED_REVIEW', reason: 'malformed', lastFailureAt: 100, diagnostics },
+      } })
+      expect(codeReviewSettingsSchema.parse(mockedSettings.current.codeReview)).toEqual(mockedSettings.current.codeReview)
+      expect(await getReviewerConfigHealth()).toEqual({ status: 'warning', configFaults: {}, malformedReviews: { ollama: { lastFailureAt: 100, diagnostics } } })
+      // Missing metrics stay absent, not zero or a claim of truncation.
+      await reportReviewerFailure('ollama', { code: 'MALFORMED_REVIEW' }, 200)
+      expect(mockedSettings.current.codeReview.reviewerHealth.ollama.diagnostics).toEqual({
+        reason: 'unknown', finishReason: 'unknown', responseLengthChars: null, responseLengthCapped: null,
+      })
+      await reportReviewerSuccess('ollama', 300)
+      expect(mockedSettings.current.codeReview).toEqual(config)
+    })
+
+    it('keeps an active quota pause when malformed output is reported and cleared', async () => {
+      mockedSettings.current = { codeReview: { reviewerHealth: { ollama: { pausedUntil: 500, reason: 'quota', lastFailureAt: 1 } } } }
+      await reportReviewerFailure('ollama', { code: 'MALFORMED_REVIEW' }, 100)
+      expect(mockedSettings.current.codeReview.reviewerHealth.ollama.pausedUntil).toBe(500)
+      expect(await reportReviewerSuccess('ollama', 200)).toBe(false)
+      expect(await reportReviewerSuccess('ollama', 600)).toBe(true)
     })
 
     it('does not turn a real transport failure into a configuration fault', async () => {
@@ -762,22 +792,34 @@ describe('codeReview helpers', () => {
       expect(body.messages[1].content).toContain('diff --git a b')
     })
 
+    // Regression: transport success must expose a safe failure category, never
+    // turn malformed output into a verdict or disclose the model response.
     it.each([
-      '## Blocking\n\n- `example.js:12`: Hardcoding `allowUnconfined: true\nNo findings.',
-      '{"verdict":"findings","findings":[',
-      JSON.stringify({ verdict: 'clean', findings: [{ severity: 'blocking', location: 'example.js:12', outcome: 'Writes are lost.', fix: 'Serialize writes.' }] }),
-      JSON.stringify({ verdict: 'findings', findings: [{ severity: 'blocking', location: 'example.js:12', outcome: 'Writes are lost.', fix: '' }] }),
-      JSON.stringify({ verdict: 'findings', findings: [] }),
-      JSON.stringify({ verdict: 'clean', findings: [], explanation: 'But there is a blocking defect.' }),
-      'No findings.\nBut a blocking defect remains.',
-      JSON.stringify({ verdict: 'findings', findings: Array(6).fill({ severity: 'blocking', location: 'example.js:12', outcome: 'Writes are lost.', fix: 'Serialize writes.' }) }),
-    ])('rejects incomplete or contradictory reviewer output without publishing findings: %s', async content => {
-      global.fetch = vi.fn().mockResolvedValue(mockJsonResponse({ choices: [{ message: { content } }] }))
+      ['invalid_json', 'synthetic-private-output'],
+      ['invalid_json', '{"verdict":"findings","findings":['],
+      ['oversized_content', 'x'.repeat(25000)],
+      ['invalid_envelope', JSON.stringify({ verdict: 'clean', findings: [], explanation: 'synthetic-private-output' })],
+      ['invalid_envelope', JSON.stringify({ verdict: 'findings', findings: Array(6).fill({}) })],
+      ['incomplete_finding', JSON.stringify({ verdict: 'findings', findings: [{ severity: 'blocking', location: 'example.js:12', outcome: 'Writes are lost.', fix: '' }] })],
+      ['verdict_findings_mismatch', JSON.stringify({ verdict: 'clean', findings: [{ severity: 'blocking', location: 'example.js:12', outcome: 'Writes are lost.', fix: 'Serialize writes.' }] })],
+      ['verdict_findings_mismatch', JSON.stringify({ verdict: 'findings', findings: [] })],
+      ['invalid_json', 'No findings.\nBut a blocking defect remains.'],
+    ])('rejects malformed output with bounded %s diagnostics', async (reason, content) => {
+      global.fetch = vi.fn().mockResolvedValue(mockJsonResponse({ choices: [{ finish_reason: 'length', message: { content } }] }))
       const result = await runLocalCodeReview({ backend: 'ollama', model: 'm', diff: 'example diff' })
-      expect(result).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW' })
+      expect(result).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW', diagnostics: {
+        reason, finishReason: 'length', responseLengthChars: Math.min(content.length, 20001), responseLengthCapped: content.length > 20001,
+      } })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
       expect(result).not.toHaveProperty('findings')
       expect(result).not.toHaveProperty('verdict')
-      expect(result.error).not.toContain(content)
+      expect(JSON.stringify(result)).not.toContain(content)
+    })
+
+    it.each([undefined, 'synthetic-private-finish-metadata', { secret: 'synthetic-secret' }])('keeps missing and unrecognized finish metadata unknown: %j', async finish_reason => {
+      global.fetch = vi.fn().mockResolvedValue(mockJsonResponse({ choices: [{ finish_reason, message: { content: 'malformed' } }] }))
+      expect(await runLocalCodeReview({ backend: 'ollama', model: 'm', diff: 'example diff' }))
+        .toMatchObject({ ok: false, diagnostics: { reason: 'invalid_json', finishReason: 'unknown', responseLengthChars: 9, responseLengthCapped: false } })
     })
 
     it('normalizes clean envelopes and preserves substantive findings as completed reviews', async () => {

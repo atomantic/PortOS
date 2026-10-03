@@ -1,13 +1,30 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { describe, it as vitestIt, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mockNoPeerSync, mockNoPeers, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { mockNoPeerSync, mockNoPeers, makePathsProxy, ownTestBodies } from '../lib/mockPathsDataRoot.js';
 
-const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'dup-detect-test-'));
+// Each test gets its own root, allocated only when the test starts — never at
+// module collection, so a run that bails before this file executes a test
+// leaves nothing behind. Teardown drains every owned test body first: a body
+// cancelled by another worker's fail-fast keeps writing, and removing the root
+// under it lets the next store write recreate it (#9635).
+let tempRoot;
+const roots = new Set();
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+
+async function cleanupFixtures() {
+  try {
+    await owned.drain();
+  } finally {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+    roots.clear();
+  }
+}
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
+  makePathsProxy(await importOriginal(), { dataRoot: () => tempRoot }));
 vi.mock('./instances.js', () => mockNoPeers());
 vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 
@@ -22,12 +39,13 @@ const seriesSvc = await import('./pipeline/series.js');
 const mediaCollections = await import('./mediaCollections.js');
 const dup = await import('./duplicateDetection.js');
 
-afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
+afterEach(cleanupFixtures);
+afterAll(cleanupFixtures);
 
 describe('duplicateDetection', () => {
   beforeEach(() => {
-    rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
-    mkdirSync(TEST_DATA_ROOT, { recursive: true });
+    tempRoot = mkdtempSync(join(tmpdir(), 'dup-detect-test-'));
+    roots.add(tempRoot);
     uuidCounter = 0;
   });
 

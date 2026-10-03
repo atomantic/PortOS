@@ -102,7 +102,8 @@ router.post('/local', asyncHandler(async (req, res) => {
     // asked and failed, which is the only kind a caller should retry.
     throw new ServerError(result.error || 'Code review failed', {
       status: isReviewerConfigFault(result.code) ? 400 : 502,
-      context: { backend: result.backend, model: result.model }
+      context: { backend: result.backend, model: result.model,
+        ...(result.code === 'MALFORMED_REVIEW' ? { code: result.code, diagnostics: result.diagnostics } : {}) }
     })
   }
   await reportReviewerSuccess(body.backend)

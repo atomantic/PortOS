@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Authored music-video world</title>
+<style>
+@font-face{font-family:"MV Mono";src:url(fonts/ibm-plex-mono-400.woff2)}
+html,body{margin:0;overflow:hidden;background:#080b12}canvas{position:absolute;inset:0;width:100vw;height:100vh;object-fit:contain}
+</style></head><body><canvas id="world"></canvas><canvas id="type"></canvas>
+<script src="portos-mv.js"></script><!-- portos-allow-hidden-content: render-time song contract -->
+<script src="generated.js"></script><!-- portos-allow-hidden-content: validated authored scene functions -->
+<!-- portos-allow-hidden-content: local packaged Three.js and reviewed engine --><script type="module">
+import * as THREE from './vendor/three.module.js';
+import { mount } from './engine.js';
+mount(THREE);
+</script><!-- portos-allow-hidden-content: local deterministic renderer -->
+</body></html>

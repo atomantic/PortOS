@@ -1,3 +1,4 @@
+import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video scene takes (#8965) — pure record transforms.
  *
@@ -141,6 +142,7 @@ function appendToScene(scene, inputs, now) {
 
 /** Append takes to one scene. Throws 404 for a deleted/unknown scene. */
 export function appendSceneTakes(project, sceneId, inputs) {
+  for (const input of inputs) assertMusicVideoMedia(project, input.kind, 'take import');
   const idx = findSceneIndex(project, sceneId);
   const { scene, appended } = appendToScene(project.scenes[idx], inputs, new Date().toISOString());
   return { project: replaceScene(project, idx, scene), scene, appended };
@@ -152,6 +154,7 @@ export function appendSceneTakes(project, sceneId, inputs) {
  * is refused, so a partially applied import can't strand half a handoff.
  */
 export function appendTakesAcrossScenes(project, items) {
+  for (const item of items) assertMusicVideoMedia(project, item.kind, 'handoff import');
   const bySceneId = new Map();
   items.forEach((item, index) => {
     findSceneIndex(project, item.sceneId);
@@ -184,6 +187,7 @@ function locateTake(project, sceneId, takeId) {
 /** Explicitly select a take for its slot. Selecting a rejected take restores it. */
 export function selectSceneTake(project, sceneId, takeId) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
+  assertMusicVideoMedia(project, take.kind, 'take selection');
   const nextTakes = takes.map((t) => (t.takeId === takeId && t.status === 'rejected' ? { ...t, status: 'candidate' } : t));
   const next = { ...scene, takes: nextTakes, [TAKE_SLOT[take.kind]]: take.assetId };
   return { project: replaceScene(project, idx, next), scene: next };

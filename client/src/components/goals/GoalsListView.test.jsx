@@ -22,17 +22,25 @@ vi.mock('../../services/api', () => ({
   applyGoalOrganization,
   updateGoal,
 }));
-vi.mock('../../hooks/useProviderModels', () => ({
-  default: () => ({
-    providers: [{ id: 'provider-1', name: 'Example Provider' }],
-    selectedProviderId: 'provider-1',
-    selectedModel: 'example-model',
-    availableModels: ['example-model'],
-    setSelectedProviderId: vi.fn(),
-    setSelectedModel: vi.fn(),
-    loading: false,
-  }),
-}));
+vi.mock('../../hooks/useProviderModels', async () => {
+  const { useState } = await import('react');
+  const providers = [
+    { id: 'provider-1', name: 'Example Provider', models: ['example-model', 'example-alternate'] },
+    { id: 'provider-2', name: 'Other Provider', models: ['other-default', 'other-alternate'] },
+  ];
+  return {
+    default: () => {
+      const [selectedProviderId, setSelectedProviderId] = useState('provider-1');
+      const [selectedModel, setSelectedModel] = useState('example-model');
+      return {
+        providers, selectedProviderId, selectedModel,
+        availableModels: providers.find(p => p.id === selectedProviderId)?.models || [],
+        setSelectedProviderId: id => { setSelectedProviderId(id); setSelectedModel(providers.find(p => p.id === id)?.models[0] || ''); },
+        setSelectedModel, loading: false,
+      };
+    },
+  };
+});
 
 // The real detail panel drags in the whole goal-editing surface (and its own API reads);
 // these tests are about WHICH goal the URL opens, so a stand-in that reports the goal it
@@ -361,4 +369,29 @@ describe('GoalDetailPanel lifecycle and state reset on goal switch (#8108)', () 
     // Verify no updateGoal was called with goal B's id and old form data
     expect(updateGoal).not.toHaveBeenCalled();
   });
+});
+
+// #9712: selecting the route must reach the request, without starting AI work
+// until Organize is clicked; a pending request still locks all three controls.
+it('organizes with the chosen provider and model only after submission', async () => {
+  const user = userEvent.setup();
+  let finish;
+  organizeGoals.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  await renderList();
+  const provider = screen.getByRole('combobox', { name: 'AI Provider' });
+  const model = screen.getByRole('combobox', { name: 'Model' });
+  await user.selectOptions(provider, 'provider-2');
+  await user.selectOptions(model, 'other-alternate');
+  expect(organizeGoals).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole('button', { name: 'Organize' }));
+  expect(organizeGoals).toHaveBeenCalledWith(
+    { providerId: 'provider-2', model: 'other-alternate' }, { silent: true },
+  );
+  expect(provider).toBeDisabled();
+  expect(model).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Analyzing...' })).toBeDisabled();
+  await act(async () => { finish(NEW_APEX_SUGGESTION); });
+  expect(screen.getByText('Goal Organization')).toBeInTheDocument();
+  expect(createGoal).not.toHaveBeenCalled();
 });

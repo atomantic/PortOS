@@ -4,27 +4,37 @@ import { join } from 'path';
 import { spawn } from '../lib/childProcess.js';
 import { atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { CORS_SNIPPET } from '../lib/scaffoldSnippets.js';
+
+const CREATE_VITE_TIMEOUT_MS = 5 * 60 * 1000;
 
 export async function scaffoldVite({ repoPath, dirName, parentDir, template, uiPort, apiPort, addStep }) {
   // Create using npm create vite
   // Security: Use spawn with array args instead of execAsync to prevent shell injection
-  const { stderr } = await new Promise((resolve) => {
-    const child = spawn('npm', ['create', 'vite@latest', dirName, '--', '--template', 'react'], {
+  // Non-interactive (--yes, stdin closed) and bounded so an npx prompt or a
+  // stalled registry can't hang the request; failure aborts before we touch
+  // files that were never created.
+  const { code, stderr } = await new Promise((resolve) => {
+    const child = spawn('npm', ['create', '--yes', 'vite@latest', dirName, '--', '--template', 'react'], {
       cwd: parentDir,
-      shell: process.platform === 'win32'
+      shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: CREATE_VITE_TIMEOUT_MS,
+      killSignal: 'SIGKILL'
     });
     let stderr = '';
     child.stderr.on('data', (data) => { stderr += data.toString(); });
-    child.on('close', () => resolve({ stderr }));
-    child.on('error', (err) => resolve({ stderr: err.message }));
+    child.on('close', (code, signal) => resolve({ code: code ?? (signal ? 1 : 0), stderr }));
+    child.on('error', (err) => resolve({ code: 1, stderr: err.message }));
   });
 
-  if (stderr && !stderr.includes('npm warn')) {
-    addStep('Create Vite project', 'error', stderr);
-  } else {
-    addStep('Create Vite project', 'done');
+  if (code !== 0) {
+    const detail = stderr.trim().split('\n').slice(-3).join(' ') || `exit code ${code}`;
+    addStep('Create Vite project', 'error', stderr || detail);
+    throw new ServerError(`Failed to create Vite project: ${detail}`, { status: 500, code: 'SCAFFOLD_FAILED' });
   }
+  addStep('Create Vite project', 'done');
 
   // Update vite.config.js with port
   if (uiPort) {

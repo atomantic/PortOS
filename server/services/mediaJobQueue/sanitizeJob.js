@@ -52,6 +52,10 @@ const executionProvenance = (value) => {
 
 export function sanitizeJob(job) {
   if (!job) return job;
+  if (job.durabilityPending) {
+    job = { ...job,
+      statusMsg: job.persistenceError ? 'Outcome pending: media queue storage unavailable' : 'Saving outcome' };
+  }
   const safeParams = job.params
     ? Object.fromEntries(Object.entries(job.params)
       .filter(([key]) => PARAM_ALLOWLIST.has(key) || key === 'musicStudio')

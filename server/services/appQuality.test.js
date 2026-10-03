@@ -50,7 +50,7 @@ describe('scheduled audit measurement workflow', () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const query = vi.fn();
     const run = { task, taskType: 'better-complexity', agentId: 'agent-1', workspacePath: '/repo', success: true, assessedAt };
-    for (const contents of ['', sentinel(report({ score: 101 })), sentinel(report({ score: '35' })), sentinel(report({ category: 'security' })), sentinel(report({ scannedFiles: 3 })), sentinel(report({ coverage: 'unavailable' })), sentinel(report()) + sentinel(report())]) {
+    for (const contents of ['', sentinel(report({ score: 101 })), sentinel(report({ score: '35' })), sentinel(report({ category: 'security' })), sentinel(report({ scannedFiles: 3, coverage: 'partial', totalFiles: 2 })), sentinel(report({ coverage: 'unavailable' })), sentinel(report()) + sentinel(report())]) {
       expect(await recordAuditQuality(run, { readFile: async () => contents, query })).toBe(false);
     }
     expect(await recordAuditQuality({ ...run, success: false }, { readFile: async () => sentinel(report()), query })).toBe(false);
@@ -60,6 +60,12 @@ describe('scheduled audit measurement workflow', () => {
     warning.mockRestore();
     expect(query).not.toHaveBeenCalled();
     expect(parseAuditQualityReport(sentinel(report({ score: 0 })), 'better-complexity')?.score).toBe(0);
+  });
+
+  // Unique regression: a "broad" claim over a partial scan (5907/8923 files) used to drop the whole run's measurement.
+  it('records a broad claim over a partial scan as partial coverage instead of discarding it', () => {
+    const parsed = parseAuditQualityReport(sentinel(report({ scannedFiles: 59, totalFiles: 89 })), 'better-complexity');
+    expect(parsed).toMatchObject({ coverage: 'partial', score: 35, scannedFiles: 59, totalFiles: 89 });
   });
 
   it('excludes stale, partial, low-confidence and inapplicable assessments while retaining their breakdown', () => {

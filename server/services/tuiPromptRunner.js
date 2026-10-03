@@ -423,7 +423,7 @@ ${prompt}`;
   // This PTY spawns the TUI directly, so the TUI's first paste-mode ON is the
   // positive ready signal. Claude gets that positive gate; other providers
   // retain their existing idle/deadline behavior.
-  const inputReady = createInputReadyTracker({ directLaunch: true });
+  const inputReady = createInputReadyTracker({ launchShape: 'direct' });
   const requiresInputReady = isClaudeCommand(command);
   // Keep local one-shot flags alongside the tracker's terminal acknowledgements
   // so a failed/delayed PTY write cannot cause repeated selector navigation.

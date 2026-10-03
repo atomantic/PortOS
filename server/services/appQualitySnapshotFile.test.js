@@ -606,3 +606,23 @@ it('serializes worktree cleanup, retries a failed Git removal, and reports stale
   expect(warn).toHaveBeenCalledWith(expect.stringContaining('registration verification unavailable'));
   warn.mockRestore();
 });
+
+// Unique regression: a rebuild from only the evidence reachable right now (peers
+// offline) used to overwrite the published file and delete every other row.
+it('keeps rows already on the default branch when fresh evidence covers less', async () => {
+  const existing = snapshot();
+  existing.measurements[0].report.category = 'privacy';
+  existing.measurements[0].assessedAt = '2026-09-20T10:00:00Z';
+  const body = qualityFileFromWireSnapshot(existing);
+  const git = gitDouble({
+    execGit: vi.fn(async (args) => (args[0] === 'show' && String(args[1]).startsWith('origin/main:')
+      ? { exitCode: 0, stdout: body, stderr: '' }
+      : args[0] === 'show' || args[0] === 'rev-parse' ? missingShow : { exitCode: 0, stdout: '', stderr: '' })),
+  });
+  const writeFile = vi.fn(async () => true);
+  const result = await publishAppQualitySnapshot(app, testDeps({ git, writeFile, now: Date.parse('2026-10-02T00:00:00Z') }));
+  expect(result.published).toBe(true);
+  const written = JSON.parse(writeFile.mock.calls[0][1]);
+  expect(written.categories).toEqual(['privacy', 'security']);
+  expect(written.measurements).toHaveLength(2);
+});

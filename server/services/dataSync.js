@@ -10,11 +10,13 @@ import { meatspaceEvents } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
+import { isDeepStrictEqual } from 'util';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { canonicalStringify, isEmptyScalar, isPlainObject } from '../lib/objects.js';
 import { snapshotChecksum } from '../lib/snapshotChecksum.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { isTombstoned, mergeTombstones, pruneTombstones } from '../lib/tombstones.js';
+import { GOAL_TOMBSTONES_KEY, reconcileGoalTombstones } from './identity/goalTombstones.js';
 import {
   DAILY_LOG_TOMBSTONES_KEY,
   dailyLogEventLiveStamp,
@@ -34,6 +36,7 @@ import { getPipelineMutationEpoch } from './pipeline/syncEpoch.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { getPeers } from './instances.js';
+import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { markHosted } from './peerHostedMedia.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
@@ -414,33 +417,72 @@ async function getGoalsSnapshot() {
   return { data, checksum: computeChecksum(data) };
 }
 
+const GOALS_METADATA_FIELDS = ['birthDate', 'lifeExpectancy', 'timeHorizons'];
+
+/**
+ * Freshness of a goals document for the metadata LWW. The document's own
+ * `updatedAt` is the clock — `setBirthDate` and every goal write stamp it — so a
+ * birth-date edit that never touches a child goal still orders correctly. The
+ * newest goal `updatedAt` stands in only for a legacy document with no usable
+ * document clock. `null` = no usable clock at all (never wins).
+ */
+function goalsDocumentClockMs(doc) {
+  const docMs = parseTsMs(doc?.updatedAt);
+  if (docMs !== null) return docMs;
+  let newest = null;
+  for (const goal of Array.isArray(doc?.goals) ? doc.goals : []) {
+    const ms = parseTsMs(goal?.updatedAt);
+    if (ms !== null && (newest === null || ms > newest)) newest = ms;
+  }
+  return newest;
+}
+
+// Goals merge by union, so a delete is only representable as a tombstone (#9816):
+// `deleteGoal` leaves `{ id, deletedAt }` in the goals document, the list unions in
+// both directions (a legacy peer that omits it leaves ours untouched), and any
+// goal copy the union covers is dropped here, children reparented. See
+// identity/goalTombstones.js for the restoration rule and resurrection horizon.
 async function applyGoalsRemote(remoteData) {
   const { editGoals } = await import('./identity/store.js');
   return editGoals(local => {
-    // Merge goals array by ID with LWW on updatedAt
-    const { merged: mergedGoals, changed: goalsChanged } = mergeArraysByKey(
-      local.goals || [],
-      remoteData.goals || [],
-      'id',
-      'updatedAt'
+    const localGoals = local.goals || [];
+    const { merged: tombstones } = mergeTombstones(
+      local[GOAL_TOMBSTONES_KEY],
+      remoteData[GOAL_TOMBSTONES_KEY],
+      { keyField: 'id' },
     );
+    // A tombstoned remote copy is filtered BEFORE the union so it neither counts
+    // as a change nor as proof the remote document is fresher.
+    const remoteGoals = reconcileGoalTombstones(remoteData.goals || [], tombstones).goals;
+    // Merge goals array by ID with LWW on updatedAt
+    const { merged: unionGoals } = mergeArraysByKey(localGoals, remoteGoals, 'id', 'updatedAt');
+    const { goals: mergedGoals, tombstones: liveTombstones } = reconcileGoalTombstones(unionGoals, tombstones);
+    const goalsChanged = canonicalStringify(mergedGoals) !== canonicalStringify(localGoals);
+    const tombstonesChanged = canonicalStringify(liveTombstones) !== canonicalStringify(local[GOAL_TOMBSTONES_KEY] ?? []);
 
-    // Merge top-level metadata (birthDate, lifeExpectancy, timeHorizons) via LWW
-    // Use the most recent goal's updatedAt as proxy for file freshness
-    const localMaxTs = (local.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
-    const remoteMaxTs = (remoteData.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
-    const metaSource = remoteMaxTs > localMaxTs ? remoteData : local;
+    // Top-level metadata (birthDate, lifeExpectancy, timeHorizons) is LWW on the document
+    // clock, independent of the goal-array merge: a metadata-only edit changes no goal.
+    // A tie keeps local, so a replay of the same snapshot is a no-op. The legacy child-clock
+    // fallback reads the tombstone-filtered remote goals, so a deleted copy is no proof of
+    // a fresher document.
+    const remoteClock = goalsDocumentClockMs({ ...remoteData, goals: remoteGoals });
+    const localClock = goalsDocumentClockMs(local);
+    const remoteWins = remoteClock !== null && (localClock === null || remoteClock > localClock);
 
-    const merged = {
-      ...local,
-      birthDate: metaSource.birthDate ?? local.birthDate,
-      lifeExpectancy: metaSource.lifeExpectancy ?? local.lifeExpectancy,
-      timeHorizons: metaSource.timeHorizons ?? local.timeHorizons,
-      goals: mergedGoals
-    };
+    const winning = {};
+    if (remoteWins) {
+      for (const field of GOALS_METADATA_FIELDS) winning[field] = remoteData[field] ?? local[field];
+      // Carry the winning clock itself — restamping on receipt would out-date the peer's
+      // next edit, and leaving ours would let the same snapshot win again.
+      if (parseTsMs(remoteData.updatedAt) !== null) winning.updatedAt = remoteData.updatedAt;
+    }
+    const metaChanged = Object.entries(winning).some(([field, value]) => !isDeepStrictEqual(value, local[field]));
 
-    if (goalsChanged || remoteMaxTs > localMaxTs) {
-      Object.assign(local, merged);
+    if (goalsChanged || tombstonesChanged || metaChanged) {
+      Object.assign(local, winning, { goals: mergedGoals });
+      // A legacy document stays free of the field until something is tombstoned.
+      if (liveTombstones.length > 0) local[GOAL_TOMBSTONES_KEY] = liveTombstones;
+      else delete local[GOAL_TOMBSTONES_KEY];
       console.log(`🔄 Goals sync: merged ${mergedGoals.length} goals`);
       return { applied: true, count: mergedGoals.length };
     }
@@ -458,64 +500,10 @@ async function getCharacterSnapshot() {
   return { data, checksum: computeChecksum(data) };
 }
 
+// Merge + persist live in the Character service so they share its mutation queue with local
+// edits (#9817); reading local state here and writing it back would race them.
 async function applyCharacterRemote(remoteData) {
-  if (!remoteData) return { applied: false, count: 0 };
-
-  const local = await readJSONFile(CHARACTER_FILE, null, { strict: true });
-  if (!local) {
-    // No local character — accept remote entirely, but strip every derived field (an older
-    // peer still sends `level`): they're derived on read now (#2673/#2674), so a stored value
-    // would be stale and would re-propagate in our own snapshot.
-    await atomicWrite(CHARACTER_FILE, characterService.stripDerivedFields(remoteData));
-    console.log(`🔄 Character sync: accepted remote character`);
-    return { applied: true, count: 1 };
-  }
-
-  // Merge events by ID (union — never lose events)
-  const { merged: mergedEvents, changed: eventsChanged } = mergeArraysByKey(
-    local.events || [],
-    remoteData.events || [],
-    'id',
-    'timestamp'
-  );
-
-  // Sort events chronologically
-  mergedEvents.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
-
-  // Merge synced ticket/task arrays (union by value)
-  const mergedTickets = [...new Set([...(local.syncedJiraTickets || []), ...(remoteData.syncedJiraTickets || [])])];
-  const mergedTasks = [...new Set([...(local.syncedTaskIds || []), ...(remoteData.syncedTaskIds || [])])];
-
-  // Scalar fields: take from whichever is more recent
-  const localTs = local.updatedAt || '';
-  const remoteTs = remoteData.updatedAt || '';
-  const scalarSource = remoteTs > localTs ? remoteData : local;
-
-  const merged = {
-    ...local,
-    name: scalarSource.name ?? local.name,
-    class: scalarSource.class ?? local.class,
-    avatarPath: scalarSource.avatarPath ?? local.avatarPath,
-    xp: Math.max(local.xp || 0, remoteData.xp || 0),
-    hp: scalarSource.hp,
-    maxHp: scalarSource.maxHp,
-    // `level` is age-derived on read (#2673), not persisted — never merge a stale peer level.
-    events: mergedEvents,
-    syncedJiraTickets: mergedTickets,
-    syncedTaskIds: mergedTasks,
-    updatedAt: remoteTs > localTs ? remoteTs : localTs
-  };
-  // Drop every derived field (level/ageYears/skills) that `...local` may have carried in from
-  // a legacy or hand-edited file — they're all derived on read now. Routed through the
-  // service's shared helper so a newly-derived field can't be forgotten at this site.
-  const persisted = characterService.stripDerivedFields(merged);
-
-  if (eventsChanged || remoteTs > localTs) {
-    await atomicWrite(CHARACTER_FILE, persisted);
-    console.log(`🔄 Character sync: merged ${mergedEvents.length} events`);
-    return { applied: true, count: mergedEvents.length };
-  }
-  return { applied: false, count: 0 };
+  return characterService.applyRemoteSnapshot(remoteData);
 }
 
 // --- Category: Digital Twin ---
@@ -896,48 +884,48 @@ async function applyVideoHistoryRemote(remoteData) {
   const incoming = Array.isArray(remoteData.videos) ? remoteData.videos : [];
   if (incoming.length === 0) return { applied: false, count: 0 };
 
-  // STRICT (#4115): this is the merge BASE, and the merged result is written
-  // back over the whole file below. A swallowed unreadable read makes `local`
-  // empty, so `next` becomes the remote rows alone — deleting every local-only
-  // row, including the id-less ones the code below goes out of its way to keep.
-  const localRaw = await readJSONFile(VIDEO_HISTORY_FILE, [], { strict: true });
-  const local = Array.isArray(localRaw) ? localRaw : [];
-
-  // Union by `id`, LWW on `createdAt` when both sides know the same row.
-  // Video-history rows are append-mostly and immutable once written, so
-  // `createdAt` is a sufficient (and the only) freshness signal — there's no
-  // `updatedAt`. A row with no string id can't be keyed and is skipped (a
-  // hand-edited or corrupt entry shouldn't clobber a real row at key
-  // `undefined`); the snapshot side excludes the same rows so checksums agree.
-  const hasId = hasVideoRowId;
-  const keyed = local.filter(hasId);
-  const before = new Map(keyed.map((r) => [r.id, r]));
-  const { merged, changed } = mergeArraysByKey(
-    keyed,
-    incoming.filter(hasId),
-    'id',
-    'createdAt',
-  );
-  if (!changed) return { applied: false, count: 0 };
-
-  // `count` reports rows actually added/updated by this merge (not total
-  // post-merge size — that would over-report when callers sum across
-  // categories or compare cycle deltas). Matches the pipeline category's
-  // `count` contract.
+  // The whole read/merge/write runs inside the shared history mutation queue so
+  // a local completion (videoDownload) or another peer's snapshot can't be
+  // overwritten by this merge's stale base. The queue's read is STRICT (#4115):
+  // an unreadable file rejects instead of becoming an empty merge base that
+  // would delete every local-only row on write-back.
   let changedCount = 0;
-  for (const row of merged) {
-    const prev = before.get(row.id);
-    if (!prev || prev !== row) changedCount++;
-  }
+  await mutateVideoHistory((local) => {
+    // Union by `id`, LWW on `createdAt` when both sides know the same row.
+    // Video-history rows are append-mostly and immutable once written, so
+    // `createdAt` is a sufficient (and the only) freshness signal — there's no
+    // `updatedAt`. A row with no string id can't be keyed and is skipped (a
+    // hand-edited or corrupt entry shouldn't clobber a real row at key
+    // `undefined`); the snapshot side excludes the same rows so checksums agree.
+    const hasId = hasVideoRowId;
+    const keyed = local.filter(hasId);
+    const before = new Map(keyed.map((r) => [r.id, r]));
+    const { merged, changed } = mergeArraysByKey(
+      keyed,
+      incoming.filter(hasId),
+      'id',
+      'createdAt',
+    );
+    if (!changed) return HISTORY_UNCHANGED;
 
-  // Preserve any local rows that lacked an id (the merge dropped them from its
-  // keyed map) — don't let a sync silently delete un-keyable local history.
-  const idless = local.filter((r) => !hasId(r));
-  // Newest-first to match how generateVideo unshifts new rows + how the
-  // Media History grid expects them.
-  const next = [...merged, ...idless].sort((a, b) =>
-    String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
-  await atomicWrite(VIDEO_HISTORY_FILE, next);
+    // `count` reports rows actually added/updated by this merge (not total
+    // post-merge size — that would over-report when callers sum across
+    // categories or compare cycle deltas). Matches the pipeline category's
+    // `count` contract.
+    for (const row of merged) {
+      const prev = before.get(row.id);
+      if (!prev || prev !== row) changedCount++;
+    }
+
+    // Preserve any local rows that lacked an id (the merge dropped them from its
+    // keyed map) — don't let a sync silently delete un-keyable local history.
+    const idless = local.filter((r) => !hasId(r));
+    // Newest-first to match how generateVideo unshifts new rows + how the
+    // Media History grid expects them.
+    return [...merged, ...idless].sort((a, b) =>
+      String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
+  });
+  if (changedCount === 0) return { applied: false, count: 0 };
   console.log(`🔄 VideoHistory sync: merged ${changedCount} video row(s)`);
   return { applied: true, count: changedCount };
 }

@@ -1,3 +1,4 @@
+import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
@@ -10,6 +11,13 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
  */
 
 import { z } from 'zod';
+
+export const musicVideoSongDraftSchema = z.object({
+  title: z.string().trim().min(1).max(80), style: z.string().trim().min(1).max(1000),
+  lyrics: z.string().max(5000), instrumental: z.boolean().default(false),
+}).strict().refine((v) => v.instrumental || v.lyrics.trim().length > 0, 'Lyrics are required for a vocal song');
+export const musicVideoSongActionSchema = z.object({ revisionId: z.string().min(1) }).strict();
+export const musicVideoSongSelectSchema = z.object({ revisionId: z.string().min(1), songId: z.string().min(1) }).strict();
 import { EFFORT_LEVELS } from './providerModels.js';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
@@ -20,6 +28,7 @@ import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
   MUSIC_VIDEO_AUTOMATION_TOOL_IDS,
+  MUSIC_VIDEO_LLM_STAGES,
   MUSIC_VIDEO_CHECKIN_MODES,
 } from './musicVideoAutomation.js';
 import {
@@ -29,6 +38,9 @@ import {
   AUTONOMOUS_ORIGINS,
   AUTONOMOUS_PROMPT_MAX,
   AUTONOMOUS_SONG_SOURCES,
+  SUNO_LIMITS,
+  SUNO_MODEL_PATTERN,
+  SUNO_VOCAL_GENDERS,
 } from './musicVideoAutonomous.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
@@ -290,7 +302,7 @@ export const musicVideoLyricsAlignSchema = z.object({
 // `document` renders a project-owned HTML composition document (its own
 // folder under data/music-video/<projectId>/composition/) seeked over the
 // song; see services/musicVideo/compositionDocument.js and documentRender.js.
-export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document'];
+export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document', 'eidoverse'];
 // #9290: 'scene' cuts once per planned shot; 'intercut' re-cuts on section energy and sung words.
 export const MUSIC_VIDEO_CUTTING_MODES = ['scene', 'intercut'];
 // Shipped starting points a project can copy into its document folder.
@@ -397,10 +409,20 @@ export const musicVideoReactiveSectionSchema = z.object({
   maxGain: z.number().min(0).max(1),
 }).strict();
 
+// Scene code is data until the isolated Eidoverse container renders it. No
+// executable, host path, output path or remote asset can be selected here.
+export const musicVideoEidoverseSceneSchema = z.object({
+  inlineScript: z.string().trim().min(1).max(100000),
+  assets: z.record(z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
+    z.string().max(300).regex(/^eidoverse\/assets\/(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/))
+    .refine(assets => Object.keys(assets).length <= 32, 'At most 32 assets').optional(),
+}).strict();
+
 // Replaced whole by a project PATCH (the editor sends the full manifest).
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
   mode: z.enum(MUSIC_VIDEO_COMPOSITION_MODES).optional(),
+  authoringRenderer: z.enum(['canvas', 'three']).optional(),
   cutting: z.enum(MUSIC_VIDEO_CUTTING_MODES).optional(),
   grade: z.object({
     preset: z.enum(MUSIC_VIDEO_GRADE_PRESETS).optional(),
@@ -417,6 +439,7 @@ export const musicVideoCompositionSchema = z.object({
     accentColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'accentColor is #rrggbb').optional(),
   }).strict().optional(),
   posterSec: timedSec,
+  eidoverseScene: musicVideoEidoverseSceneSchema.nullable().optional(),
   codeVideo: musicVideoCodeVideoSchema.nullable().optional(),
   document: musicVideoCompositionDocumentSchema.nullable().optional(),
   documentDraft: musicVideoCompositionDocumentSchema.nullable().optional(),
@@ -740,12 +763,36 @@ export const musicVideoProductionResumeSchema = z.object({
 }).strict();
 
 // ---- Fully-autonomous run: one prompt → lyrics → Suno song → video --------------
+// Suno's Advanced-form options. `excludeStyles: ''` clears the field Suno keeps
+// from its last draft; null (resume only) clears a stored option.
+const musicVideoSunoOptionsSchema = z.object({
+  excludeStyles: z.string().trim().max(SUNO_LIMITS.excludeStyles).nullable().optional(),
+  vocalGender: z.enum(SUNO_VOCAL_GENDERS).nullable().optional(),
+  model: z.string().trim().regex(SUNO_MODEL_PATTERN, 'A Suno model version such as v6 or v6-wild').nullable().optional(),
+  maxMode: z.boolean().nullable().optional(),
+}).strict();
+
+// A provider/model/effort pin for a Music Video text stage. Effort is the union
+// of every accepted level; the runner clamps it to the chosen provider's ladder.
+export const musicVideoLlmSchema = z.object({
+  providerId: z.string().trim().min(1).max(200),
+  model: z.string().trim().min(1).max(200).nullable().optional(),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+}).strict();
+
+// Per-stage pins (MUSIC_VIDEO_LLM_STAGES): an absent stage keeps its stored pin
+// (or, on a start request, uses the direction pin); null clears that stage.
+export const musicVideoLlmStagesSchema = z.object(Object.fromEntries(
+  MUSIC_VIDEO_LLM_STAGES.map((stage) => [stage, musicVideoLlmSchema.nullable().optional()]),
+)).strict();
+
 // The alternate entry point: no track, style or board is picked up front. Tool
 // ids are the same catalog the autopilot brief uses; `checkpoints` names the
 // stages that park for approval (none = fully unattended).
 export const musicVideoAutonomousStartSchema = z.object({
   prompt: z.string().trim().min(1).max(AUTONOMOUS_PROMPT_MAX),
   name: z.string().trim().min(1).max(AUTONOMOUS_NAME_MAX).optional(),
+  mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   songSource: z.enum(AUTONOMOUS_SONG_SOURCES).optional(),
   localFallback: z.boolean().optional(),
   instrumental: z.boolean().optional(),
@@ -768,11 +815,17 @@ export const musicVideoAutonomousStartSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).nullable().optional(),
   // The separate code-authoring provider a code-rendered video needs.
   authoring: musicVideoAuthoringSchema.optional(),
+  // A provider/model/effort per LLM stage; an unpinned stage uses the direction LLM above.
+  llmStages: musicVideoLlmStagesSchema.nullable().optional(),
+  // Review and revise the lyric draft with a second pass (the `lyricsReview` stage
+  // pin when set, else the direction LLM). Pinning `llmStages.lyricsReview` implies it.
+  lyricsReview: z.boolean().optional(),
   origin: z.object({
     kind: z.enum(AUTONOMOUS_ORIGINS).optional(),
     ideaId: z.string().max(80).nullable().optional(),
     ideaTitle: z.string().max(200).nullable().optional(),
   }).strict().optional(),
+  suno: musicVideoSunoOptionsSchema.nullable().optional(),
 }).strict();
 
 // Resume a parked/failed run, or approve the checkpoint it is waiting on.
@@ -780,6 +833,10 @@ export const musicVideoAutonomousResumeSchema = z.object({
   // Replace the stage output the director edited at a checkpoint.
   lyrics: z.string().max(20000).optional(),
   style: z.string().max(AUTONOMOUS_PROMPT_MAX).optional(),
+  // Patch the brief's Suno options, key by key (null clears one).
+  suno: musicVideoSunoOptionsSchema.optional(),
+  // At the song checkpoint: discard the song and generate a new one.
+  retakeSong: z.boolean().optional(),
 }).strict();
 
 // A generation kickoff that failed before reaching the queue (#9011) — names
@@ -797,14 +854,6 @@ export const musicVideoSoundBedSchema = z.object({
   volume: z.number().min(0.05).max(1).optional(),
 }).strict();
 
-// A provider/model/effort pin for a Music Video text stage. Effort is the union
-// of every accepted level; the runner clamps it to the chosen provider's ladder.
-export const musicVideoLlmSchema = z.object({
-  providerId: z.string().trim().min(1).max(200),
-  model: z.string().trim().min(1).max(200).nullable().optional(),
-  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
-}).strict();
-
 // Automation-first brief: which render tools the agent may use, the director's
 // free-text guidance, and a spend cap (null = no cap). A patch merges per
 // sub-field; `tools` replaces its list whole. See musicVideoAutomation.js.
@@ -820,6 +869,8 @@ export const musicVideoAutomationSchema = z.object({
   // The direction/planning LLM (#9545): absent keeps the stored pin, null clears
   // it back to Auto (an eligible TUI provider, else the active provider).
   llm: musicVideoLlmSchema.nullable().optional(),
+  // Per-stage LLM pins: merged per stage, a stage set to null clears it.
+  llmStages: musicVideoLlmStagesSchema.nullable().optional(),
 }).strict();
 
 // ---- Development artifacts ("ingredients") ----------------------------------
@@ -914,6 +965,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
+  mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
@@ -937,6 +989,7 @@ export const musicVideoProjectCreateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
+  mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200).optional(),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
@@ -950,6 +1003,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   automation: musicVideoAutomationSchema.nullable().optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
+  renderError: z.string().max(2000).nullable().optional(),
   lyricCues: lyricCueList.optional(),
   lyricMarkers: lyricMarkerList.optional(),
   phrases: phraseList.optional(),
@@ -960,10 +1014,60 @@ export const musicVideoProjectUpdateSchema = z.object({
 
 // Fork a project into its next editable version. The server derives lineage and
 // version numbers from the source; callers may only override the display name
-// and choose whether generated scene media should remain attached.
+// and choose whether generated scene media should remain attached. A video
+// variant always clears selected media and starts independent creative setup.
 export const musicVideoProjectCloneSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   includeGeneratedMedia: z.boolean().optional(),
+  variant: z.enum(['revision', 'video-generation']).optional(),
+}).strict();
+
+// Review content is editable; approval records are server-owned and never PATCHable.
+export const musicVideoProductionDraftSchema = z.object({
+  storyboardSource: z.enum(['board', 'document']).optional(),
+  cast: z.string().max(12000), environments: z.string().max(12000),
+  visualLanguage: z.string().max(12000), motionLanguage: z.string().max(12000),
+  implementationPlan: z.string().max(16000).optional(),
+  guideArtifactId: z.string().max(64).nullable(),
+  sourceArtifactId: z.string().max(64).nullable().optional(),
+  lyricsMode: z.enum(['vocal', 'instrumental']), timingStatus: z.enum(['provisional', 'verified']),
+  timingNotes: z.string().max(4000),
+  storyboard: z.array(z.object({
+    id: z.string().max(64).optional(), startSec: timedSec, endSec: timedSec,
+    sceneId: z.string().max(64).nullable(), lyricCueIds: z.array(z.string().max(64)).max(2000),
+    action: z.string().max(4000), staging: z.string().max(4000),
+    camera: z.string().max(4000), transition: z.string().max(4000),
+  }).strict()).max(2000),
+}).strict();
+export const musicVideoDocumentShotsSchema = z.object({
+  documentDirectory: z.string().min(1).max(500), audioBasis: z.string().min(1).max(128),
+  sourceFile: z.string().min(1).max(200),
+  shots: musicVideoProductionDraftSchema.shape.storyboard.min(1),
+}).strict().superRefine((value, ctx) => {
+  const ids = new Set();
+  for (const shot of value.shots) {
+    if (!shot.id?.trim() || ids.has(shot.id) || shot.sceneId != null
+      || !Number.isFinite(shot.startSec) || !(shot.endSec > shot.startSec)) {
+      ctx.addIssue({ code: 'custom', message: 'Document shots need unique source IDs, positive timing and no Board scene binding' });
+    }
+    ids.add(shot.id);
+  }
+});
+export const musicVideoProductionImportSchema = z.object({ source: z.string().min(2).max(250000) }).strict();
+export const musicVideoProductionApprovalSchema = z.object({
+  stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
+  password: z.string().min(1).max(1024),
+  proofReview: z.object({
+    watchedWithAudio: z.literal(true),
+    excerptId: z.string().min(1).max(200), filename: z.string().min(1).max(200),
+    energyComparison: z.string().trim().min(1).max(4000),
+    timecodedNotes: z.string().trim().min(1).max(4000)
+      .regex(/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/, 'Include a playback time such as 0:04 or 4.5s.'),
+  }).strict().optional(),
+}).strict();
+export const musicVideoProductionProofSchema = z.object({
+  kind: z.enum(['proof', 'prototype']).optional(),
+  startSec: z.number().min(0), endSec: z.number().positive(),
 }).strict();
 
 // A scene on the director board. `startSec`/`endSec` place it on the timeline;
@@ -1154,3 +1258,12 @@ export const musicVideoAudioTimingPreviewSchema = z.object({
 export const musicVideoAudioTimingApplySchema = musicVideoAudioTimingPreviewSchema.extend({
   basis: z.string().regex(/^[a-f0-9]{32}$/),
 });
+
+export const musicVideoProductionFeedbackSchema = z.object({
+  stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
+  target: z.string().trim().min(1).max(300), text: z.string().trim().min(1).max(8000),
+  decision: z.enum(['comment', 'structure-accepted', 'request-changes']),
+}).strict();
+export const musicVideoProductionFeedbackResolutionSchema = z.object({
+  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().min(1).max(1024),
+}).strict();

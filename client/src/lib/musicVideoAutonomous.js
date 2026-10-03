@@ -2,8 +2,12 @@
 // vocabulary and brief normalizer (a dependency-light leaf) and owns the start
 // form's draft ↔ wire mapping and the run's display helpers.
 
+import { musicVideoMediaMode } from '../../../server/lib/musicVideoMediaPolicy.js';
+import { llmStagesDraftFrom, llmStagesFromDraft } from './musicVideoAutomation.js';
+
 import {
   AUTONOMOUS_DEFAULT_LIMITS, AUTONOMOUS_DEFAULT_TOOLS, AUTONOMOUS_LIVE_STATUSES, AUTONOMOUS_SONG_SOURCES, AUTONOMOUS_STAGES,
+  SUNO_MODEL_PATTERN,
 } from '../../../server/lib/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
@@ -11,7 +15,7 @@ export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
   local: 'Local engine (Music Studio)',
 });
 
-export { AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, autonomousMedium } from '../../../server/lib/musicVideoAutonomous.js';
+export { AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousMedium } from '../../../server/lib/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
   ...Object.fromEntries(AUTONOMOUS_STAGES.map((stage) => [stage.id, stage.label])),
@@ -25,6 +29,8 @@ export const AUTONOMOUS_STATUS_LABELS = Object.freeze({
 
 export const emptyAutonomousDraft = () => ({
   prompt: '',
+  mediaMode: 'code-images-video',
+  authoring: { providerId: '', model: '', effort: '' },
   songSource: AUTONOMOUS_SONG_SOURCES[0],
   localFallback: false,
   instrumental: false,
@@ -35,7 +41,29 @@ export const emptyAutonomousDraft = () => ({
   maxGenerations: String(AUTONOMOUS_DEFAULT_LIMITS.maxGenerations),
   checkpoints: [],
   moodBoardId: '',
+  // Suno's Advanced-form options; blank leaves that control as Suno has it.
+  suno: { excludeStyles: '', vocalGender: '', model: '', maxMode: '' },
+  // A provider/model/effort per LLM stage (`{ [stage]: llmDraft }`; absent = the direction LLM).
+  llmStages: {},
+  // Review & revise the lyric draft with a second pass.
+  lyricsReview: false,
 });
+
+/** A blank model is fine (Suno's current one); anything else must name a version such as v6. */
+export const isSunoModelValid = (model) => !String(model || '').trim() || SUNO_MODEL_PATTERN.test(String(model).trim());
+
+// The draft's Suno options as the request's `suno` object, or null when none is set.
+function sunoRequestFromDraft(suno = {}) {
+  const excludeStyles = String(suno.excludeStyles || '').trim();
+  const model = String(suno.model || '').trim();
+  const out = {
+    ...(excludeStyles ? { excludeStyles } : {}),
+    ...(suno.vocalGender ? { vocalGender: suno.vocalGender } : {}),
+    ...(model ? { model } : {}),
+    ...(suno.maxMode === 'on' || suno.maxMode === 'off' ? { maxMode: suno.maxMode === 'on' } : {}),
+  };
+  return Object.keys(out).length ? out : null;
+}
 
 const optionalInt = (raw) => {
   const n = Number.parseInt(raw, 10);
@@ -46,14 +74,22 @@ const optionalInt = (raw) => {
 export function autonomousRequestFromDraft(draft, { providerId, model, effort } = {}) {
   const budget = Number.parseFloat(draft.budget);
   const maxGenerations = optionalInt(draft.maxGenerations);
+  const suno = draft.songSource === 'suno' ? sunoRequestFromDraft(draft.suno) : null;
+  const llmStages = llmStagesFromDraft(draft.llmStages);
   const models = Object.fromEntries(Object.entries(draft.models || {})
     .filter(([id, value]) => draft.tools.includes(id) && typeof value === 'string' && value.trim())
     .map(([id, value]) => [id, value.trim()]));
   return {
     prompt: draft.prompt.trim(),
+    mediaMode: draft.mediaMode,
+    ...(draft.authoring?.providerId && draft.authoring?.model ? { authoring: {
+      providerId: draft.authoring.providerId, model: draft.authoring.model,
+      ...(draft.authoring.effort ? { effort: draft.authoring.effort } : {}),
+    } } : {}),
     songSource: draft.songSource,
     localFallback: draft.songSource === 'suno' && draft.localFallback === true,
     instrumental: draft.instrumental === true,
+    ...(suno ? { suno } : {}),
     tools: draft.tools,
     ...(Object.keys(models).length ? { models } : {}),
     ...(draft.guidance.trim() ? { guidance: draft.guidance.trim() } : {}),
@@ -61,6 +97,8 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
     ...(maxGenerations ? { limits: { maxGenerations } } : {}),
     checkpoints: draft.checkpoints,
     ...(draft.moodBoardId ? { moodBoardId: draft.moodBoardId } : {}),
+    ...(llmStages ? { llmStages } : {}),
+    ...(draft.lyricsReview === true ? { lyricsReview: true } : {}),
     ...(providerId ? { providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) } : {}),
   };
 }
@@ -77,6 +115,12 @@ export function autonomousStageRows(run) {
 
 /** The stages whose output stays viewable on the run panel, in pipeline order. */
 export const AUTONOMOUS_VIEWABLE_STAGES = Object.freeze(['brief', 'lyrics', 'style', 'song']);
+
+/** What the Lyrics stage is doing right now when it reviews its draft (`stages.lyrics.step`). */
+export const AUTONOMOUS_LYRICS_STEP_LABELS = Object.freeze({
+  draft: 'Writing the lyric draft',
+  review: 'Reviewing and revising the lyrics',
+});
 
 /** What the Song stage is doing right now (the server's `stages.song.step`). */
 export const AUTONOMOUS_SONG_STEP_LABELS = Object.freeze({
@@ -103,7 +147,9 @@ export function autonomousStageOutput(run, stageId) {
     add('musicalDescription', 'Musical description', out.musicalDescription);
     add('concept', 'Visual concept', out.concept?.prompt);
   } else if (stageId === 'lyrics') {
-    add('lyrics', 'Lyrics', out.lyrics, { multiline: true });
+    add('lyrics', out.lyricsDraft ? 'Lyrics (revised)' : 'Lyrics', out.lyrics, { multiline: true });
+    add('lyricsReviewNotes', 'Review notes', out.lyricsReviewNotes);
+    add('lyricsDraft', 'First draft', out.lyricsDraft, { multiline: true });
   } else if (stageId === 'style') {
     add('sunoStyle', 'Suno style prompt', out.sunoStyle);
     add('conceptStyle', 'Visual style', out.concept?.style);
@@ -125,6 +171,8 @@ export function autopilotDraftFromParams(params) {
   const { prompt: _prompt, ...base } = emptyAutonomousDraft();
   return {
     ...base,
+    mediaMode: musicVideoMediaMode(p),
+    authoring: { ...base.authoring, ...(p.authoring || {}) },
     songSource: AUTONOMOUS_SONG_SOURCES.includes(p.songSource) ? p.songSource : base.songSource,
     localFallback: p.localFallback === true,
     instrumental: p.instrumental === true,
@@ -135,13 +183,15 @@ export function autopilotDraftFromParams(params) {
     maxGenerations: String(p.limits?.maxGenerations ?? AUTONOMOUS_DEFAULT_LIMITS.maxGenerations),
     checkpoints: Array.isArray(p.checkpoints) ? [...p.checkpoints] : [],
     moodBoardId: p.moodBoardId || '',
+    llmStages: llmStagesDraftFrom(p.llmStages),
+    lyricsReview: p.lyricsReview === true,
     ideaTags: (p.ideaTags || []).join(', '),
   };
 }
 
 /**
  * The `musicVideoAutopilot` params a draft saves. Starts from the saved params
- * so fields the form does not edit (review attempts, authoring provider) survive a save; the server re-normalizes it all on write.
+ * so fields the form does not edit (such as review attempts) survive a save; the server re-normalizes it all on write.
  */
 export function autopilotParamsFromDraft(draft, saved, { providerId, model, effort } = {}) {
   const { prompt: _prompt, ...request } = autonomousRequestFromDraft({ ...draft, prompt: '' }, {});
@@ -150,6 +200,10 @@ export function autopilotParamsFromDraft(draft, saved, { providerId, model, effo
     ...kept,
     ...request,
     models: request.models || {},
+    authoring: request.authoring || null,
+    // The params are replaced whole on save, so an unpinned map and an off toggle are explicit.
+    llmStages: request.llmStages || null,
+    lyricsReview: request.lyricsReview === true,
     limits: { ...(kept.limits || {}), ...(request.limits || {}) },
     moodBoardId: draft.moodBoardId || null,
     ideaTags: String(draft.ideaTags || '').split(',').map((t) => t.trim()).filter(Boolean),

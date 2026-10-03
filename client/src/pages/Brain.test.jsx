@@ -102,3 +102,21 @@ it('updates its summary from events without polling and reconciles once on recon
     vi.useRealTimers();
   }
 });
+
+it('renders Inbox while summary and settings are pending, then updates metadata', async () => {
+  let resolveSummary;
+  let resolveSettings;
+  api.getBrainSummary.mockReturnValue(new Promise(resolve => { resolveSummary = resolve; }));
+  api.getBrainSettings.mockReturnValue(new Promise(resolve => { resolveSettings = resolve; }));
+  renderPageAt('inbox');
+
+  expect(await screen.findByTestId('inbox-tab')).toBeInTheDocument();
+  expect(screen.getByText('Loading Brain summary')).toBeInTheDocument();
+  await act(async () => {
+    resolveSummary({ counts: { links: 7 }, needsReview: 2 });
+    resolveSettings({ defaultProvider: 'example-provider' });
+  });
+  expect(await screen.findByText('7 links')).toBeInTheDocument();
+  expect(screen.queryByText('Loading Brain summary')).toBeNull();
+  expect(screen.getByTestId('inbox-tab')).toBeInTheDocument();
+});

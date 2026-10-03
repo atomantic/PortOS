@@ -16,6 +16,7 @@ import { access, constants, stat } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { SHARING_SCHEMA_VERSION } from './version.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 
 const REGISTRY_PATH = () => join(PATHS.data, 'sharing', 'buckets.json');
 
@@ -29,6 +30,10 @@ export const BIO_MAX = 2000;
 export const ERR_NOT_FOUND = 'SHARING_BUCKET_NOT_FOUND';
 export const ERR_VALIDATION = 'SHARING_BUCKET_VALIDATION';
 export const ERR_PATH_UNUSABLE = 'SHARING_BUCKET_PATH_UNUSABLE';
+
+// One tail for the whole registry file: every bucket shares it, so a per-id
+// queue would still let two snapshots overwrite each other.
+const queueRegistryWrite = createFileWriteQueue();
 
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
@@ -192,59 +197,65 @@ export async function createBucket(input = {}) {
   const path = trimTo(input.path, PATH_MAX);
   if (!path) throw makeErr('Bucket path is required', ERR_VALIDATION);
   await assertPathUsable(path);
-  const state = await readRegistry();
-  // Reject duplicate paths so two registry entries can't both attempt to
-  // claim the same on-disk folder (they would fight over bucket.json + the
-  // watcher would double-fire on every manifest).
-  if (state.buckets.some((b) => b.path === path)) {
-    throw makeErr(`A bucket is already registered at: ${path}`, ERR_VALIDATION);
-  }
-  const now = new Date().toISOString();
-  const bucket = sanitizeBucket({
-    id: `bkt-${randomUUID()}`,
-    name,
-    path,
-    mode: input.mode || 'inbox',
-    displayNameOverride: input.displayNameOverride || null,
-    bioOverride: input.bioOverride || null,
-    createdAt: now,
-    updatedAt: now,
+  return queueRegistryWrite(async () => {
+    const state = await readRegistry();
+    // Reject duplicate paths so two registry entries can't both attempt to
+    // claim the same on-disk folder (they would fight over bucket.json + the
+    // watcher would double-fire on every manifest).
+    if (state.buckets.some((b) => b.path === path)) {
+      throw makeErr(`A bucket is already registered at: ${path}`, ERR_VALIDATION);
+    }
+    const now = new Date().toISOString();
+    const bucket = sanitizeBucket({
+      id: `bkt-${randomUUID()}`,
+      name,
+      path,
+      mode: input.mode || 'inbox',
+      displayNameOverride: input.displayNameOverride || null,
+      bioOverride: input.bioOverride || null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    state.buckets.push(bucket);
+    // Validate/read the shared identity before publishing the local registration.
+    await ensureBucketLayout(bucket);
+    await writeRegistry(state);
+    return bucket;
   });
-  state.buckets.push(bucket);
-  // Validate/read the shared identity before publishing the local registration.
-  await ensureBucketLayout(bucket);
-  await writeRegistry(state);
-  return bucket;
 }
 
-export async function updateBucket(id, patch = {}) {
-  const state = await readRegistry();
-  const idx = state.buckets.findIndex((b) => b.id === id);
-  if (idx < 0) throw makeErr(`Bucket not found: ${id}`, ERR_NOT_FOUND);
-  const cur = state.buckets[idx];
-  const merged = sanitizeBucket({
-    ...cur,
-    ...('name' in patch ? { name: patch.name } : {}),
-    ...('mode' in patch ? { mode: patch.mode } : {}),
-    ...('displayNameOverride' in patch ? { displayNameOverride: patch.displayNameOverride } : {}),
-    ...('bioOverride' in patch ? { bioOverride: patch.bioOverride } : {}),
-    updatedAt: new Date().toISOString(),
+export function updateBucket(id, patch = {}) {
+  return queueRegistryWrite(async () => {
+    const state = await readRegistry();
+    const idx = state.buckets.findIndex((b) => b.id === id);
+    if (idx < 0) throw makeErr(`Bucket not found: ${id}`, ERR_NOT_FOUND);
+    const cur = state.buckets[idx];
+    const merged = sanitizeBucket({
+      ...cur,
+      ...('name' in patch ? { name: patch.name } : {}),
+      ...('mode' in patch ? { mode: patch.mode } : {}),
+      ...('displayNameOverride' in patch ? { displayNameOverride: patch.displayNameOverride } : {}),
+      ...('bioOverride' in patch ? { bioOverride: patch.bioOverride } : {}),
+      updatedAt: new Date().toISOString(),
+    });
+    if (!merged) throw makeErr('Invalid bucket payload', ERR_VALIDATION);
+    // `path` is intentionally NOT patchable — if the user wants to move a
+    // bucket, they delete and re-register so the registry can re-validate and
+    // re-layout the new path.
+    state.buckets[idx] = merged;
+    await writeRegistry(state);
+    return merged;
   });
-  if (!merged) throw makeErr('Invalid bucket payload', ERR_VALIDATION);
-  // `path` is intentionally NOT patchable — if the user wants to move a
-  // bucket, they delete and re-register so the registry can re-validate and
-  // re-layout the new path.
-  state.buckets[idx] = merged;
-  await writeRegistry(state);
-  return merged;
 }
 
-export async function deleteBucket(id) {
-  const state = await readRegistry();
-  const before = state.buckets.length;
-  state.buckets = state.buckets.filter((b) => b.id !== id);
-  if (state.buckets.length === before) throw makeErr(`Bucket not found: ${id}`, ERR_NOT_FOUND);
-  await writeRegistry(state);
-  return { id };
+export function deleteBucket(id) {
+  return queueRegistryWrite(async () => {
+    const state = await readRegistry();
+    const before = state.buckets.length;
+    state.buckets = state.buckets.filter((b) => b.id !== id);
+    if (state.buckets.length === before) throw makeErr(`Bucket not found: ${id}`, ERR_NOT_FOUND);
+    await writeRegistry(state);
+    return { id };
+  });
 }
 

@@ -108,6 +108,11 @@ describe('extractLargestPre', () => {
     expect(extractLargestPre(html)).toBe('&#x110000; still a long enough sheet');
   });
 
+  it('preserves unknown named references in URL-extracted lyrics', () => {
+    const text = 'C G\n&constructor; &toString; &hasOwnProperty;';
+    expect(extractLargestPre(`<pre>${text}</pre>`)).toBe(text);
+  });
+
   it('strips inner markup tags', () => {
     const html = '<pre><span class="chord">Am</span> example lyric line here</pre>';
     expect(extractLargestPre(html)).toBe('Am example lyric line here');

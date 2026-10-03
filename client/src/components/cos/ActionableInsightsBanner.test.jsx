@@ -92,6 +92,17 @@ describe('ActionableInsightsBanner (presentational)', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/cos/agents?feedback=needs-feedback');
   });
 
+  it('renders unavailable health as an observation failure with a Health retry link', () => {
+    renderBanner({ insights: [{
+      type: 'health-unavailable', priority: 'high', icon: 'AlertTriangle', title: 'CoS health unavailable',
+      description: 'Could not observe system health.', action: { label: 'Check Health', route: '/cos/health' },
+    }] }, { withLocation: true });
+    expect(screen.getByText('Observation failed')).toBeInTheDocument();
+    expect(screen.queryByText('Data-backed')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Check Health' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/cos/health');
+  });
+
   it('hides insights the user dismisses', () => {
     renderBanner({
       insights: [

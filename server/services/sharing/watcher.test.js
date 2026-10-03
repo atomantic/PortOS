@@ -16,8 +16,9 @@ vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn() }));
 
 import { watch } from 'chokidar';
 import { processBacklog, processManifest, handleUnshare } from './importer.js';
-import { getBucket } from './buckets.js';
+import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
 import { isManifestPruning } from './manifest.js';
+import { getInstanceId } from '../instanceIdentity.js';
 
 let shutdown;
 function deferred() {
@@ -28,18 +29,33 @@ function deferred() {
 // Deliver a real attached listener's event and expose its completion to the test.
 const deliver = (watcher, event, path) => Promise.all(watcher.listeners(event).map(listener => listener(path)));
 
-async function attach(paths = posix, root = '/example/bucket') {
+async function loadWatcher(paths = posix, root = '/example/bucket') {
   vi.doMock('path', () => ({ join: paths.join, basename: paths.basename, sep: paths.sep }));
   getBucket.mockImplementation(async id => ({ id, name: 'Example bucket', path: root }));
   const module = await import('./watcher.js');
   shutdown = module.shutdownAllWatchers;
-  return { watcher: await module.attachWatcher('bucket-example'), attachWatcher: module.attachWatcher, root, paths };
+  return { ...module, root, paths };
+}
+
+async function attach(paths = posix, root = '/example/bucket') {
+  const module = await loadWatcher(paths, root);
+  return { ...module, watcher: await module.attachWatcher('bucket-example') };
 }
 
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
-  watch.mockImplementation(() => Object.assign(new EventEmitter(), { close: vi.fn().mockResolvedValue(undefined) }));
+  watch.mockImplementation(() => {
+    const watcher = Object.assign(new EventEmitter(), { closed: false });
+    watcher.close = vi.fn().mockImplementation(async () => {
+      watcher.closed = true;
+      watcher.removeAllListeners();
+    });
+    return watcher;
+  });
+  getInstanceId.mockReset().mockResolvedValue(null);
+  listBuckets.mockReset().mockResolvedValue([]);
+  ensureBucketLayout.mockReset().mockResolvedValue(undefined);
   processBacklog.mockReset().mockResolvedValue(undefined);
   processManifest.mockReset().mockResolvedValue(undefined);
   handleUnshare.mockReset().mockResolvedValue(undefined);
@@ -155,5 +171,155 @@ describe('share-bucket watcher backlog lifecycle', () => {
     await Promise.all([pending, trailing]);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Bundle sync backlog failure'));
     expect(processBacklog).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Pause preparation before a handle exists, exposing admission/teardown races.
+function pauseLayout() {
+  const started = deferred();
+  const layout = deferred();
+  ensureBucketLayout.mockImplementationOnce(() => {
+    started.resolve();
+    return layout.promise;
+  });
+  return { started: started.promise, resume: layout.resolve };
+}
+const liveHandles = () => watch.mock.results.map(result => result.value).filter(watcher => !watcher.closed);
+
+describe('share-bucket watcher attachment lifecycle', () => {
+  it('serializes overlapping attachments and waits for the replaced handle to close', async () => {
+    const { attachWatcher, listAttachedWatchers } = await loadWatcher();
+    const layout = pauseLayout();
+    const closing = deferred();
+    const closeStarted = deferred();
+    const old = Object.assign(new EventEmitter(), { closed: false });
+    old.close = vi.fn(async () => {
+      closeStarted.resolve();
+      await closing.promise;
+      old.closed = true;
+      old.removeAllListeners();
+    });
+    watch.mockImplementationOnce(() => old);
+    const first = attachWatcher('bucket-example');
+    await layout.started;
+    const second = attachWatcher('bucket-example');
+    layout.resume();
+    await first;
+    await closeStarted.promise;
+    expect(watch).toHaveBeenCalledTimes(1);
+    closing.resolve();
+    const current = await second;
+    expect(liveHandles()).toEqual([current]);
+    expect(listAttachedWatchers()).toEqual(['bucket-example']);
+    await shutdown();
+    expect(liveHandles()).toEqual([]);
+  });
+
+  it('detach during preparation waits for publication and closure before returning', async () => {
+    const { attachWatcher, detachWatcher, listAttachedWatchers } = await loadWatcher();
+    const layout = pauseLayout();
+    const attaching = attachWatcher('bucket-example');
+    await layout.started;
+    let detached = false;
+    const detaching = detachWatcher('bucket-example').then(() => { detached = true; });
+    await Promise.resolve();
+    expect(detached).toBe(false);
+    layout.resume();
+    const watcher = await attaching;
+    await detaching;
+    expect(watcher.closed).toBe(true);
+    expect(listAttachedWatchers()).toEqual([]);
+    expect(liveHandles()).toEqual([]);
+  });
+
+  it('shutdown drains overlapping admitted attachments and synchronously rejects later ones', async () => {
+    const { attachWatcher, listAttachedWatchers, attachAllWatchers } = await loadWatcher();
+    const layout = pauseLayout();
+    const first = attachWatcher('bucket-example');
+    await layout.started;
+    const second = attachWatcher('bucket-example');
+    let stopped = false;
+    const stopping = shutdown().then(() => { stopped = true; });
+    await expect(attachWatcher('bucket-late')).rejects.toThrow('watchers are shut down');
+    expect(stopped).toBe(false);
+    layout.resume();
+    await Promise.all([first, second, stopping]);
+    expect(watch).toHaveBeenCalledTimes(2);
+    expect(listAttachedWatchers()).toEqual([]);
+    expect(liveHandles()).toEqual([]);
+    await expect(attachWatcher('bucket-late')).rejects.toThrow('watchers are shut down');
+    listBuckets.mockResolvedValue([{ id: 'bucket-example', name: 'Example bucket' }]);
+    await expect(attachAllWatchers()).resolves.toEqual({ attached: 1 });
+    expect(liveHandles()).toHaveLength(1);
+    await attachWatcher('bucket-other');
+    expect(listAttachedWatchers()).toEqual(['bucket-example', 'bucket-other']);
+  });
+
+  it('explicit reinitialization waits for teardown and an older queued initialization cannot reopen admission', async () => {
+    const { watcher, attachAllWatchers, attachWatcher, listAttachedWatchers } = await attach();
+    const closing = deferred();
+    const closeStarted = deferred();
+    watcher.close.mockImplementationOnce(async () => {
+      closeStarted.resolve();
+      await closing.promise;
+      watcher.closed = true;
+      watcher.removeAllListeners();
+    });
+    const stopping = shutdown();
+    await closeStarted.promise;
+    const supersededInit = attachAllWatchers();
+    const laterShutdown = shutdown();
+    const freshInit = attachAllWatchers();
+    expect(listBuckets).not.toHaveBeenCalled();
+    await expect(attachWatcher('bucket-late')).rejects.toThrow('watchers are shut down');
+    closing.resolve();
+    await Promise.all([stopping, supersededInit, laterShutdown, freshInit]);
+    expect(listBuckets).toHaveBeenCalledTimes(1);
+    expect(liveHandles()).toEqual([]);
+    await attachWatcher('bucket-example');
+    expect(listAttachedWatchers()).toEqual(['bucket-example']);
+  });
+
+  it('shutdown during boot preparation closes its handles and boot cannot reopen admission', async () => {
+    const { attachAllWatchers, attachWatcher, listAttachedWatchers } = await loadWatcher();
+    listBuckets.mockResolvedValue([{ id: 'bucket-example', name: 'Example bucket' }]);
+    const layout = pauseLayout();
+    const initializing = attachAllWatchers();
+    await layout.started;
+    const stopping = shutdown();
+    layout.resume();
+    await Promise.all([initializing, stopping]);
+    expect(watch).toHaveBeenCalledTimes(1);
+    expect(liveHandles()).toEqual([]);
+    expect(listAttachedWatchers()).toEqual([]);
+    await expect(attachWatcher('bucket-late')).rejects.toThrow('watchers are shut down');
+  });
+
+  it('a failed replacement leaves no closed handle tracked and does not poison queued attachment or detach', async () => {
+    const { watcher, attachWatcher, detachWatcher, listAttachedWatchers } = await attach();
+    ensureBucketLayout.mockRejectedValueOnce(new Error('Example layout failure'));
+    const failed = expect(attachWatcher('bucket-example')).rejects.toThrow('Example layout failure');
+    const next = attachWatcher('bucket-other');
+    const detaching = detachWatcher('bucket-other');
+    await failed;
+    const other = await next;
+    await detaching;
+    expect(watcher.closed).toBe(true);
+    expect(other.closed).toBe(true);
+    expect(listAttachedWatchers()).toEqual([]);
+    expect(liveHandles()).toEqual([]);
+  });
+
+  it('failed closure retains ownership, drains other closes, and allows teardown to retry', async () => {
+    const { watcher, attachWatcher, listAttachedWatchers } = await attach();
+    const other = await attachWatcher('bucket-other');
+    watcher.close.mockRejectedValueOnce(new Error('Example close failure'));
+    await expect(shutdown()).rejects.toThrow('Failed to close share bucket watchers');
+    expect(other.closed).toBe(true);
+    expect(liveHandles()).toEqual([watcher]);
+    expect(listAttachedWatchers()).toEqual(['bucket-example']);
+    await shutdown();
+    expect(liveHandles()).toEqual([]);
+    expect(listAttachedWatchers()).toEqual([]);
   });
 });

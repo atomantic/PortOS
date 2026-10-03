@@ -122,16 +122,36 @@ export const cleanupUnindexedPendingAttachments = async ({ knownAttachments, now
   return { examined: markers.length, removed };
 };
 
+export const ATTACHMENT_VERIFICATION = Object.freeze({
+  VALID: 'valid',
+  INVALID: 'invalid',
+  UNAVAILABLE: 'unavailable',
+});
+
+/**
+ * Classify a stored image. Only proof of absence (ENOENT / unresolvable path)
+ * or a successful read whose bytes mismatch is INVALID. Any other read error
+ * (EACCES, EIO, EBUSY, ...) says nothing about the bytes, so it is UNAVAILABLE
+ * and callers must preserve the record and file.
+ */
 export const verifyStoredAttachment = async (attachment) => {
   const filePath = resolveScreenshot(attachment.filename);
-  if (!filePath) return false;
-  const bytes = await readFile(filePath).then((value) => value, () => null);
-  const detected = detectImageFormat(bytes);
-  return Boolean(
-    detected
-    && detected.mime === attachment.mimeType
-    && bytes.length === attachment.size,
+  if (!filePath) return ATTACHMENT_VERIFICATION.INVALID;
+  const read = await readFile(filePath).then(
+    (bytes) => ({ bytes }),
+    (error) => ({ error }),
   );
+  if (read.error) {
+    if (read.error.code === 'ENOENT') return ATTACHMENT_VERIFICATION.INVALID;
+    console.warn(`⚠️ Persistent Mind attachment ${attachment.attachmentId} could not be read (${read.error.code || read.error.message}); preserving it`);
+    return ATTACHMENT_VERIFICATION.UNAVAILABLE;
+  }
+  const detected = detectImageFormat(read.bytes);
+  return detected
+    && detected.mime === attachment.mimeType
+    && read.bytes.length === attachment.size
+    ? ATTACHMENT_VERIFICATION.VALID
+    : ATTACHMENT_VERIFICATION.INVALID;
 };
 
 export const removeStoredAttachmentFile = async (attachment) => {
@@ -141,10 +161,9 @@ export const removeStoredAttachmentFile = async (attachment) => {
 export const removeUploadAfterStateFailure = async (filePath, attachmentId) => unlinkGuarded(filePath).then(
   async () => removePendingAttachmentMarker(attachmentId),
   (error) => {
-    if (error?.code !== 'ENOENT') {
-      console.error(`❌ Failed to clean up Persistent Mind upload ${attachmentId}: ${error.message}`);
-    }
-    return removePendingAttachmentMarker(attachmentId).then(() => false);
+    if (error?.code === 'ENOENT') return removePendingAttachmentMarker(attachmentId).then(() => false);
+    console.error(`❌ Failed to clean up Persistent Mind upload ${attachmentId}: ${error.message}`);
+    return false;
   },
 );
 
@@ -154,8 +173,9 @@ export const removeUploadAfterStateFailure = async (filePath, attachmentId) => u
 // recovery path.
 export const removeRejectedUpload = async (attachmentId) => {
   const entries = await screenshotEntries();
-  if (entries) await removePendingAttachmentFiles(attachmentId, entries);
-  await removePendingAttachmentMarker(attachmentId);
+  if (!entries) return false;
+  if (!await removePendingAttachmentFiles(attachmentId, entries)) return false;
+  return removePendingAttachmentMarker(attachmentId);
 };
 
 export const resolveMessageAttachments = async (mind, attachmentIds, messageId) => {
@@ -173,7 +193,16 @@ export const resolveMessageAttachments = async (mind, attachmentIds, messageId) 
     if (!attachment.claimedBy && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) {
       return { error: attachmentFailure('Persistent mind attachment has expired', { code: 'ATTACHMENT_EXPIRED' }) };
     }
-    if (!await verifyStoredAttachment(attachment)) {
+    const verification = await verifyStoredAttachment(attachment);
+    if (verification === ATTACHMENT_VERIFICATION.UNAVAILABLE) {
+      return {
+        error: attachmentFailure(
+          'The stored image could not be read right now. Your upload is kept; retry sending once storage access recovers.',
+          { code: 'ATTACHMENT_UNAVAILABLE', status: 503 },
+        ),
+      };
+    }
+    if (verification !== ATTACHMENT_VERIFICATION.VALID) {
       return { error: attachmentFailure('Persistent mind attachment is missing or invalid', { code: 'INVALID_ATTACHMENT' }) };
     }
     attachments.push(attachment);
@@ -212,8 +241,9 @@ export async function cleanupPersistentMindAttachments({ now = Date.now() } = {}
       examined += 1;
       const expiresAt = attachment.expiresAt ? Date.parse(attachment.expiresAt) : null;
       const expired = !attachment.claimedBy && Number.isFinite(expiresAt) && expiresAt <= now;
-      const valid = expired ? false : await verifyStoredAttachment(attachment);
-      if (!expired && valid) {
+      const verification = expired ? ATTACHMENT_VERIFICATION.INVALID : await verifyStoredAttachment(attachment);
+      // Unreadable is not invalid: keep the record and bytes for a later pass.
+      if (verification !== ATTACHMENT_VERIFICATION.INVALID) {
         pendingAttachments.push(attachment);
         continue;
       }
@@ -256,7 +286,7 @@ export async function createPersistentMindAttachment({ filename, data } = {}) {
   const saved = await saveImageUpload(PATHS.screenshots, {
     filename: `mind-${attachmentId}-${originalName}`,
     data,
-  }, { maxBytes: PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_BYTES }).then(
+  }, { maxBytes: PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_BYTES, stagePrefix: `mind-${attachmentId}-` }).then(
     (value) => value,
     async (error) => {
       await removeRejectedUpload(attachmentId);

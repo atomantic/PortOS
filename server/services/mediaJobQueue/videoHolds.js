@@ -35,12 +35,12 @@ export function createVideoHolds() {
       }
       if (!readable) {
         // Unknown hold metadata cannot identify a safe local video cohort.
-        // Cover all local video, including new submissions, while other kinds
-        // recover normally. The queue latches persistence off to preserve the
+        // Cover all local video. The queue also disables dispatch and admission
+        // because its writer is latched off to preserve the
         // original file; this recovery hold exists only in this process.
         recoveryHold = { id: randomUUID(), scope: 'local-video', modelId: '*', runtime: '*',
           classification: 'invalid-hold-metadata', heldAt: new Date().toISOString(),
-          cause: 'Saved video holds are damaged. Repair the queue snapshot and restart to restore persistence. Resume releases all local video holds for this session.' };
+          cause: 'Saved video holds are damaged. Repair the queue snapshot and restart to restore persistence and dispatch.' };
       }
       return readable;
     },
@@ -49,20 +49,34 @@ export function createVideoHolds() {
     clear,
     async resolveCohorts(jobs) {
       const local = jobs.filter(isLocalVideo);
-      if (!local.length) return;
+      if (!local.length) return [];
       // Catalog loading stays off the queue's widely imported static graph.
-      const { getVideoModels } = await import('../../lib/mediaModels.js');
+      // Preparation owns only local videos; an error is a per-job result,
+      // never a rejection of the scheduler's mixed-lane pass.
+      let models;
+      try {
+        const { getVideoModels } = await import('../../lib/mediaModels.js');
+        models = getVideoModels();
+      } catch (error) {
+        return local.map((job) => ({ job, error }));
+      }
       const omitted = (job) => job.params?.modelId === undefined || job.params?.modelId === '';
       let defaultModel = null;
+      let defaultError;
       if (local.some(omitted)) {
-        const { resolveVideoModelSelection } = await import('../videoGen/modelSelection.js');
-        ({ model: defaultModel } = await resolveVideoModelSelection());
+        try {
+          const { resolveVideoModelSelection } = await import('../videoGen/modelSelection.js');
+          ({ model: defaultModel } = await resolveVideoModelSelection());
+        } catch (error) {
+          defaultError = error;
+        }
       }
-      const models = getVideoModels();
-      for (const job of local) {
+      return local.map((job) => {
+        if (omitted(job) && defaultError) return { job, error: defaultError };
         const model = omitted(job) ? defaultModel : models.find((m) => m.id === job.params.modelId);
         job.videoCohort = model ? { modelId: model.id, runtime: model.runtime || 'mlx_video' } : null;
-      }
+        return { job };
+      });
     },
     updateQueued(jobs) {
       const counts = new Map();

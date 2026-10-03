@@ -48,8 +48,9 @@ import { hashUpstream, computeStaleSteps, computeSyncDrift } from '../lib/storyB
 import { getStoryBuilderStore } from './storyBuilderStore/store.js';
 import { linkIngredientsToSeries, resolveIngredientsByIds } from './catalogDB.js';
 import { getActiveCatalogType, payloadSnippet } from '../lib/catalogTypes.js';
-import { createUniverse, deleteUniverse, getUniverse, updateUniverse } from './universeBuilder.js';
+import { createUniverse, deleteUniverse, getUniverse, mergeInfluencesWithLocks, updateUniverse } from './universeBuilder.js';
 import { expandWorldTemplate } from './universeBuilderExpand.js';
+import { extractPreservedFromDraft, mergeExpandIntoDraft } from '../lib/universeExpandMerge.js';
 import { refineWorldPrompts } from './universeBuilderRefine.js';
 import { refineUniverseCharacter } from './universeCanon.js';
 import {
@@ -938,6 +939,7 @@ export async function generateStep(id, stepId, options = {}) {
     if (!session.universeId) throw makeErr('No universe linked', ERR_VALIDATION);
     const universe = await getUniverse(session.universeId);
     emit('Expanding the aesthetic…', 'generate');
+    const { preservedVariations, preservedCompositeSheets } = extractPreservedFromDraft(universe);
     const expanded = await expandWorldTemplate({
       starterPrompt: universe.starterPrompt || session.seedIdea || universe.name,
       influences: universe.influences,
@@ -945,15 +947,31 @@ export async function generateStep(id, stepId, options = {}) {
       premise: universe.premise,
       styleNotes: universe.styleNotes,
       locked: universe.locked,
+      preservedVariations,
+      preservedCompositeSheets,
       providerId: reqProviderId,
       model: reqModel,
     });
     emit('Saving…', 'persist');
-    const updated = await updateUniverse(session.universeId, {
-      logline: expanded.logline,
-      premise: expanded.premise,
-      styleNotes: expanded.styleNotes,
-      ...(expanded.influences ? { influences: expanded.influences } : {}),
+    // Persist the WHOLE expansion (categories, composite sheets, canon) through
+    // the same merge the Universe Builder page uses — never a wholesale write:
+    // updateUniverse replaces compositeSheets + canon arrays, so a re-run on a
+    // curated universe must merge against the LATEST record (the mutator form
+    // runs inside the record's write queue, after the multi-minute LLM call)
+    // to keep locked fields, pinned variations/sheets, and existing canon.
+    const updated = await updateUniverse(session.universeId, (cur) => {
+      const { expandedDraft } = mergeExpandIntoDraft(cur, expanded, { mergeInfluences: mergeInfluencesWithLocks });
+      return {
+        logline: expandedDraft.logline,
+        premise: expandedDraft.premise,
+        styleNotes: expandedDraft.styleNotes,
+        influences: expandedDraft.influences,
+        categories: expandedDraft.categories,
+        compositeSheets: expandedDraft.compositeSheets,
+        characters: expandedDraft.characters,
+        places: expandedDraft.places,
+        objects: expandedDraft.objects,
+      };
     });
     return { result: updated, providerId: expanded.providerId, model: expanded.model };
   }

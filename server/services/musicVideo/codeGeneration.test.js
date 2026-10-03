@@ -1,7 +1,9 @@
+// Creative approval behavior is covered through production review routes and orchestration.
+vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fixtureSectionSource = (color) => `function render(ctx, env) {\n  ctx.fillStyle = ${JSON.stringify(color)};\n  ctx.fillRect(env.safe.x, env.safe.y, 12 + (env.frame % 3), 12);\n}`;
 
-const h = vi.hoisted(() => ({ project: null, calls: 0, response: '', prompts: [] }));
+const h = vi.hoisted(() => ({ project: null, calls: 0, response: '', prompts: [], beforeExecute: null }));
 
 vi.mock('../promptRunner.js', () => ({
   assertProvider: () => {},
@@ -9,7 +11,9 @@ vi.mock('../promptRunner.js', () => ({
     provider: { id: providerId || 'stub-provider' },
     selectedModel: model || 'fixture-model',
   })),
-  runPromptThroughProvider: vi.fn(async ({ prompt }) => {
+  runPromptThroughProvider: vi.fn(async ({ prompt, beforeExecute }) => {
+    await h.beforeExecute?.();
+    await beforeExecute?.({ provider: { id: 'stub-provider' }, model: 'fixture-model' });
     h.calls += 1;
     h.prompts.push(prompt);
     return { text: h.response };
@@ -51,6 +55,7 @@ const base = () => ({
 
 beforeEach(() => {
   h.project = base();
+  h.beforeExecute = null;
   h.calls = 0;
   h.response = '';
   h.prompts = [];
@@ -111,12 +116,14 @@ describe('music video code generation (#9076)', () => {
     const response = () => JSON.stringify({ sections: [{ id: 'a', source: fixtureSectionSource('#555555') }, { id: 'b', source: fixtureSectionSource('#666666') }] });
 
     it('sends the approved definitions and motion/camera rules with both the full and the one-section request', async () => {
-      h.project = { ...base(), castAndSets: { status: 'approved', direction: direction() } };
+      h.project = { ...base(), productionReview: { draft: { motionLanguage: 'Energy: playful. 0–1s unfold on the downbeat; 1–2s expand the chorus gesture.', implementationPlan: 'Hinge the paper limbs; arc the camera analytically.' } }, castAndSets: { status: 'approved', direction: direction() } };
       h.response = response();
       await generateMusicVideoCode('mv-code', { providerId: 'stub-provider' });
       await regenerateMusicVideoCodeSection('mv-code', 'a', { providerId: 'stub-provider' });
       expect(h.prompts).toHaveLength(2);
       for (const prompt of h.prompts) {
+        expect(prompt).toContain(h.project.productionReview.draft.motionLanguage);
+        expect(prompt).toContain(h.project.productionReview.draft.implementationPlan);
         expect(prompt).toContain('APPROVED CAST & SETS DEFINITIONS AND RULES');
         expect(prompt).toContain('camera: slow dolly with a beat-synced push');
         expect(prompt).toContain('movement: bobs on every beat');
@@ -139,4 +146,13 @@ describe('music video code generation (#9076)', () => {
       for (const prompt of h.prompts) expect(prompt).not.toContain('APPROVED CAST & SETS');
     });
   });
+});
+
+
+it('refuses standalone authoring when a lyric changes during provider preparation, before spending', async () => {
+  h.beforeExecute = () => {
+    h.project = { ...h.project, lyricCues: [{ ...h.project.lyricCues[0], text: 'changed lyric' }] };
+  };
+  await expect(generateMusicVideoCode('mv-code')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_REVIEW_STALE' });
+  expect(h.calls).toBe(0);
 });

@@ -182,3 +182,29 @@ export async function interruptStageRuns(projectId, activeIds) {
     data = data || '{"resumable":true}'::jsonb, completed_at = NOW()
     WHERE project_id = $1 AND status = 'running' AND data->>'kind' = 'production-stages' AND NOT (id = ANY($2::text[]))`, [projectId, activeIds]);
 }
+
+// ---- Accepted output (#9392): a frozen record beside, never inside, the run history ----
+
+/**
+ * Store the accepted output on the project. A later failed or stale run never
+ * touches it. When the output's revision is the current candidate, accepting
+ * the output also accepts that source in the same transaction.
+ */
+export async function setAcceptedOutput(projectId, accepted) {
+  return withTransaction(async client => {
+    const { rows } = await client.query(`SELECT ${columns} FROM code_animation_projects WHERE id = $1 FOR UPDATE`, [projectId]);
+    if (!rows[0]) throw missing();
+    const promoteSource = rows[0].candidateRevisionId === accepted.revisionId;
+    const result = await client.query(`UPDATE code_animation_projects SET data = data || jsonb_build_object('acceptedOutput', $2::jsonb),
+      accepted_revision_id = CASE WHEN $4 THEN $3 ELSE accepted_revision_id END,
+      candidate_revision_id = CASE WHEN $4 THEN NULL ELSE candidate_revision_id END, updated_at = NOW()
+      WHERE id = $1 RETURNING ${columns}`, [projectId, JSON.stringify(accepted), accepted.revisionId, promoteSource]);
+    return present(result.rows[0]);
+  });
+}
+
+export async function pageAcceptedOutputs({ limit, offset }) {
+  const { rows } = await query(`SELECT id, title, data->'acceptedOutput' AS accepted FROM code_animation_projects
+    WHERE data ? 'acceptedOutput' ORDER BY data->'acceptedOutput'->>'acceptedAt' DESC, id DESC LIMIT $1 OFFSET $2`, [limit + 1, offset]);
+  return { items: rows.slice(0, limit), nextCursor: rows.length > limit ? String(offset + limit) : null };
+}

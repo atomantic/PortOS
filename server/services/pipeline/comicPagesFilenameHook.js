@@ -127,8 +127,4 @@ export function initComicPagesFilenameHook() {
   hook.init();
 }
 
-export const __testing = {
-  reset() {
-    hook.__testing.reset();
-  },
-};
+export const __testing = hook.__testing;

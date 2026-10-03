@@ -2,6 +2,22 @@
 // tracker. Extracted from ensureSchemaImpl() in server/lib/db.js (#2832) with
 // zero behavior change; every statement is idempotent and runs on every boot.
 // Parity-locked against server/scripts/init-db.sql by db.ddlParity.test.js.
+
+// Machine-local replay receipts for snapshot database restores (#9725). The
+// restore writes one row for its unique operation id INSIDE the replay
+// transaction, after the dump, so a lost response or crash at COMMIT is
+// resolved from the database instead of guessed. pg_dump excludes its rows
+// (they describe this machine's restores, not application data); historical
+// receipts can never match a fresh operation id. The restore appends this exact
+// statement to its replay, so an older dump that predates the table still gets it.
+export const restoreReceiptsDdl = [
+    `CREATE TABLE IF NOT EXISTS restore_receipts (
+      operation_id UUID PRIMARY KEY,
+      dump_sha256 TEXT NOT NULL,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+];
+
 export const coreDdl = [
     `CREATE TABLE IF NOT EXISTS app_quality_measurements (
       app_id TEXT NOT NULL,
@@ -28,4 +44,5 @@ export const coreDdl = [
       id TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    ...restoreReceiptsDdl,
 ];

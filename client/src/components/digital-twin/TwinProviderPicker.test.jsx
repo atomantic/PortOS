@@ -16,7 +16,7 @@ describe('TwinProviderPicker', () => {
     const provider = screen.getByRole('combobox', { name: 'Analyze with' });
     const model = screen.getByRole('combobox', { name: 'Model' });
     expect(provider.value).toBe('lmstudio');
-    expect([...model.options].map((o) => o.value)).toEqual(['qwen', 'llama']);
+    expect([...model.options].map((o) => o.value)).toEqual(['llama', 'qwen']);
     fireEvent.change(model, { target: { value: 'llama' } });
     expect(onChange).toHaveBeenLastCalledWith({ providerId: 'lmstudio', model: 'llama' });
     fireEvent.change(provider, { target: { value: 'ollama' } });

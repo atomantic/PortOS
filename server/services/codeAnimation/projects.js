@@ -6,7 +6,7 @@ import { validateRequest } from '../../lib/validation.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { emitCodeAnimationChanged } from '../socket.js';
 import * as store from './projectStore.js';
-import { stageProjectFiles, readProjectFiles, sourceHashOf } from './projectFiles.js';
+import { stageProjectFiles, readProjectFiles, sourceHashOf, ownedStorageRetained } from './projectFiles.js';
 import { activeStageRunIds } from './stages.js';
 
 const activeImports = new Set();
@@ -69,7 +69,10 @@ export async function importProductionPackage(projectId, input) {
   } catch (error) {
     // Keep accepted work and the failed run. A staged orphan is retained on DB
     // failure, never mistaken for an accepted revision or automatically run.
-    await store.failImportRecord(runId, error.code || 'IMPORT_FAILED', !staged);
+    // Release the reservation only when no owned bytes can remain: the tree
+    // was never created or its cleanup was confirmed. Staging that failed with
+    // a refused cleanup keeps its partial bytes reserved.
+    await store.failImportRecord(runId, error.code || 'IMPORT_FAILED', !staged && !ownedStorageRetained(error));
     emitCodeAnimationChanged(projectId);
     throw error;
   } finally {

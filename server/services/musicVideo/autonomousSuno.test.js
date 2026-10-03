@@ -18,27 +18,73 @@ const NEW_A = '22222222-2222-2222-2222-222222222222';
 const NEW_B = '33333333-3333-3333-3333-333333333333';
 const noSleep = async () => {};
 
-/** A just-enough Playwright page: tracks fills/clicks and exposes song links that appear after Create. */
-function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, newTitleMatches = true, afterCreate = [NEW_A, NEW_B], onCreate, refusalSignals = { inspected: true, captcha: false, credits: false, signIn: false, contentPolicy: false } } = {}) {
+/**
+ * A just-enough Playwright page: tracks fills/clicks and exposes song links that appear after Create.
+ * `options` models the Advanced form's optional controls (version menu, More Options, vocal gender);
+ * null is an older UI that has none of them.
+ */
+function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, newTitleMatches = true, afterCreate = [NEW_A, NEW_B], onCreate, refusalSignals = { inspected: true, captcha: false, credits: false, signIn: false, contentPolicy: false }, options = null } = {}) {
   const fills = {};
+  const actions = [];
   const events = new EventEmitter();
   let created = false;
+  const count = (selector) => {
+    if (selector === 'textarea') return hasForm ? 1 : 0;
+    if (selector === '[role="textbox"][aria-label="Lyrics editor"]') return modern ? 1 : 0;
+    if (selector === 'input[placeholder="Exclude styles"]:visible') return options?.expanded ? 1 : 0;
+    if (selector === 'input[placeholder="Exclude styles"]' || selector === 'button[aria-haspopup="menu"]') return options ? 1 : 0;
+    return 1;
+  };
   const locator = (selector) => {
+    const row = /span:text-is\("([^"]+)"\)/.exec(selector);
+    if (row) {
+      const label = row[1];
+      const present = options && (label === 'Vocal Gender' ? options.gender !== undefined : label === 'Max Mode' ? options.maxMode !== undefined : false);
+      const rowHandle = {
+        count: async () => (present ? 1 : 0),
+        getByRole: (_role, { name }) => {
+          const choice = ['male', 'female', 'on', 'off'].find((c) => name.test(c));
+          const selected = () => (label === 'Vocal Gender' ? options.gender : options.maxMode) === choice;
+          const btn = {
+            getAttribute: async () => (selected() ? 'hxc-btn-base hxc-btn-variant-standard-legacy' : 'hxc-btn-base hxc-btn-variant-tertiary-legacy'),
+            click: async () => { if (label === 'Vocal Gender') options.gender = choice; else options.maxMode = choice; actions.push(`${label === 'Vocal Gender' ? 'gender' : 'max'}:${choice}`); },
+          };
+          return { count: async () => 1, first: () => btn };
+        },
+      };
+      return { ...rowHandle, last: () => rowHandle };
+    }
     const handle = {
-      count: async () => selector === 'textarea' ? (hasForm ? 1 : 0) : selector === '[role="textbox"][aria-label="Lyrics editor"]' ? (modern ? 1 : 0) : 1,
+      count: async () => count(selector),
       waitFor: async () => {},
       fill: async (v) => { fills[selector] = v; },
-      click: async () => {},
+      click: async () => { if (selector === 'button[aria-haspopup="menu"]') actions.push('open-version-menu'); },
+      innerText: async () => `  ${options?.version}  `,
     };
-    return { ...handle, first: () => handle };
+    return { ...handle, first: () => handle, filter: () => ({ ...handle, first: () => handle }) };
   };
-  const button = (role, options) => ({
-    count: async () => role === 'textbox' || role === 'tab' ? (modern ? 1 : 0) : /instrumental|custom/.test(String(options.name)) ? (modern ? 0 : 1) : 1,
-    first: () => ({ click: async () => {}, fill: async v => { fills[options.name] = v; } }),
-    last: () => ({ click: async () => { created = true; onCreate?.(events); } }),
-  });
+  const button = (role, options_) => {
+    if (role === 'menuitemradio' || role === 'menuitem') {
+      // Real entries read "v6 Pro Powerful. Versatile. Refined." / "v6-wild Pro Best for experimental ideas.".
+      const match = () => role === 'menuitemradio' ? (options?.menuItems || []).find((name) => options_.name.test(name)) : undefined;
+      const item = { waitFor: async () => { if (!match()) throw new Error('menu item timeout'); }, click: async () => { options.version = match().split(' ')[0]; actions.push(`model:${options.version}`); } };
+      const handle = { count: async () => (match() ? 1 : 0), first: () => item };
+      return { ...handle, or: () => handle };
+    }
+    return {
+      count: async () => role === 'textbox' || role === 'tab' ? (modern ? 1 : 0) : /instrumental|custom/.test(String(options_.name)) ? (modern ? 0 : 1) : 1,
+      first: () => ({ click: async () => {}, fill: async v => { fills[options_.name] = v; } }),
+      last: () => ({ click: async () => { created = true; actions.push('create'); onCreate?.(events); } }),
+    };
+  };
   return {
     fills,
+    actions,
+    getByText: (text) => ({
+      count: async () => (options && text.test('More Options') ? 1 : 0),
+      first: () => ({ click: async () => { options.expanded = true; actions.push('more-options'); } }),
+    }),
+    keyboard: { press: async (key) => { actions.push(`key:${key}`); } },
     on: events.on.bind(events),
     once: events.once.bind(events),
     emit: events.emit.bind(events),
@@ -122,6 +168,55 @@ describe('submitSunoSong', () => {
     await submitSunoSong(page, fields, { sleep: noSleep });
     expect(page.fills['[role="textbox"][aria-label="Lyrics editor"],textarea[placeholder*="lyrics" i]']).toBe(fields.lyrics);
     expect(page.fills['textarea[placeholder*="style" i]']).toBe(fields.style);
+  });
+
+  it('sets the model version, exclude styles, vocal gender and Max Mode, opening More Options for the hidden exclude field', async () => {
+    // Menu entries carry a tier and blurb; "v6" must pick "v6 Pro …", never "v6-wild Pro …". Nothing is selected yet.
+    const options = { version: 'v5', menuItems: ['v6-wild Pro Best for experimental ideas.', 'v6 Pro Powerful. Versatile. Refined.', 'v5 Pro'], expanded: false, gender: null, maxMode: 'off' };
+    const page = fakePage({ options });
+    const ids = await submitSunoSong(page, { ...fields, excludeStyles: 'metal, screamo', vocalGender: 'female', model: 'V6', maxMode: true }, { sleep: noSleep });
+    expect(ids).toEqual([NEW_A, NEW_B]);
+    expect(page.actions).toEqual(['open-version-menu', 'model:v6', 'more-options', 'gender:female', 'max:on', 'create']);
+    expect(page.fills['input[placeholder="Exclude styles"]']).toBe('metal, screamo');
+
+    // Plain buttons toggle, so an already-selected choice is left alone (clicking again could deselect it).
+    const chosen = fakePage({ options: { version: 'v6', menuItems: ['v6 Pro'], expanded: true, gender: 'female', maxMode: 'on' } });
+    await submitSunoSong(chosen, { ...fields, vocalGender: 'female', maxMode: true, model: 'v6-wild' }, { sleep: noSleep });
+    expect(chosen.actions).toEqual(['open-version-menu', 'key:Escape', 'create']);
+  });
+
+  it('touches none of the options when the brief sets none, and clears exclusions only when asked', async () => {
+    const page = fakePage({ options: { version: 'v5', menuItems: ['v5 Pro', 'v6 Pro'], expanded: false, gender: null, maxMode: 'off' } });
+    await submitSunoSong(page, { ...fields, excludeStyles: null, vocalGender: null, model: null, maxMode: null }, { sleep: noSleep });
+    expect(page.actions).toEqual(['create']);
+    expect(page.fills).not.toHaveProperty('input[placeholder="Exclude styles"]');
+
+    // Already on the wanted version and already expanded: no menu, no toggle; '' clears Suno's remembered draft.
+    const cleared = fakePage({ options: { version: 'v6', menuItems: ['v6 Pro'], expanded: true } });
+    await submitSunoSong(cleared, { ...fields, excludeStyles: '', model: 'v6' }, { sleep: noSleep });
+    expect(cleared.actions).toEqual(['create']);
+    expect(cleared.fills['input[placeholder="Exclude styles"]']).toBe('');
+  });
+
+  it('warns and still creates the song when the version menu lacks the model or an older UI lacks the controls', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const page = fakePage({ options: { version: 'v5', menuItems: ['v4.5 Pro', 'v5 Pro'], expanded: true, gender: null } });
+      await submitSunoSong(page, { ...fields, model: 'v9', vocalGender: 'male' }, { sleep: noSleep });
+      expect(page.actions).toEqual(['open-version-menu', 'key:Escape', 'gender:male', 'create']);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/model v9 in the version menu/));
+
+      warn.mockClear();
+      const older = fakePage();
+      await submitSunoSong(older, { ...fields, model: 'v6', excludeStyles: 'metal', vocalGender: 'female', maxMode: true }, { sleep: noSleep });
+      expect(older.actions).toEqual(['create']);
+      expect(warn.mock.calls.map(([line]) => line)).toEqual([
+        expect.stringMatching(/model version menu/), expect.stringMatching(/More Options/),
+        expect.stringMatching(/Exclude styles/), expect.stringMatching(/Vocal Gender row/), expect.stringMatching(/Max Mode row/),
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('reports a signed-out page as login-required so the run parks for the operator', async () => {

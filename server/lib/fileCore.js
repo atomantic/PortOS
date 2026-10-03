@@ -308,6 +308,12 @@ export async function copyFileGuarded(src, dest, mode) {
   return copyFile(src, dest, mode);
 }
 
+/** Guarded `fs/promises.rename` — the DESTINATION is what gets replaced. */
+export async function renameGuarded(from, to) {
+  if (isVitestRunner()) (await loadGuard()).assertNotRealDataWrite(to, 'rename');
+  return rename(from, to);
+}
+
 /** Guarded `fs/promises.rm`. Same signature. */
 export async function rmGuarded(target, options) {
   if (isVitestRunner()) (await loadGuard()).assertNotRealDataWrite(target, 'rm');

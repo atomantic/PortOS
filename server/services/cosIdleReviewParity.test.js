@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  dueFeatureAgents: [], featureAgentPending: [],
   state: null,
   interval: null, localEndpoint: null, requestsAfterPriority0: false, requestReads: 0,
   cosTaskData: null,
@@ -129,7 +130,8 @@ vi.mock('./cosLocalEndpointSlots.js', async (importActual) => ({
 }));
 vi.mock('./featureAgents.js', async (importActual) => ({
   ...(await importActual()),
-  getDueFeatureAgents: async () => [],
+  getDueFeatureAgents: async () => [...mocks.dueFeatureAgents],
+  setCurrentAgent: async (...args) => { mocks.featureAgentPending.push(args); },
 }));
 
 const { evaluateTasks } = await import('./cosTaskGenerator.js');
