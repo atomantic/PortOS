@@ -43,6 +43,7 @@ vi.mock('../services/cos.js', () => ({
   addTask: vi.fn(),
   updateTask: vi.fn(),
   getAllTasks: vi.fn(),
+  getTaskView: vi.fn(),
   getAgents: vi.fn(),
   getUserTasks: vi.fn(),
   getCosTasks: vi.fn(),
@@ -487,8 +488,10 @@ describe('GET /api/cos/tasks — the spawn window (lib/cosSpawnWindow.js)', () =
     grouped: { pending: [{ id: 'user/42', status: 'pending' }, { id: 'user/43', status: 'pending' }], in_progress: [] },
   });
 
+  const store = () => ({ user: source(), cos: { tasks: [], grouped: { pending: [], in_progress: [] } } });
   beforeEach(() => {
-    cos.getAllTasks.mockResolvedValue({ user: source(), cos: { tasks: [], grouped: { pending: [], in_progress: [] } } });
+    cos.getAllTasks.mockResolvedValue(store());
+    cos.getTaskView.mockResolvedValue(store());
   });
 
   it('regroups a task its agent already holds and stamps it spawning', async () => {
@@ -513,6 +516,68 @@ describe('GET /api/cos/tasks — the spawn window (lib/cosSpawnWindow.js)', () =
 
     expect(res.status).toBe(200);
     expect(res.body.user.grouped.pending.map((t) => t.id)).toEqual(['user/42', 'user/43']);
+  });
+});
+
+// The bounded views select inside the store (#9677): the route only picks the
+// reader, settles the spawn window on what came back, and shapes the response.
+// The real selection/cursor contracts are pinned against the store's own reader
+// in services/cosTaskStore.test.js.
+describe('GET /api/cos/tasks — bounded view routing (#9677)', () => {
+  const live = (taskId) => ({ id: `agent-${taskId}`, taskId, status: 'running', startedAt: new Date().toISOString() });
+  const open = () => ({ tasks: [{ id: 'user/1', status: 'pending' }],
+    grouped: { pending: [{ id: 'user/1', status: 'pending' }], in_progress: [], completed: [] },
+    file: 'TASKS.md', exists: true, type: 'user' });
+  const empty = { tasks: [], grouped: {}, exists: false };
+
+  it('bare view reads the bounded reader, never the raw store, and settles the selection', async () => {
+    cos.getTaskView.mockResolvedValue({ user: { ...open(), completedCount: 40, completedNextCursor: 'user/09' }, cos: empty });
+    cos.getAgents.mockResolvedValue([live('user/1')]);
+    const res = await request(buildApp()).get('/api/cos/tasks');
+    expect(cos.getTaskView).toHaveBeenCalledWith({ kind: 'bare' });
+    expect(cos.getAllTasks).not.toHaveBeenCalled();
+    expect(res.body.user).toMatchObject({ completedCount: 40, completedNextCursor: 'user/09' });
+    expect(res.body.user.grouped.in_progress.map(t => t.id)).toEqual(['user/1']);
+  });
+
+  it('queue view summarizes the derived lists and forwards the selected id', async () => {
+    cos.getTaskView.mockResolvedValue({ user: { ...open(), completedCount: 9,
+      grouped: { pending: [{ id: 'user/1', status: 'pending', description: 'x' }], completed: [{ id: 'user/old', status: 'completed', description: 'y' }] } }, cos: empty });
+    cos.getAgents.mockResolvedValue([live('user/1')]);
+    const res = await request(buildApp()).get('/api/cos/tasks?view=queue&selected=user/old');
+    expect(cos.getTaskView).toHaveBeenCalledWith({ kind: 'queue', selected: 'user/old' });
+    expect(res.body.user.completedCount).toBe(9);
+    expect(res.body.user.grouped).toEqual({
+      pending: [], in_progress: [{ id: 'user/1', status: 'pending', spawning: true }],
+      completed: [{ id: 'user/old', status: 'completed' }],
+    });
+  });
+
+  it('completed view validates the page size and passes source/cursor through', async () => {
+    cos.getTaskView.mockResolvedValue({ items: [], total: 0, nextCursor: null });
+    const res = await request(buildApp()).get('/api/cos/tasks?view=completed&source=internal&cursor=c9&limit=10');
+    expect(res.body).toEqual({ items: [], total: 0, nextCursor: null });
+    expect(cos.getTaskView).toHaveBeenCalledWith({ kind: 'completed', source: 'internal', cursor: 'c9', limit: 10 });
+    expect((await request(buildApp()).get('/api/cos/tasks?view=completed&limit=101')).status).toBe(400);
+  });
+
+  it('limit/offset keeps the legacy shape with true totals and settles the window', async () => {
+    cos.getTaskView.mockResolvedValue({ user: { file: 'TASKS.md', exists: true, type: 'user', tasks: [{ id: 'user/1', status: 'pending' }] },
+      cos: { file: 'COS.md', exists: true, type: 'internal', tasks: [] }, totals: { user: 7, cos: 3 } });
+    cos.getAgents.mockResolvedValue([live('user/1')]);
+    const res = await request(buildApp()).get('/api/cos/tasks?limit=1&offset=2');
+    expect(cos.getTaskView).toHaveBeenCalledWith({ kind: 'window', offset: 2, limit: 1 });
+    expect(res.body.pagination).toEqual({ limit: 1, offset: 2, userTotal: 7, cosTotal: 3, total: 10 });
+    expect(res.body.user.tasks[0]).toMatchObject({ id: 'user/1', spawning: true });
+    expect(res.body.user.grouped).toBeUndefined();
+  });
+
+  it('view=full stays the raw store, settled', async () => {
+    cos.getAllTasks.mockResolvedValue({ user: open(), cos: empty });
+    cos.getAgents.mockResolvedValue([live('user/1')]);
+    const res = await request(buildApp()).get('/api/cos/tasks?view=full');
+    expect(cos.getTaskView).not.toHaveBeenCalled();
+    expect(res.body.user.tasks[0]).toMatchObject({ id: 'user/1', spawning: true });
   });
 });
 

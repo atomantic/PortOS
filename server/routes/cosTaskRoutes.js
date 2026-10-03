@@ -132,8 +132,6 @@ async function preparePlanOnlyTask(taskData, knownApp = null) {
 
 const router = Router();
 
-const COMPLETED_FIRST_PAGE = 25;
-
 // GET /api/cos/tasks - Get all tasks (user + internal), grouped by source.
 //
 // Settled for the spawn window (lib/cosSpawnWindow.js): an agent registers as
@@ -142,8 +140,8 @@ const COMPLETED_FIRST_PAGE = 25;
 // too. Settling HERE rather than in `getAllTasks()` keeps the dispatch readers
 // (task generation, retry revival, dedup) on the raw truth they need, while
 // every API consumer gets an honest queue depth without knowing the window
-// exists. `cos.getAgents()` is free at this point — `getAllTasks()` has already
-// warmed the same `loadState()` snapshot it reads.
+// exists. The bounded views (`cos.getTaskView`) select from the parsed snapshot
+// before cloning; only `view=full` pays for the whole store.
 //
 // With no params it returns a bounded `{ user, cos }` projection: all non-completed
 // tasks plus grouped/derived lists, and only the first page of completed history
@@ -162,70 +160,51 @@ router.get('/tasks', asyncHandler(async (req, res) => {
     selected: z.string().max(512).optional(),
     cursor: z.string().max(512).optional(),
   }), req.query);
-  const [allTasks, agents] = await Promise.all([
-    cos.getAllTasks(),
-    cos.getAgents().catch(() => []),
-  ]);
-  const runningAgents = runningAgentsByTaskId(agents);
-  const tasks = {
-    ...allTasks,
-    user: settleTaskSourceSpawnWindow(allTasks?.user, runningAgents),
-    cos: settleTaskSourceSpawnWindow(allTasks?.cos, runningAgents),
-  };
+  const settleView = (view, runningAgents) => ({
+    ...view,
+    user: settleTaskSourceSpawnWindow(view?.user, runningAgents),
+    cos: settleTaskSourceSpawnWindow(view?.cos, runningAgents),
+  });
+  // The bounded views select inside the store BEFORE cloning, so a queue refresh
+  // never copies archived prompt bodies (#9677). Settlement runs on the selection.
+  const agentsPromise = cos.getAgents().catch(() => []);
   if (query.view === 'completed') {
-    const source = query.source === 'internal' ? tasks.cos : tasks.user;
-    const completed = (source?.tasks || []).filter(task => task.status === 'completed')
-      .sort((a, b) => a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
-    const remaining = completed.filter(task => !query.cursor || task.id < query.cursor);
     const { limit } = validateRequest(z.object({ limit: z.coerce.number().int().min(1).max(100).default(25) }), req.query);
-    return res.json({ items: remaining.slice(0, limit), total: completed.length,
-      nextCursor: remaining.length > limit ? remaining[limit - 1].id : null });
+    return res.json(await cos.getTaskView({ kind: 'completed', source: query.source, cursor: query.cursor, limit }));
   }
   if (query.view === 'queue') {
+    const [view, agents] = await Promise.all([cos.getTaskView({ kind: 'queue', selected: query.selected }), agentsPromise]);
+    const tasks = settleView(view, runningAgentsByTaskId(agents));
+    // `tasks` stays whole (open queue + the selected historical task); the derived
+    // lists shrink to id/status summaries.
     const queueSource = source => {
       if (!source) return source;
-      const keep = task => task.status !== 'completed' || task.id === query.selected;
-      return { ...source, tasks: (source.tasks || []).filter(keep),
-        completedCount: (source.tasks || []).filter(task => task.status === 'completed').length,
-        grouped: Object.fromEntries(Object.entries(source.grouped || {}).map(([key, rows]) => [key, rows.filter(keep).map(task => ({ id: task.id, status: task.status, spawning: task.spawning }))])),
-        autoApproved: source.autoApproved?.filter(keep).map(task => ({ id: task.id })), awaitingApproval: source.awaitingApproval?.filter(keep).map(task => ({ id: task.id })) };
+      return { ...source,
+        grouped: Object.fromEntries(Object.entries(source.grouped || {}).map(([key, rows]) => [key, rows.map(task => ({ id: task.id, status: task.status, spawning: task.spawning }))])),
+        autoApproved: source.autoApproved?.map(task => ({ id: task.id })), awaitingApproval: source.awaitingApproval?.map(task => ({ id: task.id })) };
     };
     return res.json({ user: queueSource(tasks.user), cos: queueSource(tasks.cos) });
   }
   if (!isPaginationRequested(req.query)) {
-    if (query.view === 'full') return res.json(tasks);
+    if (query.view === 'full') {
+      const [allTasks, agents] = await Promise.all([cos.getAllTasks(), agentsPromise]);
+      return res.json(settleView(allTasks, runningAgentsByTaskId(agents)));
+    }
     // Bare form: bounded projection. Every non-completed task stays whole; the
     // completed history (96% of the bytes on a long-lived install, and once
     // more inside `grouped`) shrinks to the first `view=completed` page plus
     // `completedCount`. `view=full` is the raw-store escape hatch.
-    const boundSource = source => {
-      if (!source) return source;
-      const isDone = task => task.status === 'completed';
-      const list = source.tasks || [];
-      const firstPage = list.filter(isDone).sort((a, b) => a.id < b.id ? 1 : a.id > b.id ? -1 : 0).slice(0, COMPLETED_FIRST_PAGE);
-      const completedCount = list.filter(isDone).length;
-      return { ...source, tasks: [...list.filter(task => !isDone(task)), ...firstPage], completedCount,
-        completedNextCursor: completedCount > COMPLETED_FIRST_PAGE ? firstPage[firstPage.length - 1].id : null,
-        grouped: Object.fromEntries(Object.entries(source.grouped || {}).map(([key, rows]) => [key, rows.filter(task => !isDone(task))])),
-        autoApproved: source.autoApproved?.filter(task => !isDone(task)), awaitingApproval: source.awaitingApproval?.filter(task => !isDone(task)) };
-    };
-    return res.json({ ...tasks, user: boundSource(tasks.user), cos: boundSource(tasks.cos) });
+    const [view, agents] = await Promise.all([cos.getTaskView({ kind: 'bare' }), agentsPromise]);
+    return res.json(settleView(view, runningAgentsByTaskId(agents)));
   }
   const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
-  const sliceSource = (src) => {
-    if (!src || typeof src !== 'object') return { tasks: [] };
-    // Strip the full-set derived collections so the response is actually bounded;
-    // keep only scalar metadata (file/exists/type) + the windowed task slice.
-    const { tasks: list, grouped, autoApproved, awaitingApproval, ...meta } = src;
-    const arr = Array.isArray(list) ? list : [];
-    return { ...meta, tasks: arr.slice(offset, offset + limit) };
-  };
-  const userTotal = Array.isArray(tasks?.user?.tasks) ? tasks.user.tasks.length : 0;
-  const cosTotal = Array.isArray(tasks?.cos?.tasks) ? tasks.cos.tasks.length : 0;
+  const [view, agents] = await Promise.all([cos.getTaskView({ kind: 'window', offset, limit }), agentsPromise]);
+  const runningAgents = runningAgentsByTaskId(agents);
+  const { totals } = view;
   res.json({
-    user: sliceSource(tasks?.user),
-    cos: sliceSource(tasks?.cos),
-    pagination: { limit, offset, userTotal, cosTotal, total: userTotal + cosTotal }
+    user: settleTaskSourceSpawnWindow(view.user, runningAgents),
+    cos: settleTaskSourceSpawnWindow(view.cos, runningAgents),
+    pagination: { limit, offset, userTotal: totals.user, cosTotal: totals.cos, total: totals.user + totals.cos }
   });
 }));
 
