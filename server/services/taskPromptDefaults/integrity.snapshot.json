@@ -60,7 +60,7 @@
     "ui-bugs": "073bea13a94b0266c53b5f55bb2344b9",
     "ui-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
-    "ux": "f90b5f38a7c6264e0d40919a2933ba4c"
+    "ux": "9f346b8be4408c5a8207d9a8b6080ff0"
   },
   "PROMPT_VERSIONS": {
     "accessibility": 5,
@@ -118,7 +118,7 @@
     "ui-bugs": 3,
     "ui-lifecycle": 2,
     "user-action-review": 2,
-    "ux": 4
+    "ux": 5
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 4,
   "PREVIOUS_DEFAULT_PROMPTS": {
@@ -422,7 +422,8 @@
     "ux": [
       "e03d03fc7c16faa5b5db93be2896b9ad",
       "ac11f692eae40ffe8ddeaeaccbcf75e9",
-      "b8c0bde4075685625443a405b2c70b50"
+      "b8c0bde4075685625443a405b2c70b50",
+      "f90b5f38a7c6264e0d40919a2933ba4c"
     ]
   }
 }

@@ -823,6 +823,7 @@ Duplicate findings are noise. Do NOT file:
 - **Raw console errors / broken elements / failed requests** — \`ui-bugs\` owns these.
 - **Touch-only mechanics** (hover-only controls and tap-target sizing) — \`mobile-responsive\` owns these. Responsive layout failures ARE part of this UX audit; deduplicate against findings from that sibling task.
 - **ARIA labels, contrast ratios, keyboard traps** — \`accessibility\` owns these.
+- **The wording of a single string** (jargon, an ambiguous verb, broken plurals) — \`copy\` owns it. How MUCH text a screen spends explaining itself, and whether it repeats what the controls already say, is this audit's (checklist item 9).
 
 Mention an overlap only when it is the *cause* of a UX failure you are filing
 (e.g. "the empty state is unreachable because the only trigger is a
@@ -851,6 +852,7 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    - Resize dashboard widgets and embedded panels to 240px, 320px, and 480px wide on a desktop viewport. Viewport breakpoints do not prove a narrow container fits.
    - Inspect empty, populated, loading, and error states with synthetic long names, URLs, and action labels. Check bounding rectangles and scrollWidth/clientWidth on the page AND cards: overflow-hidden can conceal unreachable controls even when the document has no horizontal scrollbar. Exempt only intentional local scroll regions such as tables/timelines; verify their keyboard access.
    - Record route/widget, viewport AND container width, state, sidebar mode, blocked action, and responsible component. Report unvisited routes/states as untested, never as passing.
+   - Read the screen as a user, not only its geometry. From the snapshot, list every visible action with what it does, and every block of instructional or explanatory text longer than one sentence. Then reach the states where a user needs particular information (a failed run, a blocked step, a pending decision, a record just created) and note what is visible there without an extra click. These inventories are the evidence for checklist items 9–11.
 
 4. **Evaluate each route against this named checklist.** Cite the checklist
    number in the finding so results are reproducible rather than vibes:
@@ -874,6 +876,28 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
       the most prominent thing, not the densest table or the newest feature.
 
    8. **Narrow-container reflow** — no overlapping cards, clipped controls, off-screen actions, or page-level horizontal scroll. Toolbars wrap, flexible children shrink, long strings wrap or have an accessible full-value path, and side panels stack before squeezing the primary work. Consult the app's design standard; for PortOS use docs/UX_DESIGN_GUIDE.md.
+   9. **Text earns its space.** A label, then at most one useful sentence, then
+      optional detail behind a named disclosure. A finding is a paragraph that
+      narrates what the visible controls already make obvious ("Click Repair to
+      repair the dependencies"), restates the heading, repeats the same
+      explanation above several groups, walks through steps the UI already
+      sequences, or pushes the primary action or the result below the fold.
+      Quote the text, count its sentences, and propose the one sentence (or
+      none) that should remain.
+   10. **One control per action.** Two visible controls on the same screen that
+      do the same thing — a header button and a card button, a toolbar action
+      and a row action, a button beside a link to the same destination, a
+      Save in two places — are a finding unless they act on different scope.
+      Name both controls and which one should stay.
+   11. **What the user needs now is visible now.** Information the user must
+      read to decide or act in the current state — the error behind a failure,
+      the reason a step is blocked, the output they just generated, the
+      prerequisite they must fix — must not sit behind a collapsed section,
+      an inactive tab, a hover tooltip, a modal, or a truncated line. A
+      disclosure that holds a blocking error must open on its own. The reverse
+      is also a finding: a status the user cannot act on that stays expanded
+      and dominates the screen. Name the state, where the information is
+      hidden, and the click count to reach it.
 
 5. **File ONE item per finding** using the "Record" mechanics under "Where to
    record findings" above. Each finding must carry:
@@ -881,7 +905,7 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    - **A short, human-readable title** naming the screen and the problem. Do
      not invent an issue ID or add a slug/category/severity tag to a forge
      title; follow the selected tracker's ID convention from its instructions.
-   - **The screen/route** you audited and which checklist item (1–8) it failed.
+   - **The screen/route** you audited and which checklist item (1–11) it failed.
    - **What the user is trying to do** on that screen.
    - **Why the current design impedes it** — 1–2 sentences, concrete and
      observable, referencing what you saw in the snapshot.
@@ -897,7 +921,11 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
 
    Be selective — file the findings that would measurably change whether a user
    succeeds, not every aesthetic preference. A handful of well-argued items
-   beats twenty nitpicks.
+   beats twenty nitpicks. Items 9–11 are not aesthetic preferences: a wall of
+   instructions, a duplicated button, or a hidden error each costs the user
+   reading time, a wrong guess, or a dead end, so file them when you see them.
+   When one component causes the same item on several screens, file one
+   finding that lists the screens.
 
 6. **Finalize** per the "Finalize" step under "Where to record findings" above,
    and per the mode banner — which is what decides whether this run ends in
