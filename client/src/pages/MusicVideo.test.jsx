@@ -1225,6 +1225,42 @@ describe('MusicVideo autonomous shot planner (#1855)', () => {
   });
 });
 
+describe('MusicVideo autonomous mode setup experience', () => {
+  it('renders autonomous run at top of setup, hides lyrics fork callout when no lyrics exist, and reflects progress in next action', async () => {
+    const autoProject = {
+      id: 'mv-auto-1',
+      name: 'Autonomous MV',
+      mode: 'autonomous',
+      status: 'draft',
+      trackId: null,
+      uploadedAudioFilename: null,
+      audioAnalysis: null,
+      scenes: [],
+      autonomousRun: {
+        id: 'run-1',
+        status: 'running',
+        stage: 'lyrics',
+        stages: { lyrics: { step: 'draft' } },
+        output: {},
+        brief: { prompt: 'A synthwave adventure' },
+      },
+    };
+    await openProject(autoProject, 'setup');
+
+    const runRegion = screen.getByRole('region', { name: 'Autonomous run' });
+    expect(runRegion).toBeInTheDocument();
+
+    expect(screen.queryByRole('heading', { name: 'Revise lyrics & song' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Fork & revise song' })).toBeNull();
+
+    expect(screen.queryByRole('button', { name: 'Attach a track' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Writing the lyric draft…' })).toBeDisabled();
+
+    expect(screen.queryByText(/Approvals: 0 of 3 approved/)).toBeNull();
+    expect(screen.getByText(/Autopilot: writing the lyric draft/i)).toBeInTheDocument();
+  });
+});
+
 describe('MusicVideo lyrics and shot coverage (#8964)', () => {
   it('imports pasted lyrics, shows the cues, and persists an edited line on blur', async () => {
     const cues = [

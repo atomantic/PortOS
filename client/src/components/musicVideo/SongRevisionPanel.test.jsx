@@ -67,4 +67,22 @@ describe('song revision UI', () => {
     await screen.findByText('Song revision: canceled');
     expect(api.act).toHaveBeenCalledWith('fork', 'cancel', { revisionId: 'rev' }, { silent: true });
   });
+  it('hides the panel when there are no lyrics or song to revise on a non-fork project', () => {
+    const { container } = render(
+      <MemoryRouter>
+        <SongRevisionPanel project={{ id: 'p1', version: 1 }} tracks={[]} onUpdated={() => {}} onFork={() => {}} />
+      </MemoryRouter>,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+  it('shows the fork callout when the project has audio or lyrics attached', () => {
+    render(
+      <MemoryRouter>
+        <SongRevisionPanel project={{ id: 'p1', trackId: 't1', version: 1 }} tracks={[{ id: 't1', title: 'Song', audioFilename: 's.mp3' }]} onUpdated={() => {}} onFork={() => {}} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('heading', { name: 'Revise lyrics & song' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Fork & revise song' })).toBeInTheDocument();
+  });
 });
+
