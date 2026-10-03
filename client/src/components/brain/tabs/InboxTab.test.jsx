@@ -68,7 +68,7 @@ beforeEach(() => {
 });
 
 describe('Brain inbox capture', () => {
-  it('captures before history resolves and keeps the accepted entry once history arrives', async () => {
+  it.each([false, true])('keeps an early capture when deferred history includes it: %s', async (historyIncludesCapture) => {
     let resolveHistory;
     const history = new Promise(resolve => { resolveHistory = resolve; });
     getBrainInbox.mockReturnValue(history);
@@ -85,7 +85,7 @@ describe('Brain inbox capture', () => {
     expect(screen.getByText('Loading inbox history')).toBeInTheDocument();
     expect(captureBrainThought.mock.calls[0].slice(1, 3)).toEqual([undefined, undefined]);
 
-    await act(async () => { resolveHistory({ entries: [accepted], counts: { filed: 1 } }); });
+    await act(async () => { resolveHistory({ entries: historyIncludesCapture ? [accepted] : [], counts: { filed: historyIncludesCapture ? 1 : 0 } }); });
     await waitFor(() => expect(screen.queryByText('Loading inbox history')).toBeNull());
     expect(screen.getAllByText(accepted.capturedText)).toHaveLength(1);
   });
