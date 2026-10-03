@@ -1,7 +1,7 @@
 /** Real separate-repository fixtures for the public scheduled cleanup consumer. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, realpathSync } from 'fs';
-import { mkdir, readFile, rm, symlink, unlink, writeFile } from 'fs/promises';
+import { mkdir, open, readFile, rm, symlink, unlink, writeFile } from 'fs/promises';
 import { join, relative } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { materializeGitRepo, resetGitWorktreeSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
@@ -57,6 +57,18 @@ async function addTree(name, { committed = false, detached = false } = {}) {
   }
   return path;
 }
+// Git marks .git pointers hidden on Windows. Reopening with "w" can fail even
+// when the file is writable; "r+" edits the existing file without recreating it.
+async function rewriteGitPointer(worktreePath, content) {
+  const handle = await open(join(worktreePath, '.git'), 'r+');
+  try {
+    await handle.writeFile(content);
+    await handle.truncate(Buffer.byteLength(content));
+  } finally {
+    await handle.close();
+  }
+}
+
 async function branchExists(branch) {
   return (await execGit(['show-ref', '--verify', `refs/heads/${branch}`], external, { ignoreExitCode: true })).exitCode === 0;
 }
@@ -125,7 +137,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
   it('resolves a relative .git pointer through Git rather than assuming an absolute parent path', async () => {
     const path = await addTree('agent-relative');
     const pointer = (await readFile(join(path, '.git'), 'utf8')).replace(/^gitdir: /, '').trim();
-    await writeFile(join(path, '.git'), `gitdir: ${relative(realpathSync(path), pointer)}\n`);
+    await rewriteGitPointer(path, `gitdir: ${relative(realpathSync(path), pointer)}\n`);
     expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(1);
     expect(existsSync(path)).toBe(false);
   });
@@ -136,7 +148,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     const missing = join(PATHS.worktrees, 'agent-missing-parent');
     await execGit(['worktree', 'add', '-b', 'agent-missing-parent', missing, 'main'], missingParent);
     const unreadable = await addTree('agent-unreadable');
-    await writeFile(join(unreadable, '.git'), 'unreadable registration\n');
+    await rewriteGitPointer(unreadable, 'unreadable registration\n');
     await rm(missingParent, { recursive: true, force: true });
     expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(0);
     expect(existsSync(missing)).toBe(true);
