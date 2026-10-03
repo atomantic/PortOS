@@ -533,6 +533,18 @@ describe('persistent mind routes', () => {
     });
   });
 
+  it('surfaces unreadable pending image storage as a retryable 503', async () => {
+    mocks.enqueuePersistentMindMessage.mockResolvedValueOnce({
+      success: false,
+      error: 'The stored image could not be read right now.',
+      code: 'ATTACHMENT_UNAVAILABLE',
+      status: 503,
+    });
+    const res = await post('/mind/messages', { id: 'message-image', images: ['attachment-1'] });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ATTACHMENT_UNAVAILABLE');
+  });
+
   it('validates the displayed temporary selection and requires its preset id to match', async () => {
     const thinkingPreset = { id: 'deep', label: 'Deep', providerId: 'example-provider', model: 'example-model', effort: '' };
     const input = { id: 'selected-message', text: 'Use this selection.', thinkingPresetId: 'deep', thinkingPreset };
