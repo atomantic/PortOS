@@ -15,6 +15,7 @@ import { canonicalStringify, isEmptyScalar, isPlainObject } from '../lib/objects
 import { snapshotChecksum } from '../lib/snapshotChecksum.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { isTombstoned, mergeTombstones, pruneTombstones } from '../lib/tombstones.js';
+import { GOAL_TOMBSTONES_KEY, reconcileGoalTombstones } from './identity/goalTombstones.js';
 import {
   DAILY_LOG_TOMBSTONES_KEY,
   dailyLogEventLiveStamp,
@@ -414,21 +415,33 @@ async function getGoalsSnapshot() {
   return { data, checksum: computeChecksum(data) };
 }
 
+// Goals merge by union, so a delete is only representable as a tombstone (#9816):
+// `deleteGoal` leaves `{ id, deletedAt }` in the goals document, the list unions in
+// both directions (a legacy peer that omits it leaves ours untouched), and any
+// goal copy the union covers is dropped here, children reparented. See
+// identity/goalTombstones.js for the restoration rule and resurrection horizon.
 async function applyGoalsRemote(remoteData) {
   const { editGoals } = await import('./identity/store.js');
   return editGoals(local => {
-    // Merge goals array by ID with LWW on updatedAt
-    const { merged: mergedGoals, changed: goalsChanged } = mergeArraysByKey(
-      local.goals || [],
-      remoteData.goals || [],
-      'id',
-      'updatedAt'
+    const localGoals = local.goals || [];
+    const { merged: tombstones } = mergeTombstones(
+      local[GOAL_TOMBSTONES_KEY],
+      remoteData[GOAL_TOMBSTONES_KEY],
+      { keyField: 'id' },
     );
+    // A tombstoned remote copy is filtered BEFORE the union so it neither counts
+    // as a change nor as proof the remote document is fresher.
+    const remoteGoals = reconcileGoalTombstones(remoteData.goals || [], tombstones).goals;
+    // Merge goals array by ID with LWW on updatedAt
+    const { merged: unionGoals } = mergeArraysByKey(localGoals, remoteGoals, 'id', 'updatedAt');
+    const { goals: mergedGoals, tombstones: liveTombstones } = reconcileGoalTombstones(unionGoals, tombstones);
+    const goalsChanged = canonicalStringify(mergedGoals) !== canonicalStringify(localGoals);
+    const tombstonesChanged = canonicalStringify(liveTombstones) !== canonicalStringify(local[GOAL_TOMBSTONES_KEY] ?? []);
 
     // Merge top-level metadata (birthDate, lifeExpectancy, timeHorizons) via LWW
     // Use the most recent goal's updatedAt as proxy for file freshness
-    const localMaxTs = (local.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
-    const remoteMaxTs = (remoteData.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
+    const localMaxTs = localGoals.reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
+    const remoteMaxTs = remoteGoals.reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
     const metaSource = remoteMaxTs > localMaxTs ? remoteData : local;
 
     const merged = {
@@ -439,8 +452,11 @@ async function applyGoalsRemote(remoteData) {
       goals: mergedGoals
     };
 
-    if (goalsChanged || remoteMaxTs > localMaxTs) {
+    if (goalsChanged || tombstonesChanged || remoteMaxTs > localMaxTs) {
       Object.assign(local, merged);
+      // A legacy document stays free of the field until something is tombstoned.
+      if (liveTombstones.length > 0) local[GOAL_TOMBSTONES_KEY] = liveTombstones;
+      else delete local[GOAL_TOMBSTONES_KEY];
       console.log(`🔄 Goals sync: merged ${mergedGoals.length} goals`);
       return { applied: true, count: mergedGoals.length };
     }
