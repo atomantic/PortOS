@@ -1,6 +1,6 @@
 # Autonomous Music Video
 
-One prompt in, a finished music video out. The Music Video page's **Autonomous** entry point (and the `music-video-autopilot` scheduled task) starts a server-owned run that does everything the hand-driven flow asks you to set up first: it writes the creative brief, the lyrics and a mood board, makes the song (in Suno, or on this machine), and produces the video with the tools you allowed. Song-writing checkpoints are optional. Production always pauses for revision-bound human review of the visual guide, lyric-timed storyboard and animated proof.
+One prompt in, a finished music video out. The Music Video page's **Autonomous** entry point (and the `music-video-autopilot` scheduled task) starts a server-owned run that does everything the hand-driven flow asks you to set up first: it writes the creative brief, the lyrics and a mood board, makes the song (in Suno, or on this machine), and produces the video with the tools you allowed. Song-writing checkpoints are optional. Production requires revision-bound approval of the visual guide, lyric-timed storyboard and animated proof. Authenticated sessions may grant automatic planning approvals; proof always needs substantive playback or machine review evidence.
 
 ## Pipeline
 
@@ -16,7 +16,7 @@ brief → lyrics → style → song → analyze → produce
 | `song` | The PortOS Browser drives the Suno web UI (custom mode: lyrics, style, title), only M4A is selected in Suno's Download UI and the completed audio is validated and imported directly into the music library, a Track is created, the take is recorded with `source: 'suno'`, and the project is linked to it. | Suno credits |
 | `song` (local) | `songSource: 'local'` renders the song with the on-device Music Designer engines instead (see [Local song source](#local-song-source)). | free (GPU time) |
 | `analyze` | The usual offline beat / tempo / section analysis. | free |
-| `produce` | **Footage** (any image/video tool picked): the existing server-owned production run (`/production-runs`) with a pool built from the picks, then the final render once it completes. **Code** (only `code:render`): a code-rendered video is authored after storyboard approval, renders a review proof, then waits for human proof approval before the final render. | per tool |
+| `produce` | **Footage** (any image/video tool picked): the existing server-owned production run (`/production-runs`) with a pool built from the picks, then the final render once it completes. **Code** (only `code:render`): a code-rendered video is authored after storyboard approval, renders a review proof, then waits for an authenticated reviewer’s proof approval before the final render. | per tool |
 
 State lives on the project as `autonomousRun` — install-local like `productionRuns` (stripped from the peer wire, not carried into a clone). Each stage settles in one serialized project write, so a crash resumes at the stage that did not settle. After a server restart a run is shown **interrupted** and nothing advances until you resume it (no cold-bootstrap provider calls).
 
@@ -135,9 +135,9 @@ The Suno adapter fills the form through `placeholder` / role selectors and reads
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/api/music-video/autonomous` | Start (202 `{ project, run }`). Body: `prompt` plus optional `songSource` (`suno` default, or `local`), `localFallback`, `suno` (Suno form options), `tools`, `models` (per-tool model pin), `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model`/`effort` (the direction LLM), `llmStages` (per-stage LLM pins), `lyricsReview`, `authoring` (code-rendered video), `autoApprove` (+ `password`, see Production review). |
+| `POST` | `/api/music-video/autonomous` | Start (202 `{ project, run }`). Body: `prompt` plus optional `songSource` (`suno` default, or `local`), `localFallback`, `suno` (Suno form options), `tools`, `models` (per-tool model pin), `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model`/`effort` (the direction LLM), `llmStages` (per-stage LLM pins), `lyricsReview`, `authoring` (code-rendered video), `autoApprove` (authenticated planning grant, see Production review). |
 | `GET` | `/api/music-video/:id/autonomous` | The run. |
-| `POST` | `/api/music-video/:id/autonomous/resume` | Approve the checkpoint, retry the stage that stopped, or resume an interrupted run. Optional `lyrics`, `style`, `suno` edits; `retakeSong: true` at the song checkpoint; `autoApprove` (+ `password`) to grant auto-approval of production review stages. |
+| `POST` | `/api/music-video/:id/autonomous/resume` | Approve the checkpoint, retry the stage that stopped, or resume an interrupted run. Optional `lyrics`, `style`, `suno` edits; `retakeSong: true` at the song checkpoint; `autoApprove` to grant or revoke automatic planning approvals using the authenticated session. |
 | `POST` | `/api/music-video/:id/autonomous/stop` / `cancel` | Pause / cancel (also stops/cancels its production run). |
 
 Progress is pushed over the `music-video:autonomous` socket event (`{ projectId, runId, run, project }`).
