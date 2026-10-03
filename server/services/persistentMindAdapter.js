@@ -123,11 +123,14 @@ export const persistentMindResponseSchema = z.object({
   callRequest: persistentMindCallRequestSchema.nullable().optional().default(null),
 }).strict();
 
-const boundedToolResult = (result) => {
+const boundedToolResult = (result, toolName) => {
+  // Delegated artifacts need their full source; the context-window fitting
+  // below still compacts them explicitly when the selected mind cannot fit it.
+  const limit = ['sandbox.delegate', 'sandbox_delegate'].includes(toolName) ? 100_000 : MAX_TOOL_RESULT_CHARS;
   const serialized = JSON.stringify(result);
-  return serialized.length <= MAX_TOOL_RESULT_CHARS
+  return serialized.length <= limit
     ? result
-    : { truncated: true, preview: serialized.slice(0, MAX_TOOL_RESULT_CHARS) };
+    : { truncated: true, preview: serialized.slice(0, limit) };
 };
 
 const compactToolResult = (toolResult, cap) => {
@@ -232,7 +235,7 @@ const executeMindToolCalls = async ({ calls, turnId, wake, signal, capabilities,
       requestId: candidate.requestId || requestId,
       name: candidate.name,
       state: result.state,
-      ...(result.result !== undefined ? { result: boundedToolResult(result.result) } : {}),
+      ...(result.result !== undefined ? { result: boundedToolResult(result.result, candidate.name) } : {}),
       ...(result.error ? { error: result.error } : {}),
     });
   }

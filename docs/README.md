@@ -85,3 +85,5 @@ Comms & voice: [beeper](./features/beeper.md) · [openclaw-operator-chat](./feat
 - [Local managed-app visitor broker](features/managed-visitors.md) — opt-in credential provisioning, versioned nonhumanoid scope and host negotiation.
 
 - [Peer push authentication](./PEER_PUSH_AUTH.md)
+
+- [Tool-free model delegation](SANDBOX_DELEGATION.md) — approved API workers, context packets, and advisory fidelity evaluation for Persistent Mind.

@@ -464,6 +464,23 @@ describe('persistent mind adapter', () => {
     expect(mock.executeToolCall).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves delegated source beyond the ordinary preview cap in the orchestrator continuation', async () => {
+    mock.root.config.persistentMindCapabilities = { delegateSandbox: true };
+    const proposal = `${'source text\n'.repeat(600)}END_OF_COMPLETE_ARTIFACT`;
+    mock.executeToolCall.mockResolvedValueOnce({ state: 'completed', result: { outcome: 'accepted', trusted: false, proposal } });
+    mock.runPrompt.mockResolvedValueOnce({ text: JSON.stringify({
+      thinkingSummary: 'Delegate a bounded draft.',
+      toolCalls: [{ name: 'sandbox.delegate', arguments: {} }],
+    }) }).mockResolvedValueOnce({ text: JSON.stringify({ thinkingSummary: 'Assess the proposal.', message: 'Draft ready.', toolCalls: [] }) });
+    await createPersistentMindTurnAdapter().run({
+      turnId: 'turn-delegated-source', wake: { kind: 'message', message: { id: 'delegated-source', text: 'Draft this.' } },
+      ...profile, signal: new AbortController().signal, context: { text: '# Context' },
+    });
+    expect(mock.runPrompt.mock.calls[1][0].prompt).toContain('END_OF_COMPLETE_ARTIFACT');
+    expect(mock.runPrompt.mock.calls[1][0].prompt).toContain('"trusted":false');
+    expect(mock.executeTaskRequests).toHaveBeenCalledWith(expect.objectContaining({ taskRequests: [] }));
+  });
+
   it('feeds a normalized tool error back to the provider instead of aborting the turn', async () => {
     mock.root.config.persistentMindCapabilities = { readPortos: true };
     mock.executeToolCall.mockRejectedValueOnce(new Error('Tool is unavailable'));

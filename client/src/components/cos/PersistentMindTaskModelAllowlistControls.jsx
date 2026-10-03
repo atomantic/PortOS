@@ -73,7 +73,7 @@ export default function PersistentMindTaskModelAllowlistControls({
         ...(Array.isArray(capabilities?.allowedAppIds) ? { allowedAppIds: capabilities.allowedAppIds } : {}),
       };
       await api.updateCosConfig({ persistentMindCapabilities: next }, { silent: true });
-      onSaved?.(next);
+      onSaved?.({ ...capabilities, ...next });
       toast.success(deduped.length ? 'Persistent mind task models restricted' : 'Persistent mind task model restriction cleared');
     } catch (requestError) {
       setEntries(previous);
