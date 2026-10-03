@@ -72,6 +72,110 @@ const renderTab = async () => {
   await waitFor(() => expect(screen.getByText(/Migrate Docker/i)).toBeTruthy());
 };
 
+describe('DatabaseTab sync and replacement', () => {
+  it('disables replace action for stopped targets and shows start requirement message', async () => {
+    const stoppedDbStatus = {
+      ...dbStatus,
+      docker: { containerRunning: false, installed: true, daemonRunning: true },
+      native: { configured: true, installed: true, running: true },
+      mode: 'native',
+    };
+    getDatabaseStatus.mockResolvedValue(stoppedDbStatus);
+    render(<DatabaseTab />);
+    await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+
+    // Docker is stopped/not-active, so the replace button should be disabled with start message
+    expect(screen.getByText(/Start Docker before replacing/i)).toBeTruthy();
+  });
+
+  it('enables replace action for running targets', async () => {
+    const runningDbStatus = {
+      ...dbStatus,
+      docker: { containerRunning: true, installed: true, daemonRunning: true },
+      native: { configured: true, installed: true, running: true },
+      mode: 'docker',
+    };
+    getDatabaseStatus.mockResolvedValue(runningDbStatus);
+    render(<DatabaseTab />);
+    await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+
+    // Native is running and not active, so replace button should be enabled
+    expect(screen.getByRole('button', { name: /Replace data from Docker/i })).toBeTruthy();
+  });
+
+  it('shows replacement warning in confirmation dialog when target is running', async () => {
+    const nativeRunningStatus = {
+      ...dbStatus,
+      docker: { containerRunning: true, installed: true, daemonRunning: true },
+      native: { configured: true, installed: true, running: true },
+      mode: 'docker',
+    };
+    getDatabaseStatus.mockResolvedValue(nativeRunningStatus);
+    render(<DatabaseTab />);
+    await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /Replace data from Docker/i }));
+
+    expect(screen.getByText(/Replace Native data with Docker data\?/i)).toBeTruthy();
+    expect(screen.getByText(/This replaces matching tables and their records/i)).toBeTruthy();
+    expect(screen.getByText(/records are not merged/i)).toBeTruthy();
+    expect(screen.getByText(/Back up Native first/i)).toBeTruthy();
+  });
+
+  it('uses explicit action verb "Replace Native data" in confirmation button', async () => {
+    const nativeRunningStatus = {
+      ...dbStatus,
+      docker: { containerRunning: true, installed: true, daemonRunning: true },
+      native: { configured: true, installed: true, running: true },
+      mode: 'docker',
+    };
+    getDatabaseStatus.mockResolvedValue(nativeRunningStatus);
+    render(<DatabaseTab />);
+    await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /Replace data from Docker/i }));
+
+    expect(screen.getByRole('button', { name: /Replace Native data/i })).toBeTruthy();
+  });
+
+  it('uses explicit action verb "Delete Docker database" in destroy confirmation', async () => {
+    const destroyableStatus = {
+      ...dbStatus,
+      docker: { containerRunning: false, installed: true, daemonRunning: true },
+      native: { configured: true, installed: true, running: true },
+      mode: 'native',
+    };
+    getDatabaseStatus.mockResolvedValue(destroyableStatus);
+    render(<DatabaseTab />);
+    await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /Destroy$/i }));
+
+    expect(screen.getByRole('button', { name: /Delete Docker database/i })).toBeTruthy();
+  });
+
+  it('cancel button does not make any request and closes dialog', async () => {
+    const nativeRunningStatus = {
+      ...dbStatus,
+      docker: { containerRunning: true, installed: true, daemonRunning: true },
+      native: { configured: true, installed: true, running: true },
+      mode: 'docker',
+    };
+    getDatabaseStatus.mockResolvedValue(nativeRunningStatus);
+    const { syncDatabase: syncDatabaseMock } = await import('../../services/api');
+
+    render(<DatabaseTab />);
+    await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /Replace data from Docker/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+
+    expect(syncDatabaseMock).not.toHaveBeenCalled();
+    // Confirmation dialog should be gone
+    expect(screen.queryByText(/This replaces matching tables/i)).toBeNull();
+  });
+});
+
 describe('DatabaseTab migration', () => {
   it('offers a migrate action when idle and reads status without a stale-poll interval', async () => {
     await renderTab();
@@ -84,7 +188,7 @@ describe('DatabaseTab migration', () => {
     await renderTab();
 
     fireEvent.click(screen.getByRole('button', { name: /Migrate Docker/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^Confirm$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Migrate to Native/i }));
 
     await waitFor(() => expect(cutoverDatabase).toHaveBeenCalledWith({ source: 'docker', target: 'native' }));
     // Accepted only: a loading toast, never a success toast.
@@ -107,7 +211,7 @@ describe('DatabaseTab migration', () => {
     await waitFor(() => expect(getDatabaseMaintenanceStatus).toHaveBeenCalledTimes(2));
 
     fireEvent.click(screen.getByRole('button', { name: /Migrate Docker/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^Confirm$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Migrate to Native/i }));
     await waitFor(() => expect(cutoverDatabase).toHaveBeenCalled());
 
     // The stale read (issued before acceptance) resolves late with idle data.
