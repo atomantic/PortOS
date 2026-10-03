@@ -102,3 +102,58 @@ describe('taskWatcher event queue', () => {
     }));
   });
 });
+
+describe('taskWatcher change detection', () => {
+  const bigPrompt = 'p'.repeat(17408);
+  const makeTasks = (n) => Array.from({ length: n }, (_, i) => ({
+    id: `t${i}`, status: 'completed', description: `task ${i}`, priority: 'MEDIUM',
+    metadata: { prompt: bigPrompt, tags: ['a', { b: null }] },
+  }));
+
+  const runChange = async (before, after, file = '/repo/TASKS.md') => {
+    const watcher = new FakeWatcher();
+    mocks.watch.mockReturnValue(watcher);
+    mocks.getUserTasks
+      .mockResolvedValueOnce({ tasks: before })
+      .mockResolvedValueOnce({ tasks: after });
+    await startWatching();
+    watcher.emit('change', file);
+    await stopWatching();
+    return mocks.emit.mock.calls.filter(([name]) => !['tasks:user:changed', 'watcher:started', 'watcher:stopped'].includes(name));
+  };
+
+  it('emits only the one modified task in a large prompt-heavy history without JSON-encoding it', async () => {
+    const before = makeTasks(4000);
+    const after = before.map((t) => ({ ...t, metadata: { ...t.metadata } }));
+    after[1234] = { ...after[1234], description: 'changed' };
+    const stringify = vi.spyOn(JSON, 'stringify');
+    const events = await runChange(before, after);
+    const bigEncodings = stringify.mock.results.filter((r) => typeof r.value === 'string' && r.value.length >= bigPrompt.length).length;
+    expect(bigEncodings).toBe(0);
+    expect(events).toEqual([['tasks:user:modified', { tasks: [{ old: before[1234], new: after[1234] }] }]]);
+  });
+
+  it('detects nested metadata changes but ignores key order and undefined entries', async () => {
+    const base = { id: 'a', status: 'pending', description: 'd', metadata: { x: 1, y: [1, { z: null }], gone: undefined } };
+    const same = { ...base, metadata: { y: [1, { z: null }], x: 1 } };
+    expect(await runChange([base], [same])).toEqual([]);
+    vi.clearAllMocks();
+    mocks.getConfig.mockResolvedValue({ userTasksFile: 'TASKS.md', cosTasksFile: 'COS-TASKS.md' });
+    const nested = { ...base, metadata: { x: 1, y: [1, { z: 0 }] } };
+    const events = await runChange([base], [nested]);
+    expect(events.map(([n]) => n)).toEqual(['tasks:user:modified']);
+  });
+
+  it('keeps completed, pending-revival, added and removed event protocol and order', async () => {
+    const before = [
+      { id: 'c', status: 'pending' }, { id: 'r', status: 'completed' }, { id: 'gone', status: 'pending' },
+    ];
+    const after = [
+      { id: 'c', status: 'completed' }, { id: 'r', status: 'pending' }, { id: 'new', status: 'pending' },
+    ];
+    const events = await runChange(before, after);
+    expect(events.map(([n]) => n)).toEqual([
+      'tasks:user:added', 'tasks:user:completed', 'tasks:user:modified', 'tasks:user:added', 'tasks:user:removed',
+    ]);
+  });
+});
