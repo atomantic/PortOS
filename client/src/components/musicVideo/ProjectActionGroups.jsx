@@ -90,7 +90,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia }) {
   // needs neither frame nor clip, so the counts cover the scenes that use them.
   const mode = project.composition?.mode || 'concat';
   const layered = isLayeredComposition(project);
-  const codeMode = mode === 'code';
+  const codeMode = mode === 'code' || mode === 'eidoverse';
   const frameScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) !== 'card');
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const referenceFrameCount = frameScenes.filter((scene) => scene.referenceImageId).length;
@@ -102,7 +102,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia }) {
   const footageFramesReady = footageScenes.every((scene) => scene.referenceImageId);
   const generatingFrames = Object.keys(sceneMedia.genScenes).length > 0;
   const generatingVideos = Object.keys(sceneMedia.genVideoScenes).length > 0;
-  const footageBlocked = codeMode ? 'Code-rendered style draws the picture in code and does not generate footage' : '';
+  const footageBlocked = codeMode ? 'This render style draws its own scene and does not generate footage' : '';
   return (
     <div className={groupCls}>
       <RecordRenderPinRow
@@ -168,6 +168,10 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
   const layered = isLayeredComposition(project);
   const codeMode = mode === 'code';
   const documentMode = mode === 'document';
+  const eidoverseMode = mode === 'eidoverse';
+  const eidoverseBlocked = !eidoverseMode ? '' : noAudioOf(project) ? 'Link a track first'
+    : !(project.audioAnalysis?.durationSec > 0) ? 'Analyze the master song first'
+      : !project.composition?.eidoverseScene?.inlineScript ? 'Save an Eidoverse scene in Compose first' : '';
   const readySceneCount = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
   const noAudio = noAudioOf(project);
   const codeDuration = Math.max(
@@ -191,9 +195,11 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
     );
   }
   return (
-    <button onClick={() => renderJob.start(project.id)} disabled={!readiness?.readyForProduction || renderJob.active || (documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount))}
+    <button onClick={() => renderJob.start(project.id)} disabled={!readiness?.readyForProduction || renderJob.active || (eidoverseMode ? !!eidoverseBlocked : documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount))}
       title={!readiness?.readyForProduction ? 'Approve the current visual guide, timed storyboard and animated proof first' : renderJob.active
         ? 'Wait for the other project render to finish, or return to it to cancel'
+        : eidoverseMode
+          ? (eidoverseBlocked || 'Render the Eidoverse scene over the master song')
         : documentMode
           ? (documentBlocked || 'Render the composition document over the song')
           : codeMode

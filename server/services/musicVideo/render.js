@@ -633,6 +633,11 @@ export async function planMusicVideoRender(project) {
 // map so the existing SSE and cancel routes apply. Code mode never asks a
 // footage model for pixels; a document draws the scenes' selected takes.
 const SEEKED_RENDERERS = Object.freeze({
+  eidoverse: {
+    label: 'Eidoverse Video', modelId: 'music-video-eidoverse',
+    prepare: async (project) => (await import('./eidoverseRender.js')).prepareEidoverseRender(project),
+    encode: async (input) => (await import('./eidoverseRender.js')).encodeEidoverseComposition(input),
+  },
   code: {
     label: 'code',
     modelId: 'music-video-code',

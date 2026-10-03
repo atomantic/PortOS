@@ -298,7 +298,7 @@ export const musicVideoLyricsAlignSchema = z.object({
 // `document` renders a project-owned HTML composition document (its own
 // folder under data/music-video/<projectId>/composition/) seeked over the
 // song; see services/musicVideo/compositionDocument.js and documentRender.js.
-export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document'];
+export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document', 'eidoverse'];
 // #9290: 'scene' cuts once per planned shot; 'intercut' re-cuts on section energy and sung words.
 export const MUSIC_VIDEO_CUTTING_MODES = ['scene', 'intercut'];
 // Shipped starting points a project can copy into its document folder.
@@ -405,6 +405,15 @@ export const musicVideoReactiveSectionSchema = z.object({
   maxGain: z.number().min(0).max(1),
 }).strict();
 
+// Scene code is data until the isolated Eidoverse container renders it. No
+// executable, host path, output path or remote asset can be selected here.
+export const musicVideoEidoverseSceneSchema = z.object({
+  inlineScript: z.string().trim().min(1).max(100000),
+  assets: z.record(z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
+    z.string().max(300).regex(/^eidoverse\/assets\/(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/))
+    .refine(assets => Object.keys(assets).length <= 32, 'At most 32 assets').optional(),
+}).strict();
+
 // Replaced whole by a project PATCH (the editor sends the full manifest).
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
@@ -426,6 +435,7 @@ export const musicVideoCompositionSchema = z.object({
     accentColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'accentColor is #rrggbb').optional(),
   }).strict().optional(),
   posterSec: timedSec,
+  eidoverseScene: musicVideoEidoverseSceneSchema.nullable().optional(),
   codeVideo: musicVideoCodeVideoSchema.nullable().optional(),
   document: musicVideoCompositionDocumentSchema.nullable().optional(),
   documentDraft: musicVideoCompositionDocumentSchema.nullable().optional(),

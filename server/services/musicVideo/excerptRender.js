@@ -85,6 +85,17 @@ const unlinkUnder = (root, filename) => {
 // A code-rendered or composition-document project excerpts the same seekable
 // composition, windowed on song time, instead of the footage concat.
 const SEEKED_EXCERPTS = Object.freeze({
+  eidoverse: {
+    label: 'Eidoverse Video',
+    prepare: async (project) => {
+      const plan = await (await import('./eidoverseRender.js')).prepareEidoverseRender(project);
+      return { plan, totalSec: plan.durationSec, songSections: (project.scenes || [])
+        .filter(s => s.endSec > s.startSec).map(s => ({ sceneId: s.sceneId, startSec: s.startSec, endSec: s.endSec })) };
+    },
+    encode: async ({ prepared, startSec, endSec, ...input }) => (await import('./eidoverseRender.js')).encodeEidoverseComposition({
+      ...input, plan: prepared.plan, windowStart: startSec, windowEnd: endSec,
+    }),
+  },
   code: {
     label: 'code',
     prepare: async (project) => {
