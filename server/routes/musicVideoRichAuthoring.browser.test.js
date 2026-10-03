@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile, copyFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { chromium } from 'playwright-core';
 import { createRequire } from 'node:module';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
@@ -89,6 +90,37 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     browser = await chromium.connectOverCDP(endpoint);
     const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
+    // The harness mounts no Toaster, so a failed UI request is otherwise invisible: record every
+    // API exchange (method, path, status, error code) and name the last ones when a wait times out.
+    const trace = [];
+    const inFlight = new Map();
+    const apiLabel = request => `${request.method()} ${new URL(request.url()).pathname.replace(p.id, ':id')}`;
+    page.on('request', request => { if (request.url().includes('/api/music-video/')) inFlight.set(request, Date.now()); });
+    for (const event of ['requestfinished', 'requestfailed']) page.on(event, request => inFlight.delete(request));
+    const loopDelay = monitorEventLoopDelay(); loopDelay.enable();
+    page.on('response', async response => {
+      const { pathname } = new URL(response.url());
+      if (!pathname.startsWith('/api/music-video/')) return;
+      const body = await response.json().catch(() => null);
+      // Bounded, synthetic shape only: which pointers the response carried, never document contents.
+      const shape = pathname.includes('/composition/document/') && body ? ` candidate=${body.candidate?.directory ?? body.project?.composition?.documentDraft?.directory ?? null} source=${body.source?.directory ?? body.document?.directory ?? null} stale=${body.stale ?? '-'}` : '';
+      const failure = response.ok() ? '' : ` ${body?.code || ''} ${String(body?.error || body?.message || '').slice(0, 120)}`;
+      trace.push(`${response.request().method()} ${pathname.replace(p.id, ':id')} -> ${response.status()}${failure}${shape}`);
+    });
+    const traced = async (label, wait) => {
+      try { return await wait(); } catch (error) {
+        const status = await page.evaluate(() => [...document.querySelectorAll('[role=status],[role=alert]')].map(el => el.textContent.trim().slice(0, 120)).filter(Boolean)).catch(() => []);
+        // A starved renderer (same-origin preview iframes share its main thread) and a blocked server
+        // loop look identical from a locator timeout; probe both.
+        const renderer = await Promise.race([page.evaluate(() => 'responsive'), new Promise(r => setTimeout(r, 3000, 'main thread unresponsive for 3s'))]).catch(e => e.message);
+        const ui = await page.evaluate(() => {
+          const named = text => [...document.querySelectorAll('button')].filter(el => el.textContent.trim() === text);
+          return { acceptButtons: named('Accept reviewed version').map(el => ({ disabled: el.disabled, shown: el.getClientRects().length > 0 })), generateLabel: document.querySelector('[aria-label="Composition document"] button.bg-port-accent')?.textContent.trim() ?? null, candidatePreview: document.body.textContent.includes('Candidate preview'), iframes: document.querySelectorAll('iframe').length };
+        }, null, { timeout: 3000 }).catch(e => e.message);
+        const loopMaxMs = Math.round(loopDelay.max / 1e6);
+        throw new Error(`${label}: ${error.message}\nstill pending: ${JSON.stringify([...inFlight].map(([request, since]) => `${apiLabel(request)} (${Date.now() - since}ms)`))}\nrecent requests:\n  ${trace.slice(-12).join('\n  ')}\nui: ${JSON.stringify(ui)}\nrenderer: ${renderer}; server event-loop max delay ${loopMaxMs}ms\npage errors: ${JSON.stringify(errors)}\nvisible status: ${JSON.stringify(status)}`, { cause: error });
+      }
+    };
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.getByLabel('Design and composition media').selectOption('code-only');
     await page.getByLabel('Authoring renderer').selectOption('three');
@@ -103,7 +135,17 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     expect(savedPlan.status()).toBe(200);
     expect((await store.getProject(p.id)).productionReview.draft.motionLanguage).toBe(choreography);
     const password = page.getByLabel('Instance password for this approval');
-    await password.fill('synthetic-password'); await page.getByRole('button', { name: 'Approve art direction', exact: true }).click();
+    // Each approval is awaited: the next step is gated on it server-side, and a click that races its
+    // own approval request fails silently (this harness mounts no Toaster to show the rejection).
+    const approve = async (name, options = {}) => {
+      await password.fill('synthetic-password');
+      const [approved] = await Promise.all([
+        page.waitForResponse(response => response.url().endsWith('/production-review/approve') && response.request().method() === 'POST'),
+        page.getByRole('button', { name, ...options }).click(),
+      ]);
+      expect(approved.status()).toBe(200);
+    };
+    await approve('Approve art direction', { exact: true });
     const [planned] = await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/production-review/prepare') && response.request().method() === 'POST'),
       page.getByRole('button', { name: 'Prepare planning draft with autopilot' }).click(),
@@ -123,12 +165,30 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.getByText('Resolution: Reviewed the updated staging in the storyboard.', { exact: true }).waitFor();
     const beforeBoard = await page.evaluate(async id => (await fetch('/api/music-video/' + id + '/production-review')).json(), p.id);
     expect(beforeBoard.readiness.storyboard.problems).toEqual([]);
-    await password.fill('synthetic-password'); await page.getByRole('button', { name: 'Approve lyric-timed storyboard' }).click();
-    await page.getByRole('button', { name: 'Generate authored 3D composition' }).click();
-    await page.getByRole('button', { name: 'Accept reviewed version' }).waitFor();
+    await approve('Approve lyric-timed storyboard');
+    // Generation response, then the candidate the panel fetches in response to the updated project.
+    // Observing both names the failing hop, and they also assert the candidate pointer is the one just staged.
+    // A load-sensitive timeout here (#9806) was seen once with the server event loop stalled ~12s while
+    // both responses were healthy; root cause beyond that stall was not established.
+    const apiResponse = (method, suffix) => page.waitForResponse(response => response.request().method() === method && new URL(response.url()).pathname.endsWith(suffix));
+    const [generated, candidate] = await traced('generation did not return a candidate', () => Promise.all([
+      apiResponse('POST', '/composition/document/generate'),
+      apiResponse('GET', '/composition/document/candidate'),
+      page.getByRole('button', { name: 'Generate authored 3D composition' }).click(),
+    ]));
+    expect(generated.status()).toBe(201);
+    const staged = (await generated.json()).document.directory;
+    expect(candidate.status()).toBe(200);
+    expect(await candidate.json()).toMatchObject({ candidate: { directory: staged }, source: { directory: staged }, stale: false, providerId: 'stub-provider' });
+    await traced('the candidate response did not render a reviewable candidate', () => page.getByRole('button', { name: 'Accept reviewed version' }).waitFor());
     expect(author.prompt).toContain(JSON.stringify(choreography));
-    await page.getByRole('button', { name: 'Accept reviewed version' }).click();
-    await page.waitForFunction(() => document.body.textContent.includes('generated ·'));
+    const [accepted] = await Promise.all([
+      apiResponse('POST', '/composition/document/accept'),
+      page.getByRole('button', { name: 'Accept reviewed version' }).click(),
+    ]);
+    expect(accepted.status()).toBe(200);
+    expect((await accepted.json()).document).toMatchObject({ directory: staged, source: { kind: 'generated' } });
+    await traced('accepting the candidate did not select the generated document', () => page.waitForFunction(() => document.body.textContent.includes('generated ·')));
     expect((await store.getProject(p.id)).composition.document.source.kind).toBe('generated');
     await page.getByRole('button', { name: 'Render animated proof' }).click();
     await page.locator('video').waitFor({ timeout: 120000 });
