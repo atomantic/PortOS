@@ -6,7 +6,7 @@ import toast from '../ui/Toast';
 import { listMediaCollections, createMediaCollection } from '../../services/api';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import useClickOutside from '../../hooks/useClickOutside.js';
-import useEscapeKey from '../../hooks/useEscapeKey.js';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { applyCollectionView } from '../../lib/mediaCollectionList.js';
 
 // Shared popover shell for the list-pick-or-create pickers:
@@ -115,14 +115,17 @@ export default function CollectionPickerShell({
     contentDeps: [collectionsState, query, excludeId],
   });
 
-  // Close on outside-click / Escape — placement and scroll/resize reflow are
+  // Wait for placement before claiming focus; the loading state already has
+  // a stable create field, so resolving the list never strands keyboard focus.
+  useFocusTrap(open && Boolean(style), menuRef);
+
+  // Close on outside-click — placement and scroll/resize reflow are
   // owned by usePopoverPosition. The menu is portaled to <body>, so the trigger
   // and the panel both have to count as "inside": that's the array form of
   // useClickOutside. `triggerRef` mirrors the caller's `anchorRef` when one was
-  // passed, so this works in either mode. Both hooks read the handler through a
+  // passed, so this works in either mode. The hook reads the handler through a
   // ref, so the inline arrow doesn't resubscribe on every parent render.
   useClickOutside([triggerRef, menuRef], open, () => onClose?.());
-  useEscapeKey(open, () => onClose?.());
 
   // When the parent owns `collections`, mirror it into local state on each
   // change so the same render path works for both modes.
@@ -193,15 +196,12 @@ export default function CollectionPickerShell({
   const list = filtered;
 
   return createPortal(
-    // Deliberately NOT role="menu" (see #7265): that role promises arrow-key
-    // roving focus among menuitem-only children, and this popover owns a search
-    // input, an inline create <form>, and rows that are plain toggle buttons —
-    // none of which are permitted menu children. role="group" + the title as
-    // aria-label names the popover without claiming a contract we don't keep;
-    // Tab reaches every control natively (same call ShellProviderLauncher made).
+    // An anchored dialog owns focus while open. Keep native list/form
+    // controls rather than menu semantics, which promise arrow-key navigation.
     <div
       ref={menuRef}
-      role="group"
+      role="dialog"
+      aria-modal="true"
       aria-label={title}
       className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] p-1.5 flex flex-col max-h-dvh-cap"
       style={{
@@ -213,12 +213,13 @@ export default function CollectionPickerShell({
         visibility: style ? 'visible' : 'hidden',
       }}
       onClick={(e) => e.stopPropagation()}
-      // Same containment as the click handler above — a keystroke that
-      // reaches here already came through a focused control inside the
-      // popover (search input, form, toggle buttons), so it must not bubble
-      // to an ancestor either. Escape is excepted so `useEscapeKey`'s
-      // `window` listener still sees it and closes the popover.
-      onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onClose?.();
+        }
+      }}
     >
       {title && (
         <div className="text-[10px] text-gray-500 uppercase tracking-wide px-1 pt-1 pb-1.5 shrink-0">{title}</div>
@@ -233,7 +234,6 @@ export default function CollectionPickerShell({
             placeholder={searchPlaceholder}
             aria-label={searchPlaceholder}
             className="w-full bg-port-bg border border-port-border rounded pl-7 pr-2 py-1 text-[11px] text-white focus:outline-none focus:border-port-accent"
-            autoFocus
           />
         </div>
       )}
