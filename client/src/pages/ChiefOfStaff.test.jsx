@@ -647,7 +647,7 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
 
   it('ignores a failed HTTP read superseded by a successful socket observation', async () => {
     let rejectHealth;
-    api.getCosHealth.mockReturnValue(new Promise((resolve, reject) => { rejectHealth = reject; }));
+    api.getCosHealth.mockReturnValue(new Promise((_resolve, reject) => { rejectHealth = reject; }));
     await renderSettledAt('health');
     expect(await screen.findByText('Loading health...')).toBeInTheDocument();
     await act(async () => {
