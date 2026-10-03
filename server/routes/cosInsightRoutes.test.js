@@ -103,7 +103,8 @@ describe('CoS Insight Routes', () => {
       expect(response.status).toBe(200);
       expect(cos.getHealthStatus).toHaveBeenCalledTimes(1);
       expect(cos.runHealthCheck).not.toHaveBeenCalled();
-      expect(Array.isArray(response.body.insights)).toBe(true);
+      expect(response.body.insights).toEqual([]);
+      expect(response.body.unavailableSources).toEqual([]);
     });
 
     it('should return actionable insights sorted by priority', async () => {
@@ -258,7 +259,7 @@ describe('CoS Insight Routes', () => {
       expect(response.body.insights.map(i => i.priority)).toEqual(['critical', 'high', 'high', 'medium', 'low']);
     });
 
-    it('should handle errors gracefully in parallel calls', async () => {
+    it('keeps health observation failure visible when parallel calls fail', async () => {
       cos.getAllTasks.mockRejectedValue(new Error('fail'));
       taskLearning.getLearningInsights.mockRejectedValue(new Error('fail'));
       cos.runHealthCheck.mockRejectedValue(new Error('fail'));
@@ -266,7 +267,25 @@ describe('CoS Insight Routes', () => {
       const response = await request(app).get('/api/cos/actionable-insights');
 
       expect(response.status).toBe(200);
-      expect(response.body.insights).toEqual([]);
+      expect(response.body.insights).toEqual([expect.objectContaining({ type: 'health-unavailable', priority: 'high' })]);
+      expect(response.body.hasActionableItems).toBe(true);
+      expect(response.body.totalCount).toBe(1);
+      expect(response.body.unavailableSources).toEqual([{ source: 'health', code: 'HEALTH_UNAVAILABLE' }]);
+    });
+
+    it.each(['', '?cachedHealth=1'])('retains other insights while health is unavailable on %s', async query => {
+      cos.getAllTasks.mockResolvedValue({ user: null, cos: { awaitingApproval: [{ id: 'a1', description: 'Example approval' }] } });
+      taskLearning.getLearningInsights.mockResolvedValue(null);
+      cos.runHealthCheck.mockRejectedValue(new Error('private failure details'));
+      cos.getHealthStatus.mockRejectedValue(new Error('private failure details'));
+
+      const response = await request(app).get(`/api/cos/actionable-insights${query}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.insights.map(i => i.type)).toEqual(['approval', 'health-unavailable']);
+      expect(response.body.unavailableSources).toEqual([{ source: 'health', code: 'HEALTH_UNAVAILABLE' }]);
+      expect(JSON.stringify(response.body)).not.toContain('private failure details');
+      if (query) expect(cos.runHealthCheck).not.toHaveBeenCalled();
     });
   });
 

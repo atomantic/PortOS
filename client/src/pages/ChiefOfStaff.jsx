@@ -152,6 +152,7 @@ export default function ChiefOfStaff() {
   const [taskHistoryRevision, setTaskHistoryRevision] = useState(0);
   const [health, setHealth] = useState(null);
   const [healthLoaded, setHealthLoaded] = useState(false);
+  const [healthError, setHealthError] = useState(null);
   const [providers, setProviders] = useState([]);
   // Which provider an unpinned task actually runs on — the Schedule tab names it
   // on the "Default" option and resolves model/effort choices against it.
@@ -251,16 +252,32 @@ export default function ChiefOfStaff() {
   // the freshness rule and then derive from the value it actually committed —
   // with a functional updater the merged result was only visible inside the
   // updater, so the derivation below fell back to the raw (possibly older, or
-  // null) read. `merge` runs the freshness rule; the socket and manual paths
-  // deliver the newest check by definition and set it outright.
+  // null) read. HTTP responses merge by check time; socket events deliver the
+  // completed check directly. Only a valid accepted observation clears errors.
   const healthRef = useRef(null);
+  // A read started before a successful socket/manual observation cannot mark
+  // that newer result unavailable when its own transport later fails.
+  const healthObservationRef = useRef(0);
+  const markHealthUnavailable = useCallback((observation = healthObservationRef.current) => {
+    if (observation !== healthObservationRef.current) return;
+    setHealthLoaded(true);
+    setHealthError('Could not observe system health. Run Check to retry.');
+  }, []);
   const applyHealth = useCallback((next, { merge = false } = {}) => {
+    if (!Array.isArray(next?.issues)) {
+      markHealthUnavailable();
+      return healthRef.current;
+    }
     const resolved = merge ? fresherHealth(healthRef.current, next) : next;
+    if (resolved === next) {
+      healthObservationRef.current += 1;
+      setHealthError(null);
+    }
     healthRef.current = resolved;
     setHealth(resolved);
     setHealthLoaded(true);
     return resolved;
-  }, []);
+  }, [markHealthUnavailable]);
 
   // The single write path for the provider list, mirroring `applyHealth` above:
   // stamping the settle flag anywhere else could set `providers` without it.
@@ -341,7 +358,13 @@ export default function ChiefOfStaff() {
         needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTask, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
         readAgents(controller),
       ]);
-      const healthRead = api.getCosHealth().catch(() => null).then((data) => {
+      const healthObservation = healthObservationRef.current;
+      const healthRead = api.getCosHealth({ signal: controller.signal, silent: true }).catch(() => null).then((data) => {
+        if (controller.signal.aborted || queryRef.current !== queryKey) return null;
+        if (!Array.isArray(data?.issues)) {
+          markHealthUnavailable(healthObservation);
+          return null;
+        }
         // Health is independently useful to the Health tab. Commit it as soon
         // as its own read settles instead of making that tab wait for the slower
         // actionable-insights request in the same batch.
@@ -416,7 +439,7 @@ export default function ChiefOfStaff() {
       if (pending.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshPageData();
     });
     return pending.promise;
-  }, [activeTab, queryKey, selectedTask, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, applyProviders, applyApps, readAgents]);
+  }, [activeTab, queryKey, selectedTask, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, applyApps, readAgents]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -883,21 +906,25 @@ export default function ChiefOfStaff() {
     setAgentState('investigating');
     setStatusMessage("Running system health check...");
     const speakingGeneration = setSpeakingFor();
+    const healthObservation = healthObservationRef.current;
     const result = await api.forceHealthCheck({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
     setSpeakingFor(0, speakingGeneration);
-    if (result) {
-      applyHealth({ lastCheck: result.metrics?.timestamp, issues: result.issues });
+    if (Array.isArray(result?.issues)) {
+      const checkedHealth = applyHealth({ lastCheck: result.metrics?.timestamp, issues: result.issues }, { merge: true });
       // The Health route does not load the Tasks-only insights banner.
       toast.success('Health check complete');
-      if (result.issues?.length > 0) {
-        setStatusMessage(summarizeHealthIssues(result.issues));
+      if (checkedHealth.issues.length > 0) {
+        setStatusMessage(summarizeHealthIssues(checkedHealth.issues));
       } else {
         setAgentState('sleeping');
         setStatusMessage("Health check passed - all systems OK");
       }
+    } else {
+      markHealthUnavailable(healthObservation);
+      if (healthObservation === healthObservationRef.current) setStatusMessage('System health unavailable');
     }
   };
 
@@ -954,9 +981,11 @@ export default function ChiefOfStaff() {
   const healthIssues = health?.issues || [];
   const issuesStatProps = {
     label: 'Issues',
-    value: healthIssues.length,
-    tone: healthIssueTone(healthIssues),
-    title: summarizeHealthIssues(healthIssues) || 'No issues detected — view system health',
+    value: healthError || !healthLoaded ? '—' : healthIssues.length,
+    tone: healthError ? 'warning' : healthIssueTone(healthIssues),
+    title: healthError ? 'Health unavailable — view last results and retry'
+      : !healthLoaded ? 'Health not observed yet — view system health'
+        : summarizeHealthIssues(healthIssues) || 'No issues detected — view system health',
     onClick: () => navigate('/cos/health'),
   };
 
@@ -1486,7 +1515,7 @@ export default function ChiefOfStaff() {
         {activeTab === 'health' && (
           <div role="tabpanel" id="tabpanel-health" aria-labelledby="tab-health">
             <Suspense fallback={<TabLoadFallback label="health" />}>
-              <HealthTab health={health} healthLoading={!healthLoaded} onCheck={handleHealthCheck} />
+              <HealthTab health={health} healthLoading={!healthLoaded} healthError={healthError} onCheck={handleHealthCheck} />
             </Suspense>
           </div>
         )}

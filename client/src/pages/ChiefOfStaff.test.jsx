@@ -100,7 +100,7 @@ beforeEach(() => {
   api.getCosStatus.mockResolvedValue({ running: false, config, stats: {} });
   api.getCosTasks.mockResolvedValue({ user: null, cos: null });
   api.getCosAgents.mockResolvedValue([]);
-  api.getCosHealth.mockResolvedValue(null);
+  api.getCosHealth.mockResolvedValue({ issues: [] });
   api.getProviders.mockResolvedValue({ providers: [] });
   api.getApps.mockResolvedValue([]);
   api.getCosLearningSummary.mockResolvedValue(null);
@@ -170,7 +170,13 @@ const renderSettledAt = async (tab) => {
   return result;
 };
 
-const renderSettledConfigTab = () => renderSettledAt('config');
+const renderSettledConfigTab = async () => {
+  // The page shell settles before this lazy tab's import. Resolve that import
+  // outside DOM-query deadlines so contended transforms cannot time out the
+  // Force Evaluate tests before their action even exists.
+  await act(async () => { await import('../components/cos/tabs/ConfigTab'); });
+  return renderSettledAt('config');
+};
 
 // #4144 — `/cos` is an `isFullWidth` route, so its `<main>` is a bare
 // `relative overflow-hidden`. The old centered `h-64` BrailleSpinner reserved
@@ -583,7 +589,7 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
   });
 
-  it('preserves last-good health when a fetchData health read fails (null)', async () => {
+  it('marks retained results stale after a failed read and clears failure on a socket observation', async () => {
     api.getCosHealth.mockResolvedValue({
       lastCheck: '2026-01-01T00:00:02Z',
       issues: [{ type: 'error', category: 'memory', message: 'FRESH_ISSUE' }],
@@ -602,6 +608,54 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     await waitFor(() => expect(api.getCosHealth.mock.calls.length).toBeGreaterThan(1));
     expect(screen.getByText('FRESH_ISSUE')).toBeInTheDocument();
     expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Health results stale');
+    await act(async () => {
+      getSocketHandler('cos:health:check')({ metrics: { timestamp: '2026-01-01T00:00:03Z' }, issues: [] });
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('All Systems Healthy')).toBeInTheDocument();
+  });
+
+  it('shows first-load failure as unavailable and recovers after a successful HTTP read', async () => {
+    api.getCosHealth.mockRejectedValue(new Error('private failure detail'));
+    await renderSettledAt('health');
+    expect(await screen.findByRole('alert')).toHaveTextContent('CoS health unavailable');
+    expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
+    expect(screen.queryByText('No issues detected')).not.toBeInTheDocument();
+    expect(screen.queryByText('private failure detail')).not.toBeInTheDocument();
+    expect(api.getCosHealth).toHaveBeenCalledWith(expect.objectContaining({ silent: true, signal: expect.any(AbortSignal) }));
+
+    api.getCosHealth.mockResolvedValue({ issues: [] });
+    await act(async () => { getSocketHandler('cos:config:changed')(); });
+    expect(await screen.findByText('All Systems Healthy')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('does not present last-good empty results as healthy after a manual check fails', async () => {
+    await renderSettledAt('health');
+    expect(await screen.findByText('All Systems Healthy')).toBeInTheDocument();
+    api.forceHealthCheck.mockRejectedValueOnce(new Error('failed check'));
+    fireEvent.click(screen.getByRole('button', { name: 'Run Check' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Health results stale');
+    expect(screen.getByText(/Current health is unknown/)).toBeInTheDocument();
+    expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Check' }));
+    expect(await screen.findByText('All Systems Healthy')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('ignores a failed HTTP read superseded by a successful socket observation', async () => {
+    let rejectHealth;
+    api.getCosHealth.mockReturnValue(new Promise((resolve, reject) => { rejectHealth = reject; }));
+    await renderSettledAt('health');
+    expect(await screen.findByText('Loading health...')).toBeInTheDocument();
+    await act(async () => {
+      getSocketHandler('cos:health:check')({ metrics: { timestamp: '2026-01-01T00:00:03Z' }, issues: [] });
+      rejectHealth(new Error('late transport failure'));
+    });
+    expect(screen.getByText('All Systems Healthy')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
 
