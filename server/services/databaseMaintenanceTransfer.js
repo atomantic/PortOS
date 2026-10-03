@@ -58,9 +58,10 @@ function hasCompletionMarker(path) {
  * prove none survive (assertPredecessorCoordinatorsStopped). Output is kept
  * internal: it can name hosts and paths.
  */
-function runDbScript(action, endpoint, argument, dumpDir) {
+function runDbScript(action, endpoint, argument, dumpDir, expectedSha256) {
   const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? PATHS.installRoot,
-    PGPASSWORD: process.env.PGPASSWORD || 'portos', PORTOS_DUMP_DIR: dumpDir, LC_ALL: 'C' };
+    PGPASSWORD: process.env.PGPASSWORD || 'portos', PORTOS_DUMP_DIR: dumpDir, LC_ALL: 'C',
+    ...(expectedSha256 ? { PORTOS_IMPORT_SHA256: expectedSha256 } : {}) };
   const args = [join(PATHS.root, 'scripts', 'db.sh'), action, '--endpoint',
     endpoint.host, String(endpoint.port), endpoint.user, endpoint.database, argument];
   return new Promise((resolve) => {
@@ -149,7 +150,7 @@ export async function runDatabaseTransfer(id, token, options = {}) {
   if (!journal.readTransferImport(id)) {
     const path = await assertRecordedDump(journal, id, dump);
     journal.assertCoordinatorWorker(id, token);
-    const result = await runDbScript('import', operation.target, path, dirname(path));
+    const result = await runDbScript('import', operation.target, path, dirname(path), dump.sha256);
     journal.assertCoordinatorWorker(id, token);
     if (result.code !== 0) throw refused(`the target import failed and was rolled back (exit ${result.code ?? 'spawn'})`);
     journal.recordTransferImport(id, token, { id, target: operation.target, sha256: dump.sha256 });
