@@ -831,6 +831,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `musicVideoNarrativeEvents.js` | Named narrative event kinds, absolute onset/word/frame resolution and deterministic silence/reactive state for composition documents. |
 
 | `persistentMindContextEvents.js` | `selectPersistentMindContextEvents`, `renderPersistentMindContextEvent` — retain useful conversation evidence without diagnostic ledger noise. |
+| `persistentMindVisitReceipts.js` | Bounded machine-local continuation receipts for a mind's outbound Eidoverse visits: `buildVisitReceiptEventData`, `selectOpenVisitReceipts`, `renderVisitContinuationPrompt` — never the remote ticket or result content. |
 
 | `codeAnimationSound.js` | Versioned frame/sample timelines, deterministic impact/reveal WAV synthesis and decoded event measurements. |
 
