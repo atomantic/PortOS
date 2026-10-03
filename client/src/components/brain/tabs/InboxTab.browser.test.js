@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -8,6 +8,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+
+// Browser startup/navigation is bounded separately from 5s interactions.
+vi.setConfig({ testTimeout: 30000 });
 
 const require = createRequire(import.meta.url);
 // Prefer the client dev dependency; linked worktrees can also use the same
@@ -47,7 +50,11 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
         },
         load(id) {
           if (id === '\0inbox-api') return `
-            export async function getBrainInbox() { return { entries: [], counts: {} }; }
+            let history;
+            export function getBrainInbox() {
+              if (!history) history = new Promise(resolve => { window.resolveInboxHistory = resolve; });
+              return history;
+            }
             export async function captureBrainThought(...args) {
               window.captures = [...(window.captures || []), args];
               return { inboxLog: { id: 'example-thought', status: 'filed', capturedText: args[0] } };
@@ -88,6 +95,15 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
     browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--mute-audio'],
       env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
     });
+    // Compile the cold Vite module graph inside fixture startup, before timed
+    // interaction cases. This does not resolve history or submit a capture.
+    const warmup = await browser.newPage();
+    try {
+      await warmup.goto(`${origin}inbox-test`, { timeout: 25000 });
+      await warmup.getByRole('textbox', { name: 'New inbox thought' }).waitFor({ timeout: 5000 });
+    } finally {
+      await warmup.close();
+    }
   }, 60000);
   afterAll(async () => {
     try {
@@ -96,7 +112,7 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
       await server?.close();
       if (browserTemp) await rm(browserTemp, { recursive: true, force: true });
     }
-  });
+  }, 60000);
 
   it.each([[360, 800], [390, 844], [768, 1024], [1440, 900]])(
     'keeps the complete capture form usable at %ix%i', async (width, height) => {
@@ -105,9 +121,12 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       try {
-        await page.goto(`${origin}inbox-test`);
+        // Cold Vite module transformation competes with other related suites.
+        // Give navigation its own bounded startup budget; interactions stay at 5s.
+        await page.goto(`${origin}inbox-test`, { timeout: 15000 });
         const input = page.getByRole('textbox', { name: 'New inbox thought' });
         await input.fill('An example thought');
+        await page.getByText('Loading inbox history').waitFor();
         const capture = page.getByRole('button', { name: 'Capture thought' });
         const creative = page.getByRole('button', { name: 'Toggle creative capture mode' });
         const mic = page.getByRole('button', { name: 'Voice capture' });
@@ -131,6 +150,12 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
         await page.waitForFunction(() => window.captures?.length === 1);
         expect(await page.evaluate(() => window.captures[0][0])).toBe('An example thought');
         expect(await page.evaluate(() => window.captures[0][3].creative)).toBe(true);
+        await page.evaluate(() => window.resolveInboxHistory({
+          entries: [{ id: 'example-thought', status: 'filed', capturedText: 'An example thought', creative: true }],
+          counts: { filed: 1 },
+        }));
+        await page.getByText('Loading inbox history').waitFor({ state: 'hidden' });
+        expect(await page.getByText('An example thought', { exact: true }).count()).toBe(1);
         await input.fill('https://example.com');
         await page.getByRole('textbox', { name: /Why are you saving this link/ }).fill('Example note');
         expect(await creative.isDisabled()).toBe(true);

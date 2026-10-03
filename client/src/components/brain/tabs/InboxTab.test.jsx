@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
 vi.mock('../../../services/api', () => ({
@@ -68,6 +68,46 @@ beforeEach(() => {
 });
 
 describe('Brain inbox capture', () => {
+  it.each([false, true])('keeps an early capture when deferred history includes it: %s', async (historyIncludesCapture) => {
+    let resolveHistory;
+    const history = new Promise(resolve => { resolveHistory = resolve; });
+    getBrainInbox.mockReturnValue(history);
+    const accepted = {
+      id: 'example-accepted', capturedText: 'An example thought',
+      status: 'filed', capturedAt: '2026-01-01T00:00:00.000Z',
+    };
+    captureBrainThought.mockResolvedValue({ inboxLog: accepted });
+    render(<MemoryRouter><InboxTab /></MemoryRouter>);
+
+    fireEvent.change(screen.getByLabelText('New inbox thought'), { target: { value: accepted.capturedText } });
+    fireEvent.click(screen.getByLabelText('Capture thought'));
+    await waitFor(() => expect(screen.getByText(accepted.capturedText)).toBeInTheDocument());
+    expect(screen.getByText('Loading inbox history')).toBeInTheDocument();
+    expect(captureBrainThought.mock.calls[0].slice(1, 3)).toEqual([undefined, undefined]);
+
+    await act(async () => { resolveHistory({ entries: historyIncludesCapture ? [accepted] : [], counts: { filed: historyIncludesCapture ? 1 : 0 } }); });
+    await waitFor(() => expect(screen.queryByText('Loading inbox history')).toBeNull());
+    expect(screen.getAllByText(accepted.capturedText)).toHaveLength(1);
+  });
+
+  it('keeps capture usable after history fails without claiming it is still loading', async () => {
+    getBrainInbox.mockRejectedValue(new Error('Example history could not load'));
+    const accepted = {
+      id: 'example-after-history-error', capturedText: 'A thought after a history failure',
+      status: 'filed', capturedAt: '2026-01-01T00:00:00.000Z',
+    };
+    captureBrainThought.mockResolvedValue({ inboxLog: accepted });
+    render(<MemoryRouter><InboxTab /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Example history could not load');
+    expect(screen.getByRole('button', { name: 'Retry loading' })).toBeEnabled();
+    expect(screen.queryByText('Inbox history is loading. You can capture thoughts above.')).toBeNull();
+    expect(screen.queryByText('Loading inbox history')).toBeNull();
+    fireEvent.change(screen.getByLabelText('New inbox thought'), { target: { value: accepted.capturedText } });
+    fireEvent.click(screen.getByLabelText('Capture thought'));
+    await waitFor(() => expect(screen.getByText(accepted.capturedText)).toBeInTheDocument());
+  });
+
   it('sends an optional note when a URL is filed to Links', async () => {
     render(<MemoryRouter><InboxTab /></MemoryRouter>);
     const input = await screen.findByLabelText('New inbox thought');

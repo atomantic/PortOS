@@ -81,7 +81,7 @@ export default function InboxTab({ onRefresh, settings }) {
   const tempIdCounter = useRef(0);
 
   const fetchInboxPage = useCallback(async ({ cursor, signal }) => {
-    const data = await api.getBrainInbox({ cursor, limit: 50, signal }).catch(() => ({ items: [], entries: [] }));
+    const data = await api.getBrainInbox({ cursor, limit: 50, signal, silent: true });
     if (data.counts) {
       setServerCounts(data.counts);
     }
@@ -364,14 +364,6 @@ export default function InboxTab({ onRefresh, settings }) {
     navigate('/catalog/ingest', { state: { prefill } });
   };
 
-  if (!paged.loaded && paged.loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <BrailleSpinner text="Loading" />
-      </div>
-    );
-  }
-
   // Compact per-status overview rendered in the desktop rail so the page reads
   // as a dashboard rather than a centered document.
   const overviewStats = [
@@ -518,6 +510,12 @@ export default function InboxTab({ onRefresh, settings }) {
           </div>
         </div>
 
+        {!paged.loaded && paged.loading && (
+          <div role="status" className="p-3 text-sm text-gray-400">
+            <BrailleSpinner text="Loading inbox history" />
+          </div>
+        )}
+
         {/* Needs Review section */}
         {needsReviewEntries.length > 0 ? (
           <div>
@@ -662,7 +660,7 @@ export default function InboxTab({ onRefresh, settings }) {
         ) : (
           <div className="hidden @5xl/inbox:flex items-center gap-2 p-3 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
             <CheckCircle size={16} className="text-port-success" />
-            Nothing needs review.
+            {paged.loaded ? 'Nothing needs review.' : 'Review counts pending.'}
           </div>
         )}
       </div>
@@ -945,7 +943,7 @@ export default function InboxTab({ onRefresh, settings }) {
               })}
 
               {filedEntries.length === 0 && (
-                <p className="text-gray-500 text-sm">No filed entries yet. Start capturing thoughts above.</p>
+                <p className="text-gray-500 text-sm">{paged.loaded ? 'No filed entries yet. Start capturing thoughts above.' : 'Inbox history is not available yet. You can capture thoughts above.'}</p>
               )}
             </div>
           )}

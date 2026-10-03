@@ -97,7 +97,7 @@ export default function Brain() {
     }
   };
 
-  if (loading) {
+  if (loading && activeTab !== 'inbox') {
     return (
       <PageSkeleton
         header="bar"
@@ -120,7 +120,9 @@ export default function Brain() {
         icon={BrainIcon}
         title="Brain"
         subtitle="Second brain for capturing and organizing thoughts"
-        actions={summary && (
+        actions={loading && !summary ? (
+          <span role="status" className="text-xs text-gray-500">Loading Brain summary</span>
+        ) : summary && (
           // Quick stats — wrap on small screens; only "needs review" stays loud
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:text-sm">
             {summary.needsReview > 0 && (
