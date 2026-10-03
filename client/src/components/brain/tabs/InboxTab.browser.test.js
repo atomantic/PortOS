@@ -47,7 +47,11 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
         },
         load(id) {
           if (id === '\0inbox-api') return `
-            export async function getBrainInbox() { return { entries: [], counts: {} }; }
+            let history;
+            export function getBrainInbox() {
+              if (!history) history = new Promise(resolve => { window.resolveInboxHistory = resolve; });
+              return history;
+            }
             export async function captureBrainThought(...args) {
               window.captures = [...(window.captures || []), args];
               return { inboxLog: { id: 'example-thought', status: 'filed', capturedText: args[0] } };
@@ -108,6 +112,7 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
         await page.goto(`${origin}inbox-test`);
         const input = page.getByRole('textbox', { name: 'New inbox thought' });
         await input.fill('An example thought');
+        await page.getByText('Loading inbox history').waitFor();
         const capture = page.getByRole('button', { name: 'Capture thought' });
         const creative = page.getByRole('button', { name: 'Toggle creative capture mode' });
         const mic = page.getByRole('button', { name: 'Voice capture' });
@@ -131,6 +136,12 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
         await page.waitForFunction(() => window.captures?.length === 1);
         expect(await page.evaluate(() => window.captures[0][0])).toBe('An example thought');
         expect(await page.evaluate(() => window.captures[0][3].creative)).toBe(true);
+        await page.evaluate(() => window.resolveInboxHistory({
+          entries: [{ id: 'example-thought', status: 'filed', capturedText: 'An example thought', creative: true }],
+          counts: { filed: 1 },
+        }));
+        await page.getByText('Loading inbox history').waitFor({ state: 'hidden' });
+        expect(await page.getByText('An example thought', { exact: true }).count()).toBe(1);
         await input.fill('https://example.com');
         await page.getByRole('textbox', { name: /Why are you saving this link/ }).fill('Example note');
         expect(await creative.isDisabled()).toBe(true);

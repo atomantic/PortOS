@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
 vi.mock('../../../services/api', () => ({
@@ -68,6 +68,28 @@ beforeEach(() => {
 });
 
 describe('Brain inbox capture', () => {
+  it('captures before history resolves and keeps the accepted entry once history arrives', async () => {
+    let resolveHistory;
+    const history = new Promise(resolve => { resolveHistory = resolve; });
+    getBrainInbox.mockReturnValue(history);
+    const accepted = {
+      id: 'example-accepted', capturedText: 'An example thought',
+      status: 'filed', capturedAt: '2026-01-01T00:00:00.000Z',
+    };
+    captureBrainThought.mockResolvedValue({ inboxLog: accepted });
+    render(<MemoryRouter><InboxTab /></MemoryRouter>);
+
+    fireEvent.change(screen.getByLabelText('New inbox thought'), { target: { value: accepted.capturedText } });
+    fireEvent.click(screen.getByLabelText('Capture thought'));
+    await waitFor(() => expect(screen.getByText(accepted.capturedText)).toBeInTheDocument());
+    expect(screen.getByText('Loading inbox history')).toBeInTheDocument();
+    expect(captureBrainThought.mock.calls[0].slice(1, 3)).toEqual([undefined, undefined]);
+
+    await act(async () => { resolveHistory({ entries: [accepted], counts: { filed: 1 } }); });
+    await waitFor(() => expect(screen.queryByText('Loading inbox history')).toBeNull());
+    expect(screen.getAllByText(accepted.capturedText)).toHaveLength(1);
+  });
+
   it('sends an optional note when a URL is filed to Links', async () => {
     render(<MemoryRouter><InboxTab /></MemoryRouter>);
     const input = await screen.findByLabelText('New inbox thought');
