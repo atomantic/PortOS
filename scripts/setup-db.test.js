@@ -70,6 +70,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
   const calls = [];
   const childEnvs = [];
   const errors = [];
+  const logs = [];
   const exitSignal = {};
   const volumeRecords = ['example persisted record'];
   const container = { running, hostBinding, hostPort, volumeRecords };
@@ -91,7 +92,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
         env: {}, platform: 'linux', stdin: { isTTY: tty }, stdout: { isTTY: tty },
         exit: (code) => { exitCode = code; throw exitSignal; }
       },
-      console: { log: () => {}, error: (message) => errors.push(message) },
+      console: { log: (message) => logs.push(message), error: (message) => errors.push(message) },
       execFileSync: (command, args, options) => {
         calls.push([command, ...args]);
         childEnvs.push(options?.env);
@@ -119,10 +120,26 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
     if (error !== exitSignal) throw error;
   }
   expect(savedEnv).toEqual(initialEnv);
-  return { exitCode, calls, childEnvs, errors, container, volumeRecords, recreations };
+  return { exitCode, calls, childEnvs, errors, logs, container, volumeRecords, recreations };
 }
 
 describe('setup preserves the selected database', () => {
+  it('gives safe initial selection guidance for unsupported file mode without running setup', async () => {
+    const result = await runSetup({ mode: 'file' });
+    expect(result.exitCode).toBe(0);
+    expect(result.calls).toEqual([]);
+    expect(result.errors.join('\n')).toContain('UNSUPPORTED for production — PostgreSQL is required');
+    const guidance = result.logs.join('\n');
+    expect(guidance).toContain('PGMODE=native or PGMODE=docker');
+    expect(guidance).toContain('repository-root .env, preserving other settings');
+    expect(guidance).toContain('Unset a conflicting exported');
+    expect(guidance).toContain('npm run setup:db');
+    expect(guidance).toContain('retain the backend holding their records');
+    expect(guidance).toContain('coordinated maintenance cutover');
+    expect(guidance).toContain('docs/STORAGE.md#setup-path-npm-run-setupdb');
+    expect(guidance).not.toMatch(/set-mode|use-native|use-docker/);
+  });
+
   it.each(['docker --version', 'docker info', 'docker compose version'])(
     'fails safely when %s is unavailable despite a healthy native database', async (unavailable) => {
       for (const tty of [false, true]) {

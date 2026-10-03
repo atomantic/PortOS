@@ -251,7 +251,12 @@ if (mode === 'file') {
   // has no file-backed equivalent. Kept for development/tests.
   console.error('🚫 PGMODE=file is UNSUPPORTED for production — PostgreSQL is required.');
   console.error('   File-based storage has no creative-catalog or vector-search support.');
-  console.log('   Switch to a supported mode with: scripts/db.sh set-mode native (or docker)');
+  console.log('   For a fresh/development install, set PGMODE=native or PGMODE=docker in the');
+  console.log('   repository-root .env, preserving other settings. Unset a conflicting exported');
+  console.log('   PGMODE, then re-run: npm run setup:db');
+  console.log('   Existing PostgreSQL installs must retain the backend holding their records;');
+  console.log('   an intentional move requires coordinated maintenance cutover.');
+  console.log('   See docs/STORAGE.md#setup-path-npm-run-setupdb.');
   process.exit(0);
 }
 
