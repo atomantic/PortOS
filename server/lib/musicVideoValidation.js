@@ -32,6 +32,7 @@ import {
   MUSIC_VIDEO_CHECKIN_MODES,
 } from './musicVideoAutomation.js';
 import {
+  AUTONOMOUS_AUTO_APPROVE_STAGES,
   AUTONOMOUS_CHECKPOINT_IDS,
   AUTONOMOUS_LIMIT_BOUNDS,
   AUTONOMOUS_NAME_MAX,
@@ -41,6 +42,7 @@ import {
   SUNO_LIMITS,
   SUNO_MODEL_PATTERN,
   SUNO_VOCAL_GENDERS,
+  normalizeAutoApprove,
 } from './musicVideoAutonomous.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
@@ -786,6 +788,16 @@ export const musicVideoLlmStagesSchema = z.object(Object.fromEntries(
   MUSIC_VIDEO_LLM_STAGES.map((stage) => [stage, musicVideoLlmSchema.nullable().optional()]),
 )).strict();
 
+// Production review stages the run may approve by itself (de-duplicated, in
+// review order). A non-empty list is approval authority, so the request must
+// carry the instance password once (checked by the route, never stored); an
+// empty list on resume clears the grant.
+const musicVideoAutoApproveFields = {
+  autoApprove: z.array(z.enum(AUTONOMOUS_AUTO_APPROVE_STAGES)).max(AUTONOMOUS_AUTO_APPROVE_STAGES.length * 4)
+    .transform(normalizeAutoApprove).optional(),
+  password: z.string().min(1).max(1024).optional(),
+};
+
 // The alternate entry point: no track, style or board is picked up front. Tool
 // ids are the same catalog the autopilot brief uses; `checkpoints` names the
 // stages that park for approval (none = fully unattended).
@@ -826,6 +838,7 @@ export const musicVideoAutonomousStartSchema = z.object({
     ideaTitle: z.string().max(200).nullable().optional(),
   }).strict().optional(),
   suno: musicVideoSunoOptionsSchema.nullable().optional(),
+  ...musicVideoAutoApproveFields,
 }).strict();
 
 // Resume a parked/failed run, or approve the checkpoint it is waiting on.
@@ -837,6 +850,8 @@ export const musicVideoAutonomousResumeSchema = z.object({
   suno: musicVideoSunoOptionsSchema.optional(),
   // At the song checkpoint: discard the song and generate a new one.
   retakeSong: z.boolean().optional(),
+  // Replace the brief's auto-approve grant ("auto-approve the rest").
+  ...musicVideoAutoApproveFields,
 }).strict();
 
 // A generation kickoff that failed before reaching the queue (#9011) — names
