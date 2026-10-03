@@ -55,6 +55,13 @@ export default function SongRevisionPanel({ project, tracks = [], onUpdated, onF
   const action = (name, extra = {}) => run(() => actOnMusicVideoSongRevision(project.id, name, { revisionId: revision.id, ...extra }, { silent: true }));
   const settled = ['review', 'failed'].includes(revision?.status);
   const canDraft = !revision || ['draft', 'canceled', 'failed'].includes(revision.status);
+  const hasSong = !!(project.trackId || project.uploadedAudioFilename || track?.audioFilename);
+  const hasLyrics = !!(track?.lyrics || (project.lyricCues || []).length > 0 || project.songRevision?.fields?.lyrics);
+  const hasRevision = !!(project.songRevision || (project.songRevisionHistory || []).length > 0);
+  const canFork = hasSong || hasLyrics;
+  if (!project.parentProjectId && !hasRevision && !canFork) {
+    return null;
+  }
   return <section aria-label="Song revision" className="min-w-0 space-y-3 rounded-lg border border-port-border bg-port-card p-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="font-medium">Revise lyrics & song</h3>

@@ -25,6 +25,20 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction({ id: 'p', trackId: 't1', scenes: [] })).toMatchObject({ id: 'analyze' });
   });
 
+  it('reflects an autonomous run in the header next action instead of asking to attach a track', () => {
+    const autoRunning = { id: 'p', autonomousRun: { status: 'running', stage: 'lyrics', stages: { lyrics: { step: 'draft' } } } };
+    expect(deriveNextAction(autoRunning)).toMatchObject({ id: 'busy', label: 'Writing the lyric draft…', disabled: true });
+
+    const autoAwaiting = { id: 'p', autonomousRun: { status: 'awaiting-approval', awaiting: 'lyrics' } };
+    expect(deriveNextAction(autoAwaiting)).toMatchObject({ id: 'review-autonomous', kind: 'goto', stage: 'setup', anchor: 'mv-auto-edit', label: 'Review Lyrics' });
+
+    const autoStopped = { id: 'p', autonomousRun: { status: 'stopped' } };
+    expect(deriveNextAction(autoStopped)).toMatchObject({ id: 'resume-autonomous', kind: 'run', label: 'Resume autopilot' });
+
+    const autoFailed = { id: 'p', autonomousRun: { status: 'failed' } };
+    expect(deriveNextAction(autoFailed)).toMatchObject({ id: 'retry-autonomous', kind: 'run', label: 'Retry autopilot' });
+  });
+
   it('a project waiting on Cast & Sets approval offers the approval, and a stopped check-in offers to resume', () => {
     const waiting = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, automation: {}, castAndSets: { status: 'review' }, scenes: [] };
     expect(deriveStages(waiting).current).toBe('cast-sets');
@@ -182,6 +196,17 @@ describe('describeProjectStatus', () => {
     });
     expect(done.headline).toBe('Published');
     expect(done.facts.map((fact) => fact.label)).toEqual(['Approvals: All 3 approved', 'Final render ready']);
+  });
+
+  it('shows detailed autopilot progress and omits approvals during setup without scenes', () => {
+    const status = describeProjectStatus(
+      { autonomousRun: { status: 'running', stage: 'lyrics', stages: { lyrics: { step: 'draft' } } }, excerpts: [] },
+      { progress: stages('setup'), readiness: readiness(false, false, false) },
+    );
+    expect(status.headline).toBe('Stage 1 of 7: Setup');
+    expect(status.facts.map((fact) => fact.label)).toEqual([
+      'Autopilot: writing the lyric draft', 'Nothing rendered yet',
+    ]);
   });
 });
 

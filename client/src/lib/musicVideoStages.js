@@ -5,7 +5,9 @@
  * strip and the tests all read the same answer.
  */
 import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
-import { AUTONOMOUS_STATUS_LABELS } from './musicVideoAutonomous.js';
+import {
+  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS,
+} from './musicVideoAutonomous.js';
 import { formatCount, formatTimecode } from '../utils/formatters.js';
 
 export const MUSIC_VIDEO_STAGES = [
@@ -123,16 +125,27 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
   const facts = [];
   const auto = project.autonomousRun;
   if (auto && nextAction?.id !== 'review-production' && !activeEvidence) {
-    const label = auto.interrupted ? 'interrupted' : (AUTONOMOUS_STATUS_LABELS[auto.status] || auto.status).toLowerCase();
+    let label;
+    if (auto.status === 'running' && !auto.interrupted) {
+      const step = auto.stages?.[auto.stage]?.step;
+      const stepDetail = (auto.stage === 'lyrics' && AUTONOMOUS_LYRICS_STEP_LABELS[step])
+        || (auto.stage === 'song' && AUTONOMOUS_SONG_STEP_LABELS[step])
+        || (AUTONOMOUS_CHECKPOINT_LABELS[auto.stage] ? AUTONOMOUS_CHECKPOINT_LABELS[auto.stage].toLowerCase() : null);
+      label = stepDetail ? `Autopilot: ${stepDetail.toLowerCase()}` : 'Autopilot running';
+    } else {
+      const statusLabel = auto.interrupted ? 'interrupted' : (AUTONOMOUS_STATUS_LABELS[auto.status] || auto.status).toLowerCase();
+      label = `Autopilot ${statusLabel}`;
+    }
     const tone = auto.status === 'completed' ? 'ok' : auto.status === 'running' && !auto.interrupted ? 'muted' : 'warn';
-    facts.push({ id: 'autopilot', label: `Autopilot ${label}`, tone });
+    facts.push({ id: 'autopilot', label, tone });
   }
   const run = currentProductionRun(project);
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
     facts.push({ id: 'production', label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', tone: run.status === 'running' ? 'muted' : 'warn' });
   }
   const approvals = approvalSummary(readiness);
-  if (approvals) facts.push({ id: 'approvals', label: `Approvals: ${approvals}`, tone: readiness.readyForProduction ? 'ok' : 'warn' });
+  const showApprovals = progress.current !== 'setup' || (project.scenes || []).length > 0;
+  if (approvals && showApprovals) facts.push({ id: 'approvals', label: `Approvals: ${approvals}`, tone: readiness.readyForProduction ? 'ok' : 'warn' });
   const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
   if (project.renderHistoryId) facts.push({ id: 'render', label: 'Final render ready', tone: 'ok' });
   else if (drafts) facts.push({ id: 'render', label: `${drafts} draft ${drafts === 1 ? 'excerpt' : 'excerpts'}, no final render`, tone: 'muted' });
@@ -235,6 +248,27 @@ export function deriveNextAction(project, {
   }
   if (kickoffRunning || analyzing || planning) {
     return { id: 'busy', kind: 'run', label: kickoffStep || (planning ? 'Planning…' : 'Working…'), disabled: true };
+  }
+
+  const auto = project.autonomousRun;
+  if (auto && auto.status !== 'completed' && auto.status !== 'canceled') {
+    if (auto.status === 'running' && !auto.interrupted) {
+      const step = auto.stages?.[auto.stage]?.step;
+      const stepText = (auto.stage === 'lyrics' && AUTONOMOUS_LYRICS_STEP_LABELS[step])
+        || (auto.stage === 'song' && AUTONOMOUS_SONG_STEP_LABELS[step])
+        || (AUTONOMOUS_CHECKPOINT_LABELS[auto.stage] ? `${AUTONOMOUS_CHECKPOINT_LABELS[auto.stage]}…` : 'Autopilot running…');
+      return { id: 'busy', kind: 'run', label: stepText.endsWith('…') ? stepText : `${stepText}…`, disabled: true };
+    }
+    if (auto.status === 'awaiting-approval') {
+      const target = AUTONOMOUS_CHECKPOINT_LABELS[auto.awaiting] || auto.awaiting || 'checkpoint';
+      return { id: 'review-autonomous', kind: 'goto', stage: 'setup', anchor: 'mv-auto-edit', label: `Review ${target}` };
+    }
+    if (auto.interrupted || auto.status === 'stopped' || auto.status === 'needs-human') {
+      return { id: 'resume-autonomous', kind: 'run', label: 'Resume autopilot' };
+    }
+    if (auto.status === 'failed') {
+      return { id: 'retry-autonomous', kind: 'run', label: 'Retry autopilot' };
+    }
   }
 
   switch (current) {

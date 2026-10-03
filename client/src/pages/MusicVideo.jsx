@@ -819,6 +819,7 @@ export default function MusicVideo() {
 
   const audioFilename = projectAudioFilename(selected);
   const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
+  const autopilotRun = selected?.autonomousRun || null;
   const nextAction = selected ? deriveNextAction(selected, {
     readiness: productionReview.readiness,
     renderActive: renderTargetsSelected,
@@ -844,6 +845,10 @@ export default function MusicVideo() {
       case 'resume-cast-sets': castSets.resume(); break;
       case 'stop-production': production.stop(nextAction.runId); break;
       case 'resume-production': production.resume(nextAction.runId, nextAction.acceptBasis ? { acceptBasis: true } : {}); break;
+      case 'resume-autonomous':
+      case 'retry-autonomous':
+        autonomous.resume();
+        break;
       case 'render-final': renderJob.start(selected.id); break;
       default: break;
     }
@@ -853,6 +858,10 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
+    autopilotRun,
+    autonomous,
+    runStage,
+    onSelectStage: setRunStage,
     productionReadiness: productionReview.readiness,
     locked: creativeSetupPending || styleReferencesPending || compositionSavePending > 0,
     busy: { analyzing, planning, arranging, cloning },
@@ -939,7 +948,6 @@ export default function MusicVideo() {
   const StageView = STAGE_VIEWS[activeStage];
 
   const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src }) : [];
-  const autopilotRun = selected?.autonomousRun || null;
 
   return (
     <div className="flex h-full flex-col">
@@ -1214,12 +1222,12 @@ export default function MusicVideo() {
               />
             ) : null}
             projectPanels={<div className="space-y-3 min-w-0">
-              {autopilotRun && (
+              {autopilotRun && activeStage !== 'setup' && (
                 <StageSection
                   key={`autonomous-${selected.id}`}
                   title="Autopilot run"
                   summary={autopilotSummary(autopilotRun)}
-                  defaultOpen={!!runStage || (autopilotRun.status === 'running' && !autopilotRun.interrupted)}
+                  defaultOpen={!!runStage || autopilotRun.interrupted || ['running', 'awaiting-approval', 'needs-human', 'failed'].includes(autopilotRun.status)}
                 >
                   <AutonomousRunPanel project={selected} auto={autonomous} selectedStage={runStage} onSelectStage={setRunStage} framed={false} />
                 </StageSection>
