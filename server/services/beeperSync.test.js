@@ -457,6 +457,29 @@ describe('watermark-bounded sweep', () => {
     expect(params.get('direction')).toBe('before');
   });
 
+  it('shares one roster across chats and touchpoints, then refreshes it for the next sweep', async () => {
+    installFetch({
+      chatPages: [{ items: CHAT_PAGE.items.slice(0, 2), hasMore: false }],
+      messagePages: Object.fromEntries(['chat-1', 'chat-2'].map((chatId) => [chatId, {
+        items: [{ id: 'msg-1', senderID: 'user-1', timestamp: '2026-09-02T10:00:00.000Z', sortKey: '1', text: 'hi' }],
+        hasMore: false,
+      }])),
+    });
+
+    await runBeeperSweep({ reason: 'manual' });
+    expect(loadRosterIndexMock).toHaveBeenCalledTimes(1);
+    const firstIndex = await loadRosterIndexMock.mock.results[0].value;
+    expect(logSenderTouchpointsMock).toHaveBeenCalledTimes(2);
+    expect(logSenderTouchpointsMock.mock.calls.every(([, options]) => options.personIndex === firstIndex)).toBe(true);
+    expect(upsertParticipantMock.mock.calls.every(([input]) => input.personIndex === firstIndex)).toBe(true);
+
+    await runBeeperSweep({ reason: 'manual' });
+    expect(loadRosterIndexMock).toHaveBeenCalledTimes(2);
+    const nextIndex = await loadRosterIndexMock.mock.results[1].value;
+    expect(nextIndex).not.toBe(firstIndex);
+    expect(logSenderTouchpointsMock.mock.calls.slice(2).every(([, options]) => options.personIndex === nextIndex)).toBe(true);
+  });
+
   it('relates senders and participants through beeperTribe rather than writing identity rows itself', async () => {
     installFetch({
       chatPages: [{ items: [CHAT_PAGE.items[0]], hasMore: false }],

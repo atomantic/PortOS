@@ -659,7 +659,7 @@ async function sweepChat({
       senderId: message.senderId,
       sentAt: message.sentAt,
       network: normalized.network,
-    })));
+    })), { personIndex });
 
   await commitMessages({
     conversationId,

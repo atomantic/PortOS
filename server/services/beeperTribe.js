@@ -221,9 +221,8 @@ export async function resolveParticipantPerson({ conversationId, sourceUserId },
 /**
  * Load and index the Tribe roster ONCE, for a caller (a sweep pass in
  * `beeperSync.js`) about to resolve MANY participants and wants to hand the
- * same `personIndex` to every `upsertParticipant` call rather than let each
- * one reload and reindex every Tribe person for itself. Mirrors the batching
- * `logSenderTouchpoints` already does internally for its own candidate list.
+ * same `personIndex` to participant upserts and touchpoint batches rather than
+ * let each reload and reindex every Tribe person for itself.
  */
 export async function loadRosterIndex() {
   return buildPersonMatchIndex(await tribe.listPeople());
@@ -564,16 +563,16 @@ export async function createPersonAndLinkParticipant({
  * candidate is `{ conversationId, senderId, sentAt, network, channel }`.
  * Dedupe key is `beeper:<YYYY-MM-DD>`, matching #10 decision "daily Tribe
  * touchpoints are written; there is no per-message activity event."
- * Returns `{ created, matched }` (mirrors `tribe.autoLogTouchpoints`'s shape).
+ * Accepts an optional sweep-scoped `personIndex`; standalone calls load one
+ * for the batch. Returns `{ created, matched }` (mirrors `tribe.autoLogTouchpoints`'s shape).
  */
-export async function logSenderTouchpoints(candidates = []) {
+export async function logSenderTouchpoints(candidates = [], { personIndex = null } = {}) {
   if (!Array.isArray(candidates) || candidates.length === 0) return { created: 0, matched: 0 };
   await ensureReady();
 
-  // Built ONCE for the whole batch and threaded through resolveParticipantPerson's
-  // phone fallback (mirrors tribe.autoLogTouchpoints), rather than every
-  // resolution reloading and reindexing every Tribe person from scratch.
-  const personIndex = buildPersonMatchIndex(await tribe.listPeople());
+  // Reuse the sweep snapshot, or load once for a standalone batch. Identity
+  // resolution still runs against current authoritative records.
+  const index = personIndex || await loadRosterIndex();
 
   // Memoize the participant -> person resolution per (conversationId,
   // senderId) within this batch, so a burst of messages from the same sender
@@ -591,7 +590,7 @@ export async function logSenderTouchpoints(candidates = []) {
       // eslint-disable-next-line no-await-in-loop -- resolving one sender at a time; batch sizes here are one sync sweep, not a bulk import
       personCache.set(cacheKey, await resolveParticipantPerson(
         { conversationId: c.conversationId, sourceUserId: c.senderId },
-        personIndex,
+        index,
       ));
     }
     const personId = personCache.get(cacheKey);
