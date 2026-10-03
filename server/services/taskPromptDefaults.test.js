@@ -84,11 +84,21 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('ux filings use tracker IDs instead of title slugs', () => {
     const current = DEFAULT_TASK_PROMPTS.ux;
 
-    expect(PROMPT_VERSIONS.ux).toBe(4);
+    expect(PROMPT_VERSIONS.ux).toBe(5);
     expect(current).toContain('{trackerInstructions}');
     expect(current).toContain('short, human-readable title');
     expect(current).not.toContain('[ux-…]');
     expect(current).not.toContain('slug-tagged title');
+  });
+
+  it('ux v5 checks wordy instructions, duplicate controls, and information hidden when needed', () => {
+    const current = DEFAULT_TASK_PROMPTS.ux;
+
+    expect(current).toContain('**Text earns its space.**');
+    expect(current).toContain('**One control per action.**');
+    expect(current).toContain('**What the user needs now is visible now.**');
+    expect(current).toContain('checklist item (1–11)');
+    expect(current).toContain('Items 9–11 are not aesthetic preferences');
   });
 
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {
