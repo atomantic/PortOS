@@ -577,10 +577,11 @@ export async function logSenderTouchpoints(candidates = []) {
 
   // Memoize the participant -> person resolution per (conversationId,
   // senderId) within this batch, so a burst of messages from the same sender
-  // resolves once, not per message. Day-level dedupe is NOT reimplemented
-  // here: tribe.autoCreateTouchpoint's (person_id, dedupe_key) partial unique
-  // index already collapses a same-day repeat into a harmless no-op insert.
+  // resolves once, not per message. Completed person/day attempts are also
+  // reused within this batch; the database unique index remains authoritative
+  // across batches and concurrent syncs.
   const personCache = new Map();
+  const completedTouchpoints = new Set();
   let created = 0;
   let matched = 0;
   for (const c of candidates) {
@@ -605,15 +606,19 @@ export async function logSenderTouchpoints(candidates = []) {
     const day = Number.isNaN(parsedSentAt.getTime())
       ? String(c.sentAt).slice(0, 10)
       : parsedSentAt.toISOString().slice(0, 10);
+    const dedupeKey = `beeper:${day}`;
+    const touchpointKey = JSON.stringify([personId, dedupeKey]);
+    if (completedTouchpoints.has(touchpointKey)) continue;
     // eslint-disable-next-line no-await-in-loop -- same reason as above
     const touchpoint = await tribe.autoCreateTouchpoint(personId, {
       happenedAt: c.sentAt,
       channel: c.channel || (c.network ? `Beeper (${c.network})` : 'Beeper'),
       summary: '',
       source: 'message',
-      dedupeKey: `beeper:${day}`,
+      dedupeKey,
       metadata: { network: c.network || '', conversationId: c.conversationId },
     });
+    completedTouchpoints.add(touchpointKey);
     if (touchpoint) created++;
   }
   return { created, matched };
