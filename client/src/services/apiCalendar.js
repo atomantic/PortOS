@@ -1,7 +1,7 @@
 import { request } from './apiCore.js';
 
 // Calendar
-export const getCalendarAccounts = () => request('/calendar/accounts');
+export const getCalendarAccounts = (options = {}) => request('/calendar/accounts', options);
 export const createCalendarAccount = (data, options = {}) => request('/calendar/accounts', { method: 'POST', body: JSON.stringify(data), ...options });
 export const updateCalendarAccount = (id, data, options = {}) => request(`/calendar/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data), ...options });
 export const deleteCalendarAccount = (id) => request(`/calendar/accounts/${id}`, { method: 'DELETE' });
