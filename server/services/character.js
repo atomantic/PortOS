@@ -141,6 +141,50 @@ function legacyLevelFromXp(xp) {
   return 1;
 }
 
+// --- Cumulative XP accounting across federated histories (#9819) ---
+//
+// `xp` is a cumulative scalar that every grant writer (addXP/addEvent/syncJiraXP/syncTaskXP)
+// bumps alongside an identified event carrying the same amount. Two machines that each take
+// a grant while disconnected therefore hold counters that BOTH include the shared history but
+// each only one side's new grant — so the merge can neither take `Math.max` (drops the lesser
+// grant) nor sum the counters (double-counts the shared history). It reconciles from the
+// event ledger instead, and keeps whatever XP the ledger does not explain (a pre-event legacy
+// baseline, a hand-edited total) exactly once.
+
+// A usable XP quantity: a finite, non-negative number — anything else (NaN, a numeric string,
+// null, a negative) is an invalid historical value and counts as 0, never NaN.
+function normalizeXp(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+// XP represented by the IDENTIFIED events in `events`, each ID counted once (an event without
+// an id is not a ledger entry — its XP, if any, stays in the record's unrepresented residual).
+function eventXpTotal(events) {
+  if (!Array.isArray(events)) return 0;
+  const byId = new Map();
+  for (const event of events) {
+    if (typeof event?.id === 'string' && event.id !== '') byId.set(event.id, normalizeXp(event.xp));
+  }
+  let total = 0;
+  for (const xp of byId.values()) total += xp;
+  return total;
+}
+
+// Pure: the cumulative XP of a merge. `inputs` are the pre-merge `{ xp, events }` records
+// (local and remote); `mergedEvents` is their event union after the existing per-ID LWW.
+//   merged xp = max over inputs of each input's UNREPRESENTED residual (xp − its own ledger,
+//               floored at 0)  +  the ledger total of the merged events.
+// The residual is taken as a max, not a sum, because each input's baseline is the same
+// shared pre-ledger history, not an independent grant. Idempotent under redelivery — a
+// snapshot already folded in has residual 0 — and symmetric, so both peers converge.
+export function reconcileXp(inputs, mergedEvents) {
+  let baseline = 0;
+  for (const input of inputs) {
+    baseline = Math.max(baseline, normalizeXp(input?.xp) - eventXpTotal(input?.events));
+  }
+  return baseline + eventXpTotal(mergedEvents);
+}
+
 function createEvent(type, description, overrides = {}) {
   return {
     id: crypto.randomUUID(),
