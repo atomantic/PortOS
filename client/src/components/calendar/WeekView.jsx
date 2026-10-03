@@ -114,7 +114,9 @@ export default function WeekView({ accounts }) {
           actionLabel="Add a calendar account"
         />
       ) : (
-        <div className="border border-port-border rounded-lg overflow-auto bg-port-card">
+        <div className="-mx-2 sm:mx-0 border border-port-border rounded-lg overflow-auto bg-port-card">
+          {/* Keep every row aligned even when seven touch targets need horizontal scrolling. */}
+          <div className="min-w-[324px] sm:min-w-[364px]">
           {/* Day headers */}
           <div className="flex border-b border-port-border sticky top-0 bg-port-card z-10">
             <div className="w-4 sm:w-14 shrink-0" />
@@ -145,7 +147,7 @@ export default function WeekView({ accounts }) {
             <div className="flex border-b border-port-border">
               <div className="w-4 sm:w-14 shrink-0 text-[10px] text-gray-500 text-right pr-1 pt-1"><span className="hidden sm:inline">All day</span></div>
               {allDayByDay.map((dayEvents, i) => (
-                <div key={i} className="flex-1 border-l border-port-border p-0.5 min-h-[28px]">
+                <div key={i} className="flex-1 min-w-0 border-l border-port-border p-0.5 min-h-[28px]">
                   {dayEvents.map(event => {
                     const adColor = colorMap.get(event.subcalendarId) || null;
                     return (
@@ -236,6 +238,7 @@ export default function WeekView({ accounts }) {
                 );
               })}
             </div>
+          </div>
           </div>
         </div>
       )}
