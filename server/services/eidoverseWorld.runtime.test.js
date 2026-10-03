@@ -1386,6 +1386,10 @@ describe('bounded scene inspection through semantic dispatch', () => {
     expect((await inspect({ anchor: [30, 0, 0], radius: 2 })).entities).toHaveLength(1);
     emit('remove', { id: 'live-model' });
     expect(await inspect({ anchor: [30, 0, 0], radius: 2 })).toMatchObject({ entities: [], complete: true, boundsComplete: true });
+    const sequence = mocks.nextSeq;
+    emit('use', { id: 'example-affordance' });
+    emit('kick', { id: 'example-principal' });
+    expect(await inspect()).toMatchObject({ availability: 'current', sequence: sequence + 1, entities: [], complete: true, boundsComplete: true });
   });
 
   it('denies missing grants, validates strict bounded inputs, and publishes a typed schema', async () => {

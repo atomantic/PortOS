@@ -69,7 +69,7 @@ export function createEidoverseSceneView(snapshot) {
   return view;
 }
 
-const nonSpatialVerbs = new Set(['genesis', 'say', 'grant', 'ban', 'unban', 'asset', 'terrain', 'grass', 'sky', 'weather', 'attest']);
+const nonSpatialVerbs = new Set(['genesis', 'say', 'grant', 'ban', 'unban', 'asset', 'terrain', 'grass', 'sky', 'weather', 'attest', 'use', 'kick']);
 /** Fold only the supported authored entity vocabulary; gaps/new dialects fail closed. */
 export function updateEidoverseSceneView(view, entry) {
   if (view.availability !== 'current') return;
