@@ -109,7 +109,9 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       try {
-        await page.goto(`${origin}inbox-test`);
+        // Cold Vite module transformation competes with other related suites.
+        // Give navigation its own bounded startup budget; interactions stay at 5s.
+        await page.goto(`${origin}inbox-test`, { timeout: 15000 });
         const input = page.getByRole('textbox', { name: 'New inbox thought' });
         await input.fill('An example thought');
         await page.getByText('Loading inbox history').waitFor();
