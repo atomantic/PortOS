@@ -308,6 +308,26 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/tracks/:id/waveform/draw',
   'POST /api/music-video/autonomous',
   'POST /api/music-video/:id/autonomous/resume',
+  // Music Video planning, authoring and review may dispatch CLI/TUI agents
+  // directly, by fallback or after a checkpoint (#9869). Gate each operation
+  // uniformly, including deterministic plan/compile options. Creative approval
+  // and toolFree authoring flags do not grant network execution authority.
+  'POST /api/music-video/:id/plan',
+  'POST /api/music-video/:id/treatment/compile',
+  'POST /api/music-video/:id/publish-kit/copy',
+  'POST /api/music-video/:id/cast-and-sets',
+  'POST /api/music-video/:id/cast-and-sets/regenerate',
+  'PATCH /api/music-video/:id/cast-and-sets/direction',
+  'POST /api/music-video/:id/cast-and-sets/resume',
+  'POST /api/music-video/:id/code/generate',
+  'POST /api/music-video/:id/code/sections/:sectionId/regenerate',
+  'POST /api/music-video/:id/composition/document/generate',
+  'POST /api/music-video/:id/composition/document/events/revise',
+  'POST /api/music-video/:id/composition/document/sections/:sectionId/regenerate',
+  'POST /api/music-video/:id/production-runs',
+  'POST /api/music-video/:id/production-runs/:runId/resume',
+  'POST /api/music-video/:id/auto-reviews',
+  'POST /api/music-video/:id/auto-reviews/:runId/resume',
 
   // Media agents retain host tools; scratch cwd and output validation are not
   // execution containment (#9667). Gate before uploads, stores or queue writes,

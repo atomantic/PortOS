@@ -267,3 +267,51 @@ describe('auxiliary media mutation inventory (#9672)', () => {
     expect([...new Set(open)].sort()).toEqual([...recordOrContained].sort());
   });
 });
+
+
+describe('Music Video agent workflow policy (#9869)', () => {
+  it('gates mounted agent workflows and keeps record, cancellation and contained rendering contracts', () => {
+    const protectedRoutes = [
+      'POST /api/music-video/:id/plan',
+      'POST /api/music-video/:id/treatment/compile',
+      'POST /api/music-video/:id/publish-kit/copy',
+      'POST /api/music-video/:id/cast-and-sets',
+      'POST /api/music-video/:id/cast-and-sets/regenerate',
+      'PATCH /api/music-video/:id/cast-and-sets/direction',
+      'POST /api/music-video/:id/cast-and-sets/resume',
+      'POST /api/music-video/:id/code/generate',
+      'POST /api/music-video/:id/code/sections/:sectionId/regenerate',
+      'POST /api/music-video/:id/composition/document/generate',
+      'POST /api/music-video/:id/composition/document/events/revise',
+      'POST /api/music-video/:id/composition/document/sections/:sectionId/regenerate',
+      'POST /api/music-video/:id/production-runs',
+      'POST /api/music-video/:id/production-runs/:runId/resume',
+      'POST /api/music-video/:id/auto-reviews',
+      'POST /api/music-video/:id/auto-reviews/:runId/resume',
+    ];
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+    for (const route of [
+      'GET /api/music-video/:id',
+      'PATCH /api/music-video/:id',
+      'POST /api/music-video/:id/production-runs/:runId/stop',
+      'POST /api/music-video/:id/production-runs/:runId/cancel',
+      'POST /api/music-video/:id/auto-reviews/:runId/stop',
+      'POST /api/music-video/:id/auto-reviews/:runId/cancel',
+      'POST /api/music-video/:id/composition/document/directory',
+      'GET /api/music-video/:id/composition/document',
+      'POST /api/music-video/:id/render',
+      'POST /api/music-video/:id/publish-kit/build',
+      'POST /api/music-video/:id/publish/:target/prepare',
+      'POST /api/music-video/:id/publish/drafts/:draftId/submit',
+    ]) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(isHostControlRoute(method, path), route).toBe(false);
+    }
+  });
+});
