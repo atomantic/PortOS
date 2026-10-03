@@ -916,6 +916,9 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
       expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
+      expect(prompt).toContain('If it returns `MERGED`, publication succeeded even when the CLI failed during local cleanup');
+      expect(prompt).toContain('Continue to the completion sentinel when this workflow requires one');
+      expect(prompt).toContain('Only while the PR is still unmerged');
       // ...and the gate is CI, not a review-loop status.
       expect(prompt).not.toMatch(/review loop reports/);
     });
@@ -1530,7 +1533,10 @@ describe('buildLightContextPrompt', () => {
       // 40KB recipe itself must still stay in the staged file — which is the
       // only thing this ceiling is measuring, so it carries growth headroom
       // rather than pinning today's byte count.
-      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(27_000);
+      // #9837 adds remote-state-first recovery and managed-cleanup ownership.
+      // Keep bounded headroom for that safety prose while the explicit recipe
+      // omission above and this ceiling still reject inlining the 40KB recipe.
+      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(29_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {
