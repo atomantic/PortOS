@@ -81,10 +81,11 @@ export default function usePopoverPosition({
     let effectivePosition = position;
     let maxHeight;
     if (constrainHeight) {
-      const aboveSpace = Math.max(0, triggerRect.top - gap - VIEWPORT_PADDING);
-      const belowSpace = Math.max(0, viewportHeight - triggerRect.bottom - gap - VIEWPORT_PADDING);
+      const viewportSpace = Math.max(0, viewportHeight - VIEWPORT_PADDING * 2);
+      const aboveSpace = Math.min(viewportSpace, Math.max(0, triggerRect.top - gap - VIEWPORT_PADDING));
+      const belowSpace = Math.min(viewportSpace, Math.max(0, viewportHeight - triggerRect.bottom - gap - VIEWPORT_PADDING));
       // Measure natural height at the clamped width before choosing a side.
-      popover.style.maxHeight = `${Math.max(0, viewportHeight - VIEWPORT_PADDING * 2)}px`;
+      popover.style.maxHeight = `${viewportSpace}px`;
       const height = popover.getBoundingClientRect().height;
       const preferredSpace = position === 'above' ? aboveSpace : belowSpace;
       if (height > preferredSpace) effectivePosition = aboveSpace > belowSpace ? 'above' : 'below';
@@ -141,7 +142,10 @@ export default function usePopoverPosition({
   useEffect(() => {
     if (!open) return undefined;
     let rafId = null;
-    const onReflow = () => {
+    const onReflow = (event) => {
+      // Scrolling help does not move its anchor. Re-measuring would briefly
+      // enlarge the live scroll container and clamp away its bottom scrollTop.
+      if (constrainHeight && event.type === 'scroll' && popoverRef.current?.contains(event.target)) return;
       if (rafId !== null) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
@@ -155,7 +159,7 @@ export default function usePopoverPosition({
       window.removeEventListener('resize', onReflow);
       window.removeEventListener('scroll', onReflow, true);
     };
-  }, [open, reposition]);
+  }, [open, reposition, constrainHeight]);
 
   return { triggerRef, popoverRef, style, reposition };
 }

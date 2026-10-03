@@ -119,7 +119,12 @@ describe.skipIf(!chrome)('help above glass cards and clipped scrollers', () => {
         await page.keyboard.press('Tab');
         expect(await panel.evaluate(el => el === document.activeElement)).toBe(true);
         await page.keyboard.press('End');
-        await page.waitForFunction(() => document.querySelector('[role="tooltip"]').scrollTop > 0);
+        await page.waitForFunction(() => {
+          const panel = document.querySelector('[role="tooltip"]');
+          return panel.scrollHeight - panel.clientHeight - panel.scrollTop < 1;
+        }, null, { timeout: 3000 });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await panel.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(1);
         await page.keyboard.press('Shift+Tab');
         expect(await trigger.evaluate(el => el === document.activeElement)).toBe(true);
         await page.keyboard.press('Tab');
