@@ -24,7 +24,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
+import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join as joinPath } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -48,11 +48,14 @@ afterAll(() => {
 
 // Mock the DB health check and child_process.spawn before importing backup.js
 const poolConfig = vi.hoisted(() => Object.freeze({ host: 'db.example.test', port: 5439, database: 'example_db', user: 'example_user', password: 'example-secret', ssl: false, sslnegotiation: 'postgres' }));
-vi.mock('../lib/db.js', () => ({
+// The restore recovery journal (#9725) is the real one, rooted in the temp data
+// tree, so the suite exercises its durable publication and fence.
+vi.mock('../lib/db.js', async () => ({
   POOL_CONFIG: poolConfig,
   checkHealth: vi.fn(),
   query: vi.fn().mockResolvedValue({ rows: [] }),
-  withDatabaseMaintenance: vi.fn(fn => fn()),
+  withDatabaseMaintenance: vi.fn(fn => fn({ adoptRestoreRecovery: vi.fn() })),
+  databaseRestoreRecovery: (await vi.importActual('../lib/databaseRestoreRecovery.js')).createDatabaseRestoreRecovery(testDataRoot()),
   ensureSchema: vi.fn().mockResolvedValue(undefined),
   // Default to null (version unknown) so dumpPostgres keeps the bare-`pg_dump`
   // path and the existing status tests don't trigger live binary discovery.
@@ -1180,6 +1183,20 @@ function mockDumpStream(...reads) {
   });
 }
 
+// Restore recovery journal + replay-receipt inspection (#9725). By default the
+// database reports no live replay session and no receipt, i.e. a failed
+// replay is a proven rollback.
+const RECOVERY_JOURNAL = () => joinPath(testDataRoot(), 'database-restore-recovery.json');
+const readRecoveryJournal = () => (existsSync(RECOVERY_JOURNAL()) ? JSON.parse(readFileSync(RECOVERY_JOURNAL(), 'utf8')) : null);
+function restoreDbAnswer({ feed = [], sessions = 0, receipt = null } = {}) {
+  return async (sql) => {
+    if (sql.includes('pg_stat_activity')) return { rows: [{ sessions, has_receipts: receipt !== null }] };
+    if (sql.includes('FROM restore_receipts')) return { rows: receipt ? [{ dump_sha256: receipt }] : [] };
+    if (sql.includes('FROM pg_sequences') && !sql.includes('setval')) return { rows: feed };
+    return { rows: [] };
+  };
+}
+
 describe('restorePostgres', () => {
   let restorePostgres;
   const mockLegacyDumpRead = (...reads) => {
@@ -1204,6 +1221,8 @@ describe('restorePostgres', () => {
     // clearAllMocks does not undo stubEnv — a PGPASSWORD stub from a failed
     // (thrown) test would otherwise leak into every test after it.
     vi.unstubAllEnvs();
+    rmSync(RECOVERY_JOURNAL(), { force: true });
+    query.mockReset().mockImplementation(restoreDbAnswer());
     checkHealth.mockResolvedValue({ connected: true });
     ({ restorePostgres } = await import('./backup.js'));
   });
@@ -1243,6 +1262,8 @@ describe('restorePostgres', () => {
     expect(result.sizeBytes).toBe(4096);
     expect(result.tableCount).toBe(2);
     expect(spawn).not.toHaveBeenCalled();
+    expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+    expect(readRecoveryJournal()).toBeNull();
     expect(ensureSchema).not.toHaveBeenCalled();
     expect(runDbMigrations).not.toHaveBeenCalled();
   });
@@ -1335,6 +1356,8 @@ describe('restorePostgres', () => {
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('restore_error');
     expect(result.error).toContain('already exists');
+    // Proven rollback (no live replay session, no receipt): admission reopens.
+    expect(readRecoveryJournal()).toBeNull();
     expect(ensureSchema).not.toHaveBeenCalled();
     expect(runDbMigrations).not.toHaveBeenCalled();
   });
@@ -1367,23 +1390,143 @@ describe('restorePostgres', () => {
     await expect(pending).resolves.toMatchObject({ status: 'ok', dryRun: false });
   });
 
-  it.each(['schema', 'migrations'])('reports committed replay when %s reconciliation fails', async (phase) => {
-    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    mockLegacyDumpRead();
-    checkHealth.mockResolvedValue({ connected: true });
-    (phase === 'schema' ? ensureSchema : runDbMigrations).mockRejectedValueOnce(new Error('upgrade failed'));
-    const proc = fakeProc();
-    spawn.mockReturnValue(proc);
-    const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
-    await flush();
-    proc.emit('close', 0);
-    const result = await pending;
-    expect(result).toMatchObject({ status: 'failed', reason: 'restore_schema_reconciliation' });
-    expect(result.error).toContain('dump was applied');
-    expect(result.error).toContain('not rolled back');
-    expect(result.error).toContain('Restart PortOS');
-    if (phase === 'schema') expect(runDbMigrations).not.toHaveBeenCalled();
-    expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
+  // #9725: a replay that COMMITTED must never reopen ordinary writes, lose its
+  // pre-replay feed positions, or be replayed again when repair fails.
+  describe('committed-restore recovery', () => {
+    const ORIGINAL = [{ sequencename: 'memories_sync_feed_seq', last_value: '500' }];
+    const setvalCalls = () => query.mock.calls.filter(([sql]) => sql.includes('setval'));
+    let resumeDatabaseRestore;
+    beforeEach(async () => {
+      vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+      mockLegacyDumpRead();
+      query.mockImplementation(restoreDbAnswer({ feed: ORIGINAL }));
+      ({ resumeDatabaseRestore } = await import('./backupRestoreRecovery.js'));
+    });
+
+    const runRestore = async ({ exitCode = 0, onSpawn } = {}) => {
+      const proc = fakeProc();
+      spawn.mockImplementation((...args) => { onSpawn?.(...args); return proc; });
+      const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
+      await flush();
+      proc.emit('close', exitCode);
+      return pending;
+    };
+
+    it('publishes the operation and ORIGINAL positions before replay and commits a receipt inside the replay', async () => {
+      let atSpawn;
+      const result = await runRestore({ onSpawn: (_bin, args, opts) => { atSpawn = { args, env: opts.env, journal: readRecoveryJournal() }; } });
+      expect(result).toMatchObject({ status: 'ok', syncCursorsRewound: 2 });
+      expect(atSpawn.journal).toMatchObject({ stage: 'replaying', snapshotId: 'snap-1', feedPositions: ORIGINAL });
+      // The receipt is the LAST command of the single replay transaction.
+      expect(atSpawn.args.at(-2)).toBe('-c');
+      expect(atSpawn.args.at(-1)).toContain(`INSERT INTO restore_receipts (operation_id, dump_sha256) VALUES ('${atSpawn.journal.id}', '${atSpawn.journal.dumpSha256}')`);
+      expect(atSpawn.args.indexOf('-f')).toBeLessThan(atSpawn.args.length - 2);
+      expect(atSpawn.env.PGAPPNAME).toBe(`portos-restore-${atSpawn.journal.id}`);
+      // Success releases admission.
+      expect(readRecoveryJournal()).toBeNull();
+    });
+
+    it.each([
+      ['schema upgrade', () => ensureSchema.mockRejectedValueOnce(new Error('ddl failed')), 'restore_schema_reconciliation'],
+      ['ordered migration', () => runDbMigrations.mockRejectedValueOnce(new Error('migration failed')), 'restore_schema_reconciliation'],
+      ['cursor write', () => rewindPostgresSyncCursors.mockRejectedValueOnce(new Error('disk full')), 'restore_sync_resync'],
+    ])('a %s fault after commit stays fenced, then recovery repairs from the original floors without replaying', async (_case, inject, reason) => {
+      inject();
+      const failed = await runRestore();
+      expect(failed).toMatchObject({ status: 'failed', reason, recovery: { stage: 'repairing', snapshotId: 'snap-1' } });
+      expect(failed.error).toMatch(/not .*replayed/i);
+      const journal = readRecoveryJournal();
+      expect(journal).toMatchObject({ id: failed.recovery.id, stage: 'repairing', feedPositions: ORIGINAL });
+
+      // While pending, neither a preview nor another replay may start.
+      for (const dryRun of [true, false]) {
+        expect(await restorePostgres('/dest', 'snap-1', { dryRun }))
+          .toMatchObject({ status: 'failed', reason: 'restore_recovery_pending', recovery: { id: journal.id } });
+      }
+      expect(spawn).toHaveBeenCalledOnce();
+
+      // The live sequence was reset to the snapshot's 100 and one draw slipped
+      // in; recovery must floor at the recorded 500, never the re-read 101.
+      query.mockClear();
+      query.mockImplementation(restoreDbAnswer({ feed: [{ sequencename: 'memories_sync_feed_seq', last_value: '101' }] }));
+      rewindPostgresSyncCursors.mockClear();
+      expect(await resumeDatabaseRestore(journal.id)).toMatchObject({ status: 'ok', outcome: 'repaired', syncCursorsRewound: 2 });
+      expect(setvalCalls().map(([, params]) => params)).toEqual([[['memories_sync_feed_seq'], ['500']]]);
+      expect(rewindPostgresSyncCursors).toHaveBeenCalledOnce();
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(readRecoveryJournal()).toBeNull();
+      // A finished recovery leaves nothing to resume.
+      expect(await resumeDatabaseRestore()).toEqual({ status: 'ok', outcome: 'none' });
+    });
+
+    it('refuses to resume a different operation than the pending one', async () => {
+      runDbMigrations.mockRejectedValueOnce(new Error('migration failed'));
+      await runRestore();
+      await expect(resumeDatabaseRestore('00000000-0000-4000-8000-000000000001'))
+        .rejects.toMatchObject({ status: 409 });
+      expect(readRecoveryJournal()).toMatchObject({ stage: 'repairing' });
+    });
+
+    it('resolves a lost psql response at COMMIT from the receipt and repairs instead of replaying', async () => {
+      let journal;
+      query.mockImplementation(async (sql, params) => restoreDbAnswer({ feed: ORIGINAL, receipt: journal?.dumpSha256 })(sql, params));
+      const result = await runRestore({ exitCode: 2, onSpawn: () => { journal = readRecoveryJournal(); } });
+      expect(result).toMatchObject({ status: 'ok', syncCursorsRewound: 2 });
+      expect(ensureSchema).toHaveBeenCalledWith({ force: true });
+      expect(setvalCalls()[0][1]).toEqual([['memories_sync_feed_seq'], ['500']]);
+      expect(readRecoveryJournal()).toBeNull();
+    });
+
+    it('keeps an unprovable outcome fenced, then releases unchanged once the receipt proves a rollback', async () => {
+      query.mockImplementation(async (sql) => {
+        if (sql.includes('pg_stat_activity')) throw new Error('connection refused');
+        return restoreDbAnswer({ feed: ORIGINAL })(sql);
+      });
+      const result = await runRestore({ exitCode: 2 });
+      expect(result).toMatchObject({ status: 'failed', reason: 'restore_commit_unknown', recovery: { stage: 'replaying' } });
+      expect(readRecoveryJournal()).toMatchObject({ stage: 'replaying' });
+      expect(ensureSchema).not.toHaveBeenCalled();
+      expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
+
+      query.mockImplementation(restoreDbAnswer());
+      expect(await resumeDatabaseRestore(result.recovery.id)).toEqual({ status: 'ok', outcome: 'rolled_back' });
+      expect(readRecoveryJournal()).toBeNull();
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(setvalCalls()).toHaveLength(0);
+    });
+
+    it('treats a still-live replay session or a foreign digest as unprovable, and only a matching receipt as a commit', async () => {
+      // Seed a pending replay whose outcome was never observed (crash at COMMIT).
+      runDbMigrations.mockRejectedValueOnce(new Error('migration failed'));
+      await runRestore();
+      const pending = readRecoveryJournal();
+      writeFileSync(RECOVERY_JOURNAL(), JSON.stringify({ ...pending, stage: 'replaying' }));
+      vi.useFakeTimers();
+      try {
+        query.mockImplementation(restoreDbAnswer({ sessions: 1 }));
+        const live = resumeDatabaseRestore(pending.id);
+        await vi.runAllTimersAsync();
+        expect(await live).toMatchObject({ status: 'failed', reason: 'restore_commit_unknown' });
+      } finally {
+        vi.useRealTimers();
+      }
+      query.mockImplementation(restoreDbAnswer({ receipt: 'b'.repeat(64) }));
+      expect(await resumeDatabaseRestore(pending.id)).toMatchObject({ reason: 'restore_commit_unknown' });
+      expect(readRecoveryJournal()).toMatchObject({ stage: 'replaying' });
+      query.mockImplementation(restoreDbAnswer({ feed: ORIGINAL, receipt: pending.dumpSha256 }));
+      expect(await resumeDatabaseRestore(pending.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+      expect(readRecoveryJournal()).toBeNull();
+      expect(spawn).toHaveBeenCalledOnce();
+    });
+
+    it('fails closed on a damaged journal', async () => {
+      writeFileSync(RECOVERY_JOURNAL(), '{ not json');
+      expect(await restorePostgres('/dest', 'snap-1', { dryRun: true }))
+        .toMatchObject({ status: 'failed', reason: 'restore_recovery_pending', recovery: { damaged: true } });
+      await expect(resumeDatabaseRestore()).rejects.toMatchObject({ code: 'DATABASE_RESTORE_RECOVERY' });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(readFileSync(RECOVERY_JOURNAL(), 'utf8')).toBe('{ not json');
+    });
   });
 
   // #8710: a restore must not leave peers skipping rows in either direction.
@@ -1393,11 +1536,8 @@ describe('restorePostgres', () => {
     beforeEach(() => {
       vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
       mockLegacyDumpRead();
-      query.mockImplementation(async (sql) => (sql.includes('FROM pg_sequences') && !sql.includes('setval')
-        ? { rows: [{ sequencename: 'memories_sync_feed_seq', last_value: '1000000000000500' }] }
-        : { rows: [] }));
+      query.mockImplementation(restoreDbAnswer({ feed: [{ sequencename: 'memories_sync_feed_seq', last_value: '1000000000000500' }] }));
     });
-    afterEach(() => query.mockReset().mockResolvedValue({ rows: [] }));
 
     const runRestore = async ({ exitCode = 0 } = {}) => {
       const proc = fakeProc();

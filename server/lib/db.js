@@ -10,6 +10,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { isTestRunner } from './runtimeEnv.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
 import { assertDatabasePoolAuthority } from './databaseAuthority.js';
+import { createDatabaseRestoreRecovery, databaseRestoreRecoveryError } from './databaseRestoreRecovery.js';
 
 const { Pool } = pg;
 
@@ -211,6 +212,12 @@ const GUARDED_CLIENT_HANDLER = {
 const databaseContext = new AsyncLocalStorage();
 const activeOperations = new Set();
 let maintenanceActive = false;
+// Durable fence for a committed snapshot restore whose repair is pending
+// (#9725). It outlives this process: while the journal exists, only the
+// maintenance context that adopted the matching operation may use the pool.
+// Exported so the restore service writes the SAME journal this gate reads.
+const restoreRecovery = createDatabaseRestoreRecovery();
+export const databaseRestoreRecovery = restoreRecovery;
 
 function maintenanceError() {
   return Object.assign(new Error('Database restore in progress; retry after it finishes.'), {
@@ -218,13 +225,20 @@ function maintenanceError() {
   });
 }
 
+// The restore operation this async context may act for, if any. Only a live
+// maintenance context (or work it started while live) carries one.
+const restoreRecoveryContext = (store) => (store?.active ? store.restoreRecoveryId : undefined);
+
 async function databaseOperation(fn) {
   // A process-local restore context cannot bypass a durable cutover fence,
   // and a pool still naming a cutover's retired backend never reaches it.
   assertDatabaseAdmission();
   assertDatabasePoolAuthority(POOL_CONFIG);
-  if (maintenanceActive && !databaseContext.getStore()?.active) throw maintenanceError();
-  const context = { active: true };
+  const parent = databaseContext.getStore();
+  if (maintenanceActive && !parent?.active) throw maintenanceError();
+  const restoreRecoveryId = restoreRecoveryContext(parent);
+  if (!restoreRecoveryId) restoreRecovery.assertAdmission();
+  const context = { active: true, restoreRecoveryId };
   const pending = databaseContext.run(context, async () => fn());
   activeOperations.add(pending);
   try {
@@ -235,21 +249,36 @@ async function databaseOperation(fn) {
   }
 }
 
-/** Drain admitted database work and reject new work until restore completes. */
-export async function withDatabaseMaintenance(fn) {
+/**
+ * Drain admitted database work and reject new work until restore completes.
+ *
+ * A pending restore recovery journal refuses entry unless `restoreRecoveryId`
+ * names that same operation. `fn` receives `{ adoptRestoreRecovery(id) }`, which
+ * lets the restore that just published a journal keep using the database for
+ * that operation only; admission for everyone else stays closed until the
+ * journal is released.
+ */
+export async function withDatabaseMaintenance(fn, { restoreRecoveryId } = {}) {
   assertDatabaseAdmission();
   assertDatabasePoolAuthority(POOL_CONFIG);
   if (maintenanceActive || databaseContext.getStore()?.active) throw maintenanceError();
+  if (restoreRecoveryId === undefined) restoreRecovery.assertAdmission();
+  else if (restoreRecovery.read()?.id !== restoreRecoveryId) throw databaseRestoreRecoveryError();
   maintenanceActive = true;
-  const context = { active: true };
+  const context = { active: true, restoreRecoveryId };
+  const adoptRestoreRecovery = (id) => {
+    if (!context.active || restoreRecovery.read()?.id !== id) throw databaseRestoreRecoveryError();
+    context.restoreRecoveryId = id;
+  };
   try {
     // An admitted transaction can start nested work while draining. Track it
     // separately and repeat until that work also settles, even when its parent
     // did not await it. Async descendants lose admission when their operation ends.
     while (activeOperations.size) await Promise.allSettled([...activeOperations]);
-    return await databaseContext.run(context, fn);
+    return await databaseContext.run(context, () => fn({ adoptRestoreRecovery }));
   } finally {
     context.active = false;
+    context.restoreRecoveryId = undefined;
     maintenanceActive = false;
   }
 }

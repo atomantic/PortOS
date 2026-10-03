@@ -18,10 +18,13 @@ import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
-import { POOL_CONFIG, checkHealth, ensureSchema, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
+import { POOL_CONFIG, checkHealth, databaseRestoreRecovery, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
 import { withPgToolEnv, resolvePgDumpBinary } from '../lib/pgTools.js';
 import { inspectDatabaseDump } from './backupDatabaseDump.js';
-import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
+import {
+  captureSyncFeedPositions, pendingRecoveryResult, repairCommittedRestore, restoreApplicationName, restoreReceiptSql,
+  restoreRecoveryRefusal, settleReplayOutcome,
+} from './backupRestoreRecovery.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
@@ -182,6 +185,11 @@ export const DEFAULT_EXCLUDES = [
   // which model weights are on THIS machine's disks; restoring it onto another
   // would claim gigabytes of models that machine does not have, and offer delete
   // buttons for them. It is fully re-derivable by a rescan from Models → Status.
+  // Anchored, like every entry here. The restore recovery journal (#9725) is an
+  // admission fence for THIS machine's in-flight database restore; a restored
+  // copy would re-fence the database for an operation that no longer exists.
+  { path: '/database-restore-recovery.json', reason: 'In-flight database restore recovery journal — a machine-local admission fence for one restore operation, never data to restore', overridable: false },
+  { path: '/.database-restore-recovery-*.pending', reason: 'Unpublished database restore recovery journal bytes — scratch from an interrupted journal write', overridable: false },
   { path: '/model-manifest.json', reason: 'Tracked downloaded-model inventory — machine-local and re-derivable by rescanning the model stores; a restored copy would describe another machine\'s disks', overridable: false },
   // Anchored, like every entry here. Readiness evidence is bound to THIS
   // machine's local image id (a restored copy would read as stale anyway) and
@@ -748,6 +756,9 @@ export async function dumpPostgres(outputPath) {
       '--no-acl',
       '--clean',
       '--if-exists',
+      // Machine-local replay receipts (#9725) describe this install's past
+      // restores, not application data; the table definition is still dumped.
+      '--exclude-table-data=restore_receipts',
       '-f', outputPath
     ], {
       shell: false,
@@ -1536,9 +1547,12 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_preflight'|'restore_error'|'timeout'|'restore_schema_reconciliation'|'restore_sync_resync', error? }
- * A successful real restore also carries `syncCursorsRewound` (peer count);
- * see resyncFederationAfterRestore.
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_preflight'|'restore_journal'|'restore_error'|'timeout', error? }
+ *     (nothing changed; a failed replay is reported only once proven rolled back)
+ *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
+ *     (a restore awaits recovery: ordinary database work stays fenced until
+ *     resumeDatabaseRestore finishes it — see backupRestoreRecovery.js, #9725)
+ * A successful real restore also carries `syncCursorsRewound` (peer count).
  * @param {string} destPath - Backup destination root
  * @param {string} snapshotId
  * @param {{dryRun?: boolean}} [options]
@@ -1548,6 +1562,10 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
   const { snapshotDir, currentSource } = resolved;
   await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
   await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
+  // A committed restore awaiting repair fences the database; neither a preview
+  // nor another replay may start until it is resolved (#9725).
+  const pendingRecovery = restoreRecoveryRefusal();
+  if (pendingRecovery) return pendingRecovery;
   const sqlPath = join(snapshotDir, 'portos-db.sql');
 
   const info = await stat(sqlPath).catch(() => null);
@@ -1631,9 +1649,25 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   }
   if (dryRun) return { status: 'ok', dryRun: true, sizeBytes, tableCount };
 
-  return withDatabaseMaintenance(async () => {
-    // Read before the replay rewinds them to the dump's values.
+  return withDatabaseMaintenance(async ({ adoptRestoreRecovery }) => {
+    // Read before the replay rewinds them, then make them durable together
+    // with this operation's identity BEFORE anything destructive runs: a
+    // committed replay whose repair fails (or a restart) must floor sequences
+    // at THESE positions, never at values re-read after the dump reset them.
     const feedPositions = await captureSyncFeedPositions();
+    let record;
+    try {
+      record = databaseRestoreRecovery.begin({ snapshotId, dumpSha256: dump.sha256, feedPositions });
+      adoptRestoreRecovery(record.id);
+    } catch (err) {
+      if (record) throw err;
+      console.error(`❌ restore: recovery journal could not be written for snapshot ${snapshotId}: ${err.message}`);
+      return {
+        status: 'failed',
+        reason: 'restore_journal',
+        error: 'The restore recovery journal could not be written. Restore was refused without changing data.',
+      };
+    }
     const { host: pgHost, port, database: pgDb, user: pgUser } = POOL_CONFIG;
     const pgPort = String(port);
 
@@ -1644,13 +1678,16 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
       // applies or leaves the live DB untouched — never a mixed snapshot/current
       // state. (The dump is written with --clean --if-exists, so the DROPs and
       // recreates all commit or roll back as one unit.) psql reads the admitted
-      // spool copy, never the snapshot path.
+      // spool copy, never the snapshot path. The trailing receipt commits with
+      // the dump or not at all, and the application name identifies this
+      // replay's session to recovery (#9725).
       const proc = spawn('psql', [
         '-X', '-v', 'ON_ERROR_STOP=1',
         '--single-transaction',
         '--echo-all',
-        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', spoolPath
-      ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: pgEnv });
+        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', spoolPath,
+        '-c', restoreReceiptSql(record),
+      ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...pgEnv, PGAPPNAME: restoreApplicationName(record.id) } });
 
       let stderr = '';
       const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL restore' });
@@ -1684,83 +1721,28 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
         console.warn(`⚠️ psql not available: ${err.message}`);
         resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
       });
-    }));
-    if (replay.status !== 'ok') return replay;
+    })).catch((err) => ({ status: 'failed', reason: 'restore_error', error: err.message }));
 
-    // Replay has committed. Reapply this version's upgrades even when readiness
-    // was cached before the restore, then honor the restored migration ledger.
-    const reconciliationError = await (async () => {
-      await ensureSchema({ force: true });
-      const { runDbMigrations } = await import('../scripts/run-db-migrations.js');
-      await runDbMigrations();
-    })().then(() => null, (err) => err);
-    if (reconciliationError) {
-      console.error(`❌ DB restore schema reconciliation failed: ${reconciliationError.message}`);
-      return {
-        status: 'failed',
-        reason: 'restore_schema_reconciliation',
-        error: 'The database dump was applied, but schema recovery is incomplete. The restore was not rolled back. Restart PortOS to retry schema recovery; if it still fails, inspect the server logs and repair the database before continuing.',
-      };
+    if (replay.status === 'ok') {
+      // psql exit 0 under --single-transaction means COMMIT succeeded.
+      record = databaseRestoreRecovery.markCommitted(record.id);
+    } else {
+      // A failed/killed/lost psql may still have committed (a crash or lost
+      // response at COMMIT). Only the receipt can say; an unknown outcome stays
+      // fenced instead of reopening writes or replaying again.
+      const settled = await settleReplayOutcome(record);
+      if (settled.outcome === 'rolled_back') return replay;
+      if (settled.outcome === 'uncertain') return pendingRecoveryResult('restore_commit_unknown', record);
+      record = settled.record;
     }
-    // Still inside maintenance, so no sync apply or feed write can interleave
-    // between the restored rows and the federation repair.
-    const resync = await resyncFederationAfterRestore(feedPositions).then(
-      (syncCursorsRewound) => ({ syncCursorsRewound }),
-      (err) => ({ err }),
-    );
-    if (resync.err) {
-      console.error(`❌ DB restore federation resync failed: ${resync.err.message}`);
-      return {
-        status: 'failed',
-        reason: 'restore_sync_resync',
-        error: 'The database dump was applied, but peer sync could not be reset. Federated memories and Catalog records pulled after this snapshot may stay missing until the restore is repeated.',
-      };
-    }
-    return { ...replay, syncCursorsRewound: resync.syncCursorsRewound };
+
+    // Replay has committed. Still inside maintenance and still fenced, so no
+    // sync apply or feed write can interleave with the repair, and a failed
+    // step leaves ordinary work closed with the original positions recorded.
+    const repaired = await repairCommittedRestore(record);
+    if (repaired.status !== 'ok') return repaired;
+    return { status: 'ok', dryRun: false, sizeBytes, tableCount, syncCursorsRewound: repaired.syncCursorsRewound };
   });
-}
-
-// Feed sequences present before the replay (a pre-#8315 install has none).
-// pg_sequences reports a NULL last_value for a never-drawn sequence, which
-// holds no position worth preserving.
-async function captureSyncFeedPositions() {
-  const { rows } = await query(
-    `SELECT sequencename, last_value::text AS last_value FROM pg_sequences
-      WHERE schemaname = current_schema() AND sequencename = ANY($1::text[]) AND last_value IS NOT NULL`,
-    [syncFeedTables.map(syncFeedSequenceName)],
-  );
-  return rows;
-}
-
-/**
- * Repair both directions of peer sync after a dump replay (#8710).
- *
- * Outbound: the dump `setval`s each feed sequence back to the dump's maximum,
- * so new rows would reuse positions peers already passed and never be pulled.
- * Floor every sequence at its pre-restore value so post-restore positions land
- * above any cursor a peer holds.
- *
- * Inbound: our per-peer memory/Catalog cursors still point past rows the
- * restore discarded. Rewind them so the next sync replays each peer's streams
- * through the idempotent LWW / ON CONFLICT apply paths.
- * @param {Array<{sequencename: string, last_value: string}>} feedPositions
- * @returns {Promise<number>} peers whose cursors were rewound
- */
-async function resyncFederationAfterRestore(feedPositions) {
-  if (feedPositions.length) {
-    // GREATEST ignores the NULL of a sequence the dump left undrawn.
-    await query(
-      `SELECT setval(format('%I', s.sequencename)::regclass, GREATEST(c.captured::bigint, s.last_value))
-        FROM pg_sequences s
-        JOIN unnest($1::text[], $2::text[]) AS c(name, captured) ON c.name = s.sequencename
-        WHERE s.schemaname = current_schema()`,
-      [feedPositions.map((p) => p.sequencename), feedPositions.map((p) => p.last_value)],
-    );
-  }
-  const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
-  const peers = await rewindPostgresSyncCursors();
-  console.log(`🔄 DB restore: floored ${feedPositions.length} sync feed sequences, rewound memory/Catalog cursors for ${peers} peers`);
-  return peers;
 }
 
 /**

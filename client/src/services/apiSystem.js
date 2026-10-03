@@ -364,6 +364,8 @@ export async function downloadBackupSnapshot(snapshotId, source) {
   return { filename };
 }
 export const restoreDatabase = (data, options) => request('/backup/restore-db', { method: 'POST', body: JSON.stringify(data), ...options });
+// Resume a committed database restore awaiting recovery (#9725). Never replays the dump.
+export const recoverDatabaseRestore = (id, options) => request('/backup/restore-db/recover', { method: 'POST', body: JSON.stringify({ id }), ...options });
 export const deleteBackupSnapshot = (snapshotId, source, options = {}) => {
   const query = source ? `?source=${encodeURIComponent(source)}` : '';
   return request(`/backup/snapshots/${encodeURIComponent(snapshotId)}${query}`, { method: 'DELETE', ...options });

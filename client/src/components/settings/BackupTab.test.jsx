@@ -8,6 +8,7 @@ vi.mock('../../services/api', () => ({
   triggerBackup: vi.fn(),
   getBackupSnapshots: vi.fn(),
   restoreDatabase: vi.fn(),
+  recoverDatabaseRestore: vi.fn(),
   deleteBackupSnapshot: vi.fn(),
   // FolderPicker imports `* as api` from the same module; it only calls this
   // when its picker is opened (never in these tests), but the mock defines it
@@ -34,6 +35,7 @@ import {
   triggerBackup,
   getBackupSnapshots,
   restoreDatabase,
+  recoverDatabaseRestore,
   deleteBackupSnapshot,
 } from '../../services/api';
 import toast from '../ui/Toast';
@@ -288,6 +290,47 @@ describe('BackupTab', () => {
       expect(toast.success).toHaveBeenCalledWith('Database restored from snap-2026-06-09', { icon: '💾' });
     });
 
+    // #9725: a committed restore whose repair failed stays fenced server-side;
+    // the tab must offer to RESUME it (never to repeat the restore).
+    it('surfaces a committed restore awaiting recovery and resumes exactly that operation', async () => {
+      withSnapshot();
+      const recovery = { id: '00000000-0000-4000-8000-000000000001', stage: 'repairing', snapshotId: 'snap-2026-06-09' };
+      restoreDatabase
+        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
+        .mockResolvedValueOnce({ status: 'failed', reason: 'restore_sync_resync', error: 'Peer sync could not be reset yet.', recovery });
+      recoverDatabaseRestore
+        .mockResolvedValueOnce({ status: 'failed', reason: 'restore_sync_resync', error: 'Still failing.', recovery })
+        .mockResolvedValueOnce({ status: 'ok', outcome: 'repaired' });
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
+      });
+      expect(toast.error).toHaveBeenCalledWith('Peer sync could not be reset yet.', { duration: Infinity });
+      expect(screen.getByText('Database restore needs recovery')).toBeInTheDocument();
+
+      const resume = screen.getByRole('button', { name: /Resume recovery/i });
+      await act(async () => { fireEvent.click(resume); });
+      expect(recoverDatabaseRestore).toHaveBeenLastCalledWith(recovery.id, { silent: true });
+      expect(toast.error).toHaveBeenLastCalledWith('Still failing.');
+      expect(screen.getByText('Database restore needs recovery')).toBeInTheDocument();
+
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Resume recovery/i })); });
+      await waitFor(() => expect(screen.queryByText('Database restore needs recovery')).toBeNull());
+      expect(restoreDatabase).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows a pending recovery reported by the status endpoint on load', async () => {
+      getBackupStatus.mockResolvedValue({ status: 'ok', defaultExcludes: [], pgBackup: null,
+        restoreRecovery: { pending: true, id: '00000000-0000-4000-8000-000000000001', stage: 'replaying', snapshotId: 'snap-1' } });
+      await renderTab({ openExclusions: false, openSnapshots: false });
+      expect(screen.getByText('Database restore needs recovery')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Resume recovery/i })).toBeEnabled();
+    });
+
     it('binds database preview and confirmation to the selected source', async () => {
       getBackupSnapshots.mockResolvedValue([
         ...Array.from({ length: 10 }, (_, index) => ({
@@ -332,25 +375,6 @@ describe('BackupTab', () => {
         source: 'previous-machine',
         dryRun: false,
       }, { silent: true });
-    });
-
-    it('explains that schema recovery failed after the dump committed', async () => {
-      withSnapshot();
-      restoreDatabase
-        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
-        .mockResolvedValueOnce({ status: 'failed', reason: 'restore_schema_reconciliation' });
-      await renderTab();
-      await act(async () => {
-        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
-      });
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
-      });
-      expect(toast.success).not.toHaveBeenCalled();
-      expect(toast.error).toHaveBeenCalledWith(
-        expect.stringMatching(/dump was applied.*not rolled back.*Restart PortOS/),
-        { duration: Infinity },
-      );
     });
 
     it('toasts an error when the confirmed restore fails', async () => {
