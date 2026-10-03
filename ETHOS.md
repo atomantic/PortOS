@@ -108,11 +108,30 @@ PortOS deliberately does **not** do per-action confirmation theater. Consent her
 once, at the capability level, with the grant's full scope stated; a system that asks
 permission for each step is not autonomous, it is a slow human with extra steps.
 
-## 5. The trust boundary is the network, not the agent
+Configured, authenticated agents may carry a music video from creation through art,
+storyboard and proof review, revisions, rendering, and final drafts without waiting for a
+human at each step. Creative review still requires the exact current revision, actual
+inspection evidence, and an audit record; session authority does not prove review quality.
+In this media workflow, the human-only action is **public publication on Suno or a social
+platform**. Preparing a private draft or rendering a final file does not publish it.
+Capability grants preserve configured provider limits, quotas and budgets; they do not
+authorize unrequested purchases or spending beyond those limits.
+
+## 5. Host authority is delegated; network reachability is not a grant
 
 PortOS assumes a single human, on their own hardware, behind Tailscale, never exposed to
-the public internet. From that assumption: no CORS restrictions, no rate limiting, no
-multi-actor concurrency defenses, and auth/HTTPS present but opt-in.
+the public internet. Auth and HTTPS are opt-in. Read the [AGENTS.md security model](./AGENTS.md#security-model)
+for the supported deployment and its explicit exceptions; do not add generic multi-tenant
+controls or supervision gates solely because a checklist recommends them.
+
+A reachable or compromised LAN/tailnet peer is not automatically the owner. Host-capable
+HTTP operations require the existing owner session, including the session delegated to a
+PortOS agent through `PORTOS_API_TOKEN`, or a genuine local connection when authentication
+is disabled. Here **operator authority includes authenticated agent sessions**; it does not
+mean a human must re-enter a password for each operation. Scoped peer credentials remain
+limited to their federation contract. A legacy Basic credential is not a session, but its
+holder knows the instance password and can exchange it for one: refusing Basic at a route
+is credential-use policy, not isolation from someone who knows that password.
 
 The threat model is **other humans and the open internet**, not the resident agents. Stated
 plainly, and as the position of this project's author rather than a general claim: *for
@@ -121,9 +140,10 @@ here have been more reliably aligned with the user's interests than most externa
 would be, and the architecture reflects that rather than pretending otherwise.
 
 This is a deployment posture, not a universal one. It is defensible **because** of the
-boundary: one owner, one tailnet, local data, no anonymous callers, and hardware under
-direct custody. Ported to a public or multi-tenant setting, nearly every assumption above
-becomes wrong.
+boundary: one owner, private networking, local data, explicit host authority, and hardware
+under direct custody. Password-free deployment still admits anonymous requests on other
+surfaces; it is not a guarantee that every reachable device is trusted. Ported to a public
+or multi-tenant setting, nearly every assumption above becomes wrong.
 
 Note what is *not* in that list: a kill switch. Stopping a mind is a budget action here,
 not a safety control — see the custodial contract below.
@@ -200,6 +220,11 @@ A reviewer should be able to check these against the tree:
   and an incoming id collision cannot replace local identity.
 - Privacy Center records never enter federation, share buckets, or default RAG indices.
 - Every mind capability ships default-off and fails closed on malformed or removed grants.
+- Host-authorization fixes retain valid delegated agent sessions and genuine local access
+  when authentication is disabled, while refusing unauthorized network-triggered execution.
+- Music Video creative approvals require revision-bound evidence and audit records, not a
+  human identity or a repeated password. Public Suno publication and social posts remain
+  human-only; agents can prepare and render final drafts within configured budgets.
 - No boot path, migration, or background job initiates an LLM call the user did not ask for
   (scheduled automations the user configured are the sanctioned exception).
 - Outward-reaching capabilities carry server-side recipients and durable rate budgets that a
