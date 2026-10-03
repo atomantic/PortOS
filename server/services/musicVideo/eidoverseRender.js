@@ -12,7 +12,7 @@ import { musicVideoEidoverseSceneSchema } from '../../lib/musicVideoValidation.j
 import { codeFrameSize, quantizeSongDuration } from './codeTimeline.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 
-export const EIDOVERSE_RENDER_IMAGE = 'portos-eidoverse-video:1';
+const EIDOVERSE_RENDER_IMAGE = 'portos-eidoverse-video:1';
 const DOCKER_FALLBACKS = ['/usr/local/bin/docker', '/opt/homebrew/bin/docker', '/Applications/Docker.app/Contents/Resources/bin/docker'];
 const OUTPUT_LIMIT = 2 * 1024 ** 3;
 const WALL_MS = 30 * 60 * 1000;
@@ -37,7 +37,7 @@ export async function prepareEidoverseRender(project) {
 
 // No checkout, home, credentials, API token, song or Docker socket is mounted.
 // Scene code can only see the installed runtime and this job's two directories.
-export function eidoverseContainerArgs({ name, root, imageId }) {
+function eidoverseContainerArgs({ name, root, imageId }) {
   return ['run', '--rm', '--pull=never', '--name', name, '--network=none', '--read-only',
     '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=256', '--memory=8g', '--cpus=4',
     '--ulimit', `fsize=${OUTPUT_LIMIT}:${OUTPUT_LIMIT}`, '--user=1000:1000', '--tmpfs', '/tmp:rw,nosuid,nodev,size=512m,mode=1777',
