@@ -56,6 +56,17 @@ export const UNCOVERED_SUITES = Object.freeze({
   smoke: 'npm run smoke',
 });
 
+/** Local pregate worker budget per Vitest workspace; see scripts/vitestCiPool.js. */
+export const PREGATE_DEFAULT_MAX_WORKERS = '4';
+
+/**
+ * Env for a stage child: bound Vitest workers unless the operator chose a
+ * budget. Direct `npm test` never passes through here, so it stays unbounded.
+ */
+export function pregateWorkerEnv(env) {
+  return { ...env, PORTOS_PREGATE_MAX_WORKERS: env.PORTOS_PREGATE_MAX_WORKERS || PREGATE_DEFAULT_MAX_WORKERS };
+}
+
 /**
  * The ordered stages to run for a plan, each a spawnable command.
  *
@@ -268,7 +279,7 @@ function main() {
     const result = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts', stage.script), ...stage.args], {
       cwd: REPO_ROOT,
       stdio: 'inherit',
-      env: { ...process.env, ...stage.env },
+      env: { ...pregateWorkerEnv(process.env), ...stage.env },
     });
     if (result.error) {
       console.error(`❌ ${stage.name} could not start: ${result.error.message}`);

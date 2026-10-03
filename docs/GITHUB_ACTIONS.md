@@ -139,7 +139,11 @@ On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`
 `client/vitest.config.js`). Standard Linux runners for public repositories are
 [4 vCPU / 16GB](https://docs.github.com/en/actions/reference/runners/github-hosted-runners);
 uncapped forks oversubscribe those cores during transform. Local `npm test`
-is unbounded. The DOM-heavy client retains its proven two-worker override:
+is unbounded. `npm run pregate` exports `PORTOS_PREGATE_MAX_WORKERS` (default 4,
+overridable) so concurrent worktree gates on one host bound their Vitest
+workers; it can only lower a workspace's cap (client stays at 2), and direct
+test runs ignore it unless you set it. Divide the host between simultaneous
+gates, e.g. `PORTOS_PREGATE_MAX_WORKERS=2 npm run pregate`. The DOM-heavy client retains its proven two-worker override:
 four workers made its async rendering assertions timing-dependent under CI
 contention. File-level parallelism stays on; the DB suite already serializes
 files because those tests share one Postgres.

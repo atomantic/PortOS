@@ -25,6 +25,7 @@ import {
   resolvePlanStages,
   downgradeFullPlan,
   parseArgs,
+  pregateWorkerEnv,
   UNCOVERED_SUITES,
   unmergedIndexPaths,
 } from './pregate.js';
@@ -240,6 +241,13 @@ describe('pregate hidden-content invocation', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('Hidden-content scan failed:');
     expect(result.stdout).not.toContain('Pregate passed');
+  });
+});
+
+describe('pregateWorkerEnv', () => {
+  it('bounds workers by default but honors an operator budget', () => {
+    expect(pregateWorkerEnv({}).PORTOS_PREGATE_MAX_WORKERS).toBe('4');
+    expect(pregateWorkerEnv({ PORTOS_PREGATE_MAX_WORKERS: '2' }).PORTOS_PREGATE_MAX_WORKERS).toBe('2');
   });
 });
 
