@@ -649,7 +649,7 @@ cmd_export() {
 }
 
 # Import SQL dump into database
-cmd_import() {
+cmd_import() (
   local dumpfile="$1"
 
   if [ ! -f "$dumpfile" ]; then
@@ -659,13 +659,18 @@ cmd_import() {
 
   info "Importing $dumpfile..."
 
-  # Strip pg17-only features for compatibility with older psql versions:
-  # - \restrict/\unrestrict (pg17 dump security tokens)
-  # - SET transaction_timeout (pg17 config parameter)
-  sed -e '/^\\restrict /d' -e '/^\\unrestrict /d' -e '/^SET transaction_timeout/d' "$dumpfile" | run_psql -v ON_ERROR_STOP=1 --single-transaction
+  # Finish a private, byte-preserving replay copy before psql sees any SQL.
+  # A failed source read must never become a successful end-of-script commit.
+  local stage replay
+  stage="$(mktemp -d "${TMPDIR:-/tmp}/portos-database-import.XXXXXX")" || return 1
+  trap 'rm -rf "$stage"' EXIT
+  if ! replay="$(node "$ROOT_DIR/scripts/prepare-database-replay.mjs" "$dumpfile" "$stage")"; then
+    return 1
+  fi
+  run_psql -v ON_ERROR_STOP=1 --single-transaction < "$replay"
 
   log "Import complete"
-}
+)
 
 # Do not snapshot and change mode while PortOS can still accept writes.
 # A process-list probe is not a writer fence. The recoverable coordinator in

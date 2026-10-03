@@ -65,7 +65,7 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
 import { POOL_CONFIG, query, checkHealth } from '../lib/db.js';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { EventEmitter } from 'events';
-import { PassThrough, Readable } from 'stream';
+import { PassThrough, Readable, Writable } from 'stream';
 import { writeFileSync, mkdtempSync, readFileSync, createReadStream, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join as pathJoin } from 'path';
@@ -76,7 +76,7 @@ import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { hostControlRouteGate } from '../services/authGate.js';
 
 afterAll(cleanupTempDataRoots);
-import { isPg17OnlyDirective, importDumpFile } from '../services/dbAdmin.js';
+import { importDumpFile, _importReplayFile } from '../services/dbAdmin.js';
 
 // Helper: make execFile call the callback with controlled output
 function mockExecFile(responses) {
@@ -224,22 +224,6 @@ describe('database maintenance status', () => {
   });
 });
 
-describe('isPg17OnlyDirective (sed-replacement line filter)', () => {
-  it('matches the pg17-only directives the legacy sed stripped', () => {
-    expect(isPg17OnlyDirective('\\restrict abc123')).toBe(true);
-    expect(isPg17OnlyDirective('\\unrestrict abc123')).toBe(true);
-    expect(isPg17OnlyDirective('SET transaction_timeout = 0;')).toBe(true);
-  });
-
-  it('leaves ordinary dump lines untouched', () => {
-    expect(isPg17OnlyDirective('CREATE TABLE foo (id int);')).toBe(false);
-    expect(isPg17OnlyDirective('SET statement_timeout = 0;')).toBe(false);
-    expect(isPg17OnlyDirective("INSERT INTO t VALUES ('\\restrict not-a-directive');")).toBe(false);
-    expect(isPg17OnlyDirective('  \\restrict indented')).toBe(false); // anchored at start, like sed /^…/
-    expect(isPg17OnlyDirective('')).toBe(false);
-  });
-});
-
 describe('importDumpFile (no-shell streaming import)', () => {
   const dumpDirs = [];
 
@@ -372,6 +356,36 @@ describe('importDumpFile (no-shell streaming import)', () => {
     expect(child.__pipedBuffer().equals(expected)).toBe(true);
   });
 
+  it('stages extension metadata, preserves stored bytes, and respects replay backpressure', async () => {
+    const { databaseImportFixture } = await import('../test/fixtures/databaseImportDump.js');
+    const { original, replay } = databaseImportFixture();
+    const child = makeFakePsql();
+    const piped = [];
+    child.stdin = new Writable({ highWaterMark: 1, write(chunk, _encoding, done) {
+      piped.push(Buffer.from(chunk));
+      setImmediate(done);
+    } });
+    child.stdin.on('finish', () => child.emit('close', 0));
+    spawn.mockReturnValue(child);
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'portos-dump-'));
+    dumpDirs.push(dir);
+    const file = pathJoin(dir, 'dump.sql');
+    writeFileSync(file, original);
+    expect((await importDumpFile(file, '5561', {})).exitCode).toBe(0);
+    expect(Buffer.concat(piped)).toEqual(replay);
+    expect(readFileSync(file)).toEqual(original);
+  });
+
+  it('does not spawn a target writer after a staging read failure', async () => {
+    createReadStream.mockImplementationOnce(() => Readable.from((async function* () {
+      yield Buffer.from('DROP TABLE example;\n');
+      throw new Error('dump read failed mid-stream');
+    })()));
+    const result = await importDumpFile('/fake/dump.sql', '5561', {});
+    expect(result).toMatchObject({ exitCode: 1, stderr: 'dump read failed mid-stream' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('resolves with a non-zero exitCode when the dump file cannot be read (no throw)', async () => {
     const child = makeFakePsql();
     spawn.mockReturnValue(child);
@@ -391,7 +405,7 @@ describe('importDumpFile (no-shell streaming import)', () => {
     ));
 
     let settled = false;
-    const promise = importDumpFile('/fake/dump.sql', '5561', {})
+    const promise = _importReplayFile('/fake/dump.sql', '5561', {})
       .then((r) => { settled = true; return r; });
 
     // The destructive prefix reached psql's stdin, the read failed, and the
@@ -426,7 +440,7 @@ describe('importDumpFile (no-shell streaming import)', () => {
         'DROP TABLE memories;\n'
       ));
 
-      const promise = importDumpFile('/fake/dump.sql', '5561', {});
+      const promise = _importReplayFile('/fake/dump.sql', '5561', {});
       // Under fake timers the stream's internal setImmediate is faked too;
       // advancing the clock by 0 pumps it plus the generator microtasks, so
       // the yield→data→throw→error chain runs and abort() fires SIGTERM.
@@ -466,7 +480,7 @@ describe('importDumpFile (no-shell streaming import)', () => {
       const stdinEnd = vi.spyOn(child.stdin, 'end');
       createReadStream.mockImplementationOnce(() => makeFailingSource('SELECT 1;\n'));
 
-      const promise = importDumpFile('/fake/dump.sql', '5561', {});
+      const promise = _importReplayFile('/fake/dump.sql', '5561', {});
       await vi.advanceTimersByTimeAsync(10_000);
       const result = await promise;
       expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
@@ -486,7 +500,7 @@ describe('importDumpFile (no-shell streaming import)', () => {
       'DROP TABLE memories;\n'
     ));
 
-    const promise = importDumpFile('/fake/dump.sql', '5561', {});
+    const promise = _importReplayFile('/fake/dump.sql', '5561', {});
     await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith('SIGTERM'));
 
     // A failed termination surfaces as 'error' — the child may still be

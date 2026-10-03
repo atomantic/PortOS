@@ -40,10 +40,10 @@ const MAX_SCANNED_LINE = 64 * 1024;
  * (created exclusively, owner-only), so a restore can replay what it checked
  * even if the snapshot changes afterwards; a spool write failure rejects too.
  * @param {string} path
- * @param {{ spoolTo?: string }} [options]
+ * @param {{ spoolTo?: string, omitVersionDirectives?: boolean }} [options]
  * @returns {Promise<{ sizeBytes: number, sha256: string, tableCount: number, complete: boolean, missingTables: string[], extensionMetadata?: {start: number, end: number}[] }>}
  */
-export function inspectDatabaseDump(path, { spoolTo } = {}) {
+export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = false } = {}) {
   return new Promise((resolvePromise, reject) => {
     const hash = createHash('sha256');
     // Latin-1 preserves byte offsets and dumps in non-UTF-8 client encodings.
@@ -73,7 +73,13 @@ export function inspectDatabaseDump(path, { spoolTo } = {}) {
         if (line.replace(/\r?\n$/, '') === '\\.') copyData = false;
         return;
       }
-      if (!statement && !quote && !dollarQuote && !blockDepth && line.startsWith('\\')) return;
+      if (!statement && !quote && !dollarQuote && !blockDepth) {
+        if (omitVersionDirectives && (/^\\(?:un)?restrict /.test(line) || /^SET transaction_timeout = 0;\r?\n?$/.test(line))) {
+          extensionMetadata.push({ start: lineStart, end: scannedBytes });
+          return;
+        }
+        if (line.startsWith('\\')) return;
+      }
       for (let i = 0; i < line.length; i += 1) {
         const c = line[i];
         const next = line[i + 1];
@@ -196,6 +202,7 @@ export function inspectDatabaseDump(path, { spoolTo } = {}) {
           && !statement.trim() && COMPLETE_TRAILER.test(tail.toString('latin1')),
         missingTables: REQUIRED_DUMP_TABLES.filter(name => !tables.has(name)),
         ...(spoolTo ? { extensionMetadata } : {}),
+        ...(omitVersionDirectives ? { replayScanSafe: !unscannable } : {}),
       };
       spooled.then(() => { if (!failed) resolvePromise(result); });
     });

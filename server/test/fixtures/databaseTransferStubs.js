@@ -43,7 +43,7 @@ case "$mode" in
   fail) printf 'DROP TABLE example_record;\\n'; exit 1 ;;
   incomplete) printf '%s' ${quote(STUB_DUMP_BODY)}; exit 0 ;;
 esac
-printf '%s' ${quote(STUB_DUMP_COMPLETE)}
+if [ -f "$R/dump.sql" ]; then cat "$R/dump.sql"; else printf '%s' ${quote(STUB_DUMP_COMPLETE)}; fi
 `);
   writeStub(join(bin, 'psql'), `#!/bin/sh
 R=${R}
