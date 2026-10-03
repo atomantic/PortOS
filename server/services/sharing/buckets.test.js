@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { vi } from 'vitest';
@@ -97,6 +97,68 @@ describe('sharing/buckets', () => {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });
     }
+  });
+
+  describe('concurrent registry mutations', () => {
+    const extraDirs = [];
+    const mkDir = () => { const d = mkdtempSync(join(tmpdir(), 'portos-sharing-extra-')); extraDirs.push(d); return d; };
+    afterEach(() => { while (extraDirs.length) rmSync(extraDirs.pop(), { recursive: true, force: true }); });
+
+    it('keeps both registrations when two creates at different paths overlap', async () => {
+      const [a, b] = await Promise.all([
+        buckets.createBucket({ name: 'A', path: mkDir() }),
+        buckets.createBucket({ name: 'B', path: mkDir() }),
+      ]);
+      const ids = (await buckets.listBuckets()).map((x) => x.id).sort();
+      expect(ids).toEqual([a.id, b.id].sort());
+    });
+
+    it('admits only one bucket when the same path is registered concurrently', async () => {
+      const results = await Promise.allSettled([
+        buckets.createBucket({ name: 'A', path: bucketTargetDir }),
+        buckets.createBucket({ name: 'B', path: bucketTargetDir }),
+      ]);
+      expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+      expect(results.find((r) => r.status === 'rejected').reason.code).toBe(buckets.ERR_VALIDATION);
+      expect(await buckets.listBuckets()).toHaveLength(1);
+    });
+
+    it('preserves updates to different buckets', async () => {
+      const a = await buckets.createBucket({ name: 'A', path: mkDir() });
+      const b = await buckets.createBucket({ name: 'B', path: mkDir() });
+      await Promise.all([
+        buckets.updateBucket(a.id, { name: 'A2' }),
+        buckets.updateBucket(b.id, { mode: 'auto-merge' }),
+      ]);
+      const list = await buckets.listBuckets();
+      expect(list.find((x) => x.id === a.id).name).toBe('A2');
+      expect(list.find((x) => x.id === b.id).mode).toBe('auto-merge');
+    });
+
+    it('does not resurrect a bucket when a rename is queued ahead of its delete, and later renames report not-found', async () => {
+      const created = await buckets.createBucket({ name: 'A', path: bucketTargetDir });
+      const rename = buckets.updateBucket(created.id, { name: 'Renamed' });
+      const remove = buckets.deleteBucket(created.id);
+      const lateRename = buckets.updateBucket(created.id, { name: 'Late' });
+      await expect(rename).resolves.toMatchObject({ name: 'Renamed' });
+      await expect(remove).resolves.toEqual({ id: created.id });
+      await expect(lateRename).rejects.toMatchObject({ code: buckets.ERR_NOT_FOUND });
+      expect(await buckets.listBuckets()).toEqual([]);
+    });
+
+    it('a rejected mutation does not poison later queued work, and an unreadable registry is never overwritten', async () => {
+      const failing = buckets.updateBucket('missing', { name: 'X' });
+      const ok = buckets.createBucket({ name: 'A', path: bucketTargetDir });
+      await expect(failing).rejects.toMatchObject({ code: buckets.ERR_NOT_FOUND });
+      await expect(ok).resolves.toMatchObject({ name: 'A' });
+
+      const registry = join(tempRoot, 'sharing', 'buckets.json');
+      writeFileSync(registry, '{ not json');
+      await expect(buckets.createBucket({ name: 'B', path: mkDir() })).rejects.toBeTruthy();
+      expect(readFileSync(registry, 'utf8')).toBe('{ not json');
+      writeFileSync(registry, JSON.stringify({ buckets: [] }));
+      await expect(buckets.createBucket({ name: 'C', path: mkDir() })).resolves.toMatchObject({ name: 'C' });
+    });
   });
 
   describe('bucketRecordsDir / bucketRecordPath', () => {
