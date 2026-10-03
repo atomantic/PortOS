@@ -190,7 +190,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
   const handleDiscoverCalendars = async (account) => {
     setDiscovering(account.id);
-    const useApi = account.syncMethod === 'google-api' && googleAuth?.hasTokens;
+    const useApi = (account.syncMethod || 'claude-mcp') === 'google-api';
     const result = useApi
       ? await api.apiDiscoverCalendars(account.id).catch(() => null)
       : await api.mcpDiscoverCalendars(account.id).catch(() => null);
