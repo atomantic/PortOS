@@ -387,7 +387,7 @@ export const listDailyLogs = (options = {}) => {
   if (options.offset) params.set('offset', options.offset);
   return request(`/brain/daily-log?${params}`);
 };
-export const getDailyLog = (date = 'today') => request(`/brain/daily-log/${encodeURIComponent(date)}`);
+export const getDailyLog = (date = 'today', options = {}) => request(`/brain/daily-log/${encodeURIComponent(date)}`, options);
 export const appendDailyLog = (date, text, source = 'text', options = {}) => request(
   `/brain/daily-log/${encodeURIComponent(date)}/append`,
   { method: 'POST', body: JSON.stringify({ text, source }), ...options }
