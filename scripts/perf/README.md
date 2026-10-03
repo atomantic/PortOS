@@ -143,3 +143,11 @@ fixture and is counted as unavailable. Inbox summary/detail and Contacts idle
 gates passed, including a full idle minute with zero HTTP transfer and four
 bytes of socket heartbeat payload. This runner does not claim all #8232
 contracts are met.
+
+#9676 moved the compact projection ahead of PostgreSQL for no-search pages:
+the bound video-history parameter for the 60-row mixed page fell from
+10,297,081 to 705,481 bytes, the SQL result from 511,058 to 31,998 bytes, and
+the plan's temporary I/O from 2,682 blocks each way to none at the default
+work_mem. Searches still match the full stored metadata. The browser response
+is unchanged at 32,212 decoded bytes. `galleryCollections.db.test.js` prints
+these measurements with `PORTOS_COLLECTION_BENCHMARK=1`.

@@ -1,6 +1,7 @@
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isTestRunner } from '../../lib/runtimeEnv.js';
 import { listAssets, countAssets, galleryFacets, listMixedGalleryPage, collectionCovers, visibleImageCollections } from './db.js';
+import { compactGalleryRecord } from './logic.js';
 
 const escapeHatch = () => process.env.MEMORY_BACKEND === 'file' || isTestRunner();
 const keyFor = ({ kind, data }) => `${kind}:${kind === 'image' ? data.filename : data.id}`;
@@ -8,33 +9,6 @@ const keyForRef = item => `${item.kind}:${item.ref}`;
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : 0;
 const text = value => typeof value === 'string' && value.trim() ? value : null;
 const readImages = async diskReader => (diskReader || (await import('../imageGen/local.js')).listGallery)();
-
-// Card fields a compact list row keeps: identity, file addressing, lineage
-// badges and the chips MediaCard renders. Everything else — full prompts,
-// negative prompts, provider payloads — stays on the record and is read on
-// demand (`/gallery/lookup`, `/video-gen/history/:id`).
-const COMPACT_FIELDS = ['id', 'filename', 'path', 'thumbnail', 'createdAt', 'hidden', 'width', 'height',
-  'appId', 'model', 'modelId', 'mode', 'seed', 'steps', 'numFrames', 'fps', 'renderMs', 'loraFilenames',
-  'lora_filenames', 'loraPaths', 'lora_paths', 'stitchedFrom', 'upscaledFrom', 'extractedFromVideoId',
-  'cleanedFrom', 'autoCleaned', 'regenerated', 'watermarkRemoved'];
-const COMPACT_PROMPT_CHARS = 240;
-
-/**
- * Opt-in list projection (#8292). `compact: true` marks the row as a PREVIEW:
- * its prompt is cut to a display label, so a consumer must hydrate the full
- * record before editing it or handing its prompt/settings to a generation
- * action. Search and counts still run over the full stored metadata.
- */
-function compactGalleryRecord(data) {
-  if (!data || typeof data !== 'object') return data;
-  const row = { compact: true };
-  for (const field of COMPACT_FIELDS) if (data[field] !== undefined) row[field] = data[field];
-  const prompt = text(data.prompt) || text(data.metadata?.prompt);
-  if (prompt) {
-    row.prompt = prompt.length > COMPACT_PROMPT_CHARS ? `${prompt.slice(0, COMPACT_PROMPT_CHARS).trimEnd()}…` : prompt;
-  }
-  return row;
-}
 
 async function resolveScope({ collectionId, starred, mediaKeys, collectionSnapshot }) {
   let keys = mediaKeys;
@@ -104,19 +78,21 @@ export async function listGalleryPage({
       counts = { image: counted.filter(row => row.kind === 'image').length,
         video: counted.filter(row => row.kind === 'video').length, all: counted.length };
     }
+    if (compact) {
+      items = items.map(item => mixed ? { kind: item.kind, data: compactGalleryRecord(item.data) } : compactGalleryRecord(item));
+    }
   } else if (summary && mixed) {
+    // The DB reader returns compact rows itself: without a search it never
+    // sends or buffers full prompts/detail bodies (#9676).
     const countScope = starred ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
     ({ items, total, hiddenTotal, counts } = await listMixedGalleryPage({
-      ...filters, limit, offset, orderedKeys: scope.orderedKeys, cover, countMediaKeys: countScope.mediaKeys,
+      ...filters, limit, offset, orderedKeys: scope.orderedKeys, cover, countMediaKeys: countScope.mediaKeys, compact,
     }));
   } else {
     [items, total, hiddenTotal] = await Promise.all([
-      listAssets({ ...filters, limit, offset, typed: mixed, orderedKeys: scope.orderedKeys, cover }),
-      countAssets(filters), summary ? countAssets({ ...filters, hidden: true }) : undefined,
+      listAssets({ ...filters, limit, offset, typed: mixed, orderedKeys: scope.orderedKeys, cover, compact }),
+      countAssets({ ...filters, compact }), summary ? countAssets({ ...filters, hidden: true, compact }) : undefined,
     ]);
-  }
-  if (compact) {
-    items = items.map(item => mixed ? { kind: item.kind, data: compactGalleryRecord(item.data) } : compactGalleryRecord(item));
   }
   return { items, total, limit, offset, ...(summary ? { hiddenTotal, ...(counts ? { counts } : {}) } : {}) };
 }
