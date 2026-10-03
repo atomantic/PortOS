@@ -1,13 +1,19 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import { readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
+import { setImmediate } from 'timers/promises';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
-const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-epigenetic-' });
+const { tempRoot, makeProxy, spies, cleanup } = mockPathsDataRoot({
+  prefix: 'portos-epigenetic-',
+  wrapExports: ['atomicWrite', 'ensureDir', 'readJSONFile'],
+  makeSpy: vi.fn,
+});
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makeProxy({ ...actual, atomicWrite: vi.fn(actual.atomicWrite) });
+  return makeProxy(actual);
 });
 
 vi.mock('fs/promises', async () => {
@@ -16,6 +22,7 @@ vi.mock('fs/promises', async () => {
 });
 
 const { atomicWrite } = await import('../lib/fileUtils.js');
+const fileUtils = await vi.importActual('../lib/fileUtils.js');
 const { readFile: realReadFile } = await vi.importActual('fs/promises');
 
 const {
@@ -44,11 +51,44 @@ const addTracked = (id, frequency = 'daily') => addIntervention({
   trackingUnit: 'dose',
 });
 
+// Pause the first save against a valid existing file. Synchronous snapshot
+// reads and a no-op ensureDir make later reads observable without disk timing.
+// The real atomic writer still persists every successful mutation.
+const overlapMutations = async (operations, { rejectFirst = false } = {}) => {
+  spies.ensureDir.mockResolvedValue(undefined);
+  vi.mocked(readFile).mockImplementation(async (...args) => readFileSync(...args));
+  spies.readJSONFile.mockClear();
+  const started = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  spies.atomicWrite.mockImplementationOnce(async (...args) => {
+    started.resolve();
+    await release.promise;
+    if (rejectFirst) throw new Error('Injected epigenetic write failure');
+    return fileUtils.atomicWrite(...args);
+  });
+
+  const pending = [operations[0]()];
+  await started.promise;
+  pending.push(...operations.slice(1).map((operation) => operation()));
+  // Attach rejection handlers before releasing an injected failure.
+  const outcomes = Promise.allSettled(pending);
+  try {
+    await setImmediate();
+    expect(spies.readJSONFile).toHaveBeenCalledTimes(1);
+  } finally {
+    release.resolve();
+    await outcomes;
+  }
+  return outcomes;
+};
+
 describe('epigenetic intervention persistence', () => {
   beforeEach(async () => {
     await rm(meatspaceRoot, { recursive: true, force: true });
     vi.mocked(readFile).mockReset().mockImplementation(realReadFile);
-    vi.mocked(atomicWrite).mockClear();
+    for (const [name, spy] of Object.entries(spies)) {
+      spy.mockReset().mockImplementation(fileUtils[name]);
+    }
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
@@ -167,6 +207,107 @@ describe('epigenetic intervention persistence', () => {
       '2026-09-12',
     ]);
     expect(interventions['vitamin-d'].logs[1]).toMatchObject({ amount: 5, notes: 'corrected' });
+  });
+
+  it('preserves overlapping logs on different interventions in the shared file', async () => {
+    await addTracked('first-habit');
+    await addTracked('second-habit');
+
+    const outcomes = await overlapMutations([
+      () => logEntry('first-habit', { amount: 1, date: '2026-09-10' }),
+      () => logEntry('second-habit', { amount: 2, date: '2026-09-10' }),
+    ]);
+
+    expect(outcomes).toMatchObject([
+      { status: 'fulfilled', value: { amount: 1 } },
+      { status: 'fulfilled', value: { amount: 2 } },
+    ]);
+    await expect(getInterventions()).resolves.toMatchObject({
+      interventions: {
+        'first-habit': { logs: [{ amount: 1 }] },
+        'second-habit': { logs: [{ amount: 2 }] },
+      },
+    });
+  });
+
+  it('serializes add, log, settings, and delete against the same persisted document', async () => {
+    await addTracked('existing-habit');
+    await addTracked('removed-habit');
+
+    const outcomes = await overlapMutations([
+      () => addTracked('new-habit'),
+      () => logEntry('existing-habit', { amount: 3, date: '2026-09-10' }),
+      () => updateIntervention('new-habit', { dosage: '2 doses' }),
+      () => deleteIntervention('removed-habit'),
+    ]);
+
+    expect(outcomes.map(({ status }) => status)).toEqual(Array(4).fill('fulfilled'));
+    await expect(getInterventions()).resolves.toMatchObject({
+      interventions: {
+        'existing-habit': { logs: [{ amount: 3 }] },
+        'new-habit': { dosage: '2 doses' },
+      },
+      trackedCount: 2,
+    });
+  });
+
+  it('preserves concurrent settings and logs while replacing same-date entries', async () => {
+    await addTracked('daily-habit');
+
+    const outcomes = await overlapMutations([
+      () => logEntry('daily-habit', { amount: 1, date: '2026-09-12' }),
+      () => updateIntervention('daily-habit', { dosage: '5 doses', notes: 'updated settings' }),
+      () => logEntry('daily-habit', { amount: 5, date: '2026-09-12', notes: 'corrected' }),
+      () => logEntry('daily-habit', { amount: 2, date: '2026-09-10' }),
+    ]);
+
+    expect(outcomes.map(({ status }) => status)).toEqual(Array(4).fill('fulfilled'));
+    const { interventions } = await getInterventions();
+    expect(interventions['daily-habit']).toMatchObject({
+      dosage: '5 doses',
+      notes: 'updated settings',
+      logs: [
+        { amount: 2, date: '2026-09-10' },
+        { amount: 5, date: '2026-09-12', notes: 'corrected' },
+      ],
+    });
+    expect(interventions['daily-habit'].logs).toHaveLength(2);
+  });
+
+  it('does not resurrect a deleted intervention with queued settings or logs', async () => {
+    await addTracked('removed-habit');
+
+    const outcomes = await overlapMutations([
+      () => deleteIntervention('removed-habit'),
+      () => updateIntervention('removed-habit', { dosage: '3 doses' }),
+      () => logEntry('removed-habit', { amount: 3, date: '2026-09-10' }),
+    ]);
+
+    expect(outcomes).toEqual([
+      { status: 'fulfilled', value: { success: true } },
+      { status: 'fulfilled', value: { error: 'Intervention not found' } },
+      { status: 'fulfilled', value: { error: 'Intervention not found' } },
+    ]);
+    await expect(getInterventions()).resolves.toMatchObject({ interventions: {}, trackedCount: 0 });
+  });
+
+  it('rejects a failed save without poisoning queued or later mutations', async () => {
+    await addTracked('daily-habit');
+
+    const outcomes = await overlapMutations([
+      () => logEntry('daily-habit', { amount: 1, date: '2026-09-10' }),
+      () => updateIntervention('daily-habit', { dosage: '2 doses' }),
+    ], { rejectFirst: true });
+
+    expect(outcomes[0]).toMatchObject({ status: 'rejected' });
+    expect(outcomes[0].reason.message).toBe('Injected epigenetic write failure');
+    expect(outcomes[1]).toMatchObject({ status: 'fulfilled', value: { dosage: '2 doses', logs: [] } });
+    await logEntry('daily-habit', { amount: 3, date: '2026-09-11' });
+    await expect(getInterventions()).resolves.toMatchObject({
+      interventions: {
+        'daily-habit': { dosage: '2 doses', logs: [{ amount: 3, date: '2026-09-11' }] },
+      },
+    });
   });
 
   it('uses daily and weekly schedules to calculate compliance over the same window', async () => {
