@@ -1,3 +1,5 @@
+import { StrictMode } from 'react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { awaitPageLoaded } from '../test/pageLoadBarrier';
@@ -22,11 +24,6 @@ vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), { error: toastError, success: vi.fn() }),
 }));
 
-vi.mock('react-router', () => ({
-  useParams: () => ({ projectId: 'p1' }),
-  useNavigate: () => vi.fn(),
-}));
-
 vi.mock('../hooks/useSseProgress', () => ({
   useSseProgress: () => ({ latest: null, closed: false }),
   isTerminalSseFrame: () => false,
@@ -34,6 +31,8 @@ vi.mock('../hooks/useSseProgress', () => ({
 
 const api = vi.hoisted(() => ({
   project: null,
+  getTimelineProject: vi.fn(),
+  getGalleryImages: vi.fn(),
   history: [],
   gallery: [],
   music: { tracks: [] },
@@ -42,12 +41,9 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/api', () => ({
-  getTimelineProject: async () => api.project,
+  getTimelineProject: (...args) => api.getTimelineProject(...args),
   listVideoHistory: async () => api.history,
-  getGalleryImages: async (filenames) => {
-    if (api.galleryThrows) throw new Error('network');
-    return api.gallery.filter(row => filenames.includes(row.filename));
-  },
+  getGalleryImages: (...args) => api.getGalleryImages(...args),
   listMusicLibrary: async () => api.music,
   updateTimelineProject: (...args) => api.updateTimelineProject(...args),
   renderTimelineProject: async () => ({ jobId: 'j1' }),
@@ -85,17 +81,169 @@ beforeEach(() => {
   api.gallery = [{ filename: 'plate.png' }, { filename: 'logo.png' }];
   api.music = { tracks: [{ filename: 'bed.mp3', label: 'Bed' }] };
   api.galleryThrows = false;
-  api.updateTimelineProject.mockClear();
+  api.getTimelineProject.mockReset().mockImplementation(async () => api.project);
+  api.getGalleryImages.mockReset().mockImplementation(async (filenames) => {
+    if (api.galleryThrows) throw new Error('network');
+    return api.gallery.filter(row => filenames.includes(row.filename));
+  });
+  api.updateTimelineProject.mockReset().mockResolvedValue({ updatedAt: 'u2' });
 });
 
+const renderEditorRoute = ({ strict = false } = {}) => {
+  const router = createMemoryRouter([
+    { path: '/media/timeline/:projectId', element: <VideoTimelineEditor /> },
+  ], { initialEntries: ['/media/timeline/p1'] });
+  const provider = <RouterProvider router={router} />;
+  return { ...render(strict ? <StrictMode>{provider}</StrictMode> : provider), router };
+};
+
 const renderEditor = async () => {
-  render(<VideoTimelineEditor />);
+  renderEditorRoute();
   await awaitPageLoaded('Loading timeline project');
 };
 
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+};
+
+describe('route and refresh ownership', () => {
+  it('keeps B lanes and its save token after a late A read completes', async () => {
+    const oldRead = deferred();
+    api.getTimelineProject.mockImplementation((id) => id === 'p1' ? oldRead.promise : Promise.resolve(project({
+      id: 'p2', name: 'Example B', updatedAt: 'b1', segments: [{ ...stillSegment, assetFile: 'logo.png' }],
+    })));
+    const view = renderEditorRoute();
+
+    await act(async () => { await view.router.navigate('/media/timeline/p2'); });
+    expect(await screen.findByRole('textbox', { name: 'Project name' })).toHaveValue('Example B');
+    await act(async () => { oldRead.resolve(project({ name: 'Example A', segments: [stillSegment] })); });
+
+    expect(api.getTimelineProject).toHaveBeenCalledWith('p1', { silent: true });
+    expect(api.getTimelineProject).toHaveBeenCalledWith('p2', { silent: true });
+    expect(view.router.state.location.pathname).toBe('/media/timeline/p2');
+    expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Example B');
+    expect(screen.getByRole('button', { name: 'Remove logo.png from timeline' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove plate.png from timeline' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+    view.unmount();
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledOnce());
+    expect(api.updateTimelineProject).toHaveBeenCalledWith('p2', expect.objectContaining({
+      expectedUpdatedAt: 'b1',
+      segments: [expect.objectContaining({ assetFile: 'logo.png' }), expect.objectContaining({ clipId: CLIP_A })],
+    }), { silent: true });
+  });
+
+  it('flushes A once through its existing write tail without owning B pending edits or token', async () => {
+    const firstSave = deferred();
+    api.getTimelineProject.mockImplementation(async (id) => project({
+      id, name: id === 'p1' ? 'Example A' : 'Example B', updatedAt: id === 'p1' ? 'a1' : 'b1',
+    }));
+    api.updateTimelineProject.mockImplementationOnce(() => firstSave.promise).mockResolvedValue({ updatedAt: 'a3' });
+    const view = renderEditorRoute();
+    await awaitPageLoaded('Loading timeline project');
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledOnce(), { timeout: 1500 });
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+    await act(async () => { await view.router.navigate('/media/timeline/p2'); });
+    expect(await screen.findByRole('textbox', { name: 'Project name' })).toHaveValue('Example B');
+    expect(screen.getByText(/Add clips, stills, overlays and audio/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+
+    await act(async () => { firstSave.resolve({ updatedAt: 'a2' }); });
+    expect(api.updateTimelineProject).toHaveBeenCalledTimes(2);
+    expect(api.updateTimelineProject.mock.calls[1]).toEqual(['p1', expect.objectContaining({
+      expectedUpdatedAt: 'a2', segments: [expect.objectContaining({ clipId: CLIP_A }), expect.objectContaining({ clipId: CLIP_A })],
+    }), { silent: true }]);
+    expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Example B');
+    const pendingUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(pendingUnload);
+    expect(pendingUnload.defaultPrevented).toBe(true);
+
+    view.unmount();
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledTimes(3));
+    expect(api.updateTimelineProject.mock.calls[2]).toEqual(['p2', expect.objectContaining({
+      expectedUpdatedAt: 'b1', segments: [expect.objectContaining({ clipId: CLIP_A })],
+    }), { silent: true }]);
+  });
+
+  it('keeps the current StrictMode load pending when the disposed setup completes', async () => {
+    const disposedRead = deferred();
+    const currentRead = deferred();
+    api.getTimelineProject.mockImplementationOnce(() => disposedRead.promise).mockImplementationOnce(() => currentRead.promise);
+    const view = renderEditorRoute({ strict: true });
+    expect(api.getTimelineProject).toHaveBeenCalledTimes(2);
+
+    await act(async () => { disposedRead.resolve(project({ name: 'Obsolete project', updatedAt: 'old' })); });
+    expect(screen.getByLabelText('Loading timeline project')).toBeInTheDocument();
+    await act(async () => { currentRead.resolve(project({ name: 'Current project', updatedAt: 'current' })); });
+    expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Current project');
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+    view.unmount();
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledOnce());
+    expect(api.updateTimelineProject.mock.calls[0][1].expectedUpdatedAt).toBe('current');
+  });
+
+  it('drops a superseded refresh that was already waiting for its image catalogue', async () => {
+    const oldGallery = deferred();
+    const secondSave = deferred();
+    api.getTimelineProject.mockResolvedValueOnce(project({ segments: [clipSegment] }))
+      .mockResolvedValueOnce(project({ name: 'Obsolete project', updatedAt: 'old', segments: [stillSegment] }))
+      .mockResolvedValueOnce(project({ name: 'Current project', updatedAt: 'current', segments: [{ ...stillSegment, assetFile: 'logo.png' }] }));
+    api.getGalleryImages.mockResolvedValueOnce([])
+      .mockImplementationOnce(() => oldGallery.promise)
+      .mockResolvedValueOnce([{ filename: 'logo.png' }]);
+    const conflict = Object.assign(new Error('conflict'), { code: 'CONFLICT' });
+    api.updateTimelineProject.mockRejectedValueOnce(conflict).mockImplementationOnce(() => secondSave.promise);
+    const view = renderEditorRoute();
+    await awaitPageLoaded('Loading timeline project');
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    await waitFor(() => expect(api.getGalleryImages).toHaveBeenCalledTimes(2));
+    await act(async () => { secondSave.reject(conflict); });
+    expect(await screen.findByRole('textbox', { name: 'Project name' })).toHaveValue('Current project');
+    await act(async () => { oldGallery.resolve([]); });
+
+    expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Current project');
+    expect(screen.getByRole('button', { name: 'Remove logo.png from timeline' })).toBeInTheDocument();
+    expect(screen.queryByText('(missing)')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+    view.unmount();
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledTimes(3));
+    expect(api.updateTimelineProject.mock.calls[2][1].expectedUpdatedAt).toBe('current');
+  });
+
+  it('ignores an obsolete same-project reload error after a newer conflict reload succeeds', async () => {
+    const oldReload = deferred();
+    const currentReload = deferred();
+    api.getTimelineProject.mockResolvedValueOnce(project({ segments: [clipSegment] }))
+      .mockImplementationOnce(() => oldReload.promise)
+      .mockImplementationOnce(() => currentReload.promise);
+    const conflict = Object.assign(new Error('conflict'), { code: 'CONFLICT' });
+    api.updateTimelineProject.mockRejectedValueOnce(conflict).mockRejectedValueOnce(conflict);
+    const view = renderEditorRoute();
+    await awaitPageLoaded('Loading timeline project');
+    // Both render attempts flush a save and start a conflict refresh.
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    await waitFor(() => expect(api.getTimelineProject).toHaveBeenCalledTimes(3));
+    await act(async () => { currentReload.resolve(project({ name: 'Current project', updatedAt: 'current' })); });
+    await act(async () => { oldReload.reject(new Error('Obsolete failure')); });
+
+    expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Current project');
+    expect(screen.queryByText('Obsolete failure')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+    view.unmount();
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledTimes(3));
+    expect(api.updateTimelineProject.mock.calls[2][1].expectedUpdatedAt).toBe('current');
+  });
+});
+
 describe('pending lane saves', () => {
   it('flushes the latest edit exactly once when unmounted before the debounce', async () => {
-    const view = render(<VideoTimelineEditor />);
+    const view = renderEditorRoute();
     await awaitPageLoaded('Loading timeline project');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
@@ -107,7 +255,7 @@ describe('pending lane saves', () => {
   });
 
   it('does not save on unmount when no lane edit is pending', async () => {
-    const view = render(<VideoTimelineEditor />);
+    const view = renderEditorRoute();
     await awaitPageLoaded('Loading timeline project');
 
     view.unmount();
@@ -116,7 +264,7 @@ describe('pending lane saves', () => {
   });
 
   it('prevents unload only while a debounced save is pending', async () => {
-    const view = render(<VideoTimelineEditor />);
+    const view = renderEditorRoute();
     await awaitPageLoaded('Loading timeline project');
     fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
 
@@ -132,7 +280,7 @@ describe('pending lane saves', () => {
   });
 
   it('keeps the leave warning after a save fails', async () => {
-    const view = render(<VideoTimelineEditor />);
+    const view = renderEditorRoute();
     await awaitPageLoaded('Loading timeline project');
     api.updateTimelineProject.mockRejectedValueOnce(new Error('offline'));
     fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
