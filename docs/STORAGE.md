@@ -165,6 +165,12 @@ while its worker is running, the retry reports `running`. Once release finishes,
 there is no active operation left to recover. A fenced refusal never authorizes
 removing the fence or launching another operation.
 
+### Snapshot database restore recovery
+
+`data/database-restore-recovery.json` (`server/lib/databaseRestoreRecovery.js`) is `file-primary`, machine-local recovery state for ONE in-flight snapshot database restore (#9725). It must be readable before PostgreSQL, so it cannot live in the database it fences. The file's presence is the admission fence: `server/lib/db.js` refuses every ordinary operation while it exists, and boot resumes recovery before loading anything else. The versioned record holds the operation UUID, stage (`replaying` | `repairing`), timestamp, snapshot id, the admitted dump's SHA-256 and the pre-replay sync-feed sequence positions — no credentials, connection details or application records. It is published (atomic no-replace link) before the destructive replay and removed only after repair completes or the replay is proven rolled back. Absent means idle; a malformed or unreadable file fails closed. It is never federated, has no reference seed and needs no migration (absent on every existing install). It and its `.database-restore-recovery-*.pending` scratch are non-overridable backup excludes: a restored copy would fence the database for an operation that no longer exists.
+
+The companion `restore_receipts` table (`db-primary`, machine-local, never federated) holds one row per committed restore operation (`operation_id`, `dump_sha256`, `applied_at`), written inside the replay transaction so a crash or lost response at `COMMIT` is resolved from the database. It is additive base schema (`restoreReceiptsDdl` in `server/lib/db/schema/core.js`, mirrored in `init-db.sql`), and the replay also creates it for dumps that predate it. `pg_dump` excludes its rows (`--exclude-table-data`), and the restore's reset drops it with the other application tables, so receipts describe only this machine's restores. Operator contract: [committed-restore recovery](BACKUP.md#database--restorepostgres).
+
 ### Calendar daily-review recovery
 
 Daily reviews remain in the existing `data/calendar/daily-reviews/<date>.json`

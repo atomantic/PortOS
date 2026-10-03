@@ -68,6 +68,15 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Machine-local replay receipts for snapshot database restores (#9725): one row
+-- per committed restore operation, written inside the replay transaction.
+-- Mirrors restoreReceiptsDdl in server/lib/db/schema/core.js.
+CREATE TABLE IF NOT EXISTS restore_receipts (
+  operation_id UUID PRIMARY KEY,
+  dump_sha256 TEXT NOT NULL,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- MeatSpace POST normalized run/attempt history. Machine-local: personal
 -- performance evidence never rides federation.
 CREATE TABLE IF NOT EXISTS post_runs (

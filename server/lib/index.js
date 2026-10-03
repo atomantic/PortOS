@@ -777,6 +777,8 @@ export * from './databaseAuthority.js';
 
 export * from './databaseMaintenanceJournal.js';
 
+export * from './databaseRestoreRecovery.js';
+
 export * from './databaseWriterRegistry.js';
 
 export * from './musicVideoCreativeContext.js';

@@ -20,6 +20,11 @@ vi.mock('../services/backup.js', () => ({
   ]
 }));
 
+vi.mock('../services/backupRestoreRecovery.js', () => ({
+  getDatabaseRestoreRecoveryStatus: vi.fn(() => ({ pending: false })),
+  resumeDatabaseRestore: vi.fn(),
+}));
+
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(),
   settingsEvents: new EventEmitter()
@@ -38,6 +43,7 @@ import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import * as backup from '../services/backup.js';
+import { getDatabaseRestoreRecoveryStatus, resumeDatabaseRestore } from '../services/backupRestoreRecovery.js';
 import { getSettings } from '../services/settings.js';
 import backupRoutes from './backup.js';
 
@@ -70,8 +76,18 @@ describe('backup routes', () => {
         defaultExcludes: [
           { path: '/browser-profile/', reason: 'test', overridable: false },
           { path: '/loras/*.safetensors', reason: 'test', overridable: true }
-        ]
+        ],
+        restoreRecovery: { pending: false },
       });
+    });
+
+    it('reports a committed restore awaiting recovery (#9725)', async () => {
+      backup.getState.mockResolvedValue({});
+      getSettings.mockResolvedValue({ backup: {} });
+      const pending = { pending: true, id: '00000000-0000-4000-8000-000000000001', stage: 'repairing', snapshotId: 'snap-1', createdAt: '2026-01-01T00:00:00.000Z' };
+      getDatabaseRestoreRecoveryStatus.mockReturnValueOnce(pending);
+      const res = await request(buildApp()).get('/api/backup/status');
+      expect(res.body.restoreRecovery).toEqual(pending);
     });
 
     it('serves a process-local persistence failure without hiding the last successful snapshot', async () => {
@@ -348,6 +364,25 @@ describe('backup routes', () => {
         'snap-2',
         expect.objectContaining({ dryRun: true })
       );
+    });
+  });
+
+  describe('POST /api/backup/restore-db/recover', () => {
+    it('resumes exactly the named pending operation', async () => {
+      const id = '00000000-0000-4000-8000-000000000001';
+      resumeDatabaseRestore.mockResolvedValue({ status: 'ok', outcome: 'repaired', syncCursorsRewound: 1 });
+      const res = await request(buildApp()).post('/api/backup/restore-db/recover').send({ id });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ status: 'ok', outcome: 'repaired', syncCursorsRewound: 1 });
+      expect(resumeDatabaseRestore).toHaveBeenCalledWith(id);
+    });
+
+    it('rejects a missing or malformed operation id without resuming', async () => {
+      for (const body of [{}, { id: 'snap-1' }, { id: '00000000-0000-4000-8000-000000000001', dryRun: false }]) {
+        const res = await request(buildApp()).post('/api/backup/restore-db/recover').send(body);
+        expect(res.status).toBe(400);
+      }
+      expect(resumeDatabaseRestore).not.toHaveBeenCalled();
     });
   });
 

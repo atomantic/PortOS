@@ -5,9 +5,11 @@ import {
   validateRequest,
   restoreRequestSchema,
   restoreDbRequestSchema,
+  restoreDbRecoverRequestSchema,
   snapshotDownloadQuerySchema,
 } from '../lib/validation.js';
 import * as backup from '../services/backup.js';
+import { getDatabaseRestoreRecoveryStatus, resumeDatabaseRestore } from '../services/backupRestoreRecovery.js';
 import { getSettings } from '../services/settings.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 
@@ -22,7 +24,9 @@ router.get('/status', asyncHandler(async (req, res) => {
     ...state,
     destPath: settings.backup?.destPath ?? null,
     nextRun,
-    defaultExcludes: backup.DEFAULT_EXCLUDES
+    defaultExcludes: backup.DEFAULT_EXCLUDES,
+    // A committed database restore awaiting repair keeps the database fenced.
+    restoreRecovery: getDatabaseRestoreRecoveryStatus(),
   });
 }));
 
@@ -106,6 +110,14 @@ router.post('/restore-db', asyncHandler(async (req, res) => {
     ...(source ? { source } : {}),
   });
   res.json(result);
+}));
+
+// POST /api/backup/restore-db/recover
+// Resume the pending committed restore: resolve an unknown replay outcome from
+// its receipt, then finish schema/migration/federation repair. Never replays.
+router.post('/restore-db/recover', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(restoreDbRecoverRequestSchema, req.body);
+  res.json(await resumeDatabaseRestore(id));
 }));
 
 export default router;

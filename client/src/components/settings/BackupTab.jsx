@@ -10,7 +10,7 @@ import Modal from '../ui/Modal';
 import Banner from '../ui/Banner';
 import CollapsibleSection from '../ui/CollapsibleSection';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
-import { getSettings, updateSettings, getBackupStatus, getBackupSnapshots, restoreDatabase, deleteBackupSnapshot } from '../../services/api';
+import { getSettings, updateSettings, getBackupStatus, getBackupSnapshots, restoreDatabase, recoverDatabaseRestore, deleteBackupSnapshot } from '../../services/api';
 import { formatBytes } from '../../utils/formatters';
 import { describeCron } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
@@ -94,6 +94,10 @@ export function BackupTab() {
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState(null); // source-bound request pending confirm
   const [restorePreview, setRestorePreview] = useState(null); // dry-run result
+  // A committed database restore awaiting recovery (#9725): the server keeps
+  // ordinary database work fenced until it is resumed to completion.
+  const [restoreRecovery, setRestoreRecovery] = useState(null);
+  const [recovering, setRecovering] = useState(false);
   const restorePreviewGenerationRef = useRef(0);
   const [deleteTarget, setDeleteTarget] = useState(null); // snapshot pending delete confirm
   const [deletingIds, setDeletingIds] = useState(new Set());
@@ -159,6 +163,7 @@ export function BackupTab() {
         setDefaultExcludes(asArray(status?.defaultExcludes));
         setPgBackup(status?.pgBackup ?? null);
         setBackupStatus(status?.status ?? 'never');
+        setRestoreRecovery(status?.restoreRecovery?.pending ? status.restoreRecovery : null);
         setSnapshots(Array.isArray(snaps) ? snaps : []);
       })
       .catch(() => {
@@ -340,14 +345,32 @@ export function BackupTab() {
       toast.success(`Database restored from ${target.request.snapshotId}`, { icon: '💾' });
     } else if (DB_RESTORE_REFUSALS[result.reason]) {
       toast.error(DB_RESTORE_REFUSALS[result.reason]);
-    } else if (result.reason === 'restore_schema_reconciliation') {
-      toast.error('The database dump was applied, but schema recovery is incomplete. It was not rolled back. Restart PortOS to retry recovery; if it still fails, check the server logs and repair the database before continuing.', { duration: Infinity });
-    } else if (result.reason === 'restore_sync_resync') {
-      toast.error('The database dump was applied, but peer sync could not be reset. Memories and Catalog records pulled from peers after this snapshot may stay missing; check the server logs and repeat the restore.', { duration: Infinity });
+    } else if (result.recovery) {
+      // Committed (or not yet provably rolled back): the server keeps the
+      // database fenced. Resume — never repeat — the restore.
+      setRestoreRecovery({ pending: true, ...result.recovery });
+      toast.error(result.error || 'The database restore needs recovery before the database can be used.', { duration: Infinity });
     } else {
       toast.error(`DB restore failed: ${result.reason || 'unknown'}`);
     }
     setRestorePreview(null);
+  };
+
+  const resumeRestoreRecovery = async () => {
+    if (!restoreRecovery?.id || recovering) return;
+    setRecovering(true);
+    const result = await recoverDatabaseRestore(restoreRecovery.id, { silent: true })
+      .catch(err => ({ status: 'failed', error: err?.message }))
+      .finally(() => setRecovering(false));
+    if (result.status === 'ok') {
+      setRestoreRecovery(null);
+      toast.success(result.outcome === 'rolled_back'
+        ? 'The restore had rolled back; the database is unchanged and available again.'
+        : 'Database restore recovery finished; the database is available again.', { icon: '💾' });
+      return;
+    }
+    if (result.recovery) setRestoreRecovery({ pending: true, ...result.recovery });
+    toast.error(result.error || 'Database restore recovery is still pending; check the server logs.');
   };
 
   const handleDeleteSnapshot = (snapshot) => {
@@ -382,6 +405,26 @@ export function BackupTab() {
       className="@container bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5"
     >
       <h2 id="backup-settings-heading" className="sr-only">Backup operations and configuration</h2>
+      {restoreRecovery && (
+        <Banner tone="error" icon={AlertTriangle} title="Database restore needs recovery" size="md">
+          {restoreRecovery.damaged ? (
+            <>The restore recovery journal is unreadable, so database features stay paused. Check the server logs; the journal is never cleared automatically.</>
+          ) : (
+            <>
+              The restore from snapshot <code>{restoreRecovery.snapshotId}</code> is not finished, so database features are paused.
+              Resume it to finish schema and peer-sync repair. The dump is never replayed again.{' '}
+              <button
+                type="button"
+                onClick={resumeRestoreRecovery}
+                disabled={recovering}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-error hover:bg-port-error/80 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+              >
+                {recovering ? <BrailleSpinner text="Recovering" className="text-white" /> : <><Database size={14} aria-hidden="true" /> Resume recovery</>}
+              </button>
+            </>
+          )}
+        </Banner>
+      )}
       {backupStatus === 'degraded' && (
         <Banner tone="warning" icon={AlertTriangle} title="Last backup degraded" size="md">
           Files were saved but the database dump failed.{' '}
