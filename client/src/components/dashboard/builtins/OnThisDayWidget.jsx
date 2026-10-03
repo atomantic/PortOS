@@ -9,8 +9,8 @@ import { History, Lightbulb, BookOpen, NotebookPen } from 'lucide-react';
 // lookbacks, so a mounted widget always has rows — no empty state needed.
 const ROW_META = {
   journal: { icon: NotebookPen, label: 'Daily Log', link: (item) => `/brain/daily-log?date=${item.date}` },
-  memory: { icon: BookOpen, label: 'Memory', link: () => '/brain/memory' },
-  idea: { icon: Lightbulb, label: 'Idea', link: () => '/brain/ideas' },
+  memory: { icon: BookOpen, label: 'Memory', link: (item) => `/brain/memory/memories/${encodeURIComponent(item.id)}` },
+  idea: { icon: Lightbulb, label: 'Idea', link: (item) => `/brain/ideas/ideas/${encodeURIComponent(item.id)}` },
 };
 
 const yearsAgoLabel = (yearsAgo) => (yearsAgo === 1 ? '1 year ago' : `${yearsAgo} years ago`);
