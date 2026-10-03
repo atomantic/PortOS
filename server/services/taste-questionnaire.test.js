@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, readFile, writeFile } from 'fs/promises';
+import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 // taste-questionnaire binds PATHS.digitalTwin at module load; makePathsProxy
@@ -186,5 +188,144 @@ describe('generatePersonalizedTasteQuestion outcomes', () => {
       isPersonalized: true,
       section: 'movies',
     });
+  });
+});
+
+// #9785: taste-profile.json has one write owner. A summary's provider call runs
+// outside the mutation queue, so an accepted peer sync (or a local reset) can
+// land mid-generation — the summary must never republish its pre-call snapshot.
+describe('summary generation vs concurrent writers', () => {
+  const PROVIDER = { id: 'provider-1', name: 'Example Provider', defaultModel: 'model-1' };
+  const T0 = '2026-01-01T00:00:00.000Z';
+  const T1 = '2026-01-02T00:00:00.000Z';
+
+  const profilePath = () => join(tempRoot, 'digital-twin', 'taste-profile.json');
+  const aestheticsPath = () => join(tempRoot, 'digital-twin', 'AESTHETICS.md');
+  const readDisk = async () => JSON.parse(await readFile(profilePath(), 'utf-8'));
+  const answer = (questionId, text, answeredAt = T0) => ({ questionId, answer: text, answeredAt });
+  const section = (responses) => ({ status: 'in_progress', responses, summary: null });
+
+  const seedProfile = async (sections) => {
+    await mkdir(join(tempRoot, 'digital-twin'), { recursive: true });
+    await writeFile(profilePath(), JSON.stringify({
+      version: '1.0.0', createdAt: T0, updatedAt: T0, profileSummary: null, lastSessionAt: T0, sections,
+    }));
+  };
+
+  // A peer snapshot as `getDigitalTwinSnapshot` ships it; older updatedAt so the
+  // only effect is the response union.
+  const peerTaste = (sections) => ({ version: '1.0.0', updatedAt: T0, sections });
+
+  // Hold the provider open until the test releases it, so writers can interleave.
+  const holdProvider = async () => {
+    const { resolveTextProvider, callProviderAISimple } = await import('./aiProvider.js');
+    resolveTextProvider.mockResolvedValue(PROVIDER);
+    let release;
+    callProviderAISimple.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+    return {
+      started: () => vi.waitFor(() => expect(callProviderAISimple).toHaveBeenCalledTimes(1)),
+      release: (text) => release({ text }),
+    };
+  };
+
+  const loadModules = async () => ({
+    taste: await import('./taste-questionnaire.js'),
+    sync: await import('./digital-twin-sync.js'),
+  });
+
+  it('keeps an answer synced during a section summary and rejects the stale summary', async () => {
+    await seedProfile({ movies: section([answer('movies-core-1', 'Example Film One')]) });
+    const { taste, sync } = await loadModules();
+    const provider = await holdProvider();
+
+    const pending = taste.generateSectionSummary('movies');
+    pending.catch(() => {});
+    await provider.started();
+
+    // Completing while the provider is still held proves the LLM call is outside the queue.
+    const synced = await sync.applyDigitalTwinRemote({
+      taste: peerTaste({ movies: section([answer('movies-core-2', 'Example Genre', T1)]) }),
+    });
+    expect(synced.applied).toBe(true);
+
+    provider.release('### Movies & Film Profile\n- stale');
+    await expect(pending).rejects.toMatchObject({ status: 409, code: 'TASTE_SUMMARY_STALE' });
+
+    const disk = await readDisk();
+    expect(disk.sections.movies.responses.map(r => r.questionId).sort()).toEqual(['movies-core-1', 'movies-core-2']);
+    expect(disk.sections.movies.summary).toBeNull();
+    expect((await taste.getSectionResponses('movies')).map(r => r.questionId).sort())
+      .toEqual(['movies-core-1', 'movies-core-2']);
+  });
+
+  it('saves an unchanged-input summary onto the latest record without dropping a concurrent sync', async () => {
+    await seedProfile({
+      movies: section([answer('movies-core-1', 'Example Film One')]),
+      food: section([]),
+    });
+    const { taste, sync } = await loadModules();
+    const provider = await holdProvider();
+
+    const pending = taste.generateSectionSummary('movies');
+    await provider.started();
+    await sync.applyDigitalTwinRemote({
+      taste: peerTaste({ food: section([answer('food-core-1', 'Example Cuisine', T1)]) }),
+    });
+    provider.release('### Movies & Film Profile\n- fresh');
+
+    await expect(pending).resolves.toEqual({ section: 'movies', summary: '### Movies & Film Profile\n- fresh' });
+    const disk = await readDisk();
+    expect(disk.sections.movies.summary).toBe('### Movies & Film Profile\n- fresh');
+    expect(disk.sections.food.responses.map(r => r.questionId)).toEqual(['food-core-1']);
+    expect((await taste.getSectionResponses('food')).map(r => r.questionId)).toEqual(['food-core-1']);
+  });
+
+  it('rejects an overall summary whose inputs were reset, without writing it or AESTHETICS.md', async () => {
+    await seedProfile({
+      movies: section([answer('movies-core-1', 'Example Film One')]),
+      music: section([answer('music-core-1', 'Example Album')]),
+    });
+    await writeFile(aestheticsPath(), '# Aesthetic Preferences\n\nexisting\n');
+    const { taste } = await loadModules();
+    const provider = await holdProvider();
+
+    const pending = taste.generateOverallSummary();
+    pending.catch(() => {});
+    await provider.started();
+    await taste.resetSection('music');
+    provider.release('### Unified Taste Profile\n- stale');
+
+    await expect(pending).rejects.toMatchObject({ status: 409, code: 'TASTE_SUMMARY_STALE' });
+    const disk = await readDisk();
+    expect(disk.profileSummary).toBeNull();
+    expect(disk.sections.music.responses).toEqual([]);
+    expect(disk.sections.movies.responses.map(r => r.questionId)).toEqual(['movies-core-1']);
+    expect(await readFile(aestheticsPath(), 'utf-8')).toBe('# Aesthetic Preferences\n\nexisting\n');
+  });
+
+  it('serializes a cold local answer with an overlapping peer merge so neither is lost', async () => {
+    await seedProfile({ food: section([]) });
+    const { taste, sync } = await loadModules();
+
+    await Promise.all([
+      taste.submitAnswer('food', 'food-core-1', 'Example Cuisine'),
+      sync.applyDigitalTwinRemote({
+        taste: peerTaste({ food: section([answer('food-core-2', 'Example Cooking Style', T1)]) }),
+      }),
+    ]);
+
+    const ids = (await readDisk()).sections.food.responses.map(r => r.questionId).sort();
+    expect(ids).toEqual(['food-core-1', 'food-core-2']);
+    expect((await taste.getSectionResponses('food')).map(r => r.questionId).sort()).toEqual(ids);
+  });
+
+  it('refuses to mutate over a corrupt profile instead of rewriting defaults', async () => {
+    await mkdir(join(tempRoot, 'digital-twin'), { recursive: true });
+    await writeFile(profilePath(), '{ not json');
+    const { taste } = await loadModules();
+
+    await expect(taste.submitAnswer('food', 'food-core-1', 'Example Cuisine'))
+      .rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+    expect(await readFile(profilePath(), 'utf-8')).toBe('{ not json');
   });
 });
