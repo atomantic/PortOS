@@ -6,7 +6,7 @@ import { formatCount } from '../utils/formatters';
 export const actionSelectionLink = (id) => `/review/${encodeURIComponent(id)}?view=today`;
 
 /** The same canonical rows and failure contract in every compact surface. */
-export default function ActionQueuePreview({ title = 'Actions', sources, queue, onSelect, compact = false }) {
+export default function ActionQueuePreview({ title = 'Actions', sources, queue, onSelect, compact = false, scopeDescription }) {
   const live = useActionQueue();
   const { data, loading, error } = queue || live;
   const heading = useId();
@@ -29,15 +29,16 @@ export default function ActionQueuePreview({ title = 'Actions', sources, queue, 
     <section className={compact ? '@container p-4' : '@container bg-port-card border border-port-border rounded-xl p-4'} aria-labelledby={heading}>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <h2 id={heading} className="text-sm font-semibold text-port-text">{title}</h2>
-        {data && <span className="text-xs text-port-warning">{lowerBound ? 'At least ' : ''}{formatCount(required.length)} required</span>}
+        {data && <span className="text-xs text-port-warning">{lowerBound ? 'At least ' : ''}{formatCount(required.length)} {scopeDescription ? 'required in this view' : 'required'}</span>}
       </div>
+      {scopeDescription && <p className="text-xs text-port-text-muted mb-3">{scopeDescription}</p>}
       {loading && !data && <p role="status" className="text-sm text-port-text-muted">Loading actions…</p>}
       {error && <p role="alert" className="text-sm text-port-warning">{data ? 'Actions could not refresh. Showing the last known actions.' : 'Actions unavailable.'} <button type="button" onClick={live.refetch} className="underline min-h-[44px]">Retry</button></p>}
       {unavailable.length > 0 && <p role="status" className="text-xs text-port-warning mb-2">Could not load {sourceNames(unavailable)}. <button type="button" onClick={live.refetch} className="underline min-h-[44px]">Retry</button> <Link to="/review?view=today" onClick={onSelect} className="underline">View source details</Link></p>}
       {limited.length > 0 && <p className="text-xs text-port-text-muted mb-2">Showing a limited preview of {sourceNames(limited)}. Open Actions for source details.</p>}
       {unknownPartial && <p role="status" className="text-xs text-port-text-muted mb-2">Action counts are incomplete. Open Actions for source details.</p>}
       {morePages && <p className="text-xs text-port-text-muted mb-2">More actions are available in Open Actions.</p>}
-      {data && !lowerBound && items.length === 0 && <p className="text-sm text-port-text-muted">All caught up!</p>}
+      {data && !lowerBound && items.length === 0 && <p className="text-sm text-port-text-muted">{scopeDescription ? 'No recommendations in this view.' : 'All caught up!'}</p>}
       {groups.map((group) => group.items.length > 0 && (
         <div key={group.label} className="mb-3">
           <h4 className="text-xs text-port-text-muted mb-1">{group.label}</h4>
@@ -53,7 +54,7 @@ export default function ActionQueuePreview({ title = 'Actions', sources, queue, 
           </ul>
         </div>
       ))}
-      <Link to="/review?view=today" onClick={onSelect} className="inline-flex items-center min-h-[44px] text-sm text-port-accent">Open Actions</Link>
+      <Link to="/review?view=today" onClick={onSelect} className="inline-flex items-center min-h-[44px] text-sm text-port-accent">{scopeDescription ? 'View all actions' : 'Open Actions'}</Link>
     </section>
   );
 }

@@ -14,8 +14,9 @@ vi.mock('../services/api', () => ({ getReviewQueue: mock.getReviewQueue }));
 vi.mock('../services/socket', () => ({ default: { on: mock.on, off: mock.off } }));
 
 const required = { id: 'health:disk', source: 'health', required: true, title: 'Disk needs attention', reason: 'Free space is low' };
+const requiredThread = { id: 'thread:follow-up', source: 'thread', required: true, title: 'Thread needs follow-up', reason: 'A reply is waiting' };
 const optional = { id: 'product:daily-post', source: 'product', required: false, isRecommendation: true, title: 'Daily POST', reason: 'Practice today' };
-const envelope = (items = [required, optional], partial = false) => ({ items, partial, sources: {} });
+const envelope = (items = [required, requiredThread, optional], partial = false) => ({ items, partial, sources: {} });
 
 function Surfaces() {
   const [history, setHistory] = useState([{ id: 'event-1', title: 'An event', read: false, timestamp: '2026-01-01' }]);
@@ -38,9 +39,15 @@ afterEach(cleanup);
 describe('canonical action previews', () => {
   it('shares IDs and required counts across the bell and saved widgets; history controls cannot complete actions', async () => {
     show();
-    const bell = await screen.findByRole('button', { name: 'Notifications (1 required actions)' });
-    const daily = screen.getByRole('region', { name: "Today's actions" });
-    expect(within(daily).getByRole('heading', { name: "Today's actions", level: 2 })).toBeInTheDocument();
+    const bell = await screen.findByRole('button', { name: 'Notifications (2 required actions)' });
+    const daily = screen.getByRole('region', { name: 'Daily recommendations' });
+    expect(within(daily).getByRole('heading', { name: 'Daily recommendations', level: 2 })).toBeInTheDocument();
+    expect(within(daily).getByText('Product recommendations only. Required actions from other sources are not shown here.')).toBeInTheDocument();
+    expect(within(daily).getByText('0 required in this view')).toBeInTheDocument();
+    expect(within(daily).queryByText('Disk needs attention')).not.toBeInTheDocument();
+    expect(within(daily).queryByText('Thread needs follow-up')).not.toBeInTheDocument();
+    expect(within(daily).getByText('Optional recommendations')).toBeInTheDocument();
+    expect(within(daily).getByRole('link', { name: 'View all actions' })).toHaveAttribute('href', '/review?view=today');
     fireEvent.click(bell);
     const panel = screen.getByRole('region', { name: 'Notifications' });
     expect(mock.getReviewQueue).toHaveBeenCalledTimes(1);
@@ -48,10 +55,11 @@ describe('canonical action previews', () => {
       expect(link).toHaveAttribute('href', '/review/health%3Adisk?view=today');
       expect(link.closest('li')).toHaveAttribute('data-action-id', 'health:disk');
     }
+    expect(screen.getAllByRole('link', { name: /Thread needs follow-up/ })).toHaveLength(2);
     expect(screen.getAllByRole('link', { name: /Disk needs attention/ })).toHaveLength(3);
     expect(screen.getAllByRole('link', { name: /Daily POST/ })).toHaveLength(4);
     fireEvent.click(within(panel).getByRole('button', { name: 'Mark all notifications as read' }));
-    expect(bell).toHaveAccessibleName('Notifications (1 required actions)');
+    expect(bell).toHaveAccessibleName('Notifications (2 required actions)');
     fireEvent.click(within(panel).getByRole('button', { name: 'Clear all notifications' }));
     expect(within(panel).getByText('No notifications')).toBeInTheDocument();
     expect(within(panel).getByRole('link', { name: /Disk needs attention/ })).toBeInTheDocument();
@@ -86,8 +94,8 @@ describe('canonical action previews', () => {
     } });
     show();
     fireEvent.click(await screen.findByRole('button', { name: /Notifications/ }));
-    const daily = screen.getByRole('region', { name: "Today's actions" });
-    expect(within(daily).getByText('All caught up!')).toBeInTheDocument();
+    const daily = screen.getByRole('region', { name: 'Daily recommendations' });
+    expect(within(daily).getByText('No recommendations in this view.')).toBeInTheDocument();
     expect(within(daily).queryByText(/limited preview|unavailable|incomplete/)).not.toBeInTheDocument();
     const notices = screen.getAllByText(/Showing a limited preview of Stored review obligations/);
     expect(notices).toHaveLength(2);
@@ -105,7 +113,7 @@ describe('canonical action previews', () => {
     const notice = await screen.findByText(/Could not load Stored review obligations/);
     expect(within(notice).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(within(notice).getByRole('link', { name: 'View source details' })).toHaveAttribute('href', '/review?view=today');
-    expect(within(screen.getByRole('region', { name: "Today's actions" })).getByText('All caught up!')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Daily recommendations' })).getByText('No recommendations in this view.')).toBeInTheDocument();
   });
 
   it('drops an older response when completion invalidates a pending read', async () => {
@@ -115,7 +123,8 @@ describe('canonical action previews', () => {
     mock.getReviewQueue.mockResolvedValue(envelope([]));
     act(() => mock.on.mock.calls.find(([event]) => event === 'review:queue:changed')[1]());
     await act(async () => finish(envelope()));
-    await waitFor(() => expect(screen.getAllByText('All caught up!')).toHaveLength(3));
+    await waitFor(() => expect(screen.getAllByText('All caught up!')).toHaveLength(2));
+    expect(screen.getByText('No recommendations in this view.')).toBeInTheDocument();
     expect(screen.queryByText('Disk needs attention')).not.toBeInTheDocument();
   });
 });
