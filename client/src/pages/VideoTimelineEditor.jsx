@@ -105,6 +105,10 @@ const withLaneEntries = (lanes, lane, next) => {
 
 export default function VideoTimelineEditor() {
   const { projectId } = useParams();
+  return <TimelineProjectEditor key={projectId} projectId={projectId} />;
+}
+
+function TimelineProjectEditor({ projectId }) {
   const navigate = useNavigate();
   const [project, setProject] = useState(null);
   const [history, setHistory] = useState([]);
@@ -167,7 +171,14 @@ export default function VideoTimelineEditor() {
 
   const { segments, overlays, audio } = lanes;
 
+  // Each instance owns one project; cleanup also invalidates reads during
+  // StrictMode's setup/cleanup cycle and any late conflict-triggered reload.
+  const activeRef = useRef(false);
+  const refreshGenerationRef = useRef(0);
   const refresh = useCallback(async () => {
+    if (!activeRef.current) return;
+    const generation = ++refreshGenerationRef.current;
+    const isCurrent = () => activeRef.current && refreshGenerationRef.current === generation;
     setLoading(true);
     setError(null);
     // `null` = the request FAILED; `[]` = a genuinely empty library. Collapsing
@@ -175,12 +186,17 @@ export default function VideoTimelineEditor() {
     // every segment, overlay and bed drawing on it as "missing" — sources the
     // server can still render perfectly well.
     const [proj, hist, library] = await Promise.all([
-      api.getTimelineProject(projectId).catch((err) => { setError(err.message); return null; }),
+      api.getTimelineProject(projectId, { silent: true }).catch((err) => {
+        if (isCurrent()) setError(err.message);
+        return null;
+      }),
       api.listVideoHistory({ silent: true }).catch(() => null),
       api.listMusicLibrary({ silent: true }).catch(() => null),
     ]);
+    if (!isCurrent()) return;
     const imageRefs = [...(proj?.segments || []), ...(proj?.overlays || [])].filter(item => item.assetKind === 'images').map(item => item.assetFile);
     const gallery = proj ? await api.getGalleryImages(imageRefs, { silent: true }).catch(() => null) : null;
+    if (!isCurrent()) return;
     if (gallery) setCheckedImageNames(new Set(imageRefs));
     if (proj) {
       const nextLanes = {
@@ -222,7 +238,14 @@ export default function VideoTimelineEditor() {
     selectionRef.current = idx >= 0 ? { lane: selection.lane, index: idx } : { lane: null, index: -1 };
   }, [selection, lanes]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    activeRef.current = true;
+    refresh();
+    return () => {
+      activeRef.current = false;
+      refreshGenerationRef.current += 1;
+    };
+  }, [refresh]);
 
   // Sync the rename draft to the canonical name when the project (re)loads
   // or is renamed elsewhere. Local edits (onChange) take over until the
