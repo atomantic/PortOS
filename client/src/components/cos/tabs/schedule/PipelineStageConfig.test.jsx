@@ -269,7 +269,7 @@ describe('PipelineStageConfig — posture-driven eligibility', () => {
 
     const modelSelects = screen.getAllByLabelText('Model');
     // The daemon's installed models, NOT the record's `stale-cached-model`.
-    expect([...modelSelects[1].options].map((o) => o.value)).toEqual(['', 'tool-model', 'safe-model']);
+    expect([...modelSelects[1].options].map((o) => o.value)).toEqual(['', 'safe-model', 'tool-model']);
     expect(modelSelects[1].querySelector('option[value="tool-model"]')).toBeDisabled();
     expect(modelSelects[1].querySelector('option[value="safe-model"]')).not.toBeDisabled();
   });
