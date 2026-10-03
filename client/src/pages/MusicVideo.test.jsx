@@ -320,8 +320,26 @@ const openProject = async (project, stage = null) => {
   if (stage) await openStage(stage);
 };
 
-const openCreateForm = async () => {
+// The header hides New project / Autonomous while a project is open, so step
+// back to the project list via the picker first.
+const clickNewProject = async () => {
+  const picker = screen.getByLabelText('Project');
+  const previous = picker.value;
+  if (!screen.queryByRole('button', { name: /New project/i })) {
+    fireEvent.change(picker, { target: { value: '' } });
+  }
   fireEvent.click(await screen.findByRole('button', { name: /New project/i }));
+  // Keep the drawer open and return to the project the test was on.
+  if (previous) fireEvent.change(picker, { target: { value: previous } });
+};
+
+const openCreateForm = clickNewProject;
+
+// Mocked useSseProgress mutates shared state without re-rendering; toggling the
+// rename form is a harmless page-level state change that forces a render.
+const forceRerender = () => {
+  fireEvent.click(screen.getByRole('button', { name: 'Rename project' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 };
 
 // Probes/harness for the URL-nav backstop test: a location readout plus a
@@ -409,6 +427,19 @@ describe('MusicVideo project load recovery (#9761)', () => {
   });
 });
 
+describe('MusicVideo project header', () => {
+  it('hides New project / Autonomous inside a project and renames it from the header', async () => {
+    await openProject(PROJECT_WITH_CLIP);
+    expect(screen.queryByRole('button', { name: /New project/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Autonomous/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Rename project' }));
+    fireEvent.change(screen.getByLabelText('Project title'), { target: { value: 'Renamed Video' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { name: 'Renamed Video' }));
+    await screen.findByRole('heading', { level: 2, name: 'Renamed Video' });
+  });
+});
+
 describe('MusicVideo render control (#1760)', () => {
   it('enables Render and kicks off the job when a scene has a clip', async () => {
     await openProject(PROJECT_WITH_CLIP, 'review');
@@ -457,7 +488,7 @@ describe('MusicVideo render control (#1760)', () => {
 
     // A metadata frame omits progress; the final-render adapter keeps 38%.
     sseState.latest = { type: 'status', message: 'Finishing output' };
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    await clickNewProject();
     await openStage('review');
     expect(screen.getByTitle('Cancel render')).toHaveTextContent('38%');
     await selectProject(other.id);
@@ -488,7 +519,7 @@ describe('MusicVideo render control (#1760)', () => {
     expect(cancelMusicVideoRender).toHaveBeenCalledWith('existing-render', { silent: true });
     expect(toast.error).toHaveBeenCalledTimes(1);
     sseState.latest = { type: 'canceled' };
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    forceRerender();
     expect(toast.info).toHaveBeenCalledWith('Render cancelled');
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled();
   });
@@ -504,7 +535,7 @@ describe('MusicVideo render control (#1760)', () => {
     await selectProject(other.id);
     await openStage('review');
     sseState.latest = { type: 'error', error: 'Renderer stopped' };
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    await clickNewProject();
     expect(toast.error).toHaveBeenCalledWith('Renderer stopped');
     expect(screen.getByLabelText('Project').querySelector('option[value="mv-1"]')).toHaveTextContent('failed');
     expect(screen.getByLabelText('Project').querySelector('option[value="mv-other"]')).toHaveTextContent('ready');
@@ -558,7 +589,7 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
     // `sseState` object rather than its own React state, so nothing re-renders
     // the component until something else does — force one (mirrors the
     // existing render-job tests' use of this same mock).
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    forceRerender();
     await screen.findByText(/Rendering draft — 50%/);
   });
 
@@ -576,7 +607,7 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
     await waitFor(() => expect(renderMusicVideoExcerpt).toHaveBeenCalled());
     await settle();
     sseState.latest = { type: 'complete', result: { excerptId: 'mve-1', filename: 'excerpt-1.mp4' } };
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    forceRerender();
 
     await screen.findByLabelText(/Play excerpt/i);
     expect(screen.getByText('lip-sync drifts here')).toBeInTheDocument();
