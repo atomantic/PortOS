@@ -31,9 +31,9 @@ A release therefore pays for one full run (on its PR), not three.
 
 PRs into `main` use `scripts/ci-test-plan.js` to classify the changed files
 before installing dependencies. Directory-scoped features add their server and
-client feature tests, and every behavioral source (nested or flat) uses Vitest's import-graph-aware
-`related` mode, fed the changed behavioral source paths plus the planner's
-explicit test files. The planner deliberately chooses full CI for shared
+client feature tests, and every behavioral source (nested or flat) uses
+Vitest's import-graph-aware `related` mode, fed the changed behavioral source
+paths plus the planner's explicit test files. The planner deliberately chooses full CI for shared
 composition roots, test configuration, dependency manifests, workflow changes,
 unknown artifacts, or wide diffs.
 
