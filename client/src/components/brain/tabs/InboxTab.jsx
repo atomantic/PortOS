@@ -370,7 +370,7 @@ export default function InboxTab({ onRefresh, settings }) {
     <div className="grid grid-cols-1 @5xl/inbox:grid-cols-[minmax(0,1fr)_360px] gap-4 content-start">
       {/* Capture input — spans both columns */}
       <form onSubmit={handleSubmit} className="@5xl/inbox:col-span-2">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             ref={inputRef}
             type="text"
@@ -382,16 +382,16 @@ export default function InboxTab({ onRefresh, settings }) {
             }}
             placeholder="One thought at a time..."
             aria-label="New inbox thought"
-            className="flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
+            className="min-w-0 basis-full @lg/inbox:basis-0 flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
           />
-          <VoiceCapture onTranscript={handleVoiceTranscript} />
+          <div className="min-w-0 max-w-full"><VoiceCapture onTranscript={handleVoiceTranscript} /></div>
           <button
             type="button"
             onClick={() => setCreative(v => !v)}
             aria-pressed={creative}
             aria-label="Toggle creative capture mode"
             disabled={inputIsUrl}
-            className={`px-3 py-3 rounded-lg border transition-colors flex items-center gap-1.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed ${creative
+            className={`shrink-0 min-w-11 min-h-11 justify-center px-3 py-3 rounded-lg border transition-colors flex items-center gap-1.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed ${creative
               ? 'bg-port-accent-2/20 text-port-accent-2 border-port-accent-2/40'
               : 'bg-port-card text-gray-400 border-port-border hover:text-gray-200'}`}
             title={inputIsUrl
@@ -404,7 +404,7 @@ export default function InboxTab({ onRefresh, settings }) {
           <button
             type="submit"
             disabled={!inputText.trim()}
-            className="px-4 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="shrink-0 min-w-11 min-h-11 justify-center px-4 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             title="Capture thought" aria-label="Capture thought"
           >
             <Send className="w-5 h-5" />
