@@ -84,3 +84,34 @@ it('does not mislabel current footage after it has been approved as production p
   expect(screen.getByText(/Matches current inputs/)).toHaveTextContent('production approval is separate');
   expect(screen.queryByText(/unapproved draft/)).toBeNull();
 });
+
+describe('ExcerptPanel roles and deletion (#10148)', () => {
+  const done = (id, extra = {}) => ({ id, status: 'complete', filename: `${id}.mp4`, startSec: 0, endSec: 12, dependencyState: { status: 'current' }, ...extra });
+
+  it('keeps the review draft visible when a newer social cut renders, and badges both', () => {
+    render(<ExcerptPanel project={documentProject} rendering={false} progress={0}
+      excerpts={[done('draft'), done('social', { aspect: '9:16' })]} startExcerpt={vi.fn()} />);
+    const list = screen.getByRole('list', { name: 'Current draft and active renders' });
+    expect(list).toHaveTextContent('Social cut');
+    expect(list).toHaveTextContent('Draft');
+    expect(screen.queryByText(/Earlier and failed attempts/)).toBeNull();
+  });
+
+  it('labels the registered proof and offers no delete for it', () => {
+    const project = { ...documentProject, productionReview: { proof: { excerptId: 'p1' } } };
+    render(<ExcerptPanel project={project} rendering={false} progress={0}
+      excerpts={[done('p1')]} startExcerpt={vi.fn()} />);
+    expect(screen.getByText('Proof')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Delete/ })).toBeNull();
+  });
+
+  it('requires a second click to delete an ordinary excerpt', () => {
+    const deleteExcerpt = vi.fn();
+    render(<ExcerptPanel project={documentProject} rendering={false} progress={0}
+      excerpts={[done('d1')]} startExcerpt={vi.fn()} deleteExcerpt={deleteExcerpt} />);
+    fireEvent.click(screen.getByRole('button', { name: /Delete/ }));
+    expect(deleteExcerpt).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
+    expect(deleteExcerpt).toHaveBeenCalledWith('d1');
+  });
+});

@@ -116,6 +116,9 @@ export function removeExcerptFromProject(project, excerptId) {
   if (excerpt.status === 'rendering') {
     throw excerptError(409, 'EXCERPT_RENDERING', 'Cancel the in-progress render before deleting this excerpt');
   }
+  if (project.productionReview?.proof?.excerptId === excerptId) {
+    throw excerptError(409, 'EXCERPT_REGISTERED_PROOF', 'This excerpt is the registered production proof. Revoke its approval or register a different proof before deleting it');
+  }
   return { project: { ...project, excerpts: projectExcerpts(project).filter((e) => e.id !== excerptId) }, excerpt };
 }
 

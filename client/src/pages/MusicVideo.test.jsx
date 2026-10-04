@@ -711,8 +711,8 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
       note: { id: 'mvn-1', atSec: 0, note: 'looks great', verdict: 'approved' },
     });
     // A note can render before the add action clears its in-flight gate.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Looks good' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Looks good' }));
     await waitFor(() => expect(updateMusicVideoExcerptNote).toHaveBeenCalledWith('mv-1', 'mve-1', 'mvn-1', { verdict: 'approved' }, { silent: true }));
 
     deleteMusicVideoExcerptNote.mockResolvedValue({ ...project, excerpts: [{ ...project.excerpts[0], notes: [] }] });
@@ -730,6 +730,7 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
     deleteMusicVideoExcerpt.mockResolvedValue({ ...project, excerpts: [] });
     await openProject(project, 'review');
     fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
     await waitFor(() => expect(deleteMusicVideoExcerpt).toHaveBeenCalledWith('mv-1', 'mve-1', { silent: true }));
     await waitFor(() => expect(screen.queryByLabelText(/Play excerpt/i)).not.toBeInTheDocument());
   });
