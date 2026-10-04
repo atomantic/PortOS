@@ -15,15 +15,15 @@
  */
 
 import { stat } from 'fs/promises';
-import { randomUUID } from 'crypto';
 import { join, resolve, isAbsolute } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { PATHS, atomicWrite, isPathInsideDir } from '../lib/fileUtils.js';
+import { atomicWrite, isPathInsideDir } from '../lib/fileUtils.js';
 import { writeWavAudioFile } from '../lib/wavAudioFile.js';
 import { chiptuneScoreSchema, CHIPTUNE_LIMITS, CHIPTUNE_NOISE_PRESETS, scoreDurationSec } from '../lib/chiptuneScore.js';
 import { renderScoreToWav } from '../lib/chiptuneRender.js';
 import { resolveProviderAndModel, assertProvider, runPromptThroughProvider } from './promptRunner.js';
 import * as tracks from './tracks/index.js';
+import { publishMusicTake } from './musicTakePublication.js';
 import { getAppById, PORTOS_APP_ID } from './apps.js';
 
 export const DEFAULT_PUBLISH_SUBDIR = 'game/assets/music';
@@ -126,11 +126,10 @@ const renderScoreToFile = (score, dir, basename) => writeWavAudioFile(renderScor
 export async function renderChiptuneTrack({ trackId }) {
   const track = await requireTrack(trackId);
   const score = requireScore(track);
-  const filename = await renderScoreToFile(score, PATHS.music, `music-${randomUUID()}`);
+  const wav = renderScoreToWav(score);
   const durationSec = Math.max(1, Math.round(scoreDurationSec(score)));
-
-  const updated = await tracks.appendActiveTake(trackId, {
-    audioFilename: filename, prompt: track.chiptunePrompt, engine: 'chiptune', durationSec,
+  const { track: updated, filename } = await publishMusicTake({
+    trackId, wav, take: { prompt: track.chiptunePrompt, engine: 'chiptune', durationSec },
   });
   return { track: updated, filename, durationSec };
 }

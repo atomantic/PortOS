@@ -29,15 +29,12 @@
  * Provider Usage Policy — no cold bootstrap).
  */
 
-import { randomUUID } from 'crypto';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { PATHS } from '../lib/fileUtils.js';
 import { trimTo } from '../lib/textUtils.js';
 import { pcmToWavBuffer } from '../lib/chiptuneRender.js';
-import { writeWavAudioFile } from '../lib/wavAudioFile.js';
 import { WAVE_SKETCH_SAMPLE_RATE, synthesizeSketchChannels } from '../lib/waveSketch.js';
 import {
   PAINTED_CANVAS_DECLICK_SEC, PAINTED_CANVAS_LIMITS, PAINTED_CANVAS_MASTER_GAIN, PAINTED_CANVAS_SAMPLE_RATE,
@@ -46,6 +43,7 @@ import {
 import { spectrogramPixels } from '../lib/spectrogramImage.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import * as tracks from './tracks/index.js';
+import { publishMusicTake } from './musicTakePublication.js';
 
 const WAVEFORM_ENGINE = 'waveform';
 const DEFAULT_CANVAS_SEC = 20;
@@ -365,11 +363,12 @@ export async function renderWaveSketchToTrack({ trackId, prompt, title }) {
   }
 
   const wav = pcmToWavBuffer(synthesizeSketchChannels(normalized), { sampleRate: WAVE_SKETCH_SAMPLE_RATE });
-  const filename = await writeWavAudioFile(wav, PATHS.music, `music-${randomUUID()}`);
   const durationSec = Math.max(1, Math.round(normalized.durationSec));
-  const updated = await tracks.appendActiveTake(trackId, {
-    audioFilename: filename, prompt: prompt || track.waveSketchPrompt || track.prompt, engine: WAVEFORM_ENGINE, durationSec,
-  }, title ? { title } : {});
+  const { track: updated, filename } = await publishMusicTake({
+    trackId, wav,
+    take: { prompt: prompt || track.waveSketchPrompt || track.prompt, engine: WAVEFORM_ENGINE, durationSec },
+    patch: title ? { title } : {},
+  });
   if (!updated) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`🎨 Rendered painted take (${durationSec}s)`);
   return { track: updated, filename, durationSec };

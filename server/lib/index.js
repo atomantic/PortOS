@@ -606,6 +606,7 @@ export * from './vaultCrypto.js';
 
 // === Model & config ===
 export * from './backupConfig.js';
+export * from './backupSnapshotBoundary.js';
 export * from './systemIdle.js';
 export * from './browserConfig.js';
 export * from './buildId.js';
