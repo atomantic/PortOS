@@ -661,6 +661,8 @@ describe('buildLightContextPrompt', () => {
       );
 
       expect(prompt).toContain(UI_AUDIT_RUNTIME_RULE);
+      expect(prompt).toContain('Network.setCookie');
+      expect(prompt).toContain('$PORTOS_API_TOKEN');
       expect(prompt).toContain('not browserless');
       expect(prompt).toContain('agent.browsers.list()');
       expect(prompt).toContain('empty array returned by agent.browsers.list() ([])');
