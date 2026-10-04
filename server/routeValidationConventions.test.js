@@ -73,10 +73,15 @@ const ALLOWED_UNVALIDATED = new Map([
 
 const VALIDATE_CALL = /\bvalidateRequest\s*\(|\bvalidate\s*\(|\bparseBody\s*\(|\.safeParse\s*\(|[Ss]chema\w*\.parse\s*\(/g;
 
-/** Names bound to `source` (`req.body` / `req.query`) or to a rest-copy of it. */
+/**
+ * Names bound to the whole `source` object (`req.body` / `req.query`) or to a
+ * rest-copy of it. A field initializer (`const limit = req.query.limit`) is not
+ * an alias: `\b` would stop at the dot and treat `limit` as the query object.
+ */
 function inputAliases(text, source) {
+  const escaped = source.replaceAll('.', '\\.');
   const alias = new RegExp(
-    `\\b(?:const|let|var)\\s+(\\{[^}]*\\}|[A-Za-z_$][\\w$]*)\\s*=\\s*${source.replace('.', '\\.')}\\b`,
+    `\\b(?:const|let|var)\\s+(\\{[^}]*\\}|[A-Za-z_$][\\w$]*)\\s*=\\s*${escaped}\\b(?!\\s*(?:\\?\\.|\\.|\\[))`,
     'g',
   );
   const names = [];
@@ -248,6 +253,7 @@ const UNVALIDATED_QUERY_BASELINE = [
   'routes/imageGen.js GET /models/:modelId/download',
   'routes/imageGen.js GET /regen/availability',
   'routes/imageGen.js GET /status',
+  'routes/imageGenSetup.js POST /install',
   'routes/jira.js GET /instances/:instanceId/board-columns/:projectKey',
   'routes/jira.js GET /instances/:instanceId/projects/:projectKey/epics',
   'routes/jira.js GET /reports',
@@ -394,6 +400,8 @@ describe('the unvalidated-body recognizer', () => {
       .toEqual(['POST /x']);
     expect(findUnvalidatedBodyHandlers("router.post('/x', asyncHandler(async (req, res) => { validateRequest(schemaFor(req.body.kind), req.params); }));"))
       .toEqual(['POST /x']);
+    expect(findUnvalidatedBodyHandlers("router.post('/x', asyncHandler(async (req, res) => { const path = req.body.path; validateRequest(pathSchema, path); use(req.body.other); }));"))
+      .toEqual(['POST /x']);
   });
 
   it('accepts a body validated through an alias, a spread, or a rest copy (#10024)', () => {
@@ -462,6 +470,12 @@ describe('the unvalidated-query recognizer', () => {
       .toEqual(['GET /x/:id']);
     expect(findUnvalidatedQueryHandlers("router.get('/x', (req, res) => { validateRequest(limitSchema, req.query.limit); });"))
       .toEqual(['GET /x']);
+    expect(findUnvalidatedQueryHandlers("router.get('/x', (req, res) => { const limit = req.query.limit; validateRequest(limitSchema, limit); use(req.query.other); });"))
+      .toEqual(['GET /x']);
+    expect(findUnvalidatedQueryHandlers("router.get('/x', (req, res) => { const limit = req.query?.limit; validateRequest(limitSchema, limit); });"))
+      .toEqual(['GET /x']);
+    expect(findUnvalidatedQueryHandlers("router.get('/x', (req, res) => { const limit = req.query['limit']; validateRequest(limitSchema, limit); });"))
+      .toEqual(['GET /x']);
     expect(findUnvalidatedQueryHandlers("router.post('/x', (req, res) => { validateRequest(bodySchema, req.body); use(req.query.dryRun); });"))
       .toEqual(['POST /x']);
     // limit/offset clamping is not a schema for the query object.
@@ -476,6 +490,8 @@ describe('the unvalidated-query recognizer', () => {
       'fooSchema.safeParse(req.query)',
       'fooQuerySchema.parse(req.query)',
       'const query = req.query; validateRequest(fooSchema, query);',
+      'const query = req.query ?? {}; validateRequest(fooSchema, query);',
+      'const query = req.query || {}; validateRequest(fooSchema, query);',
       'validateRequest(fooSchema, { ...req.query, id: req.params.id });',
       'const { token, ...rest } = req.query; validateRequest(fooSchema, rest);',
     ]) {
