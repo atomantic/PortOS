@@ -379,7 +379,7 @@ export default function MusicVideo() {
   const [pickedVersion, setPickedVersion] = useState({}); // rootId -> project id
   useEffect(() => {
     const onRunEvent = (data) => {
-      if (data?.project?.id) setProjects((prev) => prev.map((p) => (p.id === data.project.id ? data.project : p)));
+      if (data?.project?.id) replaceProject(data.project);
     };
     const events = ['music-video:autonomous', 'music-video:production'];
     events.forEach((e) => socket.on(e, onRunEvent));
