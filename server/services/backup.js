@@ -1521,14 +1521,24 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
   };
   const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
-  const restoreWithCosBoundary = async () => {
-    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
-      const { withLiveCosRestore } = await import('./cosState.js');
-      return withLiveCosRestore(restoreFiles);
+  // Innermost boundary: the media registry has no queue other boundaries wait
+  // on, and acquiring it last keeps its write fence from outliving a refused
+  // CoS restore.
+  const restoreWithMediaBoundary = async () => {
+    if (!dryRun && (!scope || scope === 'media-models.json')) {
+      const { withLiveMediaModelsRestore } = await import('../lib/mediaModels.js');
+      return withLiveMediaModelsRestore(restoreFiles);
     }
     return restoreFiles();
   };
-  // Fixed acquisition order: settings -> CoS config -> CoS runtime. Settings
+  const restoreWithCosBoundary = async () => {
+    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
+      const { withLiveCosRestore } = await import('./cosState.js');
+      return withLiveCosRestore(restoreWithMediaBoundary);
+    }
+    return restoreWithMediaBoundary();
+  };
+  // Fixed acquisition order: settings -> CoS config -> CoS runtime -> media registry. Settings
   // writers drain before any CoS queue is held, and remain fenced until both
   // the transfer and all cache reconciliation (including CoS) have settled.
   if (!dryRun && (!scope || scope === 'settings.json')) {

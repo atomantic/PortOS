@@ -269,8 +269,8 @@ queue while retaining the existing restore diagnostics. Malformed restored
 settings still invalidate the cache rather than broadcasting empty defaults.
 Dry runs and unrelated selective restores do not acquire this settings boundary.
 
-A full restore acquires queues in this order: settings, CoS configuration, CoS
-runtime state. The settings queue remains held through CoS reconciliation. A
+A full restore acquires boundaries in this order: settings, CoS configuration, CoS
+runtime state, media model registry. The settings queue remains held through CoS reconciliation. A
 restore callback must never call a queued settings write API; cache reload reads
 directly and does not re-enter the queue.
 
@@ -361,3 +361,17 @@ restart**. The offline coordinator still must own shutdown/drain, transfer,
 interruption recovery, and a verified admission-release handshake (#8816).
 Do not advance journal stages manually to make this diagnostic run; unsupported
 or damaged operations must stay fenced with both database copies preserved.
+
+### Restoring the media model registry in a running server
+
+A full live file restore or a selective `media-models.json` restore fences the
+cached media registry (`withLiveMediaModelsRestore` in `server/lib/mediaModels.js`).
+From the moment the restore is requested, availability toggles, adds, patches and
+removes are refused with `MEDIA_MODELS_RESTORE_BUSY` before any disk or cache
+change; competing restores are serialized. After the transfer — including a
+partial rsync failure — the registry is reloaded from the resulting file before
+the fence is released, so a later toggle can no longer write the pre-restore
+registry back over the restored one. If the reload cannot read the file, edits stay
+refused with `MEDIA_MODELS_UNAVAILABLE` until a later restore reconciles it or
+PortOS restarts. Dry runs and unrelated selective restores do not acquire this
+boundary.

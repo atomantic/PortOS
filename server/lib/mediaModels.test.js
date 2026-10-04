@@ -1723,3 +1723,103 @@ describe('catalog availability', () => {
     expect(() => registry.setMediaModelEnabled('missing', false)).toThrow(/Unknown/);
   });
 });
+
+describe('live snapshot restore ownership', () => {
+  const customEntry = { id: 'restored-custom', name: 'Restored', runner: 'flux2', source: 'user', repo: 'example/restored' };
+  // Stand-in for rsync landing snapshot bytes: a registry carrying an entry the
+  // warm process has never seen, plus a disabled shipped model.
+  const writeRestoredRegistry = (registry) => {
+    const restored = JSON.parse(JSON.stringify(registry.loadMediaModels()));
+    restored.image = [...restored.image, customEntry];
+    restored.image[0] = { ...restored.image[0], enabled: false };
+    writeFileSync(registryFile, JSON.stringify(restored, null, 2));
+    return restored.image[0].id;
+  };
+
+  it('serves restored values and keeps them through a later unrelated mutation', async () => {
+    const registry = await import('./mediaModels.js');
+    const disabledId = (registry.loadMediaModels(), registry.getImageModels()[0].id);
+    await registry.withLiveMediaModelsRestore(async () => { writeRestoredRegistry(registry); });
+    expect(registry.getImageModels({ includeDisabled: true }).some(m => m.id === customEntry.id)).toBe(true);
+
+    const video = registry.getVideoModels()[0];
+    registry.setMediaModelEnabled(video.id, false);
+    registry.patchUserModelEntry(customEntry.id, { name: 'Renamed' });
+    const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
+    expect(onDisk.image.find(m => m.id === customEntry.id).name).toBe('Renamed');
+    expect(onDisk.image.find(m => m.id === disabledId).enabled).toBe(false);
+  });
+
+  it('refuses every mutator before touching disk or cache while a transfer is in flight, then admits them', async () => {
+    const registry = await import('./mediaModels.js');
+    const builtin = registry.getImageModels()[0];
+    const started = Promise.withResolvers();
+    const finish = Promise.withResolvers();
+    const restoring = registry.withLiveMediaModelsRestore(async () => {
+      started.resolve();
+      await finish.promise;
+    });
+    await started.promise;
+    const before = readFileSync(registryFile, 'utf-8');
+    for (const attempt of [
+      () => registry.setMediaModelEnabled(builtin.id, false),
+      () => registry.addUserModelEntry(customEntry, { kind: 'image' }),
+      () => registry.patchUserModelEntry(customEntry.id, { name: 'x' }),
+      () => registry.removeUserModelEntry(customEntry.id),
+    ]) {
+      expect(attempt).toThrow(expect.objectContaining({ code: 'MEDIA_MODELS_RESTORE_BUSY' }));
+    }
+    expect(readFileSync(registryFile, 'utf-8')).toBe(before);
+    expect(registry.getImageModels().some(m => m.id === builtin.id)).toBe(true);
+    finish.resolve();
+    await restoring;
+    expect(registry.setMediaModelEnabled(builtin.id, false)).toMatchObject({ enabled: false });
+  });
+
+  it('reconciles from the resulting bytes after a partial transfer failure and rethrows it', async () => {
+    const registry = await import('./mediaModels.js');
+    registry.loadMediaModels();
+    const failure = Object.assign(new Error('rsync died'), { code: 'RSYNC_FAILED' });
+    await expect(registry.withLiveMediaModelsRestore(async () => {
+      writeRestoredRegistry(registry);
+      throw failure;
+    })).rejects.toMatchObject({ message: 'rsync died', code: 'RSYNC_FAILED' });
+    expect(registry.getImageModels({ includeDisabled: true }).some(m => m.id === customEntry.id)).toBe(true);
+    expect(registry.removeUserModelEntry(customEntry.id)).toMatchObject({ ok: true });
+  });
+
+  it('keeps the registry read-only when the reload cannot read the restored file, until a later restore repairs it', async () => {
+    const registry = await import('./mediaModels.js');
+    const builtin = registry.getImageModels()[0];
+    await expect(registry.withLiveMediaModelsRestore(async () => {
+      writeFileSync(registryFile, '{ not json');
+    })).rejects.toThrow(/reload failed/);
+    expect(() => registry.setMediaModelEnabled(builtin.id, false))
+      .toThrow(expect.objectContaining({ code: 'MEDIA_MODELS_UNAVAILABLE' }));
+    expect(readFileSync(registryFile, 'utf-8')).toBe('{ not json');
+
+    await registry.withLiveMediaModelsRestore(async () => {
+      writeFileSync(registryFile, JSON.stringify(registry.getShippedMediaRegistry()));
+    });
+    expect(registry.setMediaModelEnabled(builtin.id, false)).toMatchObject({ enabled: false });
+  });
+
+  it('serializes competing restores and releases ownership after a failure', async () => {
+    const registry = await import('./mediaModels.js');
+    const order = [];
+    const gate = Promise.withResolvers();
+    const first = registry.withLiveMediaModelsRestore(async () => {
+      order.push('first:start');
+      await gate.promise;
+      order.push('first:end');
+      throw new Error('first failed');
+    });
+    const second = registry.withLiveMediaModelsRestore(async () => { order.push('second'); });
+    await Promise.resolve();
+    gate.resolve();
+    await expect(first).rejects.toThrow('first failed');
+    await second;
+    expect(order).toEqual(['first:start', 'first:end', 'second']);
+    expect(registry.setMediaModelEnabled(registry.getImageModels()[0].id, false)).toMatchObject({ enabled: false });
+  });
+});

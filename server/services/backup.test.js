@@ -2695,6 +2695,8 @@ describe('getState and saveState', () => {
 // is a data-loss-adjacent contract, not a style nit (issue #3917).
 vi.mock('./cosState.js', () => ({ withLiveCosRestore: vi.fn(fn => fn()) }));
 import { withLiveCosRestore } from './cosState.js';
+vi.mock('../lib/mediaModels.js', () => ({ withLiveMediaModelsRestore: vi.fn(fn => fn()) }));
+import { withLiveMediaModelsRestore } from '../lib/mediaModels.js';
 
 describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () => {
   beforeEach(() => {
@@ -2702,6 +2704,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     reloadSettings.mockClear();
     invalidateBrainCaches.mockClear();
     withLiveCosRestore.mockClear();
+    withLiveMediaModelsRestore.mockClear();
     withLiveSettingsRestore.mockClear();
   });
 
@@ -2824,6 +2827,41 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       withLiveCosRestore.mockRejectedValueOnce(new Error('Stop CoS before restoring'));
       await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'cos' })).rejects.toThrow('Stop CoS');
       expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('media registry restore ownership boundary', () => {
+    it.each([undefined, 'media-models.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
+      await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
+      expect(withLiveMediaModelsRestore).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([{ dryRun: true }, { dryRun: true, subdirFilter: 'media-models.json' }, { dryRun: false, subdirFilter: 'images' }, { dryRun: false, subdirFilter: 'cos' }, { dryRun: false, subdirFilter: 'settings.json' }])('leaves unaffected scope alone: %j', async options => {
+      await runRestore('/dest', 'snap-1', options);
+      expect(withLiveMediaModelsRestore).not.toHaveBeenCalled();
+    });
+
+    it('acquires the registry after settings and CoS and releases it when the transfer fails', async () => {
+      const order = [];
+      withLiveSettingsRestore.mockImplementationOnce(async fn => { order.push('settings'); return fn(); });
+      withLiveCosRestore.mockImplementationOnce(async fn => { order.push('cos'); return fn(); });
+      withLiveMediaModelsRestore.mockImplementationOnce(async fn => {
+        order.push('media');
+        try { return await fn(); } finally { order.push('media:released'); }
+      });
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.emit('close', 1);
+      await expect(pending).rejects.toThrow();
+      expect(order).toEqual(['settings', 'cos', 'media', 'media:released']);
+    });
+
+    it('does not fence the registry when CoS refuses a full restore', async () => {
+      withLiveCosRestore.mockRejectedValueOnce(Object.assign(new Error('Stop CoS before restoring'), { code: 'COS_RESTORE_BUSY' }));
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false })).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
+      expect(withLiveMediaModelsRestore).not.toHaveBeenCalled();
     });
   });
 
