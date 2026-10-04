@@ -352,6 +352,27 @@ export const runSchema = z.object({
   timeout: z.number().int().min(MIN_TIMEOUT).max(MAX_TIMEOUT).optional()
 });
 
+// Prompt routes (routes/prompts.js). Free-form maps stay `z.record` because the
+// stage config / variable / preview payloads are user-defined shapes; the point
+// is that a wrong-typed top level (array, string, `config: "x"`) bounces as a
+// 400 instead of reaching the file-writing service.
+export const promptStageUpdateBodySchema = z.object({
+  config: z.record(z.string(), z.unknown()).optional(),
+  template: z.string().optional()
+});
+export const promptPreviewBodySchema = z.record(z.string(), z.unknown());
+export const promptVariableCreateBodySchema = z.object({
+  key: z.string().regex(/^[A-Za-z0-9_-]+$/, 'invalid variable key').max(80)
+}).catchall(z.unknown());
+export const promptVariableUpdateBodySchema = z.record(z.string(), z.unknown());
+
+// POST /api/provider-status/:id/usage-limit — `waitTime` is a display string the
+// status service regex-matches, so a non-string would throw a 500 there.
+export const providerUsageLimitBodySchema = z.object({
+  message: z.string().optional(),
+  waitTime: z.string().optional()
+});
+
 export function validate(schema, data) {
   const result = schema.safeParse(data);
   if (result.success) {

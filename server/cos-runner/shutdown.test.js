@@ -13,6 +13,7 @@ import { killProcessTree } from '../lib/bufferedSpawn.js';
 import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.js';
 import { createTuiExitHandler } from './tuiExit.js';
 import { armForceKill } from './forceKill.js';
+import * as requestSchemas from './requestSchemas.js';
 import { createHttpDrain } from '../lib/httpDrain.js';
 
 const deferred = () => {
@@ -75,6 +76,7 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     readFile: async path => files.get(path) ?? '{}', writeFile,
     atomicWrite: (path, data) => writeFile(path, typeof data === 'string' ? data : JSON.stringify(data, null, 2)),
     withState, drainState,
+    ...requestSchemas,
     createRunnerShutdown, registerRunnerShutdownSignals, createTuiExitHandler, createHttpDrain,
     armForceKillShared: armForceKill, killProcessTree, spawn, pty,
     createAgentSentinelAccess,
