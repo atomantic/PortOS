@@ -353,6 +353,14 @@ export const runTestsInputSchema = z.object({
   personaId: optionalPersonaId
 });
 
+// Optional client-minted batch id, echoed on every `digital-twin:test-progress`
+// frame so a run can tell its own progress from another run's. Absent for
+// callers that only read the final response array.
+const optionalRequestId = z.preprocess(
+  v => (v == null || v === '') ? undefined : v,
+  z.string().min(1).max(100).optional()
+);
+
 // Run multi-model tests input
 export const runMultiTestsInputSchema = z.object({
   providers: z.array(z.object({
@@ -360,7 +368,8 @@ export const runMultiTestsInputSchema = z.object({
     model: z.string().min(1)
   })).min(1).max(10),
   testIds: optionalTestIds,
-  personaId: optionalPersonaId
+  personaId: optionalPersonaId,
+  requestId: optionalRequestId
 });
 
 // Enrichment question input

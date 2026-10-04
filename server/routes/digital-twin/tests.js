@@ -48,7 +48,7 @@ router.post('/tests/run', asyncHandler(async (req, res) => {
  * Run behavioral tests against multiple providers/models
  */
 router.post('/tests/run-multi', asyncHandler(async (req, res) => {
-  const { providers, testIds, personaId } = validateRequest(runMultiTestsInputSchema, req.body);
+  const { providers, testIds, personaId, requestId } = validateRequest(runMultiTestsInputSchema, req.body);
   await assertPersonaExists(personaId);
   const io = req.app.get('io');
 
@@ -61,9 +61,11 @@ router.post('/tests/run-multi', asyncHandler(async (req, res) => {
         error: err.message
       }));
 
-      // Emit progress via Socket.IO
+      // Emit progress via Socket.IO. `requestId` (when the caller sent one) lets
+      // the client attribute the frame to its own batch; the final response
+      // below stays the same array for callers that don't listen.
       if (io) {
-        io.emit('digital-twin:test-progress', { providerId, model, result });
+        io.emit('digital-twin:test-progress', { requestId, providerId, model, result });
       }
 
       return { providerId, model, ...result };
