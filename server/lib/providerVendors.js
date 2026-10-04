@@ -267,6 +267,20 @@ function piToolFreeArgs(args) {
 
 // ─── codex ──────────────────────────────────────────────────────────────────
 
+// Codex has no tool-disable switch, so a one-shot is never `toolFree`. It can
+// still be confined: OS-level read-only sandbox (no writes, no mutating
+// commands), no session persisted, no user config re-routing the run. Callers
+// that only need that bound (music-video code authoring over the user's own
+// brief) accept it through `isReadOnlySandboxOneShotProvider`; the Ask/app-detect
+// host-control guard keeps treating codex as non-tool-free.
+const CODEX_READ_ONLY_ONE_SHOT_ARGS = ['--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--ignore-user-config'];
+function codexReadOnlyOneShotArgs(args) {
+  const cleared = dropOptions(args, ['--sandbox', '-s']).filter((arg) => !CODEX_READ_ONLY_ONE_SHOT_ARGS.includes(arg));
+  // Options precede the stdin-prompt marker, which stays last.
+  const tail = cleared.at(-1) === '-' ? ['-'] : [];
+  return [...cleared.slice(0, cleared.length - tail.length), ...CODEX_READ_ONLY_ONE_SHOT_ARGS, ...tail];
+}
+
 // The opt-in that pins a Codex run to the account PortOS believes it is using.
 // A third-party bridge re-points Codex by writing top-level routing keys into
 // `~/.codex/config.toml`, and codex honors that file on every invocation — so
@@ -434,6 +448,7 @@ const CODEX = {
   tuiArgs: ensureCodexTuiArgs,
   cliArgs: codexCliArgs,
   spawnArgs: codexSpawnArgs,
+  toolFreeOneShot: { matchCommand: isCodexCommand, sandboxArgs: codexReadOnlyOneShotArgs },
   publicReview: {
     // The CLI id and the TUI id share one binary, so both reach the same
     // enforced recipe when a stage selects them.
@@ -1115,6 +1130,7 @@ export function toolFreeOneShotArgs(provider, args = []) {
   const spec = PROVIDER_VENDORS.find((v) => v.toolFreeOneShot?.matchCommand(provider?.command))?.toolFreeOneShot;
   const { args: stripped, removed } = stripApprovalBypassArgs(args, spec?.bypassAliases);
   if (spec?.toolFreeArgs) return { args: spec.toolFreeArgs(stripped), toolFree: true };
+  if (spec?.sandboxArgs) return { args: spec.sandboxArgs(stripped), toolFree: false, readOnlySandbox: true };
   return { args: removed && spec?.afterStrip ? spec.afterStrip(stripped) : stripped, toolFree: false };
 }
 
@@ -1127,6 +1143,19 @@ export function toolFreeOneShotArgs(provider, args = []) {
 export function isToolFreeOneShotProvider(provider) {
   if (provider?.type === PROVIDER_TYPES.API) return true;
   return provider?.type === PROVIDER_TYPES.CLI && toolFreeOneShotArgs(provider).toolFree;
+}
+
+/**
+ * Whether a headless CLI one-shot is held to an OS read-only sandbox (codex)
+ * though it cannot disable its tools. Weaker than tool-free: read tools remain.
+ */
+function isReadOnlySandboxOneShotProvider(provider) {
+  return provider?.type === PROVIDER_TYPES.CLI && toolFreeOneShotArgs(provider).readOnlySandbox === true;
+}
+
+/** Providers music-video code authoring may use: tool-free, or read-only sandboxed. */
+export function isAuthoringOneShotProvider(provider) {
+  return isToolFreeOneShotProvider(provider) || isReadOnlySandboxOneShotProvider(provider);
 }
 
 /**

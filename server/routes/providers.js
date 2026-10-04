@@ -80,6 +80,7 @@ import {
 import { runLocalRuntimeSetup, SETUP_ACTIONS } from '../services/localRuntimeSetup.js';
 import { localEndpointPort, localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import {
+  isAuthoringOneShotProvider,
   isToolFreeOneShotProvider,
   enforcedPublicReviewPosturesForProvider,
   publicReviewPosturesForProvider,
@@ -213,6 +214,7 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
     // a card offers a button the route refuses.
     canRefreshModels: decorated.canRefreshModels || Boolean(harnessCatalogRuntime(provider)),
     toolFreeOneShot: isToolFreeOneShotProvider(provider),
+    authoringOneShot: isAuthoringOneShotProvider(provider),
     publicReviewPostures,
     publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),
     publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
