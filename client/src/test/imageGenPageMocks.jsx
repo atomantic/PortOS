@@ -30,6 +30,7 @@ import { StrictMode } from 'react';
 import { act, render } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { vi } from 'vitest';
+import { MockEventSource } from './mockEventSource';
 
 /** Local model as the catalog reports it; `.defaultLocalModel` pins its regressions against this shape. */
 export const imageGenModel = (id, overrides = {}) => ({
@@ -108,11 +109,6 @@ export const state = {
   getImageGenStatus: vi.fn(defaultStatus),
   /** `generateImage`; a spy so a suite can assert payloads or reject. */
   generateImage: vi.fn(async () => ({ jobId: 'job-1' })),
-  /**
-   * `useMediaJobSse('image')`'s `attach`; a spy so federatedTarget can hold the
-   * job stream open while it asserts over the submitted payload.
-   */
-  attachJobEvents: vi.fn(),
   /** `getActiveImageJob`'s payload. */
   activeJob: null,
   /** Settings `getSettings` resolves to; reset restores DEFAULT_SETTINGS. */
@@ -159,9 +155,11 @@ export function resetImageGenMockState() {
   state.peers = [];
   state.getImageGenStatus.mockReset().mockImplementation(defaultStatus);
   state.generateImage.mockReset().mockResolvedValue({ jobId: 'job-1' });
-  // A never-resolving attach keeps a local job stream open, the way the real
-  // SSE hook behaves mid-render, without leaking timers into the test.
-  state.attachJobEvents.mockReset().mockReturnValue(new Promise(() => {}));
+  // The real media-run hook opens this for a started/resumed render; a silent
+  // stream keeps the job open mid-render without leaking timers, and a test
+  // drives its frames through `lastEventSource()`.
+  MockEventSource.reset();
+  globalThis.EventSource = MockEventSource;
   state.activeJob = null;
   state.settings = DEFAULT_SETTINGS;
   state.getSettings.mockReset().mockImplementation(async () => state.settings);
@@ -207,9 +205,6 @@ vi.mock('../services/apiImageVideo', () => ({
 
 vi.mock('../hooks/useImageGenProgress', () => ({
   useImageGenProgress: () => ({ progress: null, begin: vi.fn(), end: vi.fn(), resume: vi.fn() }),
-}));
-vi.mock('../hooks/useMediaJobSse', () => ({
-  useMediaJobSse: () => ({ attach: state.attachJobEvents, eventSourceRef: { current: null } }),
 }));
 vi.mock('../hooks/useModelDownloadStatus', () => ({
   useModelDownloadStatus: () => ({

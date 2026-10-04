@@ -119,7 +119,6 @@ describe('VideoGen cross-page Remix handoff', () => {
     resetVideoGenMockState();
     state.getVideoGenStatus.mockResolvedValue(videoGenStatus([MODEL]));
     state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([MODEL]));
-    state.attach.mockResolvedValue({ filename: 'example.mp4' });
     state.availableLoras = [LORA];
     state.listVideoHistory.mockResolvedValue([RECORD, LEGACY_RECORD]);
     // Every weight cached — a ready install. Without this the Generate button

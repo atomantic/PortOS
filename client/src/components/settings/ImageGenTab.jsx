@@ -32,7 +32,7 @@ import FalModelSelect from '../imageGen/FalModelSelect';
 import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
-import { useMediaJobSse } from '../../hooks/useMediaJobSse';
+import { useMediaJobSse, isMediaRunEnded } from '../../hooks/useMediaJobSse';
 import { useAgyModels } from '../../hooks/useAgyModels';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import useLocalImageModels from '../../hooks/useLocalImageModels';
@@ -243,9 +243,10 @@ export function ImageGenTab() {
   const testModeId = useId();
   const [rendering, setRendering] = useState(false);
   const [renderResult, setRenderResult] = useState(null);
-  // Shared per-job SSE subscriber — same hook ImageGen/VideoGen use to await
-  // an async render's terminal frame after the kickoff POST returns a jobId.
-  const { attach: attachRenderSse, close: closeRenderSse } = useMediaJobSse('image');
+  // Shared media-run owner — same hook ImageGen/VideoGen use to await an async
+  // render's terminal frame after the kickoff POST returns a jobId. It also
+  // detaches the stream and drops the pending kickoff when the tab unmounts.
+  const { start: startRenderRun } = useMediaJobSse('image');
 
   // HuggingFace token state — separate from the main settings save flow because
   // it has its own validated endpoints (POST /setup/hf-token + DELETE) and
@@ -328,10 +329,6 @@ export function ImageGenTab() {
     setCredentialRows((previous) => ({ ...previous, [id]: row }));
     toast.success('Saved key cleared. External credentials may still apply.');
   };
-
-  // Close any in-flight test-render SSE on unmount so we don't fire setState
-  // on a torn-down component if the user navigates away mid-render.
-  useEffect(() => () => closeRenderSse(), [closeRenderSse]);
 
   useEffect(() => {
     Promise.all([getSettings({ silent: true }), getToolsList({ silent: true })])
@@ -747,24 +744,27 @@ export function ImageGenTab() {
       // prevents this branch from running with unsaved changes, but resolving
       // through `saved` makes the contract explicit. Codex is async like local
       // (returns a job descriptor immediately) so the SSE branch handles it.
-      const result = await generateImage({ prompt: testPrompt.trim(), mode: effectiveTestMode }, { silent: true });
       // Local + Codex modes return immediately after spawning the child —
       // the PNG isn't on disk yet. Subscribe to the per-job SSE and only
       // mark the render complete on the `complete` event (or fail on
       // `error`). External mode awaits internally and the file is on disk
-      // by the time generateImage resolves, so we can short-circuit.
-      const isAsync = (result?.mode === IMAGE_GEN_MODE.LOCAL || isCloudCliMode(result?.mode));
-      if (isAsync && result?.generationId) {
-        const jobResult = await attachRenderSse(result.generationId, {
+      // by the time generateImage resolves, so it completes synchronously
+      // (no job id to follow).
+      const result = await startRenderRun(
+        () => generateImage({ prompt: testPrompt.trim(), mode: effectiveTestMode }, { silent: true }),
+        (ack) => ({
           onError: (msg) => new Error(msg.error || 'Generation failed'),
-        });
-        setRenderResult({ ...result, ...jobResult });
-      } else {
-        setRenderResult(result);
-      }
+          onComplete: (msg) => ({ ...ack, ...msg.result }),
+        }),
+        {
+          jobIdOf: (ack) => ((ack?.mode === IMAGE_GEN_MODE.LOCAL || isCloudCliMode(ack?.mode)) ? ack.generationId : null),
+        },
+      );
+      setRenderResult(result);
       toast.success('Test render complete');
     } catch (err) {
-      toast.error(err.message || 'Test render failed');
+      // A detached run (tab unmounted mid-render) has nothing left to report to.
+      if (!isMediaRunEnded(err)) toast.error(err.message || 'Test render failed');
     } finally {
       setRendering(false);
     }

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
-import { useMediaJobSse } from './useMediaJobSse';
+import { renderHook, act } from '@testing-library/react';
+import { useMediaJobSse, isMediaRunEnded } from './useMediaJobSse';
 import { MockEventSource, lastEventSource as last } from '../test/mockEventSource';
 
 beforeEach(() => {
@@ -139,5 +139,128 @@ describe('useMediaJobSse', () => {
     expect(last().closed).toBe(false);
     result.current.close();
     expect(last().closed).toBe(true);
+  });
+});
+
+// The single run owner: identity, stream, cancellation and unmount detach.
+describe('useMediaJobSse run owner', () => {
+  const deferred = () => {
+    let resolve; let reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+  const settle = (p) => p.then(() => 'resolved', (err) => err);
+
+  it('cancel() targets only the owned job and settles the wait once', async () => {
+    const cancelJob = vi.fn(async () => ({}));
+    const { result } = renderHook(() => useMediaJobSse('image', { cancelJob }));
+    const run = settle(result.current.start(async () => ({ jobId: 'job-a' })));
+    await act(async () => {});
+    expect(last().url).toBe('/api/image-gen/job-a/events');
+
+    const cancelled = await act(async () => result.current.cancel());
+    expect(cancelled).toBe(true);
+    expect(cancelJob).toHaveBeenCalledTimes(1);
+    expect(cancelJob).toHaveBeenCalledWith('job-a');
+    expect(last().closed).toBe(true);
+    const err = await run;
+    expect(isMediaRunEnded(err)).toBe(true);
+    expect(err.reason).toBe('canceled');
+
+    // Nothing left to cancel; a stale terminal frame is ignored.
+    expect(await result.current.cancel()).toBe(false);
+    last().emit({ type: 'complete', result: {} });
+    expect(cancelJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('a resumed (adopted) job is cancellable by its id', async () => {
+    const cancelJob = vi.fn(async () => ({}));
+    const { result } = renderHook(() => useMediaJobSse('video', { cancelJob }));
+    settle(result.current.start(async () => ({ jobId: 'resumed', status: 'running' }), {}, { ifIdle: true }));
+    await act(async () => {});
+    await act(async () => { await result.current.cancel(); });
+    expect(cancelJob).toHaveBeenCalledWith('resumed');
+  });
+
+  it('cancel before the acknowledgement cancels the eventual job exactly once and opens no stream', async () => {
+    const cancelJob = vi.fn(async () => ({}));
+    const ack = deferred();
+    const { result } = renderHook(() => useMediaJobSse('video', { cancelJob }));
+    const run = settle(result.current.start(() => ack.promise));
+    await act(async () => { await result.current.cancel(); });
+    expect(cancelJob).not.toHaveBeenCalled();
+    expect(isMediaRunEnded(await run)).toBe(true);
+
+    await act(async () => { ack.resolve({ generationId: 'late-job' }); });
+    expect(cancelJob).toHaveBeenCalledTimes(1);
+    expect(cancelJob).toHaveBeenCalledWith('late-job');
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
+  it('unmount before the acknowledgement creates no stream, calls no handler and cancels nothing', async () => {
+    const cancelJob = vi.fn(async () => ({}));
+    const onAcknowledged = vi.fn();
+    const onStatus = vi.fn();
+    const ack = deferred();
+    const { result, unmount } = renderHook(() => useMediaJobSse('video', { cancelJob }));
+    const run = settle(result.current.start(() => ack.promise, { onAcknowledged, onStatus }));
+    unmount();
+    expect(isMediaRunEnded(await run)).toBe(true);
+    await act(async () => { ack.resolve({ jobId: 'durable' }); });
+    expect(MockEventSource.instances).toHaveLength(0);
+    expect(onAcknowledged).not.toHaveBeenCalled();
+    expect(cancelJob).not.toHaveBeenCalled();
+  });
+
+  it('unmount mid-stream closes the stream but leaves the accepted job running', async () => {
+    const cancelJob = vi.fn(async () => ({}));
+    const { result, unmount } = renderHook(() => useMediaJobSse('video', { cancelJob }));
+    const run = settle(result.current.start(async () => ({ jobId: 'durable' })));
+    await act(async () => {});
+    const stream = last();
+    unmount();
+    expect(stream.closed).toBe(true);
+    expect(isMediaRunEnded(await run)).toBe(true);
+    expect(cancelJob).not.toHaveBeenCalled();
+  });
+
+  it('ifIdle yields to an active run, and a new start supersedes the old run without cancelling it', async () => {
+    const cancelJob = vi.fn(async () => ({}));
+    const { result } = renderHook(() => useMediaJobSse('video', { cancelJob }));
+    const first = settle(result.current.start(async () => ({ jobId: 'first' })));
+    await act(async () => {});
+    expect(await result.current.start(async () => ({ jobId: 'resume' }), {}, { ifIdle: true })).toBeNull();
+
+    const second = result.current.start(async () => ({ jobId: 'second' }));
+    expect((await first).reason).toBe('superseded');
+    await act(async () => {});
+    expect(MockEventSource.instances[0].closed).toBe(true);
+    expect(last().url).toBe('/api/video-gen/second/events');
+    expect(cancelJob).not.toHaveBeenCalled();
+    last().emit({ type: 'complete', result: { filename: 'b.mp4' } });
+    await expect(second).resolves.toEqual({ filename: 'b.mp4' });
+  });
+
+  it('completes without a stream when the acknowledgement names no job (synchronous work)', async () => {
+    const { result } = renderHook(() => useMediaJobSse('image'));
+    const handlers = vi.fn((ack) => ({ onSync: (value) => ({ ...value, done: ack.filename }) }));
+    await expect(result.current.start(async () => ({ mode: 'external', filename: 'a.png' }), handlers))
+      .resolves.toEqual({ mode: 'external', filename: 'a.png', done: 'a.png' });
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
+  it('reports a failed kickoff to onKickoffError only while the run is current', async () => {
+    const onKickoffError = vi.fn();
+    const { result } = renderHook(() => useMediaJobSse('image'));
+    await expect(result.current.start(async () => { throw new Error('POST failed'); }, {}, { onKickoffError }))
+      .rejects.toThrow('POST failed');
+    expect(onKickoffError).toHaveBeenCalledTimes(1);
+
+    const failing = deferred();
+    const run = settle(result.current.start(() => failing.promise, {}, { onKickoffError }));
+    await act(async () => { await result.current.cancel(); });
+    failing.reject(new Error('late failure'));
+    expect(isMediaRunEnded(await run)).toBe(true);
+    expect(onKickoffError).toHaveBeenCalledTimes(1);
   });
 });

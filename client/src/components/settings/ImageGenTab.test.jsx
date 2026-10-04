@@ -33,9 +33,6 @@ vi.mock('./LocalSetupPanel', () => ({
 }));
 // The runtime card's install modal opens its own SSE stream.
 vi.mock('../imageGen/Flux2InstallModal', () => ({ default: () => null }));
-vi.mock('../../hooks/useMediaJobSse', () => ({
-  useMediaJobSse: () => ({ attach: vi.fn(), close: vi.fn() }),
-}));
 
 import {
   getSettings, getToolsList, updateSettings, listAgyImageModels, listImageModels, getImageGenStatus,
@@ -46,13 +43,14 @@ import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 const renderTab = async (initialEntries = ['/media/image']) => {
-  render(
+  const view = render(
     <MemoryRouter initialEntries={initialEntries}>
       <ImageGenTab />
     </MemoryRouter>,
   );
   // Cards render only after the settings fetch resolves.
   await waitFor(() => expect(screen.getByRole('tablist')).toBeTruthy());
+  return view;
 };
 
 beforeEach(() => {
@@ -430,6 +428,25 @@ describe('ImageGenTab — Test Render backend picker (#4128)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Render Test Image/i }));
     await waitFor(() => expect(generateImage).toHaveBeenCalled());
     expect(generateImage.mock.calls[0][0].mode).toBe('grok');
+  });
+
+  it('opens no render stream when the tab unmounts before the test render is acknowledged', async () => {
+    getSettings.mockResolvedValue(multiBackendSettings);
+    let acknowledge;
+    generateImage.mockReturnValue(new Promise((resolve) => { acknowledge = resolve; }));
+    const OriginalEventSource = globalThis.EventSource;
+    const streams = [];
+    globalThis.EventSource = function EventSourceStub(url) { streams.push(url); this.close = vi.fn(); };
+    try {
+      const view = await renderTab(['/media/image?mediaTab=test']);
+      fireEvent.click(screen.getByRole('button', { name: /Render Test Image/i }));
+      await waitFor(() => expect(generateImage).toHaveBeenCalled());
+      view.unmount();
+      await act(async () => { acknowledge({ mode: 'local', generationId: 'job-durable' }); });
+      expect(streams).toEqual([]);
+    } finally {
+      globalThis.EventSource = OriginalEventSource;
+    }
   });
 
   it('keeps the saved default selectable even when it is not otherwise renderable', async () => {

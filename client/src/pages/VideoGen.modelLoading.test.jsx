@@ -43,7 +43,6 @@ describe('VideoGen model picker vs the /status python probe', () => {
     resetVideoGenMockState();
     state.getVideoGenStatus.mockResolvedValue(statusPayload());
     state.getVideoGenModelContext.mockResolvedValue(modelContextPayload());
-    state.attach.mockResolvedValue({ filename: 'example.mp4' });
   });
 
   it('keeps the Model field with a loading placeholder until the model list lands', async () => {

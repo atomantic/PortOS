@@ -17,7 +17,6 @@ describe('VideoGen curated fal controls (#9232)', () => {
     state.getVideoGenStatus.mockResolvedValue(videoGenStatus([MODEL], { falEnabled: true }));
     state.modelStatuses = { [MODEL.id]: { id: MODEL.id, repo: MODEL.repo, cached: true, sizeBytes: 100 } };
     state.generateVideo.mockResolvedValue({ jobId: 'job-1' });
-    state.attach.mockReturnValue(new Promise(() => {}));
   });
 
   // Pins field-state → form → submission and pricing before enqueue, including

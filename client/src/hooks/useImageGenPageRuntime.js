@@ -14,7 +14,7 @@ import { useSocketResource } from './useSocketResource';
 import { useFederatedMediaTarget } from './useFederatedMediaTarget';
 import { useImageGenProgress } from './useImageGenProgress';
 import { useMediaCompletionRefresh } from './useMediaCompletionRefresh';
-import { useMediaJobSse } from './useMediaJobSse';
+import { useMediaJobSse, isMediaRunEnded } from './useMediaJobSse';
 import { useModelDownloadStatus } from './useModelDownloadStatus';
 import { useHfTokenStatus } from './useHfTokenStatus';
 import { useAgyModels } from './useAgyModels';
@@ -140,7 +140,11 @@ export function useImageGenPageRuntime() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [regenInfo, setRegenInfo] = useState(null);
-  const { attach: attachJobEvents, eventSourceRef } = useMediaJobSse('image');
+  // One run owner for the displayed render: Cancel targets exactly its job, and
+  // unmount detaches the stream without cancelling accepted durable work.
+  const { start: startRun, cancel: cancelRun } = useMediaJobSse('image', {
+    cancelJob: (jobId) => cancelImageGen({ jobId }),
+  });
   const { progress: externalProgress, begin: beginGenerate, end: endGenerate, resume: resumeGenerate } = useImageGenProgress();
   useMediaCompletionRefresh({ onImageCompleted: gallery.refreshRecent });
   const modelDownload = useModelDownloadStatus({ kind: 'image' });
@@ -181,27 +185,28 @@ export function useImageGenPageRuntime() {
   }, [derived.sharesFlux2Venv, fields.modelId, refreshFlux2Status]);
 
   useEffect(() => {
-    let active = true;
-    getActiveImageJob().then(({ activeJob }) => {
-      if (!active || !activeJob) return;
-      actions.restoreActiveJob(activeJob);
-      setGenerating(true);
-      setStatusMsg('Resuming…');
-      resumeGenerate(activeJob);
-      attachJobEvents(activeJob.generationId, {
+    // Adopt the job still running server-side after a reload. `ifIdle` yields to
+    // a render this tab already owns; the owner creates no stream (or
+    // presentation) when the page unmounts before the read resolves.
+    startRun(
+      () => getActiveImageJob().then(({ activeJob }) => activeJob),
+      {
+        onAcknowledged: (activeJob) => {
+          actions.restoreActiveJob(activeJob);
+          setGenerating(true);
+          setStatusMsg('Resuming…');
+          resumeGenerate(activeJob);
+        },
         onStatus: (message) => setStatusMsg(message.message),
         onProgress: (message) => setLocalProgress({ progress: message.progress }),
         onComplete: () => setGenerating(false),
         onError: () => setGenerating(false),
         onCanceled: () => setGenerating(false),
         onConnectionError: () => setGenerating(false),
-      }).catch(() => {});
-    }).catch(() => {});
-    return () => {
-      active = false;
-      eventSourceRef.current?.close();
-    };
-  }, [actions.restoreActiveJob, attachJobEvents, eventSourceRef, resumeGenerate]);
+      },
+      { ifIdle: true, jobIdOf: (activeJob) => activeJob?.generationId },
+    ).catch(() => {});
+  }, [actions.restoreActiveJob, startRun, resumeGenerate]);
 
   const regenAvailable = !!regenInfo?.available;
   const refreshRegenAvailability = useCallback(() => {
@@ -309,11 +314,13 @@ export function useImageGenPageRuntime() {
     return { payload, data };
   };
 
-  const startLocalGeneration = async () => {
+  const startLocalGeneration = () => {
     setLocalProgress({ progress: 0 });
-    const { payload, data } = await submitGenerationPayload();
-    const jobId = data.jobId || data.generationId;
-    return attachJobEvents(jobId, {
+    let submitted;
+    return startRun(async () => {
+      submitted = await submitGenerationPayload();
+      return submitted.data;
+    }, (data) => ({
       onStage: (message) => setStage({ name: message.stage, detail: message.detail }),
       onStatus: (message) => setStatusMsg(message.message),
       onProgress: (message) => {
@@ -321,6 +328,7 @@ export function useImageGenPageRuntime() {
         setStatusMsg(message.message);
       },
       onComplete: (message) => {
+        const { payload } = submitted;
         const localOnlyMeta = isCloudMode ? {} : {
           steps: payload.steps ?? derived.currentModel?.steps,
           guidance: payload.guidance ?? derived.currentModel?.guidance,
@@ -342,7 +350,7 @@ export function useImageGenPageRuntime() {
         if (message.repo) generationError.repo = message.repo;
         return generationError;
       },
-    });
+    }));
   };
 
   const queueAdditional = async (count = 1) => {
@@ -420,6 +428,9 @@ export function useImageGenPageRuntime() {
       toast.success('Image generated');
       gallery.refreshRecent();
     } catch (generationError) {
+      // Cancelled / detached runs are not failures: Cancel already did the
+      // presentation, and an unmounted page has nothing to present.
+      if (isMediaRunEnded(generationError)) return;
       setError(generationError.message || 'Image generation failed');
       if (generationError.kind) setErrorMeta({ kind: generationError.kind, repo: generationError.repo });
       const firstLine = String(generationError.message || 'Image generation failed').split('\n')[0];
@@ -433,8 +444,11 @@ export function useImageGenPageRuntime() {
   };
 
   const handleCancel = async () => {
-    eventSourceRef.current?.close();
-    await cancelImageGen().catch(() => {});
+    // Cancel exactly the render this page owns. Only a render with no owned job
+    // (a synchronous external-service call) falls back to the legacy
+    // "most recent job" cancel.
+    const owned = await cancelRun();
+    if (!owned) await cancelImageGen().catch(() => {});
     setGenerating(false);
     setStatusMsg('Cancelled');
   };
