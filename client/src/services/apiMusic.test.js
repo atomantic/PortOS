@@ -8,7 +8,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 const respond = (chunks) => vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
   ok: true,
   body: new ReadableStream({ start(controller) {
-    for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+    for (const chunk of chunks) controller.enqueue(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk);
     controller.close();
   } }),
 }));
@@ -33,6 +33,17 @@ for (const [name, start] of [
     const events = vi.fn();
     await expect(start(events)).resolves.toBeUndefined();
     expect(events.mock.calls.map(([event]) => event.type)).toEqual(['log', 'complete']);
+  });
+  it('rejects undecodable completion bytes without a success callback, preserving earlier progress', async () => {
+    const encode = (text) => new TextEncoder().encode(text);
+    respond([
+      'data: {"type":"progress","progress":0.5}\n\n',
+      new Uint8Array([...encode('data: {"type":"complete","message":"'), 0xff, ...encode('"}\n\n')]),
+    ]);
+    const events = vi.fn();
+    await expect(start(events)).rejects.toThrow('invalid UTF-8');
+    expect(events.mock.calls.map(([event]) => event.type)).toEqual(['progress']);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   it('does not interpret malformed completion as success', async () => {
     respond(['data: {"type":"complete"\n\n']);

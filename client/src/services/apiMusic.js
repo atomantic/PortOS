@@ -90,7 +90,7 @@ async function postForSseFrames(url, payload, onEvent) {
     throw new Error((typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.message) || raw || `Request failed (${res.status})`);
   }
   const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let buf = '';
   const handleFrame = (frame) => {
     const data = frame.split(/\r?\n/).filter((line) => line.startsWith('data:'))
@@ -105,7 +105,11 @@ async function postForSseFrames(url, payload, onEvent) {
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      try {
+        buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      } catch (cause) {
+        throw new Error('Installation stream contained invalid UTF-8. Check installation status before retrying.', { cause });
+      }
       const frames = buf.split(/\r?\n\r?\n/);
       buf = frames.pop() || '';
       if (done && buf) frames.push(buf);
