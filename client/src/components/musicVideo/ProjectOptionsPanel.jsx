@@ -5,7 +5,8 @@ import RecordRenderPinRow from '../imageGen/RecordRenderPinRow.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import Pill from '../ui/Pill.jsx';
 import { RenderStyleSelect } from './ProjectActionGroups.jsx';
-import { renderStyleLabel } from './compositionDraft.js';
+import { renderStyleLabel, compositionDraft, RENDER_STYLE_HELP } from './compositionDraft.js';
+import { normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft } from '../../lib/musicVideoAutomation.js';
 import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { projectServicesSummary } from '../../lib/musicVideoStages.js';
@@ -34,8 +35,24 @@ export function projectOptionsSummary(project) {
  * project through the same paths the Produce and Compose controls use.
  */
 export default function ProjectOptionsPanel({
-  project, videoSettings, generatingVideos = false, onMediaMode, onRenderStyle, onSaveAutomation,
+  project, videoSettings, generatingVideos = false, onMediaMode, onRenderStyle, onSaveAutomation, onSavePolicy,
 }) {
+  const [policyError, setPolicyError] = useState('');
+  const [allowanceText, setAllowanceText] = useState(null);
+  const policy = normalizeMusicVideoProductionPolicy(project.productionPolicy);
+  const savePolicy = (next) => {
+    setPolicyError('');
+    return Promise.resolve(onSavePolicy(next)).catch((err) => setPolicyError(err?.message || 'Could not save the production strategy'));
+  };
+  const commitAllowance = (text) => {
+    setAllowanceText(null);
+    const percent = Number(text);
+    if (text === '' || !Number.isFinite(percent) || percent < 0 || percent > 100) {
+      setPolicyError('Choose a generated-video allowance from 0 to 100%.');
+      return;
+    }
+    if (percent !== Number(policy.maxGeneratedVideoPercent)) savePolicy({ ...policy, maxGeneratedVideoPercent: percent });
+  };
   const [briefSaving, setBriefSaving] = useState(false);
   const automation = project.automation || null;
   const draft = automation ? automationDraftFrom(automation) : null;
@@ -69,6 +86,30 @@ export default function ProjectOptionsPanel({
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <RenderStyleSelect project={project} onRenderStyle={onRenderStyle} />
           <span className="text-xs text-port-text-muted">How the final video is put together; Compose holds its details.</span>
+          <p className="w-full text-xs text-port-text-muted" id="mv-setup-render-style-help">{RENDER_STYLE_HELP[compositionDraft(project).mode] || RENDER_STYLE_HELP.concat}</p>
+        </div>
+      </div>
+      <div className={rowCls}>
+        <label htmlFor="mv-setup-strategy" className={headCls}>Production strategy</label>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <select id="mv-setup-strategy" value={policy.strategy}
+            onChange={(e) => savePolicy(normalizeMusicVideoProductionPolicy({ strategy: e.target.value }, policy))}
+            className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0">
+            <option value="legacy">Legacy / manual workflow</option>
+            <option value="code-first">Code-first medium planning</option>
+          </select>
+          {policy.strategy === 'code-first' && (
+            <>
+              <label htmlFor="mv-setup-video-allowance" className="text-xs text-port-text-muted">Maximum generated video (% of final song time)</label>
+              <input id="mv-setup-video-allowance" type="number" min="0" max="100" step="any"
+                value={allowanceText ?? policy.maxGeneratedVideoPercent}
+                onChange={(e) => setAllowanceText(e.target.value)}
+                onBlur={(e) => commitAllowance(e.target.value)}
+                className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0" />
+              <p className="w-full text-xs text-port-text-muted">Start with code and images. This plans final-edit seconds; it does not change the renderer or enforce generation budgets in manual controls.</p>
+            </>
+          )}
+          {policyError && <p role="alert" className="w-full text-xs text-port-error">{policyError}</p>}
         </div>
       </div>
       <div className={rowCls}>

@@ -66,17 +66,15 @@ describe('DocumentCompositionPanel', () => {
     await waitFor(() => expect(api.generateMusicVideoMixedMediaDocument).toHaveBeenCalledWith('mv-1', { providerId: 'stub-provider', model: 'fixture-model' }, { silent: true }));
   });
 
-  it('selects code-only and authors, previews and accepts a Three.js scene candidate', async () => {
+  it('authors a code-only project and previews and accepts a Three.js scene candidate', async () => {
     const saved = { ...bare, mediaMode: 'code-only' };
     api.updateMusicVideoProject.mockResolvedValue(saved);
     api.generateMusicVideoMixedMediaDocument.mockResolvedValue({ project: { ...saved, composition: { ...saved.composition, documentDraft: generated } } });
     api.getMusicVideoMixedMediaCandidate.mockResolvedValue({ candidate: generated, source: generated, stale: false, sections: [{ id: 'world', label: 'World' }] });
     api.acceptMusicVideoMixedMediaDocument.mockResolvedValue({ project: { ...saved, composition: { ...saved.composition, document: generated } } });
     const onProject = vi.fn();
-    const view = render(<DocumentCompositionPanel project={bare} onProject={onProject} onSave={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText('Design and composition media'), { target: { value: 'code-only' } });
-    await waitFor(() => expect(onProject).toHaveBeenCalledWith(saved));
-    view.rerender(<DocumentCompositionPanel project={saved} onProject={onProject} onSave={vi.fn()} />);
+    const view = render(<DocumentCompositionPanel project={saved} onProject={onProject} onSave={vi.fn()} />);
+    expect(screen.queryByLabelText('Design and composition media')).toBeNull(); // media mode is chosen in Setup only
     expect(screen.getByLabelText('Authoring renderer').value).toBe('three');
     fireEvent.click(screen.getByRole('button', { name: 'Generate authored 3D composition' }));
     await waitFor(() => expect(api.generateMusicVideoMixedMediaDocument).toHaveBeenCalledWith('mv-1', { providerId: 'stub-provider', model: 'fixture-model' }, { silent: true }));
