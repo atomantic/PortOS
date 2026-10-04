@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acquireBackupSnapshotCut, withBackupAssetPublication } from './backupSnapshotBoundary.js';
+import { acquireBackupSnapshotCut, runOutsideBackupAssetPublication, withBackupAssetPublication } from './backupSnapshotBoundary.js';
 
 const deferred = () => {
   let resolve;
@@ -71,5 +71,34 @@ describe('backup snapshot publication admission', () => {
     expect(next).toHaveBeenCalledOnce();
     rowWrite.resolve();
     await first;
+  });
+
+  it('lets a listener spawned by an admitted workflow join it only while that workflow holds its lease', async () => {
+    const listenerWrite = deferred();
+    let listener;
+    let later;
+    const emitter = withBackupAssetPublication(async () => {
+      runOutsideBackupAssetPublication(() => {
+        listener = withBackupAssetPublication(async () => listenerWrite.promise);
+        later = new Promise(resolve => setImmediate(resolve)).then(() => withBackupAssetPublication(() => 'late'));
+      });
+    });
+    let cutReady = false;
+    const cut = acquireBackupSnapshotCut().then(release => {
+      cutReady = true;
+      return release;
+    });
+    await emitter;
+    await new Promise(resolve => setImmediate(resolve));
+    expect(cutReady).toBe(false); // the cut also waits for the spawned listener
+    listenerWrite.resolve();
+    await listener;
+    const release = await cut;
+    let lateRan = false;
+    later.then(() => { lateRan = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(lateRan).toBe(false); // admitted after the spawner finished: waits behind the cut
+    release();
+    expect(await later).toBe('late');
   });
 });

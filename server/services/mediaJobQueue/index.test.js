@@ -1,7 +1,7 @@
 vi.mock('../musicVideo/projects.js', () => ({ getProject: vi.fn(async () => ({ mediaMode: 'code-images-video' })) }));
 vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSceneReview: vi.fn(async () => {}) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
@@ -2957,5 +2957,131 @@ describe('durable execution and terminal settlement', () => {
     await vi.advanceTimersByTimeAsync(200);
     expect(mediaJobQueue.getJob(jobId).status).toBe('completed');
     expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A completion publishes a file (written by the generator before it reports
+// done) and rows (the queue snapshot and the attach hooks that name the file).
+// A backup cut must never capture one store without the other (#9981).
+describe('backup snapshot admission for media completion', () => {
+  let boundary;
+  let rows;
+  let hookGate;
+  let hookStarted;
+  let storageWrite;
+  const onCompleted = (job) => {
+    void boundary.withBackupAssetPublication(async () => {
+      hookStarted = true;
+      await hookGate;
+      rows.set(job.id, job.result.filename);
+    });
+  };
+  // What a backup would hold: the files copied, the queue snapshot and attached rows.
+  const capture = (jobId) => ({
+    files: existsSync(join(tempDataDir, 'videos')) ? readdirSync(join(tempDataDir, 'videos')) : [],
+    queueStatus: persistedJobs().find((j) => j.id === jobId)?.status,
+    rows: new Map(rows),
+  });
+  const startJob = async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'synthetic' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    return jobId;
+  };
+  const renderFinishes = (jobId) => {
+    mkdirSync(join(tempDataDir, 'videos'), { recursive: true });
+    writeFileSync(join(tempDataDir, 'videos', `${jobId}.mp4`), 'synthetic clip');
+    videoGenEvents.emit('completed', { generationId: jobId, filename: `${jobId}.mp4` });
+  };
+  const failTerminalWrites = (times) => {
+    const failures = { remaining: times, count: 0 };
+    atomicWriteSpy.mockImplementation(async (path, data) => {
+      if (failures.remaining > 0 && data?.jobs?.some((j) => j.status === 'completed')) {
+        failures.remaining -= 1;
+        failures.count += 1;
+        throw new Error('disk full');
+      }
+      return storageWrite(path, data);
+    });
+    return failures;
+  };
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  beforeEach(async () => {
+    boundary = await import('../../lib/backupSnapshotBoundary.js');
+    rows = new Map();
+    hookStarted = false;
+    hookGate = Promise.resolve();
+    storageWrite = atomicWriteSpy.getMockImplementation();
+    stubs.generateVideo.mockImplementation(async () => ({}));
+    mediaJobQueue.mediaJobEvents.on('completed', onCompleted);
+  });
+  afterEach(() => {
+    mediaJobQueue.mediaJobEvents.off('completed', onCompleted);
+    atomicWriteSpy.mockImplementation(storageWrite);
+  });
+
+  it('holds a completion that arrives during the cut away from both stores until it reopens', async () => {
+    const jobId = await startJob();
+    const release = await boundary.acquireBackupSnapshotCut();
+    renderFinishes(jobId);
+    // Unadmitted, the completion persists within a few milliseconds of real file I/O.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(mediaJobQueue.getJob(jobId).status).toBe('running');
+    expect(capture(jobId)).toEqual({ files: [`${jobId}.mp4`], queueStatus: 'running', rows: new Map() });
+    release();
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'completed');
+    await waitFor(() => rows.has(jobId));
+    expect(capture(jobId)).toEqual({ files: [`${jobId}.mp4`], queueStatus: 'completed', rows: new Map([[jobId, `${jobId}.mp4`]]) });
+  });
+
+  it('drains a completion already publishing its queue row and hook rows before the cut', async () => {
+    let finishWrite;
+    const writeGate = new Promise((resolve) => { finishWrite = resolve; });
+    let finishHook;
+    hookGate = new Promise((resolve) => { finishHook = resolve; });
+    let writeHeld = false;
+    atomicWriteSpy.mockImplementation(async (path, data) => {
+      if (data?.jobs?.some((j) => j.status === 'completed')) {
+        writeHeld = true;
+        await writeGate;
+      }
+      return storageWrite(path, data);
+    });
+    const jobId = await startJob();
+    renderFinishes(jobId);
+    await waitFor(() => writeHeld);
+    let cutReady = false;
+    const cut = boundary.acquireBackupSnapshotCut().then((release) => { cutReady = true; return release; });
+    await settle();
+    expect(cutReady).toBe(false);
+    finishWrite();
+    await waitFor(() => hookStarted);
+    await settle();
+    expect(cutReady).toBe(false);
+    finishHook();
+    const release = await cut;
+    expect(capture(jobId)).toEqual({ files: [`${jobId}.mp4`], queueStatus: 'completed', rows: new Map([[jobId, `${jobId}.mp4`]]) });
+    release();
+  });
+
+  it('retries a failed terminal write inside the same admission and releases it after final failure', async () => {
+    const retried = await startJob();
+    failTerminalWrites(1);
+    renderFinishes(retried);
+    await waitFor(() => rows.has(retried));
+    expect(capture(retried).queueStatus).toBe('completed');
+    (await boundary.acquireBackupSnapshotCut())();
+  });
+
+  it('releases admission after a terminal write fails for good, leaving no half-published outcome', async () => {
+    const failed = await startJob();
+    const failures = failTerminalWrites(3);
+    renderFinishes(failed);
+    await waitFor(() => failures.count === 3);
+    await settle();
+    // The abandoned publication holds nothing: a cut opens at once and sees no half-written outcome.
+    const release = await boundary.acquireBackupSnapshotCut({ timeoutMs: 50 });
+    expect(capture(failed)).toEqual({ files: [`${failed}.mp4`], queueStatus: 'running', rows: new Map() });
+    release();
   });
 });
