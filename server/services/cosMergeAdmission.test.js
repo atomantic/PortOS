@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
-const fixture = vi.hoisted(() => ({ state: null, disk: null, trusted: true, archived: null }));
+const fixture = vi.hoisted(() => ({ state: null, disk: null, trusted: true, archived: null, failSave: false }));
 vi.mock('./cosState.js', () => ({
   withStateLock: createFileWriteQueue(),
   loadState: async () => fixture.state,
   readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: fixture.trusted, ...structuredClone(fixture.disk) }),
-  saveState: async (state) => { fixture.disk = structuredClone(state); fixture.state = state; },
+  saveState: async (state) => { if (fixture.failSave) throw new Error('write failed'); fixture.disk = structuredClone(state); fixture.state = state; },
 }));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: async (path) => ({ host: path === '/repos/alias' ? 'ssh.github.com' : 'github.com',
@@ -22,6 +22,7 @@ const release = (agentId, token, outcome = 'merged') => claimMergeAdmission({ ag
 const persist = () => { fixture.disk = structuredClone(fixture.state); };
 beforeEach(() => {
   fixture.trusted = true;
+  fixture.failSave = false;
   fixture.archived = null;
   fixture.state = { agents: { a: parent('a'), b: parent('b', '/repos/alias'), c: parent('c', '/repos/other') }, mergeAdmissions: {} };
   persist();
@@ -120,6 +121,19 @@ describe('repository final merge workflow', () => {
       probe.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
       expect((await acquire('a')).admitted).toBe(true);
     } finally { probe.mockRestore(); }
+  });
+
+  it.each(['refused', 'write-failed'])('recovers a finished sweep after its release is %s', async (failure) => {
+    const run = withPendingMergeAdmission(origin, async () => {
+      if (failure === 'refused') fixture.trusted = false;
+      else fixture.failSave = true;
+      return 'merged';
+    });
+    if (failure === 'write-failed') await expect(run).rejects.toThrow('write failed');
+    else expect(await run).toMatchObject({ admitted: true, result: 'merged' });
+    expect(fixture.disk.mergeAdmissions[origin.host + '/' + origin.fullName]).toBeDefined();
+    fixture.trusted = true; fixture.failSave = false;
+    expect((await acquire('a')).admitted).toBe(true);
   });
 
   it('releases a failed sweep without swallowing its error', async () => {

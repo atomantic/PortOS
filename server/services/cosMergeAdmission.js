@@ -121,14 +121,19 @@ export async function withPendingMergeAdmission(origin, work) {
   try {
     return { admitted: true, result: await work() };
   } finally {
-    const released = await transaction(async (state, save) => {
-      const lease = state.mergeAdmissions[repository];
-      if (!validLease(lease, repository) || lease.token !== admission.token) return refuse('lease-owner-mismatch');
-      delete state.mergeAdmissions[repository];
-      await save(state);
-      return { released: true };
-    });
-    if (released.released) sweepTokens.delete(admission.token);
-    else console.error(`❌ Pending merge admission release withheld: ${released.reason}`);
+    try {
+      const released = await transaction(async (state, save) => {
+        const lease = state.mergeAdmissions[repository];
+        if (!validLease(lease, repository) || lease.token !== admission.token) return refuse('lease-owner-mismatch');
+        delete state.mergeAdmissions[repository];
+        await save(state);
+        return { released: true };
+      });
+      if (!released.released) console.error(`❌ Pending merge admission release withheld: ${released.reason}`);
+    } finally {
+      // The callback has stopped even if persistence failed. Keep the durable
+      // lease on disk; the next trusted transaction can prove this owner idle.
+      sweepTokens.delete(admission.token);
+    }
   }
 }
