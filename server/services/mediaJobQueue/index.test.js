@@ -3103,4 +3103,18 @@ describe('backup snapshot admission for media completion', () => {
       files: [`${recovered}.mp4`], queueStatus: 'completed', rows: new Map([[recovered, `${recovered}.mp4`]]),
     });
   });
+  it('shutdown flush waits on a recovery commit held behind an open cut and reports its failure on timeout', async () => {
+    const recovered = await startJob();
+    const failures = failTerminalWrites(3);
+    renderFinishes(recovered);
+    await waitFor(() => failures.count === 3);
+    await settle();
+    const release = await boundary.acquireBackupSnapshotCut({ timeoutMs: 50 });
+    await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'unrelated' } });
+    const flushed = await mediaJobQueue.flushMediaJobQueue({ timeoutMs: 200 });
+    expect(flushed).toMatchObject({ ok: false, timedOut: true });
+    release();
+    await waitFor(() => rows.has(recovered));
+    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
+  });
 });

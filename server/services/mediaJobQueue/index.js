@@ -573,9 +573,11 @@ async function persistImpl() {
 let completionRecovery = null;
 function recoverCompletionsUnderAdmission() {
   if (completionRecovery) return;
-  completionRecovery = withBackupAssetPublication(() => persist())
+  // Tracked as a terminal operation so the shutdown flush drains it (and times
+  // out, reporting failure, if an open cut still holds the commit).
+  completionRecovery = trackTerminalOperation(withBackupAssetPublication(() => persist())
     .catch((error) => console.error(`❌ media-job completion recovery commit failed: ${error.message}`))
-    .finally(() => { completionRecovery = null; });
+    .finally(() => { completionRecovery = null; }));
 }
 
 export async function initMediaJobQueue() {
@@ -1775,6 +1777,7 @@ export function __resetForTests() {
   // Un-latch the persistence block (#4115) — a test that booted on an unreadable
   // jobs file would otherwise leave every later test's queue unable to persist.
   persistBlocked = false;
+  completionRecovery = null;
 }
 
 // Test-only deterministic settle hook. EventEmitter terminal handlers and
