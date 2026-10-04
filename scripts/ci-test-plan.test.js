@@ -1033,6 +1033,32 @@ describe('CI test impact planner', () => {
     expect(buildCiTestPlan(['server/services/worktreeManager.test.js'], { trackedFiles: TRACKED }).full).toBe(false);
   });
 
+  it('routes log socket source to full sharded CI while nearby socket sources stay scoped (#10030)', () => {
+    const trackedFiles = [
+      ...TRACKED,
+      'server/sockets/logs.js',
+      'server/sockets/logs.test.js',
+      'server/sockets/apps.js',
+      'server/sockets/apps.test.js',
+    ];
+    const logs = buildCiTestPlan(['server/sockets/logs.js'], { trackedFiles });
+    expect(logs.full).toBe(true);
+    expect(logs.reason).toMatch(/log socket source changed \(broad import fanout\)/);
+    expect(logs.server.mode).toBe('full');
+    expect(logs.client.mode).toBe('full');
+    expect(logs.windowsMode).toBe('full');
+    expect(logs.shards).toEqual({
+      server: shardIndexes('full', FULL_SUITE_SHARDS.server),
+      client: shardIndexes('full', FULL_SUITE_SHARDS.client),
+      windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
+    });
+
+    const nearbySocket = buildCiTestPlan(['server/sockets/apps.js'], { trackedFiles });
+    expect(nearbySocket.full).toBe(false);
+    expect(nearbySocket.server.mode).toBe('related');
+    expect(nearbySocket.shards).toEqual({ server: [1], client: [1], windows: [1] });
+  });
+
   it('honors an explicit full-CI request', () => {
     const plan = buildCiTestPlan(['docs/README.md'], {
       trackedFiles: TRACKED,

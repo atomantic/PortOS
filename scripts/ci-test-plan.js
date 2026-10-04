@@ -86,6 +86,10 @@ const FULL_TRIGGER_RULES = [
   // Own the cost honestly: a full plan, sharded in CI. It also owns cross-platform
   // worktree lifecycle, so Windows escalates (matches WINDOWS_RISK_RULES).
   { re: /^server\/services\/worktreeManager\.js$/, reason: 'worktree manager source changed (broad import fanout)', windowsEscalates: true },
+  // Measured log socket hotspot (#10030): changing this source fans out through
+  // nearly the full server suite, so make the cost explicit in CI. The socket
+  // starts and supervises a real PM2 child process; keep Windows at full depth.
+  { re: /^server\/sockets\/logs\.js$/, reason: 'log socket source changed (broad import fanout)', windowsEscalates: true },
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
   // prove themselves against the complete suite rather than their own scope —
