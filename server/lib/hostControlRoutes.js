@@ -134,6 +134,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/runs',
   'POST /api/voice/studio/setup',
 
+  // Instances: runs the Tailscale CLI and writes a TLS certificate and private
+  // key into the install's cert directory.
+  'POST /api/instances/provision-cert',
+
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.
   'POST /api/apps',
