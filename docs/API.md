@@ -1011,3 +1011,16 @@ The server validates the graph before embedding or writing. Duplicate directed t
 `relationships: []` means no edges. Omitting `relationships` preserves legacy all-pairs `related-to` links for batches of 2–25 entries. Explicit graphs work above that legacy batch limit. Supported kinds include `owned-by` (inverse: Owns) and `used-by` (inverse: Uses); using an object does not establish ownership. The caller must supply only grounded, accepted facts.
 
 Ingredients, source links, optional `universeRef` bindings, and edges commit in one transaction. No existing records are backfilled. The relation wire shape and existing evidence fields are unchanged; unknown relation kinds continue to round-trip through peer sync. Structured extraction and relationship review are tracked separately under #7895.
+
+### Canon description repair
+
+`POST /api/universe-builder/:id/canon/backfill-descriptions` repairs legacy canon
+entries using their existing image prompts. It accepts no body and returns
+`{ universe, report }`, where `report` includes `filled`, `byKind`
+(`character`, `place`, `object`), `alreadyDescribed`, `missingPrompt`, and
+`skippedLocked`. It fills blank character `physicalDescription` or place/object
+`description` fields, trims and bounds prompt text, and preserves authored
+(including legacy character) descriptions and locked entries. No AI provider is
+called. The normal instance authentication gate applies; missing universes return
+404. Migration 422 applies this repair once across live universes on upgrade;
+this endpoint remains available for explicit agent or operator repairs afterward.
