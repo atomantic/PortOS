@@ -529,6 +529,13 @@ router.post('/:id/production-review/prepare', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsStartSchema, req.body || {});
   res.json(await prepareProductionReview(req.params.id, input));
 }));
+router.post('/:id/production-review/alignment', asyncHandler(async (req, res) => {
+  const { musicVideoAlignmentReviewSchema } = await import('../lib/musicVideoValidation.js');
+  const input = validateRequest(musicVideoAlignmentReviewSchema, req.body);
+  const reviewer = await requireProductionReviewer(req);
+  const { reverifyProductionAlignment } = await import('../services/musicVideo/productionReviewService.js');
+  res.json(await reverifyProductionAlignment(req.params.id, { ...input, reviewer }));
+}));
 router.post('/:id/production-review/approve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionApprovalSchema, req.body);
   const reviewer = await requireProductionReviewer(req);

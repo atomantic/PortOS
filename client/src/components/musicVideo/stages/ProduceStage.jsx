@@ -15,6 +15,7 @@ export default function ProduceStage({ board }) {
         key={`autopilot-${project.id}`}
         project={project}
         production={production}
+        readiness={board.productionReadiness}
         onSave={board.saveAutomation}
         onKickoff={board.onKickoff}
         kickoffBusy={board.busy.analyzing || board.busy.planning || kickoff.running}

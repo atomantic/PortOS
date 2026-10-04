@@ -190,3 +190,26 @@ describe('Production proof playback evidence', () => {
     expect(review.approve).not.toHaveBeenCalled();
   });
 });
+
+describe('Stale alignment review', () => {
+  it('labels historical verification and offers an explicit native button with the saved notes', () => {
+    const vocal = { ...project, productionReview: { ...project.productionReview, draft: { ...project.productionReview.draft, lyricsMode: 'vocal' } } };
+    const review = reviewFixture();
+    review.readiness.alignment = { status: 'stale', basis: 'current-word-times' };
+    review.reverifyAlignment = vi.fn();
+    const view = render(<ProductionReviewPanel project={vocal} review={review} onOpenArtifact={vi.fn()} />);
+    fireEvent.click(screen.getByText('Edit visual guide and storyboard'));
+    expect(screen.getByRole('option', { name: 'Previously verified — needs re-review' }).selected).toBe(true);
+    const button = screen.getByRole('button', { name: 'Reverify current timings' });
+    expect(button.tagName).toBe('BUTTON');
+    expect(button.disabled).toBe(false);
+    expect(screen.getByText(/Listen to the current master and inspect its word timings/)).toBeTruthy();
+    expect(review.reverifyAlignment).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    expect(review.reverifyAlignment).toHaveBeenCalledWith('Synthetic master');
+    fireEvent.change(screen.getByLabelText('Alignment notes / instrumental rationale'), { target: { value: 'New unsaved notes' } });
+    expect(button.disabled).toBe(true);
+    view.rerender(<ProductionReviewPanel project={vocal} review={{ ...review, busy: true }} onOpenArtifact={vi.fn()} />);
+    expect(button.disabled).toBe(true);
+  });
+});

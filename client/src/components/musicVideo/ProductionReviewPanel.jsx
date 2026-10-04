@@ -246,9 +246,15 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         </label>
         <label htmlFor={fieldId('alignment-status')} className="block text-sm">Alignment status
           <select id={fieldId('alignment-status')} value={draft.timingStatus} onChange={e => set('timingStatus', e.target.value)} className={fieldClass}>
-            <option value="provisional">Provisional — needs listening and correction</option><option value="verified">Verified against the current master vocal</option>
+            <option value="provisional">Provisional — needs listening and correction</option><option value="verified">{ready?.alignment?.status === 'stale' ? 'Previously verified — needs re-review' : 'Verified against the current master vocal'}</option>
           </select>
         </label>
+        {draft.lyricsMode === 'vocal' && ready?.alignment?.status === 'stale' && <div className="space-y-2">
+          <p role="status" className="text-sm text-port-warning">Word timings or master audio changed. The previous verification is historical; current alignment needs re-review.</p>
+          <p className="text-xs text-port-text-muted">Listen to the current master and inspect its word timings before reverifying. Save any edited notes first. This records your authenticated review; it does not approve the storyboard or fix timing errors.</p>
+          <button type="button" className={buttonClass} disabled={blocked || !draft.timingNotes.trim()}
+            onClick={() => review.reverifyAlignment(draft.timingNotes)}>Reverify current timings</button>
+        </div>}
         <label htmlFor={fieldId('alignment-notes')} className="block text-sm">Alignment notes / instrumental rationale<textarea id={fieldId('alignment-notes')} rows={2} value={draft.timingNotes} onChange={e => set('timingNotes', e.target.value)} className={fieldClass} /></label>
         <label htmlFor={fieldId('storyboard-source')} className="block text-sm">Storyboard source
           <select id={fieldId('storyboard-source')} value={draft.storyboardSource || 'board'} onChange={e => set('storyboardSource', e.target.value)} className={fieldClass}>

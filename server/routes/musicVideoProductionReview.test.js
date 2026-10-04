@@ -193,6 +193,37 @@ describe('human-reviewed Music Video workflow', () => {
     expect(legacy.productionReview.approvals.art).toEqual(accepted.productionReview.approvals.art);
   });
 
+  it('keeps changed word timings stale across draft saves and reverifies only the authenticated current basis', async () => {
+    await approve('art');
+    const prior = await read();
+    expect(prior.body.readiness.alignment.status).toBe('verified');
+    await store.updateProject(project.id, { lyricCues: [{ id: 'line-a', text: 'Example chorus', startSec: 1, endSec: 3,
+      words: [{ w: 'Example', startSec: 1, endSec: 1.5, conf: 'matched' }, { w: 'chorus', startSec: 1.5, endSec: 3, conf: 'matched' }] }] });
+    const saved = await save({ ...draft, timingNotes: 'Checked the updated fixture word onsets.', implementationPlan: 'Keep the existing renderer.' });
+    expect(saved.body.readiness.alignment.status).toBe('stale');
+    expect(saved.body.readiness.storyboard.problems.join(' ')).toContain('Lyric alignment is provisional or changed');
+    const reverify = (basis = saved.body.readiness.alignment.basis, notes = saved.body.project.productionReview.draft.timingNotes) =>
+      request(app).post(`${base}/production-review/alignment`).set('authorization', 'Bearer synthetic-agent').send({ basis, notes });
+    auth.authenticated = false;
+    expect((await reverify()).status).toBe(401);
+    auth.authenticated = true; auth.enabled = false;
+    expect((await reverify()).status).toBe(401);
+    auth.enabled = true;
+    expect((await request(app).post(`${base}/production-review/alignment`).set('authorization', 'Bearer expired')
+      .send({ basis: saved.body.readiness.alignment.basis, notes: draft.timingNotes })).status).toBe(401);
+    expect((await reverify(prior.body.readiness.alignment.basis)).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
+    expect((await reverify(undefined, ' ')).status).toBe(400);
+    expect((await read()).body.readiness.alignment.status).toBe('stale');
+    const reviewed = await reverify();
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.readiness.alignment.status).toBe('verified');
+    expect(reviewed.body.readiness.storyboard.approved).toBe(false);
+    expect(reviewed.body.project.productionReview.draft.timingNotes).toBe('Checked the updated fixture word onsets.');
+    expect(reviewed.body.project.productionReview.alignmentReview.reviewer).toMatchObject({ kind: 'session', sessionId: 'shared-agent-session' });
+    expect((await approve('art')).status).toBe(200);
+    expect((await approve('storyboard')).status).toBe(200);
+  });
+
   it('distinguishes provisional/zero-length/missing lyrics from an explicit instrumental', async () => {
     await approve('art');
     await save({ ...draft, timingStatus: 'provisional' });

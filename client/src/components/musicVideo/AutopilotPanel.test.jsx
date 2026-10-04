@@ -330,3 +330,19 @@ describe('AutopilotPanel budgeted pilot evidence (#9351)', () => {
     expect(api.resumeMusicVideoProduction).toHaveBeenCalledWith('p1', 'run-1', { limits: { maxGenerations: 12, maxReviewAttempts: 5, spendCapUsd: 8 } }, { silent: true });
   });
 });
+
+describe('Historical production approval stops', () => {
+  it('shows a new current blocker then ready to resume without restarting or erasing history', () => {
+    const reason = 'Review and approve the current art direction first.';
+    const project = { id: 'history-fixture', productionRuns: [run({ status: 'blocked', stopReason: reason })] };
+    const readiness = { art: { approved: true, problems: [] }, storyboard: { approved: false, problems: ['Listen and verify the current word timings.'] }, proof: { approved: false, problems: [] } };
+    const production = { ...IDLE_PRODUCTION, resume: vi.fn() };
+    const view = render(<AutopilotPanel project={project} production={production} readiness={readiness} onSave={vi.fn()} onKickoff={vi.fn()} />);
+    expect(screen.getByText(`Historical stop reason: ${reason}`)).toBeTruthy();
+    expect(screen.getByText('Listen and verify the current word timings.')).toBeTruthy();
+    view.rerender(<AutopilotPanel project={project} production={production} readiness={{ ...readiness, storyboard: { approved: true, problems: [] } }} onSave={vi.fn()} onKickoff={vi.fn()} />);
+    expect(screen.getByText('Review requirements are satisfied — ready to resume explicitly.')).toBeTruthy();
+    expect(screen.getByText(`Historical stop reason: ${reason}`)).toBeTruthy();
+    expect(production.resume).not.toHaveBeenCalled();
+  });
+});

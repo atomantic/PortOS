@@ -2582,3 +2582,20 @@ describe('direct production review navigation', () => {
     await waitFor(() => expect(art).toHaveFocus());
   });
 });
+
+describe('Autopilot collapsed review summary', () => {
+  it('shows the current blocker in the summary while retaining the historical error in run details', async () => {
+    const error = 'Review and approve the current art direction first.';
+    const project = { ...PROJECT_ANALYZED, autonomousRun: { id: 'history-run', status: 'needs-human', stage: 'produce',
+      error, errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', brief: { autoApprove: [] }, stages: {}, output: {} },
+      productionReadiness: { basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] },
+        proof: { approved: false, problems: ['Render and watch a current animated chorus proof with the master song.'] } } };
+    listMusicVideoProjects.mockResolvedValue([project]);
+    render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByText(`Historical stop reason: ${error}`);
+    const summary = screen.getByText('Autopilot run').closest('summary');
+    fireEvent.click(summary);
+    expect(summary).toHaveTextContent('Render and watch a current animated chorus proof');
+    expect(summary.textContent).not.toContain(error);
+  });
+});

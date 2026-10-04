@@ -374,3 +374,18 @@ describe('auto-approve the rest', () => {
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenLastCalledWith('mv-1', { autoApprove: ['art', 'storyboard'] }, { silent: true }));
   });
 });
+
+describe('Current autonomous review guidance', () => {
+  it('keeps an approval failure historical as the current review gate advances', () => {
+    const error = 'Review and approve the current art direction first.';
+    const project = { id: 'history-fixture', autonomousRun: baseRun({ status: 'needs-human', stage: 'produce', error, errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED' }) };
+    const auto = { busy: false, resume: vi.fn(), cancel: vi.fn() };
+    const readiness = { art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: false, problems: ['Render and watch a current animated chorus proof with the master song.'] } };
+    const view = render(<MemoryRouter><AutonomousRunPanel project={project} auto={auto} readiness={readiness} /></MemoryRouter>);
+    expect(screen.getByRole('status')).toHaveTextContent('Render and watch a current animated chorus proof');
+    expect(screen.getByText(`Historical stop reason: ${error}`)).toBeTruthy();
+    view.rerender(<MemoryRouter><AutonomousRunPanel project={project} auto={auto} readiness={{ ...readiness, proof: { approved: true, problems: [] } }} /></MemoryRouter>);
+    expect(screen.getByRole('status')).toHaveTextContent('ready to resume explicitly');
+    expect(auto.resume).not.toHaveBeenCalled();
+  });
+});

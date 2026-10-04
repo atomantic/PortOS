@@ -79,7 +79,7 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import {
-  approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam,
+  productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam,
 } from '../lib/musicVideoStages.js';
 import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
@@ -102,9 +102,10 @@ const STAGE_VIEWS = {
 };
 
 // Keep active work open; historical runs remain available behind their summary.
-const autopilotSummary = (run) => {
+const autopilotSummary = (run, readiness) => {
   const label = run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status;
-  return run.error ? `${label} — ${run.error}` : label;
+  const guidance = productionReviewStopGuidance(run, readiness);
+  return run.error ? `${label} — ${guidance?.current || run.error}` : label;
 };
 
 const STATUS_COLORS = {
@@ -1226,10 +1227,10 @@ export default function MusicVideo() {
                 <StageSection
                   key={`autonomous-${selected.id}`}
                   title="Autopilot run"
-                  summary={autopilotSummary(autopilotRun)}
+                  summary={autopilotSummary(autopilotRun, productionReview.readiness)}
                   defaultOpen={!!runStage || autopilotRun.interrupted || ['running', 'awaiting-approval', 'needs-human', 'failed'].includes(autopilotRun.status)}
                 >
-                  <AutonomousRunPanel project={selected} auto={autonomous} selectedStage={runStage} onSelectStage={setRunStage} framed={false} />
+                  <AutonomousRunPanel project={selected} auto={autonomous} readiness={productionReview.readiness} selectedStage={runStage} onSelectStage={setRunStage} framed={false} />
                 </StageSection>
               )}
               <StageSection
