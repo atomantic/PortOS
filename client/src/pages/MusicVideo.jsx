@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
 import { Plus, Film, Copy, Trash2, Wand2, Pencil } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import socket from '../services/socket';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
@@ -85,6 +86,7 @@ import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import {
   productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
 } from '../lib/musicVideoStages.js';
+import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
 import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
@@ -294,6 +296,25 @@ export default function MusicVideo() {
     if (open) next.set('sheet', 'contact'); else next.delete('sheet');
     return next;
   });
+
+  // Index: name filter lives in the URL (?q=); forks collapse under their root
+  // with a per-card version switcher; cards patch in place from run events.
+  const nameQuery = searchParams.get('q') || '';
+  const setNameQuery = (value) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (value) next.set('q', value); else next.delete('q');
+    return next;
+  }, { replace: true });
+  const projectGroups = useMemo(() => groupMusicVideoProjects(projects, nameQuery), [projects, nameQuery]);
+  const [pickedVersion, setPickedVersion] = useState({}); // rootId -> project id
+  useEffect(() => {
+    const onRunEvent = (data) => {
+      if (data?.project?.id) setProjects((prev) => prev.map((p) => (p.id === data.project.id ? data.project : p)));
+    };
+    const events = ['music-video:autonomous', 'music-video:production'];
+    events.forEach((e) => socket.on(e, onRunEvent));
+    return () => events.forEach((e) => socket.off(e, onRunEvent));
+  }, []);
 
   // Preparation is already resolving the project's audio at kickoff;
   // relinking the track now would leave the project pointing at a NEW track
@@ -1230,26 +1251,49 @@ export default function MusicVideo() {
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-port-text-muted">
-                    Projects ({projects.length})
+                    Projects ({projectGroups.length})
                   </h2>
+                  <label htmlFor="mv-project-filter" className="sr-only">Filter projects by name</label>
+                  <input
+                    id="mv-project-filter"
+                    type="search"
+                    value={nameQuery}
+                    onChange={(e) => setNameQuery(e.target.value)}
+                    placeholder="Filter by name…"
+                    className="min-w-0 w-full sm:w-64 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+                  />
                 </div>
+                {projectGroups.length === 0 && (
+                  <p className="text-sm text-port-text-muted">No projects match &ldquo;{nameQuery}&rdquo;.</p>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="mv-project-grid">
-                  {sortedProjects.map((project) => (
-                    <MusicVideoProjectCard
-                      key={project.id}
-                      project={project}
-                      trackLabel={trackName(project.trackId)}
-                      onSelect={() => selectProject(project.id)}
-                      onClone={(options) => handleClone(project, options)}
-                      isConfirmingDelete={isConfirmingDelete(project.id)}
-                      onRequestDelete={() => handleDeleteRequest(project.id)}
-                      onConfirmDelete={() => confirmDelete(() => handleDelete(project.id))}
-                      onCancelDelete={cancelDelete}
-                      cloning={cloningId === project.id}
-                    />
-                  ))}
+                  {projectGroups.map(({ rootId, versions }) => {
+                    const picked = versions.findIndex((v) => v.id === pickedVersion[rootId]);
+                    const versionIndex = picked >= 0 ? picked : 0;
+                    const project = versions[versionIndex];
+                    return (
+                      <MusicVideoProjectCard
+                        key={rootId}
+                        project={project}
+                        trackLabel={trackName(project.trackId)}
+                        onSelect={() => selectProject(project.id)}
+                        onClone={(options) => handleClone(project, options)}
+                        isConfirmingDelete={isConfirmingDelete(project.id)}
+                        onRequestDelete={() => handleDeleteRequest(project.id)}
+                        onConfirmDelete={() => confirmDelete(() => handleDelete(project.id))}
+                        onCancelDelete={cancelDelete}
+                        cloning={cloningId === project.id}
+                        versionCount={versions.length}
+                        versionIndex={versionIndex}
+                        onVersionStep={(delta) => {
+                          const target = versions[versionIndex + delta];
+                          if (target) setPickedVersion((prev) => ({ ...prev, [rootId]: target.id }));
+                        }}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}

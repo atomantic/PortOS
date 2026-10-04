@@ -76,6 +76,7 @@ export * from './musicVideoTakes.js';
 export * from './musicVideoShotTiming.js';
 export * from './musicVideoStages.js';
 export * from './musicVideoAttention.js';
+export * from './musicVideoProjectList.js';
 export * from './musicVideoUniverseRefs.js';
 export * from './musicVideoAutomation.js';
 export * from './musicVideoAutonomous.js';
