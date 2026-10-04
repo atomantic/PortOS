@@ -83,7 +83,7 @@ import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import {
-  productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist,
+  productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
 } from '../lib/musicVideoStages.js';
 import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
@@ -180,6 +180,10 @@ export default function MusicVideo() {
   const renaming = !!selected && renamingId === selected.id;
   const [renameDraft, setRenameDraft] = useState('');
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+  const sortedProjects = useMemo(
+    () => [...projects].sort(compareMusicVideoProjectsNewestFirst),
+    [projects],
+  );
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
   const progress = useMemo(() => deriveStages(selected, productionReview.readiness), [selected, productionReview.readiness]);
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
@@ -309,7 +313,8 @@ export default function MusicVideo() {
     setLoading(true);
     try {
       const data = await listMusicVideoProjects({ silent: true });
-      setProjects(data || []);
+      const sorted = Array.isArray(data) ? [...data].sort(compareMusicVideoProjectsNewestFirst) : [];
+      setProjects(sorted);
       setProjectsError(null);
     } catch (err) {
       setProjectsError(err?.message || 'Failed to load music video projects');
@@ -364,7 +369,7 @@ export default function MusicVideo() {
       ...(form.mode === 'autonomous' ? { automation: automationFromDraft(form.automation) } : {}),
     }, { silent: true })
       .then((proj) => {
-        setProjects((prev) => [...prev, proj]);
+        setProjects((prev) => [proj, ...prev]);
         selectProject(proj.id);
         setForm(emptyCreateForm());
         setCreateOpen(false);
@@ -409,7 +414,7 @@ export default function MusicVideo() {
     setCloningId(target.id);
     cloneMusicVideoProject(target.id, options, { silent: true })
       .then((project) => {
-        setProjects((prev) => [...prev, project]);
+        setProjects((prev) => [project, ...prev]);
         navigate(`/music-video/${project.id}${songRevision === true ? "/setup" : ""}`);
         toast.success(`Created ${project.name}`);
       })
@@ -581,7 +586,7 @@ export default function MusicVideo() {
       .then((target) => updateMusicVideoProject(target.id, patch, { silent: true }).then((proj) => ({ proj, forked: target !== selected })))
       .then(({ proj, forked }) => {
         if (forked) {
-          setProjects((prev) => [...prev, proj]);
+          setProjects((prev) => [proj, ...prev]);
           navigate(`/music-video/${proj.id}/setup`);
         } else replaceProject(proj);
         if (cleared.length > 0) toast.success('Track changed — re-run Analyze and Align words');
@@ -1047,7 +1052,7 @@ export default function MusicVideo() {
               className="min-w-0 w-full sm:w-72 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
-              {projects.map((project) => (
+              {sortedProjects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.name} · {projectShotSummary(project)} · {project.status}
                 </option>
@@ -1171,7 +1176,7 @@ export default function MusicVideo() {
         open={autonomousOpen}
         onClose={() => setAutonomousOpen(false)}
         onStarted={(proj) => {
-          setProjects((prev) => [...prev, proj]);
+          setProjects((prev) => [proj, ...prev]);
           selectProject(proj.id);
           setAutonomousOpen(false);
         }}
@@ -1219,7 +1224,7 @@ export default function MusicVideo() {
                   </h2>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="mv-project-grid">
-                  {projects.map((project) => (
+                  {sortedProjects.map((project) => (
                     <MusicVideoProjectCard
                       key={project.id}
                       project={project}

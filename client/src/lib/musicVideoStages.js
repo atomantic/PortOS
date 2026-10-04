@@ -433,3 +433,22 @@ export function stageChecklist(stageId, project, readiness = project?.production
       return [];
   }
 }
+
+/**
+ * Sort comparator to organize Music Video projects so the newest one is first.
+ * Compares `createdAt` descending (newest created first), falling back to
+ * `updatedAt` descending, and preserves relative order if neither is set.
+ */
+export function compareMusicVideoProjectsNewestFirst(a, b) {
+  const aTime = Date.parse(a?.createdAt || a?.updatedAt) || 0;
+  const bTime = Date.parse(b?.createdAt || b?.updatedAt) || 0;
+  if (aTime !== bTime) {
+    return bTime - aTime;
+  }
+  const aUpdated = Date.parse(a?.updatedAt) || 0;
+  const bUpdated = Date.parse(b?.updatedAt) || 0;
+  if (aUpdated !== bUpdated) {
+    return bUpdated - aUpdated;
+  }
+  return 0;
+}

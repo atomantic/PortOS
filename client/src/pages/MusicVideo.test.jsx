@@ -2636,6 +2636,22 @@ describe('MusicVideo main page project cards', () => {
     });
     expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
   });
+
+  it('organizes project cards with the newest one first', async () => {
+    const older = { ...PROJECT_WITH_CLIP, id: 'mv-old', name: 'Older Video', createdAt: '2026-09-01T00:00:00.000Z' };
+    const middle = { ...PROJECT_NO_CLIP, id: 'mv-mid', name: 'Middle Video', createdAt: '2026-09-15T00:00:00.000Z' };
+    const newest = { ...PROJECT_WITH_CLIP, id: 'mv-new', name: 'Newest Video', createdAt: '2026-10-01T00:00:00.000Z' };
+
+    listMusicVideoProjects.mockResolvedValueOnce([older, middle, newest]);
+    renderMV();
+
+    const grid = await screen.findByTestId('mv-project-grid');
+    const cards = within(grid).getAllByTestId(/^mv-project-card-/);
+    expect(cards).toHaveLength(3);
+    expect(cards[0]).toHaveAttribute('data-testid', 'mv-project-card-mv-new');
+    expect(cards[1]).toHaveAttribute('data-testid', 'mv-project-card-mv-mid');
+    expect(cards[2]).toHaveAttribute('data-testid', 'mv-project-card-mv-old');
+  });
 });
 
 
