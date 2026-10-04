@@ -1,7 +1,6 @@
 import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
-import MediaModePicker from './MediaModePicker.jsx';
-import { musicVideoMediaMode, musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
-import { useEffect, useState } from 'react';
+import { musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
+import { useEffect, useState, useRef } from 'react';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { Download, FileArchive, FolderInput, LayoutTemplate, Unlink, Film, RotateCcw } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -9,6 +8,7 @@ import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 import NarrativeEventsEditor from './NarrativeEventsEditor.jsx';
+import StageSection from './StageSection.jsx';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { formatBytes, timeAgo } from '../../utils/formatters.js';
 import { compositionDraft } from './compositionDraft.js';
@@ -132,10 +132,13 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   // Replacing or detaching drops the current version folder once nothing
   // points at it, so both ask for a second click (no window.confirm).
   const [confirming, setConfirming] = useState(null);
+  const confirmTimerRef = useRef(null);
   const [folder, setFolder] = useState('');
   const [candidate, setCandidate] = useState(null);
   const [selectedSection, setSelectedSection] = useState('');
   const [eventPending, setEventPending] = useState(false);
+  const [generationStartTime, setGenerationStartTime] = useState(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const {
     providers, selectedProviderId, selectedModel, availableModels, selectedProvider,
     setSelectedProviderId, setSelectedModel,
@@ -151,6 +154,35 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
       .catch((err) => { if (active) toast.error(err?.message || 'Could not load the candidate'); });
     return () => { active = false; };
   }, [project.id, project.updatedAt, project.composition?.documentDraft?.directory, project.composition?.document?.directory, project.composition?.document?.source?.kind]);
+
+  // Clear confirm state after 5 seconds or when the panel loses focus
+  useEffect(() => {
+    if (!confirming) {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+      return;
+    }
+    confirmTimerRef.current = setTimeout(() => setConfirming(null), 5000);
+    return () => {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+    };
+  }, [confirming]);
+
+  // Track elapsed time during generation
+  useEffect(() => {
+    if (busy !== 'generate' && busy !== 'regenerate') {
+      setGenerationStartTime(null);
+      setElapsedSeconds(0);
+      return;
+    }
+    if (!generationStartTime) {
+      setGenerationStartTime(Date.now());
+      return;
+    }
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - generationStartTime) / 1000));
+    }, 100);
+    return () => clearInterval(interval);
+  }, [busy, generationStartTime]);
 
   const run = async (label, task, success) => {
     setBusy(label);
@@ -190,53 +222,61 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   const compareSection = candidate?.sections?.find((section) => section.id === selectedSection);
   const comparisonSeek = compareSection ? { t: compareSection.startSec, n: compareSection.startSec + 1 } : null;
 
+  const docSummary = doc ? `${SOURCE_LABELS[doc.source?.kind] || 'imported'}${doc.source?.name ? ` · ${doc.source.name}` : ''}` : 'None yet';
+  const generateSummary = busy === 'generate' || busy === 'regenerate'
+    ? `Generating… ${elapsedSeconds}s · ${selectedProvider?.name || 'provider'} / ${effectiveModel || 'model'}`
+    : candidate
+    ? `Ready to review`
+    : 'Generate or regenerate section';
+
   return (
     <section className="mt-3 space-y-2 rounded-lg border border-port-border bg-port-bg p-2" aria-label="Composition document">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
-        <span className="text-sm text-port-text">Composition document</span>
-        {doc ? (
-          <span>
-            {SOURCE_LABELS[doc.source?.kind] || 'imported'}{doc.source?.name ? ` · ${doc.source.name}` : ''}
-            {doc.files != null ? ` · ${doc.files} files` : ''}{doc.bytes != null ? ` · ${formatBytes(doc.bytes)}` : ''}
-            {doc.updatedAt ? ` · updated ${timeAgo(doc.updatedAt)}` : ''}
-          </span>
-        ) : <span>None yet — start from the layered template or import your own.</span>}
+      <div className="flex items-center gap-2 text-sm text-port-text">
+        <span>Composition document</span>
+        {doc && <span className="text-xs text-port-text-muted">
+          {doc.files != null && `${doc.files} files`}
+          {doc.bytes != null && ` · ${formatBytes(doc.bytes)}`}
+          {doc.updatedAt && ` · updated ${timeAgo(doc.updatedAt)}`}
+        </span>}
       </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <button type="button" className={buttonCls} disabled={!!busy} onClick={startTemplate}
-          title="Copy PortOS's layered template (scene media, camera moves, grain, HUD, kinetic lyrics) into this project">
-          <LayoutTemplate size={14} /> {busy === 'template' ? 'Copying…' : confirming === 'template' ? 'Click again to replace' : doc ? 'Replace with template' : 'Start from template'}
-        </button>
-        <FilePickerButton accept=".zip,application/zip" onChange={(e) => importZip(e.target.files?.[0])} disabled={!!busy}
-          ariaLabel="Import zip composition document" className={`${buttonCls} cursor-pointer`}
-          title="A .zip whose root (or single top folder) holds index.html">
-          <FileArchive size={14} aria-hidden="true" /> {busy === 'zip' ? 'Importing…' : 'Import zip'}
-        </FilePickerButton>
-        <div className="flex items-end gap-1">
-          <div>
-            <label htmlFor="mv-doc-folder" className="block text-xs text-port-text-muted mb-0.5">Folder inside data/</label>
-            <input id="mv-doc-folder" type="text" value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="compositions/my-video"
-              className={`${inputCls} w-48`} />
+
+      <StageSection id="mv-doc-source" title="Document source" summary={docSummary}>
+        <div className="flex flex-wrap items-end gap-2">
+          <button type="button" className={buttonCls} disabled={!!busy} onClick={startTemplate}
+            title="Copy PortOS's layered template (scene media, camera moves, grain, HUD, kinetic lyrics) into this project">
+            <LayoutTemplate size={14} /> {busy === 'template' ? 'Copying…' : confirming === 'template' ? 'Click again to replace' : doc ? 'Replace with template' : 'Start from template'}
+          </button>
+          <FilePickerButton accept=".zip,application/zip" onChange={(e) => importZip(e.target.files?.[0])} disabled={!!busy}
+            ariaLabel="Import zip composition document" className={`${buttonCls} cursor-pointer`}
+            title="A .zip whose root (or single top folder) holds index.html">
+            <FileArchive size={14} aria-hidden="true" /> {busy === 'zip' ? 'Importing…' : 'Import zip'}
+          </FilePickerButton>
+          <div className="flex items-end gap-1">
+            <div>
+              <label htmlFor="mv-doc-folder" className="block text-xs text-port-text-muted mb-0.5">Folder inside data/</label>
+              <input id="mv-doc-folder" type="text" value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="compositions/my-video"
+                className={`${inputCls} w-48`} />
+            </div>
+            <button type="button" className={buttonCls} disabled={!!busy || !folder.trim()} onClick={importFolder}>
+              <FolderInput size={14} /> {busy === 'folder' ? 'Importing…' : 'Import folder'}
+            </button>
           </div>
-          <button type="button" className={buttonCls} disabled={!!busy || !folder.trim()} onClick={importFolder}>
-            <FolderInput size={14} /> {busy === 'folder' ? 'Importing…' : 'Import folder'}
+          <button type="button" className={buttonCls} disabled={!!busy || !doc} onClick={exportZip}>
+            <Download size={14} /> Export zip
+          </button>
+          <button type="button" className={buttonCls} disabled={!!busy || !doc} onClick={detach} title="Stop using this document (the render refuses until another is attached)">
+            <Unlink size={14} /> {confirming === 'detach' ? 'Click again to detach' : 'Detach'}
           </button>
         </div>
-        <button type="button" className={buttonCls} disabled={!!busy || !doc} onClick={exportZip}>
-          <Download size={14} /> Export zip
-        </button>
-        <button type="button" className={buttonCls} disabled={!!busy || !doc} onClick={detach} title="Stop using this document (the render refuses until another is attached)">
-          <Unlink size={14} /> {confirming === 'detach' ? 'Click again to detach' : 'Detach'}
-        </button>
-      </div>
-      <div className="space-y-2 rounded border border-port-border p-2">
-        <MediaModePicker value={musicVideoMediaMode(project)} disabled={!!busy} onChange={(mediaMode) => run('policy', () => updateMusicVideoProject(project.id, { mediaMode }, { silent: true }).then((project) => ({ project })), 'Media mode saved')} />
         <label htmlFor="mv-doc-renderer" className="block text-xs text-port-text-muted">Authoring renderer</label>
         <select id="mv-doc-renderer" disabled={!!busy} value={musicVideoDocumentRenderer(project)} className={inputCls}
           onChange={(event) => run('renderer', () => updateMusicVideoProject(project.id, { composition: { ...compositionDraft(project), authoringRenderer: event.target.value } }, { silent: true }).then((project) => ({ project })), 'Renderer saved')}>
           <option value="three">Three.js authored worlds</option><option value="canvas">Canvas layered scenes</option>
         </select>
         <p className="text-xs text-port-text-muted">Three.js: modeled geometry, lighting, articulated characters and camera, with a local font overlay. Generated Three.js worlds use geometry only; selected images/video require Canvas or an imported document. Preview and export share deterministic seek(t), 1080p at 24 fps by default. Native Code mode remains the limited 720p Canvas renderer. Local ES modules and fonts are packaged; remote imports are blocked. Document motion blur is honored on export.</p>
+      </StageSection>
+
+      <StageSection id="mv-doc-generate" title="Generate & revise" summary={generateSummary} defaultOpen={!candidate}>
         <NarrativeEventsEditor key={`${project.id}-${JSON.stringify([project.composition?.narrativeEvents, project.composition?.reactiveSections])}`}
           project={project} sections={candidate?.sections || []} disabled={!!busy} onSave={saveEvents} onPendingChange={setEventPending} />
         <p className="text-xs text-port-text-muted">Generate from the approved treatment, song timing and selected project assets. Missing media is reported before any provider call.</p>
@@ -250,7 +290,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         {!authoringValid && <p className="text-xs text-port-warning" role="status">Choose a compatible code authoring provider and model before generation.</p>}
         <div className="flex flex-wrap items-end gap-2">
           <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || eventPending || !authoringValid} onClick={generate}>
-            <Film size={14} /> {busy === 'generate' ? 'Generating…' : musicVideoDocumentRenderer(project) === 'three' ? 'Generate authored 3D composition' : 'Generate mixed-media composition'}
+            <Film size={14} /> {busy === 'generate' ? `Generating… ${elapsedSeconds}s` : musicVideoDocumentRenderer(project) === 'three' ? 'Generate authored 3D composition' : 'Generate mixed-media composition'}
           </button>
           {candidate?.source && <>
             <div>
@@ -261,19 +301,18 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
               </select>
             </div>
             <button type="button" className={buttonCls} disabled={!!busy || eventPending || !selectedSectionValid || candidate.stale || !authoringValid} onClick={regenerate}>
-              <RotateCcw size={14} /> {busy === 'regenerate' ? 'Regenerating…' : 'Regenerate section'}
+              <RotateCcw size={14} /> {busy === 'regenerate' ? `Regenerating… ${elapsedSeconds}s` : 'Regenerate section'}
             </button>
             <button type="button" className={buttonCls} disabled={!!busy || eventPending || !candidate.eventRevisionAvailable || !authoringValid} onClick={reviseEvents}>
               {busy === 'event-revision' ? 'Revising events…' : 'Revise events only'}
             </button>
           </>}
-          {candidate?.candidate && <>
-            <button type="button" className={buttonCls} disabled={!!busy || eventPending || candidate.stale} onClick={accept}>Accept reviewed version</button>
-            <button type="button" className={buttonCls} disabled={!!busy} onClick={discard}>Discard candidate</button>
-          </>}
         </div>
         {candidate?.stale && <p className="text-xs text-port-warning" role="status">{candidate.eventRevisionAvailable ? 'Event bindings changed. Revise events only to retain selected footage.' : 'The treatment, song or selected assets changed. Generate a fresh candidate.'}</p>}
-        {candidate?.candidate && <div className="rounded border border-port-border p-2">
+      </StageSection>
+
+      {candidate?.candidate && <StageSection id="mv-doc-candidate" title="Candidate review" summary="Compare and accept or discard" defaultOpen>
+        <div className="rounded border border-port-border p-2">
           <p className="mb-2 text-xs text-port-text-muted">Candidate preview · {candidate.providerId || 'provider'} / {candidate.model || 'default model'} · active document stays selected until accepted</p>
           <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
             {doc?.source?.kind === 'generated' && <div><p className="text-xs text-port-text-muted">Before · accepted section</p><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={comparisonSeek} /></div>}
@@ -282,8 +321,13 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
           {(candidate.comparisons || []).filter((entry) => !selectedSection || entry.sectionId === selectedSection).map((entry) => <p key={entry.sectionId} className="mt-2 text-xs text-port-text-muted">
             {entry.sectionId}: before {entry.before.map((event) => `${event.name} @ frame ${event.startFrame}`).join(', ') || 'no events'}; after {entry.after.map((event) => `${event.name} @ frame ${event.startFrame}`).join(', ') || 'no events'}
           </p>)}
-        </div>}
-      </div>
+        </div>
+        <div className="flex gap-2">
+          <button type="button" className={buttonCls} disabled={!!busy || eventPending || candidate.stale} onClick={accept}>Accept reviewed version</button>
+          <button type="button" className={buttonCls} disabled={!!busy} onClick={discard}>Discard candidate</button>
+        </div>
+      </StageSection>}
+
       <OverlayEditor key={`${project.id}-${project.composition?.overlay ? 'hud' : 'none'}`} project={project} onSave={onSave} />
       {doc && <DocumentFiles key={doc.directory} projectId={project.id} directory={doc.directory} />}
     </section>
