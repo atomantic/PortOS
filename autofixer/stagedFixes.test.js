@@ -15,6 +15,9 @@ beforeEach(async () => {
   repo = join(root, 'repo');
   await mkdir(repo);
   execFileSync('git', ['init', '-q'], { cwd: repo });
+  // The fixture's exact-byte patch/rollback contract must not inherit the
+  // runner's checkout conversion (core.autocrlf=true on Windows).
+  execFileSync('git', ['config', '--local', 'core.autocrlf', 'false'], { cwd: repo });
   await writeFile(join(repo, 'example.txt'), 'old\n');
   await mkdir(join(root, 'sessions', id), { recursive: true });
   await writeFile(join(root, 'sessions', id, 'metadata.json'), JSON.stringify({
