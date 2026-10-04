@@ -111,6 +111,23 @@ describe('musicVideo routes', () => {
     expect(r.body).toEqual([{ id: 'mv-1', name: 'A' }]);
   });
 
+  it('GET /midi-sources returns only the newest transcription per track, trimmed (#10203)', async () => {
+    const mk = (id, trackId, createdAt) => ({
+      id, name: id, trackId, scenes: [{ big: true }],
+      midiTranscription: createdAt ? { filename: `${id}.mid`, model: 'm', createdAt, notes: [1, 2] } : null,
+    });
+    svc.listProjects.mockResolvedValueOnce([
+      mk('mv-old', 't1', '2026-01-01'), mk('mv-new', 't1', '2026-02-01'),
+      mk('mv-none', 't1', null), mk('mv-other', 't2', '2026-01-05'), mk('mv-unlinked', null, '2026-03-01'),
+    ]);
+    const r = await request(app).get('/api/music-video/midi-sources');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([
+      { trackId: 't1', id: 'mv-new', name: 'mv-new', midiTranscription: { filename: 'mv-new.mid', model: 'm', createdAt: '2026-02-01' } },
+      { trackId: 't2', id: 'mv-other', name: 'mv-other', midiTranscription: { filename: 'mv-other.mid', model: 'm', createdAt: '2026-01-05' } },
+    ]);
+  });
+
   it('GET / returns a bounded envelope when pagination is requested', async () => {
     svc.listProjects.mockResolvedValueOnce(
       Array.from({ length: 5 }, (_, i) => ({ id: `mv-${i}`, name: `P${i}` }))

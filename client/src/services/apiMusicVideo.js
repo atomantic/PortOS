@@ -13,6 +13,8 @@ export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options =
   if (cursor != null) query.set('cursor', String(cursor));
   return request(`/music-video?${query}`, options);
 };
+// Newest MIDI transcription per track — bounded projection for the Tracks page (#10203).
+export const listMusicVideoMidiSources = (options = {}) => request('/music-video/midi-sources', options);
 export const createMusicVideoProject = (data, options = {}) => request('/music-video', {
   method: 'POST', body: JSON.stringify(data), ...options,
 });
