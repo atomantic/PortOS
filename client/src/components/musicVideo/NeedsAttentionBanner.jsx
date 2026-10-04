@@ -1,4 +1,5 @@
 import { AlertTriangle, Link2, Play, X } from 'lucide-react';
+import { Link } from 'react-router';
 import { ATTENTION_ANCHOR_ID } from '../../lib/musicVideoAttention.js';
 
 const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2.5 text-xs disabled:opacity-50 sm:min-h-0 sm:py-1';
@@ -79,6 +80,19 @@ export default function NeedsAttentionBanner({ items, busy = false, actions = {}
             <span className="min-w-0 flex-1 basis-60">
               <span className="font-medium">{item.title}</span>
               <span className="block text-port-text-muted">{item.detail}</span>
+              {item.scenes?.length > 0 && (
+                <span className="mt-1 flex flex-wrap gap-1.5">
+                  {item.scenes.map((s) => (
+                    <Link
+                      key={s.sceneId}
+                      to={`/music-video/${item.projectId || ''}/board/scene/${s.sceneId}`}
+                      className="rounded bg-port-accent/10 px-1.5 py-0.5 text-[11px] text-port-accent hover:underline"
+                    >
+                      {s.label || `Scene ${(s.order ?? 0) + 1}`}
+                    </Link>
+                  ))}
+                </span>
+              )}
             </span>
             <span className="flex flex-wrap items-center gap-2">
               <ItemActions item={item} busy={busy} actions={actions} />

@@ -69,6 +69,15 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
           : `New takes: ${ready} of ${total}. Production and auto-review wait until it is resumed or cancelled.`,
         revisionId: revision.id,
         canResume: !rendering,
+        projectId: project.id,
+        scenes: rejected.map((s) => {
+          const sc = (project.scenes || []).find((scene) => scene.sceneId === s.sceneId);
+          return {
+            sceneId: s.sceneId,
+            order: sc?.order,
+            label: sc ? (sc.sectionLabel || sc.label || `Scene ${(sc.order ?? 0) + 1}`) : s.sceneId,
+          };
+        }),
       });
     }
   }

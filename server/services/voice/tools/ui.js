@@ -42,9 +42,43 @@ export const UI_TOOLS = [
     execute: async ({ page, path } = {}, ctx = {}) => {
       let target = null;
       let resolvedKey = null;
-      if (page && typeof page === 'string') {
+
+      const currentPath = ctx.state?.ui?.path || '';
+      const mvMatch = currentPath.match(/^\/music-video\/([^/?#]+)/);
+      const openProjectId = mvMatch && mvMatch[1] !== 'new' ? mvMatch[1] : null;
+
+      if (openProjectId && page && typeof page === 'string') {
+        const norm = page.trim().toLowerCase().replace(/\s+/g, '-').replace(/[.!?:;,"']+$/, '');
+        const MV_STAGES = {
+          setup: 'setup',
+          'cast-and-sets': 'cast-sets',
+          'cast-sets': 'cast-sets',
+          board: 'board',
+          'the-board': 'board',
+          'open-the-board': 'board',
+          'scene-board': 'board',
+          produce: 'produce',
+          compose: 'compose',
+          review: 'review',
+          publish: 'publish',
+        };
+        const stage = MV_STAGES[norm] || (norm.startsWith('open-') ? MV_STAGES[norm.replace(/^open-/, '')] : null);
+        if (stage) {
+          target = `/music-video/${openProjectId}/${stage}`;
+          resolvedKey = stage;
+        }
+      }
+
+      if (!target && page && typeof page === 'string') {
         const hit = resolveNavCommand(page);
-        if (hit) { target = hit.path; resolvedKey = hit.matched; }
+        if (hit) {
+          target = hit.path;
+          resolvedKey = hit.matched;
+          if (openProjectId && target.startsWith('/music-video/') && !target.includes('?')) {
+            const stage = target.replace(/^\/music-video\//, '').split('/')[0];
+            target = `/music-video/${openProjectId}/${stage}`;
+          }
+        }
       }
       if (!target && path && typeof path === 'string' && path.startsWith('/')) target = path;
       if (!target) {

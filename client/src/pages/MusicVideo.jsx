@@ -132,7 +132,21 @@ export default function MusicVideo() {
   // stage the project was in. A development artifact opens from its own deep
   // link (/music-video/:projectId/:stage/dev/:artifactId, or the older
   // /music-video/:projectId/dev/:artifactId), the version from `?v=`.
-  const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage } = useParams();
+  const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage, sceneId: routeSceneId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const newParam = searchParams.get('new');
+  const createOpen = newParam === 'project';
+  const autonomousOpen = newParam === 'autonomous';
+  const setCreateOpen = (open) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (open) next.set('new', 'project'); else next.delete('new');
+    return next;
+  });
+  const setAutonomousOpen = (open) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (open) next.set('new', 'autonomous'); else next.delete('new');
+    return next;
+  });
   const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [tracks, setTracks] = useState([]);
@@ -152,8 +166,6 @@ export default function MusicVideo() {
   const cloning = !!cloningId;
   const [importingLyrics, setImportingLyrics] = useState(false);
   const [aligningLyrics, setAligningLyrics] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [autonomousOpen, setAutonomousOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(emptyCreateForm);
   const selected = projects.find((p) => p.id === selectedId) || null;
@@ -189,7 +201,17 @@ export default function MusicVideo() {
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
   if (selected && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
   const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
-  const activeStage = resolveStageParam(routeStage) || pinnedStage || progress.current;
+  const activeStage = resolveStageParam(routeStage) || (routeSceneId ? 'board' : (pinnedStage || progress.current));
+
+  const handleToggleSceneExpand = (sceneId, isExpanded) => {
+    if (!selected) return;
+    const stage = activeStage || 'board';
+    if (isExpanded) {
+      navigate(`/music-video/${selected.id}/${stage}/scene/${sceneId}`, { replace: true });
+    } else if (routeSceneId === sceneId) {
+      navigate(`/music-video/${selected.id}/${stage}`, { replace: true });
+    }
+  };
 
 
   // Functional merges keyed on the captured projectId/sceneId so an async result
@@ -275,7 +297,6 @@ export default function MusicVideo() {
   useEffect(() => { setPickerTarget(null); }, [selectedId]);
   // Contact sheet open state lives in the URL (?sheet=contact) so it survives a
   // reload and Back closes it.
-  const [searchParams, setSearchParams] = useSearchParams();
   const contactSheetOpen = searchParams.get('sheet') === 'contact';
   const setContactSheetOpen = (open) => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
@@ -304,7 +325,8 @@ export default function MusicVideo() {
       toast.error(youtube.switchBlockedMessage);
       return;
     }
-    navigate(id ? `/music-video/${id}` : '/music-video');
+    const search = searchParams.toString();
+    navigate(id ? `/music-video/${id}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
   };
 
   const loadProjects = useCallback(async () => {
@@ -832,9 +854,9 @@ export default function MusicVideo() {
     focusable?.focus?.({ preventScroll: true });
   }, [activeStage, location.key, selectedId, !!selected]);
   const goToStage = (stage, anchor = null) => {
-    // The dock's picked source (`?play=`) follows the director across tabs.
-    const play = searchParams.get('play');
-    navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${play ? `?play=${encodeURIComponent(play)}` : ''}${anchor ? `#${anchor}` : ''}`, { replace: activeStage === stage });
+    // Preserve search params (e.g. ?play=, ?new=, ?sheet=) across tabs.
+    const search = searchParams.toString();
+    navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${search ? `?${search}` : ''}${anchor ? `#${anchor}` : ''}`, { replace: activeStage === stage });
   };
 
   // The docked preview: scene cards seek it; on a phone it is a mini-player
@@ -897,6 +919,8 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
+    activeSceneId: routeSceneId || null,
+    onToggleSceneExpand: handleToggleSceneExpand,
     autopilotRun,
     autonomous,
     runStage,

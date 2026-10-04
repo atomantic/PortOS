@@ -15,6 +15,7 @@ import { searchBM25 } from './memoryBM25.js';
 import { getMemories, ensureBackend, hybridSearchMemories } from './memoryBackend.js';
 import { getAllApps } from './apps.js';
 import { getHistory } from './history.js';
+import { listProjects as listMusicVideoProjects } from './musicVideo/projects.js';
 
 // =============================================================================
 // SNIPPET HELPER
@@ -286,11 +287,28 @@ function searchHealth(query) {
   return { id: 'health', label: 'Health', icon: 'HeartPulse', results };
 }
 
+async function searchMusicVideo(query) {
+  const q = query.toLowerCase();
+  const projects = await listMusicVideoProjects({ includeDeleted: false }).catch(() => []);
+  const results = (projects ?? [])
+    .filter(p => p.name?.toLowerCase().includes(q))
+    .map(p => ({
+      id: p.id,
+      title: p.name,
+      snippet: extractSnippet(p.concept || p.description || p.name, query),
+      url: `/music-video/${p.id}`,
+      type: 'music-video'
+    }))
+    .slice(0, 5);
+
+  return { id: 'musicVideo', label: 'Music Video', icon: 'Video', results };
+}
+
 // =============================================================================
 // FAN-OUT ENGINE
 // =============================================================================
 
-const ADAPTERS = ['brain', 'memory', 'apps', 'history', 'health'];
+const ADAPTERS = ['brain', 'memory', 'apps', 'history', 'health', 'musicVideo'];
 
 /**
  * Fan out a keyword query to all PortOS data sources in parallel.
@@ -299,13 +317,14 @@ const ADAPTERS = ['brain', 'memory', 'apps', 'history', 'health'];
 export async function fanOutSearch(query) {
   console.log(`🔍 Search fan-out for "${query}" across ${ADAPTERS.length} sources`);
 
-  const [brainResult, memoryResult, appsResult, historyResult, healthResult] =
+  const [brainResult, memoryResult, appsResult, historyResult, healthResult, musicVideoResult] =
     await Promise.allSettled([
       searchBrain(query),
       searchMemory(query),
       searchApps(query),
       searchHistory(query),
-      Promise.resolve(searchHealth(query))
+      Promise.resolve(searchHealth(query)),
+      searchMusicVideo(query)
     ]);
 
   const FALLBACKS = [
@@ -313,10 +332,11 @@ export async function fanOutSearch(query) {
     { id: 'memory', label: 'Memory', icon: 'Cpu', results: [] },
     { id: 'apps', label: 'Apps', icon: 'Package', results: [] },
     { id: 'history', label: 'History', icon: 'History', results: [] },
-    { id: 'health', label: 'Health', icon: 'HeartPulse', results: [] }
+    { id: 'health', label: 'Health', icon: 'HeartPulse', results: [] },
+    { id: 'musicVideo', label: 'Music Video', icon: 'Video', results: [] }
   ];
 
-  const settled = [brainResult, memoryResult, appsResult, historyResult, healthResult];
+  const settled = [brainResult, memoryResult, appsResult, historyResult, healthResult, musicVideoResult];
   const sources = settled.map((r, i) => r.status === 'fulfilled' ? r.value : FALLBACKS[i]);
   const nonEmpty = sources.filter(s => s.results.length > 0);
 

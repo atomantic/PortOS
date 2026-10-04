@@ -1,4 +1,5 @@
 import { RotateCcw, Play, X } from 'lucide-react';
+import { Link } from 'react-router';
 
 const STATUS_LABELS = { open: 'Open', rendering: 'Rendering revised draft…', complete: 'Complete', canceled: 'Cancelled' };
 const SLOT = { image: 'referenceImageId', video: 'videoHistoryId' };
@@ -66,7 +67,12 @@ export default function RevisionPanel({ project, busy, genScenes = {}, genVideoS
           const state = sectionState(section, entry?.scene, spinning, revision.repair);
           return (
             <li key={section.sceneId} className="flex flex-wrap items-center gap-2">
-              <span className="min-w-0 flex-1">{entry ? `Scene ${entry.number}` : section.sceneId} <span className="text-port-text-muted">({section.layer})</span></span>
+              <Link
+                to={`/music-video/${project?.id}/board/scene/${section.sceneId}`}
+                className="min-w-0 flex-1 hover:underline text-port-accent"
+              >
+                {entry ? `Scene ${entry.number}` : section.sceneId} <span className="text-port-text-muted">({section.layer})</span>
+              </Link>
               <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase ${section.verdict === 'rejected' ? 'bg-port-error/20 text-port-error' : 'bg-port-success/20 text-port-success'}`}>{section.verdict}</span>
               <span className={state.tone}>{state.label}</span>
             </li>

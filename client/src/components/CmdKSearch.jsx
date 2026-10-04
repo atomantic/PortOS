@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router';
-import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid, BookMarked, Send } from 'lucide-react';
+import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid, BookMarked, Send, Video } from 'lucide-react';
 import { useCmdKSearch } from '../hooks/useCmdKSearch';
 import useFocusTrap from '../hooks/useFocusTrap.js';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
@@ -17,7 +17,7 @@ import { safeReadJsonStorage } from '../lib/safeStorage.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 import { onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
-const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse };
+const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse, Video };
 
 // Subsequence-based fuzzy scorer. Tiered: exact label > label-prefix > alias
 // exact > label-contains > alias-contains > keyword-contains > section-contains
@@ -342,7 +342,18 @@ export default function CmdKSearch() {
   }, [captureDraft, close]);
 
   const DISPATCH = useMemo(() => ({
-    nav: (item) => { navigate(item.path); close(); },
+    nav: (item) => {
+      let targetPath = item.path;
+      const match = location.pathname.match(/^\/music-video\/([^/?#]+)/);
+      if (match && match[1] !== 'new' && item.path.startsWith('/music-video/')) {
+        const stage = item.path.replace(/^\/music-video\//, '').split(/[?#]/)[0];
+        if (stage && !item.path.includes('?new=')) {
+          targetPath = `/music-video/${match[1]}/${stage}`;
+        }
+      }
+      navigate(targetPath);
+      close();
+    },
     search: (item) => { navigate(item.url); close(); },
     catalog: (item) => { navigate(item.path); close(); },
     layout: async (item) => {
