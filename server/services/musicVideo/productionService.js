@@ -31,7 +31,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
-import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
+import { isAuthoringOneShotProvider } from '../../lib/providerVendors.js';
 import { codeFirstProductionAssets } from '../../lib/musicVideoMediumPlan.js';
 import { beginNextAttempt } from './autoReview.js';
 import { withAutopilotCutting } from './composition.js';
@@ -106,7 +106,7 @@ const defaults = {
     const { resolveProviderAndModel } = await import('../promptRunner.js');
     const { provider, selectedModel } = await resolveProviderAndModel(input);
     if (!provider || provider.id !== input?.providerId || provider.enabled === false || !selectedModel || selectedModel !== input?.model) throw new ServerError('The selected code-authoring provider/model is unavailable', { status: 409, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
-    if (!isToolFreeOneShotProvider(provider)) throw new ServerError('Choose an API or a tool-free headless CLI for code authoring', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
+    if (!isAuthoringOneShotProvider(provider)) throw new ServerError('Choose an API, a tool-free headless CLI, or a read-only-sandboxed codex CLI for code authoring', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
     return { providerId: provider.id, model: selectedModel, ...(input.effort ? { effort: input.effort } : {}), costUsd: isFreeProvider(provider) ? 0 : null };
   },
   releaseRevisionSection: async (...args) => (await import('./revisionService.js')).releaseRevisionSection(...args),
@@ -368,7 +368,7 @@ async function authorDocument(projectId, runId, action) {
       verifyCurrent,
       beforeSubmit: async ({ provider, model }) => {
         if (provider.id !== run.authoring.providerId || model !== run.authoring.model) throw new ServerError('The authoring provider/model changed; no fallback is allowed', { status: 409, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
-        if (!isToolFreeOneShotProvider(provider)) throw new ServerError('This code authoring provider cannot run without tools', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
+        if (!isAuthoringOneShotProvider(provider)) throw new ServerError('This code authoring provider cannot run without tools', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
         const costUsd = isFreeProvider(provider) ? 0 : null;
         const reserved = await mutateProjectRecord(projectId, (current) => {
           verifyCurrent(current);

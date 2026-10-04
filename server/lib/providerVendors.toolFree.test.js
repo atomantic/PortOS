@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { buildCliArgs } from './cliProviderArgs.js';
-import { isToolFreeOneShotProvider, toolFreeOneShotArgs, toolFreeOneShotRefusal } from './providerVendors.js';
+import { isAuthoringOneShotProvider, isToolFreeOneShotProvider, toolFreeOneShotArgs, toolFreeOneShotRefusal } from './providerVendors.js';
 
 const SHIPPED_PROVIDERS = Object.values(
   JSON.parse(readFileSync(new URL('../../data.reference/providers.json', import.meta.url), 'utf8')).providers,
@@ -81,6 +81,24 @@ describe('toolFreeOneShotArgs', () => {
 
   it('leaves an API provider alone and tool-free', () => {
     expect(toolFreeOneShotArgs({ type: 'api' }, ['x'])).toEqual({ args: ['x'], toolFree: true });
+  });
+});
+
+describe('codex read-only sandbox one-shot', () => {
+  it('confines codex to a read-only sandbox without calling it tool-free', () => {
+    const result = toolFreeOneShotArgs(cli('codex'), ['exec', '--sandbox', 'danger-full-access', '--dangerously-bypass-approvals-and-sandbox', '-']);
+    expect(result).toEqual({
+      args: ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '-'],
+      toolFree: false,
+      readOnlySandbox: true,
+    });
+  });
+
+  it('admits codex for authoring only, not for the host-control guard', () => {
+    expect(isAuthoringOneShotProvider(cli('codex'))).toBe(true);
+    expect(isToolFreeOneShotProvider(cli('codex'))).toBe(false);
+    expect(isAuthoringOneShotProvider(cli('agy'))).toBe(false);
+    expect(isAuthoringOneShotProvider({ type: 'tui', command: 'codex' })).toBe(false);
   });
 });
 
