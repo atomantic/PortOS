@@ -112,15 +112,6 @@ const autopilotSummary = (run, readiness) => {
   return run.error ? `${label} — ${guidance?.current || run.error}` : label;
 };
 
-const STATUS_COLORS = {
-  draft: 'bg-port-border text-port-text',
-  analyzed: 'bg-port-accent/30 text-port-accent',
-  ready: 'bg-port-accent/30 text-port-accent',
-  rendering: 'bg-port-warning/30 text-port-warning',
-  complete: 'bg-port-success/30 text-port-success',
-  failed: 'bg-port-error/30 text-port-error',
-};
-
 export default function MusicVideo() {
   // Deep-linkable project selection: the selected project lives in the URL
   // (/music-video/:projectId) rather than local state, so a project's
@@ -1078,16 +1069,13 @@ export default function MusicVideo() {
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
                 <option key={project.id} value={project.id}>
-                  {project.name} · {projectShotSummary(project)} · {project.status}
+                  {project.name} · {projectShotSummary(project)}
                 </option>
               ))}
             </select>
             {selected && (
               <span className="flex items-center gap-1">
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-border">v{selected.version || 1}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[selected.status] || 'bg-port-border'}`}>
-                  {selected.status}
-                </span>
               </span>
             )}
             {selected && (

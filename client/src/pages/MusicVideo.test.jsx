@@ -550,8 +550,11 @@ describe('MusicVideo render control (#1760)', () => {
     sseState.latest = { type: 'error', error: 'Renderer stopped' };
     await clickNewProject();
     expect(toast.error).toHaveBeenCalledWith('Renderer stopped');
-    expect(screen.getByLabelText('Project').querySelector('option[value="mv-1"]')).toHaveTextContent('failed');
-    expect(screen.getByLabelText('Project').querySelector('option[value="mv-other"]')).toHaveTextContent('ready');
+    // The picker names the project, not the legacy status word. The failure stays on mv-1.
+    const picker = screen.getByLabelText('Project');
+    expect(picker.querySelector('option[value="mv-1"]')).toHaveTextContent('Neon Run');
+    expect(picker.querySelector('option[value="mv-1"]').textContent).not.toMatch(/\bfailed\b/);
+    expect(picker.querySelector('option[value="mv-other"]').textContent).not.toMatch(/\bready\b/);
     expect(screen.queryByText('Renderer stopped')).not.toBeInTheDocument();
     await selectProject(PROJECT_WITH_CLIP.id);
     await openStage('review');
