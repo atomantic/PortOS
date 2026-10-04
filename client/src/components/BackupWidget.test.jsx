@@ -39,7 +39,7 @@ const renderWidget = () => render(
 const openRestorePanel = async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Snapshots' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
-  return screen.findByRole('textbox', { name: 'Selective restore (optional)' });
+  return screen.findByRole('textbox', { name: 'File restore folder (optional)' });
 };
 
 beforeEach(() => {
@@ -234,7 +234,17 @@ describe('BackupWidget snapshots', () => {
     await act(async () => {
       finishRestore({ changedFiles: ['brain/example.json'] });
     });
-    expect(mockToast.success).toHaveBeenCalledWith('Restore complete — 1 file(s) restored');
+    expect(mockToast.success).toHaveBeenCalledWith('File restore complete — 1 file(s) restored');
+  });
+
+  it('describes restore as files-only and never claims all data is up to date', async () => {
+    mockRestoreBackup.mockResolvedValueOnce({ changedFiles: [] });
+    await openRestorePanel();
+    expect(screen.getByText(/PostgreSQL records are not restored here/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Restore PostgreSQL records in Backup settings' })).toHaveAttribute('href', '/settings/backup');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByText(/PostgreSQL data was not checked/)).toBeInTheDocument();
+    expect(screen.queryByText(/already up to date/)).toBeNull();
   });
 
   it('keeps the legacy snapshot warning through restore completion', async () => {
@@ -254,7 +264,7 @@ describe('BackupWidget snapshots', () => {
     expect(screen.getByRole('button', { name: 'Restore 1 file(s)' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
     await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
-      'Restore complete — 1 file(s) restored (unverified legacy snapshot)',
+      'File restore complete — 1 file(s) restored (unverified legacy snapshot)',
     ));
   });
 
@@ -274,7 +284,7 @@ describe('BackupWidget snapshots', () => {
     await screen.findByRole('status');
     fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
     await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
-      'Restore complete — 1 file(s) restored (unverified legacy snapshot)',
+      'File restore complete — 1 file(s) restored (unverified legacy snapshot)',
     ));
   });
 
