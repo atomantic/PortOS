@@ -155,6 +155,25 @@ describe('On This Day record destinations', () => {
     expect(screen.getByTestId('location').textContent).toBe(path);
   });
 
+  it.each([
+    ['memory', '/brain/memory/memories/example-second', 'getBrainMemories', 'getBrainMemory'],
+    ['idea', '/brain/ideas/ideas/example-second', 'getBrainIdeas', 'getBrainIdea'],
+  ])('keeps the open %s editor when the collection page lands after the reader loaded', async (type, path, listGetter, getter) => {
+    let resolvePage;
+    // Any refetch after the first load hangs, so a reset to "Loading entry" stays observable.
+    api[getter].mockReset().mockResolvedValueOnce(second).mockImplementation(() => new Promise(() => {}));
+    api[listGetter].mockImplementation(() => new Promise(resolve => { resolvePage = resolve; }));
+    mount(type, path);
+    const reader = await screen.findByRole('complementary', { name: 'Preview: Example second' });
+    fireEvent.click(within(reader).getByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('textbox', { name: 'Title' })).toBeTruthy();
+
+    // The late list page must not reset the already-resolved detail back to loading.
+    await act(async () => resolvePage({ items: [first], total: 2, nextCursor: 'older-page' }));
+    expect(screen.queryByRole('complementary', { name: 'Loading entry' })).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Title' })).toBeTruthy();
+  });
+
   it('drops a superseded detail response when another URL selects a different record', async () => {
     let resolveDetail;
     api.getBrainMemory.mockImplementation(() => new Promise(resolve => { resolveDetail = resolve; }));
