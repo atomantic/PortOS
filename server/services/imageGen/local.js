@@ -22,6 +22,7 @@ import { randomUUID } from 'crypto';
 import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -1258,19 +1259,22 @@ export async function saveUploadedGalleryImage(base64Data, tempPath) {
   const staging = `${output}.tmp`;
   try {
     await sharp(input, { limitInputPixels: MAX_GALLERY_UPLOAD_PIXELS }).rotate().png().toFile(staging);
-    await rename(staging, output);
+    // Encoding stays outside admission. Publish the final file, metadata, and
+    // derived database row together so a backup cannot split those writes.
+    return await withBackupAssetPublication(async () => {
+      await rename(staging, output);
+      // PNG normalization strips source text chunks; keep their bounded
+      // projection in the gallery sidecar for listings and later attachments.
+      if (Object.keys(metadata).length > 0) {
+        await atomicWrite(join(PATHS.images, filename.replace('.png', '.metadata.json')), metadata);
+      }
+      await refreshImageIndex(filename);
+      console.log(`📥 Saved uploaded gallery image: ${filename} (PNG from ${detected.mime})`);
+      return { filename, path: `/data/images/${filename}`, metadata };
+    });
   } finally {
     await unlinkGuarded(staging).catch(() => {});
   }
-  // The normalized PNG intentionally has no source text chunks. Keep the
-  // bounded projection in the canonical gallery sidecar so gallery listings,
-  // media indexing, and later catalog attachments can still recover it.
-  if (Object.keys(metadata).length > 0) {
-    await atomicWrite(join(PATHS.images, filename.replace('.png', '.metadata.json')), metadata);
-  }
-  await refreshImageIndex(filename);
-  console.log(`📥 Saved uploaded gallery image: ${filename} (PNG from ${detected.mime})`);
-  return { filename, path: `/data/images/${filename}`, metadata };
 }
 
 export async function listGallery() {
@@ -1297,37 +1301,39 @@ export async function listGallery() {
 
 export async function deleteImage(filename) {
   assertGalleryFilename(filename);
-  await unlinkGuarded(join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp'))).catch(() => {});
-  await unlinkGuarded(join(PATHS.images, filename)).catch(() => {});
-  await unlinkGuarded(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
-  await unlinkGuarded(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
-  // Drop the derived index row with the file (#2738). Without this the row
-  // survives until the next boot reconcile, so anything counting the index
-  // (the Character sheet's Auteur skill / Media Assets tile) reads high in
-  // between. Non-fatal + dynamically imported: a broken index must never fail
-  // the user's delete, and this keeps the pg stack out of this module's static
-  // graph (the mirror of how the index dynamically imports the media stack).
-  //
-  // Gated on the PNG being CONFIRMED gone. The unlink above swallows its error,
-  // so an EACCES/EBUSY/EIO failure leaves the image on disk and still listed by
-  // listGallery() — unindexing it there would swap this bug for its mirror and
-  // UNDERcount a live image. Failed-to-delete is not deleted.
-  //
-  // The probe is tri-state, NOT existsSync: that collapses "absent" and "I
-  // couldn't tell" (EACCES on the dir, EIO) into the same `false`, which is the
-  // absent-vs-failed sentinel trap — an unreadable gallery would read as "every
-  // image is gone" and retire live rows. Only a definitive ENOENT retires the
-  // row; present-or-unknown leaves it for the reconcile, which reads disk.
-  const probeErr = await stat(join(PATHS.images, filename)).then(() => null, (err) => err);
-  if (probeErr?.code === 'ENOENT') {
-    await import('../mediaAssetIndex/index.js')
-      .then((m) => m.unindexImage(filename))
-      .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
-  } else {
-    console.error(`❌ Image file not confirmed gone (${probeErr?.code || 'still present'}), keeping its index row: ${filename}`);
-  }
-  console.log(`🗑️ Deleted image: ${filename}`);
-  return { ok: true };
+  return withBackupAssetPublication(async () => {
+    await unlinkGuarded(join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp'))).catch(() => {});
+    await unlinkGuarded(join(PATHS.images, filename)).catch(() => {});
+    await unlinkGuarded(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
+    await unlinkGuarded(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
+    // Drop the derived index row with the file (#2738). Without this the row
+    // survives until the next boot reconcile, so anything counting the index
+    // (the Character sheet's Auteur skill / Media Assets tile) reads high in
+    // between. Non-fatal + dynamically imported: a broken index must never fail
+    // the user's delete, and this keeps the pg stack out of this module's static
+    // graph (the mirror of how the index dynamically imports the media stack).
+    //
+    // Gated on the PNG being CONFIRMED gone. The unlink above swallows its error,
+    // so an EACCES/EBUSY/EIO failure leaves the image on disk and still listed by
+    // listGallery() — unindexing it there would swap this bug for its mirror and
+    // UNDERcount a live image. Failed-to-delete is not deleted.
+    //
+    // The probe is tri-state, NOT existsSync: that collapses "absent" and "I
+    // couldn't tell" (EACCES on the dir, EIO) into the same `false`, which is the
+    // absent-vs-failed sentinel trap — an unreadable gallery would read as "every
+    // image is gone" and retire live rows. Only a definitive ENOENT retires the
+    // row; present-or-unknown leaves it for the reconcile, which reads disk.
+    const probeErr = await stat(join(PATHS.images, filename)).then(() => null, (err) => err);
+    if (probeErr?.code === 'ENOENT') {
+      await import('../mediaAssetIndex/index.js')
+        .then((m) => m.unindexImage(filename))
+        .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
+    } else {
+      console.error(`❌ Image file not confirmed gone (${probeErr?.code || 'still present'}), keeping its index row: ${filename}`);
+    }
+    console.log(`🗑️ Deleted image: ${filename}`);
+    return { ok: true };
+  });
 }
 
 // Sidecar edits are whole-file read→modify→replace cycles; atomicWrite stops a
@@ -1337,13 +1343,15 @@ export async function deleteImage(filename) {
 const sidecarEditQueue = createKeyCachedQueue();
 
 function editImageSidecar(filename, mutate) {
-  return sidecarEditQueue(filename, async () => {
+  // Admit before joining the queue so a cut drains every already-requested
+  // edit, including one waiting for an earlier edit's index refresh.
+  return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
     const { path: sidecarPath, metadata } = await readImageSidecar(filename);
     const result = mutate(metadata);
     await atomicWrite(sidecarPath, metadata);
     await refreshImageIndex(filename);
     return result;
-  });
+  }));
 }
 
 export async function setImageHidden(filename, hidden) {

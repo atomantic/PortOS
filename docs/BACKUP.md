@@ -62,8 +62,30 @@ Admission inventory (`withBackupAssetPublication`):
 | Pipeline filename hooks (`filenameHookFactory.js` comic pages and storyboards, `seasonCoverFilenameHook.js`) | Covered |
 | Recovery commit of a completion whose terminal write failed (the next queue write acknowledges it outside any admission) | Outstanding |
 | Other `mediaJobEvents` `completed` subscribers that write rows (universe-builder collection hook, LoRA dataset, character sheet, sprite animation, Creative Director scene runner/plan advance/seed settle, music-video production) | Outstanding |
-| Durable replacement/deletion owners | Outstanding (#9982) |
+| Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
+| Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
+| Other durable replacement/deletion owners and final global readiness/invariant check | Outstanding (#9982) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
+
+Direct gallery uploads encode before admission, then publish the final image,
+sidecar, and derived index row under one lease. Prompt/visibility edits and
+image/video deletions take admission before their first read or removal and
+hold it through the index update. A snapshot requested halfway through one of
+these workflows drains it; a mutation arriving during a snapshot waits until the
+file copy, SQL dump, and manifest are done. These leases do not make the two
+stores transactional: existing best-effort index failures can still leave
+stale derived rows for reconciliation, and a delete can leave other records
+that referenced the asset. The admission timeout/failure path still refuses the
+snapshot and preserves older recovery points.
+
+The remaining inventory includes LoRA dataset image writes/removals
+(`loraDatasets.js`), voice-profile asset copies (`voice/studio.js`), development
+artifact/vocal-stem import workflows (`musicVideo/devArtifactService.js`,
+`musicVideo/vocalStem.js`), direct render/index completion listeners, and the
+other completion paths above. Their persistence adapters and direct filesystem
+calls need workflow-level classification; independently locking `fileCore` or
+SQL primitives would not cover the gap between writes. No domain is newly
+excluded by this slice, and the final global readiness check is still pending.
 
 This is part of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923).
 Until every owner is covered, `status: ok` reports that the file
