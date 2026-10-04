@@ -55,9 +55,10 @@ describe('releaseIdleSiblingNextHolder', () => {
       expect(await holderBranch()).toBe(BRANCH);
       expect(await git(['rev-parse', 'HEAD'], holder)).toBe(head);
     }
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, {
+    const released = await releaseIdleSiblingNextHolder(repo, BRANCH, {
       agents: [{ ...parent, status: 'completed' }], nowMs: LATER(),
-    })).resolves.toEqual({ path: holder });
+    });
+    expect(resolve(released.path)).toBe(resolve(holder));
     expect(await git(['rev-parse', 'HEAD'], holder)).toBe(head);
   });
 
