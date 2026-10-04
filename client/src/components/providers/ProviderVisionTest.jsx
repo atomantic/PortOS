@@ -36,7 +36,7 @@ export default function ProviderVisionTest({ provider }) {
   };
   return <>
     <button className={buttonClass} disabled={!provider.enabled} onClick={checkHealth}>Test vision</button>
-    {open && <Modal onClose={() => setOpen(false)} ariaLabel={`Test vision — ${provider.name}`} panelClassName="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
+    {open && <Modal open usePortal onClose={() => setOpen(false)} ariaLabel={`Test vision — ${provider.name}`} panelClassName="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-port-text">Test vision — {provider.name}</h2>
         <button className={buttonClass} onClick={() => setOpen(false)}>Close</button>
