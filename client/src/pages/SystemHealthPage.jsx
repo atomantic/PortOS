@@ -27,6 +27,7 @@ const READINESS_EVENTS = ['system:health:changed'];
 // `forge` is intentionally absent — its message already embeds gh's own remedy
 // text and there is no in-app page that fixes it.
 const REMEDIATION = {
+  'data-disk': { to: '/system-resources/storage', label: 'Runtime data disk usage breakdown' },
   disk: { to: '/system-resources/storage', label: 'Disk usage breakdown' },
   memory: { to: '/devtools/processes', label: 'All processes' },
   cpu: { to: '/devtools/processes', label: 'All processes' },
@@ -275,21 +276,24 @@ function SystemHealthOverview() {
             pct={Math.min(100, health.system.cpu.usagePercent)}
             sub={`${health.system.cpu.cores} cores · ${health.system.cpu.loadAvg1m.toFixed(2)} load`}
           />
-          {health.system.disk ? (
+          {[{ disk: health.system.disk, label: 'Root disk', unavailable: health.warnings?.some(warning => warning.type === 'probe-unavailable' && warning.source === 'disk') },
+            ...(Object.hasOwn(health.system, 'dataDisk') ? [{ disk: health.system.dataDisk, label: 'Runtime data disk', unavailable: true }] : [])
+          ].map(({ disk, label, unavailable }) => (disk ? (
             <ResourceCard
+              key={label}
               icon={Database}
-              label="Disk"
-              pct={health.system.disk.usagePercent}
+              label={label}
+              pct={disk.usagePercent}
               warn={t.diskWarn}
               critical={t.diskCritical}
-              sub={`${health.system.disk.usedFormatted} / ${health.system.disk.totalFormatted}`}
+              sub={`${disk.usedFormatted} / ${disk.totalFormatted}`}
             />
-          ) : health.warnings?.some(warning => warning.type === 'probe-unavailable' && warning.source === 'disk') ? (
-            <div className="bg-port-card border border-port-border rounded-xl p-4" aria-label="Disk status unavailable">
-              <div className="text-xs uppercase tracking-wide text-gray-500 mb-2">Disk</div>
+          ) : unavailable ? (
+            <div className="bg-port-card border border-port-border rounded-xl p-4" key={label} aria-label={label === 'Root disk' ? 'Disk status unavailable' : `${label} status unavailable`}>
+              <div className="text-xs uppercase tracking-wide text-gray-500 mb-2">{label}</div>
               <div className="text-3xl font-bold text-port-warning">Unavailable</div>
             </div>
-          ) : null}
+          ) : null))}
         </section>
 
         {error && <p role="status" className="text-port-warning">Health refresh failed. Showing the last available reading.</p>}

@@ -12,6 +12,7 @@ vi.mock('../lib/db.js', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: {
     root: '/example/portos',
+    data: '/example/data',
     browserDownloads: '/example/Downloads',
   },
   dirSize: vi.fn(async (path) => path.includes('Downloads') ? 900 : 100),
@@ -141,6 +142,22 @@ describe('system resource reporting', () => {
     lmStudioManager.getLastLoadedModelsError.mockReturnValue(null);
     lmStudioManager.getLastListError.mockReturnValue(null);
     settings.getSettings.mockResolvedValue({});
+  });
+
+  it('reports data capacity independently and preserves unknown data probes', async () => {
+    fsPromises.statfs.mockResolvedValueOnce({ blocks: 100, bsize: 1, bavail: 80 })
+      .mockResolvedValueOnce({ blocks: 100, bsize: 1, bavail: 1 });
+    const report = await buildSystemResourceReport();
+    expect(report.filesystem.usagePercent).toBe(20);
+    expect(report.dataFilesystem).toEqual({ totalBytes: 100, usedBytes: 99, freeBytes: 1, usagePercent: 99 });
+    expect(fsPromises.statfs).toHaveBeenCalledWith(fileUtils.PATHS.data);
+    fsPromises.statfs.mockResolvedValueOnce({ blocks: 100, bsize: 1, bavail: 80 }).mockRejectedValueOnce(new Error('private mount'));
+    const failed = await buildSystemResourceReport();
+    expect(failed.filesystem.usagePercent).toBe(20);
+    expect(failed.dataFilesystem).toBeNull();
+    expect(failed.sourceErrors).toContain('data-filesystem');
+    expect(JSON.stringify(failed)).not.toContain('private mount');
+    expect((await buildSystemResourceReport()).dataFilesystem.usagePercent).toBe(75);
   });
 
   it('combines storage, model residency, and live queue summaries', async () => {

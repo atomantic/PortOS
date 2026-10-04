@@ -328,3 +328,19 @@ describe('SystemHealthPage — no dangling aria-controls/aria-labelledby', () =>
     expectNoDanglingAriaRefs(container);
   });
 });
+
+
+it('shows labelled root and data capacity on the overview', async () => {
+  api.getSystemHealth.mockResolvedValue({ ...HEALTH, system: { ...HEALTH.system, dataDisk: { usagePercent: 99, usedFormatted: '99 GB', totalFormatted: '100 GB' } } });
+  renderPage();
+  expect(await screen.findByText('Runtime data disk')).toBeInTheDocument();
+  expect(screen.getByText('Root disk')).toBeInTheDocument();
+  expect(screen.getByText('99%')).toBeInTheDocument();
+});
+
+it('shows unavailable data without substituting root capacity', async () => {
+  api.getSystemHealth.mockResolvedValue({ ...HEALTH, system: { ...HEALTH.system, dataDisk: null } });
+  renderPage();
+  expect(await screen.findByLabelText('Runtime data disk status unavailable')).toHaveTextContent('Unavailable');
+  expect(screen.getByText('92%')).toBeInTheDocument();
+});
