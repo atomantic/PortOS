@@ -3084,4 +3084,23 @@ describe('backup snapshot admission for media completion', () => {
     expect(capture(failed)).toEqual({ files: [`${failed}.mp4`], queueStatus: 'running', rows: new Map() });
     release();
   });
+
+  it('recovers an abandoned completion only under admission, never from a write landing mid-cut', async () => {
+    const recovered = await startJob();
+    const failures = failTerminalWrites(3);
+    renderFinishes(recovered);
+    await waitFor(() => failures.count === 3);
+    await settle();
+    const release = await boundary.acquireBackupSnapshotCut({ timeoutMs: 50 });
+    // Storage is writable again and an unrelated queue write lands during the cut.
+    await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'unrelated' } });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(mediaJobQueue.getJob(recovered).status).toBe('running');
+    expect(capture(recovered)).toEqual({ files: [`${recovered}.mp4`], queueStatus: 'running', rows: new Map() });
+    release();
+    await waitFor(() => rows.has(recovered));
+    expect(capture(recovered)).toEqual({
+      files: [`${recovered}.mp4`], queueStatus: 'completed', rows: new Map([[recovered, `${recovered}.mp4`]]),
+    });
+  });
 });
