@@ -26,18 +26,21 @@ import { installLocalModelId } from '../lib/imageGenBackends';
 export default function useLocalImageModels(enabled) {
   const [models, setModels] = useState(null);
   const [installDefault, setInstallDefault] = useState(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     if (!enabled) return undefined;
     let alive = true;
+    setModels(null);
+    setFailed(false);
     listImageModels({ silent: true })
       .then((list) => { if (alive) setModels(Array.isArray(list) ? list : []); })
-      .catch(() => { if (alive) setModels([]); });
+      .catch(() => { if (alive) { setModels([]); setFailed(true); } });
     getSettings({ silent: true })
       .then((s) => { if (alive) setInstallDefault(installLocalModelId(s)); })
       .catch(() => { if (alive) setInstallDefault(installLocalModelId(null)); });
     return () => { alive = false; };
   }, [enabled]);
 
-  return { models, installDefault };
+  return { models, installDefault, failed };
 }

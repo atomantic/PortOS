@@ -25,7 +25,9 @@ vi.mock('../../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(asy
 vi.mock('../../services/apiMusic.js', () => ({
   listMusicEngines: vi.fn(async () => ({ engines: [{ id: 'acestep', name: 'ACE-Step', ready: true, lyrics: true }] })),
 }));
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: vi.fn(async () => ({ imageGen: { local: { modelId: 'example-image' } } })) }));
 vi.mock('../../services/apiImageVideo.js', () => ({
+  listImageModels: vi.fn(async () => [{ id: 'example-image', name: 'Example image' }]),
   getVideoGenModelContext: vi.fn(async () => ({
     models: [
       { id: 'example-ltx', name: 'Example LTX' },
@@ -246,7 +248,8 @@ describe('AutonomousStartDrawer', () => {
     render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
     fireEvent.click(screen.getByLabelText('Lyrics', { selector: '#mv-auto-checkpoint-lyrics' }));
-    fireEvent.change(screen.getByLabelText(/local image gen model/i), { target: { value: 'flux2-dev' } });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Example image' })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/local image gen model/i), { target: { value: 'example-image' } });
     fireEvent.change(screen.getByLabelText(/budget cap/i), { target: { value: '12' } });
     await waitFor(() => expect(screen.getByRole('option', { name: 'Neon Rain' })).toBeTruthy());
     fireEvent.change(screen.getByLabelText('Mood board'), { target: { value: 'mb-1' } });
@@ -254,7 +257,7 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalled());
     expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({
-      checkpoints: ['lyrics'], models: { 'image:local': 'flux2-dev' }, budgetUsd: 12, moodBoardId: 'mb-1',
+      checkpoints: ['lyrics'], models: { 'image:local': 'example-image' }, budgetUsd: 12, moodBoardId: 'mb-1',
     });
   });
 

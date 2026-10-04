@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import useLocalImageModels from '../../hooks/useLocalImageModels.js';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideoAutomation.js';
 import { autonomousMedium } from '../../lib/musicVideoAutonomous.js';
@@ -13,7 +14,7 @@ const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded 
  * the hardware-compatible models are in. A blank value is the install default.
  * A pin the catalog no longer lists stays selected, so a save cannot drop it.
  */
-function localVideoModelSelectState({ catalog, failed, pinned }) {
+function localModelSelectState({ catalog, failed, pinned, kind }) {
   const models = Array.isArray(catalog?.models) ? catalog.models : [];
   const loading = catalog == null && !failed;
   const defaultId = typeof catalog?.defaultModel === 'string' ? catalog.defaultModel : '';
@@ -29,8 +30,8 @@ function localVideoModelSelectState({ catalog, failed, pinned }) {
     ...(loading ? [] : models.map((model) => ({ id: model.id, name: model.name || model.id }))),
   ];
   let status = '';
-  if (failed) status = 'Could not load local video models.';
-  else if (!loading && models.length === 0) status = 'No local video models are compatible with this machine.';
+  if (failed) status = `Could not load local ${kind} models.`;
+  else if (!loading && models.length === 0) status = `No local ${kind} models are compatible with this machine.`;
   return {
     blankLabel: loading ? 'Loading models…' : (blankDetail ? `Install default (${blankDetail})` : 'Install default'),
     options,
@@ -78,6 +79,7 @@ export default function ToolPicker({ idPrefix = 'mv-auto', tools, models, onChan
     models,
   });
   const modelTools = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group !== 'code' && picked.has(t.id));
+  const localImage = useLocalImageModels(picked.has('image:local'));
   const localVideo = useLocalVideoModels(modelTools.some((tool) => tool.id === LOCAL_VIDEO_TOOL_ID));
   const setModel = (toolId, value) => onChange({ tools, models: { ...models, [toolId]: value } });
 
@@ -116,7 +118,7 @@ export default function ToolPicker({ idPrefix = 'mv-auto', tools, models, onChan
           {modelTools.map((tool) => {
             const fieldId = `${idPrefix}-model-${tool.id}`;
             const value = models[tool.id] || '';
-            if (tool.id !== LOCAL_VIDEO_TOOL_ID) {
+            if (tool.id !== LOCAL_VIDEO_TOOL_ID && tool.id !== 'image:local') {
               return (
                 <div key={tool.id} className="min-w-0">
                   <label htmlFor={fieldId} className="block text-xs text-port-text-muted mb-1">{tool.label} model (optional)</label>
@@ -131,7 +133,11 @@ export default function ToolPicker({ idPrefix = 'mv-auto', tools, models, onChan
                 </div>
               );
             }
-            const select = localVideoModelSelectState({ catalog: localVideo.catalog, failed: localVideo.failed, pinned: value });
+            const image = tool.id === 'image:local';
+            const select = localModelSelectState({
+              catalog: image ? (localImage.models === null ? null : { models: localImage.models, defaultModel: localImage.installDefault }) : localVideo.catalog,
+              failed: image ? localImage.failed : localVideo.failed, pinned: value, kind: image ? 'image' : 'video',
+            });
             const statusId = `${fieldId}-status`;
             return (
               <div key={tool.id} className="min-w-0">
