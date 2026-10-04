@@ -4,8 +4,8 @@ import { afterEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ listeners: new Set(), sync: vi.fn(), success: vi.fn() }));
 vi.mock('../../../services/socket', () => ({ default: {
-  on: vi.fn((event, handler) => mocks.listeners.add(handler)),
-  off: vi.fn((event, handler) => mocks.listeners.delete(handler))
+  on: vi.fn((event, handler) => { if (event === 'genome:clinvar-progress') mocks.listeners.add(handler); }),
+  off: vi.fn((event, handler) => { if (event === 'genome:clinvar-progress') mocks.listeners.delete(handler); })
 } }));
 vi.mock('../../../services/api', () => ({
   getGenomeSummary: vi.fn(async () => ({ uploaded: true, markers: [] })),
