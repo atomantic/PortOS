@@ -13,6 +13,7 @@ vi.mock('../../../services/api', () => ({
   getBranchComparison: vi.fn(),
   getRemoteBranches: vi.fn(),
   updateBranches: vi.fn(),
+  pushAllBranches: vi.fn(),
   getGitDiff: vi.fn(),
   cleanupMergedBranches: vi.fn(),
   resetToDefaultBranch: vi.fn(),
@@ -110,6 +111,18 @@ describe('GitTab managed repository sources', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fetch branches' }));
 
     await waitFor(() => expect(api.updateBranches).toHaveBeenCalledWith('/repo'));
+    await waitFor(() => expect(screen.getByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '1'));
+  });
+
+  it('refreshes repository sources after pushing so the ahead count clears', async () => {
+    api.getBranches.mockResolvedValue({ branches: [{ name: 'dev', tracking: 'origin/dev', ahead: 1, behind: 0 }] });
+    api.pushAllBranches.mockResolvedValue({ success: true, pushed: 1, results: {} });
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
+
+    expect(await screen.findByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '0');
+    fireEvent.click(screen.getAllByRole('button', { name: /^Push$/ })[0]);
+
+    await waitFor(() => expect(api.pushAllBranches).toHaveBeenCalledWith('/repo'));
     await waitFor(() => expect(screen.getByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '1'));
   });
 });
