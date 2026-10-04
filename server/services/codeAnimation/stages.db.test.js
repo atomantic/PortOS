@@ -34,6 +34,18 @@ vi.mock('fs/promises', async importOriginal => {
   };
 });
 vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
+// Exercise the default review adapter with only its external provider boundary doubled.
+vi.mock('./preflight.js', async importOriginal => ({
+  ...await importOriginal(),
+  preflightProductionProject: vi.fn(async () => ({
+    resolved: { providerId: 'example-provider', model: 'example-model' }, problems: [],
+    capabilities: { imageInputAccepted: true }, allowFallback: false,
+  })),
+}));
+vi.mock('../providers.js', () => ({ getProviderById: vi.fn(async () => ({ id: 'example-provider' })) }));
+vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
+vi.mock('../runner.js', () => ({ stopRun: vi.fn() }));
+import { runPromptThroughProvider } from '../promptRunner.js';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { createCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
@@ -178,6 +190,39 @@ describe.skipIf(!ready)('Production stage runs', () => {
     expect(saved.data.stages.find(stage => stage.key === 'review').reviewer).toEqual({ providerId: 'example-provider', model: 'example-model' });
     expect(saved.data.findings.some(finding => finding.kind === 'visual-review' && finding.severity === 'warning')).toBe(true);
     expect(saved.data.verdict.unverified.map(item => item.dimension)).not.toContain('semantic-visual');
+  });
+
+  it.each([false, true])('extracts default-adapter review evidence after metadata and repeated prompt echoes (empty=%s)', async empty => {
+    const { id } = await project();
+    const detail = `  Brighter [background] {please}: ${'x'.repeat(510)}  `;
+    const findings = empty ? [] : [{ detail, atSeconds: 1 }, { detail: 'Keep ```json {"shape":[]} ``` in frame.', atSeconds: 'unknown' }];
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({
+      text: `${prompt}\nExample: {"schema":"findings"}\n${prompt}\nActual: \`\`\`json\n${JSON.stringify({ findings })}\n\`\`\``,
+      provider: { id: 'example-provider' }, model: 'example-model',
+    }));
+    const { run, done } = await startProductionStageRun(id, { visualReview: true }, { sample, repair: unfreeze, render });
+    expect(await done).toBe('completed');
+    const saved = (await getProductionHistory(id, { limit: 1, offset: 0 })).items.find(item => item.id === run.id);
+    const review = saved.data.stages.find(stage => stage.key === 'review');
+    expect(review.status).toBe('completed');
+    expect(review.reviewFindings).toEqual(empty ? [] : [
+      { detail: detail.trim().slice(0, 500), atSeconds: 1 },
+      { detail: findings[1].detail, atSeconds: null },
+    ]);
+    expect(saved.data.verdict.unverified.map(item => item.dimension)).not.toContain('semantic-visual');
+    expect(runPromptThroughProvider.mock.calls.at(-1)[0]).toMatchObject({ toolFree: true, source: 'code-animation-review', screenshots: expect.any(Array) });
+  });
+
+  it.each(['{"schema":"findings"}', '{"findings":[{"detail":42}]}', 'not JSON', 'prompt only'])('fails default-adapter review without successful evidence for %s', async text => {
+    const { id } = await project();
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: text === 'prompt only' ? `${prompt}\n${prompt}` : text }));
+    render.mockClear();
+    const { done } = await startProductionStageRun(id, { visualReview: true }, { sample, repair: unfreeze, render });
+    expect(await done).toBe('failed');
+    const [saved] = (await getProductionHistory(id, { limit: 1, offset: 0 })).items;
+    expect(saved.data.stages.find(stage => stage.key === 'review')).toMatchObject({ status: 'failed', error: 'CODE_ANIMATION_REVIEW_INVALID' });
+    expect(saved.data.stages.some(stage => stage.key === 'inspect')).toBe(false);
+    expect(render).not.toHaveBeenCalled();
   });
 
   it('cancels a pending visual review through its signal and resumes with the opt-in inherited', async () => {

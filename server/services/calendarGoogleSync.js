@@ -5,7 +5,7 @@ import { mutateCache, logCalendarTouchpoints, recordCalendarActivity } from './c
 import { getAllProviders } from './providers.js';
 import { getSettings } from './settings.js';
 import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { selectMeetingUrl } from '../lib/meetingUrl.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -264,7 +264,7 @@ Include the full events arrays as returned by gcal_list_events, with every field
     const status = partial ? 'partial' : 'success';
 
     // Parse Claude's output and push events
-    const parsed = parseCalendarJson(result.output);
+    const parsed = parseCalendarJson(result.output.split(prompt).join(''));
     if (!parsed) {
       // Carry the stderr tail so the failure names WHY the CLI produced no
       // usable JSON instead of a bare, undiagnosable parse error.
@@ -327,19 +327,20 @@ Include the full events arrays as returned by gcal_list_events, with every field
   });
 }
 
+const isCalendarPayload = value => Array.isArray(value?.calendars) && value.calendars.every(cal =>
+  typeof cal?.calendarId === 'string' && cal.calendarId.trim() && Array.isArray(cal.events)
+  && cal.events.every(event => event !== null && typeof event === 'object' && !Array.isArray(event)));
+
 function parseCalendarJson(output) {
-  // Try to extract JSON from Claude's response
-  // Look for {"calendars":...} pattern
-  const jsonMatch = output.match(/\{[\s\S]*"calendars"\s*:\s*\[[\s\S]*\]\s*\}/);
-  if (jsonMatch) {
-    const parsed = safeJSONParse(jsonMatch[0], null);
-    if (parsed?.calendars) return parsed;
-  }
-  // Try parsing the entire output as JSON
-  const parsed = safeJSONParse(output, null);
-  if (parsed?.calendars) return parsed;
-  return null;
+  const { value } = extractJson(output, { shapePredicate: isCalendarPayload, skipInnerFence: true });
+  // The shared extractor can return a parseable nonmatching fallback.
+  return isCalendarPayload(value) ? value : null;
 }
+
+const isDiscoveredCalendars = value => Array.isArray(value) && value.every(cal =>
+  typeof cal?.id === 'string' && cal.id.trim()
+  && (cal.name === undefined || typeof cal.name === 'string')
+  && (cal.color === undefined || typeof cal.color === 'string'));
 
 export async function mcpDiscoverCalendars(accountId, io) {
   const account = await getAccount(accountId);
@@ -371,15 +372,14 @@ Output NOTHING else — just the JSON array.`;
     throw new ServerError(`Calendar discovery returned a partial response — not merging: ${reason}`, { status: 502 });
   }
 
-  // Parse the calendar list from Claude's output
-  const match = result.output.match(/\[[\s\S]*\]/);
-  if (!match) {
+  const { value: calendars } = extractJson(result.output.split(prompt).join(''), {
+    blockType: 'array', shapePredicate: isDiscoveredCalendars, skipInnerFence: true,
+  });
+  if (calendars === undefined) {
     const reason = result.stderrTail ? `: ${result.stderrTail}` : '';
     throw new ServerError(`Failed to parse calendar list from Claude response${reason}`, { status: 502 });
   }
-
-  const calendars = safeJSONParse(match[0], null);
-  if (!Array.isArray(calendars)) throw new ServerError('Invalid calendar list format', { status: 502 });
+  if (!isDiscoveredCalendars(calendars)) throw new ServerError('Invalid calendar list format', { status: 502 });
 
   // Merge with existing subcalendars (preserve enabled/dormant state)
   const merged = mergeDiscoveredSubcalendars(account.subcalendars, calendars);
