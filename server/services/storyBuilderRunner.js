@@ -43,6 +43,23 @@ export function attachClient(sessionId, stepId, res) {
   return runner.attachClient(runKey(sessionId, stepId), res);
 }
 
+// Bounded discovery projection of a session's in-flight step runs, for a client
+// that lost its run slot (full reload, second tab). Read-only: it inspects the
+// in-memory run map and never starts provider work. Deliberately omits the
+// request signature, feedback text, clients and abort controller — only the
+// identity a client needs to re-attach to the existing progress stream.
+export function listActiveStepRuns(sessionId) {
+  const prefix = runKey(sessionId, '');
+  return runner.listActive(prefix).map(({ key, runId, startedAt, phase, meta }) => ({
+    stepId: key.slice(prefix.length),
+    runId,
+    op: meta.op,
+    startedAt,
+    phase,
+    ...(meta.entryId ? { entryId: meta.entryId } : {}),
+  }));
+}
+
 /**
  * Kick off a step generate (op: 'generate') or refine (op: 'refine') for a
  * session. Returns the runId immediately; progress lands via SSE. Re-calling
@@ -71,12 +88,15 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
   // `meta`) instead — the client then refuses to bind its success handler to the
   // running request's frame. A finished run lingering in the replay grace window
   // does NOT block: the factory starts a fresh run that replaces it.
-  return runner.start(key, async ({ runId, broadcast }) => {
+  return runner.start(key, async ({ runId, broadcast, record }) => {
     broadcast({ type: 'start', runId, stepId, op });
     // Best-effort phase emitter handed to the conductor; an onProgress throw
     // must never break the run.
     const onProgress = (frame) => {
       try {
+        // Latest phase label, so a client that attaches mid-run (reload / second
+        // tab) can be told what the run is doing via listActiveStepRuns.
+        if (typeof frame?.label === 'string' && frame.label) record.phase = frame.label.slice(0, 200);
         broadcast({ type: 'progress', runId, ...frame });
       } catch (err) {
         console.error(`❌ story-builder progress emit failed: ${err?.message || err}`);
@@ -108,7 +128,7 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
       console.error(`❌ story-builder ${op} failed — session=${sessionId.slice(0, 8)} step=${stepId} ${message}`);
       broadcast({ type: 'error', runId, stepId, op, error: message, failedAt: new Date().toISOString() });
     }
-  }, { sig, meta: { op } });
+  }, { sig, meta: { op, ...(options.entryId ? { entryId: options.entryId } : {}) } });
 }
 
 // Export internals for tests.

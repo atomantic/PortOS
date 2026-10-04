@@ -20,7 +20,7 @@ import {
 import toast from '../components/ui/Toast';
 import Banner from '../components/ui/Banner';
 import { useLockToggle } from '../hooks/useLockToggle';
-import { StoryStepRunProvider, useStoryStepRun } from '../hooks/useStoryStepRuns.jsx';
+import { StoryStepRunProvider, useStoryStepRun, useStoryRunMonitor } from '../hooks/useStoryStepRuns.jsx';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
@@ -1035,6 +1035,14 @@ function nextButtonReason({ locked, stale }) {
   return 'Go to the next step.';
 }
 
+// Wording for a run's operation, shared by the active-run banner and the
+// completion toast of a run this view only adopted.
+const RUN_OP_LABEL = {
+  generate: { active: 'Generating', done: 'Generation' },
+  refine: { active: 'Refining', done: 'Refinement' },
+  backfill: { active: 'Backfilling', done: 'Backfill' },
+};
+
 function StoryBuilderDetail({ storyId, stepParam }) {
   const navigate = useNavigate();
   const [steps, setSteps] = useState([]);
@@ -1054,13 +1062,34 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   // records fetched before the newer completion landed.
   const reloadGenRef = useRef(0);
 
+  // Runs this view did not start itself (a reload, a second tab, or the holder of
+  // a refused kickoff) are discovered on the session read and adopted by the
+  // provider (#10065). The callbacks go through a ref so they can call `reload`
+  // (defined just below) without re-registering on every render.
+  const reloadRef = useRef(null);
+  const handleAdoptedEnd = useCallback(({ ok, op, error }) => {
+    if (ok) toast.success(`${RUN_OP_LABEL[op]?.done || 'Run'} finished`);
+    else toast.error(error?.message || 'Run failed');
+    reloadRef.current?.();
+  }, []);
+  const handleKickoffUncertain = useCallback(() => { reloadRef.current?.(); }, []);
+  const { runs: activeRuns, adoptActive } = useStoryRunMonitor({
+    onAdoptedEnd: handleAdoptedEnd,
+    onKickoffUncertain: handleKickoffUncertain,
+  });
+
   const reload = useCallback(async () => {
     const gen = ++reloadGenRef.current;
     const isCurrent = () => reloadGenRef.current === gen;
     const s = await getStorySession(storyId, { silent: true }).catch(() => null);
     if (!isCurrent()) return;
     if (!s) { setSession(null); setLoading(false); return; }
-    setSession(s);
+    // `activeSteps` is a live-run snapshot, not session state — hand it to the
+    // provider (which drops it if the story changed meanwhile) and keep it out of
+    // the record we hold.
+    const { activeSteps, ...record } = s;
+    adoptActive(storyId, activeSteps);
+    setSession(record);
     setStaleSteps(s.staleSteps || []);
     setSyncDrift(s.syncDrift === true);
     // These GETs own their fallback (.catch → null/[]), so silence the helper's
@@ -1078,7 +1107,8 @@ function StoryBuilderDetail({ storyId, stepParam }) {
       setIssues(Array.isArray(iss) ? iss : (iss?.items || []));
     }
     setLoading(false);
-  }, [storyId]);
+  }, [storyId, adoptActive]);
+  reloadRef.current = reload;
 
   // Optimistically mirror a completed character render onto the loaded
   // universe's `imageRefs[]`. The Story Builder characters step now tags its
@@ -1316,6 +1346,31 @@ function StoryBuilderDetail({ storyId, stepParam }) {
             </>
           )}
         </div>
+
+        {/* Live runs — own kickoffs and ones adopted after a reload / second tab —
+            stay visible whichever step is open, with a way back to the step. */}
+        {activeRuns.length > 0 && (
+          <div role="status" aria-live="polite" className="mb-4 space-y-2">
+            {activeRuns.map((run) => {
+              const label = steps.find((st) => st.id === run.stepId)?.label || run.stepId;
+              return (
+                <div key={run.stepId} className="flex items-center flex-wrap gap-x-3 gap-y-1 text-sm bg-port-card border border-port-accent/40 rounded-lg px-3 py-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-port-accent shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 break-words">
+                    <span className="font-medium">{RUN_OP_LABEL[run.op]?.active || 'Running'} {label}</span>
+                    {run.phase ? <span className="text-gray-400"> — {run.phase}</span> : null}
+                    {run.adopted ? <span className="text-xs text-gray-500"> (resumed monitoring)</span> : null}
+                  </span>
+                  {run.stepId !== activeStepId && (
+                    <button type="button" onClick={() => goToStep(run.stepId)} className="ml-auto text-xs text-port-accent hover:underline">
+                      Go to step
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
           {/* Step rail */}

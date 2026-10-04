@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource';
-import { StoryStepRunProvider, useStoryStepRun } from './useStoryStepRuns.jsx';
+import { StoryStepRunProvider, useStoryStepRun, useStoryRunMonitor } from './useStoryStepRuns.jsx';
 
 vi.mock('../services/api', () => ({
   storyStepProgressSseUrl: (sessionId, stepId) => `/api/story-builder/${sessionId}/steps/${stepId}/progress`,
@@ -224,5 +224,108 @@ describe('useStoryStepRuns', () => {
     click('run-plotArc');
     await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
     expect(kickoff).toHaveBeenCalledTimes(1);
+  });
+
+  describe('adopting runs this mount did not start (#10065)', () => {
+    // Stands in for the page: feeds a session read's activeSteps into the
+    // provider and records what the page callbacks receive.
+    function Monitor({ sessionId, discovered, onAdoptedEnd, onKickoffUncertain }) {
+      const { runs, adoptActive } = useStoryRunMonitor({ onAdoptedEnd, onKickoffUncertain });
+      return (
+        <div>
+          <button onClick={() => adoptActive(sessionId, discovered)}>discover</button>
+          <button onClick={() => adoptActive('other-session', discovered)}>discover-stale</button>
+          <span data-testid="runs">{runs.map((r) => `${r.stepId}:${r.op}:${r.phase}:${r.adopted}`).join('|') || 'none'}</span>
+        </div>
+      );
+    }
+    const renderMonitor = (props, panel = null) => render(
+      <StoryStepRunProvider sessionId="s1">
+        <Monitor sessionId="s1" {...props} />
+        {panel}
+      </StoryStepRunProvider>,
+    );
+
+    it('attaches to a discovered run without a kickoff and settles through onAdoptedEnd once', async () => {
+      const onAdoptedEnd = vi.fn();
+      renderMonitor({ discovered: [{ stepId: 'plotArc', runId: 'r7', op: 'refine', phase: 'Rewriting…', entryId: 'c1' }], onAdoptedEnd });
+      click('discover');
+      await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+      expect(lastEventSource().url).toBe('/api/story-builder/s1/steps/plotArc/progress');
+      expect(screen.getByTestId('runs').textContent).toBe('plotArc:refine:Rewriting…:true');
+
+      act(() => lastEventSource().emit({ runId: 'r7', type: 'complete' }));
+      expect(onAdoptedEnd).toHaveBeenCalledTimes(1);
+      expect(onAdoptedEnd).toHaveBeenCalledWith(expect.objectContaining({ ok: true, stepId: 'plotArc', op: 'refine' }));
+      expect(screen.getByTestId('runs').textContent).toBe('none');
+
+      // A stale snapshot listing the settled run must not resurrect it.
+      click('discover');
+      expect(screen.getByTestId('runs').textContent).toBe('none');
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    it('ignores a discovery response that belongs to a different story', () => {
+      renderMonitor({ discovered: [{ stepId: 'plotArc', runId: 'r7', op: 'generate' }] });
+      click('discover-stale');
+      expect(screen.getByTestId('runs').textContent).toBe('none');
+      expect(MockEventSource.instances).toHaveLength(0);
+    });
+
+    it('does not displace a step that already has its own run', async () => {
+      const kickoff = vi.fn().mockResolvedValue({ runId: 'own' });
+      renderMonitor(
+        { discovered: [{ stepId: 'plotArc', runId: 'other', op: 'refine' }] },
+        <StepPanel stepId="plotArc" kickoff={kickoff} onComplete={vi.fn()} onError={vi.fn()} />,
+      );
+      click('run-plotArc');
+      await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+      click('discover');
+      expect(MockEventSource.instances).toHaveLength(1);
+      expect(screen.getByTestId('state-plotArc').textContent).toMatch(/busy:generate/);
+    });
+
+    it('adopts the conflict holder, keeps the refused op\'s success handler unfired, and reports the refusal', async () => {
+      const onComplete = vi.fn();
+      const onError = vi.fn();
+      const onAdoptedEnd = vi.fn();
+      const kickoff = vi.fn().mockResolvedValue({ conflict: true, runId: 'holder', op: 'refine', entryId: 'c9' });
+      renderMonitor({ discovered: [], onAdoptedEnd },
+        <StepPanel stepId="characters" kickoff={kickoff} onComplete={onComplete} onError={onError} />);
+      click('run-characters');
+
+      await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+      expect(onError.mock.calls[0][0].message).toMatch(/refine run is already in progress.*monitoring/);
+      expect(screen.getByTestId('state-characters').textContent).toBe('busy:refine:Running…');
+      expect(screen.getByTestId('meta-characters').textContent).toBe('c9');
+
+      act(() => lastEventSource().emit({ runId: 'holder', type: 'complete' }));
+      expect(onComplete).not.toHaveBeenCalled(); // the refused request's success never fires
+      expect(onAdoptedEnd).toHaveBeenCalledWith(expect.objectContaining({ ok: true, op: 'refine' }));
+    });
+
+    it('asks the page to re-read the session when a kickoff rejects (lost acknowledgement)', async () => {
+      const onKickoffUncertain = vi.fn();
+      const onError = vi.fn();
+      const kickoff = vi.fn().mockRejectedValue(new Error('network'));
+      renderMonitor({ discovered: [], onKickoffUncertain },
+        <StepPanel stepId="plotArc" kickoff={kickoff} onComplete={vi.fn()} onError={onError} />);
+      click('run-plotArc');
+      await waitFor(() => expect(onKickoffUncertain).toHaveBeenCalledTimes(1));
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops an adopted run when the story changes', async () => {
+      const { rerender } = renderMonitor({ discovered: [{ stepId: 'plotArc', runId: 'r7', op: 'generate' }] });
+      click('discover');
+      await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+      rerender(
+        <StoryStepRunProvider sessionId="s2">
+          <Monitor sessionId="s2" discovered={[]} />
+        </StoryStepRunProvider>,
+      );
+      expect(screen.getByTestId('runs').textContent).toBe('none');
+      expect(MockEventSource.instances.filter((es) => es.url.includes('/s2/'))).toHaveLength(0);
+    });
   });
 });
