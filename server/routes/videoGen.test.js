@@ -2821,6 +2821,32 @@ describe('videoGen routes', () => {
       expect(mediaJobQueue.cancelJob).toHaveBeenCalledWith('queued-2');
     });
 
+    // A supplied-but-malformed jobId must NOT degrade to "absent" (which cancels
+    // the running render) — it would kill a render the caller never named (#9932).
+    it.each([
+      ['array', []],
+      ['object', {}],
+      ['null', null],
+      ['whitespace', '   '],
+      ['number', 7],
+    ])('rejects a %s jobId with 400 and cancels nothing', async (_label, jobId) => {
+      mediaJobQueue.listJobs.mockReturnValue([{ id: 'running-b', kind: 'video', status: 'running' }]);
+      const r = await request(app).post('/api/video-gen/cancel').send({ jobId });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('VALIDATION_ERROR');
+      expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+    });
+
+    it('does not fall back to the running job when the named id is stale', async () => {
+      mediaJobQueue.listJobs.mockImplementation(({ status, kind } = {}) => [
+        { id: 'finished-a', kind: 'video', status: 'completed' },
+        { id: 'running-b', kind: 'video', status: 'running' },
+      ].filter((j) => (!status || j.status === status) && (!kind || j.kind === kind)));
+      const r = await request(app).post('/api/video-gen/cancel').send({ jobId: 'finished-a' });
+      expect(r.body.ok).toBe(false);
+      expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+    });
+
     // No running job and no jobId — fall back to newest queued so the user
     // can pull back a recent submission before it starts.
     it('falls back to newest queued video when no jobId and nothing is running', async () => {

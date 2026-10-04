@@ -273,6 +273,19 @@ export const cancel = () => {
   return localCancelled || codexCancelled || grokCancelled || agyCancelled || falCancelled;
 };
 
+// Exact-ID cancel (#9932). The explicit-target counterpart to cancel(): stops
+// ONLY the render that owns `jobId` and never reaches a bulk method, so a
+// request naming a finished/unknown job cancels nothing instead of nuking a
+// concurrent render. Local holds one anonymous process, so it is signalled only
+// when its active job IS the requested one; the cloud backends key by job id.
+// Returns whether a live render was signalled.
+export const cancelJob = (jobId) => {
+  if (!jobId) return false;
+  const localJob = local.getActiveJob();
+  if ((localJob?.id === jobId || localJob?.generationId === jobId) && local.cancel()) return true;
+  return codex.cancel(jobId) || grok.cancel(jobId) || agy.cancel(jobId) || fal.cancel(jobId);
+};
+
 // Re-exports so routes can hit a specific backend directly when the request
 // is shape-specific (gallery, LoRAs). The dispatcher is for the generic
 // generate/status flow used by all modes.
