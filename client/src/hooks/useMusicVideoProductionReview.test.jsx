@@ -21,8 +21,10 @@ describe('useMusicVideoProductionReview readiness source (#10136)', () => {
   it('uses the readiness on the read response without another request, and keeps it across a mutation response', async () => {
     const { result, rerender } = run({ id: 'a', productionReadiness: readiness });
     expect(result.current.readiness).toBe(readiness);
+    expect(result.current.current).toBe(true);
     rerender({ p: { id: 'a' } }); // mutation response: no readiness field
     expect(result.current.readiness).toBe(readiness);
+    expect(result.current.current).toBe(false); // stale for stage marks, never for approvals
     await waitFor(() => expect(api.getMusicVideoProductionReview).toHaveBeenCalledTimes(1));
   });
 

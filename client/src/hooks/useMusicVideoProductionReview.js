@@ -6,7 +6,7 @@ import useSseJobSlot from './useSseJobSlot.js';
 
 /**
  * Server-authoritative approvals. A read response carries `productionReadiness`; a mutation response
- * does not, so the last readiness for the same project stays in place (never a flash of "not done")
+ * does not, so the last readiness for the same project stays in place (never a flash of "not done"; `current` says whether it is for this exact revision)
  * while one review fetch refreshes it. Approvals still bind to the server-issued basis, so a stale
  * basis is refused rather than honoured.
  */
@@ -20,9 +20,9 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
   const [readinessError, setReadinessError] = useState(null);
   useEffect(() => {
     let active = true;
-    if (project?.productionReadiness) setState({ id: project.id, readiness: project.productionReadiness });
+    if (project?.productionReadiness) setState({ id: project.id, owner: project, readiness: project.productionReadiness });
     else if (project?.id) getMusicVideoProductionReview(project.id, { silent: true })
-      .then(result => { if (active) { setState({ id: project.id, readiness: result.readiness }); setReadinessError(null); } })
+      .then(result => { if (active) { setState({ id: project.id, owner: project, readiness: result.readiness }); setReadinessError(null); } })
       .catch(err => { if (active) setReadinessError(err.message); });
     return () => { active = false; };
   }, [project]);
@@ -57,7 +57,10 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     finally { setBusy(false); }
   };
   const readiness = project?.productionReadiness || (state && state.id === project?.id ? state.readiness : null);
-  return { readiness, readinessError: readiness ? null : readinessError, busy, error, proof: { ...proof, occupied: proof.active, active: proof.active && proof.context === project?.id },
+  // `current`: readiness belongs to this exact project revision. Stage marks may use a stale value;
+  // approval controls must wait for a current one.
+  const current = !!project?.productionReadiness || state?.owner === project;
+  return { readiness, current, readinessError: readiness ? null : readinessError, busy, error, proof: { ...proof, occupied: proof.active, active: proof.active && proof.context === project?.id },
     feedback: body => call(() => addMusicVideoProductionFeedback(project.id, { ...body, basis: readiness?.basis[body.stage] }, { silent: true })),
     resolveFeedback: (feedbackId, resolution) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution }, { silent: true })),
     revise: stage => call(() => reviseMusicVideoProductionFromFeedback(project.id, { stage }, { silent: true })),

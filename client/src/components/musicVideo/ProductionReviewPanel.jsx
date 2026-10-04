@@ -28,7 +28,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const [playbackReview, setPlaybackReview] = useState({ ...EMPTY_PLAYBACK, identity: null });
   const [startSec, setStartSec] = useState(project.productionReview?.proof?.startSec || 0);
   const [endSec, setEndSec] = useState(project.productionReview?.proof?.endSec || Math.min(20, project.audioAnalysis?.durationSec || 20));
-  const ready = review.readiness;
+  const ready = review.current === false ? null : review.readiness; // approvals never act on a stale revision
   const set = (key, value) => setLocal({ ...draft, [key]: value });
   const documentShots = draft.storyboardSource === 'document';
   const shots = documentShots ? draft.storyboard : [...draft.storyboard, ...(project.scenes || []).filter(scene => !draft.storyboard.some(s => s.sceneId === scene.sceneId)).map(scene => ({
