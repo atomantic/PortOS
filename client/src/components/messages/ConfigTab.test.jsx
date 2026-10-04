@@ -131,3 +131,31 @@ describe('Messages account deletion', () => {
     expect(setAccounts.mock.calls[0][0]([gmailAccount])).toEqual([]);
   });
 });
+
+describe('Messages prompt template settings', () => {
+  const noAuth = { hasCredentials: true, hasTokens: true, needsScopeUpgrade: false };
+
+  async function editReplyAndSave() {
+    api.getGoogleAuthStatus.mockResolvedValue(noAuth);
+    api.updateSettings = vi.fn().mockResolvedValue({ ok: true });
+    renderConfig();
+    const reply = await screen.findByLabelText('Reply Template');
+    fireEvent.change(reply, { target: { value: 'Custom reply' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Config/ }));
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
+    return api.updateSettings.mock.calls[0][0].messages;
+  }
+
+  it('offers no Forward Template editor and writes no default for it', async () => {
+    const messages = await editReplyAndSave();
+    expect(screen.queryByLabelText('Forward Template')).not.toBeInTheDocument();
+    expect(messages.replyTemplate).toBe('Custom reply');
+    expect(Object.hasOwn(messages, 'forwardTemplate')).toBe(false);
+  });
+
+  it('round-trips an existing stored forwardTemplate unchanged', async () => {
+    api.getSettings.mockResolvedValue({ messages: { forwardTemplate: '' } });
+    const messages = await editReplyAndSave();
+    expect(messages.forwardTemplate).toBe('');
+  });
+});
