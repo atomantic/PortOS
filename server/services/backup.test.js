@@ -3252,6 +3252,50 @@ describe('runBackup lifecycle', () => {
     ]);
   });
 
+  it('keeps a newly admitted music take out of both halves of a snapshot', async () => {
+    const fsp = await actualFs();
+    const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+    const sourceMusic = joinPath(dataRoot, 'music');
+    await fsp.mkdir(sourceMusic, { recursive: true });
+    await fsp.writeFile(joinPath(sourceMusic, 'old.wav'), 'old audio');
+    let rowFilename = 'old.wav';
+    const rsync = fakeProc();
+    const pg = fakeProc();
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pg);
+
+    const pending = runBackup(destRoot);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotDir = await findSnapshotDir();
+    const capturedMusic = joinPath(snapshotDir, 'data', 'music');
+    await fsp.mkdir(capturedMusic, { recursive: true });
+    await fsp.copyFile(joinPath(sourceMusic, rowFilename), joinPath(capturedMusic, rowFilename));
+
+    let published = false;
+    const newTake = withBackupAssetPublication(async () => {
+      await fsp.writeFile(joinPath(sourceMusic, 'new.wav'), 'new audio');
+      rowFilename = 'new.wav';
+      published = true;
+    });
+    await Promise.resolve();
+    expect(published).toBe(false);
+
+    rsync.emit('close', 0);
+    await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+    const capturedRow = rowFilename;
+    const dumpPath = spawn.mock.calls[1][1][spawn.mock.calls[1][1].indexOf('-f') + 1];
+    await fsp.writeFile(dumpPath, `CREATE TABLE public.tracks (audio_filename text);\nCOPY public.tracks (audio_filename) FROM stdin;\n${capturedRow}\n\\.\n`);
+    pg.emit('close', 0);
+    await pending;
+    await newTake;
+
+    expect(capturedRow).toBe('old.wav');
+    expect(await fsp.readFile(joinPath(capturedMusic, capturedRow), 'utf8')).toBe('old audio');
+    await expect(fsp.access(joinPath(capturedMusic, 'new.wav'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(rowFilename).toBe('new.wav');
+    expect(published).toBe(true);
+  });
+
   it.each([
     ['data readdir', 'EIO'],
     ['data readdir', 'EACCES'],

@@ -5,6 +5,23 @@ PortOS backs up two things together, into a single timestamped snapshot:
 1. **Filesystem data** — an rsync mirror of `./data/` (with SHA-256 manifest).
 2. **PostgreSQL** — a `pg_dump` logical dump (`portos-db.sql`) written alongside the snapshot.
 
+### Consistency while assets are changing
+
+The backup service closes a process-local publication boundary before copying
+`data/`, drains music-track take publications already in progress, and keeps
+new take publications waiting through the SQL dump and manifest write. Browser
+code takes, SuperCollider takes, chiptune renders, and painted-waveform renders
+stage encoding outside that boundary, then publish their final audio bytes and
+track row together inside it. Manual and scheduled backups use the same cut.
+
+This is the first slice of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923). Media-job completion, other durable asset
+replacement/deletion paths, and database maintenance are tracked as separate
+children. Until those owners are covered, `status: ok` reports that the file
+copy, manifest, and database dump completed; it does not assert that every
+database asset reference resolves to the captured filesystem bytes. A restore
+operator should verify affected assets before treating a snapshot as a complete
+recovery point.
+
 Now that PostgreSQL is a **required** dependency (it owns the creative catalog, memory, and a growing set of app-native records — see [Storage Classification Contract](./STORAGE.md)), **the database dump is part of required system state, not an optional extra.** A snapshot that captured `data/` but failed to capture the DB is incomplete, and PortOS surfaces that explicitly.
 
 The dump includes the machine-local `cos_pending_agent_feedback` reference index and `review_queue_triage` presentation markers. The queue's source records remain in their owning stores; restoring the dump therefore preserves snooze/dismissal decisions without exporting them through federation or duplicating source payloads.

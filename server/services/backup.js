@@ -16,6 +16,7 @@ import { hostname, tmpdir } from 'os';
 import { basename, join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
 import { POOL_CONFIG, checkHealth, databaseRestoreRecovery, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
@@ -626,18 +627,25 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     await writeFile(markerPath(snapshotDir), '');
     dashboardEvents.emit('backup:changed');
 
-    const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
-    changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags);
-    console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
+    // Freeze admitted file-plus-row publications across both stores. A writer
+    // that started first drains completely; new writers wait until the dump
+    // and manifest are published. Rendering/provider work is outside admission.
+    const releaseSnapshotCut = await acquireBackupSnapshotCut();
+    let pgResult;
+    try {
+      const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
+      changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags);
+      console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
 
-    // Dump PostgreSQL alongside the file backup. Result is NO LONGER swallowed —
-    // a configured-but-failed dump must degrade the backup and alert the user.
-    const pgDumpPath = join(snapshotDir, 'portos-db.sql');
-    const pgResult = await dumpPostgres(pgDumpPath);
-
-    manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath, {
-      allowMissingDump: pgResult.status === 'skipped' || pgResult.status === 'failed'
-    });
+      // A configured-but-failed dump degrades the backup and alerts the user.
+      const pgDumpPath = join(snapshotDir, 'portos-db.sql');
+      pgResult = await dumpPostgres(pgDumpPath);
+      manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath, {
+        allowMissingDump: pgResult.status === 'skipped' || pgResult.status === 'failed'
+      });
+    } finally {
+      releaseSnapshotCut();
+    }
 
     const status = backupStatusForPg(pgResult);
     const lastRun = new Date().toISOString();
