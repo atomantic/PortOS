@@ -7,6 +7,9 @@ import { getVideoGenModelContext } from '../../services/apiImageVideo.js';
 
 const GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
 const LOCAL_VIDEO_TOOL_ID = 'video:local';
+// Codex image gen always uses the PortOS Codex Imagegen config (Settings → Image Gen),
+// so it takes no per-run model pin.
+const NO_MODEL_PIN_TOOL_IDS = new Set(['image:codex']);
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
 /**
@@ -74,11 +77,15 @@ function useLocalVideoModels(enabled) {
 export default function ToolPicker({ idPrefix = 'mv-auto', tools, models, onChange }) {
   const picked = new Set(tools);
   const medium = autonomousMedium(tools);
-  const toggleTool = (id) => onChange({
-    tools: MUSIC_VIDEO_AUTOMATION_TOOL_IDS.filter((t) => (t === id ? !picked.has(t) : picked.has(t))),
-    models,
-  });
-  const modelTools = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group !== 'code' && picked.has(t.id));
+  const toggleTool = (id) => {
+    // Drop any stale pin for a tool that no longer exposes a model field.
+    const { [id]: _dropped, ...rest } = models;
+    onChange({
+      tools: MUSIC_VIDEO_AUTOMATION_TOOL_IDS.filter((t) => (t === id ? !picked.has(t) : picked.has(t))),
+      models: NO_MODEL_PIN_TOOL_IDS.has(id) ? rest : models,
+    });
+  };
+  const modelTools = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group !== 'code' && !NO_MODEL_PIN_TOOL_IDS.has(t.id) && picked.has(t.id));
   const localImage = useLocalImageModels(picked.has('image:local'));
   const localVideo = useLocalVideoModels(modelTools.some((tool) => tool.id === LOCAL_VIDEO_TOOL_ID));
   const setModel = (toolId, value) => onChange({ tools, models: { ...models, [toolId]: value } });

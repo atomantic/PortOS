@@ -31,3 +31,12 @@ describe('local image tool models', () => {
     expect(screen.getByRole('combobox').disabled).toBe(false);
   });
 });
+describe('codex image tool', () => {
+  it('shows no model field and drops a stale pin when toggled', () => {
+    const onChange = vi.fn();
+    render(<ToolPicker tools={['image:codex']} models={{ 'image:codex': 'old' }} onChange={onChange} />);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.click(screen.getByText('Codex image gen $'));
+    expect(onChange).toHaveBeenLastCalledWith({ tools: [], models: {} });
+  });
+});
