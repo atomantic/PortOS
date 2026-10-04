@@ -80,6 +80,12 @@ const FULL_TRIGGER_RULES = [
   { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsEscalates: false },
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsEscalates: true },
   { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsEscalates: true },
+  // Measured hotspot (#9999): a two-file worktreeManager change expanded through
+  // import consumers to 57 selectors and a ~941-file local run, yet counted as
+  // a "scoped" plan because MAX_TARGETED_TEST_FILES only sees explicit selectors.
+  // Own the cost honestly: a full plan, sharded in CI. It also owns cross-platform
+  // worktree lifecycle, so Windows escalates (matches WINDOWS_RISK_RULES).
+  { re: /^server\/services\/worktreeManager\.js$/, reason: 'worktree manager source changed (broad import fanout)', windowsEscalates: true },
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
   // prove themselves against the complete suite rather than their own scope —

@@ -540,6 +540,16 @@ edits `App.jsx` *and* bumps a lockfile escalates. Otherwise the job drops to **o
 `WINDOWS_CONTRACT_TESTS`** — reduced, never skipped, and exactly the depth a
 Windows-risk scoped PR already gets.
 
+**Measured full trigger: `server/services/worktreeManager.js` (#9999).** A
+two-file change to this module expanded through Vitest's import-consumer
+traversal to 57 explicit selectors and a ~941-file, ~40-minute local run
+(including real Chrome/ffmpeg renders), while still reading as a scoped plan
+because `MAX_TARGETED_TEST_FILES` counts only explicit selectors. It now plans
+full (Windows escalates, since the module owns cross-platform worktree
+lifecycle). Default `npm run pregate` therefore runs only its always-run guards
+for it, `--full` runs everything, and CI runs the full sharded suite. Its test
+file alone stays scoped; the #9673 consumer traversal is unchanged elsewhere.
+
 Three properties keep that safe, each pinned by `scripts/ci-test-plan.test.js`:
 
 - **Fail-closed by default.** `windowsEscalates` defaults to `true`, so a
