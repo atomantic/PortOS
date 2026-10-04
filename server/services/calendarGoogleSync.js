@@ -166,8 +166,9 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
         if (!dateRange) return true;
         const start = Date.parse(e.startTime || e.endTime);
         const end = Date.parse(e.endTime || e.startTime);
-        // Unparseable/missing times can't be proven outside the window.
-        return (Number.isNaN(start) || start <= winEnd) && (Number.isNaN(end) || end >= winStart);
+        // Bounds are exclusive like Google's timeMin/timeMax; unparseable/missing
+        // times can't be proven outside the window.
+        return (Number.isNaN(start) || start < winEnd) && (Number.isNaN(end) || end > winStart);
       };
       cache.events = cache.events.filter(e =>
         e.subcalendarId !== calendarId || incomingIds.has(e.externalId) || !inSyncedWindow(e)
