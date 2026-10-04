@@ -108,7 +108,18 @@ describe('musicVideo routes', () => {
   it('GET / lists projects', async () => {
     const r = await request(app).get('/api/music-video');
     expect(r.status).toBe(200);
-    expect(r.body).toEqual([{ id: 'mv-1', name: 'A' }]);
+    expect(r.body).toHaveLength(1);
+    expect(r.body[0]).toMatchObject({ id: 'mv-1', name: 'A' });
+    expect(r.body[0].productionReadiness).toMatchObject({ readyForProduction: false, art: { approved: false } });
+  });
+
+  it('GET /:id carries server-computed productionReadiness so stages derive from one record (#10136)', async () => {
+    svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A' });
+    const r = await request(app).get('/api/music-video/mv-1');
+    expect(r.status).toBe(200);
+    expect(r.body.productionReadiness).toMatchObject({
+      art: { approved: false }, storyboard: { approved: false }, proof: { approved: false },
+    });
   });
 
   it('GET /midi-sources returns only the newest transcription per track, trimmed (#10203)', async () => {

@@ -262,7 +262,9 @@ export default function MusicVideo() {
   };
   const progress = deriveStages(selected, productionReview.readiness, publish);
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
-  if (selected && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
+  // The opened stage waits for readiness (or its failure) so a done project never pins to Cast & Sets.
+  const statusKnown = !!productionReview.readiness || !!productionReview.readinessError;
+  if (selected && statusKnown && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
   const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
   const activeStage = resolveStageParam(routeStage) || (routeSceneId ? 'board' : (pinnedStage || progress.current));
 
@@ -1383,7 +1385,11 @@ export default function MusicVideo() {
             nextAction={compositionSavePending > 0 && nextAction ? { ...nextAction, disabled: true, reason: 'Saving composition…' } : nextAction}
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
-            status={describeProjectStatus(selected, { progress, nextAction, readiness: productionReview.readiness })}
+            status={statusKnown && productionReview.readiness
+              ? describeProjectStatus(selected, { progress, nextAction, readiness: productionReview.readiness })
+              : statusKnown
+                ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', facts: [] }
+                : { headline: 'Loading status…', tone: 'muted', facts: [] }}
             attention={(
               <NeedsAttentionBanner
                 items={attentionItems}

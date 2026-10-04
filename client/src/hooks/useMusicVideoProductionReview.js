@@ -4,7 +4,12 @@ import { reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVid
   cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback, reviseMusicVideoProductionFromFeedback } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
-/** Server-authoritative approvals; changing any project input hides stale readiness immediately. */
+/**
+ * Server-authoritative approvals. A read response carries `productionReadiness`; a mutation response
+ * does not, so the last readiness for the same project stays in place (never a flash of "not done")
+ * while one review fetch refreshes it. Approvals still bind to the server-issued basis, so a stale
+ * basis is refused rather than honoured.
+ */
 export default function useMusicVideoProductionReview({ project, replaceProject }) {
   const latest = useRef(project);
   latest.current = project;
@@ -12,11 +17,13 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
   const [state, setState] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [readinessError, setReadinessError] = useState(null);
   useEffect(() => {
     let active = true;
-    if (project?.id) getMusicVideoProductionReview(project.id, { silent: true })
-      .then(result => { if (active) setState({ owner: project, readiness: result.readiness }); })
-      .catch(err => { if (active) setError(err.message); });
+    if (project?.productionReadiness) setState({ id: project.id, readiness: project.productionReadiness });
+    else if (project?.id) getMusicVideoProductionReview(project.id, { silent: true })
+      .then(result => { if (active) { setState({ id: project.id, readiness: result.readiness }); setReadinessError(null); } })
+      .catch(err => { if (active) setReadinessError(err.message); });
     return () => { active = false; };
   }, [project]);
   const refresh = async id => {
@@ -49,18 +56,19 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     } catch (err) { if (latest.current === owner) setError(err.message); return null; }
     finally { setBusy(false); }
   };
-  return { readiness: state?.owner === project ? state.readiness : null, busy, error, proof: { ...proof, occupied: proof.active, active: proof.active && proof.context === project?.id },
-    feedback: body => call(() => addMusicVideoProductionFeedback(project.id, { ...body, basis: state?.readiness.basis[body.stage] }, { silent: true })),
+  const readiness = project?.productionReadiness || (state?.id === project?.id ? state.readiness : null);
+  return { readiness, readinessError: readiness ? null : readinessError, busy, error, proof: { ...proof, occupied: proof.active, active: proof.active && proof.context === project?.id },
+    feedback: body => call(() => addMusicVideoProductionFeedback(project.id, { ...body, basis: readiness?.basis[body.stage] }, { silent: true })),
     resolveFeedback: (feedbackId, resolution) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution }, { silent: true })),
     revise: stage => call(() => reviseMusicVideoProductionFromFeedback(project.id, { stage }, { silent: true })),
     importDocumentShots: body => call(() => importMusicVideoDocumentShots(project.id, body, { silent: true })),
     importPlanning: source => call(() => importMusicVideoProductionPlanning(project.id, source, { silent: true })),
     bindShot: shotId => call(() => bindMusicVideoProductionShot(project.id, shotId, { silent: true })),
-    reverifyAlignment: notes => call(() => reverifyMusicVideoAlignment(project.id, { basis: state?.readiness.alignment.basis, notes }, { silent: true })),
+    reverifyAlignment: notes => call(() => reverifyMusicVideoAlignment(project.id, { basis: readiness?.alignment.basis, notes }, { silent: true })),
     save: draft => call(() => saveMusicVideoProductionDraft(project.id, draft, { silent: true })),
     prepare: () => call(() => prepareMusicVideoProductionReview(project.id, {}, { silent: true })),
     approve: (stage, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
-      { stage, basis: state?.readiness.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
+      { stage, basis: readiness?.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
     renderProof: window => proof.start({ id: project.id, window }, project.id),
   };
 }
