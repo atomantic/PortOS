@@ -45,7 +45,7 @@
     "rollup-plugin-visualizer": "7.1.1",
     "tailwindcss": "4.3.3",
     "vite": "8.3.1",
-    "vitest": "5.0.2"
+    "vitest": "5.0.3"
   },
   "overrides": {
     "socket.io-parser": "4.2.7",
