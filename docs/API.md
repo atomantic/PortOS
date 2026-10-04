@@ -735,6 +735,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/insights` | Cross-domain insights |
 | `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)) |
 | `/api/federation/media/v1` | Authenticated queued peer audio provider (see [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md)) |
+| `/api/federation/admin/v1` | Paired-peer administration preflights and temporary signed plans; execution remains unsupported (see [peer administration planning](./features/peer-administration.md)) |
+| `/api/peer-administration` | Operator-only per-peer/action planning grants and outbound previews (see [peer administration planning](./features/peer-administration.md)) |
 | `/api/mortalloom` | MortalLoom (iCloud-JSON sync precedent) |
 | `/api/review` | Review queue |
 | `/api/settings` | App settings |

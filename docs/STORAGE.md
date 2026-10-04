@@ -752,3 +752,25 @@ originals and is distinct from space reclamation.
 ### Importer sessions
 
 `data/importer-sessions.json` is `file-primary`, machine-local operational state: for each manuscript imported into a series, how far `POST /api/importer/commit` got (`arc-persisted` after canon/arc/seasons landed, `committed` with the created issue ids). It exists so a reload between the commit and the next step cannot lose the client's own "already committed" markers and re-send the payload (#9943). It is keyed by a derived import id (`imp-` + hash of series id and the normalized manuscript), so a re-analyze of the same text reads the same session back. It is a bounded ledger of what THIS machine's commit did to THIS machine's records, with no foreign keys, cross-record queries, or search, so it stays out of PostgreSQL; each entry is only honored while the issues it recorded still exist. It is deliberately **never federated**: a peer's issues arrive through record sync, and replaying a commit there would describe records that machine did not create. Schema version 1, newest 500 sessions kept, rewritten whole behind a write queue (`services/importerSessions.js`); a payload declaring another version reads as empty rather than half-read, so no migration or `data.reference/` seed is needed. Rsync backups include it.
+
+## Peer administration planning policy
+
+`data/peer-admin-grants.json` is bounded, machine-local `file-primary` authority
+configuration, like the paired-credential registry. It contains schema-1 slots
+for exact peer/action identities (maximum 300), expiring planning-only grants,
+opaque grant IDs, server-derived authority type and a domain-separated pair
+binding digest, never raw credentials. It has no record relationships, search,
+sync cursors or federation export. Revocation replaces the slot with a new ID
+and `allowed: false`; stale writes compare the prior ID. All mutations share a
+file-wide queue and atomic writes. Missing means no grants; malformed or future
+schemas fail closed. This is a new standalone config document, so no existing
+on-disk format is migrated and no seed grants are shipped. Filesystem backups
+include it; a restored grant still needs matching host/peer/pair identities and
+an unexpired timestamp. `planning-v1` can never authorize a future executor.
+
+Preflights and plan receipts are bounded in-memory diagnostics, not durable
+operations: they expire within 60 seconds/five minutes and disappear at process
+restart. No operation can run or be recovered from them. The future execution
+ledger must be `db-primary`, receiver-local, retain replay/idempotency evidence,
+and be covered by PostgreSQL backup before any executor is connected. See
+[peer administration planning](features/peer-administration.md).
