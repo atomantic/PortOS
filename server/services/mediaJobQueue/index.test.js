@@ -1512,7 +1512,7 @@ describe('Audio kind (#1928)', () => {
     expect(mediaJobQueue.getJob(first.jobId).status).toBe('running');
     expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
     await mediaJobQueue.cancelJob(first.jobId);
-    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Canceled' });
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Canceled', remoteInputsDisposable: true });
     finish.get(first.jobId)();
     await waitFor(() => mediaJobQueue.getJob(second.jobId)?.status === 'running');
   });
@@ -2773,6 +2773,31 @@ describe('durable remote source-audio settlement', () => {
     videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Uncertain remote outcome', remoteInputsDisposable: false });
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
     expect(existsSync(job.path)).toBe(true);
+  });
+  it('reserves an uncertain peer across lane release and restart, then unblocks only after reconciliation settles', async () => {
+    const first = await startAudioJob();
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Unknown receipt', remoteInputsDisposable: false });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
+    const next = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
+    const other = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: { ...remoteVideoMediaParams(), peerId: '00000000-0000-4000-8000-000000000002' } } });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === other.jobId));
+    expect(stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId)).toBe(false);
+    expect(persistedJobs().find((job) => job.id === first.jobId).params.remotePeerReservation).toBe(true);
+    videoGenEvents.emit('completed', { generationId: other.jobId, remoteInputsDisposable: true });
+    await flush();
+    mediaJobQueue.quiesceMediaJobQueue();
+    mediaJobQueue.__resetForTests();
+    stubs.generateVideoRemote.mockClear();
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === first.jobId));
+    const recovery = stubs.generateVideoRemote.mock.calls.find(([params]) => params.jobId === first.jobId)[0];
+    expect(recovery.remoteMedia.reconcile).toBe(true);
+    expect(stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId)).toBe(false);
+    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId));
+    expect(persistedJobs().find((job) => job.id === first.jobId).params.remotePeerReservation).toBe(false);
+    videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
   });
 
   it('keeps Run now from bypassing the per-peer GPU cap', async () => {

@@ -81,6 +81,13 @@ describe('project render-pool submission policy', () => {
   it('rejects an empty or duplicated remote pool at the project write schema', () => {
     expect(musicVideoVideoSettingsSchema.safeParse({ renderPool: { mode: 'peers', peers: [] } }).success).toBe(false);
   });
+  it('refuses an explicit continuation before the local supplied-audio mode override', async () => {
+    m.project.videoSettings.generationMode = 'suppliedAudio';
+    m.project.videoSettings.renderPool.mode = 'local';
+    await expect(applyProjectRenderPool({ ...body(), mode: 'extend', extendFromVideoId: 'prior-clip' })).rejects.toThrow(/continuation/);
+    expect(m.resolve).not.toHaveBeenCalled();
+    expect(await applyProjectRenderPool(body())).toMatchObject({ mode: 'a2v', backend: 'local' });
+  });
   it('keeps node selections machine-local on outbound and inbound project sync', () => {
     const pool = m.project.videoSettings.renderPool;
     expect(stripMusicVideoLocalRenderPins(m.project, { stripVideoBackend: false }).videoSettings.renderPool).toBeUndefined();

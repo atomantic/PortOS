@@ -529,9 +529,10 @@ async function persistImpl() {
   const trimmedArchive = archive
     .filter((j) => {
       const ts = j.completedAt ? new Date(j.completedAt).getTime() : Date.now();
-      return !j.durabilityPending && ts > cutoff;
+      return !j.durabilityPending && (j.params?.remotePeerReservation === true || ts > cutoff);
     })
-    .slice(-MAX_PERSISTED_ARCHIVE).concat(pendingArchive);
+    .filter((job) => job.params?.remotePeerReservation !== true).slice(-MAX_PERSISTED_ARCHIVE)
+    .concat(archive.filter((job) => !job.durabilityPending && job.params?.remotePeerReservation === true), pendingArchive);
   // Mutate `archive` in place so subsequent reads see the trim too.
   archive.length = 0;
   archive.push(...trimmedArchive);
@@ -630,7 +631,11 @@ export async function initMediaJobQueue() {
     const videoReap = maintenance.held() ? { reaped: 0 }
       : await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
     if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
-    for (const j of persistedJobs) {
+    for (const persisted of persistedJobs) {
+      // An uncertain terminal observer result is not a terminal peer result.
+      // Reconcile the original idempotency key while preserving its peer slot.
+      const j = isRemoteMediaJob(persisted) && persisted.params?.remotePeerReservation === true
+        && ['failed', 'canceled'].includes(persisted.status) ? { ...persisted, status: 'running' } : persisted;
       if (j.status === 'running' && maintenance.held()) {
         maintenance.recoverOwned('media', j.id);
         if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
@@ -794,12 +799,15 @@ function startLaneJob(job, { lane }) {
     return false;
   }
   if (lane === 'remote' && remoteRunning.some((active) => active.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId)) return false;
+  if (lane === 'remote' && archive.some((entry) => entry.id !== job.id && entry.params?.remotePeerReservation === true
+    && entry.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId)) return false;
   const permit = recoveringJobs.has(job.id)
     ? maintenance.recoverOwned('media', job.id)
     : maintenance.tryAdmit('media', job.id, { reconnect: isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true });
   if (!permit) return false;
   queue.splice(idx, 1);
   job.status = 'running';
+  if (lane === 'remote') job.params = { ...job.params, remotePeerReservation: true };
   job.startedAt = new Date().toISOString();
   job.position = 1;
   job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
@@ -1212,6 +1220,15 @@ async function runJobLifecycle(job, markDispatched) {
   // (excluded from persistImpl's serialized field set).
   let watchdogTimer;
   async function releaseRemoteAudioInputs(disposable) {
+    if (disposable && isRemoteMediaJob(job) && job.params?.remotePeerReservation === true) {
+      job.params = { ...job.params, remotePeerReservation: false };
+      try { await persist(); }
+      catch (error) {
+        job.params = { ...job.params, remotePeerReservation: true };
+        maintenance.markResourceUnsettled('media', job.id);
+        return;
+      }
+    }
     if (!disposable || inputCleanupAttempted || job.kind !== 'video' || !isRemoteMediaJob(job)) return;
     inputCleanupAttempted = true;
     try {
@@ -1241,6 +1258,9 @@ async function runJobLifecycle(job, markDispatched) {
   }
 
   async function publishTerminalTransition(state, apply, remoteInputsDisposable) {
+    if (remoteInputsDisposable === true && isRemoteMediaJob(job)) {
+      job.params = { ...job.params, remotePeerReservation: false };
+    }
     stageTerminalTransition(job, (job) => {
       apply(job);
       job.status = state;
@@ -1531,7 +1551,8 @@ async function runJobLifecycle(job, markDispatched) {
           await safeUnlinkUpload(p);
         }
       }
-      handlers.failed({ error: err.message, code: err.code });
+      handlers.failed({ error: err.message, code: err.code,
+        remoteInputsDisposable: isRemoteMediaJob(job) && job.providerInvoked !== true && job.params?.remoteMedia?.reconcile !== true });
     })());
   }
 

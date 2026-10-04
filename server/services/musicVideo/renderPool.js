@@ -10,6 +10,11 @@ export async function applyProjectRenderPool(body) {
   const { getProject } = await import('./projects.js');
   const project = await getProject(body.musicVideo.projectId);
   const pool = project?.videoSettings?.renderPool;
+  if (project?.videoSettings?.generationMode === 'suppliedAudio'
+    && ((body.mode && !['image', 'a2v'].includes(body.mode)) || body.extendFromVideoId
+      || body.lastImageFile || body.keyframes?.length || body.chunks > 1)) {
+    refuse('Supplied song audio does not support continuation, end frames, keyframes or chained clips');
+  }
   if (body.musicVideo.productionRunId && project?.videoSettings?.generationMode === 'suppliedAudio') {
     refuse('Production runs do not yet bind supplied-audio windows in their immutable pool; use Prompt motion');
   }

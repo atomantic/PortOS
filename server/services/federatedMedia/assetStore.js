@@ -162,7 +162,13 @@ async function storeAsset({ callerId, mimeType, declaredSha256, body }) {
   if (existing?.isFile() && existing.size === body.length) {
     await utimes(path, new Date(), new Date());
   } else {
-    await atomicWrite(path, body);
+    await atomicWrite(path, body).catch((error) => {
+      // The shared writer may have left an unknown temporary sibling, or
+      // suppressed a cleanup error. Keep this admission unsettled rather than
+      // claiming the input boundary is drained after an uncertain write.
+      maintenance.markCurrentUnsettled();
+      throw error;
+    });
   }
   return {
     wireVersion: FEDERATED_MEDIA_WIRE_VERSION,

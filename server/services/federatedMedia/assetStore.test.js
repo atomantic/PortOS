@@ -1,4 +1,16 @@
-vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: { run: (_kind, _resource, fn) => fn() } }));
+const failures = vi.hoisted(() => ({ write: false, unsettled: vi.fn() }));
+vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: { run: (_kind, _resource, fn) => fn(), markCurrentUnsettled: failures.unsettled } }));
+vi.mock('../../lib/fileUtils.js', async (load) => {
+  const actual = await load();
+  return { ...actual, atomicWrite: async (path, body) => {
+    if (failures.write) {
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(`${path}.fixture.tmp`, body.subarray(0, 4));
+      throw Object.assign(new Error('Fixture partial persistence failure'), { code: 'EIO' });
+    }
+    return actual.atomicWrite(path, body);
+  } };
+});
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, existsSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,6 +41,7 @@ let tempRoot;
 let originalInbox;
 
 beforeEach(() => {
+  failures.write = false; failures.unsettled.mockClear();
   tempRoot = mkdtempSync(join(tmpdir(), 'portos-federated-inbox-'));
   originalInbox = PATHS.federatedMediaInbox;
   PATHS.federatedMediaInbox = tempRoot;
@@ -54,6 +67,12 @@ const upload = async (callerId, body = PNG, mimeType = 'image/png', digest) => s
 });
 
 describe('federated media asset store', () => {
+  it('keeps input admission unsettled when shared persistence may leave an unknown partial temp file', async () => {
+    failures.write = true;
+    await expect(upload('peer-a')).rejects.toMatchObject({ code: 'EIO' });
+    expect(failures.unsettled).toHaveBeenCalledOnce();
+    expect(await findFederatedMediaAsset('peer-a', federatedMediaAssetId('peer-a', await sha256(PNG)))).toBeNull();
+  });
   it('accepts a verified image and answers with a content-addressed, caller-scoped id', async () => {
     const stored = await upload('peer-a');
     expect(stored).toMatchObject({

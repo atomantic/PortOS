@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const state = vi.hoisted(() => ({
@@ -24,14 +24,14 @@ vi.mock('node:fs/promises', async (load) => {
   const fs = await load();
   return { ...fs,
     writeFile: async (path, bytes, options) => {
-      if (state.failAudioCopy && String(path).includes('/federated-audio-')) {
+      if (state.failAudioCopy && basename(path).startsWith('federated-audio-')) {
         await fs.writeFile(path, bytes.subarray(0, 12), options);
         throw Object.assign(new Error('Fixture disk write failure'), { code: 'EIO' });
       }
       return fs.writeFile(path, bytes, options);
     },
     unlink: async (path) => {
-      if (state.failAudioCleanup && String(path).includes('/federated-audio-')) {
+      if (state.failAudioCleanup && basename(path).startsWith('federated-audio-')) {
         throw Object.assign(new Error('Fixture cleanup failure'), { code: 'EIO' });
       }
       return fs.unlink(path);
