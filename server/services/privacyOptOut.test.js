@@ -217,6 +217,19 @@ describe('emailLane', () => {
     expect(sender).toHaveBeenCalledWith('draft-1');
     expect(res.sent).toBe(true);
   });
+  it.each([
+    ['an Outlook account drafts over the browser transport', [{ id: 'outlook-1', type: 'outlook', canSend: true }], 'outlook-1', 'playwright'],
+    ['Gmail is preferred over a browser-delivered account', [{ id: 'outlook-1', type: 'outlook', canSend: true }, { id: 'gmail-1', type: 'gmail', canSend: true }], 'gmail-1', 'api']
+  ])('%s', async (_label, accounts, accountId, sendVia) => {
+    await emailLane(broker, { id: 'c1' }, { disclosedFields: ['full_name', 'email'], payload, accountsProvider: async () => accounts });
+    expect(createDraft).toHaveBeenCalledWith(expect.objectContaining({ accountId, sendVia }));
+  });
+  it('never drafts a broker email from a Teams chat', async () => {
+    createDraft.mockClear();
+    const res = await emailLane(broker, { id: 'c1' }, { disclosedFields: ['full_name', 'email'], payload, accountsProvider: async () => [{ id: 'teams-1', type: 'teams', canSend: true }] });
+    expect(res).toMatchObject({ outcome: 'account_required' });
+    expect(createDraft).not.toHaveBeenCalled();
+  });
   it('queues a human task when the broker has no email', async () => {
     const res = await emailLane({ id: 'x', optout: {} }, { id: 'c1' }, { disclosedFields: ['full_name'], payload });
     expect(res.outcome).toBe('human_task_queued');

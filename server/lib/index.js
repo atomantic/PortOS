@@ -775,6 +775,8 @@ export * from './launchVideoValidation.js';
 export * from './styleSourcePrompt.js';
 
 export * from './messageBrowserIdentity.js';
+export * from './messageBrowserCompose.js';
+export * from './messageTransport.js';
 
 export * from './databaseAuthority.js';
 

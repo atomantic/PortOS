@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
+import { accountTypeCanSend, sendViaForAccountType } from '../lib/messageTransport.js';
 
 const ACCOUNTS_FILE = join(PATHS.messages, 'accounts.json');
 // All account IDs share this file, including sync metadata writes.
@@ -22,14 +23,18 @@ async function saveAccounts(accounts) {
   noteReadinessChanged();
 }
 
+// `canSend` is derived from the transport table, never stored: it flips with the
+// code that implements a provider's send, not with data an install carries.
+const withDerivedCapabilities = account => ({ ...account, canSend: accountTypeCanSend(account.type) });
+
 export async function listAccounts() {
   const accounts = await loadAccounts();
-  return Object.values(accounts).map(account => ({ ...account, canSend: account.type === 'gmail' })).sort((a, b) => a.name.localeCompare(b.name));
+  return Object.values(accounts).map(withDerivedCapabilities).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function getAccount(id) {
   const accounts = await loadAccounts();
-  return accounts[id] ? { ...accounts[id], canSend: accounts[id].type === 'gmail' } : null;
+  return accounts[id] ? withDerivedCapabilities(accounts[id]) : null;
 }
 
 export async function createAccount(data) {
@@ -40,7 +45,7 @@ export async function createAccount(data) {
       id,
       name: data.name,
       type: data.type, // gmail, outlook, teams
-      provider: data.type === 'gmail' ? 'api' : 'playwright',
+      provider: sendViaForAccountType(data.type) ?? 'playwright',
       email: data.email || '',
       enabled: true,
       syncConfig: {

@@ -46,8 +46,9 @@ describe('messageAccounts', () => {
     uuid.mockReturnValueOnce('teams-id');
     await messageAccounts.createAccount({ name: 'Teams', type: 'teams' });
     expect((await messageAccounts.listAccounts()).map(({ type, canSend }) => ({ type, canSend }))).toEqual([
-      { type: 'gmail', canSend: true }, { type: 'outlook', canSend: false }, { type: 'teams', canSend: false }
+      { type: 'gmail', canSend: true }, { type: 'outlook', canSend: true }, { type: 'teams', canSend: true }
     ]);
+    expect(await messageAccounts.getAccount('teams-id')).toMatchObject({ type: 'teams', canSend: true, provider: 'playwright' });
   });
 
   beforeEach(() => {

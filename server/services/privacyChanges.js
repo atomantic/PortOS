@@ -32,6 +32,7 @@ import { getOrg } from './privacyOrgs.js';
 import { resolveSubjectId } from './privacySubjects.js';
 import { listAccounts } from './messageAccounts.js';
 import { createDraft } from './messageDrafts.js';
+import { pickEmailSenderAccount, sendViaForAccountType } from '../lib/messageTransport.js';
 
 const EVENT_COLUMNS = `id, subject_id, vault_record_id, replacement_record_id, kind, declared_at, note`;
 
@@ -342,8 +343,8 @@ export async function draftUpdateEmail(eventId, orgId) {
   if (!to) throw new ServerError('Organization has no contact email', { status: 400, code: 'ORG_EMAIL_MISSING' });
 
   const accounts = await listAccounts();
-  const account = accounts.find((a) => a.canSend && a.enabled !== false);
-  if (!account) throw new ServerError('Connect a Gmail account to send update emails', { status: 400, code: 'NO_MESSAGE_ACCOUNT' });
+  const account = pickEmailSenderAccount(accounts);
+  if (!account) throw new ServerError('Connect a Gmail or Outlook account to send update emails', { status: 400, code: 'NO_MESSAGE_ACCOUNT' });
 
   const oldRecord = await getVaultRecord(event.vaultRecordId);
   const newReveal = await revealValue(event.replacementRecordId);
@@ -362,7 +363,7 @@ export async function draftUpdateEmail(eventId, orgId) {
     subject,
     body,
     generatedBy: 'privacy-change',
-    sendVia: 'api',
+    sendVia: sendViaForAccountType(account.type),
   });
   console.log(`📧 Drafted privacy update email for org ${orgId} (change ${eventId}, draft ${draft.id})`);
   return { draftId: draft.id, status: draft.status };
