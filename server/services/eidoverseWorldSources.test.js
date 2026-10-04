@@ -1,11 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { statfs } from 'node:fs/promises';
 import { PATHS } from '../lib/paths.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+const dataRoot = () => lazyTempDataRoot('portos-observation-dispatch-');
+vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot }));
+vi.mock('./persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
+vi.mock('./persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
+vi.mock('./voice/tools.js', () => ({ getToolSpecs: () => [], getToolSpecsForIntent: () => ({ specs: [] }), dispatchTool: vi.fn() }));
+vi.mock('./eidoverseFoundationLedger.js', () => ({ listEidoverseFoundations: async () => ({ foundations: [], counts: {} }) }));
+vi.mock('./eidoverseControllerRuntime.js', () => ({ listEidoverseControllers: async () => ({ installs: [], counts: {} }) }));
+vi.mock('./eidoverseWorld.js', () => ({ readEidoverseWorldRecipe: async () => null }));
+vi.mock('./eidoverseTravel.js', () => ({ listEidoverseDestinations: async () => ({ destinations: [] }) }));
+afterAll(cleanupTempDataRoots);
 
 const sources = vi.hoisted(() => ({}));
 
-vi.mock('node:fs/promises', () => ({
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...await importOriginal(),
   statfs: vi.fn(async () => ({
     blocks: 100,
     bsize: 1,
@@ -215,5 +230,55 @@ describe('Eidoverse world source aggregation', () => {
       }),
     ]);
     expect(JSON.stringify(result.productivity)).not.toContain('Example private task');
+  });
+});
+
+
+describe('semantic observation authority and marker workflow', () => {
+  it('delivers fresh bounded collector reasons only to a granted mind and preserves the observation delta', async () => {
+    const { executeCosToolCall } = await import('./cosToolRegistry.js');
+    const { observeEidoverseWorld } = await import('./eidoverseObservationLedger.js');
+    sources.apps = [
+      { overallStatus: 'online', managed: true },
+      { overallStatus: 'not_started', managed: true, name: 'Example Secret App',
+        token: 'invented-token', path: '/invented/private/path', host: 'host-XXXX.example.com', error: 'invented-raw-error' },
+      { overallStatus: 'n/a', managed: false },
+    ];
+    sources.featuresState = { features: Array.from({ length: 19 }, (_, i) => ({ id: `feature-${i}` })) };
+    sources.diskPercent = 99;
+    sources.review = { alert: 1 };
+    sources.cosStatus = { running: true, paused: false };
+    const call = { requestId: 'observation-granted-first', name: 'eidoverse.observe', arguments: {} };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: {} } })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    const authority = { scope: 'mind', capabilities: { manageEidoverse: true, toolExposureAllSchemas: true } };
+    const first = await executeCosToolCall({ call, authority });
+    expect(first.state).toBe('completed');
+    expect(first.result.changes.firstObservation).toBe(true);
+    expect(first.result.places.find((place) => place.id === 'nexus')).toMatchObject({ signalCount: 21,
+      attentionSignals: [
+        { source: 'health', severity: 'error', signalCount: 1, reasons: [
+          { code: 'review_alerts', affectedCount: 1 }, { code: 'runtime_data_disk_critical', affectedCount: null },
+        ] },
+        { source: 'operations', severity: 'attention', signalCount: 1, reasons: [{ code: 'review_alerts', affectedCount: 1 }] },
+      ],
+    });
+    expect(first.result.places.find((place) => place.id === 'apps').attentionSignals[0].reasons).toEqual([{ code: 'app_not_started', affectedCount: 1 }]);
+    const serialized = JSON.stringify(first.result);
+    for (const secret of ['Example Secret App', 'invented-token', '/invented/private/path', 'host-XXXX.example.com', 'invented-raw-error']) expect(serialized).not.toContain(secret);
+    const markerPath = join(dataRoot(), 'eidoverse', 'observation.json');
+    const beforePeek = readFileSync(markerPath, 'utf8');
+    expect(beforePeek).not.toContain('attentionReasons');
+    sources.apps = [{ overallStatus: 'online' }]; sources.diskPercent = 10; sources.review = { alert: 0 };
+    const peek = await observeEidoverseWorld({ commit: false });
+    expect(peek.places.find((place) => place.id === 'nexus').attentionSignals).toEqual([]);
+    expect(readFileSync(markerPath, 'utf8')).toBe(beforePeek);
+    const next = await executeCosToolCall({ call: { ...call, requestId: 'observation-granted-next' }, authority });
+    expect(next.result.changes).toMatchObject({ firstObservation: false, since: first.result.observedAt,
+      placesChanged: expect.arrayContaining([{ id: 'nexus', was: 'attention', now: 'active' }, { id: 'apps', was: 'attention', now: 'active' }]),
+    });
+    sources.apps = null; sources.diskPercent = undefined; sources.memory = null; sources.review = null;
+    const unavailable = await executeCosToolCall({ call: { ...call, requestId: 'observation-granted-unavailable' }, authority });
+    expect(unavailable.result.places.find((place) => place.id === 'apps')).toMatchObject({ attentionSignals: [], unreadableSources: ['apps'] });
+    expect(unavailable.result.places.find((place) => place.id === 'nexus').attentionSignals).toEqual([]);
   });
 });

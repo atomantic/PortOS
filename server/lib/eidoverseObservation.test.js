@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildEidoverseObservation } from './eidoverseObservation.js';
-import { eidoversePeerId } from './eidoverseWorldSignals.js';
+import { EIDOVERSE_ATTENTION_REASON_CODES, eidoversePeerId } from './eidoverseWorldSignals.js';
 
 const OBSERVED_AT = '2026-09-16T12:00:00.000Z';
 
@@ -377,5 +377,42 @@ describe('a section that could not be read', () => {
     // One unreadable source must not discard a sibling's real signal; the
     // district says which source it could not read instead.
     expect(report.places[0]).toMatchObject({ signalCount: 1, status: 'active', unreadableSources: ['apps'] });
+  });
+});
+
+
+describe('bounded attention projection', () => {
+  it('sanitizes reason metadata, aggregates unknown counts conservatively and truncates deterministically', () => {
+    const rows = ['error', 'attention'].map((status) => ({ status,
+      name: 'Example Secret App', path: '/invented/private/path', error: 'invented-error-token',
+      attentionReasons: [
+        ...EIDOVERSE_ATTENTION_REASON_CODES.map((code) => ({ code, affectedCount: 2, secret: 'invented-token' })),
+        { code: 'invented-secret-reason', affectedCount: 42 },
+      ],
+    }));
+    const districts = [{ id: 'test', sources: ['tasks', 'apps'] }];
+    const args = { districts, includes: { tasks: true, apps: true }, source: { apps: rows, tasks: rows } };
+    const place = observe(args).report.places[0];
+    expect(place.attentionSignals.flatMap((entry) => entry.reasons)).toHaveLength(24);
+    expect(place.attentionTruncated).toBe(true);
+    expect(place.attentionSignals.map((entry) => entry.source)).toEqual(['apps', 'apps', 'tasks']);
+    expect(observe({ ...args, districts: [{ id: 'test', sources: ['apps', 'tasks'] }],
+      source: { apps: [...rows].reverse(), tasks: [...rows].reverse() } }).report.places[0].attentionSignals).toEqual(place.attentionSignals);
+    const serialized = JSON.stringify(place.attentionSignals);
+    for (const secret of ['Example Secret App', '/invented/private/path', 'invented-error-token', 'invented-token', 'invented-secret-reason']) expect(serialized).not.toContain(secret);
+    const unknown = observe({ source: { apps: [rows[0], { status: 'error', attentionReasons: [{ code: 'app_unknown', affectedCount: NaN }] }] } }).report.places.find((entry) => entry.id === 'apps');
+    expect(unknown.attentionSignals[0].reasons).toContainEqual({ code: 'app_unknown', affectedCount: null });
+  });
+
+  it('keeps healthy, unreadable, disabled and legacy reason-less sources distinct without stale causes', () => {
+    const first = observe({ source: { apps: [{ status: 'error', attentionReasons: [{ code: 'app_unknown', affectedCount: 3 }] }] } });
+    const place = (args) => observe({ marker: first.marker, ...args }).report.places.find((row) => row.id === 'apps');
+    expect(place({ source: { apps: [{ status: 'active', attentionReasons: [{ code: 'app_unknown', affectedCount: 3 }] }] } })).toMatchObject({ attentionSignals: [], status: 'active' });
+    expect(place({ source: { apps: null } })).toMatchObject({ attentionSignals: [], signalCount: null, unreadableSources: ['apps'], status: 'unknown' });
+    expect(place({ source: { apps: [{ status: 'error' }] }, includes: { apps: false } })).toMatchObject({ attentionSignals: [], disabledSources: ['apps'] });
+    expect(place({ source: { apps: [{ status: 'error', attentionReasons: [{ code: 'raw-private-error' }] }, { status: 'attention' }] } }).attentionSignals).toEqual([
+      { source: 'apps', severity: 'error', signalCount: 1, reasons: [{ code: 'source_error', affectedCount: null }] },
+      { source: 'apps', severity: 'attention', signalCount: 1, reasons: [{ code: 'source_attention', affectedCount: null }] },
+    ]);
   });
 });
