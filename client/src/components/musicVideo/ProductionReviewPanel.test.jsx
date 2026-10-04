@@ -26,6 +26,15 @@ function recordPlayback() {
 }
 
 describe('Production proof playback evidence', () => {
+  it('shows a persisted capture failure after reconnect and keeps proof approval blocked', () => {
+    render(<ProductionReviewPanel project={{ ...project, excerpts: [{ id: 'proof-a', status: 'error',
+      error: 'Composition capture failed at frame 0 (song 12s): Browser command timed out: Page.captureScreenshot' }] }}
+      review={reviewFixture()} onOpenArtifact={vi.fn()} />);
+    expect(screen.getByRole('alert').textContent).toContain('capture failed at frame 0');
+    expect(screen.getByRole('button', { name: 'Approve animated proof' }).disabled).toBe(true);
+    expect(screen.queryByLabelText('Animated proof with master audio')).toBeNull();
+  });
+
   it('submits substantive machine evidence for the exact proof without claiming playback', () => {
     const review = reviewFixture();
     const view = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);

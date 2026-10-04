@@ -111,7 +111,10 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     const at = offsetSec ? Math.round((offsetSec + t) * 1e6) / 1e6 : t;
     await seekComposition(page, at, Math.round(t * fps));
     page.check();
-    const { data } = await page.send('Page.captureScreenshot', SCREENSHOT);
+    const captureStarted = performance.now();
+    const { data } = await page.send('Page.captureScreenshot', SCREENSHOT).catch(error => {
+      throw new Error(`Composition capture failed at frame ${Math.round(t * fps)} (song ${at}s) after ${Math.round(performance.now() - captureStarted)}ms: ${error.message}`);
+    });
     page.check();
     return Buffer.from(data, 'base64');
   };

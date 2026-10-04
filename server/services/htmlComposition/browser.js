@@ -90,13 +90,31 @@ async function readSlice(asset, start, end) {
   } finally { await handle.close(); }
 }
 
-export async function openComposition(directory, { signal, validateAssets, streamMedia = false, mediaMode = 'code-images-video' } = {}) {
+export async function openComposition(directory, { signal, validateAssets, streamMedia = false, mediaMode = 'code-images-video', ownedBrowser = false } = {}) {
   const assets = await snapshotAssets(directory, { streamMedia });
   validateAssets?.(assets);
   signal?.throwIfAborted();
+  if (ownedBrowser) {
+    const { launchCompositionBrowser } = await import('./ownedBrowser.js');
+    const owner = await launchCompositionBrowser({ signal });
+    try {
+      const page = await connectComposition(assets, { signal, mediaMode,
+        version: { webSocketDebuggerUrl: owner.webSocketDebuggerUrl, 'User-Agent': 'HeadlessChrome/' } });
+      return { ...page, close: async options => {
+        try { await page.close(options); } finally { await owner.close(); }
+      } };
+    } catch (error) {
+      await owner.close();
+      throw error;
+    }
+  }
   const response = await cdpRequest('/json/version');
   if (!response.ok) throw new Error('Managed browser is unavailable');
   const version = await response.json();
+  return connectComposition(assets, { signal, mediaMode, version });
+}
+
+async function connectComposition(assets, { signal, mediaMode, version }) {
   const { webSocketDebuggerUrl } = version;
   if (!webSocketDebuggerUrl) throw new Error('Managed browser has no CDP endpoint');
   const ws = new WebSocket(webSocketDebuggerUrl, { handshakeTimeout: 10000 });
@@ -202,8 +220,11 @@ export async function openComposition(directory, { signal, validateAssets, strea
     ws.terminate();
     if (verify && error) throw error;
   }
-  async function evaluate(expression) {
-    const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+  async function evaluate(expression, phase = 'evaluation') {
+    const started = performance.now();
+    const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }).catch(error => {
+      throw new Error(`Composition ${phase} failed after ${Math.round(performance.now() - started)}ms: ${error.message}`);
+    });
     if (result.exceptionDetails) throw new Error(`Composition script failed: ${result.exceptionDetails.exception?.description ?? result.exceptionDetails.text}`);
     if (failure) throw failure;
     return result.result.value;
@@ -247,8 +268,8 @@ export async function openComposition(directory, { signal, validateAssets, strea
     await send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
     const navigation = await send('Page.navigate', { url: `${ORIGIN}/index.html` });
     if (navigation.errorText) throw new Error(`Composition navigation failed: ${navigation.errorText}`);
-    await evaluate(`new Promise(resolve => document.readyState === 'complete' ? resolve() : addEventListener('load', resolve, { once: true }))`);
-    await evaluate('document.fonts.ready.then(() => true)');
+    await evaluate(`new Promise(resolve => document.readyState === 'complete' ? resolve() : addEventListener('load', resolve, { once: true }))`, 'document load');
+    await evaluate('document.fonts.ready.then(() => true)', 'font readiness');
     return { evaluate, send, close, check: () => { signal?.throwIfAborted(); if (failure) throw failure; } };
   } catch (error) {
     await close();

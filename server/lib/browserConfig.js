@@ -1,5 +1,13 @@
 import { isNonBlankStr } from './textUtils.js';
 
+/** Same executable for managed browsing and isolated headless rendering. */
+export function browserExecutablePath(config, os = process.platform) {
+  if (isNonBlankStr(config?.chromePath)) return config.chromePath;
+  if (os === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  if (os === 'win32') return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  return 'google-chrome';
+}
+
 export function deriveMacAppBundleFromChromePath(chromePath) {
   if (!isNonBlankStr(chromePath)) return null;
   const normalized = chromePath.trim().replaceAll('\\', '/');

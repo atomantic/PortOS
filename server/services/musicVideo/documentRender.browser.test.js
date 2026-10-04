@@ -40,7 +40,7 @@ let testSignal;
 beforeEach(({ signal }) => { testSignal = signal; });
 
 let endpoint;
-vi.mock('../browserService.js', () => ({ cdpRequest: (path) => fetch(`${endpoint}${path}`) }));
+vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: vi.fn((path) => fetch(`${endpoint}${path}`)) }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-browser-'),
 }));
@@ -79,6 +79,24 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     browser = await chromium.connectOverCDP(endpoint);
   }, 30000);
   afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: () => {} }));
+
+  it('keeps network refusal inside the owned capture browser and leaves the browsing session alive', async () => {
+    const { openComposition } = await import('../htmlComposition/browser.js');
+    const directory = 'compositions/synthetic-owned-refusal';
+    await mkdir(join(PATHS.data, directory), { recursive: true });
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<!doctype html><title>Synthetic contained capture</title>');
+    const page = await openComposition(directory, { ownedBrowser: true });
+    try {
+      await expect((async () => {
+        await page.evaluate("fetch('https://example.invalid/refused').catch(() => null)");
+        page.check();
+      })()).rejects.toThrow(/Refused composition request/);
+    } finally { await page.close(); }
+    expect(browser.isConnected()).toBe(true);
+    const untouched = await browser.newPage();
+    expect(await untouched.evaluate(() => 6 * 7)).toBe(42);
+    await untouched.close();
+  }, 30000);
 
   // Server-only CI does not install client dependencies; the full local install
   // exercises this cross-workspace package/render contract alongside the UI proof.
@@ -203,6 +221,10 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   }, 120000);
 
   it('draws the selected take at SONG time in an excerpt, identically on every render, with the master muxed', async () => {
+    const { cdpRequest } = await import('../browserService.js');
+    const managedCalls = cdpRequest.mock.calls.length;
+    const unrelatedPage = await browser.newPage();
+    await unrelatedPage.setContent('<title>Unrelated browser session</title>');
     // A 3s clip: red, then green, then blue — each second a solid colour.
     await mkdir(PATHS.videos, { recursive: true });
     await mkdir(PATHS.music, { recursive: true });
@@ -245,6 +267,9 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(streams.split('\n').filter(Boolean).sort()).toEqual(['audio', 'video']);
 
     const second = await render('second.mp4');
+    expect(cdpRequest.mock.calls.length).toBe(managedCalls);
+    expect(await unrelatedPage.title()).toBe('Unrelated browser session');
+    await unrelatedPage.close();
     const hashes = (path) => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-map', '0:v', '-f', 'framemd5', '-']).toString().split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split(',').pop().trim());
     expect(hashes(second.outputPath)).toEqual(hashes(first.outputPath));
     // The staged job folder is gone once the render ends.
