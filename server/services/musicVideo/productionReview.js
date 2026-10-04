@@ -65,6 +65,7 @@ export function productionReadiness(project) {
   const review = project.productionReview || {};
   const draft = review.draft || {};
   const basis = productionReviewBasis(project);
+  const alignmentBasis = productionAlignmentBasis(project);
   const unresolved = stage => (review.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
   const artProblems = unresolved('art').map(f => `Resolve art feedback for ${f.target}: ${f.text}`);
   for (const [key, label] of [['cast', 'Cast guide'], ['environments', 'Environment guide'],
@@ -84,7 +85,7 @@ export function productionReadiness(project) {
     if (!text(draft.timingNotes)) boardProblems.push('Explain and confirm the instrumental exception.');
   } else {
     if (!cues.length) boardProblems.push('Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.');
-    if (draft.timingStatus !== 'verified' || review.alignmentBasis !== productionAlignmentBasis(project)) boardProblems.push('Lyric alignment is provisional or changed. Listen and verify the current word timings.');
+    if (draft.timingStatus !== 'verified' || review.alignmentBasis !== alignmentBasis) boardProblems.push('Lyric alignment is provisional or changed. Listen and verify the current word timings.');
     if (!text(draft.timingNotes)) boardProblems.push('Record how the vocal timings were checked.');
     if (cues.some(c => !(Number.isFinite(c.startSec) && c.endSec > c.startSec && c.endSec <= duration)
       || !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec)
@@ -130,7 +131,8 @@ export function productionReadiness(project) {
     proofProblems.push('Render and watch a current animated chorus proof with the master song.');
   }
   const proofApproved = !proofProblems.length && hasProofEvidence(review.approvals?.proof?.proofReview) && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
-  return { basis, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: productionAlignmentBasis(project) }, art: { approved: artApproved, problems: [...new Set(artProblems)] },
+  return { basis, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
+    : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)] },
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)] },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null },
     readyForProduction: proofApproved };

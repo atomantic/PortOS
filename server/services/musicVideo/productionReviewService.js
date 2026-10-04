@@ -121,6 +121,19 @@ export async function saveProductionDraft(id, draft) {
   return changed(project);
 }
 
+/** Only the explicit authenticated action can rebind already-verified timings. */
+export async function reverifyProductionAlignment(id, { basis, notes, reviewer }) {
+  const { project } = await mutateProjectRecord(id, current => {
+    if (basis !== productionAlignmentBasis(current)) throw new ServerError('The word timings changed while you were reviewing. Inspect them again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+    const draft = current.productionReview?.draft;
+    if (!draft || draft.lyricsMode !== 'vocal') throw new ServerError('Save a vocal planning draft before verifying alignment.', { status: 409, code: 'PLANNING_DRAFT_REQUIRED' });
+    return { project: { ...current, productionReview: { ...current.productionReview,
+      draft: { ...draft, timingStatus: 'verified', timingNotes: notes }, alignmentBasis: basis,
+      alignmentReview: { basis, reviewer, reviewedAt: new Date().toISOString() } } } };
+  });
+  return changed(project);
+}
+
 export async function approveProductionReview(id, input) {
   const guard = await validateGuideSelection(await requireProject(id), current => current.productionReview?.draft?.guideArtifactId);
   const { project } = await mutateProjectRecord(id, current => {

@@ -35,6 +35,20 @@ export const currentProductionRun = (project) => {
   return runs.find((r) => RESUMABLE_RUN_STATUSES.has(r.status)) || runs[runs.length - 1] || null;
 };
 
+/** Current review guidance for a stopped approval-gated run; retain other failures. */
+export function productionReviewStopGuidance(run, readiness, through = 'proof') {
+  const reason = run?.stopReason || run?.error;
+  if (!readiness || !reason || !['blocked', 'needs-human', 'stopped', 'failed'].includes(run.status)) return null;
+  const approvalStop = run.errorCode === 'MUSIC_VIDEO_APPROVAL_REQUIRED'
+    || /^(?:Review and approve the current art direction|A reviewer must approve the current|Lyric alignment is provisional or changed|Production review needs human approval)/.test(reason);
+  if (!approvalStop) return null;
+  const stages = ['art', 'storyboard', 'proof'];
+  const stage = stages.slice(0, stages.indexOf(through) + 1).find(key => !readiness[key]?.approved);
+  const current = stage ? readiness[stage].problems?.[0]
+    || `Review and approve the current ${stage === 'art' ? 'art direction' : stage}.` : 'Review requirements are satisfied — ready to resume explicitly.';
+  return { current, historical: current !== reason ? reason : null };
+}
+
 export function projectShotSummary(project) {
   const draft = project?.productionReview?.draft;
   const document = project?.composition?.mode === 'document' && draft?.storyboardSource === 'document';

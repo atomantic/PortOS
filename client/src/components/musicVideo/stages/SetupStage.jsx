@@ -28,6 +28,7 @@ export default function SetupStage({ board }) {
           key={`autonomous-${project.id}`}
           project={project}
           auto={autonomous}
+          readiness={board.productionReadiness}
           selectedStage={runStage}
           onSelectStage={onSelectStage}
           framed

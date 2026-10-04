@@ -5,6 +5,7 @@ import {
   AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
   autonomousStageOutput, autonomousStageRows, isAutonomousLive,
 } from '../../lib/musicVideoAutonomous.js';
+import { productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
 import AutoApproveFields from './AutoApproveFields.jsx';
 
 // The stages that report a sub-step while they run (the server's `stages[id].step`).
@@ -57,7 +58,7 @@ function StageOutput({ run, row, editableBelow }) {
  * `useAutonomousMusicVideo`; this panel only renders the run it is given.
  * `framed={false}` drops the card chrome and title for a host that supplies them.
  */
-export default function AutonomousRunPanel({ project, auto, selectedStage = null, onSelectStage, framed = true }) {
+export default function AutonomousRunPanel({ project, auto, readiness, selectedStage = null, onSelectStage, framed = true }) {
   const run = project?.autonomousRun;
   const [edit, setEdit] = useState(null); // { for: stage, value } — the director's edit at a checkpoint
   // Planning approval authority is granted with the next explicit resume.
@@ -65,6 +66,7 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
   const autoApprove = autoApproveEdit && autoApproveEdit.runId === run?.id ? autoApproveEdit.value : (run?.brief?.autoApprove || []).filter(stage => stage !== 'proof');
   const [grantError, setGrantError] = useState(null);
   if (!run) return null;
+  const guidance = productionReviewStopGuidance(run, readiness);
   const rows = autonomousStageRows(run);
   const live = isAutonomousLive(run);
   const awaiting = run.status === 'awaiting-approval' ? run.awaiting : null;
@@ -139,9 +141,11 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
 
       {run.error && (
         <p role="status" className="flex items-start gap-1 text-xs text-port-warning break-words min-w-0">
-          <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" /> <span className="min-w-0">{run.error}</span>
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" /> <span className="min-w-0">{guidance?.current || run.error}</span>
         </p>
       )}
+
+      {guidance?.historical && <p className="text-xs text-port-text-muted break-words">Historical stop reason: {guidance.historical}</p>}
 
       {awaiting && (
         <div className="rounded border border-port-border p-2 space-y-2">

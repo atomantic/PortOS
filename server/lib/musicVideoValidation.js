@@ -1066,6 +1066,9 @@ export const musicVideoProductionDraftSchema = z.object({
     camera: z.string().max(4000), transition: z.string().max(4000),
   }).strict()).max(2000),
 }).strict();
+export const musicVideoAlignmentReviewSchema = z.object({
+  basis: z.string().min(1).max(128), notes: z.string().trim().min(1).max(4000),
+}).strict();
 export const musicVideoDocumentShotsSchema = z.object({
   documentDirectory: z.string().min(1).max(500), audioBasis: z.string().min(1).max(128),
   sourceFile: z.string().min(1).max(200),

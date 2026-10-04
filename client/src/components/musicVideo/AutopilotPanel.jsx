@@ -11,7 +11,7 @@ import { codeFirstProductionAssets } from '../../../../server/lib/musicVideoMedi
 import {
   DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_LLM_STAGES, MUSIC_VIDEO_LLM_STAGE_LABELS, automationDraftFrom, automationFromDraft, llmRouteLabel,
 } from '../../lib/musicVideoAutomation.js';
-import { RESUMABLE_RUN_STATUSES, currentProductionRun } from '../../lib/musicVideoStages.js';
+import { RESUMABLE_RUN_STATUSES, currentProductionRun, productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
 
 const POOL_TOOLS = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group === 'image' || t.group === 'video');
@@ -59,7 +59,7 @@ function StepRow({ step }) {
   );
 }
 
-function RunView({ run, production, codeFirst, project }) {
+function RunView({ run, production, codeFirst, project, readiness }) {
   const [budget, setBudget] = useState(null);
   const live = RESUMABLE_RUN_STATUSES.has(run.status);
   const steps = run.steps || [];
@@ -69,9 +69,10 @@ function RunView({ run, production, codeFirst, project }) {
   const resumeValid = !budget || (Number.isInteger(budget.maxGenerations) && budget.maxGenerations >= run.limits.maxGenerations && budget.maxGenerations <= 500
     && Number.isInteger(budget.maxReviewAttempts) && budget.maxReviewAttempts >= run.limits.maxReviewAttempts && budget.maxReviewAttempts <= 10
     && (budget.spendCapUsd == null || (Number.isFinite(budget.spendCapUsd) && budget.spendCapUsd >= cap && budget.spendCapUsd <= 100000)));
+  const guidance = productionReviewStopGuidance(run, readiness, 'storyboard');
   const hint = run.interrupted
     ? 'The server restarted — nothing is running. Resume to continue.'
-    : run.stopReason;
+    : guidance?.current || run.stopReason;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -108,6 +109,7 @@ function RunView({ run, production, codeFirst, project }) {
           </div>;
         })}
       </div>}
+      {guidance?.historical && <p className="text-port-text-muted break-words">Historical stop reason: {guidance.historical}</p>}
       {hint && <p className="text-port-warning break-words">{hint}</p>}
       {steps.some((step) => step.retryBlocked) && <p className="text-port-warning">Terminal refusal recorded: unchanged inputs will not be submitted again on Resume. Repair the shot or cancel and choose another supported route. No new spend is reserved while blocked.</p>}
       {run.error && <p role="status" className="text-port-error break-words">{run.error}</p>}
@@ -383,7 +385,7 @@ function BriefSection({ project, onSave, onKickoff, kickoffBusy, kickoffStep, ki
  * it with an allowed provider/model pool and explicit limits. Progress arrives
  * over the `music-video:production` socket event via `useMusicVideoProduction`.
  */
-function ProductionSection({ project, production }) {
+function ProductionSection({ project, production, readiness }) {
   const run = currentProductionRun(project);
   const active = run && RESUMABLE_RUN_STATUSES.has(run.status);
   const codeFirst = project.productionPolicy?.strategy === 'code-first';
@@ -392,7 +394,7 @@ function ProductionSection({ project, production }) {
   return (
     <div className="rounded border border-port-border p-2 space-y-2 text-xs" aria-label="Production run">
       <span className="font-medium flex items-center gap-1"><Clapperboard size={12} /> Autonomous production (opt-in)</span>
-      {run && <RunView key={run.id} run={run} production={production} codeFirst={codeFirst} project={project} />}
+      {run && <RunView key={run.id} run={run} production={production} codeFirst={codeFirst} project={project} readiness={readiness} />}
       {codeFirst && <>
         <MediumPlanSummary project={project} />
         <div className="rounded border border-port-border p-2 space-y-1" aria-label="Code-first asset preflight">
@@ -420,7 +422,7 @@ function ProductionSection({ project, production }) {
  * `kickoffStep` names the kickoff step running now.
  */
 export default function AutopilotPanel({
-  project, production, onSave, onKickoff, kickoffBusy, kickoffStep = null, kickoffBlockedReason,
+  project, production, readiness, onSave, onKickoff, kickoffBusy, kickoffStep = null, kickoffBlockedReason,
 }) {
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0" aria-label="Autopilot">
@@ -432,7 +434,7 @@ export default function AutopilotPanel({
         kickoffStep={kickoffStep}
         kickoffBlockedReason={kickoffBlockedReason}
       />
-      <ProductionSection project={project} production={production} />
+      <ProductionSection project={project} production={production} readiness={readiness} />
     </section>
   );
 }

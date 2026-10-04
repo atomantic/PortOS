@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
+import { reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
   approveMusicVideoProductionReview, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
   cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
@@ -55,6 +55,7 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     importDocumentShots: body => call(() => importMusicVideoDocumentShots(project.id, body, { silent: true })),
     importPlanning: source => call(() => importMusicVideoProductionPlanning(project.id, source, { silent: true })),
     bindShot: shotId => call(() => bindMusicVideoProductionShot(project.id, shotId, { silent: true })),
+    reverifyAlignment: notes => call(() => reverifyMusicVideoAlignment(project.id, { basis: state?.readiness.alignment.basis, notes }, { silent: true })),
     save: draft => call(() => saveMusicVideoProductionDraft(project.id, draft, { silent: true })),
     prepare: () => call(() => prepareMusicVideoProductionReview(project.id, {}, { silent: true })),
     approve: (stage, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
