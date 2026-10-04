@@ -5,7 +5,7 @@ import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
-import { getAppName, formatDateNumeric } from '../../../utils/formatters';
+import { getAppName, formatDateNumeric, formatPercent } from '../../../utils/formatters';
 import MemoryTimeline from './MemoryTimeline';
 // Lazy: MemoryGraph pulls the three.js stack; load it only when rendered.
 const MemoryGraph = lazy(() => import('./MemoryGraph'));
@@ -271,7 +271,7 @@ export default function MemoryTab({ apps = [] }) {
                     </span>
                     <span className="text-xs text-gray-500">{memory.category}</span>
                     <span className="text-xs text-yellow-400">
-                      {((memory.confidence || 0) * 100).toFixed(0)}% confidence
+                      {formatPercent((memory.confidence || 0) * 100, { decimals: 0 })} confidence
                     </span>
                   </div>
                   <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
@@ -412,7 +412,7 @@ export default function MemoryTab({ apps = [] }) {
                         </span>
                       )}
                       {memory.similarity && (
-                        <span className="text-xs text-port-accent">{(memory.similarity * 100).toFixed(0)}% match</span>
+                        <span className="text-xs text-port-accent">{formatPercent(memory.similarity * 100, { decimals: 0 })} match</span>
                       )}
                     </div>
                     <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
@@ -428,7 +428,7 @@ export default function MemoryTab({ apps = [] }) {
                     <div className="text-xs text-gray-500 mt-2 flex flex-wrap items-center gap-2">
                       <span>{formatDateNumeric(memory.createdAt)}</span>
                       <span>*</span>
-                      <span>importance: {((memory.importance || 0.5) * 100).toFixed(0)}%</span>
+                      <span>importance: {formatPercent((memory.importance || 0.5) * 100, { decimals: 0 })}</span>
                       {getAppName(memory.sourceAppId, apps) && (
                         <>
                           <span>*</span>

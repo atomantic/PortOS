@@ -3,6 +3,7 @@ import { Link, Navigate, useParams } from 'react-router';
 import { Activity, AlertTriangle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
+import { formatPercent } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -312,7 +313,7 @@ function SystemHealthOverview() {
                 <div key={p.name} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-port-bg/40 hover:bg-port-bg/60 text-sm">
                   <span className={`w-2 h-2 rounded-full ${p.status === 'online' ? 'bg-port-success' : p.status === 'errored' ? 'bg-port-error' : 'bg-gray-500'}`} />
                   <span className="flex-1 text-gray-200 font-mono text-xs truncate">{p.name}</span>
-                  <span className="text-gray-400 tabular-nums">{p.cpu.toFixed(0)}% CPU</span>
+                  <span className="text-gray-400 tabular-nums">{formatPercent(p.cpu, { decimals: 0 })} CPU</span>
                   <span className="text-gray-100 tabular-nums w-24 text-right">{p.memoryFormatted}</span>
                   {p.unstableRestarts > 0 && (
                     <span className="text-port-warning text-xs">{p.unstableRestarts} crash-loop</span>

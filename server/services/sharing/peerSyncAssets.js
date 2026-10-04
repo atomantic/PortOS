@@ -295,7 +295,7 @@ const ASSET_KIND_EXTENSIONS = {
 function hasAllowedAssetExtension(kind, filename) {
   if (ASSET_KIND_EXTENSIONS[kind]?.has(extname(filename).toLowerCase())) return true;
   // Do not echo a peer-controlled filename into the log (it can contain CR/LF).
-  console.warn(`peerSync: skipped unsupported ${kind} asset extension`);
+  console.warn(`⚠️ peerSync: skipped unsupported ${kind} asset extension`);
   return false;
 }
 

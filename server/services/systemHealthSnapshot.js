@@ -95,7 +95,7 @@ export async function getSystemHealthSnapshot() {
       return failedProbe;
     }),
     cos.getStatus().catch((error) => {
-      console.error('Chief of Staff health probe failed', error);
+      console.error(`❌ Chief of Staff health probe failed: ${error.message}`);
       return failedProbe;
     }),
     // Queue depth is read here rather than taken off `getStatus()`, which has no
@@ -114,7 +114,7 @@ export async function getSystemHealthSnapshot() {
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
     getCurrentVersion().catch(() => null),
     statfs('/').catch((error) => {
-      console.error('Root filesystem health probe failed', error);
+      console.error(`❌ Root filesystem health probe failed: ${error.message}`);
       return failedProbe;
     }),
     getMemoryStats(),

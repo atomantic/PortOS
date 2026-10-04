@@ -4,7 +4,7 @@ import * as api from '../services/api';
 import { useSocketResource } from '../hooks/useSocketResource';
 import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
-import { formatCount, formatDateTime } from '../utils/formatters';
+import { formatCount, formatDateTime, formatPercent } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 
 const AGENT_EVENTS = [];
@@ -84,14 +84,14 @@ export function AgentsPage() {
         <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl p-2 sm:p-5 flex items-center justify-between">
           <div>
             <div className="text-gray-400 text-[10px] sm:text-sm mb-0.5 sm:mb-1">CPU</div>
-            <div className="text-lg sm:text-3xl font-bold text-white font-mono">{totalCpu.toFixed(1)}%</div>
+            <div className="text-lg sm:text-3xl font-bold text-white font-mono">{formatPercent(totalCpu)}</div>
           </div>
           <Cpu size={20} className="sm:w-8 sm:h-8 text-port-accent" />
         </div>
         <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl p-2 sm:p-5 flex items-center justify-between">
           <div>
             <div className="text-gray-400 text-[10px] sm:text-sm mb-0.5 sm:mb-1">Memory</div>
-            <div className="text-lg sm:text-3xl font-bold text-white font-mono">{totalMemory.toFixed(1)}%</div>
+            <div className="text-lg sm:text-3xl font-bold text-white font-mono">{formatPercent(totalMemory)}</div>
           </div>
           <MemoryStick size={20} className="sm:w-8 sm:h-8 text-port-success" />
         </div>
@@ -130,11 +130,11 @@ export function AgentsPage() {
               <div className="flex items-center gap-4 text-xs">
                 <div className="flex items-center gap-1">
                   <span className="text-gray-500">CPU</span>
-                  <span className="font-mono text-port-success">{agent.cpu?.toFixed(1)}%</span>
+                  <span className="font-mono text-port-success">{formatPercent(agent.cpu)}</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <span className="text-gray-500">Mem</span>
-                  <span className="font-mono text-port-accent">{agent.memory?.toFixed(1)}%</span>
+                  <span className="font-mono text-port-accent">{formatPercent(agent.memory)}</span>
                 </div>
               </div>
               <button
@@ -219,8 +219,8 @@ export function AgentsPage() {
                   </td>
                   <td className="px-4 py-4 font-mono text-white">{agent.pid}</td>
                   <td className="px-4 py-4 font-mono text-port-accent">{agent.runtimeFormatted}</td>
-                  <td className="px-4 py-4 font-mono text-port-success">{agent.cpu?.toFixed(1)}%</td>
-                  <td className="px-4 py-4 font-mono text-port-accent">{agent.memory?.toFixed(1)}%</td>
+                  <td className="px-4 py-4 font-mono text-port-success">{formatPercent(agent.cpu)}</td>
+                  <td className="px-4 py-4 font-mono text-port-accent">{formatPercent(agent.memory)}</td>
                   <td className="px-4 py-4 font-mono text-gray-300">
                     {agent.agentName.toLowerCase()}
                     {agent.source === 'cos' && (
@@ -320,7 +320,7 @@ export function AgentsPage() {
                             <div>
                               <div className="flex items-center justify-between text-xs mb-1">
                                 <span className="text-gray-500 uppercase tracking-wide">CPU Usage</span>
-                                <span className="text-port-success font-mono">{agent.cpu?.toFixed(1)}%</span>
+                                <span className="text-port-success font-mono">{formatPercent(agent.cpu)}</span>
                               </div>
                               <div className="h-2 bg-port-border rounded-full overflow-hidden">
                                 <div
@@ -332,7 +332,7 @@ export function AgentsPage() {
                             <div>
                               <div className="flex items-center justify-between text-xs mb-1">
                                 <span className="text-gray-500 uppercase tracking-wide">Memory Usage</span>
-                                <span className="text-port-accent font-mono">{agent.memory?.toFixed(1)}%</span>
+                                <span className="text-port-accent font-mono">{formatPercent(agent.memory)}</span>
                               </div>
                               <div className="h-2 bg-port-border rounded-full overflow-hidden">
                                 <div

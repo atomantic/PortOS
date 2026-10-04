@@ -16,7 +16,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
 import useGraphNodeDetail from '../../../hooks/useGraphNodeDetail';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
-import { formatDateNumeric } from '../../../utils/formatters';
+import { formatDateNumeric, formatPercent } from '../../../utils/formatters';
 
 const EDGE_COLORS = {
   similar: '#3b82f6',
@@ -728,7 +728,7 @@ export default function BrainGraph() {
                     <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: BRAIN_TYPE_HEX[cn.brainType] }} />
                     <span className="text-xs text-gray-300 truncate flex-1">{cn.label}</span>
                     <span className="text-[10px] text-gray-600 shrink-0">
-                      {cn.edgeType === 'linked' ? 'linked' : cn.edgeType === 'shared_tag' ? 'tag' : `${((cn.weight || 0) * 100).toFixed(0)}%`}
+                      {cn.edgeType === 'linked' ? 'linked' : cn.edgeType === 'shared_tag' ? 'tag' : formatPercent((cn.weight || 0) * 100, { decimals: 0 })}
                     </span>
                   </button>
                 ))}

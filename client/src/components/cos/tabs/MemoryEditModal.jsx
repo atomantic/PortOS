@@ -5,7 +5,7 @@ import Modal from '../../ui/Modal';
 import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
-import { getAppName } from '../../../utils/formatters';
+import { getAppName, formatPercent } from '../../../utils/formatters';
 
 export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
   const [formData, setFormData] = useState({
@@ -251,7 +251,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
           {/* Importance and Confidence */}
           <div className="flex flex-col sm:flex-row gap-4">
             <FormField
-              label={<>Importance: {(formData.importance * 100).toFixed(0)}%</>}
+              label={<>Importance: {formatPercent(formData.importance * 100, { decimals: 0 })}</>}
               className="flex-1"
               labelClassName="block text-sm text-gray-400 mb-2"
             >
@@ -266,7 +266,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
               />
             </FormField>
             <FormField
-              label={<>Confidence: {(formData.confidence * 100).toFixed(0)}%</>}
+              label={<>Confidence: {formatPercent(formData.confidence * 100, { decimals: 0 })}</>}
               className="flex-1"
               labelClassName="block text-sm text-gray-400 mb-2"
             >

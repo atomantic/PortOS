@@ -70,7 +70,7 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
 
   if (!str || !str.trim()) {
     if (logError && str) {
-      console.warn(`Invalid JSON${context ? ` in ${context}` : ''}: empty or malformed content`);
+      console.warn(`⚠️ Invalid JSON${context ? ` in ${context}` : ''}: empty or malformed content`);
     }
     return defaultValue;
   }
@@ -79,14 +79,14 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
     const parsed = JSON.parse(str);
     if (!allowArray && Array.isArray(parsed)) {
       if (logError) {
-        console.warn(`Invalid JSON${context ? ` in ${context}` : ''}: array not allowed`);
+        console.warn(`⚠️ Invalid JSON${context ? ` in ${context}` : ''}: array not allowed`);
       }
       return defaultValue;
     }
     return parsed;
   } catch (err) {
     if (logError) {
-      console.warn(`Failed to parse JSON${context ? ` in ${context}` : ''}: ${err.message}`);
+      console.warn(`⚠️ Failed to parse JSON${context ? ` in ${context}` : ''}: ${err.message}`);
     }
     return defaultValue;
   }
@@ -328,7 +328,7 @@ export async function readJSONFileStrict(filePath, defaultValue = null, { allowA
       return { ok: true, value: defaultValue };
     }
     if (logError) {
-      console.warn(`Failed to read file ${filePath}: ${err.message}`);
+      console.warn(`⚠️ Failed to read file ${filePath}: ${err.message}`);
     }
     return { ok: false, value: defaultValue };
   }
@@ -360,7 +360,7 @@ export async function readJSONFileStrict(filePath, defaultValue = null, { allowA
   // a strict caller must refuse to count a shape it cannot count.
   if (allowArray && Array.isArray(defaultValue) && !Array.isArray(parsed)) {
     if (logError) {
-      console.warn(`Expected a JSON array in ${filePath}, got ${parsed === null ? 'null' : typeof parsed}`);
+      console.warn(`⚠️ Expected a JSON array in ${filePath}, got ${parsed === null ? 'null' : typeof parsed}`);
     }
     return { ok: false, value: defaultValue };
   }
@@ -476,7 +476,7 @@ export async function readJSONLFile(filePath, { logErrors = false } = {}) {
     }
     // Log other I/O errors if requested
     if (logErrors) {
-      console.warn(`Failed to read file ${filePath}: ${err.message}`);
+      console.warn(`⚠️ Failed to read file ${filePath}: ${err.message}`);
     }
     return [];
   }

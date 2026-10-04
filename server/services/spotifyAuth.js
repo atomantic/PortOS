@@ -26,6 +26,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
 import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
+import { PORTS } from '../lib/ports.js';
 
 // Cap on each token-endpoint round-trip so a hung accounts.spotify.com can't
 // stall an OAuth callback or a history-sync refresh indefinitely.
@@ -60,7 +61,7 @@ const ACCOUNTS_BASE = 'https://accounts.spotify.com';
  */
 export function getRedirectUri({ origin } = {}) {
   if (process.env.SPOTIFY_REDIRECT_URI) return process.env.SPOTIFY_REDIRECT_URI;
-  const port = process.env.PORT || 5555;
+  const port = process.env.PORT || PORTS.API;
   if (origin) return `${origin.replace(/\/$/, '')}/api/spotify/oauth/callback`;
   if (process.env.PUBLIC_HOST) {
     return `http://${process.env.PUBLIC_HOST}:${port}/api/spotify/oauth/callback`;
