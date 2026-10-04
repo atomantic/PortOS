@@ -61,9 +61,10 @@ Admission inventory (`withBackupAssetPublication`):
 | Attach hooks on `completed` via `mediaJobImageHook.js` (writers-room, catalog, music-video scene image/video/cast-sets, CD scene image/music bed, FableLoom scene image/video, sprite references, deck cards, music studio) | Covered |
 | Pipeline filename hooks (`filenameHookFactory.js` comic pages and storyboards, `seasonCoverFilenameHook.js`) | Covered |
 | Recovery commit of a completion whose terminal write failed (the next queue write acknowledges it outside any admission) | Outstanding |
-| Other `mediaJobEvents` `completed` subscribers that write rows (universe-builder collection hook, LoRA dataset, character sheet, sprite animation, Creative Director scene runner/plan advance/seed settle, music-video production) | Outstanding |
+| Other `mediaJobEvents` `completed` subscribers that write rows (universe-builder collection hook, character sheet, sprite animation, Creative Director scene runner/plan advance/seed settle, music-video production) | Outstanding |
 | Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
 | Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
+| LoRA dataset uploads, gallery imports, reference-sheet crops, generated completion/recovery copies, image/dataset deletion, and queued record edits (`loraDatasets.js`, `loraDatasetGenerate.js`) | Covered as complete file/record workflows (#9982 partial) |
 | Other durable replacement/deletion owners and final global readiness/invariant check | Outstanding (#9982) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
 
@@ -78,8 +79,19 @@ stale derived rows for reconciliation, and a delete can leave other records
 that referenced the asset. The admission timeout/failure path still refuses the
 snapshot and preserves older recovery points.
 
-The remaining inventory includes LoRA dataset image writes/removals
-(`loraDatasets.js`), voice-profile asset copies (`voice/studio.js`), development
+LoRA datasets keep their metadata beside their images rather than in PostgreSQL.
+Their admitted workflows prevent rsync from capturing a half-applied image/record
+mutation too: upload/import normalization, reference-sheet cropping, generated
+image copies and recovery replacements, and image/dataset removal each hold one
+lease through their final metadata or file operation. Record edits acquire
+admission before joining the dataset write queue. Completion listeners acquire
+their own lease synchronously during queue fan-out; rendering, queue waits,
+captioning, and the vision crop proposal stay outside admission. Local image
+normalization/cropping and copying are included in the lease. Pending `rendering`
+entries can still name files that do not exist yet, and admission does not repair
+pre-existing missing files or make failed writes transactional.
+
+The remaining inventory includes voice-profile asset copies (`voice/studio.js`), development
 artifact/vocal-stem import workflows (`musicVideo/devArtifactService.js`,
 `musicVideo/vocalStem.js`), direct render/index completion listeners, and the
 other completion paths above. Their persistence adapters and direct filesystem
