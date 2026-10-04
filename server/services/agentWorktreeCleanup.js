@@ -737,7 +737,7 @@ async function resolveClaimContinuationPatch({ task, agentId, agentMetadata }) {
   if (!agents) return null;
   const worktrees = await listWorktrees(source).catch(() => []);
   const pointer = claimContinuationPointer({
-    task, agentId, worktrees, agents, worktreesRoot: PATHS.worktrees,
+    task, agentId, worktrees, agents, worktreesRoot: PATHS.worktrees, sourceWorkspace: source,
   });
   if (!pointer) return null;
   emitLog('info', `🔁 Task ${task.id} will resume in the claim worktree ${pointer.resumeWorktreePath} (${pointer.existingBranch}) instead of starting clean`, {

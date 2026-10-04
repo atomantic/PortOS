@@ -99,3 +99,25 @@ it('preserves scheduled reconciliation identity through persistence and registra
   expect(record.taskAnalysisType).toBe('branch-reconcile');
   expect(record.isWorktree).toBe(false);
 });
+
+describe('buildAgentRegistration — claim ownership', () => {
+  // The claim tree is cut by the agent, so a relaunch can only see who holds it
+  // from the branch the run registered here.
+  it('registers the exact branch a pinned claim run owns', () => {
+    const record = buildAgentRegistration({ ...args({ claimFlow: true, claimTarget: '42' }), claimFlowTask: true });
+    expect(record.claimBranch).toBe('claim/issue-42');
+    expect(record.claimPicksOwnBranch).toBe(false);
+  });
+
+  it('registers an unpinned claim run (swarm orchestrator) as picking its own branch', () => {
+    const record = buildAgentRegistration({ ...args({ claimFlow: true, swarmCount: 3 }), claimFlowTask: true });
+    expect(record.claimBranch).toBeNull();
+    expect(record.claimPicksOwnBranch).toBe(true);
+  });
+
+  it('registers no claim ownership for an ordinary task', () => {
+    const record = buildAgentRegistration(args({}));
+    expect(record.claimBranch).toBeUndefined();
+    expect(record.claimPicksOwnBranch).toBeUndefined();
+  });
+});

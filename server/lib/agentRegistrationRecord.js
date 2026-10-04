@@ -24,6 +24,7 @@ import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.j
 // pure helper (server/AGENTS.md, "Import scoping").
 import { normalizeReviewers } from './reviewerConfig.js';
 import { quotaBurnAgentMetadata } from './quotaBurnOrigin.js';
+import { claimOwnershipBinding } from './claimContinuation.js';
 
 /**
  * How this run is dispatched, as one closed vocabulary rather than the nested
@@ -259,6 +260,11 @@ export function buildAgentRegistration({
     // the run record so completion diagnostics cannot mistake the claim path
     // for the generic commit-only handoff.
     configClaimFlow: claimFlowTask,
+    // The claim branch this run owns (or `claimPicksOwnBranch` when it picks one
+    // itself, as a swarm orchestrator does). The `claim-*` tree is cut by the
+    // agent, so `workspacePath` never names it; a later relaunch of that claim
+    // reads these at launch to see that a live owner holds the checkout.
+    ...claimOwnershipBinding(task),
     configSimplify: isTruthyMeta(task.metadata?.simplify),
     configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),
     configReviewers: normalizeReviewers(task.metadata),

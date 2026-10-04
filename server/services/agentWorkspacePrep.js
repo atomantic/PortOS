@@ -35,7 +35,7 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies, worktreeIdleMs } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -44,7 +44,7 @@ import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
 import { isNonCommittingCoordinatorTask, resolveTaskHookType } from './taskTypeHooks.js';
-import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
+import { claimContinuationAdmission, claimContinuationWorkspace } from '../lib/claimContinuation.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -283,6 +283,25 @@ async function prepareRequestedWorktree({
 }
 
 /**
+ * Re-check, at launch, that the claim worktree a cached continuation pointer names
+ * is still free to enter. The pointer was written when the previous run died;
+ * another owner may have taken the checkout since. Every read fails closed — an
+ * unreadable agent list or worktree list is "unknown", never "nobody is there".
+ * Read-only: nothing here rebases, commits, pushes, moves or removes.
+ */
+async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWorkspace }) {
+  const { getAgents } = await import('./cos.js');
+  const [agents, worktrees] = await Promise.all([
+    getAgents().catch(() => null),
+    listWorktrees(sourceWorkspace).catch(() => null),
+  ]);
+  const holderIdleMs = await worktreeIdleMs(claimWorkspace.workspacePath).catch(() => null);
+  return claimContinuationAdmission({
+    metadata: task.metadata, agentId, sourceWorkspace, worktrees, agents, holderIdleMs,
+  });
+}
+
+/**
  * Prepare the workspace (and any worktree/JIRA branch) for an agent task.
  *
  * @param {{ agentId: string, task: object }} params
@@ -403,6 +422,25 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     worktreesRoot: PATHS.worktrees,
   });
   if (claimWorkspace) {
+    // The pointer is a cached answer, not authority: confirm the holder, the
+    // branch and the absence of another live owner NOW, and wait (bounded) when
+    // that cannot be established rather than entering someone's checkout.
+    const admission = await admitClaimContinuation({ task, agentId, sourceWorkspace: workspacePath, claimWorkspace });
+    if (!admission.admit) {
+      const attempt = (Number(task.metadata?.worktreeBusyAttempts) || 0) + 1;
+      const detail = `The claim worktree for ${claimWorkspace.worktreeInfo.branchName} cannot be confirmed free (${admission.reason}); nothing in it was touched`;
+      if (attempt <= WORKTREE_BUSY_MAX_ATTEMPTS) {
+        emitLog('info', `🌳 ${detail}; retrying after a short cooldown (attempt ${attempt}/${WORKTREE_BUSY_MAX_ATTEMPTS})`, { taskId: task.id, branch: claimWorkspace.worktreeInfo.branchName, reason: admission.reason });
+        await blockTask(task, `${detail}; retrying after a short cooldown`, 'worktree-busy', {
+          cooldownUntil: new Date(Date.now() + WORKTREE_BUSY_COOLDOWN_MS).toISOString(),
+          worktreeBusyAttempts: attempt,
+        });
+        return { outcome: 'blocked', reason: detail };
+      }
+      emitLog('warn', `🌳 ${detail}; giving up after ${WORKTREE_BUSY_MAX_ATTEMPTS} attempts`, { taskId: task.id, branch: claimWorkspace.worktreeInfo.branchName, reason: admission.reason });
+      await blockTask(task, `${detail}. Resolve who owns the checkout, then re-run this task.`, 'worktree-failed');
+      return { outcome: 'blocked', reason: detail };
+    }
     workspacePath = claimWorkspace.workspacePath;
     worktreeInfo = claimWorkspace.worktreeInfo;
     emitLog('info', `🌳 Agent ${agentId} is continuing the claim worktree ${worktreeInfo.branchName}`, {

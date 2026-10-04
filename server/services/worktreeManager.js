@@ -792,6 +792,22 @@ export async function findAdoptableWorktreeForBranch(sourceWorkspace, branchName
   return { path: holder.path, agentId };
 }
 
+/**
+ * How long a worktree's git state has sat untouched, in ms — the newest mtime of
+ * its index, HEAD and HEAD reflog. A live session touches its index constantly;
+ * a finished one goes quiet. Null when nothing could be read (no git dir, or no
+ * file stat-able), which callers must treat as "unknown", never as "idle".
+ * Read-only: it only stats files, so reading never resets the clock.
+ */
+export async function worktreeIdleMs(worktreePath, nowMs = Date.now()) {
+  const gitDir = await execGit(['rev-parse', '--absolute-git-dir'], worktreePath).then(r => r.stdout.trim(), () => null);
+  if (!gitDir) return null;
+  const mtimes = await Promise.all(['index', 'HEAD', join('logs', 'HEAD')]
+    .map(f => stat(join(gitDir, f)).then(st => st.mtimeMs, () => 0)));
+  const newest = Math.max(...mtimes);
+  return newest > 0 ? nowMs - newest : null;
+}
+
 // How long a sibling `/do:next` tree must sit untouched before a follow-up may
 // release its branch. An agent that finished and kept its tree (waiting on CI,
 // say) goes quiet for far longer; a live session touches its index constantly.
@@ -837,13 +853,10 @@ export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, 
   if (activeWorkspacePaths.some(p => p && (pathsEqual(p, holder.path) || isPathInsideDir(holder.path, p)))) return null;
 
   const git = (args) => execGit(args, holder.path).then(r => r.stdout.trim());
-  // Idleness first; `--no-optional-locks` keeps `status` from refreshing the
-  // index and so resetting the very clock this reads on a refused attempt.
-  const gitDir = await git(['rev-parse', '--absolute-git-dir']).catch(() => null);
-  if (!gitDir) return null;
-  const mtimes = await Promise.all(['index', 'HEAD', join('logs', 'HEAD')]
-    .map(f => stat(join(gitDir, f)).then(s => s.mtimeMs, () => 0)));
-  if (nowMs - Math.max(...mtimes) < idleMs) return null;
+  // Idleness first; the `--no-optional-locks` status below keeps a refused attempt
+  // from refreshing the index and so resetting the very clock this reads.
+  const idle = await worktreeIdleMs(holder.path, nowMs);
+  if (idle === null || idle < idleMs) return null;
 
   // Stricter than `classifyWorktreeDirt` on purpose: this tree isn't PortOS's,
   // so no path counts as disposable scratch.
