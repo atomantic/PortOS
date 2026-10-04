@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
-import { accountTypeCanSend, sendViaForAccountType } from '../lib/messageTransport.js';
+import { accountTypeCanSend, accountTypeHasReadState, sendViaForAccountType, syncModesForAccountType } from '../lib/messageTransport.js';
 
 const ACCOUNTS_FILE = join(PATHS.messages, 'accounts.json');
 // All account IDs share this file, including sync metadata writes.
@@ -23,9 +23,15 @@ async function saveAccounts(accounts) {
   noteReadinessChanged();
 }
 
-// `canSend` is derived from the transport table, never stored: it flips with the
-// code that implements a provider's send, not with data an install carries.
-const withDerivedCapabilities = account => ({ ...account, canSend: accountTypeCanSend(account.type) });
+// `canSend`, `syncModes` and `hasReadState` are derived from the transport table, never
+// stored: they flip with the code that implements a provider, not with data an install
+// carries. `syncModes` tells the UI which sync actions to offer (#9968).
+const withDerivedCapabilities = account => ({
+  ...account,
+  canSend: accountTypeCanSend(account.type),
+  syncModes: [...syncModesForAccountType(account.type)],
+  hasReadState: accountTypeHasReadState(account.type)
+});
 
 export async function listAccounts() {
   const accounts = await loadAccounts();

@@ -185,6 +185,7 @@ export * from './estimationTolerance.js';
 export * from './lookaheadTransport.js';
 export * from './lossSparkline.js';
 export * from './managedAppSources.js';
+export * from './messageSyncModes.js';
 export * from './metronome.js';
 export * from './mindThinkingPresets.js';
 export * from './mindTurnProgress.js';

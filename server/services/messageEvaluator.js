@@ -23,7 +23,8 @@ const messageEvidence = (message) => ({
   from: message.from?.name || message.from?.email || 'Unknown',
   subject: message.subject || '',
   bodyText: message.bodyText || '',
-  isUnread: message.isUnread ?? !message.isRead,
+  // null = provider cannot measure read state; do not present that as unread.
+  isUnread: message.isUnread ?? (message.isRead === null ? null : !message.isRead),
   isFlagged: message.isFlagged ?? false,
   hasMeetingInvite: message.hasMeetingInvite ?? false,
 });

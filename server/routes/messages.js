@@ -138,7 +138,9 @@ router.post('/sync/:accountId', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.accountId)) {
     throw new ServerError('Invalid account ID format', { status: 400 });
   }
-  const mode = ['unread', 'full'].includes(req.body?.mode) ? req.body.mode : 'unread';
+  // An omitted/unrecognized mode stays undefined so syncAccount selects the account's
+  // supported default; an explicit one is validated against the account there.
+  const mode = ['unread', 'full'].includes(req.body?.mode) ? req.body.mode : undefined;
   const io = req.app.get('io');
   const result = await messageSync.syncAccount(req.params.accountId, io, { mode });
   if (result.error) throw new ServerError(result.error, { status: result.status || 404 });

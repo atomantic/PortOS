@@ -135,3 +135,30 @@ describe('Messages sync lifecycle', () => {
     expect(toast.error).toHaveBeenCalledExactlyOnceWith('Sync failed: Connection lost');
   });
 });
+
+describe('Messages sync actions by provider capability (#9968)', () => {
+  const gmail = { id: 'gmail-1', name: 'Gmail', enabled: true, provider: 'api', syncModes: ['unread', 'full'] };
+  const teams = { id: 'teams-1', name: 'Chat', enabled: true, provider: 'playwright', syncModes: ['full'] };
+  const legacy = { id: 'legacy-1', name: 'Legacy', enabled: true, provider: 'api' }; // older server: no syncModes
+
+  it('offers no unread-only sync for Teams but keeps Full Sync working', async () => {
+    api.syncMessageAccount.mockResolvedValue({ status: 'success', newMessages: 0 });
+    render(<SyncTab accounts={[teams]} onRefresh={vi.fn()} />);
+
+    expect(screen.queryByRole('button', { name: 'Sync Unread' })).toBeNull();
+    expect(screen.getByText(/unread-only sync isn.t available/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Full Sync' }));
+    expect(api.syncMessageAccount).toHaveBeenCalledWith(teams.id, 'full', { silent: true });
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+  });
+
+  it('keeps Sync Unread for accounts that support it, including payloads without syncModes', async () => {
+    render(<SyncTab accounts={[gmail, teams, legacy]} onRefresh={vi.fn()} />);
+    await waitFor(() => expect(api.getMessageSelectors).toHaveBeenCalled());
+    await act(async () => {});
+
+    expect(screen.getAllByRole('button', { name: 'Sync Unread' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Full Sync' })).toHaveLength(3);
+  });
+});
