@@ -21,11 +21,10 @@ import {
   getReverseOutlineStatus,
   pipelineReverseOutlineSseUrl,
 } from '../services/api';
-import { usePipelineProgress } from '../hooks/usePipelineProgress';
+import { useSeriesRunLifecycle } from '../hooks/useSeriesRunLifecycle';
+import RunRecoveryBanner from '../components/pipeline/RunRecoveryBanner';
 import useUrlParams from '../hooks/useUrlParams';
 import { buildPlotlineGrid, sceneComponentCount } from '../lib/reverseOutlineGrid.js';
-
-const RUN_ENDED = new Set(['complete', 'canceled', 'cancelled', 'error']);
 
 export default function PipelineReverseOutline() {
   const { seriesId } = useParams();
@@ -38,14 +37,47 @@ export default function PipelineReverseOutline() {
   const [series, setSeries] = useState(null);
   const [outline, setOutline] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [active, setActive] = useState(false);
   const [starting, setStarting] = useState(false);
   // Scene selection lives in the URL (`?scene=<sceneId>`) so the open detail
   // panel is shareable, bookmarkable, and survives a reload.
   const [searchParams, updateParams] = useUrlParams();
-  const activeRunIdRef = useRef(null);
   // Supersession token for the outline re-read below.
   const outlineRequestRef = useRef(0);
+
+  // Re-read the saved outline, dropping a response that a newer read or a
+  // series switch has superseded.
+  const reloadOutline = () => {
+    const req = ++outlineRequestRef.current;
+    const forSeries = seriesId;
+    getReverseOutline(seriesId)
+      .then((o) => { if (req === outlineRequestRef.current && seriesIdRef.current === forSeries) setOutline(o); })
+      .catch(() => {});
+  };
+
+  // The run's lifecycle — terminal frame, stream closed without one, cancel
+  // settlement — lives in the shared hook; this page owns the result + toasts.
+  const run = useSeriesRunLifecycle({
+    scopeId: seriesId,
+    urlBuilder: pipelineReverseOutlineSseUrl,
+    fetchStatus: getReverseOutlineStatus,
+    requestCancel: cancelReverseOutline,
+    onTerminal: (frame) => {
+      if (frame.type === 'complete') {
+        reloadOutline();
+        if (frame.status === 'no-content') toast.warning('Nothing drafted yet — write or import a manuscript first');
+        else toast.success(`Reverse outline ready — ${frame.sceneCount || 0} scenes`);
+      } else if (frame.type === 'canceled') {
+        toast.success('Reverse outline canceled');
+      } else {
+        toast.error(frame.error || 'Reverse outline failed');
+      }
+    },
+    onReconciled: ({ canceled }) => {
+      reloadOutline();
+      toast.success(canceled ? 'Reverse outline canceled' : 'Reverse outline run finished — showing the saved outline');
+    },
+  });
+  const { active, adopt: adoptRun } = run;
 
   // Load series + outline, and re-attach to an in-flight run on (re)mount.
   useEffect(() => {
@@ -60,7 +92,7 @@ export default function PipelineReverseOutline() {
         if (canceled) return;
         setSeries(s);
         setOutline(o);
-        if (status?.active) setActive(true);
+        if (status?.active) adoptRun();
       })
       .catch((err) => {
         if (canceled) return;
@@ -69,38 +101,10 @@ export default function PipelineReverseOutline() {
       })
       .finally(() => { if (!canceled) setLoading(false); });
     return () => { canceled = true; };
-  }, [seriesId, navigate]);
-
-  const { latest } = usePipelineProgress(pipelineReverseOutlineSseUrl, [seriesId], { enabled: active });
-
-  // React to the terminal frame: refetch the outline, drop the busy state.
-  useEffect(() => {
-    if (!active || !latest || !RUN_ENDED.has(latest.type)) return;
-    if (activeRunIdRef.current && latest.runId && latest.runId !== activeRunIdRef.current) return;
-    // A request-generation ref, not a `let active` flag: `active` is in this
-    // effect's own dependency array, so the write below re-runs the effect
-    // immediately and a lifetime-scoped flag would be flipped by its own
-    // cleanup before the response landed. The re-run early-returns without
-    // bumping, so the in-flight request stays current and only a genuinely
-    // newer one supersedes it.
-    setActive(false);
-    activeRunIdRef.current = null;
-    if (latest.type === 'complete') {
-      const req = ++outlineRequestRef.current;
-      const forSeries = seriesId;
-      getReverseOutline(seriesId)
-        .then((o) => { if (req === outlineRequestRef.current && seriesIdRef.current === forSeries) setOutline(o); })
-        .catch(() => {});
-      if (latest.status === 'no-content') toast.warning('Nothing drafted yet — write or import a manuscript first');
-      else toast.success(`Reverse outline ready — ${latest.sceneCount || 0} scenes`);
-    } else if (latest.type === 'canceled') {
-      toast.success('Reverse outline canceled');
-    } else {
-      toast.error(latest.error || 'Reverse outline failed');
-    }
-  }, [active, latest, seriesId]);
+  }, [seriesId, navigate, adoptRun]);
 
   const handleGenerate = async (force) => {
+    const forSeries = seriesId;
     setStarting(true);
     // The regenerated outline mints new scene ids — drop the stale selection.
     updateParams({ scene: null }, { replace: true });
@@ -111,13 +115,9 @@ export default function PipelineReverseOutline() {
       return null;
     });
     setStarting(false);
-    if (!res?.runId) return;
-    activeRunIdRef.current = res.runId;
-    setActive(true);
-  };
-
-  const handleCancel = () => {
-    cancelReverseOutline(seriesId).catch(() => {});
+    // A kickoff acknowledged after the user switched series belongs to the old one.
+    if (!res?.runId || seriesIdRef.current !== forSeries) return;
+    adoptRun(res.runId);
   };
 
   if (loading) {
@@ -163,10 +163,11 @@ export default function PipelineReverseOutline() {
           {active ? (
             <button
               type="button"
-              onClick={handleCancel}
-              className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-port-border bg-port-card text-sm text-gray-300 hover:text-white"
+              onClick={run.cancel}
+              disabled={Boolean(run.cancelState)}
+              className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-port-border bg-port-card text-sm text-gray-300 hover:text-white disabled:opacity-50"
             >
-              <X size={14} /> Cancel
+              <X size={14} /> {run.cancelState ? 'Canceling…' : 'Cancel'}
             </button>
           ) : null}
           <button
@@ -181,6 +182,14 @@ export default function PipelineReverseOutline() {
           </button>
         </div>
       </header>
+
+      <RunRecoveryBanner
+        recovery={run.recovery}
+        cancelPending={run.cancelState === 'pending'}
+        noun="reverse outline"
+        onReattach={run.reattach}
+        onRetryStatus={run.retryStatus}
+      />
 
       {outline?.stale && hasOutline ? (
         <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-lg border border-port-warning/40 bg-port-warning/10 text-port-warning text-sm">
