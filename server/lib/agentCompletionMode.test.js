@@ -83,6 +83,7 @@ describe('resolveCompletionMode', () => {
       resolveCompletionMode({ slashdoCommand: 'release' }),
       resolveCompletionMode({ slashdoCommand: 'better' }),
       resolveCompletionMode({ taskHookType: 'branch-reconcile' }),
+      resolveCompletionMode({ taskHookType: 'app-checkout-recovery' }),
       resolveCompletionMode({ isTui: true, canRunSlashCommands: false }),
       resolveCompletionMode({ isTui: true }),
       resolveCompletionMode({ worktreeInfo: wt, willOpenPR: false }),

@@ -242,6 +242,8 @@ export const createCosTaskSchema = z.object({
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
   ),
+  // A self-managed recovery of the configured checkout, rather than CoS delivery.
+  workflow: z.enum(['app-checkout-recovery']).optional(),
   whenDone: z.enum(['commit-push', 'leave-uncommitted']).optional(),
   // Read-only planning mode: investigate the codebase and file the issue, but
   // do not start implementation delivery. The task store expands this into
