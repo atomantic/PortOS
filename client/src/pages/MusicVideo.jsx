@@ -369,7 +369,13 @@ export default function MusicVideo() {
   const contactSheetOpen = searchParams.get('sheet') === 'contact';
   const setContactSheetOpen = (open) => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
-    if (open) next.set('sheet', 'contact'); else next.delete('sheet');
+    if (open) next.set('sheet', 'contact'); else { next.delete('sheet'); next.delete('pending'); }
+    return next;
+  });
+  const contactSheetPendingOnly = searchParams.get('pending') === '1';
+  const setContactSheetPendingOnly = (on) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (on) next.set('pending', '1'); else next.delete('pending');
     return next;
   });
 
@@ -1127,6 +1133,10 @@ export default function MusicVideo() {
           onSelectTake={takes.selectTake}
           onReviewTake={takes.reviewTake}
           onOpenPreview={openPreview}
+          pendingOnly={contactSheetPendingOnly}
+          onPendingOnlyChange={setContactSheetPendingOnly}
+          onRegenerateFrame={sceneMedia.generateFrame}
+          generatingScenes={sceneMedia.genScenes}
         />
       )}
       <PageHeader

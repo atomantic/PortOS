@@ -203,7 +203,7 @@ export default function SceneCard({
           </div>
         )}
         <ShotActionInspector contract={scene.direction?.actionContract} scene={scene} />
-        <PlateComparison scene={scene} />
+        <PlateComparison scene={scene} frames={false} />
         <div className="flex flex-wrap gap-2 items-center text-xs">
           {SCENE_TIME_FIELDS.map(([labelText, key]) => {
             const toValue = (v) => (v === '' ? null : Number(v));

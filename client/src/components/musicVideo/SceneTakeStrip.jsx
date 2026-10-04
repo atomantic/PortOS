@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Check, RotateCcw, X, MessageSquare } from 'lucide-react';
-import { sceneTakeList, takePreviewKey, takeThumbUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
+import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
+import { plateVerdict } from './PlateComparison.jsx';
 
+const VERDICT_TONE = { pass: 'bg-port-success/20 text-port-success', fail: 'bg-port-error/20 text-port-error', unverified: 'bg-port-warning/20 text-port-warning' };
 const KIND_LABEL = { image: 'Frame takes', video: 'Clip takes' };
 
 /**
@@ -19,6 +21,7 @@ export default function SceneTakeStrip({
 }) {
   const [noteFor, setNoteFor] = useState(null);
   const [noteDraft, setNoteDraft] = useState('');
+  const [playingId, setPlayingId] = useState(null);
   const takes = sceneTakeList(scene, kind);
   const selected = scene[TAKE_SLOT[kind]] || null;
   if (takes.length === 0) return null;
@@ -40,17 +43,27 @@ export default function SceneTakeStrip({
         {takes.map((take) => {
           const isSelected = take.assetId === selected;
           const rejected = take.status === 'rejected';
+          const verdict = kind === 'image' ? plateVerdict(scene, take) : null;
+          const playKey = take.takeId || take.assetId;
+          const playing = kind === 'video' && playingId === playKey;
           return (
             <li key={take.takeId || `legacy-${take.assetId}`} className={`${thumbClass} shrink-0 space-y-1`}>
               <button
                 type="button"
+                data-take-focus=""
                 onClick={() => onOpenPreview?.(takePreviewKey(take))}
+                onMouseEnter={() => setPlayingId(playKey)}
+                onMouseLeave={() => setPlayingId(null)}
+                onFocus={() => setPlayingId(playKey)}
+                onBlur={() => setPlayingId(null)}
                 aria-label={`View ${kind === 'image' ? 'frame' : 'clip'} take full size`}
-                className={`block w-full rounded overflow-hidden border focus:outline-none focus:ring-2 focus:ring-port-accent ${isSelected ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'} ${rejected ? 'opacity-40' : ''}`}
+                className={`relative block w-full rounded overflow-hidden border focus:outline-none focus:ring-2 focus:ring-port-accent ${isSelected ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'} ${rejected ? 'opacity-40' : ''}`}
               >
                 <img src={takeThumbUrl(take)} alt="" loading="lazy" className="w-full aspect-video object-cover block bg-black" />
+                {playing && <video src={takeClipUrl(take)} autoPlay muted loop playsInline aria-hidden="true" className="absolute inset-0 w-full h-full object-cover bg-black" />}
               </button>
               <div className="text-[10px] text-port-text-muted truncate" title={take.originalName || take.prompt || takeProvenance(take)}>
+                {verdict && <span className={`mr-1 rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="Plate preflight verdict">{verdict.label}</span>}
                 {isSelected ? <span className="text-port-accent">Selected · </span> : null}
                 {rejected ? 'rejected · ' : ''}{takeProvenance(take)}
               </div>
