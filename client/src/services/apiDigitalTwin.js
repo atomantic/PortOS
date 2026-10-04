@@ -24,9 +24,9 @@ const runDigitalTwinTests = (providerId, model, testIds = null, personaId = null
   method: 'POST',
   body: JSON.stringify({ providerId, model, testIds, personaId })
 });
-const runDigitalTwinMultiTests = (providers, testIds = null, personaId = null) => request('/digital-twin/tests/run-multi', {
+const runDigitalTwinMultiTests = (providers, testIds = null, personaId = null, requestId = undefined) => request('/digital-twin/tests/run-multi', {
   method: 'POST',
-  body: JSON.stringify({ providers, testIds, personaId })
+  body: JSON.stringify({ providers, testIds, personaId, requestId })
 });
 export const getDigitalTwinTestHistory = (limit = 10) => request(`/digital-twin/tests/history?limit=${limit}`);
 
