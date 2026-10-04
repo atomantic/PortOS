@@ -174,10 +174,32 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
   const showApprovals = progress.current !== 'setup' || (project.scenes || []).length > 0;
   if (approvals && showApprovals) facts.push({ id: 'approvals', label: `Approvals: ${approvals}`, tone: readiness.readyForProduction ? 'ok' : 'warn' });
   const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
-  if (project.renderHistoryId) facts.push({ id: 'render', label: 'Final render ready', tone: 'ok' });
+  if (isFinalRenderStale(project)) facts.push({ id: 'render', label: STALE_RENDER_MESSAGE, tone: 'warn' });
+  else if (project.renderHistoryId) facts.push({ id: 'render', label: 'Final render ready', tone: 'ok' });
   else if (drafts) facts.push({ id: 'render', label: `${drafts} draft ${drafts === 1 ? 'excerpt' : 'excerpts'}, no final render`, tone: 'muted' });
   else facts.push({ id: 'render', label: 'Nothing rendered yet', tone: 'muted' });
   return { headline, tone: activeEvidence ? 'muted' : allDone ? 'ok' : needsYou ? 'warn' : 'muted', facts };
+}
+
+export const STALE_RENDER_MESSAGE = 'Final render is out of date — re-render';
+
+/** The server's dependency projection says scenes changed after the final render was made. */
+export const isFinalRenderStale = (project) => !!project?.renderHistoryId && project.renderDependencyState?.status === 'stale';
+
+/**
+ * Publish progress per enabled platform. `publish.targets` is the director's
+ * enabled `[{ target, label }]` list (machine-level settings, so the caller
+ * supplies it) and `publish.drafts` the drafts filled this session. With no
+ * platform enabled there is nothing to count per platform, so any one recorded
+ * post still counts as published.
+ */
+export function publishPlatformProgress(project, publish = {}) {
+  const posts = project?.publishKit?.posts || {};
+  const rows = (publish.targets || []).map(({ target, label }) => ({
+    target, label, state: posts[target] ? 'posted' : publish.drafts?.[target] ? 'draft' : 'none',
+  }));
+  const posted = rows.length ? rows.filter((row) => row.state === 'posted').length : Object.keys(posts).length;
+  return { rows, posted, total: rows.length, done: rows.length ? posted === rows.length : posted > 0 };
 }
 
 /** Resolve the `:stage` route param; an unknown or missing value is null. */
@@ -207,7 +229,7 @@ const composeDone = (project, mode) => {
  * `todo` — plus `current`, the first stage that is not done. A live production
  * run owns the project, so it pins `current` to Produce.
  */
-export function deriveStages(project, readiness = project?.productionReadiness) {
+export function deriveStages(project, readiness = project?.productionReadiness, publish = {}) {
   const scenes = project?.scenes || [];
   const mode = project?.composition?.mode || 'concat';
   const cast = project?.castAndSets || null;
@@ -227,9 +249,10 @@ export function deriveStages(project, readiness = project?.productionReadiness) 
     board: planned,
     produce: produceDone && !!readiness?.proof.approved,
     compose: !!readiness?.proof.approved && composeDone(project || {}, mode),
-    review: !!project?.renderHistoryId,
-    // #9281/#9282: a release is published once any platform post is recorded.
-    publish: Object.keys(project?.publishKit?.posts || {}).length > 0,
+    // A render made before later scene edits no longer counts as the final video.
+    review: !!project?.renderHistoryId && !isFinalRenderStale(project),
+    // #9281/#9282: published once every enabled platform has a recorded post.
+    publish: publishPlatformProgress(project, publish).done,
   };
   const blocked = {
     'cast-sets': castStopped,
@@ -258,10 +281,10 @@ export function deriveStages(project, readiness = project?.productionReadiness) 
 export function deriveNextAction(project, {
   draftActive = false, proofActive = false, renderActive = false, renderProgress = 0, renderPending = false, renderBlockedByOther = false,
   kickoffRunning = false, kickoffStep = '', kickoffBlockedReason = null,
-  planning = false, analyzing = false, readiness = project?.productionReadiness,
+  planning = false, analyzing = false, readiness = project?.productionReadiness, publish = {},
 } = {}) {
   if (!project) return null;
-  const { current } = deriveStages(project, readiness);
+  const { current } = deriveStages(project, readiness, publish);
   const run = currentProductionRun(project);
   const cast = project.castAndSets || null;
   const scenes = project.scenes || [];
@@ -342,6 +365,12 @@ export function deriveNextAction(project, {
         ? { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Publish the release', shortLabel: 'Publish' }
         : { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit', shortLabel: 'Kit' };
     default:
+      if (isFinalRenderStale(project)) {
+        return {
+          id: 'render-final', kind: 'run', label: 'Re-render final video', shortLabel: 'Re-render',
+          disabled: renderBlockedByOther, reason: renderBlockedByOther ? 'Wait for the other project render to finish' : undefined,
+        };
+      }
       if (project.renderHistoryId) return { id: 'goto-final', kind: 'goto', stage: 'review', anchor: 'mv-final-video', label: 'Watch final video', shortLabel: 'Watch' };
       return {
         id: 'render-final', kind: 'run', label: 'Render final video', shortLabel: 'Render',
@@ -365,7 +394,7 @@ const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboa
  * Cast & Sets sheet file does not approve the art direction, so the art item
  * says so while it is open.
  */
-export function stageChecklist(stageId, project, readiness = project?.productionReadiness) {
+export function stageChecklist(stageId, project, readiness = project?.productionReadiness, publish = {}) {
   if (!project) return [];
   const draft = project.productionReview?.draft || {};
   const scenes = project.scenes || [];
@@ -433,12 +462,26 @@ export function stageChecklist(stageId, project, readiness = project?.production
       return [proof, { id: 'composition', label: 'Nothing to compose for this render style', done: true }];
     }
     case 'review':
-      return [{ id: 'final', label: 'Final video rendered', done: !!project.renderHistoryId }];
-    case 'publish':
-      return [
-        { id: 'kit', label: 'Publishing kit built', done: !!project.publishKit?.builtAt },
-        { id: 'posted', label: 'Posted to a platform', done: Object.keys(project.publishKit?.posts || {}).length > 0 },
+      return [{
+        id: 'final', label: 'Final video rendered', done: !!project.renderHistoryId && !isFinalRenderStale(project),
+        detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.` : null,
+        action: isFinalRenderStale(project) ? { label: 'Re-render', anchor: 'mv-final-video' } : null,
+      }];
+    case 'publish': {
+      const kit = project.publishKit || {};
+      const kitCurrent = !!kit.builtAt && (!kit.master?.renderHistoryId || kit.master.renderHistoryId === project.renderHistoryId);
+      const progress = publishPlatformProgress(project, publish);
+      const items = [
+        { id: 'kit', label: 'Kit built from the current render', done: kitCurrent,
+          detail: kit.builtAt && !kitCurrent ? 'The final render changed since the kit was built; rebuild it.' : null },
+        { id: 'copy', label: 'Copy drafted', done: !!(kit.copyDraftedAt || kit.copy) },
       ];
+      if (!progress.rows.length) return [...items, { id: 'posted', label: 'Posted to a platform', done: progress.done }];
+      items.push({ id: 'posted', label: `Posted to every enabled platform (${formatCount(progress.posted)} of ${formatCount(progress.total)})`, done: progress.done });
+      const STATE_LABELS = { posted: 'posted', draft: 'draft filled', none: 'not started' };
+      for (const row of progress.rows) items.push({ id: `post-${row.target}`, label: `${row.label}: ${STATE_LABELS[row.state]}`, done: row.state === 'posted' });
+      return items;
+    }
     default:
       return [];
   }

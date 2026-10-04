@@ -4,6 +4,7 @@ import ExcerptPanel from '../ExcerptPanel.jsx';
 import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
 import HandoffControls from '../HandoffControls.jsx';
 import StageSection from '../StageSection.jsx';
+import { isFinalRenderStale } from '../../../lib/musicVideoStages.js';
 import { RenderFinalButton } from '../ProjectActionGroups.jsx';
 
 /**
@@ -28,6 +29,7 @@ export default function ReviewStage({ board }) {
           rendering={renderBound}
           progress={renderJob.progress}
           renderHistoryId={project.renderHistoryId}
+          stale={isFinalRenderStale(project)}
           finalVideo={finalVideo}
           onOpenPreview={board.openPreview}
         />

@@ -1,6 +1,7 @@
 import Banner from '../ui/Banner.jsx';
 import { useRef } from 'react';
-import { Film, Download, Maximize2 } from 'lucide-react';
+import { Film, Download, Maximize2, AlertTriangle } from 'lucide-react';
+import { STALE_RENDER_MESSAGE } from '../../lib/musicVideoStages.js';
 
 // The final-render surface: a progress bar while the assemble job runs, and the
 // finished MP4 (inline player + download + Media History deep link) once the
@@ -16,7 +17,7 @@ import { Film, Download, Maximize2 } from 'lucide-react';
 // Media History →" stays — it goes to the full history grid, not the same-page
 // lightbox.
 export default function RenderStatusPanel({
-  rendering, progress, renderHistoryId, finalVideo, onOpenPreview,
+  rendering, progress, renderHistoryId, finalVideo, onOpenPreview, stale = false,
 }) {
   const playerRef = useRef(null);
   if (rendering) {
@@ -31,10 +32,10 @@ export default function RenderStatusPanel({
   }
   if (!renderHistoryId) return null;
   return (
-    <div className="mt-3 border border-port-success/40 bg-port-success/5 rounded-lg p-3 space-y-2">
+    <div className={`mt-3 border rounded-lg p-3 space-y-2 ${stale ? 'border-port-warning/40 bg-port-warning/5' : 'border-port-success/40 bg-port-success/5'}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-sm font-medium flex items-center gap-1.5">
-          <Film size={15} className="text-port-success" /> Final music video
+          <Film size={15} className={stale ? 'text-port-warning' : 'text-port-success'} /> Final music video
         </span>
         <div className="flex items-center gap-2 text-xs">
           {finalVideo?.src && (
@@ -50,6 +51,11 @@ export default function RenderStatusPanel({
             className="text-port-accent">Open in Media History →</a>
         </div>
       </div>
+      {stale && (
+        <p role="status" className="text-xs text-port-warning flex items-center gap-1.5">
+          <AlertTriangle size={13} /> {STALE_RENDER_MESSAGE}
+        </p>
+      )}
       {finalVideo?.resolving && <p className="text-xs text-port-text-muted">Loading final video…</p>}
       {finalVideo?.src && (
         // aspect-video reserves the box before the video's intrinsic dimensions

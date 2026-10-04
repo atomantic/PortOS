@@ -72,6 +72,7 @@ import BoardStage from '../components/musicVideo/stages/BoardStage.jsx';
 import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
 import ComposeStage from '../components/musicVideo/stages/ComposeStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
+import { PUBLISH_TARGETS } from '../components/musicVideo/PublishPostingPanel.jsx';
 import PublishStage from '../components/musicVideo/stages/PublishStage.jsx';
 import { compositionDraft } from '../components/musicVideo/compositionDraft.js';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
@@ -190,7 +191,14 @@ export default function MusicVideo() {
     [projects],
   );
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
-  const progress = useMemo(() => deriveStages(selected, productionReview.readiness), [selected, productionReview.readiness]);
+  // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.
+  const publishing = useMusicVideoPublishing({ project: selected, replaceProject });
+  // Publish counts every platform the director turned on (#9287), not just any one post.
+  const publish = {
+    targets: PUBLISH_TARGETS.filter((entry) => publishing.enabledTargets?.includes(entry.target)),
+    drafts: publishing.drafts,
+  };
+  const progress = deriveStages(selected, productionReview.readiness, publish);
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
   if (selected && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
   const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
@@ -259,8 +267,6 @@ export default function MusicVideo() {
   const excerpts = useMusicVideoExcerpts({ project: selected, replaceProject });
   // Publishing kit (#9281): release encodes, thumbnails, captions, chapters and copy.
   const publishKit = useMusicVideoPublishKit({ project: selected, replaceProject });
-  // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.
-  const publishing = useMusicVideoPublishing({ project: selected, replaceProject });
   const videoSettings = useMusicVideoModelSettings({ project: selected, onProjectPatch: patchProject });
   const tempo = useMusicVideoManualTempo({ project: selected, onUpdated: replaceProject });
   const sceneMedia = useMusicVideoSceneMedia({
@@ -886,6 +892,7 @@ export default function MusicVideo() {
   const autopilotRun = selected?.autonomousRun || null;
   const nextAction = selected ? deriveNextAction(selected, {
     readiness: productionReview.readiness,
+    publish,
     renderActive: renderTargetsSelected,
     draftActive: excerpts.rendering,
     proofActive: productionReview.proof.active,
@@ -1357,7 +1364,7 @@ export default function MusicVideo() {
             </div>}
           >
             <StageChecklist
-              items={stageChecklist(activeStage, selected, productionReview.readiness)}
+              items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
               onAction={(action) => goToStage(activeStage, action.anchor)}
               headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
             />

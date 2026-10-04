@@ -114,6 +114,15 @@ describe('public dependency save / repair / review workflow', () => {
     expect(changed.scenes.map((scene) => scene.videoHistoryId)).toEqual(['clip-a', 'clip-b']);
   });
 
+  it('marks the final render stale once a scene changes after it was rendered', async () => {
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, renderHistoryId: 'final-render', renderDependencies: captureMusicVideoEvidence(current) } }));
+    expect((await fresh()).renderDependencyState.status).toBe('current');
+    await request(app).patch(`${base()}/scenes/a`).send({ shotMode: 'performance', performanceSpeaker: 'Example Singer' });
+    const changed = await fresh();
+    expect(changed.renderDependencyState.status).toBe('stale');
+    expect(changed.renderDependencyState.reasons.length).toBeGreaterThan(0);
+  });
+
   it('keeps reused take provenance current when cloning a project', async () => {
     const clone = await projects.cloneProject(project.id);
     expect(clone.scenes[0].sceneId).not.toBe('a');

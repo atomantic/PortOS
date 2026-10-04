@@ -92,6 +92,35 @@ describe('deriveStages / deriveNextAction', () => {
     expect(stateOf({ ...finished, publishKit: { posts: { youtube: { url: 'https://example.com/v' } } } }).publish).toBe('done');
   });
 
+  it('sends a stale final render back to Review with a re-render prompt (#10143)', () => {
+    const ready = { audioAnalysis: ANALYSIS, uploadedAudioFilename: 'a.mp3', scenes: [scene()], productionReadiness: APPROVED, renderHistoryId: 'rh-1' };
+    const stale = { ...ready, renderDependencyState: { status: 'stale', reasons: ['Selected clip changed'] } };
+    expect(deriveStages({ ...ready, renderDependencyState: { status: 'current', reasons: [] } }).current).toBe('publish');
+    expect(deriveStages(stale)).toMatchObject({ current: 'review' });
+    expect(stateOf(stale).review).toBe('active');
+    expect(deriveNextAction(stale)).toMatchObject({ id: 'render-final', label: 'Re-render final video' });
+    expect(stageChecklist('review', stale)[0]).toMatchObject({ done: false, detail: 'Final render is out of date — re-render.' });
+    expect(describeProjectStatus(stale, { progress: deriveStages(stale) }).facts.find((f) => f.id === 'render'))
+      .toMatchObject({ label: 'Final render is out of date — re-render', tone: 'warn' });
+  });
+
+  it('counts Publish per enabled platform, done only when each has a post (#10143)', () => {
+    const ready = { audioAnalysis: ANALYSIS, uploadedAudioFilename: 'a.mp3', scenes: [scene()], productionReadiness: APPROVED, renderHistoryId: 'rh-1',
+      publishKit: { builtAt: '2026-01-01T00:00:00.000Z', master: { renderHistoryId: 'rh-1' }, copyDraftedAt: '2026-01-02T00:00:00.000Z', posts: { youtube: { url: 'https://example.com/v' } } } };
+    const targets = [{ target: 'youtube', label: 'YouTube' }, { target: 'x', label: 'X thread' }, { target: 'reddit', label: 'Reddit' }];
+    const publish = { targets, drafts: { x: { summary: {} } } };
+    expect(deriveStages(ready, undefined, publish).current).toBe('publish');
+    expect(stageChecklist('publish', ready, undefined, publish).map((i) => [i.label, i.done])).toEqual([
+      ['Kit built from the current render', true], ['Copy drafted', true],
+      ['Posted to every enabled platform (1 of 3)', false],
+      ['YouTube: posted', true], ['X thread: draft filled', false], ['Reddit: not started', false],
+    ]);
+    const all = { ...ready, publishKit: { ...ready.publishKit, posts: { youtube: {}, x: {}, reddit: {} } } };
+    expect(deriveStages(all, undefined, publish).stages.find((s) => s.id === 'publish').state).toBe('done');
+    // A kit built from an older render is not "from the current render".
+    expect(stageChecklist('publish', { ...ready, renderHistoryId: 'rh-2' }, undefined, publish)[0].done).toBe(false);
+  });
+
   it('derives Produce and Compose for all five render styles (#10139)', () => {
     const bare = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
     const withMode = (composition) => ({ ...bare, composition });
