@@ -36,10 +36,14 @@ export const projectPublishKit = (project) => (project?.publishKit && typeof pro
 
 const kitError = (status, code, message, context) => new ServerError(message, { status, code, ...(context ? { context } : {}) });
 
-/** The build currently running for a project (`{ jobId, status }`), so a reloaded page can reattach. */
+/**
+ * The build running for a project (`{ jobId, status }`), so a reloaded page can
+ * reattach. Only once its SSE job exists: during the prerequisite lookup the
+ * reservation holds the slot but there is nothing to attach to yet.
+ */
 export const getActivePublishKitBuild = (projectId) => {
   const jobId = projectBuilds.get(projectId);
-  return jobId ? { jobId, status: 'running' } : null;
+  return jobId && jobs.get(jobId)?.status === 'running' ? { jobId, status: 'running' } : null;
 };
 
 async function requireProject(projectId) {
@@ -91,8 +95,7 @@ async function releaseKitFiles(filenames, keep) {
  * record carries the result.
  */
 export async function startPublishKitBuild(projectId) {
-  const running = getActivePublishKitBuild(projectId);
-  if (running) throw kitError(409, 'PUBLISH_KIT_BUILD_IN_PROGRESS', 'A publishing kit build is already running for this project', running);
+  if (projectBuilds.has(projectId)) throw kitError(409, 'PUBLISH_KIT_BUILD_IN_PROGRESS', 'A publishing kit build is already running for this project', getActivePublishKitBuild(projectId) || undefined);
   const jobId = `mvpk-${randomUUID()}`;
   // Reserve synchronously: final-render lookup and ffmpeg probing can overlap
   // another request before there is a background job to put in the registry.

@@ -36,7 +36,9 @@ describe('publishing kit build reattach (#9942)', () => {
     await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, renderHistoryId: 'reattach-render' } }));
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
-    const probe = vi.spyOn(ffmpegLib, 'findFfmpeg').mockReturnValue(gate);
+    vi.spyOn(ffmpegLib, 'findFfmpeg').mockResolvedValue('ffmpeg');
+    // The job exists (and is attachable) once the first encode is in flight.
+    const probe = vi.spyOn(ffmpegLib, 'runFfmpegProcess').mockReturnValue(gate.then(() => ({ ok: false, reason: 'test stop' })));
     try {
       const first = request(app).post(`/api/music-video/${id}/publish-kit/build`).then((r) => r);
       await vi.waitFor(() => expect(probe).toHaveBeenCalled());
@@ -48,11 +50,12 @@ describe('publishing kit build reattach (#9942)', () => {
       expect(read.body.activePublishKitBuild).toEqual(second.body.context);
       release(null);
       await first;
+      await vi.waitFor(async () => expect((await request(app).get(`/api/music-video/${id}`)).body.activePublishKitBuild).toBeUndefined());
       const after = await request(app).get(`/api/music-video/${id}`);
       expect(after.body.activePublishKitBuild).toBeUndefined();
     } finally {
       release(null);
-      probe.mockRestore();
+      vi.restoreAllMocks();
     }
   });
 });
