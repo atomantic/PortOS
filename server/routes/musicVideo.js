@@ -132,7 +132,7 @@ import {
   startProduction, resumeProduction, stopProduction, cancelProduction, getProduction,
 } from '../services/musicVideo/productionService.js';
 import {
-  startAutonomousVideo, getAutonomousRun, resumeAutonomousVideo, stopAutonomousVideo, cancelAutonomousVideo,
+  startAutonomousVideo, getAutonomousRun, presentProjectAutonomousRun, resumeAutonomousVideo, stopAutonomousVideo, cancelAutonomousVideo,
 } from '../services/musicVideo/autonomousService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import {
@@ -200,8 +200,11 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // Backward-compatible by default: returns the full projects array. When a client
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+// Both pins are process-local, so only the server can say which stages a restart orphaned.
+const presentProjectForRead = (project) => presentProjectAutonomousRun(presentProjectCastAndSets(project));
+
 router.get('/', asyncHandler(async (req, res) => {
-  const projects = (await listProjects()).map(presentProjectCastAndSets);
+  const projects = (await listProjects()).map(presentProjectForRead);
   if (!isPaginationRequested(req.query)) {
     return res.json(projects);
   }
@@ -213,7 +216,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   if (!p) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
-  const presented = presentProjectCastAndSets(p);
+  const presented = presentProjectForRead(p);
   res.json(activePublishKitBuild ? { ...presented, activePublishKitBuild } : presented);
 }));
 
