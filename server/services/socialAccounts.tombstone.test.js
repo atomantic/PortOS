@@ -24,7 +24,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: tempRoot });
 });
 
-const { createAccount, updateAccount, deleteAccount, getAllAccounts, loadAccounts, invalidateCache } =
+const { createAccount, updateAccount, deleteAccount, getAllAccounts, loadAccounts, invalidateCache, getAccountById } =
   await import('./socialAccounts.js');
 const { applyDigitalTwinRemote, getDigitalTwinSnapshot, mergeSocialAccounts } = await import('./digital-twin-sync.js');
 
@@ -129,6 +129,22 @@ describe('social account tombstones (#3532)', () => {
       },
     });
     expect(await accountIds()).toContain('peer-1');
+  });
+
+  it('preserves existing legacy ingestionEnabled flag when updates omit it (#10061)', async () => {
+    const created = await createAccount({
+      platform: 'github',
+      username: 'legacy-user',
+      ingestionEnabled: true
+    });
+    expect(created.ingestionEnabled).toBe(true);
+
+    const edited = await updateAccount(created.id, { displayName: 'Updated Name', notes: 'Updated notes' });
+    expect(edited.displayName).toBe('Updated Name');
+    expect(edited.ingestionEnabled).toBe(true);
+
+    const fetched = await getAccountById(created.id);
+    expect(fetched.ingestionEnabled).toBe(true);
   });
 });
 
