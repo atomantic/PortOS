@@ -68,7 +68,8 @@ describe('publishing kit build (#9281)', () => {
       await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
       const overlap = kit.startPublishKitBuild(id);
       releasePrerequisite(null);
-      await expect(overlap).rejects.toMatchObject({ status: 409, code: 'PUBLISH_KIT_BUILD_IN_PROGRESS' });
+      expect(kit.getActivePublishKitBuild(id)).toMatchObject({ status: 'running', jobId: expect.stringMatching(/^mvpk-/) });
+      await expect(overlap).rejects.toMatchObject({ status: 409, code: 'PUBLISH_KIT_BUILD_IN_PROGRESS', context: { jobId: kit.getActivePublishKitBuild(id).jobId, status: 'running' } });
       expect(await firstFailure).toMatchObject({ code: 'FFMPEG_MISSING' });
       expect(probe).toHaveBeenCalledTimes(1);
       // A failed setup must leave the project available for the next attempt.

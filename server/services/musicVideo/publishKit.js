@@ -34,7 +34,13 @@ const AUDIO_ARGS = ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart'];
 export const attachPublishKitSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 export const projectPublishKit = (project) => (project?.publishKit && typeof project.publishKit === 'object' ? project.publishKit : {});
 
-const kitError = (status, code, message) => new ServerError(message, { status, code });
+const kitError = (status, code, message, context) => new ServerError(message, { status, code, ...(context ? { context } : {}) });
+
+/** The build currently running for a project (`{ jobId, status }`), so a reloaded page can reattach. */
+export const getActivePublishKitBuild = (projectId) => {
+  const jobId = projectBuilds.get(projectId);
+  return jobId ? { jobId, status: 'running' } : null;
+};
 
 async function requireProject(projectId) {
   const project = await getProject(projectId);
@@ -85,7 +91,8 @@ async function releaseKitFiles(filenames, keep) {
  * record carries the result.
  */
 export async function startPublishKitBuild(projectId) {
-  if (projectBuilds.has(projectId)) throw kitError(409, 'PUBLISH_KIT_BUILD_IN_PROGRESS', 'A publishing kit build is already running for this project');
+  const running = getActivePublishKitBuild(projectId);
+  if (running) throw kitError(409, 'PUBLISH_KIT_BUILD_IN_PROGRESS', 'A publishing kit build is already running for this project', running);
   const jobId = `mvpk-${randomUUID()}`;
   // Reserve synchronously: final-render lookup and ffmpeg probing can overlap
   // another request before there is a background job to put in the registry.
