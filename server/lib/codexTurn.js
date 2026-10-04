@@ -323,6 +323,9 @@ export const classifyCodexTransportError = (err) => {
   }
 };
 
+// `MessagePhase` in the app-server protocol: interim narration vs the answer.
+const CODEX_COMMENTARY_PHASE = 'commentary';
+
 /** A fresh accumulator for one turn. */
 export const createTurnAccumulator = ({ threadId = null, turnId = null } = {}) => ({
   threadId,
@@ -380,8 +383,17 @@ export const applyCodexTurnEvent = (acc, method, params) => {
       // that previewed it are dropped — appending both would double the prose —
       // while deltas that arrive AFTER it belong to the next message and are
       // still carried by `finalizeCodexTurn`.
+      //
+      // Newer models narrate before answering: an interim `commentary` message
+      // ("I'll review the diff…") precedes the `final_answer` one. Folding that
+      // narration into the answer turns a JSON envelope into prose-then-JSON
+      // that no parser accepts (#9969), so a commentary item is dropped along
+      // with the deltas that previewed it. `phase: null` is "unknown" — legacy
+      // models never set it — and keeps the concatenating behavior.
       if (params.item?.type === 'agentMessage' && typeof params.item.text === 'string') {
-        acc.finalText = acc.finalText === null ? params.item.text : `${acc.finalText}${params.item.text}`;
+        if (params.item.phase !== CODEX_COMMENTARY_PHASE) {
+          acc.finalText = acc.finalText === null ? params.item.text : `${acc.finalText}${params.item.text}`;
+        }
         acc.deltas.length = 0;
       }
       return false;

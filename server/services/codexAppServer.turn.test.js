@@ -69,13 +69,13 @@ const awaitRequest = async (child, method, answer) => {
 };
 
 /** Drive a text turn to a `turn/completed` with `status`, streaming `deltas`. */
-const driveTurn = async (child, { deltas = [], status = 'completed', item = null, error = null, usage = null } = {}) => {
+const driveTurn = async (child, { deltas = [], status = 'completed', item = null, items = [], error = null, usage = null } = {}) => {
   await awaitRequest(child, 'thread/start', { thread: { id: 'thread-1' }, model: 'model-alpha' });
   await awaitRequest(child, 'turn/start', { turn: { id: 'turn-1', items: [], status: 'inProgress' } });
   for (const delta of deltas) {
     child.notify('item/agentMessage/delta', { threadId: 'thread-1', turnId: 'turn-1', itemId: 'i1', delta });
   }
-  if (item) child.notify('item/completed', { threadId: 'thread-1', turnId: 'turn-1', completedAtMs: 1, item });
+  for (const done of item ? [item] : items) child.notify('item/completed', { threadId: 'thread-1', turnId: 'turn-1', completedAtMs: 1, item: done });
   if (usage) child.notify('thread/tokenUsage/updated', { threadId: 'thread-1', turnId: 'turn-1', tokenUsage: usage });
   child.notify('turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1', items: [], status, error } });
 };
@@ -146,6 +146,24 @@ describe('running a text turn', () => {
 
     await expect(promise).resolves.toMatchObject({ text: '{"verdict":"ok"}' });
     expect(child.lastRequest('turn/start').params.outputSchema).toEqual(schema);
+  });
+
+  it('returns only the final answer when the model narrates first (#9969)', async () => {
+    // gpt-6-class models emit an interim `commentary` message before the
+    // `final_answer`. Concatenating both made the code-review envelope
+    // prose-then-JSON, which normalizeCodeReviewVerdict rejects as invalid_json.
+    const promise = runCodexTextTurn({ prompt: 'review' });
+    await handshake();
+    await driveTurn(child, {
+      deltas: ["I'll check the diff first."],
+      items: [
+        { type: 'agentMessage', id: 'i1', phase: 'commentary', text: "I'll check the diff first." },
+        { type: 'agentMessage', id: 'i2', phase: 'final_answer', text: '{"verdict":"clean","findings":[]}' },
+      ],
+    });
+
+    const { text } = await promise;
+    expect(JSON.parse(text)).toEqual({ verdict: 'clean', findings: [] });
   });
 
   it('rejects rather than returning the partial text of an interrupted turn', async () => {

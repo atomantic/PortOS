@@ -279,6 +279,32 @@ describe('turn projection', () => {
     expect(finalizeCodexTurn(acc).text).toBe('message one. message two.');
   });
 
+  it('drops commentary messages and keeps final answers and phase-less messages (#9969)', () => {
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
+    const message = (text, phase) => applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.itemCompleted, {
+      threadId: 't', turnId: 'turn-1', item: { type: 'agentMessage', text, ...(phase === undefined ? {} : { phase }) },
+    });
+    delta(acc, 'narration preview');
+    message('narration. ', 'commentary');
+    message('legacy one. ', null);
+    message('legacy two. ');
+    message('answer.', 'final_answer');
+    complete(acc, { id: 'turn-1', status: 'completed' });
+
+    expect(finalizeCodexTurn(acc).text).toBe('legacy one. legacy two. answer.');
+  });
+
+  it('reports an empty completion when a turn emitted only commentary', () => {
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
+    delta(acc, 'thinking out loud');
+    applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.itemCompleted, {
+      threadId: 't', turnId: 'turn-1', item: { type: 'agentMessage', text: 'thinking out loud', phase: 'commentary' },
+    });
+    complete(acc, { id: 'turn-1', status: 'completed' });
+
+    expect(finalizeCodexTurn(acc)).toMatchObject({ error: 'Codex returned an empty completion' });
+  });
+
   it('accepts an anonymous completion on its own thread', () => {
     // The frame already reached this accumulator BY THREAD, and PortOS's threads
     // are ephemeral with exactly one turn — so rejecting it over an id the
