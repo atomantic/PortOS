@@ -1149,7 +1149,7 @@ export function isToolFreeOneShotProvider(provider) {
  * Whether a headless CLI one-shot is held to an OS read-only sandbox (codex)
  * though it cannot disable its tools. Weaker than tool-free: read tools remain.
  */
-export function isReadOnlySandboxOneShotProvider(provider) {
+function isReadOnlySandboxOneShotProvider(provider) {
   return provider?.type === PROVIDER_TYPES.CLI && toolFreeOneShotArgs(provider).readOnlySandbox === true;
 }
 
