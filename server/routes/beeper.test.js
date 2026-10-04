@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
+vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(), updateSettingsWith: vi.fn() }));
+import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { beeperSocketEvents } from '../services/beeperSocketEvents.js';
+
 vi.mock('../services/beeperStatus.js', () => ({
   getBeeperStatus: vi.fn(),
   checkBeeperConnection: vi.fn(),
@@ -908,5 +912,43 @@ describe('POST /api/beeper/outbox/:id/reconcile', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ id: ENTRY_ID, state: 'sent' });
     expect(sendOutboxEntry).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('saved Beeper scopes routes', () => {
+  let settings;
+  const input = { name: 'Example unread scope', filters: { network: 'signal', unreadOnly: true, archived: false } };
+  beforeEach(() => {
+    settings = { beeper: { enabled: true, sendReadReceipts: false }, unrelated: 'preserved' };
+    vi.mocked(getSettings).mockImplementation(async () => settings);
+    vi.mocked(updateSettingsWith).mockImplementation(async (mutate) => { settings = await mutate(settings); return settings; });
+  });
+
+  it('creates, lists, renames and deletes a scope while preserving connection preferences', async () => {
+    const event = vi.fn();
+    beeperSocketEvents.on('invalidate', event);
+    try {
+      const app = buildApp();
+      expect((await request(app).get('/api/beeper/scopes')).body).toEqual({ scopes: [] });
+      const created = await request(app).post('/api/beeper/scopes').send(input);
+      expect(created.status).toBe(201);
+      const id = created.body.id;
+      expect((await request(app).get('/api/beeper/scopes')).body.scopes).toEqual([{ id, ...input }]);
+      const renamed = await request(app).patch(`/api/beeper/scopes/${id}`).send({ ...input, name: 'Renamed example' });
+      expect(renamed.body.name).toBe('Renamed example');
+      expect((await request(app).delete(`/api/beeper/scopes/${id}`)).status).toBe(200);
+      expect(settings).toEqual({ beeper: { enabled: true, sendReadReceipts: false }, unrelated: 'preserved', beeperSavedScopes: [] });
+      expect(event).toHaveBeenCalledTimes(3);
+      expect(event).toHaveBeenLastCalledWith({ kind: 'scopes' });
+    } finally { beeperSocketEvents.off('invalidate', event); }
+  });
+
+  it('rejects unbounded/foreign filters and missing rename targets before persisting', async () => {
+    const app = buildApp();
+    expect((await request(app).post('/api/beeper/scopes').send({ ...input, filters: { token: 'example' } })).status).toBe(400);
+    expect((await request(app).post('/api/beeper/scopes').send({ ...input, name: 'x'.repeat(61) })).status).toBe(400);
+    expect((await request(app).patch('/api/beeper/scopes/11111111-1111-4111-8111-111111111111').send(input)).status).toBe(404);
+    expect(settings.beeperSavedScopes).toBeUndefined();
   });
 });
