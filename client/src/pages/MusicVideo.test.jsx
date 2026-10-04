@@ -1334,7 +1334,7 @@ describe('MusicVideo autonomous mode setup experience', () => {
     expect(screen.getByRole('button', { name: 'Writing the lyric draft…' })).toBeDisabled();
 
     expect(screen.queryByText(/Approvals: 0 of 3 approved/)).toBeNull();
-    expect(screen.getByText(/Autopilot: writing the lyric draft/i)).toBeInTheDocument();
+    expect(screen.getByText(/Autonomous run: writing the lyric draft/i)).toBeInTheDocument();
   });
 });
 
@@ -2338,7 +2338,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
     renderAt('/music-video/mv-1/produce');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     expect(selectedTab()).toHaveTextContent(/^Produce/);
-    expect(screen.getByRole('button', { name: 'Set up autopilot' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Set up automation brief' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: STAGE_TABS.board }));
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/music-video/mv-1/board'));
@@ -2379,7 +2379,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       },
       'cast-sets': { 'Cast & Sets check-in': () => screen.queryByLabelText('Cast & Sets check-in') },
       board: { 'AI Plan': () => screen.queryByRole('button', { name: /AI Plan/ }), 'Add scene': () => screen.queryByRole('button', { name: /Add scene/ }), 'Shot prompt': () => screen.queryByLabelText('Shot prompt') },
-      produce: { 'Autopilot': () => screen.queryByLabelText('Autopilot'), 'Start production': () => screen.queryByRole('button', { name: /Start production/ }) },
+      produce: { 'Automation brief': () => screen.queryByLabelText('Automation brief'), 'Start production': () => screen.queryByRole('button', { name: /Start production/ }) },
       compose: { Typography: () => screen.queryByText(/^Typography —/) },
       review: { 'Render final': () => screen.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': () => screen.queryByRole('button', { name: /Render excerpt/ }), 'Import development file': () => screen.queryByLabelText('Import development file') },
     };
@@ -2726,7 +2726,7 @@ describe('Autopilot collapsed review summary', () => {
     listMusicVideoProjects.mockResolvedValue([project]);
     render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}>{MV_ROUTES}</MemoryRouter>);
     await screen.findByText(`Historical stop reason: ${error}`);
-    const summary = screen.getByText('Autopilot run').closest('summary');
+    const summary = screen.getByText('Autonomous run').closest('summary');
     fireEvent.click(summary);
     expect(summary).toHaveTextContent('Render and watch a current animated chorus proof');
     expect(summary.textContent).not.toContain(error);

@@ -33,10 +33,10 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction(autoAwaiting)).toMatchObject({ id: 'review-autonomous', kind: 'goto', stage: 'setup', anchor: 'mv-auto-edit', label: 'Review Lyrics' });
 
     const autoStopped = { id: 'p', autonomousRun: { status: 'stopped' } };
-    expect(deriveNextAction(autoStopped)).toMatchObject({ id: 'resume-autonomous', kind: 'run', label: 'Resume autopilot' });
+    expect(deriveNextAction(autoStopped)).toMatchObject({ id: 'resume-autonomous', kind: 'run', label: 'Resume autonomous run' });
 
     const autoFailed = { id: 'p', autonomousRun: { status: 'failed' } };
-    expect(deriveNextAction(autoFailed)).toMatchObject({ id: 'retry-autonomous', kind: 'run', label: 'Retry autopilot' });
+    expect(deriveNextAction(autoFailed)).toMatchObject({ id: 'retry-autonomous', kind: 'run', label: 'Retry autonomous run' });
   });
 
   it('a project waiting on Cast & Sets approval offers the approval, and a stopped check-in offers to resume', () => {
@@ -228,7 +228,7 @@ describe('describeProjectStatus', () => {
     );
     expect(status.headline).toBe('Stage 1 of 7: Setup');
     expect(status.facts.map((fact) => fact.label)).toEqual([
-      'Autopilot: writing the lyric draft', 'Nothing rendered yet',
+      'Autonomous run: writing the lyric draft', 'Nothing rendered yet',
     ]);
   });
 });
@@ -279,7 +279,7 @@ describe('stageChecklist', () => {
     expect(stageChecklist('setup', { id: 'p' }).map((i) => i.done)).toEqual([false, false]);
     expect(stageChecklist('setup', { id: 'p' })[0].action).toEqual({ label: 'Attach a track', anchor: 'mv-track' });
     // A running autonomous run writes the song itself, so there is nothing to attach.
-    expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'running' } })[0]).toMatchObject({ action: null, detail: 'The autopilot run is making the song.' });
+    expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'running' } })[0]).toMatchObject({ action: null, detail: 'The autonomous run is making the song.' });
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), NOT_APPROVED).map((i) => [i.id, i.done]))
       .toEqual([['shots', true], ['approve-storyboard', false]]);
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])

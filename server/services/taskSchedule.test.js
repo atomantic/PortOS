@@ -2423,6 +2423,7 @@ describe('taskSchedule', () => {
       expect(status.tasks['better-complexity'].suggestedAfter).toEqual(['module-hygiene'])
       expect(status.tasks['module-hygiene'].runGuidance).toContain('module boundaries')
       expect(status.tasks['claim-issue']).toMatchObject({ displayName: 'claim-issue', defaultLabels: [] })
+      expect(status.tasks['music-video-autopilot']).toMatchObject({ displayName: 'Autonomous run' })
     })
 
     it('projects task summaries and explains hook-owned prompts', async () => {

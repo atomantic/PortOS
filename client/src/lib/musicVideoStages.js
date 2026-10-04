@@ -154,10 +154,10 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
       const stepDetail = (auto.stage === 'lyrics' && AUTONOMOUS_LYRICS_STEP_LABELS[step])
         || (auto.stage === 'song' && AUTONOMOUS_SONG_STEP_LABELS[step])
         || (AUTONOMOUS_CHECKPOINT_LABELS[auto.stage] ? AUTONOMOUS_CHECKPOINT_LABELS[auto.stage].toLowerCase() : null);
-      label = stepDetail ? `Autopilot: ${stepDetail.toLowerCase()}` : 'Autopilot running';
+      label = stepDetail ? `Autonomous run: ${stepDetail.toLowerCase()}` : 'Autonomous run running';
     } else {
       const statusLabel = auto.interrupted ? 'interrupted' : (AUTONOMOUS_STATUS_LABELS[auto.status] || auto.status).toLowerCase();
-      label = `Autopilot ${statusLabel}`;
+      label = `Autonomous run ${statusLabel}`;
     }
     const tone = auto.status === 'completed' ? 'ok' : auto.status === 'running' && !auto.interrupted ? 'muted' : 'warn';
     facts.push({ id: 'autopilot', label, tone });
@@ -290,7 +290,7 @@ export function deriveNextAction(project, {
       const step = auto.stages?.[auto.stage]?.step;
       const stepText = (auto.stage === 'lyrics' && AUTONOMOUS_LYRICS_STEP_LABELS[step])
         || (auto.stage === 'song' && AUTONOMOUS_SONG_STEP_LABELS[step])
-        || (AUTONOMOUS_CHECKPOINT_LABELS[auto.stage] ? `${AUTONOMOUS_CHECKPOINT_LABELS[auto.stage]}…` : 'Autopilot running…');
+        || (AUTONOMOUS_CHECKPOINT_LABELS[auto.stage] ? `${AUTONOMOUS_CHECKPOINT_LABELS[auto.stage]}…` : 'Autonomous run running…');
       return { id: 'busy', kind: 'run', label: stepText.endsWith('…') ? stepText : `${stepText}…`, disabled: true };
     }
     if (auto.status === 'awaiting-approval') {
@@ -298,10 +298,10 @@ export function deriveNextAction(project, {
       return { id: 'review-autonomous', kind: 'goto', stage: 'setup', anchor: 'mv-auto-edit', label: `Review ${target}` };
     }
     if (auto.interrupted || auto.status === 'stopped' || auto.status === 'needs-human') {
-      return { id: 'resume-autonomous', kind: 'run', label: 'Resume autopilot' };
+      return { id: 'resume-autonomous', kind: 'run', label: 'Resume autonomous run' };
     }
     if (auto.status === 'failed') {
-      return { id: 'retry-autonomous', kind: 'run', label: 'Retry autopilot' };
+      return { id: 'retry-autonomous', kind: 'run', label: 'Retry autonomous run' };
     }
   }
 
@@ -374,7 +374,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
       const autoSong = !!project.autonomousRun && !['completed', 'canceled', 'failed'].includes(project.autonomousRun.status);
       const hasAudio = projectHasAudio(project);
       return [
-        { id: 'track', label: 'Track attached', done: hasAudio, detail: !hasAudio && autoSong ? 'The autopilot run is making the song.' : null,
+        { id: 'track', label: 'Track attached', done: hasAudio, detail: !hasAudio && autoSong ? 'The autonomous run is making the song.' : null,
           action: hasAudio || autoSong ? null : { label: 'Attach a track', anchor: 'mv-track' } },
         { id: 'analysis', label: 'Song analyzed', done: !!project.audioAnalysis, detail: project.audioAnalysis ? null : 'Analyze the song from the header or Song & lyrics.' },
       ];
