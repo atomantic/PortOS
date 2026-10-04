@@ -47,11 +47,11 @@ vi.mock('../../services/api', () => ({
   TRACK_LYRICS_MAX: 10000,
   TRACK_PROMPT_MAX: 2000,
 }));
-vi.mock('../../services/apiMusicVideo.js', () => ({ listMusicVideoProjects: vi.fn() }));
+vi.mock('../../services/apiMusicVideo.js', () => ({ listMusicVideoMidiSources: vi.fn() }));
 
 import TracksManager from './TracksManager.jsx';
 import { listTracks, listAlbums, createTrack, deleteTrack, updateTrack, uploadTrackAudio } from '../../services/api';
-import { listMusicVideoProjects } from '../../services/apiMusicVideo.js';
+import { listMusicVideoMidiSources } from '../../services/apiMusicVideo.js';
 
 const TRACK = { id: 'track-1', title: 'Example Song', audioFilename: 'example.mp3', renders: [] };
 
@@ -80,25 +80,22 @@ describe('<TracksManager> MIDI transcription read-through', () => {
     vi.clearAllMocks();
   });
 
-  it('shows the newest linked Music Video transcription with a source link', async () => {
-    listMusicVideoProjects.mockResolvedValue([
-      { id: 'mv-old', name: 'Old Cut', trackId: 'track-1', midiTranscription: { filename: 'old.mid', model: 'small', createdAt: '2026-01-01T00:00:00Z' } },
+  it('shows the linked Music Video transcription with a source link', async () => {
+    listMusicVideoMidiSources.mockResolvedValue([
       { id: 'mv-new', name: 'New Cut', trackId: 'track-1', midiTranscription: { filename: 'new.mid', model: 'medium', createdAt: '2026-06-01T00:00:00Z' } },
       { id: 'mv-other', name: 'Other', trackId: 'track-2', midiTranscription: { filename: 'other.mid', createdAt: '2026-07-01T00:00:00Z' } },
     ]);
     renderAt('track-1');
     const viz = await screen.findByTestId('midi-viz');
-    // Newest transcription wins; other tracks' projects are ignored.
+    // Other tracks' sources are ignored (the server already picks the newest per track).
     expect(viz.getAttribute('data-url')).toBe('/data/music/new.mid');
     expect(viz.getAttribute('data-model')).toBe('medium');
     const link = screen.getByRole('link', { name: /from Music Video/ });
     expect(link.getAttribute('href')).toBe('/music-video/mv-new');
   });
 
-  it('renders no MIDI section when no linked project has a transcription', async () => {
-    listMusicVideoProjects.mockResolvedValue([
-      { id: 'mv-1', name: 'No MIDI', trackId: 'track-1' },
-    ]);
+  it('renders no MIDI section when the track has no MIDI source', async () => {
+    listMusicVideoMidiSources.mockResolvedValue([]);
     renderAt('track-1');
     await screen.findByDisplayValue('Example Song');
     expect(screen.queryByTestId('midi-viz')).toBeNull();
@@ -113,7 +110,7 @@ describe('<TracksManager> generator mode toggle', () => {
   beforeEach(() => {
     listTracks.mockResolvedValue([TRACK]);
     listAlbums.mockResolvedValue([]);
-    listMusicVideoProjects.mockResolvedValue([]);
+    listMusicVideoMidiSources.mockResolvedValue([]);
   });
   afterEach(() => {
     cleanup();
@@ -201,7 +198,7 @@ describe('<TracksManager> generative workflow hand-off', () => {
   beforeEach(() => {
     listTracks.mockResolvedValue([TRACK]);
     listAlbums.mockResolvedValue([]);
-    listMusicVideoProjects.mockResolvedValue([]);
+    listMusicVideoMidiSources.mockResolvedValue([]);
   });
   afterEach(() => {
     cleanup();
@@ -308,7 +305,7 @@ describe('<TracksManager> Audio-to-Video hand-off', () => {
   beforeEach(() => {
     listTracks.mockResolvedValue([{ ...TRACK, renders: [{ id: 'render-1', audioFilename: 'example take.mp3' }] }]);
     listAlbums.mockResolvedValue([]);
-    listMusicVideoProjects.mockResolvedValue([]);
+    listMusicVideoMidiSources.mockResolvedValue([]);
   });
   afterEach(() => {
     cleanup();
@@ -332,7 +329,7 @@ describe('<TracksManager> delete confirm + save wiring', () => {
   beforeEach(() => {
     listTracks.mockResolvedValue([TRACK]);
     listAlbums.mockResolvedValue([]);
-    listMusicVideoProjects.mockResolvedValue([]);
+    listMusicVideoMidiSources.mockResolvedValue([]);
   });
   afterEach(() => {
     cleanup();
@@ -401,7 +398,7 @@ describe('<TracksManager> delete confirm + save wiring', () => {
 describe('<TracksManager> album picker', () => {
   beforeEach(() => {
     listAlbums.mockResolvedValue([{ id: 'album-1', title: 'Debut LP' }]);
-    listMusicVideoProjects.mockResolvedValue([]);
+    listMusicVideoMidiSources.mockResolvedValue([]);
   });
   afterEach(() => {
     cleanup();
@@ -434,7 +431,7 @@ describe('<TracksManager> Suno export import', () => {
   beforeEach(() => {
     listTracks.mockResolvedValue([TRACK]);
     listAlbums.mockResolvedValue([]);
-    listMusicVideoProjects.mockResolvedValue([]);
+    listMusicVideoMidiSources.mockResolvedValue([]);
   });
   afterEach(() => {
     cleanup();

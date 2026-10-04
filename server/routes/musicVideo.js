@@ -230,6 +230,26 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json(paginateArray(projects, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
+// Bounded projection for the Tracks page MIDI read-through (#10203): the newest
+// MIDI transcription per linked track, without shipping every full project record.
+router.get('/midi-sources', asyncHandler(async (req, res) => {
+  const newest = new Map();
+  for (const p of await listProjects()) {
+    const midi = p.midiTranscription;
+    if (!p.trackId || !midi?.filename) continue;
+    const prev = newest.get(p.trackId);
+    if (!prev || (midi.createdAt || '') > (prev.midiTranscription.createdAt || '')) {
+      newest.set(p.trackId, {
+        trackId: p.trackId,
+        id: p.id,
+        name: p.name,
+        midiTranscription: { filename: midi.filename, model: midi.model, createdAt: midi.createdAt },
+      });
+    }
+  }
+  res.json([...newest.values()]);
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const p = await getProject(req.params.id);
   if (!p) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });

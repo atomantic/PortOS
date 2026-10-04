@@ -4,7 +4,6 @@ import { request } from './apiCore.js';
 // offline beat/tempo/section analysis. `options` lets a caller suppress
 // request()'s auto-toast with `{ silent: true }` when it owns its own error UI.
 
-export const listMusicVideoProjects = (options = {}) => request('/music-video', options);
 // Bounded, newest-first summary page (#10169) — `{ items, total, nextCursor }`
 // for the index and header picker, never the full project records.
 export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options = {}) => {
@@ -13,6 +12,8 @@ export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options =
   if (cursor != null) query.set('cursor', String(cursor));
   return request(`/music-video?${query}`, options);
 };
+// Newest MIDI transcription per track — bounded projection for the Tracks page (#10203).
+export const listMusicVideoMidiSources = (options = {}) => request('/music-video/midi-sources', options);
 export const createMusicVideoProject = (data, options = {}) => request('/music-video', {
   method: 'POST', body: JSON.stringify(data), ...options,
 });

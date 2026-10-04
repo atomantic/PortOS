@@ -31,7 +31,7 @@ import TrackWaveformHost from './TrackWaveformHost';
 import TrackRenderCard from './TrackRenderCard';
 import TrackRenderModal from './TrackRenderModal';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
-import { listMusicVideoProjects } from '../../services/apiMusicVideo.js';
+import { listMusicVideoMidiSources } from '../../services/apiMusicVideo.js';
 import { trackAudioUrl } from '../../services/apiTracks.js';
 import {
   listTracks, createTrack, updateTrack, deleteTrack,
@@ -105,7 +105,7 @@ export default function TracksManager() {
     Promise.all([
       listTracks({ silent: true }).catch((err) => { toast.error(err.message || 'Failed to load tracks'); return []; }),
       listAlbums({ silent: true }).catch(() => []),
-      listMusicVideoProjects({ silent: true }).catch(() => []),
+      listMusicVideoMidiSources({ silent: true }).catch(() => []),
     ])
       .then(([trackList, albumList, mvList]) => {
         setTracks(Array.isArray(trackList) ? trackList : []);
@@ -333,9 +333,7 @@ export default function TracksManager() {
   // project, but the piano-roll is just as useful when inspecting the track.
   const midiSource = useMemo(() => {
     if (!persisted?.id) return null;
-    const linked = mvProjects.filter((p) => p.trackId === persisted.id && p.midiTranscription?.filename);
-    if (!linked.length) return null;
-    return linked.sort((a, b) => (b.midiTranscription.createdAt || '').localeCompare(a.midiTranscription.createdAt || ''))[0];
+    return mvProjects.find((p) => p.trackId === persisted.id) || null;
   }, [mvProjects, persisted]);
 
   // Render history — newest first. The active take (the top-level audioFilename
