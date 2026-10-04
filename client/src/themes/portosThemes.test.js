@@ -382,4 +382,27 @@ describe('DEFAULT_AVATAR_COLOR', () => {
     expect(DEFAULT_AVATAR_COLOR).toBe(`#${hex}`);
   });
 });
+
+describe('button compositor layer isolation and animation stabilization', () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'), 'utf8');
+
+  it('isolates buttons to their own GPU compositing layer to prevent WebKit backing-sharing ghosting', () => {
+    expect(css).toMatch(/:where\(button,\s*\[role="button"\]\)\s*\{[^}]*isolation:\s*isolate/);
+    expect(css).toMatch(/:where\(button,\s*\[role="button"\]\)\s*\{[^}]*backface-visibility:\s*hidden/);
+    expect(css).toMatch(/:where\(button,\s*\[role="button"\]\)\s*\{[^}]*transform:\s*translateZ\(0\)/);
+  });
+
+  it('stabilizes .animate-spin on its own compositor layer with will-change and backface-visibility', () => {
+    expect(css).toMatch(/\.animate-spin\s*\{[^}]*backface-visibility:\s*hidden/);
+    expect(css).toMatch(/\.animate-spin\s*\{[^}]*transform:\s*translateZ\(0\)/);
+    expect(css).toMatch(/\.animate-spin\s*\{[^}]*will-change:\s*transform/);
+  });
+
+  it('does not transition opacity on themed buttons to avoid intermediate compositor fading artifacts', () => {
+    // html[data-port-theme] button transition must not include opacity
+    const match = css.match(/html\[data-port-theme\]\s+button,[^{]*\{[^}]*transition:[^;]+;/);
+    expect(match).toBeTruthy();
+    expect(match[0]).not.toContain('opacity');
+  });
+});
 // @vitest-environment node

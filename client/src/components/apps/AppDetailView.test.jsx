@@ -17,6 +17,10 @@ vi.mock('../../services/api', () => ({
   getApp: vi.fn(),
   getProcessesList: vi.fn(),
   launchNativeApp: vi.fn(),
+  buildApp: vi.fn(),
+  stopApp: vi.fn(),
+  restartApp: vi.fn(),
+  startApp: vi.fn(),
 }));
 
 vi.mock('../../services/socket', () => ({
@@ -346,3 +350,29 @@ describe('native launch realtime status', () => {
     expect(socketHandlers.has('connect')).toBe(false);
   });
 });
+
+describe('action button active states and aria-busy', () => {
+  it('sets aria-busy and shows spinning state during build', async () => {
+    let resolveBuild;
+    const buildPromise = new Promise((resolve) => { resolveBuild = resolve; });
+    api.buildApp.mockReturnValue(buildPromise);
+    api.getApp.mockResolvedValue({ ...APP, buildCommand: 'npm run build' });
+
+    renderDetail();
+    const buildBtn = await screen.findByRole('button', { name: /Build production UI/ });
+    expect(buildBtn).toHaveAttribute('aria-busy', 'false');
+    expect(buildBtn).not.toBeDisabled();
+
+    fireEvent.click(buildBtn);
+    expect(buildBtn).toHaveAttribute('aria-busy', 'true');
+    expect(buildBtn).toBeDisabled();
+    expect(buildBtn.querySelector('.animate-spin')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveBuild({ success: true });
+    });
+    expect(buildBtn).toHaveAttribute('aria-busy', 'false');
+    expect(buildBtn).not.toBeDisabled();
+  });
+});
+
