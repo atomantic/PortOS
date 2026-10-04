@@ -12,7 +12,6 @@ vi.mock('../services/jira.js', () => ({
   updateTicket: vi.fn(),
   addComment: vi.fn(),
   getTransitions: vi.fn(),
-  deleteTicket: vi.fn(),
   transitionTicket: vi.fn(),
   getMyCurrentSprintTickets: vi.fn(),
   fetchMyCurrentSprintTickets: vi.fn(),
@@ -257,24 +256,22 @@ describe('ticket id path-traversal guard', () => {
 
   beforeEach(() => vi.clearAllMocks());
 
-  it.each(bad)('rejects %s on delete, comment and transition with no upstream call', async (id) => {
+  it.each(bad)('rejects %s on comment, transition and update with no upstream call', async (id) => {
     const app = makeApp();
     const responses = [
-      await request(app).delete(`${base}/${id}`),
       await request(app).post(`${base}/${id}/comments`).send({ comment: 'hi' }),
       await request(app).post(`${base}/${id}/transition`).send({ transitionId: '1' }),
       await request(app).put(`${base}/${id}`).send({ summary: 'x' })
     ];
     responses.forEach((r) => expect(r.status).toBe(400));
-    expect(jiraService.deleteTicket).not.toHaveBeenCalled();
     expect(jiraService.addComment).not.toHaveBeenCalled();
     expect(jiraService.transitionTicket).not.toHaveBeenCalled();
     expect(jiraService.updateTicket).not.toHaveBeenCalled();
   });
 
   it('still accepts issue keys and numeric ids', async () => {
-    jiraService.deleteTicket.mockResolvedValue({ success: true });
-    expect((await request(makeApp()).delete(`${base}/ABC-123`)).status).toBe(200);
-    expect((await request(makeApp()).delete(`${base}/10001`)).status).toBe(200);
+    jiraService.getIssue.mockResolvedValue({ key: 'ABC-123' });
+    expect((await request(makeApp()).get(`${base}/ABC-123`)).status).toBe(200);
+    expect((await request(makeApp()).get(`${base}/10001`)).status).toBe(200);
   });
 });

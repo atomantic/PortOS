@@ -168,12 +168,6 @@ router.get('/learning/recommendations/:taskType', asyncHandler(async (req, res) 
   res.json(recommendations);
 }));
 
-// POST /api/cos/learning/recalculate-model-tiers - Rebuild byModelTier from routingAccuracy
-router.post('/learning/recalculate-model-tiers', asyncHandler(async (req, res) => {
-  const result = await taskLearning.recalculateModelTierMetrics();
-  res.json({ success: true, ...result });
-}));
-
 // POST /api/cos/learning/recalculate-durations - Rebuild success-only duration stats from agent archive
 router.post('/learning/recalculate-durations', asyncHandler(async (req, res) => {
   const result = await taskLearning.recalculateDurationStats();

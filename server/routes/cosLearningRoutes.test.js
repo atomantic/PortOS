@@ -17,7 +17,6 @@ vi.mock('../services/taskLearning.js', () => ({
   recordLearningInsight: vi.fn(),
   getAllPromptRecommendations: vi.fn(),
   getPromptImprovementRecommendations: vi.fn(),
-  recalculateModelTierMetrics: vi.fn(),
   recalculateDurationStats: vi.fn(),
   getConfidenceLevels: vi.fn(),
   getTaskTypeConfidence: vi.fn(),
@@ -310,17 +309,6 @@ describe('CoS Learning Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.cleared).toBe(true);
-    });
-  });
-
-  describe('POST /api/cos/learning/recalculate-model-tiers', () => {
-    it('should recalculate model tier metrics', async () => {
-      taskLearning.recalculateModelTierMetrics.mockResolvedValue({ recalculated: 5 });
-
-      const response = await request(app).post('/api/cos/learning/recalculate-model-tiers');
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
     });
   });
 

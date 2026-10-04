@@ -165,22 +165,4 @@ router.put('/config', asyncHandler(async (req, res) => {
   res.json({ success: true, config })
 }))
 
-/**
- * GET /api/lmstudio/thinking-stats
- * Get local thinking statistics
- */
-router.get('/thinking-stats', (req, res) => {
-  const stats = localThinking.getStats()
-  res.json(stats)
-})
-
-/**
- * POST /api/lmstudio/reset-cache
- * Reset LM Studio cached state
- */
-router.post('/reset-cache', (req, res) => {
-  lmStudioManager.resetCache()
-  res.json({ success: true, message: 'Cache reset' })
-})
-
 export default router

@@ -295,7 +295,7 @@ describe('SystemHealthPage remediation links', () => {
 // means to render, and that every manifest tab has a presentation entry (icon)
 // in SystemHealthPage.jsx, which would otherwise only surface as a thrown
 // import-time error. The short labels come from the manifest's `tabLabel`; ⌘K
-// and voice still show "System Resources Overview"/"Storage Report"/"Active
+// and voice still show "System Resources"/"Storage Report"/"Active
 // Queues" so each is unambiguous out of page context.
 describe('RESOURCE_TABS ↔ nav manifest', () => {
   it('renders the system-resources tabGroup in page order with a presentation entry each', () => {
