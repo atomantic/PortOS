@@ -1133,6 +1133,7 @@ function SeriesManuscriptEditor() {
         fixDrafts={fixDrafts}
         onAccepted={applyAccepted}
         onBeginMutation={beginSectionMutation}
+        isCurrentOwner={ownsView}
       />
 
       <ManuscriptReadAloud

@@ -385,7 +385,7 @@ describe('PipelineManuscriptEditor', () => {
     expect(api.undoPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', comment.id, { silent: true });
   });
 
-  it('stops a delayed accept-all batch when another format replaces its owner (#9953)', async () => {
+  it.each(['success', 'failure'])('stops a delayed accept-all batch after %s when another format replaces its owner (#9953)', async (outcome) => {
     mockBothFormats();
     const second = { ...comment, id: 'mrc-2', anchorQuote: 'The hero walked in.', fix: { find: 'The hero walked in.', replace: 'A visitor arrived.' } };
     api.getPipelineManuscriptReview.mockResolvedValue({ comments: [{ ...comment, fix: { find: 'She left.', replace: 'Accepted prose.' } }, second] });
@@ -397,7 +397,7 @@ describe('PipelineManuscriptEditor', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Accept all 2 edits' }));
     fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
     await screen.findByDisplayValue('INT. ROOM - DAY');
-    await act(async () => { pending.resolve(acceptedProse); });
+    await act(async () => { pending.resolve(outcome === 'success' ? acceptedProse : null); });
     await expectTeleplayUnchanged();
     expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('dialog', { name: 'Manuscript impact preview' })).toBeInTheDocument();

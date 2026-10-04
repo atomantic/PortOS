@@ -44,7 +44,7 @@ function editsBySectionKey(comments, fixDrafts) {
   return map;
 }
 
-export default function ManuscriptImpactPreview({ open, onClose, seriesId, sections, comments, fixDrafts, onAccepted, onBeginMutation }) {
+export default function ManuscriptImpactPreview({ open, onClose, seriesId, sections, comments, fixDrafts, onAccepted, onBeginMutation, isCurrentOwner = () => true }) {
   // null when idle, { done, total } while the accept-all pass runs.
   const [acceptState, setAcceptState] = useState(null);
 
@@ -102,6 +102,10 @@ export default function ManuscriptImpactPreview({ open, onClose, seriesId, secti
       // over an earlier member's change, stops the batch.
       const snapshot = onBeginMutation ? await onBeginMutation(sectionKeysOf(target.edits)) : undefined;
       if (!mountedRef.current) return;
+      if (!isCurrentOwner()) {
+        setAcceptState(null);
+        return;
+      }
       if (snapshot === null) {
         errors.push('a section has an unsaved or kept draft to resolve first');
         break;
@@ -112,6 +116,10 @@ export default function ManuscriptImpactPreview({ open, onClose, seriesId, secti
           return null;
         });
       if (!mountedRef.current) return;
+      if (!isCurrentOwner()) {
+        setAcceptState(null);
+        return;
+      }
       if (result) {
         applied += 1;
         if (onAccepted(result, snapshot) === false) {
