@@ -87,6 +87,15 @@ export const isLocalRenderMark = (renderingOn, instanceId) => !renderingOn || re
 // partial-output pointer alongside the status.
 const settledRender = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null });
 
+// Tell listeners (the autonomous run waiting on its final render) that a render
+// job reached a terminal state. Emitted after the project record's terminal
+// write, with the outcome read off the job the caller already settled.
+const emitRenderSettled = (projectId, job) => musicVideoEvents.emit('render', {
+  projectId, jobId: job.id,
+  status: job.status === 'complete' ? 'completed' : job.status === 'canceled' ? 'canceled' : 'failed',
+  error: job.lastError || null,
+});
+
 export const attachRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 // #8964 loop semantics. A scene saved before shot planning existed has no
@@ -713,6 +722,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     await updateProject(projectId, settledRender(patch.status, { renderError: patch.status === 'failed' ? job.lastError?.slice(0, 2000) || 'Render failed' : null, ...patch.extra })).catch((err) => {
       console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
     });
+    emitRenderSettled(projectId, job);
     if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null });
     closeJobAfterDelay(jobs, jobId);
   };
@@ -897,6 +907,7 @@ export async function renderMusicVideo(projectId, options = {}) {
           await updateProject(projectId, settledRender('failed')).catch((updateErr) => {
             console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
           });
+          emitRenderSettled(projectId, job);
           await releaseScratch();
           closeJobAfterDelay(jobs, jobId);
         },
@@ -919,6 +930,7 @@ export async function renderMusicVideo(projectId, options = {}) {
             await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
             });
+            emitRenderSettled(projectId, job);
             await releaseScratch();
             closeJobAfterDelay(jobs, jobId);
             return;
@@ -956,6 +968,7 @@ export async function renderMusicVideo(projectId, options = {}) {
             await updateProject(projectId, settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) })).catch((updateErr) => {
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→complete write failed: ${updateErr.message}`);
             });
+            emitRenderSettled(projectId, job);
             console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
             broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
           } catch (err) {
@@ -966,6 +979,7 @@ export async function renderMusicVideo(projectId, options = {}) {
             await updateProject(projectId, settledRender('failed')).catch((updateErr) => {
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
             });
+            emitRenderSettled(projectId, job);
           } finally {
             projectRenders.delete(projectId);
             await releaseScratch();
@@ -1009,6 +1023,7 @@ export async function renderMusicVideo(projectId, options = {}) {
       await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
         console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
       });
+      emitRenderSettled(projectId, job);
       await releaseScratch();
       closeJobAfterDelay(jobs, jobId);
     });

@@ -154,6 +154,11 @@ export const AUTONOMOUS_SONG_STEP_LABELS = Object.freeze({
   importing: 'Importing into the music library',
 });
 
+/** What the Produce stage is doing once production is done (the server's `stages.produce.step`). */
+export const AUTONOMOUS_PRODUCE_STEP_LABELS = Object.freeze({
+  rendering: 'Rendering final video',
+});
+
 /**
  * What a completed stage produced, read-only: `[{ key, label, text?, href? }]`
  * (empty when the stage stored nothing). A text field carries `multiline` when

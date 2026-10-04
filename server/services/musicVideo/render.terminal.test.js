@@ -84,6 +84,7 @@ import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { unlink } from 'fs/promises';
+import { musicVideoEvents } from './events.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
@@ -110,12 +111,18 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
   it('finalizes immediately on a PRE-spawn error and releases the project slot', async () => {
     const pid = 'pre-1';
     prime(pid);
+    const settledEvents = [];
+    const onRender = (e) => settledEvents.push(e);
+    musicVideoEvents.on('render', onRender);
     const { jobId } = await renderMusicVideo(pid);
     const proc = lastProc();
 
     // No 'spawn' event → genuine spawn failure. 'close' will not follow.
     proc.emit('error', new Error('spawn ENOENT'));
     await tick();
+    musicVideoEvents.off('render', onRender);
+    // An autonomous run waiting on this render learns it failed (and why).
+    expect(settledEvents).toEqual([{ projectId: pid, jobId, status: 'failed', error: expect.stringMatching(/Failed to spawn ffmpeg/) }]);
 
     expect(getRenderJobStatus(jobId).status).toBe('error');
     expect(getRenderJobStatus(jobId).error).toMatch(/Failed to spawn ffmpeg/);
