@@ -270,7 +270,6 @@ describe('videoGen/grok — harvest and finalize', () => {
 
 describe('videoGen/grok — cancel', () => {
   it('retains cancel escalation and maintenance ownership after a live error until close and all cleanup finish', async () => {
-    const restorePlatform = pinPlatform('darwin');
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const scratchCleanup = Promise.withResolvers();
     const uploadCleanup = Promise.withResolvers();
@@ -298,7 +297,11 @@ describe('videoGen/grok — cancel', () => {
       child.emit('error', new Error('Signal transport failed'));
       expect(failed).not.toHaveBeenCalled();
       expect(grok.getActiveJob()).toMatchObject({ generationId: jobId });
-      expect(grok.cancel(jobId)).toBe(true);
+      // Exercise POSIX escalation without changing the journal's native
+      // filesystem behavior (Windows cannot fsync an opened directory).
+      const restorePlatform = pinPlatform('darwin');
+      try { expect(grok.cancel(jobId)).toBe(true); }
+      finally { restorePlatform(); }
       await vi.advanceTimersByTimeAsync(5000);
       expect(child.kill).toHaveBeenCalledWith('SIGKILL');
       expect(fixture.admission.status().state).toBe('draining');
@@ -327,7 +330,6 @@ describe('videoGen/grok — cancel', () => {
       await closing;
       await permit.finish();
       vi.useRealTimers();
-      restorePlatform();
     }
   });
 
