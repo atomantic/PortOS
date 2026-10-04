@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
 import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { resolveReviewPolicy } from '../../lib/reviewerConfig.js';
-import { buildTuiCompletionSection } from './completion.js';
+import { buildTuiCompletionSection, buildClaimFlowCompletionSection } from './completion.js';
 
 const render = (forgeCli = 'gh', reviewers = ['copilot']) => buildTuiCompletionSection({
   willOpenPR: true,
@@ -39,5 +39,23 @@ describe('review-enabled completion merge gate', () => {
 
     expect(section).toContain('**Required local-review merge gate:**');
     expect(section).toContain('If `LOCAL_OVERALL_STATUS=review-blocked`, do NOT run this merge path');
+  });
+});
+
+
+describe('claim parent merge admission instructions', () => {
+  it('binds the parent through CI, requires resync on external base movement and releases on either outcome', () => {
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
+    expect(prompt).toContain('"action":"check"');
+    expect(prompt).toContain('"action":"release"');
+    expect(prompt).toContain('Authorization: Bearer');
+    expect(prompt).toContain('never a fan-out child');
+    expect(prompt).toContain('at most 30 minutes');
+    expect(prompt).toContain('if it moved, sync again, rerun pregate and require fresh CI');
+    expect(prompt).toContain('outcome leave-open');
+    expect(prompt).toContain('never permission to proceed');
+    expect(buildClaimFlowCompletionSection()).toContain('do not merge');
+    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-admission');
   });
 });

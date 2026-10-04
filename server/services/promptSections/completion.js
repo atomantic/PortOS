@@ -13,6 +13,9 @@ import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
 import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
 
+import { localApiBaseUrl } from '../../lib/networkExposure.js';
+import { agentApiCurl } from '../../lib/agentApiToken.js';
+
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 export const NO_CHANGE_AUDIT_GUIDANCE = 'This audit may legitimately conclude that no change is needed. First verify the data this audit owns against authoritative sources. If the audited data is current, leave the worktree clean and do not run the commit, push, PR, or review steps below; write the completion sentinel when this provider uses one, or exit without committing when it does not. If a change is needed, continue through the normal workflow below.';
 
@@ -547,13 +550,34 @@ export function buildClaimResumeOverride({ priorAgentId, branchName, worktreePat
   ].join('\n');
 }
 
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false, prCompletion = null, claimResume = null } = {}) {
+/** Only the registered parent acquires; swarm workers keep authoring in parallel. */
+function buildMergeAdmissionSection(agentId) {
+  if (!agentId) return 'Merge admission requires a registered parent agent ID. If none was supplied, leave the reviewed PR open and report this missing ownership binding; do not merge.';
+  const command = (action, extra = {}) => agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-admission',
+    payload: JSON.stringify({ agentId, action, ...extra }) });
+  return [
+    '## Repository merge admission',
+    'After local review and PR publication, the parent orchestrator (never a fan-out child) must acquire admission immediately BEFORE the final base sync, pregate/push, current-head CI wait and merge. This applies to a single issue and separately to each ready PR in a swarm. Implementation/review and initial PR publication stay concurrent.',
+    'Run the following and require a parsed JSON response with admitted:true and a nonempty token; retain that token privately for check/release:',
+    '```bash', command('acquire'), '```',
+    'If admitted:false, report the reason and wait retryAfterMs (15 seconds), with a progress update at least every minute. Retry for at most 30 minutes, then record a leave-open outcome and finish with the PR and claim intact. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',
+    'Keep admission through final sync, pregate, push, CI, merge and cleanup. Replace TOKEN below with the returned token; check admission before each push or merge, and require admitted:true:',
+    '```bash', command('check', { token: 'TOKEN' }), '```',
+    'Admission coordinates participating runs on this install only. Manual merges and other installs can still advance the base: re-read the live default-branch SHA before merging; if it moved, sync again, rerun pregate and require fresh CI on the resulting head. Never bypass CI, infer success from absent checks, or treat auto-merge/queued as MERGED.',
+    'After a verified remote MERGED result and cleanup, release with outcome merged. On a recorded failure or leave-open handoff, release with outcome leave-open instead. Require released:true; report a failed release without deleting or overwriting ownership state:',
+    '```bash', command('release', { token: 'TOKEN', outcome: 'merged' }), '```',
+    'A completed child, empty cwd process list, old timestamp, or CI wait is not proof that the parent has stopped. Only the server may recover a lease after verifying its registered owner completed.',
+  ].join('\n');
+}
+
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false, prCompletion = null, claimResume = null, agentId = null } = {}) {
   const isMergeOnGreen = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const resumeOverride = buildClaimResumeOverride(claimResume || {});
   const lines = [
     ...(resumeOverride ? [resumeOverride, ''] : []),
     ...(pin ? [pin, ''] : []),
+    ...(!leavePrOpen ? [buildMergeAdmissionSection(agentId), ''] : []),
     '## Claim Workflow Handoff',
     ...(leavePrOpen ? [
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',

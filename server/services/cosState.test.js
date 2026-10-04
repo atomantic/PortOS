@@ -102,6 +102,21 @@ describe('cosState persistence', () => {
     });
   });
 
+  it('preserves durable merge leases across reloads and does not default malformed ownership', async () => {
+    const lease = { kind: 'agent', agentId: 'parent', repository: 'github.com/example/repo', token: 'example-token' };
+    writeState({ agents: {}, mergeAdmissions: { [lease.repository]: lease } });
+    let store = await freshModule();
+    await store.saveState(await store.loadState());
+    store = await freshModule();
+    expect(await store.readMergeAdmissionStateForSafetyCheck()).toEqual({
+      trusted: true, agents: {}, mergeAdmissions: { [lease.repository]: lease },
+    });
+    writeState({ agents: {}, mergeAdmissions: null });
+    expect((await store.readMergeAdmissionStateForSafetyCheck()).mergeAdmissions).toBeNull();
+    writeFileSync(STATE_PATH, 'broken');
+    expect((await store.readMergeAdmissionStateForSafetyCheck()).trusted).toBe(false);
+  });
+
   // The split's version of what the sidecar used to buy: config lives in its
   // own file, so an unreadable state.json cannot take the settings with it.
   it('keeps config when state.json becomes unreadable', async () => {

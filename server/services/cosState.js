@@ -430,6 +430,13 @@ async function readStateForSafetyCheck() {
   return { trusted: true, state };
 }
 
+// Merge admission shares the runtime ownership store and its write queue.
+// Missing leases are legacy empty state; malformed leases are never defaulted.
+export async function readMergeAdmissionStateForSafetyCheck() {
+  const { trusted, state } = await readStateForSafetyCheck();
+  return { trusted, agents: state?.agents ?? null, mergeAdmissions: state && Object.hasOwn(state, 'mergeAdmissions') ? state.mergeAdmissions : {} };
+}
+
 // The Persistent Mind slice, for the update route's image-work gate.
 export async function readPersistentMindStateForSafetyCheck() {
   const { trusted, state } = await readStateForSafetyCheck();

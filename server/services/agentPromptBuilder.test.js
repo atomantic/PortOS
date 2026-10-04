@@ -522,7 +522,7 @@ describe('claim-flow completion handoff', () => {
     const lightPrompt = buildLightContextPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green' } }),
       '/repo', null,
-      { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
+      { isTui: true, providerId: 'codex-tui', providerCommand: 'codex', agentId: 'parent-example' },
     );
 
     expect(lightPrompt).toMatch(/## Claim Workflow Handoff/);
@@ -532,13 +532,17 @@ describe('claim-flow completion handoff', () => {
 
     const apiPrompt = await buildAgentPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green' } }),
-      {}, '/repo', null, { providerType: 'api' },
+      {}, '/repo', null, { providerType: 'api', agentId: 'parent-example' },
     );
 
     expect(apiPrompt).toMatch(/## Claim Workflow Handoff/);
     expect(apiPrompt).toContain('PR completion policy: MERGE ON GREEN (no code review)');
     expect(apiPrompt).not.toContain('## Reviewer pin');
     expect(apiPrompt).not.toContain('Required-review publication rule');
+    for (const prompt of [lightPrompt, apiPrompt]) {
+      expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
+      expect(prompt).toContain('never a fan-out child');
+    }
   });
 
   it('keeps the full API no-change prompt coupled to the normal change workflow', async () => {
