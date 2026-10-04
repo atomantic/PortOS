@@ -251,6 +251,7 @@ describe('auxiliary media mutation inventory (#9672)', () => {
     'PATCH /api/lora-datasets/:id',
     'PATCH /api/lora-datasets/:id/images/:imageId',
     'POST /api/lora-datasets',
+    'POST /api/lora-datasets/:id/caption-runs/:runId/cancel',
     'POST /api/lora-datasets/:id/import-gallery',
     'POST /api/lora-datasets/:id/images',
     'POST /api/lora-datasets/:id/strip-shared-fragments',
