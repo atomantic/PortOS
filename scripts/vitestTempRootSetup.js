@@ -13,6 +13,12 @@ export function setup() {}
 // Exclude it only inside our owned root; never sweep arbitrary host directories.
 const VITEST_INTERNAL_SCRATCH_DIR = /^[A-Za-z0-9_-]{21}$/;
 
+// macOS `xcrun` (spawned by any descendant resolving an Apple toolchain) writes
+// its lookup cache to $TMPDIR, which is our owned root. It is toolchain-owned
+// output, not fixture data: match the exact cache name only, so a real leaked
+// fixture is still reported.
+const TOOLCHAIN_CACHE_PREFIXES = new Set(['xcrun_db']);
+
 export function groupLeakPrefix(name) {
   return name.replace(/[0-9a-zA-Z]{6,}$/, '') || name;
 }
@@ -48,6 +54,7 @@ export function teardown() {
   entries = entries
     .filter((name) => name !== OWNER_FILE)
     .filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name))
+    .filter((name) => !TOOLCHAIN_CACHE_PREFIXES.has(groupLeakPrefix(name)))
     .filter((name) => !isEffectivelyEmpty(join(root, name)));
 
   const byPrefix = new Map();

@@ -1274,12 +1274,32 @@ describe('MusicVideo autonomous shot planner (#1855)', () => {
     const plannedProject = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's1', order: 0, prompt: 'p' }] };
     planMusicVideoProject.mockResolvedValue({ project: plannedProject, scenesAdded: 1, promptsSeeded: false, promptsSkippedReason: 'no-provider' });
 
-    await openProject(PROJECT_ANALYZED, 'board');
+    await openProject({ ...PROJECT_ANALYZED, scenes: [] }, 'board');
     const planBtn = await screen.findByRole('button', { name: /AI Plan/i });
     expect(planBtn).toHaveProperty('disabled', false);
 
     fireEvent.click(planBtn);
     await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith('mv-3', { seedPrompts: true }, { silent: true }));
+  });
+});
+
+describe('MusicVideo AI Plan on a board that already has scenes (#10144)', () => {
+  const withScenes = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's1', order: 0, prompt: 'p' }, { sceneId: 's2', order: 1, prompt: 'q' }] };
+
+  it('sends no plan request until the director chooses Replace or Add', async () => {
+    planMusicVideoProject.mockClear();
+    planMusicVideoProject.mockResolvedValue({ project: withScenes, scenesAdded: 1, promptsSeeded: false });
+    await openProject(withScenes, 'board');
+    fireEvent.click(await screen.findByRole('button', { name: /AI Plan/i }));
+    expect(await screen.findByRole('button', { name: /Replace 2 shots/ })).toBeTruthy();
+    expect(planMusicVideoProject).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(planMusicVideoProject).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /AI Plan/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Replace 2 shots/ }));
+    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(withScenes.id, { seedPrompts: true, mode: 'replace' }, { silent: true }));
   });
 });
 

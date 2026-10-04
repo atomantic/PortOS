@@ -332,6 +332,38 @@ describe('planProject', () => {
     expect(result.promptsSkippedReason).toBe('no-provider');
   });
 
+  it('409s PLAN_MODE_REQUIRED before any LLM or write when the board has scenes and the caller must choose', async () => {
+    getProject.mockResolvedValue(makeProject({ scenes: [{ sceneId: 'old-1' }, { sceneId: 'old-2' }] }));
+    await expect(planProject('mv-1', { mode: 'require' })).rejects.toMatchObject({ status: 409, code: 'PLAN_MODE_REQUIRED' });
+    expect(addProjectScenes).not.toHaveBeenCalled();
+    expect(mutateProjectRecord).not.toHaveBeenCalled();
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('plans normally under mode "require" when the board is empty', async () => {
+    getProject.mockResolvedValue(makeProject({ scenes: [] }));
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+    await planProject('mv-1', { mode: 'require', seedPrompts: false });
+    expect(addProjectScenes).toHaveBeenCalledTimes(1);
+  });
+
+  it('replace swaps the board through the record mutation, keeping work on scenes with a reused span', async () => {
+    const old = [{ sceneId: 'old-1', startSec: 0, endSec: 2, videoHistoryId: 'v1', referenceImageId: 'r1', takes: [{ takeId: 't' }] }, { sceneId: 'old-2', startSec: 99, endSec: 100 }];
+    getProject.mockResolvedValue(makeProject({ scenes: old }));
+    let outcome;
+    mutateProjectRecord.mockImplementation(async (_id, transform) => { outcome = transform(makeProject({ scenes: old })); return outcome; });
+
+    const result = await planProject('mv-1', { mode: 'replace', seedPrompts: false });
+
+    expect(addProjectScenes).not.toHaveBeenCalled();
+    const scenes = outcome.project.scenes;
+    expect(scenes.some((sc) => sc.sceneId === 'old-2')).toBe(false);
+    const kept = scenes.find((sc) => sc.sceneId === 'old-1');
+    if (kept) expect(kept).toMatchObject({ videoHistoryId: 'v1', referenceImageId: 'r1', takes: [{ takeId: 't' }] });
+    expect(scenes.map((sc) => sc.order)).toEqual(scenes.map((_, i) => i));
+    expect(result.scenesAdded).toBe(scenes.length);
+  });
+
   it('skips the LLM call entirely when seedPrompts is false', async () => {
     getProject.mockResolvedValue(makeProject());
     addProjectScenes.mockResolvedValue(freshProjectResult());

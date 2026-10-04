@@ -35,6 +35,15 @@ describe('buildPublishPayload (#9282)', () => {
     expect(p.captions).toEqual({ dir: 'videos', name: 'captions.srt' });
   });
 
+  it('refuses YouTube, X and Reddit video drafts when the kit master is from an earlier render (#10146)', () => {
+    const staleProject = () => ({ ...project({ master: { filename: 'master.mp4', renderHistoryId: 'old' } }), renderHistoryId: 'new' });
+    for (const platform of ['youtube', 'x', 'reddit']) {
+      expect(() => buildPublishPayload(platform, staleProject())).toThrow(expect.objectContaining({ status: 409, code: 'PUBLISH_KIT_STALE' }));
+    }
+    const fresh = { ...project({ master: { filename: 'master.mp4', renderHistoryId: 'new' } }), renderHistoryId: 'new' };
+    expect(buildPublishPayload('youtube', fresh).video.name).toBe('master.mp4');
+  });
+
   it('does not repeat chapters the description already has', () => {
     const p = buildPublishPayload('youtube', project({ copy: { youtube: { title: 't', description: 'x\n0:00 Start\n0:30 Next' } } }));
     expect(p.description).not.toContain('Chapters');

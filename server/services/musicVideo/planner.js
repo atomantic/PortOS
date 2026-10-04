@@ -283,6 +283,10 @@ async function tryProposeScenePrompts(project, shots, { providerId, model, effor
  * @param {string} [options.model] — model override for the prompt-seeding call.
  * @param {string} [options.effort] — reasoning-effort override for an
  *   effort-capable CLI/TUI provider (clamped by the runner).
+ * @param {'replace'|'append'|'require'} [options.mode='append'] — what to do when the
+ *   board already has scenes: `replace` swaps the board (keeping work on scenes
+ *   whose time span is reused), `append` adds to it, `require` refuses with a
+ *   409 `PLAN_MODE_REQUIRED` so a caller must choose (the HTTP route).
  * @param {string} [options.directive] — a production run's directive (#9066),
  *   added to the director guidance the first-pass prompts are written under.
  * @returns {Promise<{ project: object, scenesAdded: number, promptsSeeded: boolean, promptsSkippedReason: string|null, pacing: object, llmRoute: object|null }>}
@@ -290,9 +294,16 @@ async function tryProposeScenePrompts(project, shots, { providerId, model, effor
  *   used (null when none was made); a project with an automation brief also
  *   keeps it under `automation.routes.plan`.
  */
-export async function planProject(id, { seedPrompts = true, providerId, model, effort, directive } = {}) {
+export async function planProject(id, { seedPrompts = true, providerId, model, effort, directive, mode = 'append' } = {}) {
   const project = await getProject(id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const existingCount = (project.scenes || []).length;
+  if (mode === 'require' && existingCount > 0) {
+    throw new ServerError(
+      `The board already has ${existingCount} shot${existingCount === 1 ? '' : 's'} — choose to replace them or add to the board`,
+      { status: 409, code: 'PLAN_MODE_REQUIRED', context: { sceneCount: existingCount } },
+    );
+  }
 
   const sections = validSections(project.audioAnalysis?.sections);
   if (sections.length === 0) {
@@ -348,22 +359,21 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
   const hasCards = sceneInputs.some((s) => s.visualLayer === 'card');
   // Persist card scenes and the mode that renders them in the same transaction.
   // Read the current composition under the lock so concurrent edits survive.
-  const { project: persisted, scenes } = hasCards
-    ? await persistCardPlan(id, sceneInputs)
-    : await addProjectScenes(id, sceneInputs);
+  const { project: persisted, scenes } = await persistPlan(id, sceneInputs, { hasCards, replace: mode === 'replace' });
   // Only a project with an automation brief keeps the route it planned on.
   const updated = (persisted.automation && await recordLlmRoute(id, 'plan', llmRoute)) || persisted;
   console.log(`🪄 Music Video plan: seeded ${scenes.length} scene${scenes.length === 1 ? '' : 's'} for ${id} (prompts ${promptsSeeded ? 'seeded' : `skipped: ${promptsSkippedReason || 'n/a'}`})`);
   return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason, pacing, llmRoute };
 }
 
-async function persistCardPlan(id, sceneInputs) {
-  const { addScenes } = await import('./projectsLogic.js');
+async function persistPlan(id, sceneInputs, { hasCards, replace }) {
+  if (!hasCards && !replace) return addProjectScenes(id, sceneInputs);
+  const { addScenes, replaceScenes } = await import('./projectsLogic.js');
   const { normalizeComposition } = await import('./composition.js');
   return mutateProjectRecord(id, (current) => {
-    const outcome = addScenes(current, sceneInputs);
+    const outcome = (replace ? replaceScenes : addScenes)(current, sceneInputs);
     // An authored whole-song code/document renderer remains the operator's choice.
-    if (!current.composition?.mode || current.composition.mode === 'concat') {
+    if (hasCards && (!current.composition?.mode || current.composition.mode === 'concat')) {
       outcome.project.composition = normalizeComposition({ ...current.composition, mode: 'composed' });
     }
     return outcome;
