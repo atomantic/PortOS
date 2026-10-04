@@ -66,7 +66,7 @@ async function scanMtplx() {
   const root = getMtplxRoot();
   const modelsDir = join(root, 'models');
   const items = [];
-  for (const dirName of await subdirs(modelsDir)) {
+  for (const dirName of await isRealDirectory(modelsDir) ? await subdirs(modelsDir) : []) {
     // Checkpoints are `<org>--<name>`; the key space is shared with the session
     // bank, so a directory that would collide with it is not a checkpoint.
     if (dirName === SESSION_BANK) continue;
@@ -159,7 +159,7 @@ async function scanXetCache({ now = Date.now() } = {}) {
 async function scanPixieForge() {
   const root = join(getPixieForgeRoot(), 'loras');
   const items = [];
-  for (const entry of await readEntries(root)) {
+  for (const entry of await isRealDirectory(root) ? await readEntries(root) : []) {
     if (!entry.isFile() || !entry.name.endsWith('.safetensors')) continue;
     const path = join(root, entry.name);
     items.push(item({

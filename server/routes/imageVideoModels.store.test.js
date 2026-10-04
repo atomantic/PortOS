@@ -92,6 +92,16 @@ describe('file-system model stores', () => {
     expect(await exists(join(outside, 'precious.bin'))).toBe(true);
   });
 
+  it('ignores a models directory that is a symlink out of the store', async () => {
+    const outside = join(root, 'outside');
+    await fill(join(outside, 'org--external', 'w.bin'), 10);
+    await mkdir(join(root, 'mtplx'), { recursive: true });
+    await symlink(outside, join(root, 'mtplx', 'models'));
+    expect((await listModelStore('mtplx')).items).toEqual([]);
+    expect((await request(app).delete('/api/image-video/models/store/mtplx/org--external')).status).toBe(404);
+    expect(await exists(join(outside, 'org--external'))).toBe(true);
+  });
+
   it('clears xet chunk caches and only logs older than 7 days', async () => {
     await fill(join(root, 'xet', 'abc', 'chunk_cache', 'c.bin'), 100);
     await fill(join(root, 'xet', 'logs', 'old.log'), 40);
