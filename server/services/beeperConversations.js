@@ -270,7 +270,7 @@ async function attachParticipants(conversations, { cap = LIST_PARTICIPANT_CAP } 
  * happens to choose (audit cluster 06, indexes and query plans).
  */
 export async function listConversations({
-  network, unreadOnly, archived, lowPriority, limit, cursor,
+  network, unreadOnly, archived, lowPriority, search, limit, cursor,
 } = {}) {
   const pageSize = clampLimit(limit, DEFAULT_CONVERSATION_LIMIT, MAX_CONVERSATION_LIMIT);
   const params = [];
@@ -292,6 +292,14 @@ export async function listConversations({
   if (typeof lowPriority === 'boolean') {
     params.push(lowPriority);
     where.push(`c.is_low_priority = $${params.length}`);
+  }
+
+  // Title search: a case-insensitive substring match with LIKE metacharacters
+  // escaped, so a query of `50%` finds "50%" rather than everything.
+  const term = typeof search === 'string' ? search.trim() : '';
+  if (term) {
+    params.push(`%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`);
+    where.push(`c.title ILIKE $${params.length}`);
   }
 
   const decoded = decodeCursor(cursor, { idPattern: UUID_PATTERN });

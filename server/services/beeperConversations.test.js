@@ -111,6 +111,22 @@ describe('listConversations — filters are tri-state by omission', () => {
   });
 });
 
+describe('listConversations — title search', () => {
+  it('binds a case-insensitive substring pattern with LIKE metacharacters escaped', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] });
+    await listConversations({ search: '  50%_off  ' });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(flat(sql)).toContain('c.title ILIKE $1');
+    expect(params).toEqual(['%50\\%\\_off%', 51]);
+  });
+
+  it('applies no title predicate for a blank search', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] });
+    await listConversations({ search: '   ' });
+    expect(flat(vi.mocked(query).mock.calls[0][0])).not.toContain('ILIKE');
+  });
+});
+
 describe('listConversations — keyset pagination', () => {
   it('returns a nextCursor only when a further page exists, and resumes from it', async () => {
     const rows = Array.from({ length: 3 }, (_, i) => conversationRow({

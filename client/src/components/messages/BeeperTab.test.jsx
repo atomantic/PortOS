@@ -226,6 +226,40 @@ describe('deep linking', () => {
   });
 });
 
+describe('conversation search', () => {
+  it('reopens a shared ?q= link with the search box open and the term sent to the server', async () => {
+    renderTab('/messages/beeper?q=alice');
+    expect(await screen.findByLabelText('Search conversations by name')).toHaveValue('alice');
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenCalledWith(
+      { search: 'alice', archived: false, lowPriority: false },
+      { silent: true },
+    ));
+  });
+
+  it('opens from the toolbar, refetches with the typed term, and clearing it drops the filter', async () => {
+    renderTab('/messages/beeper');
+    fireEvent.click(await screen.findByRole('button', { name: 'Search conversations' }));
+    fireEvent.change(screen.getByLabelText('Search conversations by name'), { target: { value: 'bob' } });
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith(
+      { search: 'bob', archived: false, lowPriority: false },
+      { silent: true },
+    ));
+    const box = screen.getByLabelText('Search conversations by name');
+    fireEvent.change(box, { target: { value: 'bob ' } });
+    expect(box).toHaveValue('bob ');
+    fireEvent.change(box, { target: { value: 'bob smith' } });
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith(
+      { search: 'bob smith', archived: false, lowPriority: false },
+      { silent: true },
+    ));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith(
+      { archived: false, lowPriority: false },
+      { silent: true },
+    ));
+  });
+});
+
 describe('rendering at every install size', () => {
   it('renders with zero conversations, and says an empty list is often correct when networks are mirrored and the list loaded fine', async () => {
     api.getBeeperNetworks.mockResolvedValue({ networks: [NINE_NETWORKS[0]] });
@@ -492,11 +526,11 @@ describe('the pinned grid is Beeper’s own isPinned, mirrored', () => {
 });
 
 describe('unimplemented controls are absent rather than inert', () => {
-  it('renders no Requests, Later, add-scope, overflow, search or new-conversation control', async () => {
+  it('renders no Requests, Later, add-scope, overflow or new-conversation control', async () => {
     renderTab();
     await screen.findByText('Nothing here');
 
-    for (const label of ['Requests', 'Later', 'Add scope', 'More scope options', 'Search conversations', 'New conversation']) {
+    for (const label of ['Requests', 'Later', 'Add scope', 'More scope options', 'New conversation']) {
       expect(screen.queryByRole('button', { name: label })).toBeNull();
     }
   });
