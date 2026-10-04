@@ -116,6 +116,7 @@ export default function SetupStage({ board }) {
           onMediaMode={board.saveMediaMode}
           onRenderStyle={board.onRenderStyle}
           onSaveAutomation={board.saveAutomation}
+          onSavePolicy={(productionPolicy) => board.saveCreativeSetup({ productionPolicy })}
         />
       </StageSection>
       <StageSection id="mv-setup-song" title="Song & lyrics" summary={songSummary(project, trackLabel)} defaultOpen={songOpen}>

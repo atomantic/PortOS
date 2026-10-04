@@ -5,6 +5,7 @@ import EidoverseVideoPanel from '../EidoverseVideoPanel.jsx';
 import CodeVideoPanel from '../CodeVideoPanel.jsx';
 import DocumentCompositionPanel from '../DocumentCompositionPanel.jsx';
 import { renderStyleLabel } from '../compositionDraft.js';
+import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../../server/lib/musicVideoMediaPolicy.js';
 
 /**
  * Compose: how the final render is put together — the timed typography and
@@ -20,6 +21,7 @@ export default function ComposeStage({ board }) {
       <div className="space-y-2 rounded-lg border border-port-border bg-port-card p-3">
         <div className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
           <span>Render style: <span className="text-port-text">{renderStyleLabel(mode)}</span></span>
+          <span>Media: <span className="text-port-text">{MUSIC_VIDEO_MEDIA_MODE_LABELS[musicVideoMediaMode(project)]}</span></span>
           <button type="button" onClick={() => board.goToStage('setup', 'mv-setup-options')} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">
             Change in Setup
           </button>

@@ -1533,13 +1533,13 @@ describe('MusicVideo typography composition (#8984)', () => {
       composition: expect.objectContaining({ mode: 'concat', textCues: [expect.objectContaining({ text: 'first line', startSec: 1, endSec: 3, template: 'fade' })] }),
     }, { silent: true }));
 
-    fireEvent.change(document.getElementById('mv-typo-mode'), { target: { value: 'composed' } });
+    expect(document.getElementById('mv-typo-mode')).toBeNull(); // render style is chosen in Setup only
     fireEvent.change(screen.getByLabelText('Text cue 1 motion'), { target: { value: 'typewriter' } });
     fireEvent.change(text, { target: { value: 'first line, typed' } });
     fireEvent.blur(text);
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenLastCalledWith('mv-3', {
       composition: expect.objectContaining({
-        mode: 'composed',
+        mode: 'concat',
         textCues: [expect.objectContaining({ text: 'first line, typed', template: 'typewriter' })],
       }),
     }, { silent: true }));

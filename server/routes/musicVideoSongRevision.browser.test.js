@@ -106,7 +106,7 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     const upload = () => page.getByLabel('Import document shot manifest', { exact: true }).setInputFiles({ name: 'shots.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(manifest)) });
     await upload();
     await page.getByText('authored-shot — document source shot', { exact: true }).waitFor();
-    expect(await page.getByRole('button', { name: 'Prepare planning draft with autopilot' }).isDisabled()).toBe(true);
+    expect(await page.getByRole('button', { name: 'Draft art direction and shots' }).isDisabled()).toBe(true);
     const replacement = await importDocumentTemplate(selected.id, 'layered');
     musicVideoEvents.emit('song-revision', { projectId: selected.id, project: replacement.project });
     await page.waitForFunction(directory => document.body.textContent.includes(directory), replacement.document.directory);

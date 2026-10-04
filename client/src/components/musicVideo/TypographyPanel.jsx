@@ -1,5 +1,5 @@
 import { Copy, Plus, Trash2 } from 'lucide-react';
-import { compositionDraft, RENDER_STYLES, renderStyleLabel } from './compositionDraft.js';
+import { compositionDraft, renderStyleLabel } from './compositionDraft.js';
 
 // Client-minted ids keep a freshly added row addressable across saves (see LyricsPanel).
 const mintId = () => `mtc-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -27,6 +27,7 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
   const cues = composition.textCues || [];
   const composed = composition.mode === 'composed';
   const codeMode = composition.mode === 'code';
+  const footage = composition.mode === 'concat';
   const timedLyrics = (project.lyricCues || []).filter((c) => typeof c.startSec === 'number' && typeof c.endSec === 'number');
 
   const edit = (patch) => onEditLocal({ composition: { ...composition, ...patch } });
@@ -48,12 +49,6 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
       </summary>
 
       <div className="mt-2 flex flex-wrap items-end gap-2">
-        <div>
-          <label htmlFor="mv-typo-mode" className="block text-port-text-muted mb-0.5">Render style</label>
-          <select id="mv-typo-mode" value={composition.mode} onChange={(e) => replace({ mode: e.target.value })} className={inputCls}>
-            {RENDER_STYLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </div>
         <div>
           <label htmlFor="mv-typo-cutting" className="block text-port-text-muted mb-0.5" title="Intercut re-cuts each shot on the song's energy and sung words, reusing cutaway footage — no extra generation.">Cutting</label>
           <select id="mv-typo-cutting" value={composition.cutting || 'scene'} onChange={(e) => replace({ cutting: e.target.value })} className={inputCls}>
@@ -89,6 +84,7 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
       </div>
 
       {composed && cues.length === 0 && <p className="mt-2 text-port-text-muted">No text cues yet — a composed render with none renders as plain cuts.</p>}
+      {footage && cues.length > 0 && <p className="mt-2 text-port-warning" role="status">Footage renders plain cuts, so these text cues will not appear. Choose Composed in Setup to lay them over the footage.</p>}
       {codeMode && <p className="mt-2 text-port-text-muted">Code-rendered draws the song in code. Text cues stay stored and come back if you switch to Composed.</p>}
       {composition.mode === 'document' && <p className="mt-2 text-port-text-muted">The composition document reads these cues from <code>PORTOS_MV.textCues</code>: the layered template draws Hero cues as kinetic words on their sung times and uses Subtitle cues (or, with none, the timed lyrics) as subtitles.</p>}
       <div className="mt-2 max-h-72 overflow-y-auto space-y-1 pr-1">
