@@ -179,10 +179,21 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
 /** Resolve the `:stage` route param; an unknown or missing value is null. */
 export const resolveStageParam = (value) => (isStageId(value) ? value : null);
 
+// Footage-optional modes draw their own picture, so scene footage never gates Produce.
+const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
+
+// A code video is composed once it was generated or the director holds sections to render.
+const codeComposed = (project) => {
+  const code = project.composition?.codeVideo;
+  return !!code?.generatedAt || (code?.sections || []).length > 0;
+};
+
 const composeDone = (project, mode) => {
   if (mode === 'composed') return (project.composition?.textCues || []).length > 0;
   if (mode === 'document') return !!project.composition?.document;
-  // Footage has nothing to compose; a code-rendered video is composed by its own panel on demand.
+  if (mode === 'eidoverse') return !!project.composition?.eidoverseScene?.inlineScript;
+  if (mode === 'code') return codeComposed(project);
+  // Footage has nothing to compose.
   return true;
 };
 
@@ -200,7 +211,7 @@ export function deriveStages(project, readiness = project?.productionReadiness) 
   const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status);
   const layered = isLayeredComposition(project);
   // Code and document renders draw the picture themselves; scene footage is optional there.
-  const footageOptional = mode === 'code' || mode === 'document';
+  const footageOptional = FOOTAGE_OPTIONAL_MODES.has(mode);
   const planned = !!readiness?.storyboard.approved;
   const castStopped = !!cast && (cast.interrupted || cast.status === 'failed');
   const castDone = !!readiness?.art.approved;
@@ -314,7 +325,7 @@ export function deriveNextAction(project, {
     case 'compose':
       return {
         id: 'goto-compose', kind: 'goto', stage: 'compose',
-        label: (project.composition?.mode === 'document') ? 'Attach a composition' : 'Add typography',
+        label: { document: 'Attach a composition', eidoverse: 'Save the Eidoverse scene', code: 'Generate the code video' }[project.composition?.mode] || 'Add typography',
       };
     case 'publish':
       return project.publishKit?.builtAt
@@ -387,7 +398,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
     }
     case 'produce': {
       const items = [];
-      if (mode !== 'code' && mode !== 'document') {
+      if (!FOOTAGE_OPTIONAL_MODES.has(mode)) {
         const layered = isLayeredComposition(project);
         const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
         items.push({ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: scenes.length > 0 && ready === scenes.length });
@@ -400,6 +411,15 @@ export function stageChecklist(stageId, project, readiness = project?.production
       const proof = { id: 'proof', label: 'Animated proof approved (Produce)', done: !!readiness?.proof?.approved };
       if (mode === 'composed') return [proof, { id: 'composition', label: 'Timed typography added', done: (project.composition?.textCues || []).length > 0 }];
       if (mode === 'document') return [proof, { id: 'composition', label: 'Composition document attached', done: !!project.composition?.document }];
+      if (mode === 'eidoverse') {
+        const saved = !!project.composition?.eidoverseScene?.inlineScript;
+        return [proof, { id: 'composition', label: 'Save the Eidoverse scene', done: saved, action: saved ? null : { label: 'Save the scene', anchor: 'mv-eidoverse-scene' } }];
+      }
+      if (mode === 'code') {
+        const generated = !!project.composition?.codeVideo?.generatedAt;
+        return [proof, { id: 'composition', label: generated ? 'Code video generated' : 'Code video sections ready', done: codeComposed(project),
+          detail: codeComposed(project) ? null : 'Generate the code video from the Code Video panel.' }];
+      }
       return [proof, { id: 'composition', label: 'Nothing to compose for this render style', done: true }];
     }
     case 'review':

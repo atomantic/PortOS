@@ -28,7 +28,9 @@
  */
 
 /** Backends whose downloaded weights PortOS inventories. */
-export const MODEL_INVENTORY_BACKENDS = ['huggingface', 'lora', 'ollama', 'lmstudio'];
+export const MODEL_INVENTORY_BACKENDS = [
+  'huggingface', 'lora', 'ollama', 'lmstudio', 'mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge',
+];
 
 // The on-the-wire prefix per backend. `huggingface` shortens to `hf` for the same
 // reason the cache directories do — it is the longest of the four and appears in
@@ -38,6 +40,10 @@ const BACKEND_PREFIX = {
   lora: 'lora',
   ollama: 'ollama',
   lmstudio: 'lmstudio',
+  mtplx: 'mtplx',
+  hy3dgen: 'hy3dgen',
+  'hf-xet-cache': 'hf-xet',
+  'pixie-forge': 'pixie-forge',
 };
 
 const PREFIX_BACKEND = new Map(Object.entries(BACKEND_PREFIX).map(([backend, prefix]) => [prefix, backend]));
@@ -134,6 +140,63 @@ export const localModelInventoryRow = ({ backend, modelId, name, detail, sizeByt
   managePath: '/models/llms',
   action: deletable ? { type: 'local-model', backend, modelId } : null,
 });
+
+/**
+ * What each file-system model store is, and how risky it is to delete from.
+ *
+ * These stores sit outside the Hugging Face hub cache and `data/loras/`, so the
+ * request that deletes one names `<backend>/<key>` and the server resolves the
+ * path from its own scan — never from the request. `caches` are regenerable
+ * (low risk, "clear" rather than "delete"); `pixie-forge` holds LoRA weights
+ * that may exist nowhere else.
+ */
+export const MODEL_STORE_BACKENDS = {
+  mtplx: {
+    label: 'MTPLX',
+    managePath: '/models/llms',
+    risk: 'medium',
+  },
+  hy3dgen: {
+    label: 'Hunyuan3D',
+    managePath: '/models/media',
+    risk: 'medium',
+  },
+  'hf-xet-cache': {
+    label: 'HF xet cache',
+    managePath: '/models/media',
+    risk: 'low',
+    cleanupReason: 'Regenerable Hugging Face download chunk cache and old xet logs. Clearing it only makes the next download re-fetch chunks.',
+  },
+  'pixie-forge': {
+    label: 'Pixie Forge LoRA',
+    managePath: '/models/loras',
+    risk: 'high',
+    cleanupReason: 'A LoRA adapter may be the only copy and can take hours to reproduce.',
+  },
+};
+
+/**
+ * A model or cache in one of the `MODEL_STORE_BACKENDS` stores.
+ *
+ * `risk` and `cleanupReason` default per backend, but a row may override them: the
+ * MTPLX session bank is a regenerable cache inside a backend whose checkpoints are
+ * not.
+ */
+export const modelStoreInventoryRow = ({ backend, key, name, detail, sizeBytes, risk, cleanupReason }) => {
+  const store = MODEL_STORE_BACKENDS[backend];
+  return {
+    id: store ? modelInventoryId(backend, key) : null,
+    backend,
+    name: name || key,
+    detail: detail || null,
+    sizeBytes,
+    sizeIsEstimate: false,
+    risk: risk || store?.risk,
+    cleanupReason: cleanupReason || store?.cleanupReason || null,
+    managePath: store?.managePath,
+    action: { type: 'model-store', backend, key },
+  };
+};
 
 /**
  * Apply the LIVE facts to a stored row on read.

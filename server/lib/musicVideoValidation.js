@@ -1186,6 +1186,8 @@ export const musicVideoPlanRequestSchema = z.object({
   providerId: z.string().max(64).optional(),
   model: z.string().max(200).optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
+  // Required once the board has scenes (409 PLAN_MODE_REQUIRED otherwise).
+  mode: z.enum(['replace', 'append']).optional(),
 }).strict();
 
 // Manual-tempo fallback (see services/musicVideo/audioAnalysis.js for why bpm
