@@ -92,6 +92,29 @@ describe('deriveStages / deriveNextAction', () => {
     expect(stateOf({ ...finished, publishKit: { posts: { youtube: { url: 'https://example.com/v' } } } }).publish).toBe('done');
   });
 
+  it('derives Produce and Compose for all five render styles (#10139)', () => {
+    const bare = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
+    const withMode = (composition) => ({ ...bare, composition });
+    // Footage styles still need footage; composed also needs cues.
+    expect(deriveStages(withMode({ mode: 'concat' })).current).toBe('produce');
+    expect(deriveStages(withMode({ mode: 'composed', textCues: [] })).current).toBe('produce');
+    // Eidoverse: Produce done without footage; Compose waits on a saved scene.
+    expect(stateOf(withMode({ mode: 'eidoverse' })).produce).toBe('done');
+    expect(deriveStages(withMode({ mode: 'eidoverse' })).current).toBe('compose');
+    expect(stageChecklist('produce', withMode({ mode: 'eidoverse' }), APPROVED).map((i) => i.id)).toEqual(['approve-proof']);
+    expect(stageChecklist('compose', withMode({ mode: 'eidoverse' }), APPROVED)[1])
+      .toMatchObject({ label: 'Save the Eidoverse scene', done: false, action: { anchor: 'mv-eidoverse-scene' } });
+    const saved = withMode({ mode: 'eidoverse', eidoverseScene: { inlineScript: 'scene()' } });
+    expect(deriveStages(saved).current).toBe('review');
+    expect(stageChecklist('compose', saved, APPROVED)[1].done).toBe(true);
+    // Code: composed only once generated (or sections exist).
+    expect(deriveStages(withMode({ mode: 'code' })).current).toBe('compose');
+    expect(stageChecklist('compose', withMode({ mode: 'code' }), APPROVED)[1].done).toBe(false);
+    expect(deriveStages(withMode({ mode: 'code', codeVideo: { generatedAt: '2026-01-01T00:00:00.000Z', sections: [] } })).current).toBe('review');
+    // Document: composed once the document is attached.
+    expect(deriveStages(withMode({ mode: 'document' })).current).toBe('compose');
+  });
+
   it('does not require scene footage for code-rendered or document projects', () => {
     const bare = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
     expect(stateOf({ ...bare, composition: { mode: 'code' } }).produce).toBe('done');
