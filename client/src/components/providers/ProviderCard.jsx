@@ -44,6 +44,7 @@ import ProviderReadiness from './ProviderReadiness';
 import { CodexRoutingNotice, GatewayKeyHint } from './ProviderNotices';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import ProviderEnvVars from './ProviderEnvVars';
+import ProviderVisionTest from './ProviderVisionTest';
 
 // One phrasing for "this command isn't on the CoS Agent Runner's allowlist".
 // The editor states the same thing in its own inline banner, in prose.
@@ -301,6 +302,8 @@ export default function ProviderCard({
           >
             {testResult?.testing ? 'Testing...' : 'Test'}
           </button>
+
+          {isApiProvider(provider) && <ProviderVisionTest provider={provider} />}
 
           {supportsModelRefresh(provider) && (
             <button
