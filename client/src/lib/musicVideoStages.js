@@ -88,17 +88,21 @@ export function projectSpend(project) {
 /**
  * Everything the docked preview can play, in the order it picks a default:
  * the final render (its resolved `finalVideoSrc`), the composition document,
- * then each finished draft excerpt, newest first. Each entry has a stable `id`
+ * then each finished draft excerpt, newest first. While editing the
+ * composition (`liveFirst`, the Compose stage) the live document leads so an
+ * old final render is not what the user sees by default. A final render whose
+ * inputs changed is labelled out of date. Each entry has a stable `id`
  * (the `?play=` value) and a `label` for the source picker.
  */
-export function listPreviewSources(project, { finalVideoSrc = null } = {}) {
+export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = false } = {}) {
   const sources = [];
-  if (project?.renderHistoryId && finalVideoSrc) {
-    sources.push({ id: 'final', kind: 'video', label: 'Final render', src: finalVideoSrc, startSec: 0, endSec: null });
-  }
-  if (project?.composition?.mode === 'document' && project.composition.document) {
-    sources.push({ id: 'document', kind: 'document', label: 'Composition (live)' });
-  }
+  const final = project?.renderHistoryId && finalVideoSrc
+    ? { id: 'final', kind: 'video', label: project.renderDependencyState?.status === 'stale' ? 'Final render (out of date)' : 'Final render', src: finalVideoSrc, startSec: 0, endSec: null }
+    : null;
+  const live = project?.composition?.mode === 'document' && project.composition.document
+    ? { id: 'document', kind: 'document', label: 'Composition (live)' }
+    : null;
+  sources.push(...(liveFirst ? [live, final] : [final, live]).filter(Boolean));
   const excerpts = (project?.excerpts || []).filter((e) => e.status === 'complete' && e.filename).reverse();
   for (const excerpt of excerpts) {
     sources.push({

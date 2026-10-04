@@ -40,7 +40,7 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
       .then((next) => { if (active) setDoc(next); })
       .catch((err) => { if (active) setError(err?.message || 'Could not build the code preview'); });
     return () => { active = false; };
-  }, [project.id, project.updatedAt, project.composition?.codeVideo?.generatedAt]);
+  }, [project.id, project.composition?.codeVideo?.generatedAt]);
 
   const sections = useMemo(() => doc?.song?.sections || doc?.timeline?.sections || [], [doc]);
   const fps = doc?.fps || 24;

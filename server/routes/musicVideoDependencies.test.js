@@ -104,8 +104,11 @@ describe('public dependency save / repair / review workflow', () => {
     await request(app).patch(`${base()}/scenes/a`).send({ shotMode: 'performance', performanceSpeaker: 'Example Singer' });
     await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, excerpts: current.excerpts.map((excerpt) => excerpt.id === 'excerpt-a'
       ? { ...excerpt, dependencies: captureMusicVideoEvidence(current, { startSec: 0, endSec: 5 }) } : excerpt) } }));
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, renderHistoryId: 'example-render', renderDependencies: captureMusicVideoEvidence(current) } }));
+    expect((await fresh()).renderDependencyState.status).toBe('current');
     await request(app).patch(`${base()}/scenes/a`).send({ performanceSpeaker: 'Example Duet Partner' });
     const changed = await fresh();
+    expect(changed.renderDependencyState.status).toBe('stale');
     expect(changed.excerpts[0].dependencyState.status).toBe('stale');
     expect(changed.excerpts[1].dependencyState.status).toBe('current');
     expect(changed.scenes.map((scene) => scene.videoHistoryId)).toEqual(['clip-a', 'clip-b']);

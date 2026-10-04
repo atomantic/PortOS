@@ -24,6 +24,12 @@ export default function ComposeStage({ board }) {
             Change in Setup
           </button>
         </div>
+        {mode !== 'document' && (
+          <p className="text-xs text-port-text-muted" role="status">
+            No live preview for this style — render a draft excerpt to check changes.{' '}
+            <button type="button" onClick={() => board.goToStage('review', 'mv-draft-excerpts')} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">Render a draft excerpt</button>
+          </p>
+        )}
         <GradePanel project={project} onSave={board.saveCompositionGrade} />
         {mode !== 'eidoverse' && <TypographyPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />}
         {mode === 'eidoverse' && <EidoverseVideoPanel key={project.id} project={project} onProject={board.replaceProject} productionReadiness={board.productionReadiness} />}

@@ -174,6 +174,10 @@ describe('listPreviewSources', () => {
       .toEqual(['final', 'document', 'excerpt:b', 'excerpt:a']);
     // The final render plays only once its file has resolved; a non-document mode has no live composition.
     expect(ids({ renderHistoryId: 'r1', composition: { mode: 'concat', document: { directory: 'd' } }, excerpts })).toEqual(['excerpt:b', 'excerpt:a']);
+    // Composing puts the live document ahead of an old final render, and a stale final says so.
+    const stale = { renderHistoryId: 'r1', renderDependencyState: { status: 'stale' }, composition: { mode: 'document', document: { directory: 'd' } }, excerpts };
+    expect(ids(stale, { finalVideoSrc: '/data/videos/final.mp4', liveFirst: true })).toEqual(['document', 'final', 'excerpt:b', 'excerpt:a']);
+    expect(listPreviewSources(stale, { finalVideoSrc: '/data/videos/final.mp4' })[0].label).toBe('Final render (out of date)');
     expect(listPreviewSources({ excerpts: [{ id: 'c', status: 'error' }] })).toEqual([]);
     expect(listPreviewSources({ excerpts })[0]).toMatchObject({ kind: 'video', src: '/data/videos/b.mp4', startSec: 10, endSec: 20 });
   });
