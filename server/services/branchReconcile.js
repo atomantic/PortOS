@@ -40,6 +40,7 @@ import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { ledgerPath, readVerdictLedger, partitionSuperseded, recordVerdictInstruction, recordVerdict, sameDirtyPaths } from './supersededLedger.js';
 import { backupSupersededBranch } from './supersededBackup.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { withClaimOwnershipLock } from './cosClaimOwnership.js';
 import { agentApiCurl } from '../lib/agentApiToken.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
 
@@ -399,7 +400,7 @@ export function buildActiveOwnerIds(runtimeIds, liveAgents) {
  * caller does not dispatch or mutate on this answer (a read-only detector) and
  * nothing is added; supplied but unreadable holds every branch.
  *
- * @param {{ branch: string, path: string|null, claimOwners?: { agents: object[]|null }, sourceWorkspace: string }} input
+ * @param {{ branch: string, path: string|null, claimOwners?: { agents: object[]|null, readAgents?: () => Promise<object[]> }, sourceWorkspace: string }} input
  * @returns {string|null}
  */
 export function resolveClaimOwnerReason({ branch, path, claimOwners, sourceWorkspace }) {
@@ -1053,7 +1054,7 @@ async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeA
  * @returns {Promise<{cleaned:string[], skipped:{branch:string,reason:string,retryAt?:string}[]}>}
  *   A skip carries `retryAt` when its hold is known to lift at a specific time.
  */
-export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds = new Set(), origin, forgeExec, forgeAccount = null } = {}) {
+export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds = new Set(), claimOwners, origin, forgeExec, forgeAccount = null } = {}) {
   const cleaned = [];
   const skipped = [];
   for (const b of merged) {
@@ -1068,6 +1069,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
     // dirty gate is still ahead of the removal.
     const retired = await retireBranch(repoPath, b, {
       activeAgentIds,
+      claimOwners,
       staleClaimIdleMs: isMalformedClaimBranch(b.branch)
         ? SHIPPED_CLAIM_IDLE_MS
         : b.upstreamGone ? SHIPPED_CLAIM_IDLE_MS : STALE_CLAIM_IDLE_MS,
@@ -1119,7 +1121,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
  * @returns {Promise<{reaped:string[], held:object[], skipped:{branch:string,reason:string,retryAt?:string}[]}>}
  *   `held` is the live entries the reap could not take, for the caller to report.
  */
-export async function reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds = new Set(), cosDir } = {}) {
+export async function reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds = new Set(), claimOwners, cosDir } = {}) {
   const reaped = [];
   const held = [];
   const skipped = [];
@@ -1134,6 +1136,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
       continue;
     }
     const retired = await retireBranch(repoPath, b, {
+      claimOwners,
       activeAgentIds,
       allowLiveClaim: true,
       label: `🔀 branch-reconcile: remove superseded worktree for ${b.branch}`,
@@ -1197,10 +1200,25 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *   copies them out before anything is removed. Never set it false without both.
  * @returns {Promise<{ ok: true, prepared?: any } | { ok: false, reason: string, retryAt?: string }>}
  */
-async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, prepare }) {
+async function retireBranch(repoPath, b, opts) {
   // A live claim run may still be finishing this branch (CI wait, merge handoff,
-  // its own cleanup) — never remove its checkout or ref from under it.
+  // its own cleanup) — never remove its checkout or ref from under it. The scan's
+  // answer is stale by now, so with a registry reader the owners are re-read
+  // under the lock binding takes: a bind lands before this check or after the
+  // removal, never between them.
   if (b.claimOwnerReason) return { ok: false, reason: b.claimOwnerReason };
+  const readAgents = opts.claimOwners?.readAgents;
+  if (!readAgents) return retireBranchNow(repoPath, b, opts);
+  return withClaimOwnershipLock(async () => {
+    const reason = claimCheckoutOwnerReason({
+      branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath,
+      agents: await readAgents().catch(() => null),
+    });
+    return reason ? { ok: false, reason } : retireBranchNow(repoPath, b, opts);
+  });
+}
+
+async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, prepare }) {
   if (b.worktreePath) {
     // Never tear down a worktree that's locked, a RECENT human /claim session, or
     // an active CoS agent workspace. An abandoned claim worktree (clean and older
@@ -1254,8 +1272,10 @@ async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClai
  *   branches left on `origin` that nothing local points at; off, they are only
  *   reported — see `reapOrphanedRemotes`. `activeAgentIds` protects in-use CoS
  *   agent worktrees and any live worktree basename tokens supplied by the caller.
- *   `claimOwners` (`{ agents }`, the agent registry) adds the registered claim
- *   owners — see `resolveClaimOwnerReason`; a dispatching caller must pass it.
+ *   `claimOwners` (`{ agents, readAgents? }`, the agent registry) adds the
+ *   registered claim owners — see `resolveClaimOwnerReason`; a dispatching
+ *   caller must pass it. `readAgents` re-reads the registry right before each
+ *   retirement, because a claim run can bind a branch after the scan.
  *   `forgeAccount` is the managed app record's explicit gh
  *   account pin, so an app whose repo belongs to another GitHub account is
  *   polled with a credential that can actually see it (#7540); unset, the
@@ -1356,7 +1376,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   // pass is how nine of them accumulated in this install. Backed up first, and
   // held by the same protection gate as cleanupMerged — see reapSupersededBranches.
   const supersededReap = reapSuperseded
-    ? await reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds })
+    ? await reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds, claimOwners })
     : { reaped: [], held: superseded, skipped: superseded.map((b) => ({ branch: b.branch, reason: 'reap-superseded-disabled' })) };
   // Every WIP entry carries its `liveOwnerReason`, so a caller that needs the
   // "held by a live owner" subset (to report "the only branches left belong to
@@ -1364,7 +1384,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   const wip = classified.filter((c) => c.state === 'WIP');
 
   const { cleaned: cleanedBranches, skipped } = cleanup
-    ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, origin, forgeExec, forgeAccount })
+    ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
   const cleaned = [...new Set([...cleanedWorktrees, ...cleanedBranches])];
 

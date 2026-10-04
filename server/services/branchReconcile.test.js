@@ -1354,6 +1354,24 @@ describe('reconcile', () => {
       }
     });
 
+    it('re-reads ownership right before retirement, so a bind after the scan still holds the checkout', async () => {
+      git.getBranches.mockResolvedValue([
+        { name: 'claim/issue-101', isDefault: false, current: false, tracking: 'origin/claim/issue-101', merged: true }
+      ]);
+      wt.listWorktrees.mockResolvedValue([
+        { path: '/repo/data/cos/worktrees/claim-issue-101', branch: 'refs/heads/claim/issue-101' }
+      ]);
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
+      execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+      // The scan saw nobody; the run bound the branch before cleanup reached it.
+      const late = await reconcile('/repo', { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [owner('running')] } });
+      expect(late.skipped).toEqual([expect.objectContaining({ branch: 'claim/issue-101', reason: 'claim-owner-active' })]);
+      const unreadable = await reconcile('/repo', { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => { throw new Error('state unreadable'); } } });
+      expect(unreadable.skipped).toEqual([expect.objectContaining({ reason: 'claim-ownership-unreadable' })]);
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+      expect(git.deleteBranch).not.toHaveBeenCalled();
+    });
+
     it('never retires a merged, clean claim checkout its live owner is still handing off', async () => {
       git.getBranches.mockResolvedValue([
         { name: 'claim/issue-101', isDefault: false, current: false, tracking: 'origin/claim/issue-101', merged: true }

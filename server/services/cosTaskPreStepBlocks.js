@@ -447,7 +447,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const result = await reconcile(app.repoPath, {
     cleanup: actions.cleanupMerged !== false,
     activeAgentIds,
-    claimOwners: { agents: liveAgents },
+    claimOwners: { agents: liveAgents, readAgents: getAgents },
     // The app's gh account pin, so a repo owned by another GitHub account is
     // polled with a credential that can see it (#7540).
     forgeAccount: app.forgeAccount || null

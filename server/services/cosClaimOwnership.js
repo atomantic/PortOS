@@ -20,6 +20,15 @@ const normalize = (p) => (process.platform === 'win32' ? resolve(p).toLowerCase(
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string' && normalize(a) === normalize(b);
 const branchOf = (wt) => String(wt?.branch || '').replace(/^refs\/heads\//, '');
 
+// One in-process tail shared by binding and branch-reconcile's retirement, so a
+// bind cannot land between cleanup's ownership re-read and its removal.
+let ownershipTail = Promise.resolve();
+export function withClaimOwnershipLock(work) {
+  const run = ownershipTail.then(work, work);
+  ownershipTail = run.catch(() => {});
+  return run;
+}
+
 /**
  * @param {{ agentId: string, action: 'bind'|'release', branch: string }} input
  * @returns {Promise<{ bound: true, branch: string }|{ released: true, branch: string }|{ bound?: false, released?: false, reason: string }>}
@@ -28,7 +37,7 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
   const done = action === 'bind' ? 'bound' : 'released';
   const { withStateLock, loadState, saveState } = await import('./cosState.js');
   const { cosEvents } = await import('./cosEvents.js');
-  return withStateLock(async () => {
+  return withClaimOwnershipLock(() => withStateLock(async () => {
     const state = await loadState();
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { [done]: false, reason: 'owner-unknown' };
@@ -39,7 +48,7 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
     cosEvents.emit('agent:updated', state.agents[agentId]);
     console.log(`🔒 Claim ownership ${done}: ${branch} → ${agentId}`);
     return { [done]: true, branch };
-  });
+  }));
 }
 
 /**
