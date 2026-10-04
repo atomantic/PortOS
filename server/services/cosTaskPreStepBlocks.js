@@ -33,7 +33,6 @@ import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
 import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
-import { worktreeAgentId } from '../lib/worktreeOwnership.js';
 import {
   appendReviewerEffortBlock,
   buildLocalReviewerInstructions,
@@ -422,26 +421,20 @@ export async function resolveReconcileDrainGate(taskSchedule, taskType, app, { s
  */
 export async function resolveBranchReconcileBlock(app, taskType, metadata, taskSchedule) {
   if (taskType !== 'branch-reconcile') return { skip: false, block: '' };
-  const { reconcile, filterActionable, limitBranchesForAgent, formatInFlightForPrompt, actionableSignature, describeIdleReconcilePark } = await import('./branchReconcile.js');
+  const { reconcile, filterActionable, limitBranchesForAgent, formatInFlightForPrompt, actionableSignature, describeIdleReconcilePark, buildActiveOwnerIds } = await import('./branchReconcile.js');
   const { formatSupersededForPrompt } = await import('./supersededLedger.js');
-  const { getActiveAgentIds, isTruthyMeta } = await import('./agentState.js');
+  const { getActiveAgentIds } = await import('./agentState.js');
   const { getAgents } = await import('./cos.js');
-  const activeAgentIds = new Set(getActiveAgentIds());
   const liveAgents = await getAgents().catch((err) => {
     emitLog('warn', `branch-reconcile skipped for ${app.name}: active agent state unreadable (${err.message})`, { appId: app.id, analysisType: taskType });
     return null;
   });
   if (!Array.isArray(liveAgents)) return { skip: true };
   // Claim worktrees use a branch-shaped directory name, not the `agent-*` id
-  // stored on the run. Add the live record's workspace basename to the same
-  // ownership set so a branch-reconcile sub-agent cannot adopt a claim tree
-  // while its original agent is still running (or paused for resume).
-  for (const agent of liveAgents) {
-    if (agent?.status !== 'running' && agent?.status !== 'paused') continue;
-    if (agent.id) activeAgentIds.add(agent.id);
-    const worktreeId = worktreeAgentId(agent.workspacePath || agent.metadata?.workspacePath);
-    if (worktreeId) activeAgentIds.add(worktreeId);
-  }
+  // stored on the run, so the live records' workspace basenames join the
+  // ownership set — and a run that cut its own claim tree keeps the source repo
+  // as its workspace, so its registered branch bindings are passed as well.
+  const activeAgentIds = buildActiveOwnerIds(getActiveAgentIds(), liveAgents);
   // Action toggles were merged (global → per-app override) + value-constrained
   // by sanitizeTaskMetadata into `metadata`; each is ON unless explicitly false.
   const actions = {
@@ -454,6 +447,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const result = await reconcile(app.repoPath, {
     cleanup: actions.cleanupMerged !== false,
     activeAgentIds,
+    claimOwners: { agents: liveAgents, readAgents: getAgents },
     // The app's gh account pin, so a repo owned by another GitHub account is
     // polled with a credential that can see it (#7540).
     forgeAccount: app.forgeAccount || null
@@ -539,7 +533,8 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
       defaultBranch: result.defaultBranch,
       actions,
       branchesPerAgent: metadata.branchesPerAgent,
-      repoPath: app.repoPath
+      repoPath: app.repoPath,
+      appId: app.id
     }),
     supersededBlock
   ].filter(Boolean).join('\n');

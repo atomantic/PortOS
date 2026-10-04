@@ -569,6 +569,25 @@ export function buildClaimResumeOverride({ priorAgentId, branchName, worktreePat
   ].join('\n');
 }
 
+/**
+ * The run's registered claim branch is only the pinned target (or nothing, for
+ * a picker); the branch it actually checks out — an epic's child, a split
+ * slice, a picked issue — is bound here before the checkout exists, so
+ * branch-reconcile and continuations see a live owner for it (#10089).
+ */
+function buildClaimOwnershipSection(agentId) {
+  if (!agentId) return 'Claim ownership binding requires a registered agent ID. None was supplied, so PortOS treats every claim checkout in this repository as possibly yours until this run ends; do not hand a claim branch to another run while you are live.';
+  const command = (action) => agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/claim-ownership',
+    payload: JSON.stringify({ agentId, action, branch: 'BRANCH' }) });
+  return [
+    '## Claim ownership binding',
+    'Before this run (the parent, never a fan-out child) creates, adopts or checks out ANY claim worktree, bind that exact branch to this run — the pinned issue’s own `claim/…` branch, a tracking epic’s child, a slice split from an oversized issue, each issue a picker or swarm selects, or a claim worktree you are resuming. Replace BRANCH with the branch name and require a parsed JSON response with bound:true:',
+    '```bash', command('bind'), '```',
+    'A refusal, HTTP/auth/transport error or unreadable JSON means the branch is not yours: do not create or enter that worktree; report the reason. Binding lasts until this run ends, through publication, CI, merge or leave-open handoff and cleanup — never release a branch you are still finishing. Release only a branch you deliberately leave for another owner mid-run:',
+    '```bash', command('release'), '```',
+  ].join('\n');
+}
+
 /** Only the registered parent acquires; swarm workers keep authoring in parallel. */
 function buildMergeAdmissionSection(agentId) {
   if (!agentId) return 'Merge admission requires a registered parent agent ID. If none was supplied, leave the reviewed PR open and report this missing ownership binding; do not merge.';
@@ -596,6 +615,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
   const lines = [
     ...(resumeOverride ? [resumeOverride, ''] : []),
     ...(pin ? [pin, ''] : []),
+    buildClaimOwnershipSection(agentId), '',
     ...(!leavePrOpen ? [buildMergeAdmissionSection(agentId), ''] : []),
     '## Claim Workflow Handoff',
     ...(leavePrOpen ? [

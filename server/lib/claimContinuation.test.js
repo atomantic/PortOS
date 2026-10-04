@@ -5,6 +5,9 @@ import {
   claimContinuationPointer,
   claimContinuationWorkspace,
   claimOwnershipBinding,
+  bindClaimBranch,
+  releaseClaimBranch,
+  claimCheckoutOwnerReason,
 } from './claimContinuation.js';
 
 const ROOT = '/data/cos/worktrees';
@@ -120,7 +123,7 @@ describe('claimContinuationWorkspace', () => {
 describe('claimOwnershipBinding', () => {
   it('binds a pinned claim run to its exact branch', () => {
     expect(claimOwnershipBinding({ metadata: { claimFlow: 'true', claimTarget: '42' } }))
-      .toEqual({ claimBranch: 'claim/issue-42', claimPicksOwnBranch: false });
+      .toEqual({ claimBranch: 'claim/issue-42', claimPicksOwnBranch: false, claimSelectionPending: true });
   });
 
   it('marks an unpinned claim run (issue picker or swarm orchestrator) as picking its own branch', () => {
@@ -230,5 +233,71 @@ describe('claimContinuationAdmission', () => {
     expect(admit({ worktrees: [{ ...holder, locked: true }] })).toEqual({ admit: false, reason: 'holder-locked' });
     expect(admit({ metadata: { ...metadata, resumeWorktreePath: undefined } }))
       .toEqual({ admit: false, reason: 'pointer-incomplete' });
+  });
+});
+
+// #10089: the branch a run actually checks out is not always the one it was
+// registered for — a pinned tracking epic ships a child, a picker chooses later.
+describe('claim branch binding lifecycle', () => {
+  const SOURCE = '/repos/app-x';
+  const CHILD = `${ROOT}/claim-portos-issue-101`;
+  const reason = (agents, branchName = 'claim/issue-101', holderPath = CHILD) =>
+    claimCheckoutOwnerReason({ branchName, holderPath, sourceWorkspace: SOURCE, agents });
+  const register = (task) => ({
+    id: 'agent-run', status: 'running', workspacePath: SOURCE,
+    metadata: { sourceWorkspace: SOURCE, ...claimOwnershipBinding(task) },
+  });
+  const bind = (agent, branch) => ({ ...agent, metadata: { ...agent.metadata, ...bindClaimBranch(agent, branch) } });
+
+  it('protects an epic child from a run pinned to the epic, before and after it binds the child', () => {
+    const pinned = register({ metadata: { claimFlow: true, claimTarget: '100' } });
+    // Choosing: every claim checkout in its repository may be its own.
+    expect(reason([pinned])).toBe('claim-owner-ambiguous');
+    const bound = bind(pinned, 'claim/issue-101');
+    expect(reason([bound])).toBe('claim-owner-active');
+    // Bound and settled: an unrelated claim tree is free again.
+    expect(reason([bound], 'claim/issue-55', `${ROOT}/claim-portos-issue-55`)).toBeNull();
+    // The run's end, or an explicit release, frees the child for recovery.
+    expect(reason([{ ...bound, status: 'completed' }])).toBeNull();
+    const released = { ...bound, metadata: { ...bound.metadata, ...releaseClaimBranch(bound, 'claim/issue-101') } };
+    expect(reason([released])).toBeNull();
+  });
+
+  it('keeps a picker run a possible owner until it binds its selection', () => {
+    const picker = register({ metadata: { claimFlow: true } });
+    expect(reason([picker])).toBe('claim-owner-ambiguous');
+    const bound = bind(picker, 'claim/issue-101');
+    expect(reason([bound])).toBe('claim-owner-active');
+    expect(reason([bound], 'claim/issue-55', `${ROOT}/claim-portos-issue-55`)).toBeNull();
+  });
+
+  it('stays settled after a picker releases its last binding', () => {
+    const bound = bind(register({ metadata: { claimFlow: true } }), 'claim/issue-101');
+    const released = { ...bound, metadata: { ...bound.metadata, ...releaseClaimBranch(bound, 'claim/issue-101') } };
+    expect(reason([released])).toBeNull();
+    expect(reason([released], 'claim/issue-55', `${ROOT}/claim-portos-issue-55`)).toBeNull();
+  });
+
+  it('refuses to bind a branch another live run in the repository already owns', () => {
+    const rival = bind({ ...register({ metadata: { claimFlow: true } }), id: 'agent-rival' }, 'claim/issue-101');
+    const pinned = register({ metadata: { claimFlow: true, claimTarget: '100' } });
+    expect(bindClaimBranch(pinned, 'claim/issue-101', [rival, pinned])).toEqual({ refused: 'owner-active' });
+    expect(bindClaimBranch(pinned, 'claim/issue-101', [{ ...rival, status: 'completed' }])).toMatchObject({ claimBranches: ['claim/issue-101'] });
+    // The run this one continues is not a rival.
+    const relaunch = { ...pinned, metadata: { ...pinned.metadata, resumedFromAgentId: 'agent-rival' } };
+    expect(bindClaimBranch(relaunch, 'claim/issue-101', [rival])).toMatchObject({ claimBranches: ['claim/issue-101'] });
+  });
+
+  it('refuses to bind for a finished run, a non-claim run or a non-claim branch', () => {
+    const pinned = register({ metadata: { claimFlow: true, claimTarget: '100' } });
+    expect(bindClaimBranch({ ...pinned, status: 'completed' }, 'claim/issue-101')).toEqual({ refused: 'owner-not-running' });
+    expect(bindClaimBranch({ id: 'agent-x', status: 'running', metadata: {} }, 'claim/issue-101')).toEqual({ refused: 'claim-owner-unverified' });
+    for (const branch of ['main', 'claim/../main', 'claim/issue-1 x', '']) {
+      expect(bindClaimBranch(pinned, branch)).toEqual({ refused: 'branch-invalid' });
+    }
+  });
+
+  it('holds the branch when the registry is unreadable', () => {
+    expect(reason(null)).toBe('claim-ownership-unreadable');
   });
 });

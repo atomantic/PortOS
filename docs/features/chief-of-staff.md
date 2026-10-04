@@ -57,6 +57,29 @@ before merge and repeat sync, pregate and fresh current-head CI when it changes.
 Admission does not grant permission to adopt another owner's branch or checkout,
 does not replace reviews/CI, and does not make queued auto-merge a completed merge.
 
+## Claim branch ownership
+
+A claim run cuts its own `claim/…` checkout, so its registered workspace stays
+the source repository and no worktree basename names it. Ownership is the
+registry's branch/repository binding (`server/lib/claimContinuation.js`):
+a pinned run registers its target branch and is treated as possibly owning
+every claim checkout in its repository until it binds the branch it actually
+works on (a tracking epic ships a child, an oversized issue ships a slice); a
+picker or swarm parent is a possible owner until it binds its first branch.
+The claim prompt binds each branch through the host-control-gated
+`POST /api/cos/claim-ownership` (`action: "bind"`, registered agent ID, branch)
+BEFORE creating that worktree, and `release` hands a branch off mid-run. The
+run's completion releases everything; quiet diffs, cwd, or a missing basename
+never do. Bindings live on the run record in `data/cos/state.json` — no new
+store or migration; records without them keep their previous behavior.
+
+branch-reconcile applies the same owners twice: its scan holds a branch with a
+live, possible or unreadable claim owner (never dispatched as `ABANDONED_WIP`,
+never retired by cleanup), and each dispatched branch carries a `check` command
+the worker runs right before its first mutation, because a run can take the
+branch after the scan. A refusal, an unreadable registry, or a moved checkout
+leaves the branch untouched; a completed or released owner admits recovery.
+
 ## Task File Format
 
 ```markdown

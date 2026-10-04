@@ -25,6 +25,26 @@ router.post('/merge-admission', asyncHandler(async (req, res) => {
   res.json(await claimMergeAdmission(input));
 }));
 
+// A claim run binds (or hands off) the concrete branch it checks out; a
+// branch-reconcile worker rechecks live ownership right before mutating (#10089).
+const claimBranchSchema = z.string().min(1).max(200);
+const claimOwnershipSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('bind'), agentId: z.string().min(1).max(200), branch: claimBranchSchema }),
+  z.object({ action: z.literal('release'), agentId: z.string().min(1).max(200), branch: claimBranchSchema }),
+  z.object({
+    action: z.literal('check'),
+    appId: z.string().min(1).max(200),
+    branch: claimBranchSchema,
+    worktreePath: z.string().min(1).max(4096).optional(),
+    agentId: z.string().min(1).max(200).optional(),
+  }),
+]);
+router.post('/claim-ownership', asyncHandler(async (req, res) => {
+  const input = validateRequest(claimOwnershipSchema, req.body ?? {});
+  const { updateClaimOwnership, checkReconcileOwnership } = await import('../services/cosClaimOwnership.js');
+  res.json(input.action === 'check' ? await checkReconcileOwnership(input) : await updateClaimOwnership(input));
+}));
+
 // `reason` is persisted into task metadata + interpolated into logs; guard the
 // shape so a non-string body can't store `[object Object]`.
 const pauseBodySchema = z.object({ reason: z.string().max(500).optional() });
