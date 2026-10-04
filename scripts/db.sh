@@ -579,7 +579,7 @@ run_psql() {
   if command -v psql >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif [ "$mode" = "docker" ] && docker_running; then
-    docker exec -e PGPASSWORD="$PGPASSWORD" portos-db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
+    docker exec -i -e PGPASSWORD="$PGPASSWORD" portos-db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
     err "psql not found on host and Docker DB is not running"
     exit 1

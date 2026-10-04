@@ -32,7 +32,11 @@ case "$1" in
           empty) exit 1 ;;
           *) printf '%s' "$FULL_DUMP"; exit 0 ;;
         esac ;;
-      *psql*) echo IMPORT >> "$STUB_LOG"; cat >> "$IMPORT_LOG"; exit 0 ;;
+      *psql*)
+        echo IMPORT >> "$STUB_LOG"
+        # docker exec forwards stdin only when interactive mode is enabled.
+        case " $* " in *" -i "*) cat >> "$IMPORT_LOG" ;; esac
+        exit 0 ;;
     esac ;;
 esac
 exit 0
@@ -246,6 +250,26 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     });
     expect(rejected.status).not.toBe(0);
     expect(existsSync(importLog)).toBe(false);
+  });
+
+  it('forwards the complete staged replay through Docker when host psql is absent', () => {
+    const isolated = join(root, 'docker-only-bin');
+    mkdirSync(isolated);
+    for (const name of ['bash', 'cat', 'dirname', 'mktemp', 'rm', 'grep', 'cut', 'tr']) {
+      const binary = ['/usr/bin', '/bin'].map(dir => join(dir, name)).find(existsSync);
+      symlinkSync(binary, join(isolated, name));
+    }
+    for (const name of ['node', 'docker', 'uname']) {
+      symlinkSync(join(root, 'bin', name), join(isolated, name));
+    }
+    const dump = join(root, 'docker-import.sql');
+    writeFileSync(dump, FULL_DUMP);
+    const result = run(['import', dump], 'ok', { PATH: isolated });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(importLog), 'Docker must receive SQL on stdin').toBe(true);
+    expect(readFileSync(importLog, 'utf8')).toBe(FULL_DUMP);
+    expect(result.stdout).toContain('Import complete');
+    expect(readFileSync(dump, 'utf8')).toBe(FULL_DUMP);
   });
 
   it('rejects incomplete endpoints and connection-string database overrides before any database command', () => {
