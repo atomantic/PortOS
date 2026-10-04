@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 import { getAccount, updateSyncStatus, markSentIngested, updateSendAsAliases } from './messageAccounts.js';
+import { defaultSyncModeForAccountType, syncModesForAccountType } from '../lib/messageTransport.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -169,8 +170,14 @@ export async function syncAccount(accountId, io, options = {}) {
   if (!account) return { error: 'Account not found' };
   if (!account.enabled) return { error: 'Account is disabled', status: 400 };
 
+  // Reject an explicit mode the provider cannot honor BEFORE taking the lock, emitting
+  // events, or touching the browser/cache. An omitted mode takes the account's default.
+  const mode = options.mode || defaultSyncModeForAccountType(account.type);
+  if (!syncModesForAccountType(account.type).includes(mode)) {
+    return { error: `${account.type} accounts do not support ${mode} sync`, status: 400 };
+  }
+
   syncLocks.set(accountId, true);
-  const mode = options.mode || 'unread';
   io?.emit('messages:sync:started', { accountId, mode });
   console.log(`📧 Starting ${mode} sync for account ${account.id} (${account.type})`);
 
@@ -409,8 +416,9 @@ function mergeRefreshedMessage(cache, existingByExternalId, accountId, source, m
         bodyText: threadMsg.body || '',
         bodyFull: true,
         date: threadMsg.date || message.date || new Date().toISOString(),
-        isRead: message.isRead ?? true,
-        isUnread: message.isUnread ?? false,
+        // null = read state unknown (Teams cannot measure it) — keep it null, not "read"
+        isRead: message.isRead === undefined ? true : message.isRead,
+        isUnread: message.isUnread === undefined ? false : message.isUnread,
         isPinned: message.isPinned ?? false,
         isFlagged: message.isFlagged ?? false,
         isReplied: message.isReplied ?? false,

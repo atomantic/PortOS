@@ -119,8 +119,10 @@ export async function syncPlaywright(account, cache, io, options = {}) {
     bodyText: msg.preview || '',
     bodyFull: false,
     date: msg.date || new Date().toISOString(),
-    isRead: !(msg.isUnread ?? false),
-    isUnread: msg.isUnread ?? false,
+    // `isUnread: null` = the provider cannot measure read state (Teams): record it as
+    // unknown rather than manufacturing a read message.
+    isRead: msg.isUnread === null ? null : !(msg.isUnread ?? false),
+    isUnread: msg.isUnread === null ? null : (msg.isUnread ?? false),
     isPinned: msg.isPinned ?? false,
     isFlagged: msg.isFlagged ?? false,
     isReplied: msg.isReplied ?? false,
@@ -413,7 +415,9 @@ function buildExtractionScript(type, sels, mode = 'unread') {
             subject: '',
             preview: lines[1] || '',
             date: lines[2] || '',
-            isUnread: false,
+            // The Teams list view exposes no read-state marker we can trust, so the
+            // state is unknown — never "read" (#9968). null survives normalization.
+            isUnread: null,
             isPinned: false,
             isFlagged: false,
             isReplied: false,

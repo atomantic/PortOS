@@ -520,7 +520,7 @@ describe('syncAccount', () => {
     expect(result.newMessages).toBe(0);
   });
 
-  it('should call syncPlaywright for teams accounts', async () => {
+  it('selects the supported full mode for a Teams sync that omits the mode', async () => {
     getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Teams', type: 'teams', enabled: true });
     readFile.mockResolvedValue(JSON.stringify({ syncCursor: null, messages: [] }));
     syncPlaywright.mockResolvedValue([]);
@@ -528,7 +528,44 @@ describe('syncAccount', () => {
 
     await syncAccount(VALID_UUID, mockIo);
 
-    expect(syncPlaywright).toHaveBeenCalled();
+    expect(syncPlaywright).toHaveBeenCalledWith(expect.objectContaining({ type: 'teams' }), expect.any(Object), mockIo, { mode: 'full' });
+    expect(mockIo.emit).toHaveBeenCalledWith('messages:sync:started', { accountId: VALID_UUID, mode: 'full' });
+  });
+
+  it('rejects an explicit Teams unread sync before any browser dispatch or cache write', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Teams', type: 'teams', enabled: true });
+    syncPlaywright.mockClear();
+    atomicWrite.mockClear();
+    readFile.mockClear();
+
+    const result = await syncAccount(VALID_UUID, mockIo, { mode: 'unread' });
+
+    expect(result).toMatchObject({ status: 400, error: expect.stringContaining('unread') });
+    expect(syncPlaywright).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(mockIo.emit).not.toHaveBeenCalled();
+    // The lock was never taken, so a following supported sync is not blocked.
+    syncPlaywright.mockResolvedValue([]);
+    readFile.mockResolvedValue(JSON.stringify({ syncCursor: null, messages: [] }));
+    updateSyncStatus.mockResolvedValue();
+    expect(await syncAccount(VALID_UUID, mockIo, { mode: 'full' })).toMatchObject({ status: 'success' });
+  });
+
+  it('overwrites a legacy fabricated-read Teams record with unknown read state', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Teams', type: 'teams', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ syncCursor: null, messages: [
+      { id: 'legacy', externalId: 'teams-ext', date: '2026-01-01', isRead: true, isUnread: false }
+    ] }));
+    syncPlaywright.mockResolvedValue([{ id: 'new', externalId: 'teams-ext', date: '2026-01-01', isRead: null, isUnread: null }]);
+    updateSyncStatus.mockResolvedValue();
+    atomicWrite.mockClear();
+
+    await syncAccount(VALID_UUID, mockIo);
+
+    expect(atomicWrite.mock.calls[0][1].messages).toEqual([
+      expect.objectContaining({ id: 'legacy', isRead: null, isUnread: null })
+    ]);
   });
 
   it('removes only the confirmed action target from the current cache', async () => {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import vm from 'node:vm';
 
 const findOrOpenPage = vi.fn();
 const isAuthPage = vi.fn();
@@ -103,6 +104,29 @@ it('retains the ingested provider row ID when detail is unavailable', async () =
   evaluateOnPage.mockResolvedValue({ found: false });
   const result = await syncPlaywright({ id: 'example-account', type: 'outlook' }, { messages: [] });
   expect(result.messages).toEqual([expect.objectContaining({ providerRowId: 'stable-row', subject: 'Example subject' })]);
+});
+
+// Teams' list view exposes no trusted read-state marker, so a Teams sync must record
+// read state as unknown (null) — not manufacture read messages (#9968). Runs the real
+// generated extraction script against a synthetic DOM, independent of the requested mode.
+it('records Teams read state as unknown for both sync modes', async () => {
+  findOrOpenPage.mockResolvedValue({ url: 'https://teams.microsoft.com/', webSocketDebuggerUrl: 'ws://x' });
+  isAuthPage.mockReturnValue(false);
+  tryReadFile.mockResolvedValue('{}');
+  const document = { querySelectorAll: () => [
+    { innerText: 'Alice Example\nHello there\n10:00' },
+    { innerText: 'Bob Example\n3 unread messages\n09:00' }
+  ] };
+  const scripts = [];
+  evaluateOnPage.mockReset();
+  evaluateOnPage.mockImplementation(async (_page, script) => { scripts.push(script); return vm.runInNewContext(script, { document }); });
+
+  for (const mode of ['unread', 'full']) {
+    const result = await syncPlaywright({ id: 'example-account', type: 'teams' }, { messages: [] }, null, { mode });
+    expect(result.messages).toHaveLength(2);
+    for (const message of result.messages) expect(message).toMatchObject({ isRead: null, isUnread: null });
+  }
+  expect(scripts[0]).toBe(scripts[1]);
 });
 
 // Browser-delivered drafts. evaluateOnPage is scripted per compose phase, so the

@@ -7,6 +7,7 @@ import { formatDateTime } from '../../utils/formatters';
 import { buildSelectorTestFailureTask } from '../../lib/selectorTestFailureTask';
 import * as api from '../../services/api';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
+import { accountSupportsSyncMode } from '../../lib/messageSyncModes';
 
 // Human-facing summary per `testSelectors()` status — kept out of JSX so the
 // failure-task builder and the toast can share the same wording.
@@ -58,7 +59,7 @@ export default function SyncTab({ accounts, onRefresh }) {
     if (result?.success) toast.success('Browser tab opened — log in if needed, then sync');
   };
 
-  const handleSync = (accountId, mode = 'unread') =>
+  const handleSync = (accountId, mode) =>
     sync(accountId, () => api.syncMessageAccount(accountId, mode, { silent: true }));
 
   const handleSaveSelectors = async (provider) => {
@@ -103,6 +104,11 @@ export default function SyncTab({ accounts, onRefresh }) {
                     : 'Never synced'}
                   {account.lastSyncStatus && ` (${account.lastSyncStatus})`}
                 </div>
+                {!accountSupportsSyncMode(account, 'unread') && (
+                  <div className="text-xs text-gray-500">
+                    Unread-only sync isn&apos;t available — read state can&apos;t be read from this provider yet
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 {syncing[account.id] === 'auth-required' && (
@@ -123,14 +129,16 @@ export default function SyncTab({ accounts, onRefresh }) {
                   <RefreshCw size={16} className="text-port-accent animate-spin" />
                 ) : (
                   <>
-                    <button
-                      onClick={() => handleSync(account.id, 'unread')}
-                      disabled={!account.enabled}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/10 text-port-accent rounded text-sm hover:bg-port-accent/20 transition-colors disabled:opacity-50"
-                      title="Sync unread messages only"
-                    >
-                      <MailOpen size={14} /> Sync Unread
-                    </button>
+                    {accountSupportsSyncMode(account, 'unread') && (
+                      <button
+                        onClick={() => handleSync(account.id, 'unread')}
+                        disabled={!account.enabled}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/10 text-port-accent rounded text-sm hover:bg-port-accent/20 transition-colors disabled:opacity-50"
+                        title="Sync unread messages only"
+                      >
+                        <MailOpen size={14} /> Sync Unread
+                      </button>
+                    )}
                     <button
                       onClick={() => handleSync(account.id, 'full')}
                       disabled={!account.enabled}
