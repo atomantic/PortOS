@@ -17,9 +17,8 @@ export async function publishMusicTake({ trackId, wav, take, patch = {} }) {
     return await withBackupAssetPublication(async () => {
       await ensureDir(PATHS.music);
       await copyFile(join(stageDir, filename), join(PATHS.music, filename), constants.COPYFILE_EXCL);
-      const track = Object.keys(patch).length
-        ? await tracks.appendActiveTake(trackId, { ...take, audioFilename: filename }, patch)
-        : await tracks.appendActiveTake(trackId, { ...take, audioFilename: filename });
+      const published = { ...take, audioFilename: filename };
+      const track = await tracks.appendActiveTake(trackId, published, ...(Object.keys(patch).length ? [patch] : []));
       return { track, filename };
     });
   } finally {

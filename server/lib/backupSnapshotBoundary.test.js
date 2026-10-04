@@ -36,6 +36,27 @@ describe('backup snapshot publication admission', () => {
     expect(secondStarted).toBe(true);
   });
 
+  it('lets only the current owner reopen admission and refuses a competing or nested cut', async () => {
+    const releaseFirst = await acquireBackupSnapshotCut();
+    await expect(acquireBackupSnapshotCut()).rejects.toThrow('already owned');
+    releaseFirst();
+    releaseFirst();
+
+    const releaseSecond = await acquireBackupSnapshotCut();
+    releaseFirst(); // a stale release from the earlier cut must not open this one
+    let admitted = false;
+    const waiting = withBackupAssetPublication(() => { admitted = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(admitted).toBe(false);
+    releaseSecond();
+    await waiting;
+    expect(admitted).toBe(true);
+
+    await withBackupAssetPublication(async () => {
+      await expect(acquireBackupSnapshotCut()).rejects.toThrow('inside an asset publication');
+    });
+  });
+
   it('reopens admission when an admitted workflow cannot drain', async () => {
     vi.useFakeTimers();
     const rowWrite = deferred();

@@ -47,6 +47,8 @@ export async function withBackupAssetPublication(work) {
  * admission and rejects, so runBackup marks its incomplete snapshot failed.
  */
 export async function acquireBackupSnapshotCut({ timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS } = {}) {
+  // A cut requested from inside an admitted workflow would wait on itself for the whole timeout.
+  if (publicationScope.getStore()?.active) throw new Error('Backup snapshot cut cannot be acquired inside an asset publication');
   if (cutRequested || cutActive) throw new Error('Backup snapshot cut already owned');
   cutRequested = true;
   if (admitted > 0) {

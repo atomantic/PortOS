@@ -13,6 +13,9 @@ new take publications waiting through the SQL dump and manifest write. Browser
 code takes, SuperCollider takes, chiptune renders, and painted-waveform renders
 stage encoding outside that boundary, then publish their final audio bytes and
 track row together inside it. Manual and scheduled backups use the same cut.
+If an admitted take does not drain within two minutes, or the cut cannot be
+released, the snapshot is marked failed (never published or used for retention
+pruning) and take publication reopens.
 
 This is the first slice of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923). Media-job completion, other durable asset
 replacement/deletion paths, and database maintenance are tracked as separate

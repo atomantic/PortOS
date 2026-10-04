@@ -65,6 +65,18 @@ vi.mock('../lib/db.js', async () => ({
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
+// Passthrough seam: the snapshot-cut failure tests wrap acquisition to shorten the
+// drain timeout or fail release. Left unset, runBackup uses the real boundary.
+const snapshotCutSeam = vi.hoisted(() => ({ wrap: null }));
+vi.mock('../lib/backupSnapshotBoundary.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    acquireBackupSnapshotCut: (...args) => snapshotCutSeam.wrap
+      ? snapshotCutSeam.wrap(actual.acquireBackupSnapshotCut, ...args)
+      : actual.acquireBackupSnapshotCut(...args),
+  };
+});
 import { ensureSchema, query, withDatabaseMaintenance } from '../lib/db.js';
 vi.mock('./backupDatabaseReset.js', () => ({
   getDatabaseResetPlan: async () => ({ preflight: 'SELECT 1', reset: 'RESET_APPROVED_SCHEMA' }),
@@ -3294,6 +3306,72 @@ describe('runBackup lifecycle', () => {
     await expect(fsp.access(joinPath(capturedMusic, 'new.wav'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(rowFilename).toBe('new.wav');
     expect(published).toBe(true);
+  });
+
+  describe('snapshot cut failures', () => {
+    const OLD_IDS = ['2020-01-01T00-00-00', '2020-01-02T00-00-00'];
+
+    // Two completed snapshots with retentionCount 1: a run that wrongly reached
+    // retention pruning would delete the older one.
+    async function seedCompletedSnapshots() {
+      const fsp = await actualFs();
+      for (const id of OLD_IDS) {
+        const dir = joinPath(destRoot, 'snapshots', machineHost, id);
+        await fsp.mkdir(joinPath(dir, 'data'), { recursive: true });
+        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt: `${id.slice(0, 10)}T00:00:00.000Z`, fileCount: 0 }));
+      }
+    }
+
+    async function expectFailedSnapshotWithoutPruning() {
+      const { listSnapshots, getState } = await import('./backup.js');
+      const snapshots = await listSnapshots(destRoot);
+      expect(snapshots.map(snapshot => snapshot.id)).toEqual(expect.arrayContaining(OLD_IDS));
+      expect(snapshots).toHaveLength(OLD_IDS.length + 1);
+      const [failed, ...rest] = [...snapshots].sort((a, b) => Number(Boolean(b.failed)) - Number(Boolean(a.failed)));
+      expect(failed).toMatchObject({ failed: true, incomplete: false });
+      expect(rest.every(snapshot => !snapshot.failed && !snapshot.incomplete)).toBe(true);
+      expect((await getState()).status).toBe('error');
+      expect(isBackupInProgress()).toBe(false);
+    }
+
+    afterEach(() => { snapshotCutSeam.wrap = null; });
+
+    it('fails the snapshot without copying, publishing or pruning when admitted takes cannot drain, then reopens admission', async () => {
+      const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+      await seedCompletedSnapshots();
+      let finishTake;
+      const stuckTake = withBackupAssetPublication(() => new Promise(resolve => { finishTake = resolve; }));
+      snapshotCutSeam.wrap = (acquire) => acquire({ timeoutMs: 20 });
+
+      await expect(runBackup(destRoot, null, { retentionCount: 1 }))
+        .rejects.toThrow('Timed out draining asset publications');
+
+      expect(spawn).not.toHaveBeenCalled();
+      await expectFailedSnapshotWithoutPruning();
+      await expect(withBackupAssetPublication(() => 'admitted')).resolves.toBe('admitted');
+      finishTake();
+      await stuckTake;
+    });
+
+    it('fails the snapshot without pruning when the cut cannot be released', async () => {
+      await seedCompletedSnapshots();
+      snapshotCutSeam.wrap = async (acquire, ...args) => {
+        const release = await acquire(...args);
+        return () => {
+          release();
+          throw new Error('cut release failed');
+        };
+      };
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+
+      const pending = runBackup(destRoot, null, { retentionCount: 1 }).catch(error => error);
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      proc.emit('close', 0);
+
+      expect(await pending).toMatchObject({ message: 'cut release failed' });
+      await expectFailedSnapshotWithoutPruning();
+    });
   });
 
   it.each([
