@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,11 @@ describe('vitestCiPool', () => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   };
+
+  // The Windows CI job exports the override; tests must not inherit it.
+  beforeEach(() => {
+    delete process.env.PORTOS_CI_MAX_WORKERS;
+  });
 
   afterEach(() => {
     restore('CI', original);
