@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
   Archive, BellOff, Filter, Inbox, Loader2,
-  RefreshCw, Settings, TrendingDown,
+  RefreshCw, Search, Settings, TrendingDown, X,
 } from 'lucide-react';
 import NetworkLogo, { networkLabel } from './BeeperNetworkLogo';
 import BeeperThread from './BeeperThread';
@@ -30,7 +30,7 @@ import * as api from '../../../services/api';
  *    roster and never the reference's user-curated saved scopes at mixed grain
  *    (a Discord-DMs chip beside a single-server chip). Those are deferred.
  *  - **`Archive` and `Low priority` are wired**, because `isArchived` and
- *    `isLowPriority` are real fields on every chat row. Requests, Later, add-scope, search and
+ *    `isLowPriority` are real fields on every chat row. Requests, Later, add-scope and
  *    new conversation are omitted until they work (#9985) — an inert control
  *    that looks live is worse than an absent one.
  *  - **The pinned grid is Beeper's own `isPinned`, mirrored.** PortOS never
@@ -49,7 +49,7 @@ import * as api from '../../../services/api';
  */
 
 // Fixed system scopes, in the reference's own order. Requests, Later, scope
-// management, search and new conversation are omitted until implemented
+// management and new conversation are omitted until implemented
 // (tracked in the Beeper enhancements issue, #9985).
 const SYSTEM_SCOPES = [
   { id: 'inbox', label: 'Inbox', icon: Inbox },
@@ -84,8 +84,8 @@ const INVALIDATION_MAX_WAIT_MS = 2000;
 const RECENT_ACTIVITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** The filter set one scope means. Absent keys are absent FILTERS, not `false`. */
-function filtersForScope(scope, unreadOnly) {
-  const base = unreadOnly ? { unreadOnly: true } : {};
+function filtersForScope(scope, unreadOnly, search) {
+  const base = { ...(unreadOnly ? { unreadOnly: true } : {}), ...(search ? { search } : {}) };
   if (scope === 'archive') return { ...base, archived: true };
   if (scope === 'low') return { ...base, lowPriority: true };
   if (typeof scope === 'string' && scope.startsWith(NETWORK_SCOPE_PREFIX)) {
@@ -350,6 +350,8 @@ export default function BeeperChatSurface({
 
   const scopeParam = searchParams.get('scope') || 'inbox';
   const unreadOnly = searchParams.get('unread') === '1';
+  const search = (searchParams.get('q') || '').trim();
+  const [searchOpen, setSearchOpen] = useState(Boolean(search));
 
   const [networks, setNetworks] = useState([]);
   const [conversations, setConversations] = useState([]);
@@ -389,7 +391,7 @@ export default function BeeperChatSurface({
     : 'inbox';
   const activeNetwork = scopeNetwork(scope);
   const unified = !activeNetwork;
-  const filters = useMemo(() => filtersForScope(scope, unreadOnly), [scope, unreadOnly]);
+  const filters = useMemo(() => filtersForScope(scope, unreadOnly, search), [scope, unreadOnly, search]);
 
   const setParam = useCallback((key, value) => {
     setSearchParams((prev) => {
@@ -891,11 +893,24 @@ export default function BeeperChatSurface({
           </span>
           <button
             type="button"
+            onClick={() => {
+              if (searchOpen) setParam('q', null);
+              setSearchOpen(!searchOpen);
+            }}
+            title="Search conversations"
+            aria-label="Search conversations"
+            aria-pressed={searchOpen}
+            className={`ml-auto inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 ${searchOpen ? 'bg-port-accent text-port-bg' : 'text-gray-500 hover:text-white'}`}
+          >
+            <Search size={15} />
+          </button>
+          <button
+            type="button"
             onClick={() => setParam('unread', unreadOnly ? null : '1')}
             title="Unread only"
             aria-label="Unread only"
             aria-pressed={unreadOnly}
-            className={`ml-auto inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 ${unreadOnly ? 'bg-port-accent text-port-bg' : 'text-gray-500 hover:text-white'}`}
+            className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 ${unreadOnly ? 'bg-port-accent text-port-bg' : 'text-gray-500 hover:text-white'}`}
           >
             <Filter size={15} />
           </button>
@@ -910,6 +925,30 @@ export default function BeeperChatSurface({
             <RefreshCw size={15} className={syncing || listLoading ? 'animate-spin' : undefined} />
           </button>
         </div>
+
+        {searchOpen && (
+          <div className="relative shrink-0 px-3 pb-2">
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setParam('q', event.target.value || null)}
+              placeholder="Search conversations"
+              aria-label="Search conversations by name"
+              autoFocus
+              className="w-full rounded border border-port-border bg-port-bg px-2 py-1.5 pr-8 text-xs text-white placeholder:text-gray-500 focus:border-port-accent focus:outline-none"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setParam('q', null)}
+                aria-label="Clear search"
+                className="absolute right-4 top-1/2 -translate-y-1/2 -mt-1 text-gray-500 hover:text-white"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        )}
 
         {listError && (
           <p role="alert" className="mx-3 mb-2 rounded border border-port-error/40 bg-port-error/10 px-2 py-1.5 text-[11px] text-port-error">

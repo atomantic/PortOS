@@ -28,9 +28,9 @@ export const syncBeeperNow = (options = {}) => request('/beeper/sync', { method:
 // as the literal "true"/"false" otherwise: the server reads an absent filter as
 // "do not filter", which is a different query from `false`.
 export const getBeeperConversations = ({
-  network, unreadOnly, archived, lowPriority, limit, cursor,
+  network, unreadOnly, archived, lowPriority, search, limit, cursor,
 } = {}, options = {}) =>
-  request(`/beeper/conversations${queryString({ network, unreadOnly, archived, lowPriority, limit, cursor })}`, options);
+  request(`/beeper/conversations${queryString({ network, unreadOnly, archived, lowPriority, search, limit, cursor })}`, options);
 
 export const getBeeperConversation = (conversationId, options = {}) =>
   request(`/beeper/conversations/${encodeURIComponent(conversationId)}`, options);

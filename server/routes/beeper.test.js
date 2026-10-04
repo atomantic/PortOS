@@ -593,6 +593,15 @@ describe('GET /api/beeper/conversations — filters', () => {
     expect(listConversations).not.toHaveBeenCalled();
   });
 
+  it('trims and forwards the title search, rejecting an oversized one', async () => {
+    await request(buildApp()).get('/api/beeper/conversations?search=%20alice%20');
+    expect(listConversations).toHaveBeenCalledWith({ search: 'alice' });
+    vi.mocked(listConversations).mockClear();
+    const res = await request(buildApp()).get(`/api/beeper/conversations?search=${'a'.repeat(201)}`);
+    expect(res.status).toBe(400);
+    expect(listConversations).not.toHaveBeenCalled();
+  });
+
   it('forwards the pagination cursor untouched', async () => {
     vi.mocked(listConversations).mockResolvedValue({ conversations: [], nextCursor: 'next-page-token' });
     const res = await request(buildApp()).get('/api/beeper/conversations?cursor=abc123');
