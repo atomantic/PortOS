@@ -2005,8 +2005,8 @@ describe('formatInFlightForPrompt', () => {
     ], { defaultBranch: 'main', actions: {}, appId: 'app-x' });
     expect(block).toContain('Ownership recheck: immediately before the FIRST edit');
     expect(block).toContain('/api/cos/claim-ownership');
-    expect(block).toContain('{"action":"check","appId":"app-x","branch":"claim/issue-101","worktreePath":"/wt/claim-issue-101"}');
-    expect(block).toContain('{"action":"check","appId":"app-x","branch":"feature/x"}');
+    expect(block).toContain('{"action":"check","appId":"app-x","branch":"claim/issue-101","worktreePath":"/wt/claim-issue-101","agentId":"{agentId}"}');
+    expect(block).toContain('{"action":"check","appId":"app-x","branch":"feature/x","agentId":"{agentId}"}');
     expect(block).toContain('Authorization: Bearer');
     expect(await formatInFlightForPrompt([{ branch: 'feature/x', state: 'NEEDS_PR' }], { defaultBranch: 'main', actions: {} }))
       .not.toContain('claim-ownership');

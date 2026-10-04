@@ -114,13 +114,62 @@ export function bindClaimBranch(agent, branch, agents = []) {
  * `bindClaimBranch`. Pure.
  */
 export function releaseClaimBranch(agent, branch) {
-  const refused = bindingRefusal(agent, branch);
+  const refused = releaseRefusal(agent, branch);
   if (refused) return { refused };
   const released = ownershipList(agent, 'claimReleasedBranches');
   return {
     claimBranches: ownershipList(agent, 'claimBranches').filter((b) => b !== branch),
     claimReleasedBranches: released.includes(branch) ? released : [...released, branch].slice(-MAX_BOUND_CLAIM_BRANCHES),
   };
+}
+
+/**
+ * The metadata patch that reserves `branch` for a live branch-reconcile
+ * coordinator whose worker was just admitted to mutate it (#10096). It lands in
+ * the same `claimBranches` list a claim run's bindings use, so
+ * `claimHolderOccupancy` reports the coordinator as an `active` owner to `bind`,
+ * continuation and adoption until its run ends. Null when `branch` is not a
+ * claim-shaped name — no claim run can bind it, so there is nothing to reserve.
+ * `{ refused }` when the record is not a live run or its bound list is full. Pure.
+ *
+ * @returns {{ claimBranches: string[], claimReleasedBranches: string[] }|{ refused: string }|null}
+ */
+export function reserveReconcileBranch(agent, branch) {
+  if (!isClaimOwnershipBranch(branch)) return null;
+  if (!isLiveAgent(agent)) return { refused: 'owner-not-running' };
+  const held = ownershipList(agent, 'claimBranches');
+  if (!held.includes(branch) && held.length >= MAX_BOUND_CLAIM_BRANCHES) return { refused: 'too-many-branches' };
+  return {
+    claimBranches: held.includes(branch) ? held : [...held, branch],
+    claimReleasedBranches: ownershipList(agent, 'claimReleasedBranches').filter((b) => b !== branch),
+  };
+}
+
+/** Where the coordinator prompt's recheck command carries the run's own agent id. */
+export const RECONCILE_AGENT_ID_PLACEHOLDER = '{agentId}';
+const RECONCILE_AGENT_ID_FIELD = `,"agentId":"${RECONCILE_AGENT_ID_PLACEHOLDER}"`;
+
+/**
+ * Fill a coordinator prompt's `{agentId}` slot at spawn time, once the run has an
+ * id (the in-flight block is generated before spawn). Without a usable id the
+ * field is dropped, so the recheck stays the read-only answer instead of sending
+ * a literal placeholder. Pure.
+ */
+export function injectReconcileAgentId(text, agentId) {
+  if (typeof text !== 'string' || !text.includes(RECONCILE_AGENT_ID_PLACEHOLDER)) return text;
+  const usable = typeof agentId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(agentId);
+  return usable
+    ? text.replaceAll(RECONCILE_AGENT_ID_PLACEHOLDER, agentId)
+    : text.replaceAll(RECONCILE_AGENT_ID_FIELD, '');
+}
+
+// A release may also come from a run that holds the branch by reservation rather
+// than as a claim run (a branch-reconcile coordinator).
+function releaseRefusal(agent, branch) {
+  if (isLiveAgent(agent) && ownershipList(agent, 'claimBranches').includes(branch)) {
+    return isClaimOwnershipBranch(branch) ? null : 'branch-invalid';
+  }
+  return bindingRefusal(agent, branch);
 }
 
 // Only a live claim run may change its own bindings, and only for a claim branch.
