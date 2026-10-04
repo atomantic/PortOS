@@ -55,7 +55,8 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
         && data.action.sections?.length && submit) {
         // The hand-out is the only thing driving a board-owned run forward, so a
         // throw here must not vanish: say so and point at Continue (#9940).
-        Promise.resolve().then(() => submit(data.project, data.action.sections, data.action.revisionId)).then((n) => {
+        // (The executor runs synchronously, so the hand-out starts this tick.)
+        new Promise((resolve) => resolve(submit(data.project, data.action.sections, data.action.revisionId))).then((n) => {
           if (n) toast.info(`Auto-review: generating ${n} revised section${n === 1 ? '' : 's'}`);
         }).catch((err) => {
           console.error(`❌ Music Video auto-review hand-out failed: ${err?.message || 'unknown error'}`);
