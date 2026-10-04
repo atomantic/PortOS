@@ -20,15 +20,22 @@ import useSseJobSlot from './useSseJobSlot.js';
  * uploads dir — `context` is whatever was passed to `start(url, context)`,
  * captured at kickoff so a slow-finishing job still attaches to the right
  * target even if the caller's own state changed while it was in flight.
+ *
+ * `target` is `{ roundId, referenceId }` for a reference that is already saved
+ * (or null for an unsaved draft row). It is read at each kickoff, and the server
+ * attaches the finished file to that reference itself (#9943), so `onComplete`
+ * only has to mirror it into the editor draft.
  */
-export default function useReferenceAudioImport({ onComplete } = {}) {
+export default function useReferenceAudioImport({ onComplete, target = null } = {}) {
   const { active, percent, stage, start, cancel } = useSseJobSlot({
-    startRequest: (url) => importReferenceAudio(url, { silent: true }),
+    startRequest: (url) => importReferenceAudio(url, { ...target, silent: true }),
     eventsUrl: referenceAudioImportEventsUrl,
     cancelRequest: cancelReferenceAudioImport,
     trimStartArg: true,
     onComplete: (frame, context) => onComplete?.(frame.filename, context),
-    successToast: () => 'Reference audio downloaded — Save the song to keep it',
+    successToast: (frame) => (frame.attached
+      ? 'Reference audio downloaded and attached'
+      : 'Reference audio downloaded — Save the song to keep it'),
     errorFallback: 'Reference audio download failed',
     canceledMessage: 'Reference audio download cancelled',
     lostConnectionMessage: 'Lost connection to the reference-audio download',

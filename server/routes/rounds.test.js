@@ -364,7 +364,28 @@ describe('rounds route', () => {
       .send({ url: 'https://tiktok.com/@a/video/1' });
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ jobId: 'job-1' });
-    expect(importMocks.startReferenceAudioImport).toHaveBeenCalledWith('https://tiktok.com/@a/video/1');
+    expect(importMocks.startReferenceAudioImport).toHaveBeenCalledWith('https://tiktok.com/@a/video/1', {});
+  });
+
+  // #9943: the target rides the kickoff so the server can attach the finished
+  // file to the saved reference instead of the editor carrying it until Save.
+  it('POST /reference-audio/import forwards the round + reference the download is for', async () => {
+    importMocks.startReferenceAudioImport.mockResolvedValue({ jobId: 'job-2' });
+    const res = await request(makeApp())
+      .post('/api/rounds/reference-audio/import')
+      .send({ url: 'https://tiktok.com/@a/video/1', roundId: 'round-1', referenceId: 'ref-1' });
+    expect(res.status).toBe(202);
+    expect(importMocks.startReferenceAudioImport).toHaveBeenCalledWith(
+      'https://tiktok.com/@a/video/1', { roundId: 'round-1', referenceId: 'ref-1' },
+    );
+  });
+
+  it('POST /reference-audio/import 400s when only one half of the target is sent', async () => {
+    const res = await request(makeApp())
+      .post('/api/rounds/reference-audio/import')
+      .send({ url: 'https://tiktok.com/@a/video/1', roundId: 'round-1' });
+    expect(res.status).toBe(400);
+    expect(importMocks.startReferenceAudioImport).not.toHaveBeenCalled();
   });
 
   it('POST /reference-audio/import 400s on a missing url (not read as a round id)', async () => {

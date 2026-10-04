@@ -592,6 +592,35 @@ export async function updateRound(id, patch) {
   });
 }
 
+// Attach a downloaded reference-audio file to a reference that is ALREADY
+// persisted on the round (#9943). The download used to leave the filename only
+// in the editor's draft until Save, so a reload orphaned the file and lost the
+// result; attaching at download time puts it on the song itself, and Save then
+// merely confirms what the server already holds.
+//
+// Returns whether it attached. A missing round or reference (the row is still an
+// unsaved draft, or was deleted mid-download) and a reference that already has
+// audio are both a clean `false`: this never replaces a recording the user
+// attached, and never throws into the finished download that called it.
+export async function attachReferenceAudio(roundId, referenceId, audioFilename) {
+  return enqueue(async () => {
+    const songs = await readRounds();
+    const idx = songs.findIndex((s) => s.id === roundId);
+    if (idx === -1) return false;
+    const references = songs[idx].references || [];
+    const refIdx = references.findIndex((r) => r.id === referenceId);
+    if (refIdx === -1 || references[refIdx].audioFilename) return false;
+    songs[idx] = sanitizeRound({
+      ...songs[idx],
+      references: references.map((r, i) => (i === refIdx ? { ...r, audioFilename } : r)),
+      updatedAt: new Date().toISOString(),
+    });
+    await atomicWrite(STATE_PATH, { rounds: songs });
+    console.log(`🎧 Attached reference audio ${audioFilename} to "${songs[idx].title}" (${roundId})`);
+    return true;
+  });
+}
+
 // Restore a built-in default song's shipped content (metadata, lyrics, layers,
 // notation, notes) to the current bundled template — for installs that seeded
 // an older version of the song and want the newer shipped one. User-owned state

@@ -716,6 +716,50 @@ describe('rounds service', () => {
     expect(patched.partnerRoundIds).toEqual(['song-other']); // self dropped
   });
 
+  // #9943: a finished reference-audio download attaches to the saved reference
+  // itself, so a reload (a fresh read of the store) still shows the file.
+  describe('attachReferenceAudio', () => {
+    const makeRound = (references) => svc.createRound({ title: 'Attach test', references });
+
+    it('persists the file on the reference so a fresh read still shows it', async () => {
+      const round = await makeRound([{ id: 'ref-a', url: 'https://example.com/clip' }]);
+
+      expect(await svc.attachReferenceAudio(round.id, 'ref-a', 'clip.mp3')).toBe(true);
+
+      const reloaded = await svc.getRound(round.id);
+      expect(reloaded.references[0]).toMatchObject({ id: 'ref-a', audioFilename: 'clip.mp3' });
+    });
+
+    it('never replaces audio already attached to the reference', async () => {
+      const round = await makeRound([{ id: 'ref-a', url: 'https://example.com/clip', audioFilename: 'first.mp3' }]);
+
+      expect(await svc.attachReferenceAudio(round.id, 'ref-a', 'second.mp3')).toBe(false);
+
+      expect((await svc.getRound(round.id)).references[0].audioFilename).toBe('first.mp3');
+    });
+
+    it('attaches only to the named reference', async () => {
+      const round = await makeRound([
+        { id: 'ref-a', url: 'https://example.com/a' },
+        { id: 'ref-b', url: 'https://example.com/b' },
+      ]);
+
+      await svc.attachReferenceAudio(round.id, 'ref-b', 'b.mp3');
+
+      const [a, b] = (await svc.getRound(round.id)).references;
+      expect(a.audioFilename).toBeUndefined();
+      expect(b.audioFilename).toBe('b.mp3');
+    });
+
+    it('reports false for a round or reference that is not on disk (an unsaved draft row)', async () => {
+      const round = await makeRound([{ id: 'ref-a', url: 'https://example.com/clip' }]);
+
+      expect(await svc.attachReferenceAudio('round-missing', 'ref-a', 'clip.mp3')).toBe(false);
+      expect(await svc.attachReferenceAudio(round.id, 'tmp-ref-draft', 'clip.mp3')).toBe(false);
+      expect((await svc.getRound(round.id)).references[0].audioFilename).toBeUndefined();
+    });
+  });
+
   it('getRound returns null for a non-existent id', async () => {
     await svc.listRounds(); // ensure seeded
     const missing = await svc.getRound('song-does-not-exist-xyz');

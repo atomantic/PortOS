@@ -32,11 +32,13 @@ const refImport = vi.hoisted(() => ({
   start: vi.fn(),
   cancel: vi.fn(),
   onComplete: null,
+  target: undefined,
   state: { active: false, percent: 0, stage: null },
 }));
 vi.mock('../../hooks/useReferenceAudioImport.js', () => ({
   default: (opts = {}) => {
     refImport.onComplete = opts.onComplete;
+    refImport.target = opts.target;
     return { ...refImport.state, start: refImport.start, cancel: refImport.cancel };
   },
 }));
@@ -419,6 +421,28 @@ describe('ReferenceAudioAttach', () => {
     // Segments are offsets into the removed audio — cleared with it so stale
     // ranges can't resurrect against a later, different recording.
     expect(onUpdate).toHaveBeenCalledWith('segments', []);
+  });
+
+  // #9943: the server attaches the finished download to a SAVED reference, so a
+  // reload before Save keeps it. A row still carrying a temp id exists only in
+  // this draft — there is nothing server-side to attach to, so no target.
+  describe('download target (#9943)', () => {
+    const targetFor = (reference, roundId) => {
+      render(<ReferenceAudioAttach reference={reference} roundId={roundId} onUpdate={vi.fn()} />);
+      return refImport.target;
+    };
+
+    it('names the saved reference so the server can attach the file', () => {
+      expect(targetFor({ id: 'ref-1a2b3c4d', url: 'https://x.com' }, 'round-1')).toEqual({ roundId: 'round-1', referenceId: 'ref-1a2b3c4d' });
+    });
+
+    it('sends no target for a reference that only exists in the unsaved draft', () => {
+      expect(targetFor({ id: 'ref-new-1', url: 'https://x.com' }, 'round-1')).toBeNull();
+    });
+
+    it('sends no target when the round id is unknown', () => {
+      expect(targetFor({ id: 'ref-1a2b3c4d', url: 'https://x.com' }, undefined)).toBeNull();
+    });
   });
 
   it('starts a URL download and wires the finished filename onto the reference draft (#2120)', () => {

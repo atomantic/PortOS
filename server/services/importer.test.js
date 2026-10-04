@@ -1706,6 +1706,145 @@ describe('commitImport', () => {
   });
 });
 
+// Import sessions (#9943): the server, not the client's React state, remembers
+// how far an import got, so a repeat commit cannot duplicate the issue set.
+describe('commitImport import sessions (#9943)', () => {
+  const analyze = (source = 'The vault loomed in the dark.') => importerSvc.analyzeImport({
+    universeName: 'Session U', seriesName: 'Session S', contentType: 'short-story', source,
+  });
+  const payloadFor = (preview, extra = {}) => ({
+    universeId: preview.universe.id,
+    seriesId: preview.series.id,
+    importId: preview.importId,
+    arc: { logline: 'Original logline', summary: 'Original summary', shape: 'man-in-hole' },
+    seasons: [{ number: 1, title: 'S1', logline: '', synopsis: '', endingHook: '' }],
+    issues: [
+      { title: 'I1', arcPosition: 1, proseExcerpt: 'p1' },
+      { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' },
+    ],
+    ...extra,
+  });
+  const issueCount = async (preview) => (await issuesSvc.listIssues({ seriesId: preview.series.id })).length;
+
+  it('replays a repeated commit: nothing new is created and the recorded ids come back', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    const first = await importerSvc.commitImport(payloadFor(preview));
+    expect(first.createdIssueIds).toHaveLength(2);
+    expect(first.replayed).toBeUndefined();
+
+    // An edit made after the commit must survive a repeat: the replay writes nothing.
+    await seriesSvc.updateSeries(preview.series.id, { logline: 'Edited since' });
+    const again = await importerSvc.commitImport(payloadFor(preview));
+
+    expect(again.replayed).toBe(true);
+    expect(again.createdIssueIds).toEqual(first.createdIssueIds);
+    expect(await issueCount(preview)).toBe(2);
+    expect((await seriesSvc.getSeries(preview.series.id)).logline).toBe('Edited since');
+  });
+
+  it('survives a reload: re-analyzing the same text reads the committed session back', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    expect(preview.importSession).toBeNull();
+    const first = await importerSvc.commitImport(payloadFor(preview));
+
+    // The reload dropped every client marker; analyze is all the client has.
+    const reanalyzed = await analyze('  The vault loomed in the dark.\r\n');
+    expect(reanalyzed.isExistingSeries).toBe(true);
+    expect(reanalyzed.importId).toBe(preview.importId);
+    expect(reanalyzed.importSession).toEqual({ status: 'committed', createdIssueIds: first.createdIssueIds });
+
+    const resumed = await importerSvc.commitImport(payloadFor(reanalyzed));
+    expect(resumed.replayed).toBe(true);
+    expect(await issueCount(preview)).toBe(2);
+  });
+
+  it('resumes after a rolled-back issue loop without resending canon or the arc', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    let call = 0;
+    mockCreateIssue.mockImplementation(async (...args) => {
+      call++;
+      if (call === 2) throw new Error('simulated mid-loop FS error');
+      return realIssuesRef.current.createIssue(...args);
+    });
+    await expect(importerSvc.commitImport(payloadFor(preview))).rejects.toMatchObject({
+      code: importerSvc.ERR_PARTIAL_COMMIT_ISSUES,
+    });
+    expect(await issueCount(preview)).toBe(0);
+
+    const reanalyzed = await analyze();
+    expect(reanalyzed.importSession).toMatchObject({ status: 'arc-persisted' });
+    await seriesSvc.updateSeries(preview.series.id, { arc: { logline: 'Edited arc', summary: 'Edited', shape: 'rags-to-riches' } });
+
+    // A client with no memory of the failure resends the full payload, arc included.
+    const retried = await importerSvc.commitImport(payloadFor(reanalyzed));
+    expect(retried.createdIssueIds).toHaveLength(2);
+    expect((await seriesSvc.getSeries(preview.series.id)).arc.shape).toBe('rags-to-riches');
+    expect((await analyze()).importSession.status).toBe('committed');
+  });
+
+  it('does not block a different manuscript imported into the same series', async () => {
+    wireDefaultLLMResponses();
+    const first = await analyze('Chapter one text.');
+    await importerSvc.commitImport(payloadFor(first, { issues: [{ title: 'A', arcPosition: 1, proseExcerpt: 'a' }] }));
+
+    const second = await analyze('A different manuscript entirely.');
+    expect(second.importId).not.toBe(first.importId);
+    expect(second.importSession).toBeNull();
+    const result = await importerSvc.commitImport(payloadFor(second, { issues: [{ title: 'B', proseExcerpt: 'b' }] }));
+    expect(result.replayed).toBeUndefined();
+    expect(await issueCount(first)).toBe(2);
+  });
+
+  it('treats a committed session whose issues were all deleted as a fresh start', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    const first = await importerSvc.commitImport(payloadFor(preview));
+    for (const id of first.createdIssueIds) await issuesSvc.deleteIssue(id);
+
+    const reanalyzed = await analyze();
+    expect(reanalyzed.importSession).toBeNull();
+    const again = await importerSvc.commitImport(payloadFor(reanalyzed));
+    expect(again.replayed).toBeUndefined();
+    expect(again.createdIssueIds).toHaveLength(2);
+  });
+
+  it('serializes concurrent commits of one import into a single issue set', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    const [a, b] = await Promise.all([
+      importerSvc.commitImport(payloadFor(preview)),
+      importerSvc.commitImport(payloadFor(preview)),
+    ]);
+    expect([a.replayed, b.replayed].filter(Boolean)).toHaveLength(1);
+    expect(a.createdIssueIds).toEqual(b.createdIssueIds);
+    expect(await issueCount(preview)).toBe(2);
+  });
+
+  it('keeps replace mode independent of the session — it rewrites rather than replays', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    await importerSvc.commitImport(payloadFor(preview));
+    const replaced = await importerSvc.commitImport(payloadFor(preview, {
+      replaceMode: true,
+      issues: [{ title: 'Replacement', arcPosition: 1, proseExcerpt: 'r' }],
+    }));
+    expect(replaced.replayed).toBeUndefined();
+    const after = await issuesSvc.listIssues({ seriesId: preview.series.id });
+    expect(after.map((i) => i.title)).toEqual(['Replacement']);
+  });
+
+  it('commits without an importId exactly as before (older clients)', async () => {
+    const { uni, ser } = await setupForCommit();
+    const body = { universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Solo', proseExcerpt: 'p' }] };
+    await importerSvc.commitImport(body);
+    await importerSvc.commitImport(body);
+    expect(await issuesSvc.listIssues({ seriesId: ser.id })).toHaveLength(2);
+  });
+});
+
 describe('mergeSeasons (pure helper)', () => {
   const stubBuildSeason = (input) => ({
     id: `built-${input.number}`,

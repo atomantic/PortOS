@@ -11,7 +11,6 @@ vi.mock('../../../services/api', () => ({
   updateBrainInboxEntry: vi.fn(),
   deleteBrainInboxEntry: vi.fn(),
   markBrainInboxDone: vi.fn(),
-  markBrainInboxSentToCatalog: vi.fn(),
 }));
 
 vi.mock('../../../services/socket', () => ({

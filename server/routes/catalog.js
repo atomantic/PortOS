@@ -166,9 +166,23 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
   const scrap = await catalogDB.getScrap(req.params.id);
   if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
 
+  // Source notes are stamped consumed in THIS request — on a replay too, so a
+  // retry that follows a crash between the commit and the stamp heals it. A
+  // stamp failure fails the request; the retry (same key) replays the receipt
+  // rather than committing again, which is why the commit is safe to leave in
+  // place when the stamp below it fails.
+  const consumeSourceNotes = async () => {
+    if (!body.creativeNoteIds) return;
+    const { markInboxSentToCatalog } = await import('../services/brain.js');
+    await markInboxSentToCatalog(body.creativeNoteIds);
+  };
+
   if (body.operationKey) {
     const replay = await catalogDB.getScrapCommitReceipt({ ...body, scrapId: scrap.id });
-    if (replay) return res.status(201).json({ scrap, ingredients: replay });
+    if (replay) {
+      await consumeSourceNotes();
+      return res.status(201).json({ scrap, ingredients: replay });
+    }
   }
 
   // Embed all drafts in parallel (concurrency-4 inside embedBatch) before
@@ -189,6 +203,7 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
     role: body.role,
   });
 
+  await consumeSourceNotes();
   res.status(201).json({ scrap, ingredients: created });
 }));
 
