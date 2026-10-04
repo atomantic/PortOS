@@ -8,7 +8,7 @@ const conductor = {
 };
 vi.mock('./storyBuilder.js', () => conductor);
 
-const { startStepRun, isStepRunActive, attachClient, __testing } = await import('./storyBuilderRunner.js');
+const { startStepRun, isStepRunActive, attachClient, listActiveStepRuns, __testing } = await import('./storyBuilderRunner.js');
 
 // Minimal SSE `res` double: captures written frames + close.
 function fakeRes() {
@@ -140,5 +140,44 @@ describe('storyBuilderRunner', () => {
   it('attachClient returns false when no run is active for the step', () => {
     const res = fakeRes();
     expect(attachClient('stb-none', 'idea', res)).toBe(false);
+  });
+
+  describe('listActiveStepRuns (discovery after reload)', () => {
+    it('lists only this session\'s in-flight runs with a bounded identity, the latest phase, and no request text', async () => {
+      let releaseRefine;
+      conductor.refineStep.mockImplementation(async (_id, _step, { onProgress }) => {
+        onProgress?.({ label: 'Rewriting Mira…', phase: 'refine' });
+        await new Promise((r) => { releaseRefine = r; });
+        return {};
+      });
+      conductor.generateStep.mockImplementation(() => new Promise(() => {}));
+      const refine = startStepRun('stb-1', 'characters', { op: 'refine', entryId: 'char-A', feedback: 'make her angrier' });
+      startStepRun('stb-1', 'plotArc', { op: 'backfill', fromDownstream: true });
+      startStepRun('stb-other', 'idea', { op: 'generate' });
+      await flush();
+
+      const active = listActiveStepRuns('stb-1');
+      expect(active.map((r) => r.stepId).sort()).toEqual(['characters', 'plotArc']);
+      const characters = active.find((r) => r.stepId === 'characters');
+      expect(characters).toEqual({
+        stepId: 'characters', runId: refine.runId, op: 'refine', entryId: 'char-A',
+        startedAt: expect.any(String), phase: 'Rewriting Mira…',
+      });
+      // Discovery must not leak the request text, and must not start provider work.
+      expect(JSON.stringify(active)).not.toContain('angrier');
+      expect(active.find((r) => r.stepId === 'plotArc')).toMatchObject({ op: 'backfill', phase: null });
+      expect(conductor.refineStep).toHaveBeenCalledTimes(1);
+      expect(conductor.generateStep).toHaveBeenCalledTimes(2);
+      releaseRefine();
+      await flush();
+    });
+
+    it('does not list a finished run still lingering in its replay window', async () => {
+      conductor.generateStep.mockResolvedValue({});
+      startStepRun('stb-1', 'idea', { op: 'generate' });
+      await flush();
+      expect(__testing.runs.size).toBe(1); // record still present for terminal replay
+      expect(listActiveStepRuns('stb-1')).toEqual([]);
+    });
   });
 });

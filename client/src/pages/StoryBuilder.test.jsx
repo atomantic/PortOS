@@ -907,4 +907,52 @@ describe('StoryBuilder — detail stepper', () => {
     await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Generated'));
     delete global.EventSource;
   });
+
+  // #10065 — a full reload / second tab starts with an empty provider, but the
+  // server run is still live. The session read now reports it; the page must
+  // re-attach to its stream (no second kickoff), show it, and refresh once on
+  // settlement.
+  describe('discovering a live run after a reload (#10065)', () => {
+    const liveSession = (activeSteps) => ({
+      id: 'stb-1', title: 'X', currentStep: 'readerMap', universeId: 'u1', seriesId: 's1',
+      steps: mkSteps({ idea: { locked: true }, universeAesthetic: { locked: true }, plotArc: { locked: true } }),
+      staleSteps: [], llm: { provider: '', model: '' }, activeSteps,
+    });
+    beforeEach(() => { MockEventSource.reset(); global.EventSource = MockEventSource; });
+    afterEach(() => { delete global.EventSource; });
+
+    it('attaches to the surviving run, shows it, disables the kickoff and reloads once on completion', async () => {
+      api.getStorySession.mockResolvedValue(liveSession([
+        { stepId: 'readerMap', runId: 'run-9', op: 'refine', startedAt: '2026-01-01T00:00:00.000Z', phase: 'Rewriting…' },
+      ]));
+      renderAt('/story-builder/stb-1/readerMap');
+
+      await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+      expect(lastEventSource().url).toBe('/api/story-builder/stb-1/steps/readerMap/progress');
+      expect(screen.getByRole('status').textContent).toMatch(/Refining Reader Map/);
+      expect(screen.getByRole('status').textContent).toMatch(/resumed monitoring/);
+      // The control is busy off the discovered run — no second kickoff possible.
+      expect(screen.getByRole('button', { name: /Generate reader map|Re-generate|Working/ }).disabled).toBe(true);
+      expect(api.generateStoryStep).not.toHaveBeenCalled();
+      expect(api.refineStoryStep).not.toHaveBeenCalled();
+
+      api.getStorySession.mockClear();
+      api.getStorySession.mockResolvedValue(liveSession([]));
+      await act(async () => { lastEventSource().emit({ runId: 'run-9', type: 'complete' }); });
+      await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Refinement finished'));
+      await waitFor(() => expect(api.getStorySession).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+      // Settled once — the post-settlement session read lists no live run, so nothing re-attaches.
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    it('lets the operator reach a run on another step from the banner', async () => {
+      api.getStorySession.mockResolvedValue(liveSession([
+        { stepId: 'characters', runId: 'run-3', op: 'backfill', startedAt: '2026-01-01T00:00:00.000Z', phase: null },
+      ]));
+      renderAt('/story-builder/stb-1/readerMap');
+      await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/Backfilling Characters/));
+      expect(screen.getByRole('button', { name: 'Go to step' })).toBeTruthy();
+    });
+  });
 });

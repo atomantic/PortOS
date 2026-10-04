@@ -206,7 +206,10 @@ export const createJobFailureFinalizer = ({
 // run's `meta`, e.g. `{ op }`) so the caller can refuse to bind onto unrelated
 // work. Omit `sig` (the default) and any in-flight run coalesces unconditionally.
 //
-// Returns `{ runs, isActive, attachClient, cancel, start }`. `runs` is exposed
+// A caller's `work` may stamp `record.phase` (a short label) so `listActive` can
+// report the latest phase to a client that attaches mid-run.
+//
+// Returns `{ runs, isActive, attachClient, listActive, cancel, start }`. `runs` is exposed
 // so a module can re-export it as `__testing.runs`.
 export function createSseRunner({ logLabel = 'sse run' } = {}) {
   // runs: Map<key, { runId, clients[], lastPayload, cancelRequested, finished, cleanupTimer, startedAt, abort, sig, meta }>
@@ -232,6 +235,20 @@ export function createSseRunner({ logLabel = 'sse run' } = {}) {
   };
 
   const attachClient = (key, res) => attachSseClient(runs, key, res);
+
+  // Bounded read-only view of the runs still in flight whose key starts with
+  // `prefix` — a discovery surface for a client that lost its run slot (reload,
+  // second tab). Exposes only identity + the caller's own `meta` + the latest
+  // phase label, never the signature, clients, or abort controller, and a
+  // finished run lingering in its replay window is NOT listed (it is not running).
+  const listActive = (prefix = '') => {
+    const out = [];
+    for (const [key, run] of runs) {
+      if (run.finished || !String(key).startsWith(prefix)) continue;
+      out.push({ key, runId: run.runId, startedAt: run.startedAt, phase: run.phase ?? null, meta: { ...(run.meta || {}) } });
+    }
+    return out;
+  };
 
   const cancel = (key) => {
     const run = runs.get(key);
@@ -302,5 +319,5 @@ export function createSseRunner({ logLabel = 'sse run' } = {}) {
     return { runId, alreadyRunning: false };
   };
 
-  return { runs, isActive, attachClient, cancel, start };
+  return { runs, isActive, attachClient, listActive, cancel, start };
 }

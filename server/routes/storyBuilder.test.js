@@ -31,6 +31,7 @@ vi.mock('../services/storyBuilder.js', () => svc);
 const runner = {
   startStepRun: vi.fn(() => ({ runId: 'run-1', alreadyRunning: false })),
   attachClient: vi.fn(() => true),
+  listActiveStepRuns: vi.fn(() => []),
 };
 vi.mock('../services/storyBuilderRunner.js', () => runner);
 
@@ -103,6 +104,17 @@ describe('GET /api/story-builder/:id', () => {
     expect(res.body.id).toBe('stb-1');
     expect(res.body.staleSteps).toEqual(['readerMap']);
     expect(res.body.syncDrift).toBe(true);
+    expect(res.body.activeSteps).toEqual([]);
+  });
+
+  it('exposes the session\'s live step runs for post-reload re-attachment (#10065)', async () => {
+    const live = [{ stepId: 'plotArc', runId: 'run-9', op: 'refine', startedAt: '2026-01-01T00:00:00.000Z', phase: 'Planning…' }];
+    runner.listActiveStepRuns.mockReturnValueOnce(live);
+    const res = await request(makeApp()).get('/api/story-builder/stb-1');
+    expect(res.body.activeSteps).toEqual(live);
+    expect(runner.listActiveStepRuns).toHaveBeenCalledWith('stb-1');
+    expect(svc.generateStep).not.toHaveBeenCalled();
+    expect(svc.refineStep).not.toHaveBeenCalled();
   });
 
   it('maps a service NOT_FOUND to 404', async () => {

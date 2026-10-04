@@ -30,7 +30,7 @@ import {
   ERR_NOT_FOUND,
   ERR_VALIDATION,
 } from '../services/storyBuilder.js';
-import { startStepRun, attachClient } from '../services/storyBuilderRunner.js';
+import { startStepRun, attachClient, listActiveStepRuns } from '../services/storyBuilderRunner.js';
 
 const router = Router();
 
@@ -68,9 +68,13 @@ router.post('/', asyncHandler(async (req, res) => {
 // flag (#730: this machine's live records diverged from the synced baseline).
 const flattenView = (view) => ({ ...view.session, staleSteps: view.staleSteps, syncDrift: view.syncDrift });
 
+// `activeSteps` is the live-run discovery surface (#10065): which generate /
+// refine / backfill runs are still in flight for this session, so a reloaded or
+// second-tab client can re-attach to their progress streams. Computed from the
+// runner's in-memory map on read — it is never persisted and read-only.
 router.get('/:id', asyncHandler(async (req, res) => {
   const view = await getStorySessionView(req.params.id).catch((err) => { throw mapServiceError(err); });
-  res.json(flattenView(view));
+  res.json({ ...flattenView(view), activeSteps: listActiveStepRuns(req.params.id) });
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {
