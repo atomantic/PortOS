@@ -1,5 +1,6 @@
 import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
-import { musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
+import MediaModePicker from './MediaModePicker.jsx';
+import { musicVideoMediaMode, musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { useEffect, useState, useRef } from 'react';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { Download, FileArchive, FolderInput, LayoutTemplate, Unlink, Film, RotateCcw } from 'lucide-react';
@@ -268,6 +269,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
             <Unlink size={14} /> {confirming === 'detach' ? 'Click again to detach' : 'Detach'}
           </button>
         </div>
+        <MediaModePicker value={musicVideoMediaMode(project)} disabled={!!busy} onChange={(mediaMode) => run('policy', () => updateMusicVideoProject(project.id, { mediaMode }, { silent: true }).then((project) => ({ project })), 'Media mode saved')} />
         <label htmlFor="mv-doc-renderer" className="block text-xs text-port-text-muted">Authoring renderer</label>
         <select id="mv-doc-renderer" disabled={!!busy} value={musicVideoDocumentRenderer(project)} className={inputCls}
           onChange={(event) => run('renderer', () => updateMusicVideoProject(project.id, { composition: { ...compositionDraft(project), authoringRenderer: event.target.value } }, { silent: true }).then((project) => ({ project })), 'Renderer saved')}>
