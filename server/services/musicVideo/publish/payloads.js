@@ -6,6 +6,7 @@
  */
 import { ServerError } from '../../../lib/errorHandler.js';
 import { chaptersText } from '../publishKitText.js';
+import { musicVideoDependencyChanges } from '../../../lib/musicVideoDependencies.js';
 
 const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80 };
 const DEFAULT_SUBREDDIT = 'aivideo';
@@ -20,10 +21,39 @@ function requireFreshKit(project, kit) {
   if ((kit.master?.renderHistoryId ?? null) !== (project?.renderHistoryId ?? null)) throw stale();
 }
 
-/** The newest finished 9:16 social cut (#9280): what Shorts, TikTok and Reels upload. */
-function latestVerticalCut(project) {
-  const cuts = (project?.excerpts || []).filter((e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename);
-  return cuts.length ? cuts[cuts.length - 1] : null;
+const VERTICAL_NEEDS = 'Render a 9:16 social cut on the Review stage (or rebuild the publishing kit for a 16:9 render) first';
+const isVerticalCut = (e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename;
+
+/**
+ * The vertical cuts a director can post (#10150), newest last: finished 9:16
+ * excerpts flagged stale when the project changed since, plus the kit's
+ * center-crop 9:16 encode (16:9 renders) while the kit is fresh.
+ */
+export function verticalCuts(project) {
+  const kit = kitOf(project);
+  const cuts = (project?.excerpts || []).filter(isVerticalCut)
+    .map((e) => ({ id: e.id ?? null, filename: e.filename, startSec: e.startSec, endSec: e.endSec, stale: musicVideoDependencyChanges(project, e.dependencies).length > 0 }));
+  const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
+  if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
+    cuts.unshift({ id: 'kit-vertical', filename: crop.filename, startSec: crop.startSec ?? 0, endSec: crop.endSec ?? 0, stale: false });
+  }
+  return cuts;
+}
+
+/** The cut the director picked (`options.cutId`), else the newest non-stale one; a stale pick is refused. */
+function pickVerticalCut(project, options) {
+  const cuts = verticalCuts(project);
+  const wanted = text(options?.cutId);
+  if (wanted) {
+    const cut = cuts.find((c) => c.id === wanted);
+    if (!cut) throw missing('That vertical cut no longer exists — pick another');
+    if (cut.stale) throw new ServerError('That vertical cut was rendered before the project changed — render a fresh one', { status: 409, code: 'PUBLISH_CUT_STALE' });
+    return cut;
+  }
+  const fresh = cuts.filter((c) => !c.stale);
+  if (fresh.length) return fresh[fresh.length - 1];
+  if (cuts.length) throw new ServerError('Every 9:16 cut was rendered before the project changed — render a fresh one', { status: 409, code: 'PUBLISH_CUT_STALE' });
+  throw missing(VERTICAL_NEEDS);
 }
 
 /** The full video's public link: the recorded YouTube post, else the one the director gave the kit. */
@@ -60,21 +90,18 @@ const BUILDERS = {
       captions: kit.captionsFilename ? { dir: 'videos', name: kit.captionsFilename } : null,
     };
   },
-  shorts: (project, kit) => {
-    const cut = latestVerticalCut(project);
-    if (!cut) throw missing('Render a 9:16 social cut on the Review stage first');
+  shorts: (project, kit, options = {}) => {
+    const cut = pickVerticalCut(project, options);
     const url = fullVideoUrl(kit);
     const description = [text(kit.copy?.shorts?.description), url && !text(kit.copy?.shorts?.description).includes(url) ? `Full video: ${url}` : ''].filter(Boolean).join('\n\n');
     return { video: { dir: 'videos', name: cut.filename }, title: requireTitle('shorts', text(kit.copy?.shorts?.title)), description, tags: [], thumbnail: null, captions: null };
   },
-  tiktok: (project, kit) => {
-    const cut = latestVerticalCut(project);
-    if (!cut) throw missing('Render a 9:16 social cut on the Review stage first');
+  tiktok: (project, kit, options = {}) => {
+    const cut = pickVerticalCut(project, options);
     return { video: { dir: 'videos', name: cut.filename }, caption: text(kit.copy?.tiktok?.caption), coverAtSec: Math.max(0, (cut.endSec - cut.startSec) / 2) };
   },
-  instagram: (project, kit) => {
-    const cut = latestVerticalCut(project);
-    if (!cut) throw missing('Render a 9:16 social cut on the Review stage first');
+  instagram: (project, kit, options = {}) => {
+    const cut = pickVerticalCut(project, options);
     return { video: { dir: 'videos', name: cut.filename }, caption: instagramSafe(text(kit.copy?.instagram?.caption)) };
   },
   x: (project, kit, options = {}) => {

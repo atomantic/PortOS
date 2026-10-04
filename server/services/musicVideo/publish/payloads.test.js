@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildPublishPayload } from './payloads.js';
+import { captureMusicVideoEvidence } from '../../../lib/musicVideoDependencies.js';
 
 const kit = (over = {}) => ({
   master: { filename: 'master.mp4' },
@@ -23,7 +24,8 @@ const kit = (over = {}) => ({
   },
   ...over,
 });
-const project = (over = {}, excerpts = [{ status: 'complete', aspect: '9:16', filename: 'cut-a.mp4', startSec: 10, endSec: 30 }]) => ({ publishKit: kit(over), excerpts });
+const evidence = () => captureMusicVideoEvidence({ scenes: [] }, { startSec: 0, endSec: 20 });
+const project = (over = {}, excerpts = [{ status: 'complete', aspect: '9:16', filename: 'cut-a.mp4', startSec: 10, endSec: 30, dependencies: evidence() }]) => ({ scenes: [], publishKit: kit(over), excerpts });
 
 describe('buildPublishPayload (#9282)', () => {
   it('uploads the master to YouTube with chapters appended, thumbnail and captions', () => {
@@ -57,9 +59,9 @@ describe('buildPublishPayload (#9282)', () => {
 
   it('sends the newest 9:16 cut to Shorts, TikTok and Reels, linking the full video from Shorts', () => {
     const excerpts = [
-      { status: 'complete', aspect: '9:16', filename: 'old.mp4', startSec: 0, endSec: 20 },
-      { status: 'complete', aspect: '16:9', filename: 'wide.mp4', startSec: 0, endSec: 20 },
-      { status: 'complete', aspect: '9:16', filename: 'new.mp4', startSec: 40, endSec: 60 },
+      { status: 'complete', aspect: '9:16', filename: 'old.mp4', startSec: 0, endSec: 20, dependencies: evidence() },
+      { status: 'complete', aspect: '16:9', filename: 'wide.mp4', startSec: 0, endSec: 20, dependencies: evidence() },
+      { status: 'complete', aspect: '9:16', filename: 'new.mp4', startSec: 40, endSec: 60, dependencies: evidence() },
       { status: 'running', aspect: '9:16', filename: 'partial.mp4' },
     ];
     const shorts = buildPublishPayload('shorts', project({}, excerpts));
@@ -68,6 +70,23 @@ describe('buildPublishPayload (#9282)', () => {
     expect(buildPublishPayload('tiktok', project({}, excerpts))).toMatchObject({ video: { name: 'new.mp4' }, coverAtSec: 10 });
     expect(buildPublishPayload('instagram', project({}, excerpts)).caption).toBe('made with portos and suno');
     expect(() => buildPublishPayload('tiktok', project({}, []))).toThrow(/9:16 social cut/);
+  });
+
+  it('uses the kit center-crop vertical encode for a 16:9 render with no social cut, and only while the kit is fresh (#10150)', () => {
+    const exports = [{ kind: 'vertical-9x16', filename: 'vertical.mp4', startSec: 5, endSec: 35 }];
+    const wide = { ...project({ exports, master: { filename: 'master.mp4', renderHistoryId: 'r1' } }, []), renderHistoryId: 'r1' };
+    expect(buildPublishPayload('shorts', wide).video.name).toBe('vertical.mp4');
+    expect(buildPublishPayload('tiktok', wide)).toMatchObject({ video: { name: 'vertical.mp4' }, coverAtSec: 15 });
+    expect(() => buildPublishPayload('instagram', { ...wide, renderHistoryId: 'r2' })).toThrow(/9:16 social cut/);
+  });
+
+  it('lets the director pick a cut and refuses stale ones (#10150)', () => {
+    const stale = { id: 'mve-stale', status: 'complete', aspect: '9:16', filename: 'stale.mp4', startSec: 0, endSec: 10, dependencies: { ...evidence(), references: [{ role: 'song', assetId: 'x', revision: 'old' }] } };
+    const fresh = { id: 'mve-fresh', status: 'complete', aspect: '9:16', filename: 'fresh.mp4', startSec: 0, endSec: 10, dependencies: evidence() };
+    expect(buildPublishPayload('shorts', project({}, [fresh, stale])).video.name).toBe('fresh.mp4');
+    expect(buildPublishPayload('shorts', project({}, [fresh, stale]), { cutId: 'mve-fresh' }).video.name).toBe('fresh.mp4');
+    expect(() => buildPublishPayload('shorts', project({}, [fresh, stale]), { cutId: 'mve-stale' })).toThrow(expect.objectContaining({ status: 409, code: 'PUBLISH_CUT_STALE' }));
+    expect(() => buildPublishPayload('tiktok', project({}, [stale]))).toThrow(expect.objectContaining({ code: 'PUBLISH_CUT_STALE' }));
   });
 
   it('threads X: hook with the 1080p encode, story, prompt, then links with the full video last', () => {

@@ -291,7 +291,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     await verifyCurrent?.(await getProject(projectId));
     const { excerpt } = await mutateProjectRecord(projectId, (current) => {
       if (pilotEvidence && musicVideoDependencyChanges(current, pilotEvidence).length) throw new ServerError('The selected pilot changed before rendering', { status: 409, code: 'COMPOSITION_DRAFT_STALE' });
-      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: stored, dependencies: pilotEvidence || captureMusicVideoEvidence(project, { sceneIds: sections.map((section) => section.sceneId), startSec, endSec: endClamped }), partialFilename: filename, renderingOn });
+      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, performanceProject: stored, dependencies: pilotEvidence || captureMusicVideoEvidence(project, { sceneIds: sections.map((section) => section.sceneId), startSec, endSec: endClamped }), partialFilename: filename, renderingOn, aspect: musicVideoAspect(project) });
       return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
     });
     const excerptId = excerpt.id;

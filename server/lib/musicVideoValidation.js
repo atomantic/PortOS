@@ -682,6 +682,7 @@ export const musicVideoPublishPrepareSchema = z.object({
   pin: z.boolean(),
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
+  cutId: z.string().min(1).max(100),
 }).partial().strict();
 
 export const musicVideoExcerptNoteSchema = z.object({
