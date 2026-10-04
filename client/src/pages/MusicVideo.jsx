@@ -1223,6 +1223,7 @@ export default function MusicVideo() {
         )}
         {selected && (
           <MusicVideoLayout
+            onRename={handleRename}
             project={selected}
             trackLabel={trackName(selected.trackId)}
             stage={activeStage}

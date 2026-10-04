@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, CircleDot, Clapperboard, Film, Layers, LayoutGrid, Music, Play,
+  AlertTriangle, ArrowRight, CheckCircle2, CircleDot, Clapperboard, Film, Layers, LayoutGrid, Music, Pencil, Play,
   Send, SlidersHorizontal, Users,
 } from 'lucide-react';
 import TabPills from '../ui/TabPills.jsx';
@@ -50,7 +50,7 @@ const DOCK_CLASSES = 'max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 
  */
 export default function MusicVideoLayout({
   project, trackLabel, stage, onStageChange, progress, nextAction, onNextAction, spend, status = null,
-  attention = null, dock, projectPanels, children,
+  attention = null, dock, projectPanels, onRename = null, children,
 }) {
   const headerRef = useRef(null);
   const rootRef = useRef(null);
@@ -93,7 +93,20 @@ export default function MusicVideoLayout({
         className="sticky top-[calc(env(safe-area-inset-top)-1rem)] z-30 -mx-4 space-y-2 border-b border-port-border bg-port-bg px-4 pt-2 md:top-[calc(env(safe-area-inset-top)-1.5rem)] md:-mx-6 md:px-6"
       >
         <div className="flex min-w-0 items-center gap-3">
-          <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">{project.name}</h2>
+          <div className="flex min-w-0 flex-1 items-center gap-1">
+            <h2 className="min-w-0 truncate text-lg font-semibold">{project.name}</h2>
+            {onRename && (
+              <button
+                type="button"
+                onClick={onRename}
+                title="Rename project"
+                aria-label="Rename project"
+                className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-port-text-muted hover:text-port-text sm:min-h-0 sm:min-w-0 sm:p-1"
+              >
+                <Pencil size={14} aria-hidden="true" />
+              </button>
+            )}
+          </div>
           <span className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted max-sm:hidden">
             <Music size={12} className="shrink-0" aria-hidden="true" />
             <span className="truncate">{trackLabel}</span>

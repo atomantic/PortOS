@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import MusicVideoLayout from './MusicVideoLayout.jsx';
 import { MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
 
@@ -42,5 +42,17 @@ describe('music-video stage navigation', () => {
     expect(icons.every(Boolean)).toBe(true);
     expect(new Set(icons).size).toBe(tabs.length);
     expect(navigation.getByRole('tab', { name: /^Publish/ })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('project rename affordance', () => {
+  it('shows a rename button beside the project name that calls onRename', () => {
+    const onRename = vi.fn();
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="setup"
+      onStageChange={() => {}} onRename={onRename}
+      progress={{ current: 'setup', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'todo' })) }}
+      spend={{ spentUsd: 0 }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Rename project' }));
+    expect(onRename).toHaveBeenCalledTimes(1);
   });
 });
