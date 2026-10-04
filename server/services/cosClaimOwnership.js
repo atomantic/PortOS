@@ -11,10 +11,13 @@
  *   - `checkReconcileOwnership` — a branch-reconcile worker re-reads the live
  *     owners immediately before it edits, rebases, pushes, merges, moves or
  *     removes a checkout, because ownership can be acquired after the scan that
- *     dispatched it. Anything unreadable or changed refuses.
+ *     dispatched it. Anything unreadable or changed refuses. When the caller
+ *     names its agent, a successful check also RESERVES the branch on that run's
+ *     record under the binding lock, so a claim run cannot bind or adopt it
+ *     while the worker mutates it; the run's completion releases it.
  */
 import { resolve } from 'path';
-import { bindClaimBranch, releaseClaimBranch, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 
 const normalize = (p) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string' && normalize(a) === normalize(b);
@@ -56,11 +59,19 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
  * when the checkout it was dispatched at still holds the branch and no live
  * owner (agent, lock, or registered/possible claim run) holds it.
  *
+ * With `agentId` the admission is also an acquire: under the same lock `bind`
+ * takes, the branch is recorded on that coordinator's run record, so every other
+ * caller (claim `bind`, continuation, adoption, a later reconcile scan) sees a
+ * live owner until the run ends or releases it. Without `agentId` the answer is
+ * read-only. A named run that is not a live registered agent is refused: the
+ * reservation could not be recorded.
+ *
  * @param {{ appId: string, branch: string, worktreePath?: string, agentId?: string }} input
  * @param {object} [deps] - injected for tests
  * @returns {Promise<{ admitted: true }|{ admitted: false, reason: string }>}
  */
-export async function checkReconcileOwnership({ appId, branch, worktreePath, agentId }, deps = {}) {
+export async function checkReconcileOwnership(input, deps = {}) {
+  const { appId, branch, worktreePath, agentId } = input;
   const getAppById = deps.getAppById ?? (await import('./apps.js')).getAppById;
   const listWorktrees = deps.listWorktrees ?? (await import('./worktreeManager.js')).listWorktrees;
   const getAgents = deps.getAgents ?? (await import('./cosAgentLifecycle.js')).getAgents;
@@ -70,18 +81,41 @@ export async function checkReconcileOwnership({ appId, branch, worktreePath, age
   const app = await getAppById(appId).catch(() => null);
   const repoPath = app?.repoPath;
   if (!repoPath) return { admitted: false, reason: 'app-unknown' };
-  const [worktrees, agents] = await Promise.all([
-    listWorktrees(repoPath).catch(() => null),
-    getAgents().catch(() => null),
-  ]);
-  if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admitted: false, reason: 'ownership-unreadable' };
+  // The git read stays outside the lock; only the agent registry — the half a
+  // concurrent bind changes — is re-read where the reservation is decided.
+  const worktrees = await listWorktrees(repoPath).catch(() => null);
 
-  const holder = worktrees.find((wt) => branchOf(wt) === branch) || null;
-  if (worktreePath && !samePath(holder?.path, worktreePath)) return { admitted: false, reason: 'holder-changed' };
-  const others = agentId ? agents.filter((a) => a?.id !== agentId) : agents;
-  const reason = resolveLiveOwnerReason({
-    branch, path: holder?.path || null, locked: Boolean(holder?.locked),
-    activeAgentIds: buildActiveOwnerIds(getActiveAgentIds().filter((id) => id !== agentId), others),
-  }) || claimCheckoutOwnerReason({ branchName: branch, holderPath: holder?.path || null, sourceWorkspace: repoPath, agents: others });
-  return reason ? { admitted: false, reason } : { admitted: true };
+  const admit = async () => {
+    const agents = await getAgents().catch(() => null);
+    if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admitted: false, reason: 'ownership-unreadable' };
+    const holder = worktrees.find((wt) => branchOf(wt) === branch) || null;
+    if (worktreePath && !samePath(holder?.path, worktreePath)) return { admitted: false, reason: 'holder-changed' };
+    const others = agentId ? agents.filter((a) => a?.id !== agentId) : agents;
+    const reason = resolveLiveOwnerReason({
+      branch, path: holder?.path || null, locked: Boolean(holder?.locked),
+      activeAgentIds: buildActiveOwnerIds(getActiveAgentIds().filter((id) => id !== agentId), others),
+    }) || claimCheckoutOwnerReason({ branchName: branch, holderPath: holder?.path || null, sourceWorkspace: repoPath, agents: others });
+    return reason ? { admitted: false, reason } : { admitted: true };
+  };
+  if (!agentId) return admit();
+
+  const { withStateLock, loadState, saveState } = await import('./cosState.js');
+  const { cosEvents } = await import('./cosEvents.js');
+  // Decided inside the lock a bind takes, so no bind can land between
+  // "admitted" and "reserved".
+  return withClaimOwnershipLock(() => withStateLock(async () => {
+    const admission = await admit();
+    if (!admission.admitted) return admission;
+    const state = await loadState();
+    const agent = state.agents?.[agentId];
+    if (!agent || agent.id !== agentId) return { admitted: false, reason: 'owner-unknown' };
+    const patch = reserveReconcileBranch(agent, branch);
+    if (!patch) return admission;
+    if (patch.refused) return { admitted: false, reason: patch.refused };
+    state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, ...patch } };
+    await saveState(state);
+    cosEvents.emit('agent:updated', state.agents[agentId]);
+    console.log(`🔒 Reconcile reservation: ${branch} → ${agentId}`);
+    return admission;
+  }));
 }
