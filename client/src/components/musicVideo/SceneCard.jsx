@@ -1,7 +1,7 @@
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
@@ -72,7 +72,16 @@ export default function SceneCard({
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
+  expanded, onToggleExpand,
 }) {
+  const detailsRef = useRef(null);
+
+  useEffect(() => {
+    if (expanded && detailsRef.current) {
+      detailsRef.current.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    }
+  }, [expanded]);
+
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
   // native controls let the user unmute it first (muted is only initial).
@@ -126,7 +135,15 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   return (
-    <details className="group min-w-0 rounded-lg border border-port-border bg-port-card">
+    <details
+      ref={detailsRef}
+      id={`scene-${scene.sceneId}`}
+      open={expanded != null ? expanded : undefined}
+      onToggle={(e) => {
+        onToggleExpand?.(scene.sceneId, e.currentTarget.open);
+      }}
+      className="group min-w-0 rounded-lg border border-port-border bg-port-card"
+    >
       <summary
         onClick={() => onSeek?.(scene)}
         className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none [&::-webkit-details-marker]:hidden"

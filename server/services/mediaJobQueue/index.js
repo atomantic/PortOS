@@ -34,7 +34,7 @@ import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
 import { PATHS, readJSONFileStrict, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
 import { SSE_HEADERS } from '../../lib/sseHeaders.js';
-import { runOutsideBackupAssetPublication, withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { holdsBackupAssetPublication, runOutsideBackupAssetPublication, withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { reapAndCleanDetachedDirs } from '../../lib/detachedSpawn.js';
 import {
@@ -473,6 +473,11 @@ let persistChain = Promise.resolve();
 // Terminal outcomes stay private until the snapshot containing them succeeds.
 // Recovery commits storage only; it never invokes a generator again.
 const pendingTransitions = new Map();
+// Only a completion publishes durable output. Its commit holds backup admission
+// from staging the terminal row through the hook fan-out, never while rendering
+// or waiting in the queue; failures and cancellations stay unadmitted so a
+// backup never delays them.
+const admitCompletion = (state, commit) => (state === 'completed' ? withBackupAssetPublication(commit) : commit());
 function stageTerminalTransition(job, apply, acknowledge) {
   job.terminating = true;
   const target = { ...job };
@@ -537,11 +542,19 @@ async function persistImpl() {
     ...queue,
     ...archive,
   ];
+  // A completion's terminal row and its `completed` fan-out publish together,
+  // so only a snapshot written inside a backup admission lease commits one. Any
+  // other write (progress, enqueue, the shutdown flush, or one landing after a
+  // completion's own retries gave up) keeps it `running` on disk and leaves it
+  // to an admitted recovery commit, never publishing it in the middle of a cut.
+  const admitted = holdsBackupAssetPublication();
+  const commits = (job) => admitted || job.durabilityPending?.status !== 'completed';
+  const deferredCompletion = [...pendingTransitions.keys()].some((job) => !commits(job));
   // Strip non-serializable bits.
-  const serializable = live.map((job) => ({ ...job, ...job.durabilityPending })).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
+  const serializable = live.map((job) => (commits(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }),
   );
-  const transitions = [...pendingTransitions];
+  const transitions = [...pendingTransitions].filter(([job]) => commits(job));
   await atomicWrite(JOBS_FILE, { jobs: serializable, videoHolds: videoHolds.snapshot() });
   for (const [job, acknowledge] of transitions) {
     if (pendingTransitions.get(job) !== acknowledge) continue;
@@ -551,6 +564,21 @@ async function persistImpl() {
     delete job.persistenceError;
     await acknowledge();
   }
+  if (deferredCompletion) recoverCompletionsUnderAdmission();
+}
+
+// Storage is writable again, but a completion is still staged. Commit it from
+// its own admission lease: it waits out an active backup cut, and its attach
+// hooks join the lease from the fan-out. Never awaited inside the persist
+// chain, so a cut draining an admitted write cannot deadlock on it.
+let completionRecovery = null;
+function recoverCompletionsUnderAdmission() {
+  if (completionRecovery) return;
+  // Tracked as a terminal operation so the shutdown flush drains it (and times
+  // out, reporting failure, if an open cut still holds the commit).
+  completionRecovery = trackTerminalOperation(withBackupAssetPublication(() => persist())
+    .catch((error) => console.error(`❌ media-job completion recovery commit failed: ${error.message}`))
+    .finally(() => { completionRecovery = null; }));
 }
 
 export async function initMediaJobQueue() {
@@ -1186,12 +1214,7 @@ async function runJobLifecycle(job, markDispatched) {
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
     await drainProgressPersist();
-    // Only a completion publishes durable output. It holds backup admission from
-    // staging the terminal row through the hook fan-out, never while rendering
-    // or waiting in the queue; failures and cancellations stay unadmitted so a
-    // backup never delays them.
-    const publish = () => publishTerminalTransition(state, apply);
-    await (state === 'completed' ? withBackupAssetPublication(publish) : publish());
+    await admitCompletion(state, () => publishTerminalTransition(state, apply));
   }
 
   async function publishTerminalTransition(state, apply) {
@@ -1642,7 +1665,7 @@ export async function cancelQueuedJobs({ kind } = {}) {
 export async function cancelJob(jobId) {
   const pending = findJob(jobId);
   if (pending?.durabilityPending) {
-    await persistTerminalTransition(pending);
+    await admitCompletion(pending.durabilityPending.status, () => persistTerminalTransition(pending));
     return pending.status === 'canceled' ? { ok: true, status: 'canceled' }
       : { ok: false, code: 'ALREADY_TERMINAL', status: pending.status, error: 'Job is already finishing' };
   }
@@ -1805,6 +1828,7 @@ export function __resetForTests() {
   // Un-latch the persistence block (#4115) — a test that booted on an unreadable
   // jobs file would otherwise leave every later test's queue unable to persist.
   persistBlocked = false;
+  completionRecovery = null;
 }
 
 // Test-only deterministic settle hook. EventEmitter terminal handlers and

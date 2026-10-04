@@ -19,7 +19,8 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
-import { taskContextBlock } from '../lib/cosTaskPrompt.js';
+import { TASK_PROMPT_KEY, taskContextBlock } from '../lib/cosTaskPrompt.js';
+import { injectReconcileAgentId } from '../lib/claimContinuation.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
 import { isClaimFlowDispatch, resolveTaskHookType } from './taskTypeHooks.js';
@@ -105,6 +106,7 @@ This is an unattended run, but it is not browserless when the target has a web U
 - Check browser status/configuration when needed; the CDP endpoint is local and configurable, with shipped default 127.0.0.1:5556.
 - All UI audits share one persistent, dedicated PortOS browser tab. At the start, inspect normal type: "page" targets from /json/list and read window.name over each page's webSocketDebuggerUrl. Reuse only the target marked window.name === "portos-ui-quality-audit"; never guess ownership from a URL, title, or which tab is active, and never navigate, activate, or close any other page. If no marked target exists, create exactly one background target by sending Target.createTarget with {url: "about:blank", background: true} to the browser-level webSocketDebuggerUrl from /json/version, then find its page target by the returned targetId. Do not use PUT /json/new, browser.newPage(), context.newPage(), a new browser context/window, or an "open in new tab" action for this audit. If background target creation fails, do not fall back to a foreground tab; report the specific CDP failure and stop the live UI portion.
 - Navigate that one dedicated target in place with Page.navigate and inspect it with Runtime.evaluate on its page socket. Reuse the same target for every route and control; never create a page per view. Do not send Page or Runtime commands to the browser-level socket from /json/version, and do not call Page.bringToFront or use UI actions that select/focus a tab. After navigation, set window.name = "portos-ui-quality-audit" again if a cross-site navigation cleared it. At the end, set window.name to that marker and document.title to "PortOS UI Audit", then leave the tab open for the next audit. Use Page, Runtime, Log, and Network domains on the dedicated page socket for live evidence.
+- If the instance password is set, the dedicated tab lands on the login page. Do not ask for, search for, or guess the password: it is stored only as a hash, and the gate exists to keep other machines out, not this agent. Your environment already holds $PORTOS_API_TOKEN, a loopback session token PortOS minted for you (empty when no password is set). Before navigating, on the dedicated page socket send Network.enable then Network.setCookie with {name: "portos_auth_<port>", value: <the token>, url: <the UI origin>, httpOnly: true, sameSite: "Lax"} where <port> is the UI origin's port (for example portos_auth_5555 for http://localhost:5555; the server also accepts the bare name portos_auth), then Page.navigate again. Never print the token or write it into a finding.
 - Treat the target as a running local system: discover its actual UI/API URL and ports from the app configuration, PortOS app/process state, and health endpoints, then inspect scoped server logs when diagnosing console or request failures. Do not guess a URL or treat source-only speculation as a UI finding.
 - Capture live evidence (snapshots, console/request results, and observed runtime state) before changing code. Do not stop the UI audit merely because the provider bridge is unavailable. Stop the web-UI portion only after the PortOS health/CDP probes fail or no usable page target can be created, navigated, and inspected; the handoff must name the concrete endpoint, HTTP/process, or WebSocket failure. A provider-only "No browser is available" result is not enough, and a failed CDP probe must not become a source-only UX finding. For a native or source-only target with no web surface, continue the relevant audit without inventing a browser target and record that limitation.`;
 
@@ -288,6 +290,16 @@ async function prepareReviewLoopRecipe(task, {
   };
 }
 
+function fillReconcileAgentId(task, agentId) {
+  const description = injectReconcileAgentId(task.description, agentId);
+  const prompt = injectReconcileAgentId(task.metadata?.[TASK_PROMPT_KEY], agentId);
+  if (description === task.description && prompt === task.metadata?.[TASK_PROMPT_KEY]) return task;
+  return {
+    ...task, description,
+    ...(prompt !== task.metadata?.[TASK_PROMPT_KEY] ? { metadata: { ...task.metadata, [TASK_PROMPT_KEY]: prompt } } : {}),
+  };
+}
+
 /**
  * Build the agent prompt.
  *
@@ -340,6 +352,11 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Feeds both the briefing template (via the reconciled `task` object) and the
   // full-path fallback below.
   task = reconcileSplitContext(task);
+
+  // A branch-reconcile coordinator's recheck commands carry its own agent id so
+  // a successful check reserves the branch for it (#10096). The block was built
+  // before the run had an id; fill the slot now, wherever the prompt travels.
+  task = fillReconcileAgentId(task, options.agentId);
 
   // Feature-agent tasks carry only a compact queue description. Expand the
   // persisted persona briefing at spawn time so scheduled and manually

@@ -437,6 +437,7 @@ export const createBlankSketch = ({ silent = false } = {}) =>
 // Models management (HF cache + LoRAs)
 export const listCachedModels = (options = {}) => request('/image-video/models', options);
 export const deleteCachedModel = (dirName, options = {}) => request(`/image-video/models/hf/${encodeURIComponent(dirName)}`, { method: 'DELETE', ...options });
+export const deleteModelStoreItem = (backend, key, options = {}) => request(`/image-video/models/store/${encodeURIComponent(backend)}/${encodeURIComponent(key)}`, { method: 'DELETE', ...options });
 export const deleteLora = (filename, options = {}) => request(`/image-video/models/lora/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
 
 // Media-model REGISTRY (the catalog of pickable image/video base models,

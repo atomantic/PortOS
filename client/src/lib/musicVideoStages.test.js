@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist,
+  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
 } from './musicVideoStages.js';
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
@@ -33,17 +33,17 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction(autoAwaiting)).toMatchObject({ id: 'review-autonomous', kind: 'goto', stage: 'setup', anchor: 'mv-auto-edit', label: 'Review Lyrics' });
 
     const autoStopped = { id: 'p', autonomousRun: { status: 'stopped' } };
-    expect(deriveNextAction(autoStopped)).toMatchObject({ id: 'resume-autonomous', kind: 'run', label: 'Resume autopilot' });
+    expect(deriveNextAction(autoStopped)).toMatchObject({ id: 'resume-autonomous', kind: 'run', label: 'Resume autonomous run' });
 
     const autoFailed = { id: 'p', autonomousRun: { status: 'failed' } };
-    expect(deriveNextAction(autoFailed)).toMatchObject({ id: 'retry-autonomous', kind: 'run', label: 'Retry autopilot' });
+    expect(deriveNextAction(autoFailed)).toMatchObject({ id: 'retry-autonomous', kind: 'run', label: 'Retry autonomous run' });
   });
 
   it('a project waiting on Cast & Sets approval offers the approval, and a stopped check-in offers to resume', () => {
     const waiting = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, automation: {}, castAndSets: { status: 'review' }, scenes: [] };
     expect(deriveStages(waiting).current).toBe('cast-sets');
     expect(stateOf(waiting)).toMatchObject({ setup: 'done', 'cast-sets': 'active', board: 'todo' });
-    expect(deriveNextAction(waiting)).toMatchObject({ id: 'review-production', kind: 'goto', stage: 'cast-sets' });
+    expect(deriveNextAction(waiting)).toMatchObject({ id: 'review-production', kind: 'goto', stage: 'cast-sets', shortLabel: 'Art' });
 
     const interrupted = { ...waiting, castAndSets: { status: 'imaging', interrupted: true } };
     expect(stateOf(interrupted)['cast-sets']).toBe('blocked');
@@ -90,6 +90,29 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction(finished)).toMatchObject({ id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit' });
     expect(deriveNextAction({ ...finished, publishKit: { builtAt: '2026-01-01T00:00:00.000Z' } })).toMatchObject({ label: 'Publish the release' });
     expect(stateOf({ ...finished, publishKit: { posts: { youtube: { url: 'https://example.com/v' } } } }).publish).toBe('done');
+  });
+
+  it('derives Produce and Compose for all five render styles (#10139)', () => {
+    const bare = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
+    const withMode = (composition) => ({ ...bare, composition });
+    // Footage styles still need footage; composed also needs cues.
+    expect(deriveStages(withMode({ mode: 'concat' })).current).toBe('produce');
+    expect(deriveStages(withMode({ mode: 'composed', textCues: [] })).current).toBe('produce');
+    // Eidoverse: Produce done without footage; Compose waits on a saved scene.
+    expect(stateOf(withMode({ mode: 'eidoverse' })).produce).toBe('done');
+    expect(deriveStages(withMode({ mode: 'eidoverse' })).current).toBe('compose');
+    expect(stageChecklist('produce', withMode({ mode: 'eidoverse' }), APPROVED).map((i) => i.id)).toEqual(['approve-proof']);
+    expect(stageChecklist('compose', withMode({ mode: 'eidoverse' }), APPROVED)[1])
+      .toMatchObject({ label: 'Save the Eidoverse scene', done: false, action: { anchor: 'mv-eidoverse-scene' } });
+    const saved = withMode({ mode: 'eidoverse', eidoverseScene: { inlineScript: 'scene()' } });
+    expect(deriveStages(saved).current).toBe('review');
+    expect(stageChecklist('compose', saved, APPROVED)[1].done).toBe(true);
+    // Code: composed only once generated (or sections exist).
+    expect(deriveStages(withMode({ mode: 'code' })).current).toBe('compose');
+    expect(stageChecklist('compose', withMode({ mode: 'code' }), APPROVED)[1].done).toBe(false);
+    expect(deriveStages(withMode({ mode: 'code', codeVideo: { generatedAt: '2026-01-01T00:00:00.000Z', sections: [] } })).current).toBe('review');
+    // Document: composed once the document is attached.
+    expect(deriveStages(withMode({ mode: 'document' })).current).toBe('compose');
   });
 
   it('does not require scene footage for code-rendered or document projects', () => {
@@ -205,7 +228,7 @@ describe('describeProjectStatus', () => {
     );
     expect(status.headline).toBe('Stage 1 of 7: Setup');
     expect(status.facts.map((fact) => fact.label)).toEqual([
-      'Autopilot: writing the lyric draft', 'Nothing rendered yet',
+      'Autonomous run: writing the lyric draft', 'Nothing rendered yet',
     ]);
   });
 });
@@ -256,7 +279,7 @@ describe('stageChecklist', () => {
     expect(stageChecklist('setup', { id: 'p' }).map((i) => i.done)).toEqual([false, false]);
     expect(stageChecklist('setup', { id: 'p' })[0].action).toEqual({ label: 'Attach a track', anchor: 'mv-track' });
     // A running autonomous run writes the song itself, so there is nothing to attach.
-    expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'running' } })[0]).toMatchObject({ action: null, detail: 'The autopilot run is making the song.' });
+    expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'running' } })[0]).toMatchObject({ action: null, detail: 'The autonomous run is making the song.' });
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), NOT_APPROVED).map((i) => [i.id, i.done]))
       .toEqual([['shots', true], ['approve-storyboard', false]]);
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])
@@ -264,5 +287,30 @@ describe('stageChecklist', () => {
     // A code render draws its own picture: no footage item.
     expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => i.id)).toEqual(['approve-proof']);
     expect(stageChecklist('compose', castProject({ composition: { mode: 'composed', textCues: [] } }), APPROVED).map((i) => i.done)).toEqual([true, false]);
+  });
+});
+
+describe('compareMusicVideoProjectsNewestFirst', () => {
+  it('sorts projects by createdAt descending so newest is first', () => {
+    const p1 = { id: 'p1', createdAt: '2026-09-01T00:00:00.000Z' };
+    const p2 = { id: 'p2', createdAt: '2026-10-01T00:00:00.000Z' };
+    const p3 = { id: 'p3', createdAt: '2026-09-15T00:00:00.000Z' };
+    const sorted = [p1, p2, p3].sort(compareMusicVideoProjectsNewestFirst);
+    expect(sorted.map((p) => p.id)).toEqual(['p2', 'p3', 'p1']);
+  });
+
+  it('falls back to updatedAt descending when createdAt is absent or identical', () => {
+    const p1 = { id: 'p1', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' };
+    const p2 = { id: 'p2', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-02T00:00:00.000Z' };
+    const pNoCreated = { id: 'p3', updatedAt: '2026-09-03T00:00:00.000Z' };
+    const sorted = [p1, p2, pNoCreated].sort(compareMusicVideoProjectsNewestFirst);
+    expect(sorted.map((p) => p.id)).toEqual(['p3', 'p2', 'p1']);
+  });
+
+  it('preserves order when neither project has timestamps', () => {
+    const p1 = { id: 'p1', name: 'First' };
+    const p2 = { id: 'p2', name: 'Second' };
+    const sorted = [p1, p2].sort(compareMusicVideoProjectsNewestFirst);
+    expect(sorted.map((p) => p.id)).toEqual(['p1', 'p2']);
   });
 });

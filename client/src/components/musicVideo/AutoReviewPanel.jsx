@@ -126,9 +126,24 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
     });
   };
 
+  const isStartedByAutonomous = Boolean(
+    (run && (run.startedBy === 'autonomous' || run.autonomousRunId)) ||
+    (project?.autonomousRun && (
+      (run && (run.productionRunId === project.autonomousRun.output?.productionRunId || project.autonomousRun.output?.autoReviewRunId === run.id)) ||
+      project.autonomousRun
+    ))
+  );
+
   return (
     <div className="rounded border border-port-border p-2 space-y-2 text-xs" aria-label="Automatic review">
-      <span className="font-medium flex items-center gap-1"><Bot size={12} /> Auto-review (opt-in)</span>
+      <span className="font-medium flex flex-wrap items-center gap-2">
+        <span className="flex items-center gap-1"><Bot size={12} /> Auto-review{isStartedByAutonomous ? '' : ' (opt-in)'}</span>
+        {isStartedByAutonomous && (
+          <span className="text-xs text-port-text-muted font-normal">
+            · <a href={project?.id ? `/music-video/${project.id}/setup#mv-autonomous-run` : '#mv-autonomous-run'} className="text-port-accent hover:underline">Started by the autonomous run</a>
+          </span>
+        )}
+      </span>
       {!active && (
         <div className="space-y-2">
           <p className="text-port-text-muted">

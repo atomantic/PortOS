@@ -5,7 +5,6 @@ import PublishPostingPanel from '../components/musicVideo/PublishPostingPanel.js
 
 const api = vi.hoisted(() => ({
   prepareMusicVideoPublishDraft: vi.fn(),
-  submitMusicVideoPublishDraft: vi.fn(),
   discardMusicVideoPublishDraft: vi.fn(async () => true),
   getMusicVideoPublishPlatforms: vi.fn(async () => ({ platforms: { youtube: { enabled: true }, reddit: { enabled: true } } })),
   updateMusicVideoPublishPlatforms: vi.fn(),
@@ -31,7 +30,6 @@ function Posting({ id }) {
 beforeEach(() => {
   vi.clearAllMocks();
   api.prepareMusicVideoPublishDraft.mockReset();
-  api.submitMusicVideoPublishDraft.mockReset();
 });
 
 describe('music-video publishing project boundary', () => {
@@ -49,14 +47,12 @@ describe('music-video publishing project boundary', () => {
     expect(within(row('Reddit')).getByLabelText('Subreddit')).toHaveValue('');
     view.rerender(<Posting id="project-a" />);
     expect(screen.queryByText('Example A')).not.toBeInTheDocument();
-    expect(api.submitMusicVideoPublishDraft).not.toHaveBeenCalled();
   });
 
   it('ignores a late old-project preparation without clearing the current preparation', async () => {
     const first = deferred();
     const second = deferred();
     api.prepareMusicVideoPublishDraft.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    api.submitMusicVideoPublishDraft.mockResolvedValue({ post: { url: 'https://example.com/post' } });
     const view = render(<Posting id="project-a" />);
     await screen.findByText('YouTube', { selector: 'div' });
     fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' }));
@@ -68,7 +64,6 @@ describe('music-video publishing project boundary', () => {
     await act(async () => { second.resolve({ draftId: 'draft-b', summary: { title: 'Example B' } }); });
     expect(screen.getByText('Example B')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Post to YouTube' })).not.toBeInTheDocument();
-    expect(api.submitMusicVideoPublishDraft).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Instance password to prepare YouTube')).toBeNull();
   });
 

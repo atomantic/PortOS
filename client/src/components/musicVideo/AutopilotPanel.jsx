@@ -373,7 +373,7 @@ function BriefSection({ project, onSave, onKickoff, onCancelKickoff, kickoffBusy
     );
   } else {
     header = (
-      <button type="button" onClick={() => setDraft(automationDraftFrom(null))} className={`ml-auto ${actionClass}`}>Set up autopilot</button>
+      <button type="button" onClick={() => setDraft(automationDraftFrom(null))} className={`ml-auto ${actionClass}`}>Set up automation brief</button>
     );
     body = <p className="text-xs text-port-text-muted">Hand this video to the agent: pick the tools it may use, give it guidance and a budget.</p>;
   }
@@ -382,7 +382,7 @@ function BriefSection({ project, onSave, onKickoff, onCancelKickoff, kickoffBusy
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <Bot size={16} className="text-port-accent shrink-0" aria-hidden="true" />
-        <h3 className="text-sm font-medium">Autopilot</h3>
+        <h3 className="text-sm font-medium">Automation brief</h3>
         {header}
       </div>
       {body}
@@ -398,12 +398,27 @@ function BriefSection({ project, onSave, onKickoff, onCancelKickoff, kickoffBusy
 function ProductionSection({ project, production, readiness }) {
   const run = currentProductionRun(project);
   const active = run && RESUMABLE_RUN_STATUSES.has(run.status);
+  const isStartedByAutonomous = Boolean(
+    (run && (run.startedBy === 'autonomous' || run.autonomousRunId)) ||
+    (project?.autonomousRun && (
+      (run && project.autonomousRun.output?.productionRunId === run.id) ||
+      (!run && project.autonomousRun.stage === 'produce') ||
+      project.autonomousRun.output?.productionRunId
+    ))
+  );
   const codeFirst = project.productionPolicy?.strategy === 'code-first';
   const assets = codeFirst ? codeFirstProductionAssets(project) : null;
   const count = (action) => formatCount(assets.steps.filter((step) => step.action === action).length);
   return (
     <div className="rounded border border-port-border p-2 space-y-2 text-xs" aria-label="Production run">
-      <span className="font-medium flex items-center gap-1"><Clapperboard size={12} /> Autonomous production (opt-in)</span>
+      <span className="font-medium flex flex-wrap items-center gap-2">
+        <span className="flex items-center gap-1"><Clapperboard size={12} /> Production run{isStartedByAutonomous ? '' : ' (opt-in)'}</span>
+        {isStartedByAutonomous && (
+          <span className="text-xs text-port-text-muted font-normal">
+            · <a href={project?.id ? `/music-video/${project.id}/setup#mv-autonomous-run` : '#mv-autonomous-run'} className="text-port-accent hover:underline">Started by the autonomous run</a>
+          </span>
+        )}
+      </span>
       {run && <RunView key={run.id} run={run} production={production} codeFirst={codeFirst} project={project} readiness={readiness} />}
       {codeFirst && <>
         <MediumPlanSummary project={project} />
@@ -436,7 +451,7 @@ export default function AutopilotPanel({
   project, production, readiness, onSave, onKickoff, onCancelKickoff, kickoffBusy, kickoffStep = null, kickoffBlockedReason,
 }) {
   return (
-    <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0" aria-label="Autopilot">
+    <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0" aria-label="Automation brief">
       <BriefSection
         project={project}
         onSave={onSave}

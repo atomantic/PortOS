@@ -12,6 +12,10 @@ const BACKEND_LABEL = {
   lora: 'LoRA',
   ollama: 'Ollama',
   lmstudio: 'LM Studio',
+  mtplx: 'MTPLX',
+  hy3dgen: 'Hunyuan3D',
+  'hf-xet-cache': 'HF xet cache',
+  'pixie-forge': 'Pixie Forge',
 };
 
 /**

@@ -28,6 +28,21 @@ describe('music-video stage navigation', () => {
     const status = screen.getByRole('status', { name: 'Project status' });
     expect(status).toHaveTextContent('Stage 2 of 7: Cast & Sets · needs you');
     expect(status).toHaveTextContent('Nothing rendered yet');
+    // Phone collapses the facts behind one line; the wide line stays for sm+.
+    expect(screen.getByRole('button', { name: /Stage 2 of 7/ })).toHaveClass('sm:hidden');
+  });
+
+  it('keeps the project name from a long next action on a phone (#10170)', () => {
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project Name' }} stage="board"
+      onStageChange={() => {}} progress={{ current: 'board', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'todo' })) }}
+      spend={{ spentUsd: 1.2, capUsd: 10 }}
+      nextAction={{ id: 'review-production', kind: 'goto', label: 'Review timed storyboard', shortLabel: 'Board' }}
+      onNextAction={() => {}} />);
+    const name = screen.getByRole('heading', { level: 2, name: 'Example Project Name' });
+    expect(name).toHaveClass('min-w-0', 'truncate');
+    const action = screen.getByRole('button', { name: 'Review timed storyboard' });
+    expect(action).toHaveTextContent('Board');
+    expect(action.querySelector('.sm\\:hidden')).toHaveTextContent('Board');
   });
 
   it('keeps every fixed stage in the compact icon row after adding Publish', () => {

@@ -677,6 +677,9 @@ export async function sweepAttachmentOrphans() {
   // really is "empty"; making it once means every later listing failure is a
   // genuine anomaly worth logging and refusing to act on.
   await mkdir(attachmentsRoot(), { recursive: true }).catch(() => {});
+  // Fence for the row-healing direction: a download that lands after this
+  // instant is newer than the listing and must not be read as "missing".
+  const listingStartedAt = new Date();
   const { files: onDisk, complete: storeListed } = await listStoredFiles();
   const referenced = await query(
     `SELECT DISTINCT local_path FROM beeper_attachments WHERE local_path IS NOT NULL`,
@@ -710,12 +713,19 @@ export async function sweepAttachmentOrphans() {
   if (!storeListed) {
     console.error('❌ Beeper attachment sweep: the store did not list completely — no row healed this pass');
   } else {
-    const missing = [...referencedSet].filter((relativePath) => !diskSet.has(relativePath));
+    // A file committed between the listing and the reference query is in
+    // `referencedSet` but not `diskSet`; re-check the disk, and fence the UPDATE
+    // on `fetched_at` so a row stamped after the listing is never cleared.
+    const absent = [...referencedSet].filter((relativePath) => !diskSet.has(relativePath));
+    const missing = [];
+    for (const relativePath of absent) {
+      if (!(await pathExists(join(attachmentsRoot(), relativePath)))) missing.push(relativePath);
+    }
     if (missing.length > 0) {
       const result = await query(
         `UPDATE beeper_attachments SET local_path = NULL, fetched_at = NULL, updated_at = NOW()
-          WHERE local_path = ANY($1::text[])`,
-        [missing],
+          WHERE local_path = ANY($1::text[]) AND (fetched_at IS NULL OR fetched_at < $2)`,
+        [missing, listingStartedAt],
       );
       healedRows = result?.rowCount || 0;
     }

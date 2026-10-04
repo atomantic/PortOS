@@ -67,11 +67,11 @@ export function SharingTab() {
   const [providerEnabled, setProviderEnabled] = useState(false);
   const [providerMaxQueuedJobs, setProviderMaxQueuedJobs] = useState(2);
   const [providerModels, setProviderModels] = useState([]);
-  // `null` per kind = the candidate list could not be fetched, which is NOT the
+  // `undefined` per kind = still loading; `null` = the candidate list could not be fetched, which is NOT the
   // same as a genuinely empty local catalog — reporting "no models installed"
   // for a transient API failure would send the user hunting for a model they
   // already have.
-  const [visualCandidates, setVisualCandidates] = useState({ image: null, video: null });
+  const [visualCandidates, setVisualCandidates] = useState({ image: undefined, video: undefined });
   const [providerVisualModels, setProviderVisualModels] = useState({ image: [], video: [] });
   const [savedProviderVisualModels, setSavedProviderVisualModels] = useState({ image: [], video: [] });
   const [savedProviderEnabled, setSavedProviderEnabled] = useState(false);
@@ -173,6 +173,20 @@ export function SharingTab() {
     setProviderModels((current) => checked
       ? (current.some((model) => modelKey(model) === key) ? current : [...current, selected])
       : current.filter((model) => modelKey(model) !== key));
+  };
+
+  // Bulk toggle: "all" selects every ready model (not-ready ones can't be
+  // newly shared), "none" clears every selection including not-ready ones.
+  const setAllModels = (enable) => {
+    setProviderModels(enable
+      ? musicEngines.flatMap((engine) => (engine.models || [])
+        .filter((model) => modelReady(engine, model))
+        .map((model) => ({ engine: engine.id, modelId: model.id })))
+      : []);
+    setProviderVisualModels(Object.fromEntries(VISUAL_KINDS.map(({ kind }) => [kind, enable
+      ? (visualCandidates[kind] || []).filter((candidate) => candidate.ready)
+        .map((candidate) => ({ engine: candidate.engine, modelId: candidate.modelId }))
+      : []])));
   };
 
   const toggleVisualModel = (kind, candidate, checked) => {
@@ -367,6 +381,25 @@ export function SharingTab() {
             </p>
           </div>
 
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setAllModels(true)}
+              disabled={providerSaving || strictPullSaving}
+              className="inline-flex items-center min-h-[40px] px-3 py-2 bg-port-card hover:bg-port-border text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
+            >
+              Enable all
+            </button>
+            <button
+              type="button"
+              onClick={() => setAllModels(false)}
+              disabled={providerSaving || strictPullSaving}
+              className="inline-flex items-center min-h-[40px] px-3 py-2 bg-port-card hover:bg-port-border text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
+            >
+              Disable all
+            </button>
+          </div>
+
           <fieldset>
             <legend className="block text-xs uppercase tracking-wider text-gray-500 mb-2">Allowed audio models</legend>
             {musicEngines.length === 0 ? (
@@ -406,6 +439,7 @@ export function SharingTab() {
           </fieldset>
 
           {VISUAL_KINDS.map(({ kind, label, field }) => {
+            const loadingModels = visualCandidates[kind] === undefined;
             const unavailable = visualCandidates[kind] === null;
             const rows = candidateRows(visualCandidates[kind] || [], providerVisualModels[kind]);
             return (
@@ -413,7 +447,9 @@ export function SharingTab() {
               <legend className="block text-xs uppercase tracking-wider text-gray-500 mb-2">Allowed {label} models</legend>
               {rows.length === 0 ? (
                 <p className="text-sm text-gray-500">
-                  {unavailable
+                  {loadingModels
+                    ? <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" />{`Loading local ${label} models...`}</span>
+                    : unavailable
                     ? `Could not load the local ${label} model list. Reload to try again.`
                     : `No local ${label} models are installed to share.`}
                 </p>

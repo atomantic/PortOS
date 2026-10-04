@@ -31,6 +31,7 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
   const { baseCommand, args } = validation;
   const startTime = Date.now();
   let output = '';
+  let settled = false;
 
   // Security: Use spawn with array of args (shell:false) to prevent shell injection.
   // validateCommand has already rejected shell metacharacters AND parsed quoted args
@@ -64,6 +65,8 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
   });
 
   child.on('close', (code) => {
+    if (settled) return;
+    settled = true;
     activeCommands.delete(commandId);
     const runtime = Date.now() - startTime;
     const success = code === 0;
@@ -85,6 +88,8 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
   });
 
   child.on('error', (err) => {
+    if (settled) return;
+    settled = true;
     activeCommands.delete(commandId);
     logAction('command', null, command.substring(0, 50), { command, workspacePath }, false, err.message);
     onComplete?.({

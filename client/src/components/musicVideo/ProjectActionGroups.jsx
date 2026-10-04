@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Film, Music, Activity, Image as ImageIcon, Video, Wand2 } from 'lucide-react';
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
 import { isLayeredComposition, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
@@ -60,13 +61,31 @@ export function AudioActions({ project, midi, midiBound, busy, onAnalyze }) {
 /** Plan the shots against the analyzed song and spread them by energy. */
 export function PlanActions({ project, busy, onPlan, onAutoArrange }) {
   const sceneCount = (project.scenes || []).length;
+  // A board that already has shots needs an explicit choice before planning:
+  // planning blindly would stack a second full-song plan on top of it.
+  const [choosing, setChoosing] = useState(false);
+  const choose = (mode) => { setChoosing(false); onPlan(mode); };
   return (
     <div className={groupCls}>
-      <button onClick={onPlan} disabled={busy.planning || !project.audioAnalysis}
+      <button onClick={() => (sceneCount > 0 ? setChoosing(true) : onPlan())} disabled={busy.planning || !project.audioAnalysis}
         title={!project.audioAnalysis ? 'Analyze the track first' : 'AI-plan bounded shots per song section, cut on timed lyrics, phrases and beats'}
         className={buttonCls}>
         <Wand2 size={15} /> {busy.planning ? 'Planning…' : 'AI Plan'}
       </button>
+      {choosing && !busy.planning && (
+        <div role="group" aria-label="Plan mode" className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-gray-400">The board has {sceneCount} shot{sceneCount === 1 ? '' : 's'}.</span>
+          <button onClick={() => choose('replace')} className={buttonCls}
+            title="Swap the board for a new plan; takes and clips are kept on shots whose time span is reused">
+            Replace {sceneCount} shot{sceneCount === 1 ? '' : 's'}
+          </button>
+          <button onClick={() => choose('append')} className={buttonCls}
+            title="Add the planned shots after the existing ones (can overlap them)">
+            Add to board
+          </button>
+          <button onClick={() => setChoosing(false)} className={buttonCls}>Cancel</button>
+        </div>
+      )}
       <button onClick={onAutoArrange}
         disabled={busy.arranging || !project.audioAnalysis || sceneCount === 0}
         title={!project.audioAnalysis
@@ -185,6 +204,25 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
   const documentBlocked = !documentMode ? '' : noAudio ? 'Link a track first'
     : !(project.audioAnalysis?.durationSec > 0) ? 'Analyze the track first — the document is timed against the song'
       : !project.composition?.document ? 'Start from the template or import a composition document first' : '';
+
+  // Determine the blocker reason for display
+  let blockerReason = '';
+  if (!readiness?.readyForProduction) {
+    blockerReason = 'Approve the current visual guide, timed storyboard and animated proof first';
+  } else if (eidoverseMode && eidoverseBlocked) {
+    blockerReason = eidoverseBlocked;
+  } else if (documentMode && documentBlocked) {
+    blockerReason = documentBlocked;
+  } else if (codeMode && !codeReady) {
+    blockerReason = 'Analyze the song or time a scene before rendering code';
+  } else if (sceneCount === 0) {
+    blockerReason = 'Add scenes first';
+  } else if (readySceneCount !== sceneCount) {
+    blockerReason = layered
+      ? `${sceneCount - readySceneCount} scene${sceneCount - readySceneCount === 1 ? ' is' : 's are'} not ready — footage needs a video, a still needs a frame and a span, a card needs a span`
+      : `Generate videos for all ${sceneCount} scenes first`;
+  }
+
   if (renderJob.active && renderJob.context === project.id) {
     return (
       <button onClick={renderJob.cancel} disabled={renderJob.pending}
@@ -194,25 +232,18 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
       </button>
     );
   }
+
+  const isDisabled = !readiness?.readyForProduction || renderJob.active || (eidoverseMode ? !!eidoverseBlocked : documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount));
+
   return (
-    <button onClick={() => renderJob.start(project.id)} disabled={!readiness?.readyForProduction || renderJob.active || (eidoverseMode ? !!eidoverseBlocked : documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount))}
-      title={!readiness?.readyForProduction ? 'Approve the current visual guide, timed storyboard and animated proof first' : renderJob.active
-        ? 'Wait for the other project render to finish, or return to it to cancel'
-        : eidoverseMode
-          ? (eidoverseBlocked || 'Render the Eidoverse scene over the master song')
-        : documentMode
-          ? (documentBlocked || 'Render the composition document over the song')
-          : codeMode
-            ? (codeReady ? 'Render the code-rendered video over the song. This does not generate footage.' : 'Analyze the song or time a scene before rendering code')
-            : sceneCount === 0
-              ? 'Add scenes first'
-              : readySceneCount !== sceneCount
-                ? (layered
-                  ? `${sceneCount - readySceneCount} scene${sceneCount - readySceneCount === 1 ? ' is' : 's are'} not ready — footage needs a video, a still needs a frame and a span, a card needs a span`
-                  : `Generate videos for all ${sceneCount} scenes first`)
-                : 'Render the complete music video over the track'}
-      className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
-      <Film size={15} /> {renderJob.active ? 'Rendering another project…' : 'Render final'}
-    </button>
+    <div className="space-y-1">
+      <button onClick={() => renderJob.start(project.id)} disabled={isDisabled}
+        className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
+        <Film size={15} /> {renderJob.active ? 'Rendering another project…' : 'Render final'}
+      </button>
+      {isDisabled && blockerReason && (
+        <p className="text-xs text-port-text-muted">{blockerReason}</p>
+      )}
+    </div>
   );
 }

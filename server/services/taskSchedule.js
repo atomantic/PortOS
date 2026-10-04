@@ -1434,9 +1434,11 @@ export async function getScheduleStatus() {
     // this on a schedule you can't see here".
     const appSchedules = await resolveHiddenAppSchedules(taskType, interval, activeApps, allOverrides, featureEnabled, schedule);
 
+    const auditMeta = getAuditScheduleMetadata(taskType);
     const taskStatus = {
       ...interval,
-      ...getAuditScheduleMetadata(taskType),
+      ...auditMeta,
+      displayName: interval.displayName || (auditMeta.displayName !== taskType ? auditMeta.displayName : (DEFAULT_TASK_INTERVALS[taskType]?.displayName || taskType)),
       labels: interval.labels || [],
       // Advisory ordering: WHICH tasks to run first, named by task type. Never
       // a dispatch gate — that is `runAfter`, spread in from `interval` above.

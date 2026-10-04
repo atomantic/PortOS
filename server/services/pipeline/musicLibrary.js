@@ -27,6 +27,7 @@ import {
   copyFileGuarded,
   unlinkGuarded,
 } from '../../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
 // Mirror of the sanitizer's MUSIC_SOURCES set in `services/pipeline/issues.js`.
 // Exported so routes don't sprinkle bare strings; `'gen'` is reserved for the
@@ -137,17 +138,22 @@ export async function listMusicLibrary() {
  * helper. Returns `{ filename, sizeBytes }`.
  */
 export async function importUploadedTrack(tempPath, originalName) {
-  await ensureDir(PATHS.music);
   const filename = buildStoredFilename(originalName);
   const dest = join(PATHS.music, filename);
-  // copyFile + unlink instead of rename — the multipart helper writes to
-  // os.tmpdir(), which may sit on a different filesystem (rename across
-  // devices throws EXDEV on Linux). Copy works regardless; the temp file
-  // unlink is best-effort cleanup.
-  await copyFileGuarded(tempPath, dest);
+  // The copy is the whole publication: a snapshot copying the library while it
+  // runs would capture a truncated file under its final name (#9982). The temp
+  // file lives outside `data/`, so its cleanup stays outside the lease.
+  const sizeBytes = await withBackupAssetPublication(async () => {
+    await ensureDir(PATHS.music);
+    // copyFile + unlink instead of rename — the multipart helper writes to
+    // os.tmpdir(), which may sit on a different filesystem (rename across
+    // devices throws EXDEV on Linux). Copy works regardless.
+    await copyFileGuarded(tempPath, dest);
+    const s = await stat(dest).catch(() => null);
+    return s?.size ?? 0;
+  });
   await unlinkGuarded(tempPath).catch(() => {});
-  const s = await stat(dest).catch(() => null);
-  return { filename, sizeBytes: s?.size ?? 0 };
+  return { filename, sizeBytes };
 }
 
 /**
@@ -172,15 +178,22 @@ export async function statMusicTrack(filename) {
  * Delete a track from the library by stored filename. Returns true if the
  * file existed and was removed; false if it was already gone. Validates the
  * filename so a path-traversal attempt can't escape `PATHS.music`.
+ *
+ * Issues and projects keep naming the removed file on purpose (see the route),
+ * so a snapshot copied before the unlink and dumped after it would carry rows
+ * naming bytes it never captured. Holding the lease makes the unlink wait out
+ * an open cut and a cut wait out an unlink in flight (#9982).
  */
 export async function deleteMusicTrack(filename) {
   assertSafeMusicFilename(filename);
   const full = join(PATHS.music, filename);
-  try {
-    await unlinkGuarded(full);
-    return true;
-  } catch (err) {
-    if (err.code === 'ENOENT') return false;
-    throw err;
-  }
+  return withBackupAssetPublication(async () => {
+    try {
+      await unlinkGuarded(full);
+      return true;
+    } catch (err) {
+      if (err.code === 'ENOENT') return false;
+      throw err;
+    }
+  });
 }

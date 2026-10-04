@@ -31,6 +31,7 @@ import { useConfirmDelete } from './useConfirmDelete.js';
 const removeForAction = (action) => {
   if (action.type === 'data-category') return api.purgeDataCategory(action.key, {}, { silent: true });
   if (action.type === 'hf-model') return api.deleteCachedModel(action.dirName, { silent: true });
+  if (action.type === 'model-store') return api.deleteModelStoreItem(action.backend, action.key, { silent: true });
   if (action.type === 'lora') return api.deleteLora(action.filename, { silent: true });
   if (action.type === 'local-model') return api.deleteLocalLlmModel(action.backend, action.modelId, { silent: true });
   return null;

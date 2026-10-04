@@ -37,6 +37,7 @@ import {
 } from '../../services/pipeline/musicGen.js';
 import { deriveAudioCues, preserveRenderedCues } from '../../services/pipeline/audioCues.js';
 import { uploadSingle } from '../../lib/multipart.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { mapServiceError } from './shared.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 
@@ -246,28 +247,33 @@ router.post('/issues/:id/stages/audio/lines/:lineIdx/render', asyncHandler(async
     route: 'studio',
   })
     .catch((err) => { throw mapServiceError(err); });
-  if (synthResult.provenance) {
-    await recordVoiceProfileRender({
-      issueId: issue.id,
-      lineId: line.id,
+  // The WAV is already on disk. The render provenance row and the stage row
+  // that name it commit under one lease, so a backup cut can never dump a row
+  // naming audio its file copy had not reached (#9982).
+  const { issue: updatedIssue, stage } = await withBackupAssetPublication(async () => {
+    if (synthResult.provenance) {
+      await recordVoiceProfileRender({
+        issueId: issue.id,
+        lineId: line.id,
+        audioFilename: synthResult.filename,
+        latencyMs: synthResult.latencyMs,
+        durationMs: synthResult.durationMs,
+        provenance: synthResult.provenance,
+      });
+    } else {
+      await clearVoiceProfileRender({ issueId: issue.id, lineId: line.id });
+    }
+    const nextLines = [...lines];
+    nextLines[lineIdx] = {
+      ...line,
+      audioJobId: null,
       audioFilename: synthResult.filename,
-      latencyMs: synthResult.latencyMs,
-      durationMs: synthResult.durationMs,
-      provenance: synthResult.provenance,
+    };
+    return issuesSvc.updateStage(req.params.id, 'audio', {
+      status: 'edited',
+      lines: nextLines,
+      errorMessage: '',
     });
-  } else {
-    await clearVoiceProfileRender({ issueId: issue.id, lineId: line.id });
-  }
-  const nextLines = [...lines];
-  nextLines[lineIdx] = {
-    ...line,
-    audioJobId: null,
-    audioFilename: synthResult.filename,
-  };
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'audio', {
-    status: 'edited',
-    lines: nextLines,
-    errorMessage: '',
   });
   res.json({
     issue: updatedIssue, stage, lineIdx,
@@ -388,7 +394,11 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler((req, res) =
     durationSec: body.durationSec,
     modelId: body.modelId,
   }).catch((err) => { throw mapServiceError(err); });
-  const { issue: updatedIssue, stage } = await maintenance.continueSettlement(() => issuesSvc.updateStageWithLatest(
+  // The sidecar wrote the WAV in place and may still have been writing while a
+  // cut ran. The row that first names it waits for any open cut, so a dump can
+  // never name a track its file copy did not reach (#9982). The shared publication
+  // boundary retains maintenance settlement through that wait and the row save.
+  const { issue: updatedIssue, stage } = await withBackupAssetPublication(() => issuesSvc.updateStageWithLatest(
     req.params.id,
     'audio',
     (current) => ({
@@ -581,7 +591,9 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler((req, r
   }).catch((err) => { throw mapServiceError(err); });
   // Merge against the freshest persisted cue inside the write queue so a
   // concurrent re-derive can't clobber the render (the cue list is re-read here).
-  const { issue: updatedIssue, stage } = await maintenance.continueSettlement(() => issuesSvc.updateStageWithLatest(
+  // The row that first names the WAV waits for any open backup cut (#9982).
+  // The shared publication boundary also owns its maintenance settlement.
+  const { issue: updatedIssue, stage } = await withBackupAssetPublication(() => issuesSvc.updateStageWithLatest(
     req.params.id,
     'audio',
     (current) => {

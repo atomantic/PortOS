@@ -91,7 +91,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   };
 
   return (
-    <section className={`${framed ? 'bg-port-card border border-port-border rounded-lg p-3 ' : ''}space-y-3 min-w-0`} aria-label="Autonomous run">
+    <section id="mv-autonomous-run" className={`${framed ? 'bg-port-card border border-port-border rounded-lg p-3 ' : ''}space-y-3 min-w-0`} aria-label="Autonomous run">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {framed && <span className="flex items-center gap-1 text-sm font-medium"><Wand2 size={15} className="text-port-accent" aria-hidden="true" /> Autonomous run</span>}
         <span className={`text-sm ${tone}`}>{run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status}</span>

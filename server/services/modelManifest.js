@@ -220,6 +220,10 @@ export function trustedInventoryBackends({ sourceErrors = [], disabledSources = 
   const trusted = new Set(MODEL_INVENTORY_BACKENDS);
   if (failed.has('huggingface')) trusted.delete('huggingface');
   if (failed.has('loras')) trusted.delete('lora');
+  // The file-system model stores report as storage areas under their backend id.
+  for (const backend of ['mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge']) {
+    if (failed.has(backend)) trusted.delete(backend);
+  }
   for (const backend of ['ollama', 'lmstudio']) {
     if (disabled.has(backend) || failed.has(`${backend}-backend`) || failed.has(`${backend}-inventory`)) {
       trusted.delete(backend);

@@ -30,6 +30,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 import { join } from 'path';
 import { mediaJobEvents, listJobs } from '../mediaJobQueue/index.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { spriteDir, runRelPath, SOURCE_CLIP_NAME, RUN_RECORD_NAME } from './paths.js';
 import { WALK_TRACK } from './animationTargets.js';
@@ -64,6 +65,18 @@ const decodeSpriteAnimationJob = (job) => {
  * Both the staging and the attach run INSIDE the per-record write tail: the
  * clip lands at the same path a user-triggered Reprocess reads, and a copy racing
  * that read would hand ffmpeg a truncated MP4 and error a previously-good run.
+ *
+ * The whole settle also holds backup admission (#9982): the staged clip, the
+ * decoded frames and manifest, and the run record that names them are one
+ * publication, and a snapshot copying the sprite directory halfway through would
+ * capture a run record whose frames it copied earlier. The lease is taken BEFORE
+ * the tail, and synchronously, because this runs as a completion listener: the
+ * queue's fan-out contract requires the lease to be held before the first await,
+ * so a cut already draining for the job's own completion also waits for this
+ * filing. No sprite workflow takes the lease while holding the tail, so the
+ * order cannot deadlock; one that does later must take the lease first too.
+ * A settle queued behind a long Reprocess holds its lease while it waits, which
+ * can stretch a cut's drain by that wait.
  */
 async function settleSpriteAnimationJob(job) {
   const decoded = decodeSpriteAnimationJob(job);
@@ -72,7 +85,7 @@ async function settleSpriteAnimationJob(job) {
   const label = `sprite ${track} ${recordId}/${direction || 'row-0'}`;
   const runRel = runRelPath(runId);
   const videoAbs = join(spriteDir(recordId), runRel, 'generated', SOURCE_CLIP_NAME);
-  return withAnimationWriteTail(recordId, async () => {
+  return withBackupAssetPublication(() => withAnimationWriteTail(recordId, async () => {
     // Settle a run ONCE. Neither attach looks at `run.status` — they guard only
     // frozen evidence (a finalized set, an approved run) — so re-entering here
     // for a run that is already `candidate` would re-stage the clip and re-run
@@ -114,7 +127,7 @@ async function settleSpriteAnimationJob(job) {
       ? attachTuiWalkResult(recordId, runId, videoAbs)
       : attachTrackTuiResult(track, recordId, runId, videoAbs));
     return true;
-  });
+  }));
 }
 
 let terminalHandler = null;

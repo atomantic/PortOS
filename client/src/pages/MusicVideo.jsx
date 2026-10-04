@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
 import { Plus, Film, Copy, Trash2, Wand2, Pencil } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import socket from '../services/socket';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
@@ -83,8 +84,9 @@ import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import {
-  productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist,
+  productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
 } from '../lib/musicVideoStages.js';
+import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
 import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
@@ -112,15 +114,6 @@ const autopilotSummary = (run, readiness) => {
   return run.error ? `${label} — ${guidance?.current || run.error}` : label;
 };
 
-const STATUS_COLORS = {
-  draft: 'bg-port-border text-port-text',
-  analyzed: 'bg-port-accent/30 text-port-accent',
-  ready: 'bg-port-accent/30 text-port-accent',
-  rendering: 'bg-port-warning/30 text-port-warning',
-  complete: 'bg-port-success/30 text-port-success',
-  failed: 'bg-port-error/30 text-port-error',
-};
-
 export default function MusicVideo() {
   // Deep-linkable project selection: the selected project lives in the URL
   // (/music-video/:projectId) rather than local state, so a project's
@@ -132,7 +125,21 @@ export default function MusicVideo() {
   // stage the project was in. A development artifact opens from its own deep
   // link (/music-video/:projectId/:stage/dev/:artifactId, or the older
   // /music-video/:projectId/dev/:artifactId), the version from `?v=`.
-  const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage } = useParams();
+  const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage, sceneId: routeSceneId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const newParam = searchParams.get('new');
+  const createOpen = newParam === 'project';
+  const autonomousOpen = newParam === 'autonomous';
+  const setCreateOpen = (open) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (open) next.set('new', 'project'); else next.delete('new');
+    return next;
+  });
+  const setAutonomousOpen = (open) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (open) next.set('new', 'autonomous'); else next.delete('new');
+    return next;
+  });
   const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [tracks, setTracks] = useState([]);
@@ -152,8 +159,6 @@ export default function MusicVideo() {
   const cloning = !!cloningId;
   const [importingLyrics, setImportingLyrics] = useState(false);
   const [aligningLyrics, setAligningLyrics] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [autonomousOpen, setAutonomousOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(emptyCreateForm);
   const selected = projects.find((p) => p.id === selectedId) || null;
@@ -180,12 +185,26 @@ export default function MusicVideo() {
   const renaming = !!selected && renamingId === selected.id;
   const [renameDraft, setRenameDraft] = useState('');
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+  const sortedProjects = useMemo(
+    () => [...projects].sort(compareMusicVideoProjectsNewestFirst),
+    [projects],
+  );
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
   const progress = useMemo(() => deriveStages(selected, productionReview.readiness), [selected, productionReview.readiness]);
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
   if (selected && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
   const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
-  const activeStage = resolveStageParam(routeStage) || pinnedStage || progress.current;
+  const activeStage = resolveStageParam(routeStage) || (routeSceneId ? 'board' : (pinnedStage || progress.current));
+
+  const handleToggleSceneExpand = (sceneId, isExpanded) => {
+    if (!selected) return;
+    const stage = activeStage || 'board';
+    if (isExpanded) {
+      navigate(`/music-video/${selected.id}/${stage}/scene/${sceneId}`, { replace: true });
+    } else if (routeSceneId === sceneId) {
+      navigate(`/music-video/${selected.id}/${stage}`, { replace: true });
+    }
+  };
 
 
   // Functional merges keyed on the captured projectId/sceneId so an async result
@@ -271,13 +290,31 @@ export default function MusicVideo() {
   useEffect(() => { setPickerTarget(null); }, [selectedId]);
   // Contact sheet open state lives in the URL (?sheet=contact) so it survives a
   // reload and Back closes it.
-  const [searchParams, setSearchParams] = useSearchParams();
   const contactSheetOpen = searchParams.get('sheet') === 'contact';
   const setContactSheetOpen = (open) => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
     if (open) next.set('sheet', 'contact'); else next.delete('sheet');
     return next;
   });
+
+  // Index: name filter lives in the URL (?q=); forks collapse under their root
+  // with a per-card version switcher; cards patch in place from run events.
+  const nameQuery = searchParams.get('q') || '';
+  const setNameQuery = (value) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (value) next.set('q', value); else next.delete('q');
+    return next;
+  }, { replace: true });
+  const projectGroups = useMemo(() => groupMusicVideoProjects(projects, nameQuery), [projects, nameQuery]);
+  const [pickedVersion, setPickedVersion] = useState({}); // rootId -> project id
+  useEffect(() => {
+    const onRunEvent = (data) => {
+      if (data?.project?.id) setProjects((prev) => prev.map((p) => (p.id === data.project.id ? data.project : p)));
+    };
+    const events = ['music-video:autonomous', 'music-video:production'];
+    events.forEach((e) => socket.on(e, onRunEvent));
+    return () => events.forEach((e) => socket.off(e, onRunEvent));
+  }, []);
 
   // Preparation is already resolving the project's audio at kickoff;
   // relinking the track now would leave the project pointing at a NEW track
@@ -300,7 +337,8 @@ export default function MusicVideo() {
       toast.error(youtube.switchBlockedMessage);
       return;
     }
-    navigate(id ? `/music-video/${id}` : '/music-video');
+    const search = searchParams.toString();
+    navigate(id ? `/music-video/${id}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
   };
 
   const loadProjects = useCallback(async () => {
@@ -309,7 +347,8 @@ export default function MusicVideo() {
     setLoading(true);
     try {
       const data = await listMusicVideoProjects({ silent: true });
-      setProjects(data || []);
+      const sorted = Array.isArray(data) ? [...data].sort(compareMusicVideoProjectsNewestFirst) : [];
+      setProjects(sorted);
       setProjectsError(null);
     } catch (err) {
       setProjectsError(err?.message || 'Failed to load music video projects');
@@ -364,7 +403,7 @@ export default function MusicVideo() {
       ...(form.mode === 'autonomous' ? { automation: automationFromDraft(form.automation) } : {}),
     }, { silent: true })
       .then((proj) => {
-        setProjects((prev) => [...prev, proj]);
+        setProjects((prev) => [proj, ...prev]);
         selectProject(proj.id);
         setForm(emptyCreateForm());
         setCreateOpen(false);
@@ -409,7 +448,7 @@ export default function MusicVideo() {
     setCloningId(target.id);
     cloneMusicVideoProject(target.id, options, { silent: true })
       .then((project) => {
-        setProjects((prev) => [...prev, project]);
+        setProjects((prev) => [project, ...prev]);
         navigate(`/music-video/${project.id}${songRevision === true ? "/setup" : ""}`);
         toast.success(`Created ${project.name}`);
       })
@@ -434,10 +473,10 @@ export default function MusicVideo() {
   // Director-first — seeded shots are ordinary, fully-editable board entries.
   // `target` lets the autopilot kickoff plan the freshly analyzed record
   // before `selected` re-renders with it.
-  const handlePlan = (target = selected) => {
+  const handlePlan = (target = selected, mode) => {
     if (!target?.audioAnalysis) return Promise.resolve();
     setPlanning(true);
-    return planMusicVideoProject(target.id, { seedPrompts: true }, { silent: true })
+    return planMusicVideoProject(target.id, { seedPrompts: true, ...(mode ? { mode } : {}) }, { silent: true })
       .then(({ project, scenesAdded, promptsSeeded, promptsSkippedReason }) => {
         replaceProject(project);
         const suffix = promptsSeeded
@@ -505,7 +544,7 @@ export default function MusicVideo() {
   // Saving a brief hands the project to autopilot, so mode follows it.
   const saveAutomation = (automation) => updateMusicVideoProject(selected.id, { automation, mode: 'autonomous' }, { silent: true })
     .then((proj) => patchProject(proj.id, { automation: proj.automation, mode: proj.mode, updatedAt: proj.updatedAt }))
-    .catch((err) => { toast.error(err?.message || 'Failed to save autopilot brief'); throw err; });
+    .catch((err) => { toast.error(err?.message || 'Failed to save automation brief'); throw err; });
 
   // Auto-arrange (#1915): distribute every scene across the analyzed song
   // sections weighted by each section's energy, writing the same persisted
@@ -558,7 +597,7 @@ export default function MusicVideo() {
   // Re-point the selected project at a different library track (the detail
   // view's "Change track" picker — previously there was no way to relink a
   // project's audio after creation at all).
-  const handleChangeTrack = (trackId) => {
+  const handleChangeTrack = (trackId, { fork = false, cleared = [] } = {}) => {
     if (!selected) return;
     if (renderTargetsSelected) {
       toast.error('Wait for the current render to finish before changing the track');
@@ -572,8 +611,20 @@ export default function MusicVideo() {
     if (selectedTrack?.prompt && !selected.concept?.style) {
       patch.concept = { ...(patch.concept || selected.concept || {}), style: selectedTrack.prompt };
     }
-    updateMusicVideoProject(selected.id, patch, { silent: true })
-      .then((proj) => replaceProject(proj))
+    // Fork first so the original keeps its analysis/alignment; the new track is
+    // applied to the fork only.
+    const base = fork
+      ? cloneMusicVideoProject(selected.id, {}, { silent: true })
+      : Promise.resolve(selected);
+    base
+      .then((target) => updateMusicVideoProject(target.id, patch, { silent: true }).then((proj) => ({ proj, forked: target !== selected })))
+      .then(({ proj, forked }) => {
+        if (forked) {
+          setProjects((prev) => [proj, ...prev]);
+          navigate(`/music-video/${proj.id}/setup`);
+        } else replaceProject(proj);
+        if (cleared.length > 0) toast.success('Track changed — re-run Analyze and Align words');
+      })
       .catch((err) => toast.error(err?.message || 'Failed to change track'));
   };
 
@@ -815,9 +866,9 @@ export default function MusicVideo() {
     focusable?.focus?.({ preventScroll: true });
   }, [activeStage, location.key, selectedId, !!selected]);
   const goToStage = (stage, anchor = null) => {
-    // The dock's picked source (`?play=`) follows the director across tabs.
-    const play = searchParams.get('play');
-    navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${play ? `?play=${encodeURIComponent(play)}` : ''}${anchor ? `#${anchor}` : ''}`, { replace: activeStage === stage });
+    // Preserve search params (e.g. ?play=, ?new=, ?sheet=) across tabs.
+    const search = searchParams.toString();
+    navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${search ? `?${search}` : ''}${anchor ? `#${anchor}` : ''}`, { replace: activeStage === stage });
   };
 
   // The docked preview: scene cards seek it; on a phone it is a mini-player
@@ -880,6 +931,8 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
+    activeSceneId: routeSceneId || null,
+    onToggleSceneExpand: handleToggleSceneExpand,
     autopilotRun,
     autonomous,
     runStage,
@@ -939,7 +992,7 @@ export default function MusicVideo() {
     setPickerTarget,
     onAddReference: () => setPickerTarget({ type: 'reference' }),
     onAnalyze: () => handleAnalyze(),
-    onPlan: () => handlePlan(),
+    onPlan: (mode) => handlePlan(selected, mode),
     onAutoArrange: handleAutoArrange,
     onKickoff: handleKickoff,
     onChangeTrack: handleChangeTrack,
@@ -1035,18 +1088,15 @@ export default function MusicVideo() {
               className="min-w-0 w-full sm:w-72 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
-              {projects.map((project) => (
+              {sortedProjects.map((project) => (
                 <option key={project.id} value={project.id}>
-                  {project.name} · {projectShotSummary(project)} · {project.status}
+                  {project.name} · {projectShotSummary(project)}
                 </option>
               ))}
             </select>
             {selected && (
               <span className="flex items-center gap-1">
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-border">v{selected.version || 1}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[selected.status] || 'bg-port-border'}`}>
-                  {selected.status}
-                </span>
               </span>
             )}
             {selected && (
@@ -1159,7 +1209,7 @@ export default function MusicVideo() {
         open={autonomousOpen}
         onClose={() => setAutonomousOpen(false)}
         onStarted={(proj) => {
-          setProjects((prev) => [...prev, proj]);
+          setProjects((prev) => [proj, ...prev]);
           selectProject(proj.id);
           setAutonomousOpen(false);
         }}
@@ -1201,26 +1251,49 @@ export default function MusicVideo() {
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-port-text-muted">
-                    Projects ({projects.length})
+                    Projects ({projectGroups.length})
                   </h2>
+                  <label htmlFor="mv-project-filter" className="sr-only">Filter projects by name</label>
+                  <input
+                    id="mv-project-filter"
+                    type="search"
+                    value={nameQuery}
+                    onChange={(e) => setNameQuery(e.target.value)}
+                    placeholder="Filter by name…"
+                    className="min-w-0 w-full sm:w-64 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+                  />
                 </div>
+                {projectGroups.length === 0 && (
+                  <p className="text-sm text-port-text-muted">No projects match &ldquo;{nameQuery}&rdquo;.</p>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="mv-project-grid">
-                  {projects.map((project) => (
-                    <MusicVideoProjectCard
-                      key={project.id}
-                      project={project}
-                      trackLabel={trackName(project.trackId)}
-                      onSelect={() => selectProject(project.id)}
-                      onClone={(options) => handleClone(project, options)}
-                      isConfirmingDelete={isConfirmingDelete(project.id)}
-                      onRequestDelete={() => handleDeleteRequest(project.id)}
-                      onConfirmDelete={() => confirmDelete(() => handleDelete(project.id))}
-                      onCancelDelete={cancelDelete}
-                      cloning={cloningId === project.id}
-                    />
-                  ))}
+                  {projectGroups.map(({ rootId, versions }) => {
+                    const picked = versions.findIndex((v) => v.id === pickedVersion[rootId]);
+                    const versionIndex = picked >= 0 ? picked : 0;
+                    const project = versions[versionIndex];
+                    return (
+                      <MusicVideoProjectCard
+                        key={rootId}
+                        project={project}
+                        trackLabel={trackName(project.trackId)}
+                        onSelect={() => selectProject(project.id)}
+                        onClone={(options) => handleClone(project, options)}
+                        isConfirmingDelete={isConfirmingDelete(project.id)}
+                        onRequestDelete={() => handleDeleteRequest(project.id)}
+                        onConfirmDelete={() => confirmDelete(() => handleDelete(project.id))}
+                        onCancelDelete={cancelDelete}
+                        cloning={cloningId === project.id}
+                        versionCount={versions.length}
+                        versionIndex={versionIndex}
+                        onVersionStep={(delta) => {
+                          const target = versions[versionIndex + delta];
+                          if (target) setPickedVersion((prev) => ({ ...prev, [rootId]: target.id }));
+                        }}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1264,8 +1337,9 @@ export default function MusicVideo() {
             projectPanels={<div className="space-y-3 min-w-0">
               {autopilotRun && activeStage !== 'setup' && (
                 <StageSection
+                  id="mv-autonomous-run"
                   key={`autonomous-${selected.id}`}
-                  title="Autopilot run"
+                  title="Autonomous run"
                   summary={autopilotSummary(autopilotRun, productionReview.readiness)}
                   defaultOpen={!!runStage || autopilotRun.interrupted || ['running', 'awaiting-approval', 'needs-human', 'failed'].includes(autopilotRun.status)}
                 >

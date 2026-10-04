@@ -15,7 +15,7 @@ vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () =
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyPassword: async p => p === 'synthetic-password', verifyRequestSessionIdentity: async () => ({ kind: 'session', sessionId: 'synthetic-browser', label: null }) }));
 let endpoint;
-vi.mock('../services/browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
+vi.mock('../services/browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: path => fetch(`${endpoint}${path}`) }));
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
 const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser } = await import('../services/htmlComposition/testBrowserCleanup.js');
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
@@ -127,8 +127,8 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     expect(await page.locator('video').evaluate(v => v.videoWidth)).toBeGreaterThan(0);
     await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
     await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
-    await page.getByLabel('I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.').check();
-    await page.getByRole('button', { name: 'Approve animated proof' }).click();
+    expect(await page.getByRole('checkbox', { name: /I watched this revision/ }).count()).toBe(0);
+    await page.getByRole('button', { name: 'Approve — I reviewed this proof with audio' }).click();
     await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].filter(el => el.textContent === 'Approved for this revision').length === 3);
     const result = await store.getProject(p.id);
     expect(result.productionReview.feedback[0].resolvedAt).toBeTruthy();

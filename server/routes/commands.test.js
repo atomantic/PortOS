@@ -398,6 +398,53 @@ describe('commands routes', () => {
         output: 'workspace outputworkspace warning',
       }));
     });
+
+    it('invokes onComplete exactly once with error details when child process fails to spawn, even if close emits after error', async () => {
+      allowWorkspace();
+      const child = createChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { app, io } = createApp();
+      const { logAction } = await import('../services/history.js');
+
+      const response = await request(app)
+        .post('/api/commands/execute')
+        .send({ command: 'pwd', workspacePath: WORKSPACE_PATH });
+
+      expect(response.status).toBe(202);
+      const commandId = response.body.commandId;
+      const eventPrefix = `command:${commandId}`;
+
+      // Simulate spawn error: when a binary is not found, the error event fires
+      const spawnError = new Error('ENOENT: no such file or directory');
+      child.emit('error', spawnError);
+
+      // Node.js guarantees that close always emits after error. Verify we handle it safely.
+      child.emit('close', null);
+
+      // Verify onComplete was called exactly once with the error details
+      expect(io.emit).toHaveBeenCalledWith(`${eventPrefix}:complete`, {
+        success: false,
+        error: 'ENOENT: no such file or directory',
+        exitCode: 1,
+      });
+
+      // Count completion events to ensure only one was emitted
+      const completionCalls = io.emit.mock.calls.filter(
+        call => call[0] === `${eventPrefix}:complete`
+      );
+      expect(completionCalls).toHaveLength(1);
+
+      // Verify history was logged exactly once
+      expect(logAction).toHaveBeenCalledTimes(1);
+      expect(logAction).toHaveBeenCalledWith(
+        'command',
+        null,
+        expect.any(String),
+        expect.objectContaining({ command: 'pwd' }),
+        false,
+        'ENOENT: no such file or directory'
+      );
+    });
   });
 
   describe('POST /api/commands/:id/stop', () => {

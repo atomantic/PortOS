@@ -14,7 +14,7 @@ vi.mock('../../../lib/paths.js', async (importOriginal) => makePathsProxy(await 
 
 const { PATHS } = await import('../../../lib/paths.js');
 const projects = await import('../projects.js');
-const { preparePublishDraft, submitPublishDraft, discardPublishDraft, recordPublishPost } = await import('./index.js');
+const { preparePublishDraft, discardPublishDraft, recordPublishPost } = await import('./index.js');
 
 const platforms = { stackerNews: { enabled: true, account: null }, youtube: { enabled: true, account: null }, x: { enabled: true, account: 'antic' } };
 
@@ -59,9 +59,6 @@ describe('publish drafts (#9282)', () => {
     expect(draft).toMatchObject({ target: 'stackerNews', summary: { title: 'Song' } });
     expect(draft.screenshot).toMatch(/^data:image\/jpeg;base64,/);
     expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
-
-    await expect(submitPublishDraft(id, draft.draftId, { adapters })).rejects.toMatchObject({ status: 403, code: 'PUBLISH_MANUAL_REQUIRED' });
-    expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
     expect(pages[0].closed).toBe(false);
     const { project, post } = await recordPublishPost(id, 'stackerNews', { url: 'https://stacker.news/items/1' });
     expect(post.url).toBe('https://stacker.news/items/1');
@@ -75,20 +72,9 @@ describe('publish drafts (#9282)', () => {
     const first = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms });
     const second = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms });
     expect(pages[0].closed).toBe(true);
-    await expect(submitPublishDraft(id, first.draftId, { adapters })).rejects.toMatchObject({ code: 'PUBLISH_MANUAL_REQUIRED' });
     expect(await discardPublishDraft(id, second.draftId)).toBe(true);
     expect(pages[1].closed).toBe(true);
     expect(await discardPublishDraft(id, second.draftId)).toBe(false);
-  });
-
-  it('refuses a draft whose tab the director closed', async () => {
-    const id = await readyProject();
-    const { connect, pages } = fakeBrowser();
-    const adapters = { stackerNews: adapter() };
-    const draft = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms });
-    pages[0].closed = true;
-    await expect(submitPublishDraft(id, draft.draftId, { adapters })).rejects.toMatchObject({ code: 'PUBLISH_MANUAL_REQUIRED' });
-    expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
   });
 
   it('closes the tab and surfaces the adapter\'s error when a fill fails', async () => {
