@@ -49,6 +49,26 @@ describe('provider card vision diagnostics', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Connection lost'));
   });
 
+  it('keeps a pending test disabled after close/reopen and a second health response', async () => {
+    let finish;
+    request.mockResolvedValueOnce({ available: true })
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce({ available: true });
+    renderCard();
+    fireEvent.click(screen.getByRole('button', { name: 'Test vision' }));
+    await screen.findByText(/Endpoint reachable/);
+    fireEvent.click(screen.getByRole('button', { name: 'Run vision suite' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test vision' }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole('button', { name: 'Run vision suite' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Run vision suite' }));
+    expect(request).toHaveBeenCalledTimes(3);
+    finish({ success: true, results: [] });
+    await screen.findByText('Vision test passed');
+    expect(screen.getByRole('button', { name: 'Run vision suite' })).toBeEnabled();
+  });
+
   it('shows unavailable health and refuses test calls, and offers no vision action for CLI providers', async () => {
     request.mockResolvedValueOnce({ available: false, error: 'API endpoint not reachable' });
     const { unmount } = renderCard();

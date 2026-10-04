@@ -8,7 +8,9 @@ export default function ProviderVisionTest({ provider }) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [health, setHealth] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const busy = checking || testing;
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [imagePath, setImagePath] = useState('');
@@ -19,20 +21,20 @@ export default function ProviderVisionTest({ provider }) {
     setOpen(true);
     setResult(null);
     setHealth(null);
-    setBusy(true);
+    setChecking(true);
     setError('');
     getProviderVisionHealth(provider.id, { silent: true })
-      .then(setHealth).catch(err => setError(err.message)).finally(() => setBusy(false));
+      .then(setHealth).catch(err => setError(err.message)).finally(() => setChecking(false));
   };
   const run = (suite) => {
-    setBusy(true);
+    setTesting(true);
     setError('');
     setResult(null);
     const body = model.trim() ? { model: model.trim() } : {};
     const request = suite
       ? runProviderVisionSuite(provider.id, body, { silent: true })
       : testProviderVision(provider.id, { ...body, imagePath: imagePath.trim(), prompt }, { silent: true });
-    request.then(setResult).catch(err => setError(err.message)).finally(() => setBusy(false));
+    request.then(setResult).catch(err => setError(err.message)).finally(() => setTesting(false));
   };
   return <>
     <button className={buttonClass} disabled={!provider.enabled} onClick={checkHealth}>Test vision</button>
@@ -43,7 +45,7 @@ export default function ProviderVisionTest({ provider }) {
       </div>
       <p className="text-sm text-port-text-muted">Tests send screenshots stored on this server to this provider and may incur provider charges. The suite sends one stored screenshot twice.</p>
       <div role="status" className="text-sm text-port-text-muted">
-        {busy ? 'Checking vision…' : health ? (health.available ? 'Endpoint reachable. Run a test to verify vision support.' : health.error || 'Vision unavailable') : 'Health check did not complete.'}
+        {testing ? 'Running vision test…' : checking ? 'Checking vision…' : health ? (health.available ? 'Endpoint reachable. Run a test to verify vision support.' : health.error || 'Vision unavailable') : 'Health check did not complete.'}
       </div>
       <div className="space-y-2">
         <label htmlFor={`${id}-model`} className="block text-sm text-port-text">Model</label>
