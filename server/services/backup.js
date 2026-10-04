@@ -1279,6 +1279,7 @@ function manifestDataEntries(manifest, srcDir, subdirFilter) {
     if (dataPaths.has(normalized)) return null;
     dataPaths.add(normalized);
 
+    if (isRestorePreservedPath(normalized)) continue;
     if (!subdirFilter || normalized === subdirFilter || normalized.startsWith(`${subdirFilter}/`)) {
       selected.push({ filePath, expectedHash });
     }
@@ -1306,6 +1307,30 @@ const isOsMetadataFile = (name) => OS_METADATA_FILES.has(name) || name.startsWit
  * into any directory, so matching at every depth is the point, not a bug.
  */
 const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name => `--exclude=${name}`);
+
+/**
+ * Data-root files a restore never installs, though a snapshot keeps them as
+ * recovery evidence. `database-authority.json` names which database backend a
+ * completed cutover retired ON THE MACHINE THAT RAN IT. Installing another
+ * machine's record (or an older snapshot's, after a reverse cutover) would fence
+ * a healthy local backend as `DATABASE_RETIRED_BACKEND`, including across
+ * restarts. The destination keeps whatever authority it already has,
+ * byte-for-byte: absent stays absent, damaged stays damaged. Root-anchored
+ * relative names, like `DEFAULT_EXCLUDES`; this one list feeds the rsync
+ * filter, the manifest selection and the scope inventory so preview,
+ * verification and execution cannot disagree.
+ */
+const RESTORE_PRESERVED_FILES = Object.freeze(['database-authority.json']);
+const RESTORE_PRESERVED_RSYNC_EXCLUDES = RESTORE_PRESERVED_FILES.map(name => `--exclude=/${name}`);
+const isRestorePreservedPath = (relativePath) => RESTORE_PRESERVED_FILES.includes(relativePath);
+
+// A filter naming a preserved file would otherwise be a silent no-op restore.
+// Compared case-insensitively after dropping empty/`.` segments, so
+// `./Database-Authority.json/` cannot slip past on a case-insensitive volume.
+const restoreScopeIsPreservedFile = (subdirFilter) => {
+  const normalized = subdirFilter?.split('/').filter(part => part && part !== '.').join('/').toLowerCase();
+  return RESTORE_PRESERVED_FILES.includes(normalized);
+};
 
 const snapshotFileIntegrityError = (snapshotId, unmanifestedPath = null) => new ServerError(
   // Name the offending entry: without it the operator is told their only backup
@@ -1351,6 +1376,8 @@ async function snapshotScopeInventory(srcDir, subdirFilter) {
     // OS metadata never reaches rsync (OS_METADATA_RSYNC_EXCLUDES), so it must
     // not inflate the digest floor either.
     if (isOsMetadataFile(basename(filePath))) continue;
+    const scopedPath = relative(srcDir, filePath).replaceAll('\\', '/');
+    if (isRestorePreservedPath(scopedPath)) continue;
     if (info.size > largestFileBytes) largestFileBytes = info.size;
 
     const normalized = relative(srcDir, filePath).replaceAll('\\', '/');
@@ -1460,6 +1487,14 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   if (subdirFilter != null && !isSafeSubdirFilter(subdirFilter)) {
     throw new Error(`Invalid subdirFilter: ${subdirFilter}`);
   }
+  // Refused for previews too, before any verification or transfer, so a preview
+  // never promises a restore that execution would silently skip.
+  if (restoreScopeIsPreservedFile(subdirFilter)) {
+    throw new ServerError(
+      'database-authority.json is machine-local and is never restored from a snapshot: it records which database backend a cutover completed on THIS machine, and installing another copy would fence the healthy local database. Restore your records with a data or database restore instead; to change the authority, run a database cutover (see docs/STORAGE.md, retired backend).',
+      { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
+    );
+  }
 
   // Run the preflight independently for preview and execution. A preview is an
   // aid to confirmation, not an integrity lease: snapshot bytes may change
@@ -1491,7 +1526,10 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // exclude placed after `--include=/<filter>/***` would never be consulted.
   // These are the files `snapshotScopeInventory` skips — keeping the two in
   // step is what preserves "everything transferred was verified".
-  const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES];
+  // Same placement rule: excluded before the include chain, and kept out of the
+  // manifest selection and inventory above, so what rsync may write is exactly
+  // what the preflight verified.
+  const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES, ...RESTORE_PRESERVED_RSYNC_EXCLUDES];
   if (dryRun) flags.push('--dry-run');
   if (subdirFilter) {
     // Anchored with a leading `/` — rsync matches an unanchored pattern against
