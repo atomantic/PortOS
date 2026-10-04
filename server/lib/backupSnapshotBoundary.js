@@ -1,3 +1,4 @@
+import { maintenance } from './maintenanceAdmission.js';
 /**
  * Process-local admission for durable file-plus-row publications during backup.
  * Callers hold one mutation lease across BOTH stores, not around individual
@@ -31,6 +32,10 @@ function releasePublications() {
 
 /** Hold one admission across an entire file-plus-row workflow. Nested calls reuse it. */
 export async function withBackupAssetPublication(work) {
+  return maintenance.continueSettlement(() => withAdmittedBackupAssetPublication(work));
+}
+
+async function withAdmittedBackupAssetPublication(work) {
   const scope = publicationScope.getStore();
   if (scope?.active) return work();
   // Work spawned by a still-admitted lease joins it: the cut already waits for that lease.

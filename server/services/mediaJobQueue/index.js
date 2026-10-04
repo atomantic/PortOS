@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Media Job Queue — lane-aware FIFO for media generation jobs.
  *
@@ -598,9 +599,22 @@ export async function initMediaJobQueue() {
     // re-attached (#1332), and only a genuinely-dead one is reaped+failed in
     // initLoraTraining.) This runs before the worker starts, so every dir
     // present is an orphan from the prior process.
-    const videoReap = await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
+    const videoReap = maintenance.held() ? { reaped: 0 }
+      : await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
     if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
     for (const j of persistedJobs) {
+      if (j.status === 'running' && maintenance.held()) {
+        maintenance.recoverOwned('media', j.id);
+        if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
+          recoveringJobs.add(j.id);
+          reattachJobs.push({ ...j, status: 'queued', params: { ...j.params, reattach: true } });
+        } else {
+          // Preserve uncertain work and staged inputs; no paid replay or orphan
+          // kill is safe merely because the observer process restarted.
+          archive.push({ ...j, params: restoredParams(j) });
+        }
+        continue;
+      }
       // Explicit Video Start grants one process lifetime. Restored jobs wait for
       // project reconciliation; replaying an unknown paid submit could charge twice.
       if (j.params?.videoProduction && ['queued', 'running'].includes(j.status)) {
@@ -750,6 +764,9 @@ function startLaneJob(job, { lane }) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] startLaneJob: already removed from queue, skipping`);
     return false;
   }
+  const permit = recoveringJobs.has(job.id)
+    ? maintenance.recoverOwned('media', job.id) : maintenance.tryAdmit('media', job.id);
+  if (!permit) return false;
   queue.splice(idx, 1);
   job.status = 'running';
   job.startedAt = new Date().toISOString();
@@ -768,8 +785,9 @@ function startLaneJob(job, { lane }) {
     ? (job.params?.mode || 'cloud')
     : lane === 'remote' ? `remote ${job.kind}` : job.kind;
   let finalized = false;
+  let archiveWrite;
   function finalizeLane() {
-    if (finalized) return;
+    if (finalized) return archiveWrite;
     finalized = true;
     // Count once, after every terminal path (including pre-dispatch throws),
     // and before releasing the lane. Boot reconciliation never comes here.
@@ -789,11 +807,13 @@ function startLaneJob(job, { lane }) {
     // the UI's recent-reel cap (recentLimit) handles in-memory display.
     archive.push(job);
     recomputeQueuePositions();
-    persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
+    archiveWrite = persist();
+    archiveWrite.catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
+    return archiveWrite;
   }
   let markRunning;
   trackOperation(dispatchOperations, new Promise((resolve) => { markRunning = resolve; }));
-  (async () => {
+  permit.run(async () => {
     try {
       await persist();
       // Cancellation can win while the running snapshot is blocked.
@@ -825,8 +845,12 @@ function startLaneJob(job, { lane }) {
         await trackTerminalOperation(persistTerminalTransition(job));
       }
     }
-    finalizeLane();
-  })().catch((error) => console.error(`❌ media-job [${job.id.slice(0, 8)}] storage settlement pending: ${error.message}`));
+    await finalizeLane();
+    const settled = await flushMediaJobQueue();
+    recoveringJobs.delete(job.id);
+    if (settled.ok) permit.finish();
+    else permit.markUnsettled();
+  }).catch((error) => console.error(`❌ media-job [${job.id.slice(0, 8)}] storage settlement pending: ${error.message}`));
   return true;
 }
 
@@ -871,9 +895,14 @@ async function prepareQueuedVideos(jobs = queue.filter((job) => !job.admitting))
   }
 }
 
+// IDs proven by the boot probe to have an existing trainer; request params cannot grant this.
+const recoveringJobs = new Set();
+
 async function drainLoop() {
   while (!dispatchQuiesced) {
-    const candidates = queue.filter((job) => !job.admitting);
+    const held = maintenance.held();
+    const candidates = queue.filter((job) => !job.admitting && (!held || recoveringJobs.has(job.id)));
+    if (held && !candidates.length) { await sleep(150); continue; }
     await prepareQueuedVideos(candidates);
     // Shutdown may have begun while cohorts resolved; exit without promoting.
     if (dispatchQuiesced) break;
@@ -943,7 +972,9 @@ export function runJobNow(jobId) {
   if (dispatchQuiesced) {
     return { ok: false, code: MEDIA_QUEUE_SHUTTING_DOWN, error: 'The server is shutting down; the job stays queued and resumes after restart' };
   }
-  startLaneJob(job, { lane: 'cloud' });
+  if (!startLaneJob(job, { lane: 'cloud' })) {
+    return { ok: false, code: 'MAINTENANCE_HELD', error: 'Maintenance is holding new renders; this job stays queued' };
+  }
   return { ok: true, status: 'running' };
 }
 

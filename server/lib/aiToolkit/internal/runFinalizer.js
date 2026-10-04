@@ -23,11 +23,21 @@ export function createRunFinalizer({
   onComplete,
   handleProviderError,
   safeJsonParse,
-  safeSettle,
   consumeActiveStop,
+  onPersistenceFailure,
 }) {
+  const pendingHooks = [];
+  const failed = () => onPersistenceFailure?.();
+  const settleTerminal = (fn, label) => {
+    try {
+      const result = fn();
+      if (result?.then) pendingHooks.push(Promise.resolve(result).catch(err => {
+        failed(); console.error(`❌ ${label} failed: ${err.message}`);
+      }));
+    } catch (err) { failed(); console.error(`❌ ${label} failed: ${err.message}`); }
+  };
   const readMetadata = async () => metadataObject(
-    safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'))
+    safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => { failed(); return '{}'; }))
   );
 
   const terminalState = () => {
@@ -43,7 +53,7 @@ export function createRunFinalizer({
 
   const openTerminalMetadata = async () => {
     const state = terminalState();
-    if (state.partialOutput) await atomicWrite(outputPath, state.partialOutput).catch(() => {});
+    if (state.partialOutput) await atomicWrite(outputPath, state.partialOutput).catch(failed);
     const metadata = await readMetadata();
     metadata.endTime = new Date().toISOString();
     metadata.duration = Date.now() - startTime;
@@ -76,9 +86,10 @@ export function createRunFinalizer({
         });
       }
 
-      safeSettle(() => hooks.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
-      safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+      settleTerminal(() => hooks.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
+      settleTerminal(() => onComplete?.(metadata), `Run ${runId} onComplete`);
     } catch (writeErr) {
+      failed();
       console.error(`❌ Run ${runId} success finalize error: ${writeErr.message}`);
       const failMetadata = await readMetadata();
       failMetadata.endTime = new Date().toISOString();
@@ -87,9 +98,9 @@ export function createRunFinalizer({
       failMetadata.error = `Run finalization failed: ${writeErr.message}`;
       failMetadata.errorCategory = ERROR_CATEGORIES.UNKNOWN;
       failMetadata.outputSize = Buffer.byteLength(getOutput());
-      await atomicWrite(metadataPath, failMetadata).catch(() => {});
-      safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, getOutput()), `Run ${runId} onRunFailed hook`);
-      safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
+      await atomicWrite(metadataPath, failMetadata).catch(failed);
+      settleTerminal(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, getOutput()), `Run ${runId} onRunFailed hook`);
+      settleTerminal(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
     }
   };
 
@@ -114,12 +125,13 @@ export function createRunFinalizer({
       const { metadata, partialOutput } = await openTerminalMetadata();
       Object.assign(metadata, terminal);
       await atomicWrite(metadataPath, metadata);
-      safeSettle(() => hooks.onRunFailed?.(metadata, error, partialOutput), `Run ${runId} onRunFailed hook`);
-      safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+      settleTerminal(() => hooks.onRunFailed?.(metadata, error, partialOutput), `Run ${runId} onRunFailed hook`);
+      settleTerminal(() => onComplete?.(metadata), `Run ${runId} onComplete`);
     } catch (finalErr) {
+      failed();
       console.error(`❌ API run ${runId} timeout finalize error: ${finalErr.message}`);
       const salvaged = terminalState().partialOutput;
-      safeSettle(() => onComplete?.({
+      settleTerminal(() => onComplete?.({
         success: false,
         ...terminal,
         endTime: new Date().toISOString(),
@@ -136,10 +148,11 @@ export function createRunFinalizer({
     metadata.error = 'API run canceled';
     metadata.errorCategory = ERROR_CATEGORIES.CANCELED;
     await atomicWrite(metadataPath, metadata).catch(err => {
+      failed();
       console.error(`❌ API run ${runId} cancel finalize error: ${err.message}`);
     });
-    safeSettle(() => hooks.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
-    safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+    settleTerminal(() => hooks.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
+    settleTerminal(() => onComplete?.(metadata), `Run ${runId} onComplete`);
   };
 
   const finalizeHttpError = async ({ status, statusText, body, headers }) => {
@@ -159,8 +172,8 @@ export function createRunFinalizer({
     }
 
     await atomicWrite(metadataPath, metadata);
-    safeSettle(() => hooks.onRunFailed?.(metadata, metadata.error, ''), `Run ${runId} onRunFailed hook`);
-    safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+    settleTerminal(() => hooks.onRunFailed?.(metadata, metadata.error, ''), `Run ${runId} onRunFailed hook`);
+    settleTerminal(() => onComplete?.(metadata), `Run ${runId} onComplete`);
   };
 
   const finalizeStreamError = async (error) => {
@@ -178,8 +191,8 @@ export function createRunFinalizer({
     }
 
     await atomicWrite(metadataPath, metadata);
-    safeSettle(() => hooks.onRunFailed?.(metadata, metadata.error, partialOutput), `Run ${runId} onRunFailed hook`);
-    safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+    settleTerminal(() => hooks.onRunFailed?.(metadata, metadata.error, partialOutput), `Run ${runId} onRunFailed hook`);
+    settleTerminal(() => onComplete?.(metadata), `Run ${runId} onComplete`);
   };
 
   const finalizeHandlerError = async (handlerErr) => {
@@ -190,12 +203,12 @@ export function createRunFinalizer({
       error: `Run finalization failed: ${handlerErr.message}`,
       outputSize: Buffer.byteLength(getOutput()),
     };
-    await atomicWrite(metadataPath, failMetadata).catch(() => {});
-    safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, getOutput()), `Run ${runId} onRunFailed hook`);
-    safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
+    await atomicWrite(metadataPath, failMetadata).catch(failed);
+    settleTerminal(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, getOutput()), `Run ${runId} onRunFailed hook`);
+    settleTerminal(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
   };
 
-  const finalize = async (cause) => {
+  const finalizeOnce = async (cause) => {
     if (!lifecycle.markSettled()) return false;
     activeRuns.delete(runId);
     try {
@@ -212,11 +225,20 @@ export function createRunFinalizer({
       else if (cause.type === 'canceled') await finalizeCanceled();
       return true;
     } catch (handlerErr) {
+      failed();
       console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
       await finalizeHandlerError(handlerErr);
       return true;
+    } finally {
+      await Promise.all(pendingHooks);
     }
   };
 
-  return { finalize };
+  let pending;
+  const finalize = cause => {
+    if (pending) return Promise.resolve(false);
+    pending = finalizeOnce(cause);
+    return pending;
+  };
+  return { finalize, settled: () => pending || Promise.resolve() };
 }

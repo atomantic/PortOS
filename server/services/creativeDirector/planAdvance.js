@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Creative Director — production-plan advance loop (CDO Phase 2, #2184).
  *
@@ -536,7 +537,7 @@ function armPlanJobListener(projectId, stepId, jobId, runId, expectedProductionR
     teardown();
     const success = job.status === 'completed';
     // Runs outside the request lifecycle (media-queue emitter) — never throw out.
-    (async () => {
+    maintenance.continueSettlement(async () => {
       await finishRun(projectId, runId, success ? 'completed' : 'failed', success ? undefined : `job ${job.status}`);
       if (success) {
         await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'done', result: { jobId } });
@@ -545,7 +546,7 @@ function armPlanJobListener(projectId, stepId, jobId, runId, expectedProductionR
         await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'failed', result: { jobId, jobStatus: job.status } });
         await handlePlanStepFailure(projectId, { stepId, toolName: '(long-running job)', retryCount: 0 });
       }
-    })().catch((e) => console.log(`⚠️ CD plan ${projectId} job settle for ${stepId} failed: ${e.message}`));
+    }).catch((e) => console.log(`⚠️ CD plan ${projectId} job settle for ${stepId} failed: ${e.message}`));
   }
   mediaJobEvents.on('completed', settle);
   mediaJobEvents.on('failed', settle);

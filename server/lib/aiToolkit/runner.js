@@ -669,7 +669,7 @@ export function createRunnerService(config = {}) {
       return runId;
     },
 
-    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens, beforeExecute }) {
+    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens, beforeExecute, onSettled, onPersistenceFailure }) {
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -715,6 +715,7 @@ export function createRunnerService(config = {}) {
         providerStatusService,
         hooks,
         onComplete,
+        onPersistenceFailure,
         handleProviderError,
         safeJsonParse,
         safeSettle,
@@ -760,12 +761,16 @@ export function createRunnerService(config = {}) {
         : { success: false, error: `Endpoint blocked: ${endpointGuard.reason}` };
       if (controller.signal.aborted) {
         await finalizer.finalize({ type: 'canceled' });
+        await finalizer.settled();
+        onSettled?.();
         return runId;
       }
       if (ready.success && beforeExecute) {
         try { await beforeExecute(); }
         catch {
           await finalizer.finalize({ type: 'canceled' });
+          await finalizer.settled();
+          onSettled?.();
           return runId;
         }
       }
@@ -817,6 +822,8 @@ export function createRunnerService(config = {}) {
           body: responseBody,
           headers: response.headers,
         });
+        await finalizer.settled();
+        onSettled?.();
         return runId;
       }
 
@@ -950,10 +957,18 @@ export function createRunnerService(config = {}) {
         });
       };
 
-      processStream().catch(err => {
-        void finalizer.finalize({ type: 'stream-error', error: err }).catch(handlerErr => {
-          console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
-        });
+      processStream().catch(async err => {
+        await finalizer.finalize({ type: 'stream-error', error: err });
+      }).finally(async () => {
+        // A timeout can finish metadata before the aborted reader settles.
+        // Resource ownership ends only after both transport and saving finish.
+        try { await reader.cancel?.(); reader.releaseLock?.(); }
+        catch (err) { onPersistenceFailure?.(); console.error(`❌ Run ${runId} reader cleanup failed: ${err.message}`); }
+        await finalizer.settled();
+        onSettled?.();
+      }).catch(handlerErr => {
+        onPersistenceFailure?.();
+        console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
       });
 
       return runId;

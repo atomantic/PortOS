@@ -1,3 +1,4 @@
+import MaintenancePanel from './MaintenancePanel.jsx';
 import { useState, useEffect, useMemo } from 'react';
 import { Clock3, MapPin, Palette, Save } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -183,6 +184,7 @@ export function GeneralTab() {
       className="@container space-y-4"
     >
       <h2 id="general-settings-heading" className="sr-only">General settings</h2>
+      <MaintenancePanel />
       <UnsavedChangesConfirm
         guard={routeGuard}
         when={hasDiscardableChanges}

@@ -83,6 +83,7 @@ export { default as useBeeperOutbox } from './useBeeperOutbox.js';
 export { default as useBeeperRealtime } from './useBeeperRealtime.js';
 export { default as useMoltworldWs } from './useMoltworldWs.js';
 export { default as useCharacterAugmentation } from './useCharacterAugmentation.js';
+export { useMaintenance } from './useMaintenance.js';
 export { default as useMounted } from './useMounted.js';
 export { default as useMemoRecorder } from './useMemoRecorder.js';
 export { default as usePendingListRows } from './usePendingListRows.js';

@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { cp, lstat, mkdtemp, open, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -130,7 +131,11 @@ function deliveryNames(targets) {
   return names;
 }
 
-export async function renderComposition({ jobId, owner, audio, maxDurationSec, song, ...input }) {
+export async function renderComposition(options) {
+  return maintenance.run('composition', options.jobId, () => renderCompositionAdmitted(options), { continuation: true });
+}
+
+async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, song, ...input }) {
   const job = { controller: new AbortController(), committing: false };
   active.set(jobId, job);
   const { signal } = job.controller;

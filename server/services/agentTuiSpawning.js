@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Agent TUI Spawning
  *
@@ -348,6 +349,11 @@ export async function spawnTuiAgent({
   // the SERVICE layer is threaded in here — that is what keeps
   // `sessionController.js` a leaf with no edge back into this cluster, and what
   // makes the state machine drivable without a live PTY in a test.
+  let maintenanceExited = false;
+  let maintenanceCleaned = false;
+  const settleMaintenance = () => {
+    if (maintenanceExited && maintenanceCleaned) maintenance.finishResource('agent', agentId);
+  };
   const controller = createTuiSessionController({
     agentId,
     task,
@@ -372,12 +378,15 @@ export async function spawnTuiAgent({
       hasLiveChild: (pid) => shellHasLiveChild(pid),
     },
     persistence: {
+      markUnsettled: () => maintenance.markResourceUnsettled('agent', agentId),
       updateAgent,
       appendRunEvent,
       readRunRecord: () => activeAgents.get(agentId),
       releaseRunRecord: (pid) => {
         if (pid) unregisterSpawnedAgent(pid);
         activeAgents.delete(agentId);
+        maintenanceCleaned = true;
+        settleMaintenance();
       },
     },
     sentinel: {
@@ -466,10 +475,18 @@ export async function spawnTuiAgent({
       doneSentinelPath,
       launchShape,
       safetyProfile,
-      onData: controller.handleData,
-      onExit: controller.handleExit,
+      onData: (...args) => maintenance.withResource('agent', agentId, () => controller.handleData(...args)),
+      onExit: (...args) => {
+        if (args[0]?.killed !== true) maintenanceExited = true;
+        const result = maintenance.withResource('agent', agentId, () => controller.handleExit(...args));
+        settleMaintenance();
+        return result;
+      },
       onInitialCommandSent: controller.markCommandInjected,
     });
+    // killSession removes the UI record and reports a synthetic exit. Readiness
+    // additionally waits for node-pty/the runner to confirm physical exit.
+    session.ptyProcess?.onExit?.(() => { maintenanceExited = true; settleMaintenance(); });
   } catch (err) {
     const message = err?.message || String(err);
     appendLine(`❌ Failed to start ${provider.name || provider.id} TUI: ${message}`);

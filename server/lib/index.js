@@ -828,3 +828,5 @@ export * from './musicVideoMediaPolicy.js';
 export * from './sandboxDelegation.js';
 
 export * from './forgeMaintenanceTasks.js';
+
+export * from './maintenanceAdmission.js';

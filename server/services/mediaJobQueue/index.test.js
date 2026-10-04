@@ -286,6 +286,23 @@ describe('mediaJobQueue', () => {
     mediaJobQueue.mediaJobEvents.off('changed', changed);
   });
 
+  it('maintenance preserves queued work and refuses Run now while active work finishes', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const first = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'first' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const { hold } = maintenance.begin({ reason: 'Work', owner: 'Operator' });
+    try {
+      const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'next' } });
+      expect(mediaJobQueue.runJobNow(second.jobId)).toMatchObject({ ok: false, code: 'MAINTENANCE_HELD' });
+      expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+      expect(maintenance.status().state).toBe('draining');
+      videoGenEvents.emit('completed', { generationId: first.jobId, filename: 'example.mp4' });
+      await waitFor(() => maintenance.status().state === 'ready');
+      expect(stubs.generateImageCodex).not.toHaveBeenCalled();
+      expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
+  });
+
   it('enqueueJob returns jobId + queued status + position', async () => {
     // Block the worker so the second enqueue lands behind the first in the
     // pipeline rather than entering an empty queue after the first ran.

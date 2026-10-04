@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Factory for pipeline media-job filename hooks.
  *
@@ -87,6 +88,7 @@ export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, 
           return result.patch || {};
         },
       ).then(() => { writeOk = true; }).catch((err) => {
+        maintenance.markCurrentUnsettled();
         console.error(`❌ ${name} filename hook failed for job ${shortId}: ${err?.message || err}`);
       });
 
@@ -94,11 +96,13 @@ export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, 
         console.log(`📎 ${name} filename stamped — issue=${parsed.issueId.slice(0, 8)} ${stampedLabel} ← ${filename}`);
         if (onStamped) {
           await onStamped({ parsed, job, filename, label: stampedLabel }).catch((err) => {
+        maintenance.markCurrentUnsettled();
             console.error(`❌ ${name} onStamped hook failed for job ${shortId}: ${err?.message || err}`);
           });
         }
       }
     }).catch((err) => {
+        maintenance.markCurrentUnsettled();
       console.error(`❌ ${name} filename hook crashed: ${err?.message || err}`);
     }));
   };

@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Sprite local-render completion hook (#4876).
  *
@@ -131,14 +132,18 @@ async function reconcileSettledSpriteJobs() {
     .filter((job) => ['completed', 'failed', 'canceled'].includes(job.status))
     .filter(decodeSpriteAnimationJob);
   if (!jobs.length) return 0;
+  // Register the whole recovery batch before yielding, so readiness cannot
+  // flicker between two archived jobs. Recovery starts no new provider work.
+  const pending = jobs.map(job => ({ job, permit: maintenance.recoverOwned('settlement', `sprite:${job.id}`) }));
   let settled = 0;
-  for (const job of jobs) {
+  for (const { job, permit } of pending) {
     // Serialized on purpose: these share the per-record write tail anyway, and a
     // boot sweep has no reason to contend with the requests now arriving.
     // eslint-disable-next-line no-await-in-loop
-    await settleSpriteAnimationJob(job).then(() => { settled += 1; }).catch((err) => (
-      console.error(`❌ sprite local render boot reconcile failed for job ${job.id.slice(0, 8)}: ${err?.message || err}`)
-    ));
+    await permit.run(() => settleSpriteAnimationJob(job)).then(() => { settled += 1; }).catch((err) => {
+      permit.markUnsettled();
+      console.error(`❌ sprite local render boot reconcile failed for job ${job.id.slice(0, 8)}: ${err?.message || err}`);
+    }).finally(() => permit.finish());
   }
   console.log(`🎞️ sprite local renders: reconciled ${settled} settled job(s) on boot`);
   return settled;
@@ -153,7 +158,7 @@ export function initSpriteLocalAnimationHook() {
   terminalHandler = (job) => {
     // Outside the request lifecycle, so a throw here would take the process
     // down rather than reaching error middleware (AGENTS.md boundary exception).
-    void settleSpriteAnimationJob(job).catch((err) => (
+    void maintenance.continueSettlement(() => settleSpriteAnimationJob(job)).catch((err) => (
       console.error(`❌ sprite local render hook failed for job ${job?.id?.slice(0, 8)}: ${err?.message || err}`)
     ));
   };

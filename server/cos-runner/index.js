@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import '../services/databaseBootFence.js';
 /**
  * CoS Agent Runner - Standalone PM2 Process
@@ -109,6 +110,7 @@ const io = new SocketServer(server, {
 const httpDrain = createHttpDrain([server]);
 let transportClose;
 const lifecycle = createRunnerShutdown({
+  admission: maintenance,
   stopIntake: (deadlineMs) => httpDrain.begin(deadlineMs),
   closeTransports: () => {
     transportClose ??= new Promise(resolve => {
@@ -723,6 +725,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
     } catch (err) {
       lifecycle.reportFailure(err);
       activeAgents.delete(agentId);
+      return false;
     }
   }));
 

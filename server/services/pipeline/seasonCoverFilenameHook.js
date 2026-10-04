@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Pipeline season (volume) cover — filename hook.
  *
@@ -66,6 +67,7 @@ const handler = (job) => {
         },
       };
     }).then(() => { writeOk = true; }).catch((err) => {
+        maintenance.markCurrentUnsettled();
       console.error(`❌ seasonCover filename hook failed for job ${shortId}: ${err?.message || err}`);
     });
 
@@ -77,6 +79,7 @@ const handler = (job) => {
       if (target === 'cover') await refreshSeriesCoverImage(seriesId);
     }
   }).catch((err) => {
+        maintenance.markCurrentUnsettled();
     console.error(`❌ seasonCover filename hook crashed: ${err?.message || err}`);
   }));
 };

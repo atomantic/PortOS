@@ -52,6 +52,8 @@
 
 import { vi, afterAll } from 'vitest';
 import { rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
 
 // The server intentionally logs expected error paths, lifecycle transitions,
@@ -87,4 +89,26 @@ afterAll(() => {
   for (const dir of dirs.splice(0)) {
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
   }
+});
+
+// Exercise the real gate in workflow tests, with private test-owned journals.
+// Register teardown in setup (not inside a lazy mock factory); resetModules can
+// otherwise create a journal after the file's teardown hooks were collected.
+const maintenanceTestRoots = [];
+afterAll(() => {
+  for (const entry of maintenanceTestRoots.splice(0)) {
+    entry.closed = true;
+    entry.io.rmSync(entry.root, { recursive: true, force: true });
+  }
+});
+vi.mock('./lib/maintenanceAdmission.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const io = await vi.importActual('node:fs');
+  const root = io.mkdtempSync(join(tmpdir(), 'maintenance-workflow-'));
+  const entry = { io, root, closed: false };
+  maintenanceTestRoots.push(entry);
+  return { ...actual, maintenance: actual.createMaintenanceAdmission(root, { io, assertWrite: path => {
+    // Other suites may mock fs wholesale. Keep durable I/O private and real.
+    if (entry.closed || path !== join(root, 'workflow-maintenance')) throw new Error('Unexpected maintenance test path');
+  } }) };
 });

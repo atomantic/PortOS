@@ -132,6 +132,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // Generic runs accept arbitrary prompts/workspaces, including API-to-CLI fallback.
   'POST /api/runs',
+  'POST /api/system/maintenance',
+  'POST /api/system/maintenance/resume',
   'POST /api/voice/studio/setup',
 
   // Apps: create/edit choose the repo path and the start/build commands; the

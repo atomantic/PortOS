@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Agent Management
  *
@@ -238,6 +239,11 @@ async function markAgentPaused(agentId, agentInfo, pausedAt, reason) {
  * so a later resume task can use the same workspace/change context.
  */
 export async function pauseAgent(agentId, reason = null) {
+  return maintenance.withResource('agent', agentId, () =>
+    maintenance.continueSettlement(() => pauseAdmittedAgent(agentId, reason)));
+}
+
+async function pauseAdmittedAgent(agentId, reason) {
   const pausedAt = new Date().toISOString();
 
   if (runnerAgents.has(agentId)) {
@@ -372,6 +378,7 @@ function classifyResume(task, agentId) {
  * @returns {Promise<{success: true, agentId: string, taskId: string|null, mode: 'requeued'|'already-active'|'superseded'|'new-task', created: boolean, branchName: string|null}>}
  */
 export async function resumeAgent(agentId, overrides = {}) {
+  maintenance.assertOpen();
   const agent = await getAgentRecord(agentId);
   if (!agent) {
     throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
@@ -535,6 +542,7 @@ const RELAUNCH_EXIT_TIMEOUT_MS = 15000;
  * @param {{context?: string, provider?: string, model?: string, effort?: string, app?: string, reason?: string}} overrides
  */
 export async function relaunchAgent(agentId, overrides = {}) {
+  maintenance.assertOpen();
   const agent = await getAgentRecord(agentId);
   if (!agent) {
     throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });

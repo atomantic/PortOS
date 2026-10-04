@@ -1,3 +1,5 @@
+import { bindMaintenanceIo } from './maintenanceControl.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { noteReadinessChanged } from './readinessNotify.js';
 /**
  * Server boot orchestration.
@@ -189,6 +191,7 @@ import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLoggin
  * `runBootSequence` below.
  */
 export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
+  bindMaintenanceIo(io);
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
   const aiToolkitHooks = attachLlmActivityHooks({
     ensureProviderReady: (provider) => ensureProviderReadyForExecution(provider),
@@ -202,7 +205,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // the prompt-cache tiers that dominate cost), falling back to the
       // prompt-length/stdout estimate when none is found. Owns its own error
       // handling — a usage-accounting failure must not fail the run.
-      recordCompletedRunUsage(metadata, output);
+      return recordCompletedRunUsage(metadata, output);
     },
     onRunFailed: (metadata, error) => {
       const errorMessage = error?.message ?? String(error);
@@ -290,6 +293,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       sampleProvidersFile: join(dataReferenceDir, 'providers.json'),
       io,
       asyncHandler,
+      withRunAdmission: handler => (req, res) => maintenance.run('manual-run', 'Runs', () => handler(req, res)),
       // Inject PortOS's ServerError so toolkit route errors normalize into the
       // canonical `{ error, code, timestamp, context? }` envelope (issue #1084).
       ServerError,
@@ -371,6 +375,14 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // toolkit's external-run registry, so the toolkit's own stopRun/isRunActive/
     // deleteRun account for live runs without any sibling-method monkey-patching.
     registerRunners: (aiToolkit) => {
+      const executeApi = aiToolkit.services.runner.executeApiRun.bind(aiToolkit.services.runner);
+      aiToolkit.services.runner.executeApiRun = options => {
+        const permit = maintenance.admit('api-run', options.runId, { continuation: true });
+        return permit.run(() => executeApi({ ...options,
+          onPersistenceFailure: () => permit.markUnsettled(),
+          onSettled: () => permit.finish(),
+        })).catch(err => { permit.markUnsettled(); throw err; });
+      };
       aiToolkit.services.runner.setCliRunner(executeCliRunFixed);
       aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
     },

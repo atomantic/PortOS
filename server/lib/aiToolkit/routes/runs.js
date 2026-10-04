@@ -8,7 +8,7 @@ export function createRunsRoutes(runnerService, options = {}) {
   // real ServerError + asyncHandler so thrown errors normalize into
   // `{ error, code, timestamp, context? }` and route to errorMiddleware).
   // Standalone, the toolkit's own defaults serialize the same envelope.
-  const { asyncHandler = defaultAsyncHandler, io = null, ServerError = ToolkitHttpError } = options;
+  const { asyncHandler = defaultAsyncHandler, io = null, ServerError = ToolkitHttpError, withRunAdmission = handler => handler } = options;
 
   router.get('/', asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
@@ -19,7 +19,7 @@ export function createRunsRoutes(runnerService, options = {}) {
     res.json(result);
   }));
 
-  router.post('/', asyncHandler(async (req, res) => {
+  router.post('/', asyncHandler(withRunAdmission(async (req, res) => {
     // Validate up front so invalid types (timeout: "abc", screenshots: "x")
     // can't reach the runner — setTimeout would treat "abc" as 0 and kill
     // the run immediately, and iterating a string `screenshots` would walk
@@ -98,7 +98,7 @@ export function createRunsRoutes(runnerService, options = {}) {
       : provider;
 
     if (provider.type === 'cli') {
-      runnerService.executeCliRun({
+      void Promise.resolve(runnerService.executeCliRun({
         runId,
         provider: cliProvider,
         prompt,
@@ -111,9 +111,12 @@ export function createRunsRoutes(runnerService, options = {}) {
           io?.emit(`run:${runId}:complete`, finalMetadata);
         },
         timeout: effectiveTimeout,
+      })).catch(error => {
+        console.error(`❌ Run ${runId} executor failed: ${error.message}`);
+        io?.emit(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
       });
     } else if (provider.type === 'api') {
-      runnerService.executeApiRun({
+      void Promise.resolve(runnerService.executeApiRun({
         runId,
         provider,
         model: runModel,
@@ -127,6 +130,9 @@ export function createRunsRoutes(runnerService, options = {}) {
           io?.emit(`run:${runId}:complete`, finalMetadata);
         },
         timeout: effectiveTimeout,
+      })).catch(error => {
+        console.error(`❌ Run ${runId} executor failed: ${error.message}`);
+        io?.emit(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
       });
     } else if (provider.type === 'tui' && typeof runnerService.executeTuiRun === 'function') {
       // Honor the user-picked model from the Runs UI — `executeTuiRun` reads
@@ -138,7 +144,7 @@ export function createRunsRoutes(runnerService, options = {}) {
       const effectiveProvider = runModel
         ? { ...provider, defaultModel: runModel }
         : provider;
-      runnerService.executeTuiRun({
+      void Promise.resolve(runnerService.executeTuiRun({
         runId,
         provider: effectiveProvider,
         prompt,
@@ -151,6 +157,9 @@ export function createRunsRoutes(runnerService, options = {}) {
           io?.emit(`run:${runId}:complete`, finalMetadata);
         },
         timeout: effectiveTimeout,
+      })).catch(error => {
+        console.error(`❌ Run ${runId} executor failed: ${error.message}`);
+        io?.emit(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
       });
     } else {
       throw new ServerError(`Unsupported provider type: ${provider.type}`, {
@@ -168,7 +177,7 @@ export function createRunsRoutes(runnerService, options = {}) {
       status: 'started',
       metadata
     });
-  }));
+  })));
 
   router.get('/:id', asyncHandler(async (req, res) => {
     const metadata = await runnerService.getRun(req.params.id);

@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image Gen — fal.ai queue REST API provider.
  *
@@ -367,7 +368,7 @@ async function runFal(job, jobId, {
       // account; this only lets a gallery record say roughly what it cost.
       estimatedCostUsd: request.estimatedCostUsd,
       ...renderTimingFields(job.renderStartedAtMs),
-    }).catch(() => {});
+    }).catch(() => maintenance.markCurrentUnsettled());
     // Cleaners run BEFORE the SSE complete + completed events so subscribers
     // see the cleaned bytes.
     await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: MODE });

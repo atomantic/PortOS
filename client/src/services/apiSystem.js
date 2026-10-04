@@ -615,3 +615,11 @@ export const runCosStorage = (input, options) => request('/data/cos/storage/run'
 export const cancelCosStorage = (options) => request('/data/cos/storage/cancel', { ...options, method: 'POST' });
 export const saveCosStoragePolicy = (policy, options) => request('/data/cos/storage/policy', { ...options, method: 'PUT', body: JSON.stringify(policy) });
 export const pinCosRecording = (input, options) => request('/data/cos/storage/pin', { ...options, method: 'PUT', body: JSON.stringify(input) });
+
+export const getMaintenanceStatus = (options) => request('/system/maintenance', options);
+export const beginMaintenance = (reason, options = {}) => request('/system/maintenance', {
+  method: 'POST', body: JSON.stringify({ reason }), ...options,
+});
+export const resumeMaintenance = (hold, options = {}) => request('/system/maintenance/resume', {
+  method: 'POST', body: JSON.stringify({ id: hold.id, revision: hold.revision }), ...options,
+});

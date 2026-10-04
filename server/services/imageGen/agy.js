@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image Gen — Antigravity (`agy`) CLI provider.
  *
@@ -378,7 +379,12 @@ async function runAgy(job, jobId, bin, args, {
   // scratch-dir spawn telling the child one consistent story about where it is.
   const proc = spawn(command, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
-  const removeScratch = () => rmGuarded(scratchDir, { recursive: true, force: true }).catch(() => {});
+  const removeScratch = () => maintenance.continueSettlement(
+    () => rmGuarded(scratchDir, { recursive: true, force: true }),
+  ).catch((err) => {
+    maintenance.markCurrentUnsettled();
+    console.error(`❌ agy scratch cleanup failed: ${err.message}`);
+  });
   let stdoutTail = '';
   let stderrTail = '';
   const timeoutTimer = setTimeout(() => {
@@ -395,7 +401,11 @@ async function runAgy(job, jobId, bin, args, {
   proc.stderr.on('data', (chunk) => {
     stderrTail = `${stderrTail}${chunk}`.slice(-32768);
   });
+  let processError;
   proc.on('error', (err) => {
+    processError = err;
+    // A failed kill/send on a live child is not physical exit.
+    if (proc.pid) return;
     clearTimeout(timeoutTimer);
     removeScratch();
     finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
@@ -403,9 +413,9 @@ async function runAgy(job, jobId, bin, args, {
   proc.on('close', async (code, signal) => {
     clearTimeout(timeoutTimer);
     try {
-      if (code !== 0) {
+      if (code !== 0 || processError) {
         removeScratch();
-        const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
+        const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
         return finalizeJobFailure(job, jobId, proc, `Agy generation failed: ${reason}\n${stderrTail.trim().split('\n').slice(-6).join('\n')}`);
       }
       const harvested = await harvestStagedImage(stagingPath, harvestTimeoutMs);
@@ -442,7 +452,7 @@ async function runAgy(job, jobId, bin, args, {
       // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
       // captured, so the spread measures the render itself — not the time the
       // job spent queued behind other renders.
-      await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => {});
+      await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => maintenance.markCurrentUnsettled());
       await autoCleanGeneratedImage({
         cleanC2PA,
         denoise,

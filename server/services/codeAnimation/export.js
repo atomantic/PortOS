@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Frame-exact MP4 export for a generated Code Animation (#9078).
  *
@@ -32,12 +33,15 @@ const STALE_STAGING_MS = 24 * 60 * 60 * 1000;
 // Remove this animation's earlier stagings, keeping any a queued render may
 // not have snapshotted yet.
 async function sweepStaleStagings(parent) {
+  const { listJobs } = await import('../mediaJobQueue/index.js');
+  const referenced = new Set(listJobs().filter(job => ['queued', 'running'].includes(job.status))
+    .map(job => job.params?.directory).filter(Boolean).map(directory => join(PATHS.data, directory)));
   const entries = await readdir(parent).catch(() => []);
   const cutoff = Date.now() - STALE_STAGING_MS;
   for (const name of entries) {
     const path = join(parent, name);
     const info = await stat(path).catch(() => null);
-    if (info && info.mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
+    if (!referenced.has(path) && info && info.mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
   }
 }
 
@@ -113,6 +117,10 @@ function musicTrackOf(job) {
  * composition render. Returns the queued media job plus any export notes.
  */
 export async function startCodeAnimationExport(id, deps = {}) {
+  return maintenance.run('export-preparation', id, () => startAdmittedExport(id, deps));
+}
+
+async function startAdmittedExport(id, deps) {
   const {
     enqueueJob = (await import('../mediaJobQueue/index.js')).enqueueJob,
     beatGrid = async (track) => {

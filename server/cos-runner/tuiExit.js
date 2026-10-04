@@ -69,6 +69,7 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
       console.error(`❌ TUI agent ${agentId} exit handler error: ${err.message}`);
       activeAgents.delete(agentId);
       onError?.(err);
+      return false;
     }
   };
 }
