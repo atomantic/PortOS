@@ -45,6 +45,8 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(within(sn).queryByRole('button', { name: /Post to Stacker News/ })).toBeNull();
     expect(within(sn).getByRole('button', { name: /Discard/ })).toBeInTheDocument();
     fireEvent.click(within(sn).getByRole('button', { name: /Discard/ }));
+    expect(publishing.discard).not.toHaveBeenCalled();
+    fireEvent.click(within(sn).getByRole('button', { name: /Confirm discard Stacker News draft/ }));
     expect(publishing.discard).toHaveBeenCalledWith('stackerNews');
   });
 

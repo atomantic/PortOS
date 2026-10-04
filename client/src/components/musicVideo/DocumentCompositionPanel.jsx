@@ -2,6 +2,7 @@ import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../u
 import MediaModePicker from './MediaModePicker.jsx';
 import { musicVideoMediaMode, musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { useEffect, useState, useRef } from 'react';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { useTimeTick } from '../../hooks/useTimeTick.js';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { Download, FileArchive, FolderInput, LayoutTemplate, Unlink, Film, RotateCcw } from 'lucide-react';
@@ -137,6 +138,7 @@ function ElapsedSeconds() {
  * edited.
  */
 export default function DocumentCompositionPanel({ project, audioUrl, onProject, onSave }) {
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const doc = project.composition?.document || null;
   const [busy, setBusy] = useState(null);
   // Replacing or detaching drops the current version folder once nothing
@@ -316,7 +318,20 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         </div>
         <div className="flex gap-2">
           <button type="button" className={buttonCls} disabled={!!busy || eventPending || candidate.stale} onClick={accept}>Accept reviewed version</button>
-          <button type="button" className={buttonCls} disabled={!!busy} onClick={discard}>Discard candidate</button>
+          {confirmDiscard ? (
+            <ConfirmButtonPair
+              prompt="Discard candidate?"
+              confirmText="Discard"
+              ariaLabel="Confirm discard candidate"
+              confirmAriaLabel="Confirm discard candidate"
+              largeTouchTargets
+              busy={!!busy}
+              onConfirm={() => { setConfirmDiscard(false); discard(); }}
+              onCancel={() => setConfirmDiscard(false)}
+            />
+          ) : (
+            <button type="button" className={buttonCls} disabled={!!busy} onClick={() => setConfirmDiscard(true)}>Discard candidate</button>
+          )}
         </div>
       </StageSection>}
 
