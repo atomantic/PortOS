@@ -302,6 +302,37 @@ describe('refreshFeed', () => {
     expect((await feeds.getItems({ feedId: feed.id })).map(i => i.title)).toContain('Third');
   });
 
+  it('collapses duplicate links inside one payload on add and refresh', async () => {
+    const dupItem = (n) => `<item><title>T${n}</title><link>https://example.com/dup/${n}</link></item>`;
+    const rss = (...ns) => `<rss version="2.0"><channel><title>D</title>${ns.map(dupItem).join('')}</channel></rss>`;
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: rss(1, 1, 2) }));
+    const { feed } = await feeds.addFeed('https://example.com/dup');
+    expect(await feeds.getItems({ feedId: feed.id })).toHaveLength(2);
+
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: rss(2, 3, 3) }));
+    const result = await feeds.refreshFeed(feed.id);
+    expect(result.newCount).toBe(1);
+    expect(await feeds.getItems({ feedId: feed.id })).toHaveLength(3);
+  });
+
+  it('trims by pubDate, not fetchedAt, so a newer-published item is never evicted for an older one', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-19T10:00:00Z'));
+    const item = (n, day) => `<item><title>T${n}</title><link>https://example.com/p/${n}</link><pubDate>${new Date(Date.UTC(2026, 0, day)).toUTCString()}</pubDate></item>`;
+    const rss = (...items) => `<rss version="2.0"><channel><title>P</title>${items.join('')}</channel></rss>`;
+    const initial = Array.from({ length: 100 }, (_, i) => item(i, 100 - i + 10));
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: rss(...initial) }));
+    const { feed } = await feeds.addFeed('https://example.com/p');
+
+    vi.setSystemTime(new Date('2026-05-19T10:01:00Z'));
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: rss(...initial, item(999, 1)) }));
+    await feeds.refreshFeed(feed.id);
+
+    const links = (await feeds.getItems({ feedId: feed.id, limit: 200 })).map(i => i.link);
+    expect(links).toHaveLength(100);
+    expect(links).not.toContain('https://example.com/p/999');
+  });
+
   it('returns an error when the feed id is unknown', async () => {
     expect(await feeds.refreshFeed('missing')).toEqual({ error: 'Feed not found' });
   });
