@@ -4,6 +4,8 @@ import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'luci
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import * as api from '../../../services/api';
+import socket from '../../../services/socket';
+import { useSocketSubscription } from '../../../hooks/useSocketSubscription';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName, formatDateNumeric, formatPercent } from '../../../utils/formatters';
 import MemoryTimeline from './MemoryTimeline';
@@ -110,6 +112,25 @@ export default function MemoryTab({ apps = [] }) {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // New approvals are pushed by the server (`cos:memory:approval-needed`); refresh
+  // only the pending queue + counts so an open tab never flashes its full loading
+  // state, and reconcile after a reconnect that may have dropped an event.
+  const refreshPending = useCallback(async () => {
+    const appId = sourceFilter === 'brain' ? 'brain' : sourceFilter === 'cos' ? '__not_brain' : undefined;
+    const [pendingRes, statsRes] = await Promise.all([
+      api.getMemories({ status: 'pending_approval', limit: 50, appId }).catch(() => null),
+      api.getMemoryStats().catch(() => null)
+    ]);
+    if (pendingRes) setPendingMemories(pendingRes.memories || []);
+    if (statsRes) setStats(statsRes);
+  }, [sourceFilter]);
+
+  useSocketSubscription('cos', { onResubscribe: refreshPending });
+  useEffect(() => {
+    socket.on('cos:memory:approval-needed', refreshPending);
+    return () => socket.off('cos:memory:approval-needed', refreshPending);
+  }, [refreshPending]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) {

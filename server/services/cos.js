@@ -100,6 +100,7 @@ import { ensureInstanceId } from './instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
 import { notifyIfPrLeftOrphaned } from './orphanedPrNotifier.js';
+import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from './healthCriticalNotifier.js';
 
 const RESUME_DEQUEUE_DELAY_MS = 500;
 // CD recovery normally resolves in <100ms; hold start() at most this long so
@@ -1607,6 +1608,16 @@ export async function init() {
   cosEvents.on('tasks:changed', (data) => {
     notifyIfPrLeftOrphaned(data)
       .catch(err => console.error(`❌ Orphaned-PR check failed for task ${data?.task?.id}: ${err.message}`));
+  });
+
+  // A critical health transition reaches the bell even when no CoS view is open.
+  cosEvents.on('health:critical', (issues) => {
+    notifyCriticalHealth(issues)
+      .catch(err => console.error(`❌ Critical-health notification failed: ${err.message}`));
+  });
+  cosEvents.on('health:check', (check) => {
+    clearCriticalHealthIfRecovered(check)
+      .catch(err => console.error(`❌ Critical-health recovery check failed: ${err.message}`));
   });
 
   cosEvents.on('tasks:user:added', () => {

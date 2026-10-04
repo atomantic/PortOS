@@ -12,6 +12,7 @@ vi.mock('../../../services/api', () => ({
   deleteMemory: vi.fn(),
 }));
 
+vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../../../hooks/useProviderModels', () => ({
   default: () => ({

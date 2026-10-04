@@ -9,7 +9,7 @@ import { ACTION_QUEUE_CHANGED, INSTANCE_FEATURES_CHANGED } from '../constants/ev
 const EVENTS = [
   'connect', 'brain:classified', 'brain:threads:changed',
   'cos:tasks:user:changed', 'cos:tasks:cos:changed', 'cos:agent:completed',
-  'cos:memory:approved', 'cos:memory:rejected', 'cos:agent:feedback',
+  'cos:memory:approval-needed', 'cos:memory:approved', 'cos:memory:rejected', 'cos:agent:feedback',
   'messages:changed', 'messages:draft:created', 'messages:draft:sent',
   'backup:started', 'backup:completed', 'backup:failed',
   'review:item:created', 'review:item:updated', 'review:item:deleted',
