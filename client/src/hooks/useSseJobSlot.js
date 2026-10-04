@@ -83,9 +83,19 @@ export default function useSseJobSlot({
     if (['complete', 'error', 'canceled', 'cancelled'].includes(latest.type)) onSettled?.(latest.type, job.context);
     if (latest.type === 'complete') {
       clearJob();
-      onComplete?.(latest, job.context);
-      const msg = successToast?.(latest);
-      if (msg) toast.success(msg);
+      // Completion follow-ups may throw synchronously or return a rejected
+      // promise. Own both failures after releasing the slot.
+      const finish = async () => {
+        try {
+          await onComplete?.(latest, job.context);
+          const msg = successToast?.(latest);
+          if (msg) toast.success(msg);
+        } catch (err) {
+          console.error(`❌ Job completion follow-up failed: ${err?.message || 'Unknown error'}`);
+          toast.error('Finished, but the page could not update — reload to see the result');
+        }
+      };
+      void finish();
     } else if (latest.type === 'error') {
       clearJob();
       if (!onErrorFrame?.(latest, job.context)) {

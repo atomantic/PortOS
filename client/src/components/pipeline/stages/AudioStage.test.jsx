@@ -30,6 +30,7 @@ vi.mock('../../ui/Toast', () => ({
 vi.mock('../../voice/VoicePicker', () => ({ default: () => null }));
 
 import AudioStage from './AudioStage';
+import toast from '../../ui/Toast';
 import {
   updatePipelineIssue,
   generatePipelineAudioCues,
@@ -158,6 +159,26 @@ describe('AudioStage — whole-episode audio (#863)', () => {
       { engine: 'audioldm2' },
       { silent: true },
     ));
+  });
+
+  it('releases Render all cues after the stage update callback throws', async () => {
+    const cues = [{ id: 'cue-1', label: 'Act I', prompt: 'warm pads' }];
+    const issue = makeIssue({ audioMode: 'generated', cues });
+    const onStageUpdate = vi.fn(() => { throw new Error('Synthetic update failure'); });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let finishRender;
+    renderPipelineAudioCue.mockImplementationOnce(() => new Promise(resolve => { finishRender = resolve; }));
+    render(<AudioStage issue={issue} onStageUpdate={onStageUpdate} />);
+    const button = screen.getByRole('button', { name: /Render all cues/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+    expect(button).toBeDisabled();
+    await act(async () => { finishRender({ issue, stage: { cues } }); });
+    expect(onStageUpdate).toHaveBeenCalledOnce();
+    expect(button).toBeEnabled();
+    expect(toast.error).toHaveBeenCalledWith('Could not finish updating audio cues — reload to see the result');
+    expect(toast.success).not.toHaveBeenCalled();
+    log.mockRestore();
   });
 
   it('serializes overlapping cue-prompt saves so neither edit clobbers the other', async () => {
