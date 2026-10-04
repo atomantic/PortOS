@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
   approveMusicVideoProductionReview, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
-  cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback } from '../services/apiMusicVideo.js';
+  cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback, reviseMusicVideoProductionFromFeedback } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
 /** Server-authoritative approvals; changing any project input hides stale readiness immediately. */
@@ -52,6 +52,7 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
   return { readiness: state?.owner === project ? state.readiness : null, busy, error, proof: { ...proof, occupied: proof.active, active: proof.active && proof.context === project?.id },
     feedback: body => call(() => addMusicVideoProductionFeedback(project.id, { ...body, basis: state?.readiness.basis[body.stage] }, { silent: true })),
     resolveFeedback: (feedbackId, resolution) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution }, { silent: true })),
+    revise: stage => call(() => reviseMusicVideoProductionFromFeedback(project.id, { stage }, { silent: true })),
     importDocumentShots: body => call(() => importMusicVideoDocumentShots(project.id, body, { silent: true })),
     importPlanning: source => call(() => importMusicVideoProductionPlanning(project.id, source, { silent: true })),
     bindShot: shotId => call(() => bindMusicVideoProductionShot(project.id, shotId, { silent: true })),

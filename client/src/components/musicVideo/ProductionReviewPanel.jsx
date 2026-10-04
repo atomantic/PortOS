@@ -23,6 +23,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const [feedback, setFeedback] = useState({ stage: 'art', target: '', text: '', decision: 'request-changes' });
   const [resolutions, setResolutions] = useState({});
   const [importError, setImportError] = useState(null);
+  const [revisionNotice, setRevisionNotice] = useState(null);
+  const [savedRequestStage, setSavedRequestStage] = useState(null);
   const [playbackReview, setPlaybackReview] = useState({ ...EMPTY_PLAYBACK, identity: null });
   const [startSec, setStartSec] = useState(project.productionReview?.proof?.startSec || 0);
   const [endSec, setEndSec] = useState(project.productionReview?.proof?.endSec || Math.min(20, project.audioAnalysis?.durationSec || 20));
@@ -81,6 +83,33 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (target) { target.open = true; target.focus({ preventScroll: true }); }
   };
   const nextStage = ['art', 'storyboard', 'proof'].find(stage => !ready?.[stage].approved) || 'proof';
+  const openRequests = stage => (project.productionReview?.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
+  // Mirrors the server's revise routing so an unsupported stage explains itself instead of failing on click.
+  const revisionScope = stage => {
+    if (stage === 'art') return project.castAndSets?.direction
+      ? { action: 'Regenerates the Cast & Sets direction and sheet with these requests. Review the new sheet before approving.' }
+      : { unavailable: 'This art direction has no Cast & Sets direction to regenerate. Edit the guide, then resolve each request.' };
+    if (stage === 'storyboard') {
+      if (documentShots) return { unavailable: 'Document shots come from the authored source. Revise it, reimport its shot manifest, then resolve each request.' };
+      return project.scenes?.length
+        ? { action: 'Re-plans the shots these requests name (every shot when a request names none) in place, keeping their takes and selected media.' }
+        : { unavailable: 'Plan timed Board shots before revising them from feedback.' };
+    }
+    const mode = project.composition?.mode;
+    if (mode === 'code') return { action: 'Regenerates the code composition with these requests. Render a new proof afterwards.' };
+    if (mode === 'document') return ['generated', 'template', undefined].includes(project.composition?.document?.source?.kind)
+      ? { action: 'Authors a revised composition candidate with these requests. Accept it in Compose, then render a new proof.' }
+      : { unavailable: 'This composition was imported from its own source. Revise that source and reimport it, then resolve each request.' };
+    return { unavailable: 'This proof is assembled from Board footage. Revise the affected storyboard shots or takes, then render a new proof.' };
+  };
+  const revise = async stage => {
+    const result = await review.revise(stage);
+    if (!result) return;
+    const count = result.revision?.sceneIds?.length;
+    setRevisionNotice({ stage, text: stage === 'art' ? 'Cast & Sets is regenerating with these requests. Review the new sheet, then resolve each request.'
+      : stage === 'storyboard' ? `Revised ${count} shot${count === 1 ? '' : 's'}. Review them, then resolve each request.`
+        : 'A revised composition is ready. Render and review a new proof, then resolve each request.' });
+  };
   const proofContent = <>
     <p className="text-xs text-port-text-muted break-words">Project v{project.version || 1} · proof revision {ready?.basis.proof?.slice(0, 12) || 'Loading…'} · {excerpt ? `Excerpt ${excerpt.id}` : 'No registered proof'}</p>
     {!excerpt && <div className="rounded border border-port-border p-3 space-y-2" aria-label="Proof approval prerequisites">
@@ -186,6 +215,15 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
           const fold = input?.closest('details'); if (fold) fold.open = true;
           input?.scrollIntoView({ block: 'center' }); input?.focus({ preventScroll: true });
         }}>Request changes</button>
+        {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
+          <p className="text-sm">Approval stays blocked until these are resolved. Revise from feedback, or edit and resolve manually.</p>
+          <ul className="list-disc pl-5 text-sm">{openRequests(key).map(item => <li key={item.id} className="break-words"><strong>{item.target}</strong>: {item.text}</li>)}</ul>
+          {revisionScope(key).unavailable ? <p className="text-xs text-port-text-muted">{revisionScope(key).unavailable}</p> : <>
+            <button type="button" className={buttonClass} disabled={blocked} aria-describedby={fieldId(`${key}-revision-help`)} onClick={() => revise(key)}>Revise from feedback</button>
+            <p id={fieldId(`${key}-revision-help`)} className="text-xs text-port-text-muted">{revisionScope(key).action}</p>
+          </>}
+          {revisionNotice?.stage === key && <p role="status" className="text-sm">{revisionNotice.text}</p>}
+        </div>}
       </details></li>)}
     </ol>
     <p className="text-xs text-port-text-muted">Your signed-in session can approve each reviewed stage. Authenticated agents can also review and approve. Proof approval requires recorded visual and audio evidence; publishing remains manual.</p>
@@ -202,8 +240,14 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         <option value="request-changes">Request changes — blocks affected approvals</option><option value="comment">Comment</option><option value="structure-accepted">Accept structure only — art remains unapproved</option>
       </select></label>
       <button type="button" className={buttonClass} disabled={blocked || !feedback.target.trim() || !feedback.text.trim()} onClick={async () => {
-        if (await review.feedback(feedback)) setFeedback({ ...feedback, text: '' });
+        if (await review.feedback(feedback)) {
+          setFeedback({ ...feedback, text: '' });
+          setSavedRequestStage(feedback.decision === 'request-changes' ? feedback.stage : null);
+        }
       }}>Save revision feedback</button>
+      {savedRequestStage && openRequests(savedRequestStage).length > 0 && <p role="status" className="text-sm">
+        Approval stays blocked until these are resolved. <a href={`#mv-review-${savedRequestStage}`} onClick={openReviewSection} className="text-port-accent underline">Revise from feedback</a>, or edit and resolve manually.
+      </p>}
       <ul className="mt-3 space-y-3">{(project.productionReview?.feedback || []).map(item => <li key={item.id} className="rounded border border-port-border p-2">
         <p className="text-sm"><strong>{item.target}</strong> · {item.decision} · {item.resolvedAt ? 'Resolved' : 'Open'}</p>
         <p className="text-sm whitespace-pre-wrap">{item.text}</p>

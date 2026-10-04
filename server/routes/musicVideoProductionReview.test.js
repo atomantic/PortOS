@@ -4,13 +4,14 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
-const author = vi.hoisted(() => ({ sections: [], calls: 0 }));
+const author = vi.hoisted(() => ({ sections: [], calls: 0, prompts: [] }));
 vi.mock('../services/promptRunner.js', () => ({
   assertProvider: () => {},
   resolveProviderAndModel: async () => ({ provider: { id: 'fixture-author', type: 'api', enabled: true }, selectedModel: 'fixture-model' }),
-  runPromptThroughProvider: async ({ beforeExecute }) => {
+  runPromptThroughProvider: async ({ beforeExecute, prompt }) => {
     await beforeExecute?.({ provider: { id: 'fixture-author', type: 'api' }, model: 'fixture-model' });
     author.calls += 1;
+    author.prompts.push(prompt);
     return { text: JSON.stringify({ sections: author.sections }) };
   },
 }));
@@ -22,7 +23,8 @@ const ROOT = () => lazyTempDataRoot('mv-production-review-');
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 const planner = vi.hoisted(() => vi.fn());
-vi.mock('../services/musicVideo/planner.js', () => ({ planProject: planner }));
+const shotReviser = vi.hoisted(() => vi.fn());
+vi.mock('../services/musicVideo/planner.js', () => ({ planProject: planner, proposeShotRevisions: shotReviser }));
 const auth = vi.hoisted(() => ({ enabled: true, authenticated: true }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => auth.enabled, verifyPassword: async password => password === 'synthetic-operator-password',
   verifyRequestSessionIdentity: async req => auth.authenticated && req.headers.authorization !== 'Bearer expired'
@@ -59,7 +61,7 @@ async function approve(stage, extra = {}) {
 
 beforeEach(async () => {
   auth.enabled = true; auth.authenticated = true;
-  author.calls = 0; author.sections = [];
+  author.calls = 0; author.sections = []; author.prompts = [];
   project = await store.createProject({ name: 'Example animation', uploadedAudioFilename: 'synthetic-song.wav', composition: { mode: 'code' } });
   base = `/api/music-video/${project.id}`;
   await store.setProjectAnalysis(project.id, { durationSec: 20, bpm: 120, beats: [0, 1], downbeats: [0], sections: [{ startSec: 0, endSec: 20, label: 'Chorus' }] });
@@ -416,5 +418,68 @@ describe('document-bound storyboard revision', () => {
     expect((await bind({ documentDirectory: latest.composition.document.directory, sourceFile: 'engine.js', shots })).status).toBe(409);
     expect((await read()).body.readiness.storyboard.problems.join(' ')).toContain('current authored document');
     expect((await request(app).post(`${base}/render`).send({})).status).toBe(409);
+  });
+});
+
+describe('revising from review feedback', () => {
+  const revise = stage => request(app).post(`${base}/production-review/revise`).send({ stage });
+  const requestChanges = async (stage, target, text, decision = 'request-changes') => {
+    const status = await read();
+    return request(app).post(`${base}/production-review/feedback`).send({ stage, target, text, decision, basis: status.body.readiness.basis[stage] });
+  };
+
+  it('re-plans the named storyboard shots in place on a new basis and keeps the request open', async () => {
+    expect((await revise('storyboard')).body.code).toBe('MUSIC_VIDEO_NO_FEEDBACK');
+    expect((await requestChanges('storyboard', 'shot: Chorus', 'Open the doorway on the downbeat, not before')).status).toBe(200);
+    const before = await read();
+    const [scene] = before.body.project.scenes;
+    shotReviser.mockImplementationOnce(async (_project, requests) => {
+      expect(requests.map(r => r.text)).toEqual(['Open the doorway on the downbeat, not before']);
+      return new Map([[scene.sceneId, { framePrompt: 'Figure waits at the closed doorway', prompt: 'Doorway swings open on the first downbeat' }]]);
+    });
+
+    const revised = await revise('storyboard');
+
+    expect(revised.status).toBe(200);
+    expect(revised.body.revision).toMatchObject({ stage: 'storyboard', sceneIds: [scene.sceneId] });
+    const after = revised.body.project;
+    expect(after.scenes[0]).toMatchObject({ sceneId: scene.sceneId, prompt: 'Doorway swings open on the first downbeat', framePrompt: 'Figure waits at the closed doorway' });
+    expect(after.productionReview.draft.storyboard[0]).toMatchObject({ action: 'Doorway swings open on the first downbeat',
+      staging: 'Figure waits at the closed doorway', camera: 'Dolly through doorway', transition: 'Match doorway to next frame' });
+    expect(revised.body.readiness.basis.storyboard).not.toBe(before.body.readiness.basis.storyboard);
+    expect(after.productionReview.feedback[0].resolvedAt).toBeUndefined();
+    expect(revised.body.readiness.storyboard.problems).toContain('Resolve storyboard feedback for shot: Chorus: Open the doorway on the downbeat, not before');
+  });
+
+  it('authors a revised document candidate with storyboard and proof feedback in its prompt', async () => {
+    await store.updateProject(project.id, { mediaMode: 'code-only', composition: { mode: 'document', authoringRenderer: 'canvas' },
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
+    expect((await approve('art')).status).toBe(200);
+    expect((await request(app).post(`${base}/production-review/prepare`).send({})).status).toBe(200);
+    expect((await approve('storyboard')).status).toBe(200);
+    expect((await requestChanges('storyboard', 'shot: Chorus', 'Keep the doorway silhouette readable', 'comment')).status).toBe(200);
+    expect((await requestChanges('proof', 'frame: 0:04', 'The prop lands a beat late')).status).toBe(200);
+    const { buildCodeTimeline } = await import('../services/musicVideo/codeTimeline.js');
+    author.sections = buildCodeTimeline(await store.getProject(project.id)).sections.map(section => ({ id: section.id,
+      source: "function render(ctx, env) { ctx.fillStyle = '#203040'; ctx.fillRect(0, 0, env.width, env.height); }" }));
+
+    const revised = await revise('proof');
+
+    expect(revised.status).toBe(200);
+    expect(author.calls).toBe(1);
+    expect(author.prompts[0]).toContain('UNRESOLVED REVIEW FEEDBACK');
+    expect(author.prompts[0]).toContain('proof / frame: 0:04 / request-changes: The prop lands a beat late');
+    expect(author.prompts[0]).toContain('storyboard / shot: Chorus / comment: Keep the doorway silhouette readable');
+    expect(revised.body.project.composition.documentDraft.source.kind).toBe('generated');
+    expect(revised.body.project.productionReview.feedback.every(item => !item.resolvedAt)).toBe(true);
+  });
+
+  it('explains instead of revising a footage-assembled proof', async () => {
+    await store.updateProject(project.id, { composition: { mode: 'composed' } });
+    expect((await requestChanges('proof', 'frame: 0:04', 'The prop lands a beat late')).status).toBe(200);
+    const refused = await revise('proof');
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('MUSIC_VIDEO_REVISION_UNSUPPORTED');
+    expect(author.calls).toBe(0);
   });
 });

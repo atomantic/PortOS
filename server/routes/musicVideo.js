@@ -11,9 +11,9 @@
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { Router } from 'express';
-import { musicVideoProjectListQuerySchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoProjectListQuerySchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -556,6 +556,10 @@ router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, 
   const input = validateRequest(musicVideoProductionFeedbackResolutionSchema, req.body);
   const reviewer = await requireProductionReviewer(req);
   res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution, reviewer }));
+}));
+// An explicit click: the only provider call is the stage's own revision.
+router.post('/:id/production-review/revise', asyncHandler(async (req, res) => {
+  res.json(await reviseProductionFromFeedback(req.params.id, validateRequest(musicVideoProductionReviseSchema, req.body ?? {})));
 }));
 router.get('/:id/production-review', asyncHandler(async (req, res) => {
   res.json(await getProductionReview(req.params.id));
