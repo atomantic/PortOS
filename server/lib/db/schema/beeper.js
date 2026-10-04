@@ -84,6 +84,7 @@ export const beeperDdl = [
     last_activity TIMESTAMPTZ,
     unread_count INTEGER NOT NULL DEFAULT 0,
     seen_at TIMESTAMPTZ,
+    snooze_until TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (account_id, source_chat_id)
@@ -108,6 +109,8 @@ export const beeperDdl = [
   // settings toggle to also send one is out of scope here (see the TODO on
   // `markConversationSeen`).
   `ALTER TABLE beeper_conversations ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ`,
+  // Beeper owns snooze state. NULL also covers older Desktop API versions.
+  `ALTER TABLE beeper_conversations ADD COLUMN IF NOT EXISTS snooze_until TIMESTAMPTZ`,
   // `idx_beeper_conversations_account_activity (account_id, last_activity DESC)`
   // served no query: listConversations (services/beeperConversations.js) has
   // no account_id filter, and its ORDER BY / keyset walk sorts on

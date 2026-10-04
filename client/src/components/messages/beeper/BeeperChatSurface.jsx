@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
   Archive, BellOff, Bookmark, Filter, Inbox, Loader2, MoreHorizontal, Plus,
-  RefreshCw, Search, Settings, TrendingDown, X,
+  RefreshCw, Search, Settings, Clock, TrendingDown, X,
 } from 'lucide-react';
 import NetworkLogo, { networkLabel } from './BeeperNetworkLogo';
 import BeeperThread from './BeeperThread';
@@ -48,12 +48,13 @@ import * as api from '../../../services/api';
  * rendered over the newer one.
  */
 
-// Fixed system scopes, in the reference's own order. Requests, Later and
+// Fixed system scopes. Requests and
 // new conversation are omitted until implemented
 // (tracked in the Beeper enhancements issue, #9985).
 const SCOPE_EVENTS = ['beeper:invalidate'];
 const SYSTEM_SCOPES = [
   { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'later', label: 'Later', icon: Clock },
   { id: 'archive', label: 'Archive', icon: Archive },
   { id: 'low', label: 'Low priority', icon: TrendingDown },
 ];
@@ -87,6 +88,7 @@ const RECENT_ACTIVITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** The filter set one scope means. Absent keys are absent FILTERS, not `false`. */
 function filtersForScope(scope, unreadOnly, search) {
   const base = { ...(unreadOnly ? { unreadOnly: true } : {}), ...(search ? { search } : {}) };
+  if (scope === 'later') return { ...base, snoozed: true };
   if (scope === 'archive') return { ...base, archived: true };
   if (scope === 'low') return { ...base, lowPriority: true };
   if (typeof scope === 'string' && scope.startsWith(NETWORK_SCOPE_PREFIX)) {

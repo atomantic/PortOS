@@ -531,11 +531,11 @@ describe('the pinned grid is Beeper’s own isPinned, mirrored', () => {
 });
 
 describe('unimplemented controls are absent rather than inert', () => {
-  it('renders no Requests, Later or new-conversation placeholder', async () => {
+  it('renders no Requests or new-conversation placeholder', async () => {
     renderTab();
     await screen.findByText('Nothing here');
 
-    for (const label of ['Requests', 'Later', 'More scope options', 'New conversation']) {
+    for (const label of ['Requests', 'More scope options', 'New conversation']) {
       expect(screen.queryByRole('button', { name: label })).toBeNull();
     }
   });
@@ -1741,4 +1741,25 @@ describe('saved conversation scopes', () => {
     expect(await screen.findByRole('button', { name: saved.name })).toBeInTheDocument();
     expect(api.createBeeperScope).toHaveBeenLastCalledWith({ name: saved.name, filters: saved.filters }, { silent: true });
   });
+});
+
+
+describe('Later system scope', () => {
+  it('opens the Later filter from the rail', async () => {
+    renderTab('/messages/beeper');
+    fireEvent.click(await screen.findByRole('button', { name: 'Later' }));
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith(
+      { snoozed: true }, { silent: true },
+    ));
+    expect(screen.getByRole('button', { name: 'Later' })).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+
+it('reopens a shared Later URL with search and unread filters', async () => {
+  renderTab('/messages/beeper?scope=later&q=example&unread=1');
+  await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith(
+    { snoozed: true, search: 'example', unreadOnly: true }, { silent: true },
+  ));
+  expect(screen.getByRole('button', { name: 'Later' })).toHaveAttribute('aria-pressed', 'true');
 });

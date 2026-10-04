@@ -572,6 +572,13 @@ describe('GET /api/beeper/outbox and the breaker reset', () => {
 const CONV_ID = '11111111-1111-4111-8111-111111111111';
 
 describe('GET /api/beeper/conversations — filters', () => {
+  it('validates and forwards the Later filter', async () => {
+    vi.mocked(listConversations).mockResolvedValue({ conversations: [], nextCursor: null });
+    const app = buildApp();
+    expect((await request(app).get('/api/beeper/conversations?snoozed=true')).status).toBe(200);
+    expect(listConversations).toHaveBeenCalledWith({ snoozed: true });
+    expect((await request(app).get('/api/beeper/conversations?snoozed=invalid')).status).toBe(400);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listConversations).mockResolvedValue({ conversations: [], nextCursor: null });
@@ -918,7 +925,7 @@ describe('POST /api/beeper/outbox/:id/reconcile', () => {
 
 describe('saved Beeper scopes routes', () => {
   let settings;
-  const input = { name: 'Example unread scope', filters: { network: 'signal', unreadOnly: true, archived: false } };
+  const input = { name: 'Example unread scope', filters: { network: 'signal', unreadOnly: true, archived: false, snoozed: true } };
   beforeEach(() => {
     settings = { beeper: { enabled: true, sendReadReceipts: false }, unrelated: 'preserved' };
     vi.mocked(getSettings).mockImplementation(async () => settings);
