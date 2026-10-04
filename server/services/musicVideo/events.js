@@ -45,4 +45,7 @@ import { EventEmitter } from 'events';
 //   'dev-artifact'  → { projectId, artifactId, project } — a development
 //     artifact was added, versioned, noted, reviewed or deleted; bridged to
 //     `music-video:dev-artifact`.
+//   'publish-draft' → { projectId, draftId, target, state } — a publish draft's
+//     tab was filled ('open'), closed by hand ('closed') or discarded; bridged
+//     to `music-video:publish-draft`.
 export const musicVideoEvents = new EventEmitter();

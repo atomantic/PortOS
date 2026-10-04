@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import useMusicVideoPublishing from './useMusicVideoPublishing.js';
+import socket from '../services/socket';
 import PublishPostingPanel from '../components/musicVideo/PublishPostingPanel.jsx';
 
 const api = vi.hoisted(() => ({
+  getMusicVideoPublishDrafts: vi.fn(async () => ({ drafts: [] })),
   prepareMusicVideoPublishDraft: vi.fn(),
   discardMusicVideoPublishDraft: vi.fn(async () => true),
   getMusicVideoPublishPlatforms: vi.fn(async () => ({ platforms: { youtube: { enabled: true }, reddit: { enabled: true } } })),
@@ -11,6 +13,7 @@ const api = vi.hoisted(() => ({
   recordMusicVideoPublishPost: vi.fn(),
 }));
 vi.mock('../services/apiMusicVideo.js', () => api);
+vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const project = (id) => ({ id, publishKit: { builtAt: '2026-01-01T00:00:00.000Z' } });
@@ -79,5 +82,17 @@ describe('music-video publishing project boundary', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Instance password to prepare YouTube')).toBeNull();
     expect(within(row('YouTube')).getByRole('button', { name: 'Fill draft' })).toBeEnabled();
+  });
+
+  it('rehydrates a server-side draft after reload and shows "Tab closed" when the server reports it gone', async () => {
+    api.getMusicVideoPublishDrafts.mockResolvedValueOnce({ drafts: [{ draftId: 'draft-a', target: 'youtube', state: 'open', summary: { title: 'Example A' } }] });
+    render(<Posting id="project-a" />);
+    expect(await screen.findByText('Example A')).toBeInTheDocument();
+    const onDraft = socket.on.mock.calls.find(([event]) => event === 'music-video:publish-draft')[1];
+    act(() => onDraft({ projectId: 'project-other', draftId: 'draft-a', target: 'youtube', state: 'closed' }));
+    expect(screen.getByText('Example A')).toBeInTheDocument();
+    act(() => onDraft({ projectId: 'project-a', draftId: 'draft-a', target: 'youtube', state: 'closed' }));
+    expect(screen.getByText('Tab closed — Fill again')).toBeInTheDocument();
+    expect(screen.queryByText('Example A')).not.toBeInTheDocument();
   });
 });

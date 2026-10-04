@@ -95,6 +95,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   prepareMusicVideoPublishDraft: vi.fn(),
   discardMusicVideoPublishDraft: vi.fn(),
   getMusicVideoPublishPlatforms: vi.fn(async () => ({ platforms: {}, history: {} })),
+  getMusicVideoPublishDrafts: vi.fn(async () => ({ drafts: [] })),
   updateMusicVideoPublishPlatforms: vi.fn(),
   recordMusicVideoPublishPost: vi.fn(),
   cancelMusicVideoExcerptRender: vi.fn(async () => ({ ok: true })),

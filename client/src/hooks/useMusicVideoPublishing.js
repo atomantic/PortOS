@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import socket from '../services/socket';
 import {
+  getMusicVideoPublishDrafts,
   prepareMusicVideoPublishDraft,
   discardMusicVideoPublishDraft,
   getMusicVideoPublishPlatforms,
@@ -48,6 +50,35 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   const fail = (target, err) => {
     setFor('errors', target, { message: err?.message || 'Failed', code: err?.code || null, url: err?.context?.url || null });
   };
+
+  // Rehydrate from the server after a reload, and follow its draft events
+  // (a tab filled elsewhere, closed by hand, or discarded).
+  useEffect(() => {
+    if (!projectId) return undefined;
+    const apply = (list) => { for (const d of list) if (d.state !== 'discarded') setFor('drafts', d.target, d); };
+    getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => apply(res?.drafts || [])).catch(() => {});
+    const onDraft = (e) => {
+      if (e?.projectId !== projectId) return;
+      if (e.state === 'discarded') {
+        setPosting((prev) => {
+          const current = prev.scope === scope ? prev.drafts[e.target] : null;
+          if (!current || current.draftId !== e.draftId) return prev;
+          const next = { ...prev.drafts };
+          delete next[e.target];
+          return { ...prev, drafts: next };
+        });
+      } else if (e.state === 'closed') {
+        setPosting((prev) => {
+          const current = prev.scope === scope ? prev.drafts[e.target] : null;
+          if (!current || current.draftId !== e.draftId) return prev;
+          return { ...prev, drafts: { ...prev.drafts, [e.target]: { ...current, state: 'closed' } } };
+        });
+      }
+    };
+    socket.on('music-video:publish-draft', onDraft);
+    return () => socket.off('music-video:publish-draft', onDraft);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, scope]);
 
   const prepare = (target, options = {}) => {
     setFor('busy', target, 'prepare');

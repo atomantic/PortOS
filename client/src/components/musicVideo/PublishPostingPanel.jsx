@@ -172,12 +172,13 @@ function TargetRow({ project, kit, entry, publishing }) {
       )}
       {draft && (
         <div className="space-y-2">
-          {draft.screenshot && <img src={draft.screenshot} alt={`${label} draft as filled`} className="w-full rounded border border-port-border" />}
-          <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px]">
+          {draft.state === 'closed' && <p role="status" className="text-[11px] text-port-warning">Tab closed — Fill again</p>}
+          {draft.state !== 'closed' && draft.screenshot && <img src={draft.screenshot} alt={`${label} draft as filled`} className="w-full rounded border border-port-border" />}
+          {draft.state !== 'closed' && <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px]">
             {summaryRows(draft.summary).map(([k, v]) => (
               <div key={k} className="contents"><dt className="text-port-text-muted">{k}</dt><dd className="min-w-0 break-words whitespace-pre-wrap">{v}</dd></div>
             ))}
-          </dl>
+          </dl>}
           <button type="button" onClick={() => publishing.discard(target)} disabled={!!busy}
             className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
             <XIcon size={13} /> Discard

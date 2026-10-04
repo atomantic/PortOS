@@ -319,6 +319,8 @@ const SIMPLE_BRIDGES = [
   // The Cast & Sets check-in advancing, and a development artifact changing.
   { emitter: musicVideoEvents, event: 'cast-and-sets', channel: 'music-video:cast-and-sets' },
   { emitter: musicVideoEvents, event: 'dev-artifact', channel: 'music-video:dev-artifact' },
+  // A publish draft's tab was filled, closed by hand, or discarded.
+  { emitter: musicVideoEvents, event: 'publish-draft', channel: 'music-video:publish-draft' },
 ];
 
 let forwardingRegistered = false;
