@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   patchPipelineManuscriptComment: vi.fn(),
   generatePipelineManuscriptFix: vi.fn(),
   acceptPipelineManuscriptFix: vi.fn(),
+  undoPipelineManuscriptFix: vi.fn(),
   analyzePipelineManuscriptCompleteness: vi.fn(),
   startPipelineManuscriptCompleteness: vi.fn(),
   cancelPipelineManuscriptCompleteness: vi.fn(),
@@ -795,6 +796,175 @@ describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
       await act(async () => {
         resolveSave2({ section: { issueId: 'iss-2', number: 2, title: 'Two', stageId: 'prose', content: 'Issue two, saving.' } });
       });
+    });
+  });
+});
+
+// Section mutations (revert / accept / undo) resolve after the writer may have
+// typed more — the response must not erase that newer draft (#9954).
+describe('PipelineManuscriptEditor — mutation responses vs newer edits (#9954)', () => {
+  const BASE = 'The hero walked in. She left.';
+  const FIXED = 'The hero walked in. She left, but paused.';
+  const fixed = { find: 'She left.', replace: 'She left, but paused.' };
+  const fixComment = { ...comment, fix: fixed };
+  const section = (content, extra = {}) => ({ issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content, ...extra });
+  const dirtyBadge = () => screen.queryByLabelText('Issue 1 has unsaved edits');
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((res) => { resolve = res; });
+    return { promise, resolve };
+  };
+
+  const openVersionsAndRevert = async () => {
+    fireEvent.click(await screen.findByTitle('Show prior saved versions'));
+    fireEvent.click(screen.getByRole('button', { name: /Revert/ }));
+  };
+
+  const mockRestore = (output = 'An older draft.') => {
+    const held = deferred();
+    api.restorePipelineStageVersion.mockReturnValue(held.promise);
+    return { held, resolveWith: () => held.resolve({ stage: { output, runHistory: [{ runId: 'v1', createdAt: 't' }] } }) };
+  };
+
+  beforeEach(() => {
+    api.getPipelineManuscript.mockResolvedValue({
+      sections: [section(BASE, { versions: [{ runId: 'v1', createdAt: 't' }] })],
+      viewType: 'prose', primaryStageId: 'prose', pinnedPrimary: 'prose', availableTypes: ['prose'],
+    });
+  });
+
+  it('keeps text typed after Revert started, with the restored version as the new baseline', async () => {
+    const restore = mockRestore();
+    api.savePipelineManuscriptSection.mockResolvedValue({ section: section(`${BASE} More.`) });
+    renderEditor();
+    const ta = await screen.findByDisplayValue(BASE);
+    await openVersionsAndRevert();
+    await waitFor(() => expect(api.restorePipelineStageVersion).toHaveBeenCalled());
+
+    fireEvent.change(ta, { target: { value: `${BASE} More.` } });
+    expect(dirtyBadge()).toBeInTheDocument();
+    await act(async () => { restore.resolveWith(); });
+
+    expect(screen.getByDisplayValue(`${BASE} More.`)).toBe(ta);
+    expect(dirtyBadge()).toBeInTheDocument();
+    // Not auto-saved over the restore; the writer's own blur persists it.
+    expect(api.savePipelineManuscriptSection).not.toHaveBeenCalled();
+    fireEvent.blur(ta);
+    await waitFor(() => expect(api.savePipelineManuscriptSection).toHaveBeenCalledWith(
+      'ser-1', 'iss-1', { stageId: 'prose', output: `${BASE} More.` }, { silent: true },
+    ));
+  });
+
+  it('adopts the restored text and clears the dirty state when the buffer was not touched', async () => {
+    const restore = mockRestore();
+    renderEditor();
+    await screen.findByDisplayValue(BASE);
+    await openVersionsAndRevert();
+    await act(async () => { restore.resolveWith(); });
+
+    expect(await screen.findByDisplayValue('An older draft.')).toBeInTheDocument();
+    expect(dirtyBadge()).not.toBeInTheDocument();
+  });
+
+  it('saves an unblurred draft before reverting, and aborts the revert when that save fails', async () => {
+    api.savePipelineManuscriptSection.mockRejectedValue(new Error('disk full'));
+    renderEditor();
+    const ta = await screen.findByDisplayValue(BASE);
+    await openVersionsAndRevert();
+    await act(async () => {});
+    // First click above ran with a clean buffer; make a draft, then retry.
+    api.restorePipelineStageVersion.mockClear();
+    fireEvent.change(ta, { target: { value: `${BASE} Draft.` } });
+    fireEvent.click(screen.getByRole('button', { name: /Revert/ }));
+
+    await waitFor(() => expect(api.savePipelineManuscriptSection).toHaveBeenCalled());
+    await act(async () => {});
+    expect(api.restorePipelineStageVersion).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue(`${BASE} Draft.`)).toBeInTheDocument();
+    expect(dirtyBadge()).toBeInTheDocument();
+  });
+
+  describe('accepting a fix', () => {
+    const openCardInLive = async () => {
+      const ta = await screen.findByDisplayValue(BASE);
+      const idx = BASE.indexOf('She left.') + 2;
+      ta.selectionStart = idx; ta.selectionEnd = idx;
+      fireEvent.click(ta);
+      await screen.findByText('Editorial note');
+      return ta;
+    };
+    const acceptResult = () => ({
+      comment: { ...fixComment, status: 'accepted' },
+      section: section(FIXED, { versions: [{ runId: 'v2', createdAt: 't' }] }),
+    });
+
+    beforeEach(() => {
+      api.getPipelineManuscriptReview.mockResolvedValue({ schemaVersion: 1, comments: [fixComment] });
+    });
+
+    it('keeps prose typed in Live while Accept is pending; the fixed text becomes the baseline', async () => {
+      const held = deferred();
+      api.acceptPipelineManuscriptFix.mockReturnValue(held.promise);
+      renderEditor();
+      const ta = await openCardInLive();
+      fireEvent.click(screen.getByText('Accept'));
+      await waitFor(() => expect(api.acceptPipelineManuscriptFix).toHaveBeenCalled());
+
+      fireEvent.change(ta, { target: { value: `${BASE} Appended.` } });
+      await act(async () => { held.resolve(acceptResult()); });
+
+      expect(screen.getByDisplayValue(`${BASE} Appended.`)).toBe(ta);
+      expect(dirtyBadge()).toBeInTheDocument();
+      expect(api.savePipelineManuscriptSection).not.toHaveBeenCalled();
+    });
+
+    it('adopts the fixed text and marks the section clean when nothing was typed', async () => {
+      api.acceptPipelineManuscriptFix.mockResolvedValue(acceptResult());
+      renderEditor();
+      await openCardInLive();
+      fireEvent.click(screen.getByText('Accept'));
+
+      expect(await screen.findByDisplayValue(FIXED)).toBeInTheDocument();
+      expect(dirtyBadge()).not.toBeInTheDocument();
+    });
+
+    it('persists an unblurred draft before the server applies the fix, and blocks Accept when that save fails', async () => {
+      api.savePipelineManuscriptSection.mockRejectedValue(new Error('offline'));
+      renderEditor();
+      const ta = await openCardInLive();
+      fireEvent.change(ta, { target: { value: `${BASE} Draft.` } });
+      fireEvent.click(screen.getByText('Accept'));
+
+      await waitFor(() => expect(api.savePipelineManuscriptSection).toHaveBeenCalledWith(
+        'ser-1', 'iss-1', { stageId: 'prose', output: `${BASE} Draft.` }, { silent: true },
+      ));
+      await act(async () => {});
+      expect(api.acceptPipelineManuscriptFix).not.toHaveBeenCalled();
+      expect(screen.getByDisplayValue(`${BASE} Draft.`)).toBeInTheDocument();
+    });
+
+    it('keeps text typed while the toast Undo is pending', async () => {
+      api.acceptPipelineManuscriptFix.mockResolvedValue(acceptResult());
+      const held = deferred();
+      api.undoPipelineManuscriptFix.mockReturnValue(held.promise);
+      const toast = (await import('../components/ui/Toast')).default;
+      renderEditor();
+      await openCardInLive();
+      fireEvent.click(screen.getByText('Accept'));
+      const ta = await screen.findByDisplayValue(FIXED);
+
+      const render = toast.mock.calls.map((c) => c[0]).find((arg) => typeof arg === 'function');
+      const { getByRole } = (await import('@testing-library/react')).render(render({ id: 't1' }));
+      fireEvent.click(getByRole('button', { name: /Undo/ }));
+      await waitFor(() => expect(api.undoPipelineManuscriptFix).toHaveBeenCalled());
+
+      fireEvent.change(ta, { target: { value: `${FIXED} Later.` } });
+      await act(async () => {
+        held.resolve({ comment: fixComment, section: section(BASE, { versions: [] }) });
+      });
+
+      expect(screen.getByDisplayValue(`${FIXED} Later.`)).toBe(ta);
+      expect(dirtyBadge()).toBeInTheDocument();
     });
   });
 });

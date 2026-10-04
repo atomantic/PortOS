@@ -103,19 +103,41 @@ export function UndoFixToast({ t, count, onUndo }) {
   );
 }
 
+// The saved section(s) an accept/undo response carries, as a flat list.
+export function acceptedSectionsOf({ section, sections } = {}) {
+  return Array.isArray(sections) && sections.length ? sections : [section].filter(Boolean);
+}
+
+// `issueId:stageId` keys for the sections a set of edits (or a response) touches,
+// so the page can settle just those drafts before a mutation. null = unknown
+// (an edit without both ids) and means "every section".
+export function sectionKeysOf(items) {
+  if (!items.length || !items.every((e) => e?.issueId && e?.stageId)) return null;
+  return [...new Set(items.map((e) => `${e.issueId}:${e.stageId}`))];
+}
+
+// Stands in when no page-owned `onBeginMutation` is wired (the card also renders
+// standalone): resolves undefined — not null, which means "abort" — so the
+// mutation proceeds without a snapshot.
+const NO_SNAPSHOT = () => Promise.resolve(undefined);
+
 // Show the accept confirmation + Undo toast. `applyResult` re-applies the undo's
-// { comment, section, sections } through the same handler an accept uses.
-export function showAcceptedFixToast({ seriesId, commentId, count, applyResult }) {
+// { comment, section, sections } through the same handler an accept uses; the
+// undo rewrites the same sections the accept did, so `keys` scopes the page's
+// settle-then-snapshot step (`onBeginMutation`) that guards edits typed since.
+export function showAcceptedFixToast({ seriesId, commentId, count, keys = null, onBeginMutation = NO_SNAPSHOT, applyResult }) {
   toast(
     (t) => (
       <UndoFixToast
         t={t}
         count={count}
         onUndo={async () => {
+          const snapshot = await onBeginMutation(keys);
+          if (snapshot === null) return false;
           const undone = await undoPipelineManuscriptFix(seriesId, commentId, { silent: true })
             .catch((err) => { toast.error(err.message || 'Failed to undo the fix'); return null; });
           if (!undone) return false;
-          applyResult?.(undone);
+          applyResult?.(undone, snapshot);
           return true;
         }}
       />
@@ -208,6 +230,7 @@ export function CommentCardFromProps({ comment, commentCardProps, idScope }) {
       modelOverride={commentCardProps.modelOverride}
       onCommentChange={commentCardProps.onCommentChange}
       onAccepted={commentCardProps.onAccepted}
+      onBeginMutation={commentCardProps.onBeginMutation}
       draft={commentCardProps.fixDrafts[comment.id]}
       onDraftChange={(entry) => commentCardProps.setCommentDraft(comment.id, entry)}
       nav={nav}
@@ -216,7 +239,7 @@ export function CommentCardFromProps({ comment, commentCardProps, idScope }) {
 }
 
 export default function ManuscriptCommentCard({
-  comment, seriesId, providerOverride, modelOverride, onCommentChange, onAccepted, idScope, draft, onDraftChange, nav,
+  comment, seriesId, providerOverride, modelOverride, onCommentChange, onAccepted, onBeginMutation = NO_SNAPSHOT, idScope, draft, onDraftChange, nav,
 }) {
   // Namespace form ids so two copies of an open comment don't share ids.
   const scope = idScope || comment.id;
@@ -267,13 +290,20 @@ export default function ManuscriptCommentCard({
       toast('Select at least one suggested edit to apply');
       return;
     }
+    // Settle any unsaved draft of the touched sections first (the server edits
+    // the persisted text), and snapshot them so a keystroke typed while the
+    // request is in flight survives the response (#9954).
+    const snapshot = await onBeginMutation(sectionKeysOf(selected));
+    if (snapshot === null) return;
     const result = await runAccept(selected);
     if (!result) return;
-    onAccepted(result);
+    onAccepted(result, snapshot);
     showAcceptedFixToast({
       seriesId,
       commentId: result.comment?.id || comment.id,
       count: selected.length,
+      keys: sectionKeysOf(acceptedSectionsOf(result)),
+      onBeginMutation,
       applyResult: onAccepted,
     });
   };
@@ -295,14 +325,18 @@ export default function ManuscriptCommentCard({
       find: comment.anchorQuote,
       replace: manualText,
     };
+    const snapshot = await onBeginMutation(sectionKeysOf([edit]));
+    if (snapshot === null) return;
     const result = await runAccept([edit]);
     if (!result) return;
     setManualMode(false);
-    onAccepted(result);
+    onAccepted(result, snapshot);
     showAcceptedFixToast({
       seriesId,
       commentId: result.comment?.id || comment.id,
       count: 1,
+      keys: sectionKeysOf(acceptedSectionsOf(result)),
+      onBeginMutation,
       applyResult: onAccepted,
     });
   };

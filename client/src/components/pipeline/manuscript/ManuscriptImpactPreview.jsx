@@ -23,7 +23,7 @@ import Modal from '../../ui/Modal';
 import HunkDiff from '../../ui/HunkDiff';
 import toast from '../../ui/Toast';
 import { planManuscriptEdits } from '../../../lib/applyManuscriptEdits';
-import { selectedEditsFor } from './ManuscriptCommentCard';
+import { selectedEditsFor, sectionKeysOf } from './ManuscriptCommentCard';
 import { acceptPipelineManuscriptFix } from '../../../services/api';
 import { STAGE_LABEL } from './constants';
 
@@ -44,7 +44,7 @@ function editsBySectionKey(comments, fixDrafts) {
   return map;
 }
 
-export default function ManuscriptImpactPreview({ open, onClose, seriesId, sections, comments, fixDrafts, onAccepted }) {
+export default function ManuscriptImpactPreview({ open, onClose, seriesId, sections, comments, fixDrafts, onAccepted, onBeginMutation }) {
   // null when idle, { done, total } while the accept-all pass runs.
   const [acceptState, setAcceptState] = useState(null);
 
@@ -94,19 +94,31 @@ export default function ManuscriptImpactPreview({ open, onClose, seriesId, secti
     if (!targets.length) return;
     setAcceptState({ done: 0, total: targets.length });
     const errors = [];
+    let applied = 0;
     for (const target of targets) {
+      // Settle + snapshot the touched sections per member: a draft typed while an
+      // earlier member was in flight is saved first, and a keystroke typed during
+      // this one survives its response (#9954). A save failure stops the batch.
+      const snapshot = onBeginMutation ? await onBeginMutation(sectionKeysOf(target.edits)) : undefined;
+      if (!mountedRef.current) return;
+      if (snapshot === null) {
+        errors.push('an unsaved edit could not be saved first');
+        break;
+      }
       const result = await acceptPipelineManuscriptFix(seriesId, target.comment.id, { edits: target.edits }, { silent: true })
         .catch((err) => {
           errors.push(err?.message || 'accept failed');
           return null;
         });
       if (!mountedRef.current) return;
-      if (result) onAccepted(result);
+      if (result) {
+        applied += 1;
+        onAccepted(result, snapshot);
+      }
       setAcceptState((s) => (s ? { ...s, done: s.done + 1 } : s));
     }
     if (!mountedRef.current) return;
     setAcceptState(null);
-    const applied = targets.length - errors.length;
     if (errors.length) {
       toast.error(`Applied ${applied} of ${targets.length} notes — ${errors.length} failed (${errors[0]}). The failed notes stay in the preview; regenerate those fixes.`);
     } else {
