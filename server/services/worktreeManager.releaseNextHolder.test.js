@@ -40,40 +40,55 @@ afterEach(async () => {
 describe('releaseIdleSiblingNextHolder', () => {
   it('detaches an idle, clean, pushed sibling tree in place so the branch can be checked out', async () => {
     // git reports forward-slash paths on Windows, so compare resolved paths.
-    const released = await releaseIdleSiblingNextHolder(repo, BRANCH, { nowMs: LATER() });
+    const released = await releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER() });
     expect(resolve(released.path)).toBe(resolve(holder));
     expect(existsSync(holder)).toBe(true);
     expect(await holderBranch()).toBe('');
     await git(['worktree', 'add', '-q', join(root, 'follow-up'), BRANCH]);
   });
 
+  it('preserves an idle pushed branch while its swarm parent owns the merge, including unreadable ownership', async () => {
+    const parent = { id: 'agent-parent', status: 'running', sourceWorkspace: repo, claimPicksOwnBranch: true };
+    const head = await git(['rev-parse', 'HEAD'], holder);
+    for (const agents of [[parent], null]) {
+      await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents, nowMs: LATER() })).resolves.toBeNull();
+      expect(await holderBranch()).toBe(BRANCH);
+      expect(await git(['rev-parse', 'HEAD'], holder)).toBe(head);
+    }
+    const released = await releaseIdleSiblingNextHolder(repo, BRANCH, {
+      agents: [{ ...parent, status: 'completed' }], nowMs: LATER(),
+    });
+    expect(resolve(released.path)).toBe(resolve(holder));
+    expect(await git(['rev-parse', 'HEAD'], holder)).toBe(head);
+  });
+
   it('refuses a tree with a commit that exists only locally', async () => {
     await git(['commit', '--allow-empty', '-m', 'unpushed'], holder);
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { nowMs: LATER() })).resolves.toBeNull();
+    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER() })).resolves.toBeNull();
     expect(await holderBranch()).toBe(BRANCH);
   });
 
   it('refuses a tree with an untracked file', async () => {
     await writeFile(join(holder, 'notes.txt'), 'draft');
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { nowMs: LATER() })).resolves.toBeNull();
+    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER() })).resolves.toBeNull();
     expect(await holderBranch()).toBe(BRANCH);
   });
 
   it('refuses a tree touched within the idle window', async () => {
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH)).resolves.toBeNull();
+    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [] })).resolves.toBeNull();
     expect(await holderBranch()).toBe(BRANCH);
   });
 
   it('refuses a tree a running agent works in', async () => {
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { nowMs: LATER(), activeWorkspacePaths: [holder] })).resolves.toBeNull();
+    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER(), activeWorkspacePaths: [holder] })).resolves.toBeNull();
     expect(await holderBranch()).toBe(BRANCH);
   });
 
   it('never touches the primary checkout or a non-/do:next branch', async () => {
     await git(['switch', '-q', '--detach'], holder);
     await git(['switch', '-q', BRANCH]);
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { nowMs: LATER() })).resolves.toBeNull();
+    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER() })).resolves.toBeNull();
     expect(await git(['branch', '--show-current'])).toBe(BRANCH);
-    await expect(releaseIdleSiblingNextHolder(repo, 'feature/x', { nowMs: LATER() })).resolves.toBeNull();
+    await expect(releaseIdleSiblingNextHolder(repo, 'feature/x', { agents: [], nowMs: LATER() })).resolves.toBeNull();
   });
 });

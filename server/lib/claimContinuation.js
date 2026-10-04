@@ -93,13 +93,14 @@ function registeredClaimBranch(agent) {
  */
 function claimHolderOccupancy({ agents, holderPath, branchName, sourceWorkspace, ignoreIds }) {
   let ambiguous = false;
+  const claimHolder = /^(claim|next)\//.test(branchName) || isHumanClaimWorktree(worktreeAgentId(holderPath));
   for (const agent of agents) {
     if (!agent || ignoreIds.has(agent.id) || !isLiveAgent(agent)) continue;
     const workspace = agentWorkspace(agent);
-    if (samePath(workspace, holderPath) || (workspace && isPathInsideDir(holderPath, workspace))) return 'active';
+    if (samePath(workspace, holderPath) || (holderPath && workspace && isPathInsideDir(holderPath, workspace))) return 'active';
     if (!inRepository(agent, sourceWorkspace)) continue;
     if (registeredClaimBranch(agent) === branchName) return 'active';
-    if (isTruthyMeta(agent.claimPicksOwnBranch ?? agent.metadata?.claimPicksOwnBranch)) ambiguous = true;
+    if (claimHolder && isTruthyMeta(agent.claimPicksOwnBranch ?? agent.metadata?.claimPicksOwnBranch)) ambiguous = true;
   }
   return ambiguous ? 'ambiguous' : null;
 }
@@ -178,6 +179,32 @@ export function claimContinuationWorkspace({ metadata, pathExists = () => false,
 }
 
 /**
+ * Shared admission for coordinator adoption/release and claim continuations.
+ * A missing cache may discover the holder; a supplied cache must still match.
+ * With no holder, branch/repository owners still prevent a new checkout from
+ * taking over publication while the original run is between worktrees.
+ */
+export function claimBranchAdmission({ branchName, preferredPath, agentId, sourceWorkspace, worktrees, agents, ignoreIds = [] }) {
+  if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admit: false, reason: 'ownership-unreadable' };
+  if (!branchName) return { admit: false, reason: 'pointer-incomplete' };
+  const holder = preferredPath
+    ? worktrees.find(wt => samePath(wt?.path, preferredPath))
+    : worktrees.find(wt => String(wt?.branch || '').replace(/^refs\/heads\//, '') === branchName);
+  if (preferredPath && !holder) return { admit: false, reason: 'holder-missing' };
+  if (holder && String(holder.branch || '').replace(/^refs\/heads\//, '') !== branchName) {
+    return { admit: false, reason: 'branch-changed' };
+  }
+  if (holder?.locked || holder?.prunable) return { admit: false, reason: 'holder-locked' };
+  const occupancy = claimHolderOccupancy({
+    agents, holderPath: holder?.path, branchName, sourceWorkspace,
+    ignoreIds: new Set([agentId, ...ignoreIds].filter(Boolean)),
+  });
+  if (occupancy === 'active') return { admit: false, reason: 'owner-active' };
+  if (occupancy === 'ambiguous') return { admit: false, reason: 'owner-ambiguous' };
+  return { admit: true };
+}
+
+/**
  * Launch-time ownership admission for an in-place continuation. A pointer is a
  * cached answer from when the previous run died; another owner can appear after
  * that, so the pointer alone is not authority to enter the checkout. Re-reads
@@ -207,16 +234,8 @@ export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace,
   const worktreePath = metadata?.resumeWorktreePath;
   if (!branchName || !worktreePath) return { admit: false, reason: 'pointer-incomplete' };
 
-  const holder = worktrees.find((wt) => samePath(wt?.path, worktreePath));
-  if (!holder) return { admit: false, reason: 'holder-missing' };
-  if (String(holder.branch || '').replace(/^refs\/heads\//, '') !== branchName) {
-    return { admit: false, reason: 'branch-changed' };
-  }
-  if (holder.locked || holder.prunable) return { admit: false, reason: 'holder-locked' };
-
-  const ignoreIds = new Set([agentId, metadata?.resumedFromAgentId].filter(Boolean));
-  const occupancy = claimHolderOccupancy({ agents, holderPath: holder.path, branchName, sourceWorkspace, ignoreIds });
-  if (occupancy === 'active') return { admit: false, reason: 'owner-active' };
-  if (occupancy === 'ambiguous') return { admit: false, reason: 'owner-ambiguous' };
-  return { admit: true };
+  return claimBranchAdmission({
+    branchName, preferredPath: worktreePath, agentId, sourceWorkspace, worktrees, agents,
+    ignoreIds: [metadata?.resumedFromAgentId],
+  });
 }

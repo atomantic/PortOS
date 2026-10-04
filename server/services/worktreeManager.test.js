@@ -623,8 +623,25 @@ describe('findAdoptableWorktreeForBranch (take over the tree that holds the bran
   it('adopts a human /claim worktree when the caller opts into allowLiveClaim', async () => {
     scriptWorktrees([{ path: cosTree('claim-issue-42'), branch: `refs/heads/${BRANCH}` }]);
 
-    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, { allowLiveClaim: true }))
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, { allowLiveClaim: true, agents: [] }))
       .toEqual({ path: cosTree('claim-issue-42'), agentId: 'claim-issue-42' });
+  });
+
+  it('keeps a swarm claim through the child-idle merge handoff, then allows inactive-owner recovery', async () => {
+    const path = cosTree('claim-issue-42');
+    scriptWorktrees([{ path, branch: `refs/heads/${BRANCH}` }]);
+    const parent = { id: 'agent-parent', status: 'running', sourceWorkspace: REPO, claimPicksOwnBranch: true };
+    const child = { id: 'agent-child', status: 'completed', sourceWorkspace: REPO, claimBranch: BRANCH };
+    const opts = { allowLiveClaim: true, activeAgentIds: new Set([parent.id]), agents: [parent, child] };
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, opts)).toBeNull();
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, { ...opts, agents: null })).toBeNull();
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, {
+      ...opts, agents: [{ ...parent, status: 'completed' }, child],
+    })).toEqual({ path, agentId: 'claim-issue-42' });
+    // A stale pointer must not silently select a different claim holder.
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, {
+      ...opts, agents: [], preferredPath: cosTree('claim-issue-99'),
+    })).toBeNull();
   });
 
   it('refuses a non-agent directory in the managed root', async () => {
