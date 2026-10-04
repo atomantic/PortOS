@@ -2,6 +2,7 @@
 
 import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
 
@@ -40,33 +41,37 @@ export async function setHistoryItemHidden(id, hidden) {
 }
 
 export async function deleteHistoryItem(id) {
-  const history = await loadHistory();
-  const item = history.find((h) => h.id === id);
-  if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
-  // Same path-traversal guard as extractLastFrame — unlink only if the
-  // filename resolves to inside the expected dir.
-  const videoFile = safeUnder(PATHS.videos, item.filename);
-  if (videoFile) await unlinkGuarded(videoFile).catch(() => {});
-  if (item.thumbnail) {
-    const thumbFile = safeUnder(PATHS.videoThumbnails, item.thumbnail);
-    if (thumbFile) await unlinkGuarded(thumbFile).catch(() => {});
-  }
-  // Delete evaluation frame thumbnails written by sampleEvaluationFrames:
-  // `${jobId}-f1.jpg` … `${jobId}-f9.jpg` (max count in sampleEvaluationFrames is 5,
-  // but 9 is a safe upper bound to catch any future increase).
-  for (let i = 1; i <= 9; i++) {
-    const frameFile = safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`);
-    if (frameFile) await unlinkGuarded(frameFile).catch(() => {});
-  }
-  // Serialized removal through the shared tail (re-filters the freshest list),
-  // so a concurrent download/render append isn't dropped by this save.
-  await mutateVideoHistory((h) => h.filter((x) => x.id !== id));
-  // Drop the derived index row with the entry (#2738) — keyed by job id, the
-  // ref the index wrote it under. Non-fatal + dynamically imported; see the
-  // matching hook in imageGen/local.js#deleteImage for the rationale.
-  await import('../mediaAssetIndex/index.js')
-    .then((m) => m.unindexVideo(id))
-    .catch((err) => console.error(`❌ Media index video delete hook: ${err.message}`));
-  console.log(`🗑️ Deleted video: ${item.filename}`);
-  return { ok: true };
+  // One lease covers the history read, file removals, history rewrite, and
+  // derived row removal; per-file admission would leave gaps between stores.
+  return withBackupAssetPublication(async () => {
+    const history = await loadHistory();
+    const item = history.find((h) => h.id === id);
+    if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+    // Same path-traversal guard as extractLastFrame — unlink only if the
+    // filename resolves to inside the expected dir.
+    const videoFile = safeUnder(PATHS.videos, item.filename);
+    if (videoFile) await unlinkGuarded(videoFile).catch(() => {});
+    if (item.thumbnail) {
+      const thumbFile = safeUnder(PATHS.videoThumbnails, item.thumbnail);
+      if (thumbFile) await unlinkGuarded(thumbFile).catch(() => {});
+    }
+    // Delete evaluation frame thumbnails written by sampleEvaluationFrames:
+    // `${jobId}-f1.jpg` … `${jobId}-f9.jpg` (max count in sampleEvaluationFrames is 5,
+    // but 9 is a safe upper bound to catch any future increase).
+    for (let i = 1; i <= 9; i++) {
+      const frameFile = safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`);
+      if (frameFile) await unlinkGuarded(frameFile).catch(() => {});
+    }
+    // Serialized removal through the shared tail (re-filters the freshest list),
+    // so a concurrent download/render append isn't dropped by this save.
+    await mutateVideoHistory((h) => h.filter((x) => x.id !== id));
+    // Drop the derived index row with the entry (#2738) — keyed by job id, the
+    // ref the index wrote it under. Non-fatal + dynamically imported; see the
+    // matching hook in imageGen/local.js#deleteImage for the rationale.
+    await import('../mediaAssetIndex/index.js')
+      .then((m) => m.unindexVideo(id))
+      .catch((err) => console.error(`❌ Media index video delete hook: ${err.message}`));
+    console.log(`🗑️ Deleted video: ${item.filename}`);
+    return { ok: true };
+  });
 }
