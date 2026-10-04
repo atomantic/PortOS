@@ -17,6 +17,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
+import { isPeerApiRequestAllowed } from '../lib/apiAccessPolicy.js';
 import { peerFetch, peerAuthHeaders, PEER_AUTH_HEADER } from '../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -1038,12 +1039,43 @@ export async function probeAllPeers() {
 
 // --- Query Proxy ---
 
+const PEER_PLACEHOLDER_ORIGIN = 'http://peer.invalid';
+
+// Resolve a caller-supplied proxy path to "pathname + query" that is guaranteed
+// to stay on the peer origin and on the documented federation surface
+// (PEER_API_SURFACE), or null. The allowlist runs on the path exactly as it will
+// be sent, so a segment a URL parser would normalize away (`..`, tabs, `\`) is
+// refused rather than argued past.
+function resolvePeerQueryTarget(apiPath) {
+  if (typeof apiPath !== 'string' || !apiPath.startsWith('/') || /[\s\\#]/.test(apiPath)) return null;
+  const queryAt = apiPath.indexOf('?');
+  const rawPath = queryAt === -1 ? apiPath : apiPath.slice(0, queryAt);
+  const search = queryAt === -1 ? '' : apiPath.slice(queryAt);
+  let parsed;
+  try {
+    parsed = new URL(rawPath, PEER_PLACEHOLDER_ORIGIN);
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== PEER_PLACEHOLDER_ORIGIN || parsed.username || parsed.password) return null;
+  if (parsed.pathname !== rawPath) return null;
+  const lower = rawPath.toLowerCase();
+  // The `/api/peer-sync/` read prefix also spans the POST-only push endpoint,
+  // which carries the sync secret; a GET proxy never has a reason to name it.
+  if (lower.replace(/\/$/, '') === '/api/peer-sync/push') return null;
+  if (!isPeerApiRequestAllowed('GET', lower)) return null;
+  return `${rawPath}${search}`;
+}
+
 export async function queryPeer(id, apiPath) {
   const data = await loadData();
   const peer = data.peers.find(p => p.id === id);
   if (!peer) return { error: 'Peer not found' };
 
-  const url = `${peerBaseUrl(peer)}${apiPath}`;
+  const target = resolvePeerQueryTarget(apiPath);
+  if (!target) return { error: 'Path is not on the peer federation surface', status: 400 };
+
+  const url = `${peerBaseUrl(peer)}${target}`;
   return withAbortTimeout(PROBE_TIMEOUT_MS, async (signal) => {
     const res = await peerFetch(url, { signal }, peer);
     return { success: true, data: await res.json() };

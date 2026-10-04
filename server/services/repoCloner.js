@@ -229,6 +229,8 @@ export async function pullRepo(localPath) {
   console.log(`🔄 Pulling latest for ${localPath}...`);
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+
     const child = spawn('git', ['pull', '--ff-only'], {
       cwd: localPath,
       env: process.env,
@@ -246,22 +248,36 @@ export async function pullRepo(localPath) {
       stderr += data.toString();
     });
 
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        child.kill();
+        reject(new Error('Pull timed out after 2 minutes'));
+      }
+    }, 120000);
+
+    timeout.unref?.();
+
     child.on('close', (code) => {
-      if (code === 0) {
-        console.log(`✅ Pulled latest for ${localPath}`);
-        resolve({ stdout, stderr, success: true });
-      } else {
-        console.error(`❌ Failed to pull ${localPath}: ${stderr}`);
-        reject(new Error(`Git pull failed: ${stderr || `exit code ${code}`}`));
+      clearTimeout(timeout);
+      if (!settled) {
+        settled = true;
+        if (code === 0) {
+          console.log(`✅ Pulled latest for ${localPath}`);
+          resolve({ stdout, stderr, success: true });
+        } else {
+          console.error(`❌ Failed to pull ${localPath}: ${stderr}`);
+          reject(new Error(`Git pull failed: ${stderr || `exit code ${code}`}`));
+        }
       }
     });
 
-    child.on('error', reject);
-
-    // Timeout after 2 minutes
-    setTimeout(() => {
-      child.kill();
-      reject(new Error('Pull timed out after 2 minutes'));
-    }, 120000);
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
   });
 }

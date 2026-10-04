@@ -19,7 +19,8 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
-import { taskContextBlock } from '../lib/cosTaskPrompt.js';
+import { TASK_PROMPT_KEY, taskContextBlock } from '../lib/cosTaskPrompt.js';
+import { injectReconcileAgentId } from '../lib/claimContinuation.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
 import { isClaimFlowDispatch, resolveTaskHookType } from './taskTypeHooks.js';
@@ -289,6 +290,16 @@ async function prepareReviewLoopRecipe(task, {
   };
 }
 
+function fillReconcileAgentId(task, agentId) {
+  const description = injectReconcileAgentId(task.description, agentId);
+  const prompt = injectReconcileAgentId(task.metadata?.[TASK_PROMPT_KEY], agentId);
+  if (description === task.description && prompt === task.metadata?.[TASK_PROMPT_KEY]) return task;
+  return {
+    ...task, description,
+    ...(prompt !== task.metadata?.[TASK_PROMPT_KEY] ? { metadata: { ...task.metadata, [TASK_PROMPT_KEY]: prompt } } : {}),
+  };
+}
+
 /**
  * Build the agent prompt.
  *
@@ -341,6 +352,11 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Feeds both the briefing template (via the reconciled `task` object) and the
   // full-path fallback below.
   task = reconcileSplitContext(task);
+
+  // A branch-reconcile coordinator's recheck commands carry its own agent id so
+  // a successful check reserves the branch for it (#10096). The block was built
+  // before the run had an id; fill the slot now, wherever the prompt travels.
+  task = fillReconcileAgentId(task, options.agentId);
 
   // Feature-agent tasks carry only a compact queue description. Expand the
   // persisted persona briefing at spawn time so scheduled and manually
