@@ -1645,7 +1645,8 @@ const WORKTREE_HOLD_REASONS = {
   'worktree-locked': 'worktree is locked',
   'worktree-active-agent': 'worktree is in use by a running agent',
   'worktree-agent-liveness-unknown': 'agent liveness unknown',
-  'worktree-human-claim': 'worktree is a claimed session'
+  'worktree-human-claim': 'worktree is a claimed session',
+  'remove-failed': 'worktree removal failed and the checkout is still present'
 };
 const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || 'checked out in a worktree';
 

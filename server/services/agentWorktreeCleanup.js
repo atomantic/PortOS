@@ -214,13 +214,18 @@ async function runCleanupAgentWorktree(agentId, success, options = {}) {
       return discardAgentWorktree(context);
     case 'open-pr':
       return openWorktreePullRequest(context);
-    case 'stranded-pr-handoff':
-      await mergeOrPreserveWorktree(context, disposition);
+    case 'stranded-pr-handoff': {
+      const released = await mergeOrPreserveWorktree(context, disposition);
+      if (released?.cleanupIncomplete) {
+        deferFollowUpWhileBranchHeld(context, verdict.url);
+        break;
+      }
       await handoffFollowUpAfterRelease(context, verdict.url, {
         prCompletion: PR_COMPLETION_VALUES.includes(context.prCompletion)
           ? context.prCompletion : PR_COMPLETIONS.REVIEW_THEN_MERGE,
       }, 'orphaned');
       break;
+    }
     case 'stand-down':
     case 'stand-down-uncertain':
     case 'merge-or-preserve':
@@ -379,11 +384,19 @@ async function completeOpenedPullRequest(context, prResult) {
   // pre-request above is the last user of that checkout.
   const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
     emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
-    return { warnings: [`Worktree cleanup failed: ${err.message}`] };
+    return { cleanupIncomplete: true, warnings: [`Worktree cleanup failed: ${err.message}`] };
   });
   warnings.push(...(result?.warnings || []));
 
-  await completeReleasedPullRequest(context, prResult, resolvedPrCompletion, reviewerList, leaveOpen);
+  // The PR itself is already open and stays reported as such; only work that
+  // needs the branch FREE is gated on whether the release actually happened.
+  // `cleanupIncomplete` means a removal was attempted and failed. A tree merely
+  // preserved for uncommitted work (`removed:false` without it) is deliberately
+  // not gated: the follow-up adopts that surviving holder rather than racing it
+  // (agentWorkspacePrep's adoptWorktreeHoldingBranch), which is the data-safe path.
+  await completeReleasedPullRequest(context, prResult, resolvedPrCompletion, reviewerList, leaveOpen, {
+    branchHeld: !!result?.cleanupIncomplete,
+  });
   return warnings;
 }
 
@@ -413,7 +426,7 @@ async function preRequestWorktreeReview({ agentId, worktreePath, warnings }, prR
   }
 }
 
-async function completeReleasedPullRequest(context, prResult, resolvedPrCompletion, reviewerList, leaveOpen) {
+async function completeReleasedPullRequest(context, prResult, resolvedPrCompletion, reviewerList, leaveOpen, { branchHeld = false } = {}) {
   const { agentId } = context;
   const runsReviewLoop = resolvedPrCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   if (resolvedPrCompletion === PR_COMPLETIONS.LEAVE_OPEN) {
@@ -423,7 +436,9 @@ async function completeReleasedPullRequest(context, prResult, resolvedPrCompleti
   } else {
     const queuedDeterministicMerge = await queueWorktreeMerge(context, prResult, resolvedPrCompletion);
 
-    if (!queuedDeterministicMerge) {
+    if (!queuedDeterministicMerge && branchHeld) {
+      deferFollowUpWhileBranchHeld(context, prResult.url);
+    } else if (!queuedDeterministicMerge) {
       await handoffFollowUpAfterRelease(context, prResult.url, {
         prCompletion: resolvedPrCompletion,
         reviewers: runsReviewLoop ? reviewerList : [],
@@ -497,7 +512,7 @@ async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranc
     preserveBranchWithCommits: disposition.preserveBranch,
   }).catch(err => {
     emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
-    return { warnings: [`Worktree cleanup failed: ${err.message}`] };
+    return { cleanupIncomplete: true, warnings: [`Worktree cleanup failed: ${err.message}`] };
   });
   warnings.push(...(result?.warnings || []));
 
@@ -508,6 +523,19 @@ async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranc
   // leaked remote branch and hands to a recovery agent. Finish the job here,
   // deterministically, instead of paying a model to run one `git push --delete`.
   if (result?.merged) await deleteMergedRemoteCopy(agentId, sourceWorkspace, worktreeBranch);
+  return result;
+}
+
+// A follow-up attaches its OWN worktree to the PR branch, which `git worktree
+// add` refuses while the old checkout still holds it. When cleanup could not
+// release the branch, dispatching now just blocks the task and orphans the PR it
+// exists to land — so the dispatch is withheld and the state is reported as a
+// retryable cleanup warning (the post-cleanup repo-state audit independently
+// observes the surviving worktree and files the recovery that retries removal
+// and drives the PR). The PR itself is untouched: it stays open/merged as it was.
+function deferFollowUpWhileBranchHeld({ agentId, worktreeBranch, worktreePath, warnings }, prUrl) {
+  emitLog('warn', `🌳 Deferring follow-up for ${prUrl} — worktree ${agentId} still holds ${worktreeBranch}`, { agentId, prUrl, branchName: worktreeBranch });
+  warnings.push(`PR follow-up for ${prUrl} deferred — worktree ${worktreePath || agentId} still holds branch ${worktreeBranch}; retry the worktree cleanup, then re-dispatch the follow-up`);
 }
 
 // Call only after removeWorktree settles: the follow-up attaches its own

@@ -713,6 +713,79 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
       .toBeLessThan(removeWorktree.mock.invocationCallOrder[0]);
   });
 
+  // #9909: the follow-up's `git worktree add` fails while the old checkout still
+  // holds the branch. When removal did not actually release it, the PR stays
+  // published but the dependent follow-up is withheld and the state is reported.
+  describe('when the old worktree could not be released (#9909)', () => {
+    const reviewLoopOpts = {
+      prCreation: 'always', requestCopilotReview: true, description: 'X',
+      originalTask: { id: 'task-orig', metadata: {}, description: 'X' },
+    };
+    // `clearAllMocks` keeps implementations, so restore what these tests override.
+    afterEach(() => {
+      removeWorktree.mockReset().mockResolvedValue(undefined);
+      findPullRequestForBranchMock.mockReset().mockResolvedValue({ status: 'unavailable' });
+    });
+    const openPr = () => {
+      git.push.mockResolvedValue(undefined);
+      git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/45' });
+      git.requestCopilotReview.mockResolvedValue({ success: true });
+      addTask.mockResolvedValue({ id: 'sys-rl-held' });
+    };
+
+    it('keeps the PR published but does not dispatch the follow-up into the occupied branch', async () => {
+      openPr();
+      removeWorktree.mockResolvedValue({
+        merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false,
+        warnings: ['Worktree cleanup incomplete for /wt/agent-1 (directory still present, git registration still registered) — retryable'],
+      });
+
+      const warnings = await cleanupAgentWorktree('agent-1', true, reviewLoopOpts);
+
+      expect(git.createPR).toHaveBeenCalledTimes(1);
+      expect(addTask).not.toHaveBeenCalled();
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+      expect(warnings.some(w => /cleanup incomplete/.test(w))).toBe(true);
+      expect(warnings.some(w => w.includes('PR follow-up for https://github.com/test/repo/pull/45 deferred'))).toBe(true);
+    });
+
+    it('treats a thrown removal as an unreleased branch too', async () => {
+      openPr();
+      removeWorktree.mockRejectedValue(new Error('EBUSY'));
+
+      const warnings = await cleanupAgentWorktree('agent-1', true, reviewLoopOpts);
+
+      expect(addTask).not.toHaveBeenCalled();
+      expect(warnings.some(w => w.includes('Worktree cleanup failed: EBUSY'))).toBe(true);
+      expect(warnings.some(w => w.includes('deferred'))).toBe(true);
+    });
+
+    it('still dispatches the follow-up when the tree was merely preserved for uncommitted work', async () => {
+      openPr();
+      removeWorktree.mockResolvedValue({
+        merged: false, removed: false, uncommittedSaved: false,
+        warnings: ['Worktree preserved — uncommitted changes detected in /wt/agent-1: src/a.js'],
+      });
+
+      await cleanupAgentWorktree('agent-1', true, reviewLoopOpts);
+
+      expect(addTask).toHaveBeenCalledTimes(1);
+    });
+
+    it('withholds a failed run’s orphaned-PR follow-up the same way', async () => {
+      findPullRequestForBranchMock.mockResolvedValue({ status: 'found', url: 'https://github.com/test/repo/pull/78' });
+      removeWorktree.mockResolvedValue({
+        merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false,
+        warnings: ['Worktree cleanup incomplete for /wt/agent-1 (directory still present, git registration removed) — retryable'],
+      });
+
+      const warnings = await cleanupAgentWorktree('agent-1', false, { prCreation: 'if-missing', description: 'Test task' });
+
+      expect(addTask).not.toHaveBeenCalled();
+      expect(warnings.some(w => w.includes('PR follow-up for https://github.com/test/repo/pull/78 deferred'))).toBe(true);
+    });
+  });
+
   it('STILL spawns the review-loop follow-up when the Copilot pre-request fails (follow-up re-requests at its turn)', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/43' });

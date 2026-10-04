@@ -273,14 +273,74 @@ async function cleanupOrphanBranch(repo, branchName, err) {
   });
 }
 
+/** Longest error excerpt a removal warning carries — warnings reach cards and task context. */
+const REMOVAL_ERROR_EXCERPT_CHARS = 200;
+
+/** First line of an error, bounded, for a one-line warning. */
+function errorExcerpt(err) {
+  return String(err?.message ?? err ?? '').split('\n')[0].slice(0, REMOVAL_ERROR_EXCERPT_CHARS);
+}
+
+/**
+ * Realpath of `p` even when `p` itself is gone: resolve the deepest existing
+ * ancestor and re-append the missing tail, so a removed worktree compares equal
+ * to the form git registered it under (macOS /var → /private/var).
+ */
+function canonicalPath(p) {
+  try { return realpathSync(p); } catch { /* fall through to the ancestor walk */ }
+  const parent = dirname(p);
+  return parent === p ? p : join(canonicalPath(parent), p.slice(parent.length).replace(/^[\\/]+/, ''));
+}
+
+/**
+ * Observe whether a worktree's directory and Git registration are really gone.
+ * Each probe answers `'unknown'` when it could not be read — an unverifiable
+ * state is NOT absence, so callers never report cleanup they did not establish.
+ *
+ * @returns {Promise<{directory: 'present'|'absent'|'unknown', registration: 'registered'|'absent'|'unknown'}>}
+ */
+async function probeWorktreeRemoval(repo, worktreePath) {
+  const directory = await lstat(worktreePath).then(
+    () => 'present',
+    (err) => (err?.code === 'ENOENT' || err?.code === 'ENOTDIR' ? 'absent' : 'unknown'),
+  );
+  const target = canonicalPath(worktreePath);
+  const registration = await listWorktrees(repo).then(
+    (entries) => (entries.some(wt => canonicalPath(wt.path) === target) ? 'registered' : 'absent'),
+    () => 'unknown',
+  );
+  return { directory, registration };
+}
+
+/**
+ * Fold a probe into the removal outcome every caller consumes. `removed` is true
+ * only when BOTH the directory and the registration were observed absent;
+ * `warning` is a bounded, retryable one-liner when they were not.
+ */
+function removalOutcome(worktreePath, { directory, registration }, failure = null) {
+  const removed = directory === 'absent' && registration === 'absent';
+  const state = `directory ${directory === 'absent' ? 'removed' : directory === 'present' ? 'still present' : 'unverified'}, `
+    + `git registration ${registration === 'absent' ? 'removed' : registration === 'registered' ? 'still registered' : 'unverified'}`;
+  return {
+    removed,
+    directory,
+    registration,
+    warning: removed ? null : `Worktree cleanup incomplete for ${worktreePath} (${state})${failure ? `: ${failure}` : ''} — retryable`,
+  };
+}
+
 /**
  * Remove a worktree directory robustly: try `git worktree remove --force`, and
  * if git refuses (locked, already-gone, broken admin files), fall back to a
  * plain recursive `rm` + `git worktree prune` to clear git's stale bookkeeping.
- * Every step swallows its own error — cleanup is best-effort and must never
- * throw into a completion/reap path. Inlined verbatim in four call sites
- * before extraction (removeWorktree, removePersistentWorktree,
- * reapMergedWorktrees, cleanupExternalRepoWorktrees).
+ * Never throws — cleanup is best-effort and must never throw into a
+ * completion/reap path — but it DOES report what it achieved: after every
+ * attempt it re-reads the exact directory and its Git registration, and
+ * `removed` is true only when both are observed gone. A caller that releases a
+ * branch, counts a reap or queues a follow-up must gate on `removed`; swallowing
+ * the failure is how a checkout that survived read as a completed cleanup.
+ * Shared by removeWorktree, removePersistentWorktree, reapMergedWorktrees,
+ * branch reconciliation and the worktree-add rollback.
  *
  * @param {string} repo - the git workspace to run worktree commands in (the
  *   parent repo for the worktree, NOT the worktree dir itself).
@@ -300,18 +360,27 @@ async function cleanupOrphanBranch(repo, branchName, err) {
  *   `worktreePath`; the agent-cleanup callers pass their agent id so the
  *   message wording stays byte-identical to the pre-extraction logs an operator
  *   may grep for (e.g. `… for worktree <agentId>`).
+ * @returns {Promise<{removed: boolean, directory: string, registration: string, warning: string|null}>}
+ *   `warning` is set exactly when `removed` is false.
  */
 export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 'remove', subject = worktreePath } = {}) {
   const logAll = label && log === 'all';
+  let lastFailure = null;
   await execGit(['worktree', 'remove', worktreePath, '--force'], repo).catch(async (err) => {
+    lastFailure = errorExcerpt(err);
     if (label) console.log(`⚠️ ${label}: ${err.message}`);
     await rm(worktreePath, { recursive: true, force: true }).catch((rmErr) => {
+      lastFailure = errorExcerpt(rmErr);
       if (logAll) console.log(`⚠️ Manual rm failed for worktree ${subject}: ${rmErr.message}`);
     });
     await execGit(['worktree', 'prune'], repo).catch((pruneErr) => {
+      lastFailure = errorExcerpt(pruneErr);
       if (logAll) console.log(`⚠️ Worktree prune failed for ${subject}: ${pruneErr.message}`);
     });
   });
+  const outcome = removalOutcome(worktreePath, await probeWorktreeRemoval(repo, worktreePath), lastFailure);
+  if (!outcome.removed && label) console.warn(`⚠️ ${outcome.warning}`);
+  return outcome;
 }
 
 /**
@@ -330,12 +399,15 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 
  */
 async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch }) {
   return enforceSafeBranchUpstream(sourceWorkspace, branchName).catch(async (err) => {
-    await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
+    const undone = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
       label: `Undoing worktree add for ${branchName} after an unsafe upstream`,
       log: 'all',
       subject: branchName,
-    }).catch(() => {});
-    if (deleteBranch) await cleanupOrphanBranch(sourceWorkspace, branchName, err);
+    });
+    // A branch still held by the surviving checkout cannot be deleted; leave it
+    // rather than attempt a `branch -D` that fails. The ORIGINAL error is what
+    // the caller sees either way — the rollback outcome never replaces it.
+    if (deleteBranch && undone.removed) await cleanupOrphanBranch(sourceWorkspace, branchName, err);
     throw err;
   });
 }
@@ -932,6 +1004,14 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   const warnings = [];
 
   if (!existsSync(worktreePath)) {
+    // The directory is gone, but git may still register it (a stale entry pins the
+    // branch). Verify rather than assume; prune when the registration survives.
+    let gone = removalOutcome(worktreePath, await probeWorktreeRemoval(sourceWorkspace, worktreePath));
+    if (!gone.removed) gone = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath);
+    if (!gone.removed) {
+      warnings.push(gone.warning);
+      return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
+    }
     console.log(`🌳 Worktree already removed for ${agentId}, cleaning up branch`);
     await execGit(['branch', '-D', branchName], sourceWorkspace).catch(() => {});
     return { merged: false, removed: true, uncommittedSaved: false, warnings };
@@ -949,9 +1029,14 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // or normalization differences don't false-positive as a broken worktree.
   if (detectedToplevel && !pathsEqual(detectedToplevel, worktreePath)) {
     console.log(`🌳 Worktree ${agentId} resolves to ${detectedToplevel} instead of ${worktreePath} — broken worktree, removing`);
-    await rm(worktreePath, { recursive: true, force: true }).catch(rmErr => {
+    const rmFailure = await rm(worktreePath, { recursive: true, force: true }).then(() => null, rmErr => {
       console.log(`⚠️ Failed to remove broken worktree ${agentId}: ${rmErr.message}`);
+      return rmErr;
     });
+    if (rmFailure) {
+      warnings.push(`Worktree cleanup incomplete for ${worktreePath} (broken checkout still present): ${errorExcerpt(rmFailure)} — retryable`);
+      return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
+    }
     await execGit(['branch', '-D', branchName], sourceWorkspace).catch(() => {});
     return { merged: false, removed: true, uncommittedSaved: false, warnings };
   }
@@ -1039,11 +1124,20 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     }
   }
 
-  await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
+  const removal = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
     label: `Worktree remove failed for ${agentId}, falling back to manual cleanup`,
     log: 'all',
     subject: agentId,
   });
+  if (!removal.removed) {
+    // The checkout (or its registration) survived: the branch is still held, so
+    // deleting it would fail, and `removed: true` would tell the caller it may
+    // queue work onto a branch the old worktree still owns. Report the truth with
+    // a retryable warning; `merged` stays accurate for the publication outcome.
+    console.warn(`⚠️ Worktree for ${agentId} was not removed — branch ${branchName} kept`);
+    warnings.push(removal.warning);
+    return { merged, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
+  }
 
   // Preserve branch when (a) merge was attempted, failed, and has unmerged commits,
   // OR (b) merge was refused because HEAD is on a non-default branch — the commits
@@ -1191,18 +1285,19 @@ export async function removePersistentWorktree(featureAgentId, sourceWorkspace, 
 
   if (!existsSync(worktreePath)) return { removed: false };
 
-  await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
+  const removal = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
     label: `Persistent worktree remove failed for ${featureAgentId}, falling back`,
     log: 'all',
     subject: featureAgentId,
   });
+  if (!removal.removed) return { removed: false, cleanupIncomplete: true, warnings: [removal.warning] };
 
   await execGit(['branch', '-D', branchName], sourceWorkspace).catch(err => {
     console.log(`⚠️ Branch delete failed for ${branchName}: ${err.message}`);
   });
 
   console.log(`🌳 Removed persistent worktree for feature agent ${featureAgentId}`);
-  return { removed: true };
+  return { removed: true, warnings: [] };
 }
 
 /**
@@ -1400,7 +1495,7 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
  * @param {string} [options.defaultBranch] - skip the default-branch lookup, which can
  *   contact the remote (`remote set-head`); pass it on a latency-sensitive request path
  * @param {boolean} [options.dryRun=false] - report candidates without deleting
- * @returns {Promise<{reaped: Array<{path,branch,locked,branchDeleted}>, skipped: Array<{path,branch,reason}>, defaultBranch: string, target: string, dryRun: boolean}>}
+ * @returns {Promise<{reaped: Array<{path,branch,locked,branchDeleted}>, skipped: Array<{path,branch,reason,warning?}>, defaultBranch: string, target: string, dryRun: boolean}>}
  */
 export async function reapMergedWorktrees(sourceWorkspace, {
   activeAgentIds = new Set(),
@@ -1481,10 +1576,16 @@ export async function reapMergedWorktrees(sourceWorkspace, {
 
     // Remove the worktree, then force-delete the branch (-D because squash-merged
     // branches aren't recognized by -d, and we've proven the work is in default).
-    await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
+    const removal = await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
       label: `worktree remove failed for ${wt.path}, manual cleanup`,
     });
-    // Reported per entry: the tree is gone either way, but a caller that
+    // A checkout that survived is not a reap: it is held (not counted) with the
+    // retryable warning, and the branch is left alone — it is still checked out.
+    if (!removal.removed) {
+      skipped.push({ path: wt.path, branch: branchName, reason: 'remove-failed', warning: removal.warning });
+      continue;
+    }
+    // Reported per entry: the tree is gone, but a caller that
     // presents this as "branch deleted" would otherwise be lying on a failure.
     const branchDeleted = await execGit(['branch', '-D', branchName], sourceWorkspace).then(() => true).catch(err => {
       console.log(`⚠️ branch delete failed for ${branchName}: ${err.message}`);
