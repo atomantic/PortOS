@@ -21,15 +21,6 @@ import { isTruthyMeta } from './metadataFlags.js';
 
 const CASE_FOLD = process.platform === 'win32';
 
-/**
- * How long a claim checkout must sit untouched before a claim-flow agent that
- * has NOT named its branch (an unpinned or swarm orchestrator run, whose
- * children cut `claim/issue-<n>` trees PortOS never sees) stops counting as the
- * possible owner. Matches `SIBLING_NEXT_HOLDER_IDLE_MS`: a live session touches
- * its index constantly, a finished one waiting on CI goes quiet for longer.
- */
-export const CLAIM_AMBIGUOUS_OWNER_IDLE_MS = 10 * 60 * 1000;
-
 /** Branch a pinned claim target checks out, or null when the ref is not a claim name. */
 export function claimContinuationBranch(claimTarget) {
   const ref = String(claimTarget ?? '').trim();
@@ -77,10 +68,22 @@ function agentRepository(agent) {
   return agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agentWorkspace(agent);
 }
 
+// Conservative: an agent whose repository cannot be read is treated as being in
+// this one, because the alternative is to wave a possible owner through.
+function inRepository(agent, sourceWorkspace) {
+  const repository = agentRepository(agent);
+  return !repository || !sourceWorkspace || samePath(repository, sourceWorkspace);
+}
+
+function registeredClaimBranch(agent) {
+  return agent?.claimBranch ?? agent?.metadata?.claimBranch;
+}
+
 /**
  * Whether a running or paused agent other than `ignoreIds` holds, or may hold,
  * the claim checkout:
- *   - `active`: it works inside the directory, or registered this exact branch;
+ *   - `active`: it works inside the directory, or registered this exact branch
+ *     in this repository;
  *   - `ambiguous`: it is a claim run that picks its own branch, in this same
  *     repository, so it might be the one that cut this tree — unprovable from
  *     the registry alone.
@@ -94,10 +97,9 @@ function claimHolderOccupancy({ agents, holderPath, branchName, sourceWorkspace,
     if (!agent || ignoreIds.has(agent.id) || !isLiveAgent(agent)) continue;
     const workspace = agentWorkspace(agent);
     if (samePath(workspace, holderPath) || (workspace && isPathInsideDir(holderPath, workspace))) return 'active';
-    const registeredBranch = agent.claimBranch ?? agent.metadata?.claimBranch;
-    if (registeredBranch === branchName) return 'active';
-    const picksOwn = agent.claimPicksOwnBranch ?? agent.metadata?.claimPicksOwnBranch;
-    if (isTruthyMeta(picksOwn) && samePath(agentRepository(agent), sourceWorkspace)) ambiguous = true;
+    if (!inRepository(agent, sourceWorkspace)) continue;
+    if (registeredClaimBranch(agent) === branchName) return 'active';
+    if (isTruthyMeta(agent.claimPicksOwnBranch ?? agent.metadata?.claimPicksOwnBranch)) ambiguous = true;
   }
   return ambiguous ? 'ambiguous' : null;
 }
@@ -184,9 +186,11 @@ export function claimContinuationWorkspace({ metadata, pathExists = () => false,
  * live owner holds it. Anything unreadable or changed refuses — the caller
  * defers the launch and touches neither ref nor tree.
  *
- * `holderIdleMs` is how long the checkout has been untouched (null when it
- * cannot be read). It only matters for a possible owner that picks its own
- * branch; a registered owner refuses at any idleness.
+ * A live claim run that picks its own branch (a swarm orchestrator whose
+ * children cut trees PortOS never sees) might own this tree. Git activity is not
+ * proof it stopped, so that doubt clears only on a registration: the run being
+ * continued must itself have registered this exact branch, which only the run
+ * that cut the tree could have done.
  *
  * @param {{
  *   metadata?: object,
@@ -194,14 +198,10 @@ export function claimContinuationWorkspace({ metadata, pathExists = () => false,
  *   sourceWorkspace?: string,
  *   worktrees: Array<object>|null,
  *   agents: Array<object>|null,
- *   holderIdleMs?: number|null,
- *   idleMs?: number,
  * }} input
  * @returns {{ admit: true }|{ admit: false, reason: string }}
  */
-export function claimContinuationAdmission({
-  metadata, agentId, sourceWorkspace, worktrees, agents, holderIdleMs = null, idleMs = CLAIM_AMBIGUOUS_OWNER_IDLE_MS,
-}) {
+export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace, worktrees, agents }) {
   if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admit: false, reason: 'ownership-unreadable' };
   const branchName = metadata?.existingBranch;
   const worktreePath = metadata?.resumeWorktreePath;
@@ -214,11 +214,15 @@ export function claimContinuationAdmission({
   }
   if (holder.locked || holder.prunable) return { admit: false, reason: 'holder-locked' };
 
-  const ignoreIds = new Set([agentId, metadata?.resumedFromAgentId].filter(Boolean));
+  const predecessorId = metadata?.resumedFromAgentId;
+  const ignoreIds = new Set([agentId, predecessorId].filter(Boolean));
   const occupancy = claimHolderOccupancy({ agents, holderPath: holder.path, branchName, sourceWorkspace, ignoreIds });
   if (occupancy === 'active') return { admit: false, reason: 'owner-active' };
-  if (occupancy === 'ambiguous' && !(Number.isFinite(holderIdleMs) && holderIdleMs >= idleMs)) {
-    return { admit: false, reason: 'owner-ambiguous' };
+  if (occupancy === 'ambiguous') {
+    const predecessor = agents.find((agent) => agent?.id === predecessorId);
+    if (!predecessor || registeredClaimBranch(predecessor) !== branchName) {
+      return { admit: false, reason: 'owner-ambiguous' };
+    }
   }
   return { admit: true };
 }

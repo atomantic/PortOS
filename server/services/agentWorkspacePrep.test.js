@@ -48,7 +48,6 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   findAdoptableWorktreeForBranch: vi.fn().mockResolvedValue(null),
   releaseIdleSiblingNextHolder: vi.fn().mockResolvedValue(null),
   listWorktrees: vi.fn().mockResolvedValue([]),
-  worktreeIdleMs: vi.fn().mockResolvedValue(null),
   mergeBaseIntoFeatureWorktree: vi.fn(),
 }));
 vi.mock('./agentAppWorkspace.js', () => ({
@@ -521,7 +520,7 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
 
     it('defers the launch when a live owner registered the branch after the pointer was made', async () => {
       getAgents.mockResolvedValue([
-        { id: 'agent-other', status: 'running', metadata: { claimBranch: 'claim/issue-42', sourceWorkspace: '/repos/app-x' } },
+        { id: 'agent-other', status: 'running', metadata: { claimBranch: 'claim/issue-42' } },
       ]);
 
       const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });

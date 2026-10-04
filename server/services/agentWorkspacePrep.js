@@ -35,7 +35,7 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies, worktreeIdleMs } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -295,9 +295,8 @@ async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWor
     getAgents().catch(() => null),
     listWorktrees(sourceWorkspace).catch(() => null),
   ]);
-  const holderIdleMs = await worktreeIdleMs(claimWorkspace.workspacePath).catch(() => null);
   return claimContinuationAdmission({
-    metadata: task.metadata, agentId, sourceWorkspace, worktrees, agents, holderIdleMs,
+    metadata: task.metadata, agentId, sourceWorkspace, worktrees, agents,
   });
 }
 

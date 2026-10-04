@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CLAIM_AMBIGUOUS_OWNER_IDLE_MS,
   claimContinuationAdmission,
   claimContinuationBranch,
   claimContinuationPointer,
@@ -146,7 +145,7 @@ describe('claimContinuationAdmission', () => {
   });
   const metadata = { ...pointer, resumedFromAgentId: 'agent-dead' };
   const admit = (overrides = {}) => claimContinuationAdmission({
-    metadata, agentId: 'agent-new', sourceWorkspace: SOURCE, worktrees: [holder], agents: [], holderIdleMs: null, ...overrides,
+    metadata, agentId: 'agent-new', sourceWorkspace: SOURCE, worktrees: [holder], agents: [], ...overrides,
   });
 
   it('admits a surviving claim whose previous owner is gone', () => {
@@ -180,18 +179,28 @@ describe('claimContinuationAdmission', () => {
     })).toEqual({ admit: true });
   });
 
+  it('does not let a same-named claim in another repository block this one', () => {
+    expect(admit({
+      agents: [{ id: 'agent-other', status: 'running', metadata: { claimBranch: 'claim/issue-42', sourceWorkspace: '/repos/other' } }],
+    })).toEqual({ admit: true });
+  });
+
   describe('a swarm orchestrator whose children cut their own trees', () => {
     const orchestrator = {
       id: 'agent-swarm', status: 'running', metadata: { claimPicksOwnBranch: true, sourceWorkspace: SOURCE },
     };
 
-    it('refuses while the checkout shows recent activity or its idleness is unknown', () => {
-      expect(admit({ agents: [orchestrator], holderIdleMs: 30_000 })).toEqual({ admit: false, reason: 'owner-ambiguous' });
-      expect(admit({ agents: [orchestrator], holderIdleMs: null })).toEqual({ admit: false, reason: 'owner-ambiguous' });
+    it('refuses when the run being continued never registered this branch, however long the checkout has been quiet', () => {
+      expect(admit({ agents: [orchestrator] })).toEqual({ admit: false, reason: 'owner-ambiguous' });
+      expect(admit({
+        agents: [orchestrator, { id: 'agent-dead', status: 'completed', metadata: { claimPicksOwnBranch: true } }],
+      })).toEqual({ admit: false, reason: 'owner-ambiguous' });
     });
 
-    it('admits once the checkout has been quiet past the idle window', () => {
-      expect(admit({ agents: [orchestrator], holderIdleMs: CLAIM_AMBIGUOUS_OWNER_IDLE_MS })).toEqual({ admit: true });
+    it('admits when the run being continued registered this exact branch, since it cut the tree', () => {
+      expect(admit({
+        agents: [orchestrator, { id: 'agent-dead', status: 'completed', metadata: { claimBranch: 'claim/issue-42' } }],
+      })).toEqual({ admit: true });
     });
 
     it('does not suspect an orchestrator working in a different repository', () => {
@@ -199,10 +208,13 @@ describe('claimContinuationAdmission', () => {
       expect(admit({ agents: [elsewhere] })).toEqual({ admit: true });
     });
 
-    it('refuses a registered owner at any idleness', () => {
+    it('refuses a registered owner even when the predecessor registered the branch', () => {
       expect(admit({
-        agents: [orchestrator, { id: 'agent-other', status: 'running', metadata: { claimBranch: 'claim/issue-42' } }],
-        holderIdleMs: Number.MAX_SAFE_INTEGER,
+        agents: [
+          orchestrator,
+          { id: 'agent-dead', status: 'completed', metadata: { claimBranch: 'claim/issue-42' } },
+          { id: 'agent-other', status: 'running', metadata: { claimBranch: 'claim/issue-42' } },
+        ],
       })).toEqual({ admit: false, reason: 'owner-active' });
     });
   });
