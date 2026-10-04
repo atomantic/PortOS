@@ -668,7 +668,7 @@ export async function cleanupZombieAgents() {
   // Direct-spawn handles in this process (not leftover runnerAgents adopts —
   // those are only a handle, same as GET /agents). Read from the side-effect-free
   // state module, not subAgentSpawner.
-  const { activeAgents } = await import('./agentState.js');
+  const { activeAgents, spawningTasks } = await import('./agentState.js');
 
   // Also check with the CoS runner for agents it's actively tracking
   const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
@@ -694,6 +694,12 @@ export async function cleanupZombieAgents() {
       // processActive from onExit/pid probe). Leftover runnerAgents ownership
       // from an earlier adopt is not.
       if (activeAgents.has(agent.id)) continue;
+      // The record is written before the spawn finishes (prompt build, claim
+      // update, forge/env lookups, PTY open), and that window can run for
+      // minutes under load — well past the pid grace below. While the dispatch
+      // still owns the task, a missing pid means 'not spawned yet', not 'never
+      // started'. Reaping here archives a run that goes on to launch normally.
+      if (agent.taskId && spawningTasks.has(agent.taskId)) continue;
       const executionMode = agent.metadata?.executionMode;
       const runnerOwned = agent.metadata?.useRunner === true
         || agent.metadata?.useRunner === 'true'

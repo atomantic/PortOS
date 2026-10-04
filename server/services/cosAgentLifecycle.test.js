@@ -64,7 +64,7 @@ import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
 import { getActiveAgentsFromRunner } from './cosRunnerClient.js';
-import { activeAgents, runnerAgents } from './agentState.js';
+import { activeAgents, runnerAgents, spawningTasks } from './agentState.js';
 
 describe('cosAgentLifecycle', () => {
   beforeEach(async () => {
@@ -670,10 +670,32 @@ describe('cleanupZombieAgents — runner listing is not proof of life', () => {
     vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
     activeAgents.clear();
     runnerAgents.clear();
+    spawningTasks.clear();
   });
 
   afterEach(async () => {
+    spawningTasks.clear();
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('does not reap a pid-less record while its task is still being dispatched', async () => {
+    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
+    mockCosState.state.agents['agent-slow'] = {
+      id: 'agent-slow',
+      taskId: 'task-slow',
+      status: 'running',
+      startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    };
+    spawningTasks.add('task-slow');
+
+    expect((await cleanupZombieAgents()).cleaned).toEqual([]);
+    expect(mockCosState.state.agents['agent-slow'].status).toBe('running');
+
+    // Once the dispatch gives up the task without ever recording a pid, the
+    // record really is a never-started zombie again.
+    spawningTasks.delete('task-slow');
+    expect((await cleanupZombieAgents()).cleaned).toEqual(['agent-slow']);
+    expect(mockCosState.state.agents['agent-slow'].result.error).toMatch(/never started/);
   });
 
   it('does not reap a runner-owned TUI while the runner probe is unavailable', async () => {
