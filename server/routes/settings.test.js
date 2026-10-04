@@ -1444,3 +1444,16 @@ it('generic settings updates cannot replace the password-risk revision', async (
   expect(res.status).toBe(200);
   expect(store.passwordRiskRevision).toBe('current-revision');
 });
+
+describe('autofixer settings slice', () => {
+  it('round-trips promotion options without losing provider selection on independent saves', async () => {
+    const app = buildApp();
+    expect((await request(app).put('/api/settings').send({ autofixer: { providerId: 'example-cli', model: 'example-model' } })).status).toBe(200);
+    expect((await request(app).put('/api/settings').send({ autofixer: { autoPromote: true, verifyCommand: 'npm test' } })).status).toBe(200);
+    expect((await request(app).put('/api/settings').send({ autofixer: { model: 'another-model' } })).status).toBe(200);
+    const loaded = await request(app).get('/api/settings');
+    expect(loaded.body.autofixer).toEqual({ providerId: 'example-cli', model: 'another-model', autoPromote: true, verifyCommand: 'npm test' });
+    expect((await request(app).put('/api/settings').send({ autofixer: { autoPromote: 'true' } })).status).toBe(400);
+    expect((await request(app).get('/api/settings')).body.autofixer).toEqual(loaded.body.autofixer);
+  });
+});

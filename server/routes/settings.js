@@ -674,8 +674,14 @@ router.put('/', asyncHandler(async (req, res) => {
     previousBeeperIntervalMinutes = current?.beeper?.intervalMinutes;
     previousBeeperConnection = JSON.stringify([current?.beeper?.baseUrl, current?.beeper?.allowNonLoopbackBaseUrl]);
     previousBeeperGates = JSON.stringify([current?.instanceFeatures?.beeper, current?.instanceFeatureGroups?.comms]);
+    // Provider picker and promotion controls save independent keys in this
+    // slice. Merge while holding the settings write queue to retain both.
+    const next = { ...current, ...settingsPatch };
+    if (settingsPatch.autofixer !== undefined) {
+      next.autofixer = { ...current.autofixer, ...settingsPatch.autofixer };
+    }
     return preserveExternallyOwnedKeys(
-      mergeFederationSlice({ ...current, ...settingsPatch }, current),
+      mergeFederationSlice(next, current),
       current,
     );
   }, { actor: 'user' });

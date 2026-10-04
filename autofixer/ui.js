@@ -6,7 +6,8 @@ import { fileURLToPath } from 'url';
 import { createTailscaleServers, watchCertReload } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { createSidecarAuthGate } from '../lib/sidecarAuthGate.js';
-import { PM2_BIN, execPm2, listProcessesStrict, DATA_DIR, INDEX_FILE, loadApps } from './shared.js';
+import { createStagedFixStore } from './stagedFixes.js';
+import { PM2_BIN, execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -19,10 +20,12 @@ const PORT = process.env.PORT || 5560;
 const UI_TEMPLATE_FILE = join(__dirname, 'ui.template.html');
 const UI_HTML = await readFile(UI_TEMPLATE_FILE, 'utf8');
 
+const stagedFixes = createStagedFixStore({ root: AUTOFIXER_DIR, loadApps, execPm2 });
+
 // Load autofixer history
 async function loadHistory() {
   const data = await readFile(INDEX_FILE, 'utf8').catch(() => '[]');
-  return JSON.parse(data);
+  return stagedFixes.decorateHistory(JSON.parse(data));
 }
 
 // Reads honour the optional instance password. Process mutations additionally
@@ -55,6 +58,18 @@ app.get('/api/history', async (req, res) => {
   const history = await loadHistory();
   res.json(history);
 });
+
+// Staged patches are data on reads; applying/discarding requires host authority.
+app.get('/api/fixes/:session', async (req, res) => {
+  const result = await stagedFixes.read(req.params.session);
+  res.status(result.status || 200).json(result);
+});
+for (const action of ['apply', 'discard']) {
+  app.post(`/api/fixes/:session/${action}`, auth.requireHostControl, async (req, res) => {
+    const result = await stagedFixes.mutate(req.params.session, action);
+    res.status(result.status || 200).json(result);
+  });
+}
 
 // API: Get PM2 status
 //

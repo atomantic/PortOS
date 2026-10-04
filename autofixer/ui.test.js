@@ -22,7 +22,7 @@ vi.mock('../lib/tailscale-https.js', () => ({
   watchCertReload: vi.fn(),
 }));
 vi.mock('./shared.js', () => ({
-  PM2_BIN: 'example-pm2', DATA_DIR: 'unused', INDEX_FILE: 'unused',
+  PM2_BIN: 'example-pm2', DATA_DIR: 'unused', AUTOFIXER_DIR: 'unused', INDEX_FILE: 'unused',
   execPm2: harness.execPm2, listProcessesStrict: vi.fn(),
   loadApps: async () => [{ pm2ProcessNames: ['example-process'] }],
 }));
@@ -74,6 +74,20 @@ const mutate = async (action, address = '192.0.2.10', headers = {}) => {
 };
 
 describe('Autofixer process-control authority', () => {
+  it('gates both staged patch actions before touching session files', async () => {
+    await loadUi();
+    for (const action of ['apply', 'discard']) {
+      const req = { path: `/api/fixes/autofixer_example_123/${action}`, params: { session: 'autofixer_example_123' }, headers: {}, socket: { remoteAddress: '192.0.2.10' } };
+      const res = response();
+      for (const handler of [...harness.gates, ...harness.routes.get(`/api/fixes/:session/${action}`)]) {
+        let nexted = false;
+        await handler(req, res, () => { nexted = true; });
+        if (!nexted) break;
+      }
+      expect(res.statusCode).toBe(403);
+      expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    }
+  });
   it('refuses remote, forged forwarding, and remote dev-proxy callers before PM2', async () => {
     await loadUi();
     for (const action of ['restart', 'stop']) {
