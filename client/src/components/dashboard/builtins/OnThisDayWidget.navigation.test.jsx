@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import Brain from '../../../pages/Brain';
 import OnThisDayWidget from './OnThisDayWidget';
@@ -76,6 +76,8 @@ describe('On This Day record destinations', () => {
     expect(screen.queryByText('Entry not found')).toBeNull();
     expect(screen.queryByRole('complementary', { name: 'Preview: Example first' })).toBeNull();
 
+    // findBy can resolve on the DOM mutation, before MemoryTab's passive effect has issued the fetch.
+    await waitFor(() => expect(resolveDetail).toBeTypeOf('function'));
     await act(async () => resolveDetail(second));
     const reader = await screen.findByRole('complementary', { name: 'Preview: Example second' });
     expect(within(reader).getByText('Second full text').tagName).toBe('STRONG');
@@ -179,6 +181,7 @@ describe('On This Day record destinations', () => {
     api.getBrainMemory.mockImplementation(() => new Promise(resolve => { resolveDetail = resolve; }));
     mount('memory', '/brain/memory/memories/example-second');
     await screen.findByRole('complementary', { name: 'Loading entry' });
+    await waitFor(() => expect(resolveDetail).toBeTypeOf('function'));
     fireEvent.click(screen.getByRole('button', { name: 'Select first memory' }));
     await screen.findByRole('complementary', { name: 'Preview: Example first' });
     await act(async () => resolveDetail(second));
