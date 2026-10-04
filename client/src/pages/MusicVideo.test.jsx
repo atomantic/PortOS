@@ -66,6 +66,9 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   importMusicVideoLyrics: vi.fn(),
   importMusicVideoTrackLyrics: vi.fn(),
   alignMusicVideoLyrics: vi.fn(),
+  musicVideoLyricAlignEventsUrl: (jobId) => `/api/music-video/lyrics/align/${jobId}/events`,
+  cancelMusicVideoLyricAlign: vi.fn(async () => ({ ok: true })),
+  getMusicVideoActiveJobs: vi.fn(async () => ({ alignment: null, separation: null, midi: null })),
   separateMusicVideoVocals: vi.fn(async () => ({ jobId: 'sep-job-1' })),
   musicVideoVocalSeparationEventsUrl: (jobId) => `/api/music-video/vocal-stem/separate/${jobId}/events`,
   cancelMusicVideoVocalSeparation: vi.fn(async () => ({ ok: true })),
@@ -246,7 +249,7 @@ import {
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
-  updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject, getMusicVideoActiveRender,
+  updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject, getMusicVideoActiveRender, getMusicVideoActiveJobs,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
   startMusicVideoCastAndSets, approveMusicVideoCastAndSets, stopMusicVideoProduction,
   getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
@@ -1478,13 +1481,26 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     }];
     await openProject({ ...PROJECT_ANALYZED, lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: null, endSec: null }] }, 'setup');
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
-    alignMusicVideoLyrics.mockResolvedValue({ id: 'mv-3', lyricCues: cues, updatedAt: 't' });
+    alignMusicVideoLyrics.mockResolvedValue({ jobId: 'align-job-1' });
     fireEvent.click(screen.getByRole('button', { name: 'Align words' }));
     await waitFor(() => expect(alignMusicVideoLyrics).toHaveBeenCalledWith('mv-3', {}, { silent: true }));
+    await settle();
+    sseState.latest = { type: 'complete', project: { id: 'mv-3', lyricCues: cues, updatedAt: 't' } };
+    forceRerender();
     expect(await screen.findByText('walking')).toHaveClass('text-port-accent');
     expect(screen.getByText('home')).toHaveClass('text-port-warning');
+    sseState.latest = null;
     fireEvent.click(screen.getByRole('button', { name: 'Re-align line 1' }));
     await waitFor(() => expect(alignMusicVideoLyrics).toHaveBeenLastCalledWith('mv-3', { cueId: 'lc-1' }, { silent: true }));
+  });
+
+  it('reattaches to an alignment the server is still running after a reload (#10155)', async () => {
+    getMusicVideoActiveJobs.mockResolvedValueOnce({ alignment: 'align-live', separation: null, midi: null });
+    await openProject({ ...PROJECT_ANALYZED, lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: null, endSec: null }] }, 'setup');
+    const running = await screen.findAllByRole('button', { name: 'Aligning…' });
+    running.forEach((button) => expect(button).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Re-align line 1' })).toBeDisabled();
+    expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
   });
 
   it('flags a non-looping shot longer than its clip and trims it; a legacy scene is left alone', async () => {

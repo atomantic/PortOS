@@ -53,7 +53,7 @@ describe('resolveAlignmentTranscriber', () => {
     });
     expect(transcriber.kind).toBe('whisper-cli');
     expect(probeEndpoint).not.toHaveBeenCalled();
-    expect(ensureModel).toHaveBeenCalledWith({ configuredModelPath: '/models/ggml-base.en.bin' });
+    expect(ensureModel).toHaveBeenCalledWith({ configuredModelPath: '/models/ggml-base.en.bin', onDownloadProgress: null });
 
     // A windowed re-align slices the audio and shifts the words onto the song clock.
     const words = await transcriber.transcribe(encodePcm16Wav(16000 * 10), { startSec: 2, endSec: 8, prompt: 'walking home' });

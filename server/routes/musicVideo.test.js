@@ -70,6 +70,7 @@ vi.mock('../services/audioMidiTranscription.js', () => ({
   startMidiTranscription: vi.fn(async () => ({ jobId: 'midi-job-1', model: 'medium' })),
   attachMidiTranscriptionSseClient: vi.fn(() => true),
   cancelMidiTranscription: vi.fn(() => true),
+  getActiveMidiTranscriptionJobId: vi.fn(() => null),
 }));
 
 vi.mock('../services/musicVideo/lyricAlign.js', () => ({
@@ -430,14 +431,64 @@ describe('musicVideo routes', () => {
   });
 
   describe('POST /:id/lyrics/align (#9074)', () => {
-    it('aligns only when the route is called, and accepts a single-line re-align', async () => {
+    const alignable = { id: 'mv-1', lyricCues: [{ id: 'lc-1', text: 'walking home' }] };
+
+    // Hold the mocked alignment open so the job stays "running" for the test.
+    const holdAlignment = () => {
+      let release;
+      alignProjectLyrics.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ id: 'mv-1', lyricCues: [] }); }));
+      return () => release();
+    };
+
+    it('starts a job only when the route is called, and a second click reuses it (#10155)', async () => {
+      svc.getProject.mockResolvedValue(alignable);
       expect(alignProjectLyrics).not.toHaveBeenCalled();
-      const all = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
-      expect(all.status).toBe(200);
-      expect(alignProjectLyrics).toHaveBeenCalledWith('mv-1', { cueId: undefined });
-      const one = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ cueId: 'lc-1' });
-      expect(one.status).toBe(200);
-      expect(alignProjectLyrics).toHaveBeenLastCalledWith('mv-1', { cueId: 'lc-1' });
+      const release = holdAlignment();
+      const first = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      expect(first.status).toBe(202);
+      expect(first.body.jobId).toEqual(expect.any(String));
+      expect(first.body.reused).toBeUndefined();
+      const second = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ cueId: 'lc-1' });
+      expect(second.status).toBe(202);
+      expect(second.body).toEqual({ jobId: first.body.jobId, reused: true });
+      expect(alignProjectLyrics).toHaveBeenCalledTimes(1);
+      expect(alignProjectLyrics).toHaveBeenCalledWith('mv-1', expect.objectContaining({ cueId: null }));
+      const active = await request(app).get('/api/music-video/mv-1/active-jobs');
+      expect(active.body).toEqual({ alignment: first.body.jobId, separation: null, midi: null });
+      release();
+      await vi.waitFor(async () => {
+        expect((await request(app).get('/api/music-video/mv-1/active-jobs')).body.alignment).toBeNull();
+      });
+    });
+
+    it('fails before a job exists when the project or its lyrics are missing', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [] });
+      const none = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      expect(none.status).toBe(400);
+      expect(none.body.code).toBe('NO_LYRICS');
+      svc.getProject.mockResolvedValue(alignable);
+      const gone = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ cueId: 'lc-gone' });
+      expect(gone.status).toBe(404);
+      expect(alignProjectLyrics).not.toHaveBeenCalled();
+    });
+
+    it('cancels a running job and 404s the stream of an unknown one', async () => {
+      svc.getProject.mockResolvedValue(alignable);
+      let isCancelled;
+      alignProjectLyrics.mockImplementationOnce((_id, opts) => new Promise((_resolve, reject) => {
+        isCancelled = opts.isCancelled;
+        const timer = setInterval(() => {
+          if (opts.isCancelled()) { clearInterval(timer); reject(Object.assign(new Error('cancelled'), { canceled: true })); }
+        }, 5);
+      }));
+      const { body: { jobId } } = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      expect(isCancelled()).toBe(false);
+      const cancel = await request(app).post(`/api/music-video/lyrics/align/${jobId}/cancel`);
+      expect(cancel.body).toEqual({ ok: true });
+      await vi.waitFor(async () => {
+        expect((await request(app).get('/api/music-video/mv-1/active-jobs')).body.alignment).toBeNull();
+      });
+      expect((await request(app).get('/api/music-video/lyrics/align/nope/events')).status).toBe(404);
     });
 
     it('rejects an unknown body and a cue id the schema cannot store', async () => {
