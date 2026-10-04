@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import SuperColliderStage from './SuperColliderStage';
 import * as api from '../../services/api';
+import toast from '../ui/Toast';
+vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 import { useSseProgress } from '../../hooks/useSseProgress';
 
 vi.mock('../../services/api', () => ({
@@ -33,7 +35,7 @@ describe('<SuperColliderStage>', () => {
     api.renderSuperCollider.mockResolvedValue({ jobId: 'job-12345678', position: 1, seed: 7 });
     api.saveSuperColliderTake.mockResolvedValue({ track: { id: 'track-1' }, durationSec: 8 });
   });
-  afterEach(() => cleanup());
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
   it('offers setup, without building, when the runtime is not ready', async () => {
     api.getSuperColliderStatus.mockResolvedValue({ state: 'image-missing', ready: false, message: 'image not built', action: 'Run setup' });
@@ -87,4 +89,16 @@ describe('<SuperColliderStage>', () => {
     expect(screen.queryByText('Save as take')).toBeNull();
     expect(api.saveSuperColliderTake).not.toHaveBeenCalled();
   });
+});
+
+it('does not report readiness when the real setup stream ends without completion', async () => {
+  const { setupSuperCollider } = await import('../../services/apiMusic.js');
+  api.setupSuperCollider.mockImplementation(setupSuperCollider);
+  api.getSuperColliderStatus.mockResolvedValue({ state: 'image-missing', ready: false, message: 'not built' });
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: new ReadableStream({ start(c) { c.close(); } }) }));
+  mount();
+  fireEvent.click(await screen.findByText('Set up SuperCollider'));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+  expect(toast.success).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
 });
