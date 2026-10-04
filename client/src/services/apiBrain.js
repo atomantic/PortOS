@@ -56,12 +56,6 @@ export const updateBrainInboxEntry = (id, capturedText, options = {}) => request
 });
 export const deleteBrainInboxEntry = (id, options = {}) => request(`/brain/inbox/${id}`, { method: 'DELETE', ...options });
 export const markBrainInboxDone = (id, options = {}) => request(`/brain/inbox/${id}/done`, { method: 'POST', ...options });
-// Stamp a batch of creative notes as consumed once their catalog ingest commits.
-export const markBrainInboxSentToCatalog = (ids, options) => request('/brain/inbox/sent-to-catalog', {
-  method: 'POST',
-  body: JSON.stringify({ ids }),
-  ...options
-});
 
 // Brain - People
 export const getBrainPeople = (options = {}) => {

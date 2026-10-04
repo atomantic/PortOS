@@ -52,8 +52,15 @@ export const deriveRoundParts = (id, body = {}, options) =>
 // streams over SSE (subscribe with useSseProgress); the terminal `complete` frame
 // carries the { filename } the caller persists on the reference. Upload/mic
 // capture remain the primary attach paths.
-export const importReferenceAudio = (url, options = {}) =>
-  request('/rounds/reference-audio/import', { method: 'POST', body: JSON.stringify({ url }), ...options });
+// `roundId` + `referenceId` name a SAVED reference: the server then attaches the
+// file to it when the download finishes (the frame reports `attached`), so a
+// reload before Save cannot lose it (#9943). Omit both for an unsaved draft row.
+export const importReferenceAudio = (url, { roundId, referenceId, ...options } = {}) =>
+  request('/rounds/reference-audio/import', {
+    method: 'POST',
+    body: JSON.stringify({ url, ...(roundId && referenceId ? { roundId, referenceId } : {}) }),
+    ...options,
+  });
 
 export const referenceAudioImportEventsUrl = (jobId) =>
   `/api/rounds/reference-audio/import/${enc(jobId)}/events`;

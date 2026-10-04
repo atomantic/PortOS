@@ -33,6 +33,10 @@ export const IMPORT_INTAKE_INITIAL = {
   // then failed — a re-click must skip commitImport entirely and resume at
   // session creation, otherwise it re-creates the already-created issues and
   // overwrites the arc.
+  //
+  // Both flags are a CACHE of the server's import session (#9943), not the
+  // source of truth: a reload loses them, and re-analyzing the same text
+  // re-seeds them from `preview.importSession`.
   committed: false,
 };
 
@@ -78,7 +82,17 @@ export default function useStoryImportIntake(onCreated) {
       },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Analyze failed'); return null; });
-    patch({ analyzing: false, ...(res ? { preview: res } : {}) });
+    if (res?.importSession?.status === 'committed') {
+      toast.info('This manuscript was already imported — Import & build resumes without creating the issues again.');
+    }
+    patch({
+      analyzing: false,
+      ...(res ? {
+        preview: res,
+        committed: res.importSession?.status === 'committed',
+        arcAlreadyPersisted: res.importSession?.status === 'arc-persisted',
+      } : {}),
+    });
   }, [state, patch]);
 
   const retryIssues = useCallback(async () => {
@@ -101,7 +115,8 @@ export default function useStoryImportIntake(onCreated) {
     const { preview: p, contentType, seriesName, universeName, llm, committed, arcAlreadyPersisted } = state;
     if (!p) return;
     const issues = p.issueProposals || [];
-    if (issues.length === 0) { toast.error('No issues were extracted — retry the issue split or adjust the source'); return; }
+    // A committed import needs no issues from this payload — it only resumes.
+    if (!committed && issues.length === 0) { toast.error('No issues were extracted — retry the issue split or adjust the source'); return; }
     patch({ committing: true });
     // Skip commitImport when a prior click already committed (only the later
     // createStorySession failed) — re-running it would duplicate the
@@ -110,7 +125,14 @@ export default function useStoryImportIntake(onCreated) {
       // On an arcAlreadyPersisted retry the server kept arc/seasons/canon from
       // the failed commit, so resend issues only — re-sending the full payload
       // would clobber the persisted state and risk duplicate issues.
-      const base = { universeId: p.universe.id, seriesId: p.series.id, issues, contentType };
+      const base = {
+        universeId: p.universe.id,
+        seriesId: p.series.id,
+        // Server-side session: replays or resumes instead of duplicating (#9943).
+        ...(p.importId ? { importId: p.importId } : {}),
+        issues,
+        contentType,
+      };
       const payload = arcAlreadyPersisted
         ? { ...base, canonSelections: { characters: [], places: [], objects: [] }, arc: null, seasons: [] }
         : {

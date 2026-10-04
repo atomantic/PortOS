@@ -13,6 +13,7 @@ vi.mock('./ytdlpAudioImport.js', () => ({
   downloadAudioToTempMp3: vi.fn(),
   cleanupYtDlpTemp: vi.fn(async () => {}),
 }));
+vi.mock('./rounds.js', () => ({ attachReferenceAudio: vi.fn() }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   ...(await importOriginal()),
   importFileToUploads: vi.fn(async () => ({ filename: 'ab12cd34-Reference_Audio.mp3', sizeBytes: 100 })),
@@ -23,6 +24,7 @@ const { broadcastSse } = await import('../lib/sseUtils.js');
 const { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } = await import('./ytdlpAudioImport.js');
 const { importFileToUploads } = await import('../lib/fileUtils.js');
 const { killWithEscalation } = await import('../lib/killWithEscalation.js');
+const { attachReferenceAudio } = await import('./rounds.js');
 const {
   startReferenceAudioImport, cancelReferenceAudioImport, __testing,
 } = await import('./roundReferenceAudioImport.js');
@@ -66,6 +68,40 @@ describe('startReferenceAudioImport — outcomes', () => {
       expect.anything(),
       expect.objectContaining({ type: 'complete', filename: 'ab12cd34-Reference_Audio.mp3' }),
     );
+  });
+
+  // #9943: the file lands on the saved reference at download time, so a reload
+  // between the download and Save no longer orphans it.
+  describe('attaching to the saved reference', () => {
+    const FILE = 'ab12cd34-Reference_Audio.mp3';
+    const target = { roundId: 'round-1', referenceId: 'ref-1' };
+    const completeFrame = () => broadcastSse.mock.calls.map(([, frame]) => frame).find((f) => f.type === 'complete');
+    beforeEach(() => {
+      downloadAudioToTempMp3.mockResolvedValue({ outcome: 'complete', outPath: '/tmp/x.mp3', title: 'My Clip' });
+    });
+
+    it('attaches the finished file and reports it on the complete frame', async () => {
+      attachReferenceAudio.mockResolvedValue(true);
+      await startReferenceAudioImport('https://example.com/clip', target);
+      await flush();
+      expect(attachReferenceAudio).toHaveBeenCalledWith('round-1', 'ref-1', FILE);
+      expect(completeFrame()).toMatchObject({ filename: FILE, attached: true });
+    });
+
+    it('leaves attaching to the client when no target was given (an unsaved reference)', async () => {
+      await startReferenceAudioImport('https://example.com/clip');
+      await flush();
+      expect(attachReferenceAudio).not.toHaveBeenCalled();
+      expect(completeFrame()).toMatchObject({ filename: FILE, attached: false });
+    });
+
+    it('still completes with the filename when the attach fails', async () => {
+      attachReferenceAudio.mockRejectedValue(new Error('disk full'));
+      await startReferenceAudioImport('https://example.com/clip', target);
+      await flush();
+      expect(completeFrame()).toMatchObject({ filename: FILE, attached: false });
+      expect(broadcastSse).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: 'error' }));
+    });
   });
 
   it('falls back to a default title when yt-dlp reported none', async () => {

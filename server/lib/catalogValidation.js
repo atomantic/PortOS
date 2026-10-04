@@ -430,6 +430,12 @@ export const catalogScrapCommitSchema = z.object({
   relationships: z.array(catalogDraftRelationshipSchema).max(1000).optional(),
   universeRef: z.string().trim().min(1).max(120).optional(),
   role: z.string().trim().min(1).max(64).optional(),
+  // Brain creative-inbox notes this scrap was built from. The commit itself
+  // stamps them consumed (#9943), so a reload between the commit and a
+  // follow-up client call cannot leave them re-sendable. The ids ride the
+  // request rather than the fingerprint: they are bookkeeping about the source
+  // notes, not part of the reviewed submission's identity.
+  creativeNoteIds: z.array(z.string().guid()).min(1).max(200).optional(),
 }).strict().superRefine((body, ctx) => {
   if (body.relationships === undefined) return;
   const ids = new Set();

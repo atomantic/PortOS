@@ -20,6 +20,7 @@ import { assertPublicHttpUrl } from '../lib/safeUrlFetch.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } from './ytdlpAudioImport.js';
+import { attachReferenceAudio } from './rounds.js';
 
 // Reference performances are short clips — bound resource use so a mistyped
 // link to a long archive/livestream can't download + transcode unbounded.
@@ -60,11 +61,17 @@ export function cancelReferenceAudioImport(jobId) {
 /**
  * Kick off a reference-audio download. Returns `{ jobId }` immediately; the
  * download+extract runs detached and streams progress over SSE. Terminal
- * frames: `{ type: 'complete', filename }`, `{ type: 'error', error }`, or
+ * frames: `{ type: 'complete', filename, attached }`, `{ type: 'error', error }`, or
  * `{ type: 'canceled' }`. Throws (before returning a jobId) on an unsafe URL or
  * a missing yt-dlp/ffmpeg binary, so those surface as real HTTP errors.
+ *
+ * Given the round + reference the download is for, the finished file is attached
+ * to that saved reference server-side (#9943) rather than left for the client to
+ * carry until Save — `attached` reports whether that happened. A reference that
+ * is still an unsaved draft has nothing server-side to attach to, so it stays the
+ * client's job (`attached: false`).
  */
-export async function startReferenceAudioImport(url) {
+export async function startReferenceAudioImport(url, { roundId = null, referenceId = null } = {}) {
   // SSRF guard: http(s) only, reject loopback/link-local/metadata AND private
   // LAN hosts (blockPrivate) — yt-dlp fetches the URL itself, so it never
   // reaches our SSRF-guarded fetcher; validate before handing it the URL.
@@ -114,8 +121,17 @@ export async function startReferenceAudioImport(url) {
       const { title, outPath } = result;
       const { filename } = await importFileToUploads(outPath, `${title || 'Reference Audio'}.mp3`);
 
-      console.log(`🎧 Reference-audio import ${shortId(jobId)} complete — ${filename}`);
-      broadcastSse(job, { type: 'complete', filename, title: title || null });
+      // A failed attach must not turn a finished download into an error frame:
+      // the file is in uploads and the client can still attach it on Save.
+      const attached = roundId && referenceId
+        ? await attachReferenceAudio(roundId, referenceId, filename).catch((err) => {
+            console.error(`❌ Reference-audio import ${shortId(jobId)} could not attach ${filename}: ${err?.message || err}`);
+            return false;
+          })
+        : false;
+
+      console.log(`🎧 Reference-audio import ${shortId(jobId)} complete — ${filename}${attached ? ' (attached)' : ''}`);
+      broadcastSse(job, { type: 'complete', filename, title: title || null, attached });
     } catch (err) {
       console.error(`❌ Reference-audio import ${shortId(jobId)} failed: ${err?.message || err}`);
       broadcastSse(job, { type: 'error', error: err?.message || String(err) });

@@ -341,7 +341,9 @@ export default function Importer() {
     }
     setIssueSplitFailed(Boolean(result.issueSplitFailed));
     setIssueSplitError(result.issueSplitError || null);
-    setArcAlreadyPersisted(false);
+    // The server remembers a failed commit's persisted arc across a reload; seed
+    // the retry flag from it rather than assuming a fresh start.
+    setArcAlreadyPersisted(result.importSession?.status === 'arc-persisted');
     setReplaceMode(false);
     // Re-arm the AI-cleanup opt-in off for each fresh analysis — it's
     // off-by-default (one LLM call per issue), so a prior import's choice must
@@ -388,6 +390,9 @@ export default function Importer() {
     const base = {
       universeId: preview.universe.id,
       seriesId: preview.series.id,
+      // Lets the server replay or resume this import instead of duplicating it
+      // after a reload dropped the markers kept above (#9943).
+      ...(preview.importId ? { importId: preview.importId } : {}),
       issues: issuesDraft,
       // Routes the verbatim excerpt to the right stage server-side — a
       // script-form import (comic-script → comicScript, screenplay → teleplay)
@@ -419,7 +424,9 @@ export default function Importer() {
       throw err;
     });
     if (!result) return null;
-    toast.success(`Imported ${result.createdIssueIds.length} issue${result.createdIssueIds.length === 1 ? '' : 's'} into "${result.series.name}"`);
+    toast.success(result.replayed
+      ? `Already imported into "${result.series.name}" — opening it without creating duplicates`
+      : `Imported ${result.createdIssueIds.length} issue${result.createdIssueIds.length === 1 ? '' : 's'} into "${result.series.name}"`);
     if (Array.isArray(result.remappedIssues) && result.remappedIssues.length > 0) {
       const n = result.remappedIssues.length;
       const noun = `${n} issue${n === 1 ? '' : 's'}`;
@@ -866,6 +873,12 @@ function ReviewPanel({
             the pipeline. The verbatim excerpt for each issue lands in{' '}
             <code>{seedStagePath}</code>.
           </p>
+          {preview.importSession?.status === 'committed' && (
+            <p className="text-xs mt-2 text-port-warning flex items-center gap-1.5">
+              <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+              This manuscript was already imported into this series. Commit opens it without creating duplicates.
+            </p>
+          )}
           {preview.isExistingSeries && (
             <label className={`text-xs mt-2 flex items-center gap-2 cursor-pointer ${replaceMode ? 'text-port-error' : 'text-port-text-muted'}`}>
               <input

@@ -593,9 +593,18 @@ const importerIssueEntry = z.object({
   ).optional(),
 }).passthrough();
 
+// The id analyze derives for one manuscript imported into one series (see
+// services/importerSessions.js). Declared here so the wire schema and the
+// session store validate the same shape.
+export const IMPORT_ID_RE = /^imp-[0-9a-f]{32}$/;
+
 export const importerCommitSchema = z.object({
   universeId: z.string().trim().min(1).max(120),
   seriesId: z.string().trim().min(1).max(120),
+  // Optional so older clients keep the unguarded behavior. When sent, the
+  // server's import session decides whether this commit replays, resumes, or
+  // runs fresh (#9943).
+  importId: z.string().regex(IMPORT_ID_RE).optional(),
   canonSelections: z.object({
     characters: z.array(importerCanonEntry).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX).default([]),
     places: z.array(importerCanonEntry).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX).default([]),

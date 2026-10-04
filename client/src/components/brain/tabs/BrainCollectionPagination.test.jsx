@@ -28,7 +28,6 @@ const api = vi.hoisted(() => ({
   updateBrainInboxEntry: vi.fn(),
   deleteBrainInboxEntry: vi.fn(),
   markBrainInboxDone: vi.fn(),
-  markBrainInboxSentToCatalog: vi.fn(),
   getBrainMemories: vi.fn(),
   getBrainMemory: vi.fn(),
   createBrainMemory: vi.fn(),
