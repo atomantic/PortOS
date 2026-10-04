@@ -62,7 +62,7 @@ export function claimOwnershipBinding(task) {
 }
 
 /** A branch a claim run may bind to itself: `claim/…` or slashdo's `next/…`. */
-export function isClaimOwnershipBranch(name) {
+function isClaimOwnershipBranch(name) {
   const branch = String(name ?? '');
   return branch.length <= 200 && /^(claim|next)\/[A-Za-z0-9._/-]+$/.test(branch)
     && !branch.includes('..') && !branch.endsWith('/') && !branch.endsWith('.lock');

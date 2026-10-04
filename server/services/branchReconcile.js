@@ -403,7 +403,7 @@ export function buildActiveOwnerIds(runtimeIds, liveAgents) {
  * @param {{ branch: string, path: string|null, claimOwners?: { agents: object[]|null, readAgents?: () => Promise<object[]> }, sourceWorkspace: string }} input
  * @returns {string|null}
  */
-export function resolveClaimOwnerReason({ branch, path, claimOwners, sourceWorkspace }) {
+function resolveClaimOwnerReason({ branch, path, claimOwners, sourceWorkspace }) {
   if (claimOwners === undefined) return null;
   return claimCheckoutOwnerReason({
     branchName: branch,
