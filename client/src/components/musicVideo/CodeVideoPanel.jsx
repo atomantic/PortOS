@@ -9,11 +9,13 @@ import { prepareAnimationHtml } from '../codeAnimation/CodeAnimationPreview.jsx'
 import { generateMusicVideoCode, getMusicVideoCodeDocument, regenerateMusicVideoCodeSection } from '../../services/apiMusicVideo.js';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const inputCls = 'block w-full rounded border border-port-border bg-port-card px-2 py-1.5 text-sm placeholder-port-text-muted focus:outline-none focus:ring-2 focus:ring-port-accent disabled:opacity-50';
 
 /**
  * Preview and generation for a code-rendered music video (#9076).
- * The selected section is `?section=`. Generation runs only from a click,
- * after the provider and model are shown.
+ * The selected section is `?section=`, bound to a labeled select (#10163).
+ * Generation is gated on storyboard approval with inline reason (#10163).
+ * Sections with generated code are marked in the select (#10163).
  */
 export default function CodeVideoPanel({ project, audioUrl, onProject }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -128,6 +130,24 @@ export default function CodeVideoPanel({ project, audioUrl, onProject }) {
   const providerLabel = selectedProvider?.name || selectedProviderId || 'the active provider';
   const modelLabel = selectedModel ? ` / ${selectedModel}` : '';
 
+  // Compute readiness and generated sections (#10163)
+  const generatedSectionIds = useMemo(
+    () => new Set((project?.composition?.codeVideo?.sections || []).map((s) => s.id)),
+    [project?.composition?.codeVideo?.sections],
+  );
+
+  // Get production readiness from project (server computes this for read endpoints)
+  const productionReadiness = useMemo(() => {
+    if (!project?.productionReview) return null;
+    // Check if storyboard is approved (simple client-side check based on available data)
+    const approvalBasis = project.productionReview.approvals?.storyboard?.basis;
+    const storyboardApproved = !!approvalBasis;
+    return { storyboard: { approved: storyboardApproved } };
+  }, [project?.productionReview]);
+
+  const canGenerate = productionReadiness?.storyboard?.approved ?? false;
+  const generateDisabledReason = !canGenerate ? 'Approve the storyboard first' : null;
+
   const run = async (sectionId) => {
     setBusy(sectionId || 'all');
     const body = { providerId: selectedProviderId || undefined, model: selectedModel || undefined };
@@ -173,15 +193,37 @@ export default function CodeVideoPanel({ project, audioUrl, onProject }) {
         <p className="text-xs text-port-text-muted">
           Generate code video uses {providerLabel}{modelLabel}. Nothing is sent until you click.
         </p>
-        <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || !doc}
+        {sections.length > 0 && (
+          <div>
+            <label htmlFor="mv-code-section" className="block text-xs text-port-text-muted mb-0.5">Section to regenerate</label>
+            <select id="mv-code-section" className={inputCls} value={section?.id || ''}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setSearchParams((prev) => {
+                    const next = new URLSearchParams(prev);
+                    next.set('section', e.target.value);
+                    return next;
+                  }, { replace: true });
+                }
+              }}>
+              {sections.map((sec) => (
+                <option key={sec.id} value={sec.id}>
+                  {sec.label || sec.id}{generatedSectionIds.has(sec.id) ? ' · generated' : ' · default'}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || !doc || !canGenerate}
           onClick={() => run(null)}>
           <Film size={14} /> {busy === 'all' ? 'Generating…' : 'Generate code video'}
         </button>
-        <button type="button" className={buttonCls} disabled={!!busy || !section}
+        <button type="button" className={buttonCls} disabled={!!busy || !section || !canGenerate}
           onClick={() => run(section.id)}>
           <RotateCcw size={14} /> {busy && busy !== 'all' ? 'Regenerating…' : 'Regenerate section'}
         </button>
       </div>
+      {generateDisabledReason && <p className="text-xs text-port-error" role="status">{generateDisabledReason}</p>}
       {error && <p className="text-xs text-port-error" role="alert">{error}</p>}
       <div className="overflow-hidden rounded border border-port-border bg-black" style={{ aspectRatio: doc?.width && doc?.height ? `${doc.width} / ${doc.height}` : '16 / 9', maxHeight: '70vh' }}>
         {srcDoc ? (
