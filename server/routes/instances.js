@@ -489,7 +489,7 @@ router.get('/peers/:id/full-sync-coverage', asyncHandler(async (req, res) => {
 router.get('/peers/:id/query', asyncHandler(async (req, res) => {
   const { path } = validateRequest(querySchema, req.query);
   const result = await instances.queryPeer(req.params.id, path);
-  if (result.error) throw new ServerError(result.error, { status: 502 });
+  if (result.error) throw new ServerError(result.error, { status: result.status ?? 502 });
   res.json(result.data);
 }));
 
