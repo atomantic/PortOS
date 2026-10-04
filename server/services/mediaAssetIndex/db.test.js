@@ -207,7 +207,7 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
     // Pre-seed a stale row that won't be in the injected "disk" set.
     await db.upsertAsset({ mediaKey: `image:${PFX}stale.png`, kind: 'image', ref: `${PFX}stale.png`, data: { filename: `${PFX}stale.png` }, createdAt: '2026-01-01T00:00:00.000Z' });
 
-    await new Promise((r) => setTimeout(r, 10)); // seed's indexed_at must predate reconcile's start
+    await query(`UPDATE media_assets SET indexed_at = NOW() - INTERVAL '1 minute' WHERE ref LIKE $1`, [`${PFX}stale%`]); // seed must predate reconcile's start
     const listGallery = async () => [
       { filename: `${PFX}live1.png`, prompt: 'one', createdAt: '2026-03-01T00:00:00.000Z' },
       { filename: `${PFX}live2.png`, prompt: 'two', createdAt: '2026-03-02T00:00:00.000Z' },
@@ -275,6 +275,8 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
     // SHOULD prune.
     await db.upsertAsset({ mediaKey: `image:${PFX}keep.png`, kind: 'image', ref: `${PFX}keep.png`, data: { filename: `${PFX}keep.png` }, createdAt: '2026-01-01T00:00:00.000Z' });
     await db.upsertAsset({ mediaKey: `video:${PFX}vidstale`, kind: 'video', ref: `${PFX}vidstale`, data: { id: `${PFX}vidstale` }, createdAt: '2026-01-01T00:00:00.000Z' });
+
+    await query(`UPDATE media_assets SET indexed_at = NOW() - INTERVAL '1 minute' WHERE ref LIKE $1`, [`${PFX}%`]);
 
     // Image reader THROWS (simulated transient I/O fault); video reader is fine.
     const listGallery = async () => { throw new Error('EIO: simulated disk fault'); };
