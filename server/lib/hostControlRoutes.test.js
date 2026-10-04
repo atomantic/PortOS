@@ -270,6 +270,41 @@ describe('auxiliary media mutation inventory (#9672)', () => {
 });
 
 
+describe('Pipeline authoring policy (#10068)', () => {
+  const protectedRoutes = [
+    'POST /api/pipeline/series/:id/generate-title-logo',
+    'POST /api/pipeline/issues/:id/stages/:stageId/generate',
+    'POST /api/pipeline/issues/:id/auto-run-text',
+    'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/panels/:panelIndex/refine-prompt',
+    'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/panels/:panelIndex/image-prompts',
+    'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:index/refine-prompt',
+    'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:index/image-prompts',
+    'POST /api/pipeline/issues/:id/stages/:stageId/visual',
+    'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/render',
+    'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/refine-render',
+    'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:sceneIndex/shots/:shotIndex/render',
+  ];
+
+  it('gates each audited operation and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps record CRUD, reads and cancellation open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/pipeline/series/:id'],
+      ['PATCH', '/api/pipeline/series/:id'],
+      ['PATCH', '/api/pipeline/issues/:id'],
+      ['DELETE', '/api/pipeline/issues/:id'],
+      ['POST', '/api/pipeline/issues/:id/auto-run-text/cancel'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
 describe('Music Video agent workflow policy (#9869)', () => {
   it('gates mounted agent workflows and keeps record, cancellation and contained rendering contracts', () => {
     const protectedRoutes = [

@@ -41,10 +41,13 @@
  *     caller text to a caller-chosen provider, so they gate per request
  *     instead: a provider that cannot run tool-free (`toolFreeOneShotArgs` in
  *     lib/providerVendors.js) needs host control.
- *   - pipeline and FableLoom: only autopilot start is gated — with gap filing
- *     or self-improvement on it queues CoS agents. Every other pipeline route
- *     generates text or media through an already-configured provider, the
- *     same as any AI feature; the caller never chooses what runs.
+ *   - pipeline and FableLoom: autopilot start is gated — with gap filing or
+ *     self-improvement on it queues CoS agents — and so are the Pipeline
+ *     text/visual generation operations listed under "Pipeline authoring"
+ *     below (#10068): callers choose the provider, and the staged runner can
+ *     fall back to a CLI/TUI one, so they can launch a tool-capable agent
+ *     against stored creative text. Ordinary record CRUD, reads and
+ *     cancellation stay open.
  *   - notes (#9007): vault add/repoint gated (chooses the host directory
  *     note CRUD reads/writes); note CRUD itself stays open.
  *   - browser: navigate uses the configured browser with its URL/IP guards;
@@ -421,6 +424,23 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/local-llm/persistent-mind-setup/apply',
   'POST /api/local-llm/assessments/agent-benchmark',
   'PUT /api/local-llm/jev/policy',
+
+  // Pipeline authoring (#10068): text, prompt-refinement and visual generation
+  // hand stored creative text to a caller-selected provider that may be, or
+  // fall back to, a CLI/TUI agent, or submit a cloud-agent render job directly.
+  // Gate the whole operation, including API-first requests, before any store
+  // write, run creation, checkpoint or queue submission.
+  'POST /api/pipeline/series/:id/generate-title-logo',
+  'POST /api/pipeline/issues/:id/stages/:stageId/generate',
+  'POST /api/pipeline/issues/:id/auto-run-text',
+  'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/panels/:panelIndex/refine-prompt',
+  'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/panels/:panelIndex/image-prompts',
+  'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:index/refine-prompt',
+  'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:index/image-prompts',
+  'POST /api/pipeline/issues/:id/stages/:stageId/visual',
+  'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/render',
+  'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/refine-render',
+  'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:sceneIndex/shots/:shotIndex/render',
 
   // Autopilots and support requests that queue CoS agents.
   'POST /api/pipeline/series/:id/autopilot/start',
