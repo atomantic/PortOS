@@ -39,7 +39,9 @@ export default function MusicVideoProjectCard({
   onVersionStep,
 }) {
   const [playing, setPlaying] = useState(false);
-  const preview = selectMusicVideoPreview(project);
+  // The index loads bounded summaries (#10169) that carry these derived values; a
+  // full record (just created or forked) still derives them from its own fields.
+  const preview = project.preview || selectMusicVideoPreview(project);
 
   // When preview target changes, stop playing
   useEffect(() => {
@@ -52,16 +54,23 @@ export default function MusicVideoProjectCard({
   });
 
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
-  const scenesWithClips = scenes.filter((s) => s.videoHistoryId).length;
-  const scenesWithFrames = scenes.filter((s) => s.referenceImageId).length;
-  const scenesProgressPct = scenes.length > 0 ? Math.round((scenesWithClips / scenes.length) * 100) : 0;
+  const sceneCount = project.sceneCount ?? scenes.length;
+  const scenesWithClips = project.clipCount ?? scenes.filter((s) => s.videoHistoryId).length;
+  const scenesWithFrames = project.frameCount ?? scenes.filter((s) => s.referenceImageId).length;
+  const scenesProgressPct = sceneCount > 0 ? Math.round((scenesWithClips / sceneCount) * 100) : 0;
 
-  const { current: currentStageId } = deriveStages(project);
+  const currentStageId = project.stage || deriveStages(project).current;
   const currentStageObj = MUSIC_VIDEO_STAGES.find((s) => s.id === currentStageId);
   const stageLabel = currentStageObj?.label || currentStageId;
 
-  const pill = projectRunPill(project);
-  const spend = projectSpend(project);
+  // A summary can't derive attention items, so it carries the run flags instead.
+  const pill = project.preview
+    ? (project.runInterrupted ? { id: 'interrupted', label: 'Interrupted', tone: 'warn' }
+      : project.runAwaiting ? { id: 'needs-you', label: 'Needs you', tone: 'warn' }
+      : (project.runStatus === 'running' || project.status === 'rendering') ? { id: 'running', label: 'Running', tone: 'muted' }
+      : null)
+    : projectRunPill(project);
+  const spend = project.spend || projectSpend(project);
   const audioTitle = trackLabel || project.uploadedAudioFilename || null;
   const conceptText = project.concept?.style || project.concept?.prompt || null;
   const palette = Array.isArray(project.visualSpec?.palette) ? project.visualSpec.palette : [];
@@ -290,7 +299,7 @@ export default function MusicVideoProjectCard({
         <div className="space-y-1 pt-1.5 border-t border-port-border/40 text-[11px]">
           <div className="flex items-center justify-between text-port-text-muted">
             <span>
-              {projectShotSummary(project)}
+              {project.shotSummary || projectShotSummary(project)}
               {scenesWithClips > 0 ? ` · ${scenesWithClips} clip${scenesWithClips === 1 ? '' : 's'}` : ''}
               {scenesWithFrames > 0 && scenesWithClips === 0 ? ` · ${scenesWithFrames} frame${scenesWithFrames === 1 ? '' : 's'}` : ''}
             </span>
@@ -300,7 +309,7 @@ export default function MusicVideoProjectCard({
               </span>
             ) : null}
           </div>
-          {scenes.length > 0 && (
+          {sceneCount > 0 && (
             <div className="h-1 bg-port-bg rounded overflow-hidden">
               <div
                 className="h-full bg-port-accent transition-all duration-300"

@@ -1305,3 +1305,13 @@ export const musicVideoProductionFeedbackSchema = z.object({
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
   feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().max(1024).optional(),
 }).strict();
+
+// GET /api/music-video query (#10169). Passthrough strings, like the other list
+// queries: `parsePagination` clamps `limit`/`offset`, and a malformed `cursor`
+// (an offset the summary page issued) falls back to the first page.
+export const musicVideoProjectListQuerySchema = z.object({
+  summary: z.enum(['1', 'true', '0', 'false']).optional(),
+  limit: z.string().optional(),
+  offset: z.string().optional(),
+  cursor: z.string().max(64).optional(),
+});

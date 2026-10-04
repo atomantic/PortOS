@@ -5,6 +5,14 @@ import { request } from './apiCore.js';
 // request()'s auto-toast with `{ silent: true }` when it owns its own error UI.
 
 export const listMusicVideoProjects = (options = {}) => request('/music-video', options);
+// Bounded, newest-first summary page (#10169) — `{ items, total, nextCursor }`
+// for the index and header picker, never the full project records.
+export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options = {}) => {
+  const query = new URLSearchParams({ summary: '1' });
+  if (limit != null) query.set('limit', String(limit));
+  if (cursor != null) query.set('cursor', String(cursor));
+  return request(`/music-video?${query}`, options);
+};
 export const createMusicVideoProject = (data, options = {}) => request('/music-video', {
   method: 'POST', body: JSON.stringify(data), ...options,
 });

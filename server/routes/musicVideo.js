@@ -11,7 +11,8 @@
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { Router } from 'express';
-import { musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoProjectListQuerySchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema } from '../lib/musicVideoValidation.js';
+import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
@@ -182,6 +183,10 @@ import {
   getCastAndSets,
   presentProjectCastAndSets,
 } from '../services/musicVideo/castAndSetsService.js';
+import {
+  summarizeMusicVideoProject,
+  compareMusicVideoProjectsNewestFirst,
+} from '../lib/musicVideoSummary.js';
 
 const router = Router();
 
@@ -200,15 +205,29 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // Backward-compatible by default: returns the full projects array. When a client
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+// `summary=1` (#10169) swaps each record for its bounded summary projection —
+// newest first, with a `nextCursor` — for the project index and header picker, so
+// they never load every project's scenes, runs and reviews.
 // Both pins are process-local, so only the server can say which stages a restart orphaned.
 const presentProjectForRead = (project) => presentProjectAutonomousRun(presentProjectCastAndSets(project));
 
 router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(musicVideoProjectListQuerySchema, req.query);
   const projects = (await listProjects()).map(presentProjectForRead);
-  if (!isPaginationRequested(req.query)) {
+  if (query.summary === '1' || query.summary === 'true') {
+    const summaries = projects.sort(compareMusicVideoProjectsNewestFirst)
+      .map((project) => summarizeMusicVideoProject(project, productionReadiness(project)));
+    // The cursor is the next page's offset; `cursor` wins over `offset`.
+    const cursor = parseInt(query.cursor, 10);
+    const page = paginateArray(summaries, Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
+      { defaultLimit: 50, maxLimit: 500 });
+    const next = page.offset + page.items.length;
+    return res.json({ ...page, nextCursor: next < page.total ? String(next) : null });
+  }
+  if (!isPaginationRequested(query)) {
     return res.json(projects);
   }
-  res.json(paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(projects, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {

@@ -282,7 +282,6 @@ const UNVALIDATED_QUERY_BASELINE = [
   'routes/moltworldTools.js GET /status',
   'routes/moodBoard.js GET /',
   'routes/music.js POST /setup/runtime-install',
-  'routes/musicVideo.js GET /',
   'routes/notifications.js GET /',
   'routes/openclaw.js GET /sessions/:id/messages',
   'routes/peerSync.js GET /cos-agent-archive',

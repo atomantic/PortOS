@@ -38,6 +38,28 @@ const BASE_PROJECT = {
 };
 
 describe('MusicVideoProjectCard', () => {
+  it('renders a bounded summary (no scenes/runs) the same as a full record (#10169)', () => {
+    const { scenes, ...rest } = BASE_PROJECT;
+    const summary = {
+      ...rest,
+      audioAnalysis: { bpm: 128 },
+      midiTranscription: true,
+      stage: 'board',
+      spend: { spentUsd: 1.5, capUsd: 5 },
+      shotSummary: '2 scenes',
+      sceneCount: 2,
+      clipCount: 1,
+      frameCount: 2,
+      preview: { kind: 'none', label: 'No render yet' },
+    };
+    render(<MusicVideoProjectCard project={summary} onSelect={vi.fn()} />);
+    expect(screen.getByText('Board')).toBeInTheDocument();
+    expect(screen.getByText('128 BPM')).toBeInTheDocument();
+    expect(screen.getByText(/2 scenes · 1 clip/)).toBeInTheDocument();
+    expect(screen.getByTitle('50% clips rendered')).toBeInTheDocument();
+    expect(screen.getByText(/\$1\.50/)).toBeInTheDocument();
+  });
+
   it('renders richly detailed metadata and configuration options', () => {
     const onSelect = vi.fn();
     render(
