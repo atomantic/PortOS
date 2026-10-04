@@ -1,17 +1,16 @@
 import { Film, Music, Activity, Image as ImageIcon, Video, Wand2 } from 'lucide-react';
-import RecordRenderPinRow from '../imageGen/RecordRenderPinRow.jsx';
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
-import VideoRenderSettings from './VideoRenderSettings.jsx';
 import { isLayeredComposition, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { compositionDraft, RENDER_STYLES } from './compositionDraft.js';
+import { projectServicesSummary } from '../../lib/musicVideoStages.js';
 
 /**
  * The board-level actions the old single toolbar carried, split by the stage
  * that owns them: analyze + MIDI (Setup), AI plan + auto-arrange (Board), the
- * frame/clip generators and their render pins (Produce), the render style
- * (Compose) and the final render (Review). Each group takes the page's hook
- * slots (`midi`, `videoSettings`, `sceneMedia`, `renderJob`) and the
- * page-owned in-flight flags in `busy`.
+ * frame/clip generators (Produce) and the final render (Review). The render
+ * style select and the render pins are project options, edited in Setup. Each
+ * group takes the page's hook slots (`midi`, `videoSettings`, `sceneMedia`,
+ * `renderJob`) and the page-owned in-flight flags in `busy`.
  */
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -82,8 +81,11 @@ export function PlanActions({ project, busy, onPlan, onAutoArrange }) {
   );
 }
 
-/** The frame renderer pin, the scene-video renderer, and the batch generators. */
-export function GenerationActions({ project, videoSettings, sceneMedia }) {
+/**
+ * The batch generators, with the image and video services they render on (a
+ * project option, edited in Setup › Project options; `onEditServices` goes there).
+ */
+export function GenerationActions({ project, videoSettings, sceneMedia, onEditServices }) {
   const scenes = project.scenes || [];
   const sceneCount = scenes.length;
   // #8985: in a composed render a still needs only its frame and a title card
@@ -105,14 +107,12 @@ export function GenerationActions({ project, videoSettings, sceneMedia }) {
   const footageBlocked = codeMode ? 'This render style draws its own scene and does not generate footage' : '';
   return (
     <div className={groupCls}>
-      <RecordRenderPinRow
-        idPrefix="mv-frame-pin"
-        label="Frames"
-        imageMode={project.imageMode ?? null}
-        imageModelId={project.imageModelId ?? null}
-        onChange={videoSettings.changeFramePin}
-      />
-      <VideoRenderSettings videoSettings={videoSettings} generating={generatingVideos} />
+      <span className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-port-text-muted">
+        {projectServicesSummary(project)}
+        {onEditServices && (
+          <button type="button" onClick={onEditServices} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">Change in Setup</button>
+        )}
+      </span>
       <button
         onClick={sceneMedia.generateMissingFrames}
         disabled={codeMode || videoSettings.framePinSaving || sceneCount === 0 || missingFrameCount === 0 || generatingFrames}

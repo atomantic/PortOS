@@ -65,6 +65,7 @@ import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCar
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
+import StageChecklist from '../components/musicVideo/StageChecklist.jsx';
 import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
 import BoardStage from '../components/musicVideo/stages/BoardStage.jsx';
 import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
@@ -82,7 +83,7 @@ import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import {
-  productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam,
+  productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist,
 } from '../lib/musicVideoStages.js';
 import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
@@ -924,6 +925,9 @@ export default function MusicVideo() {
     saveCompositionGrade: (patch) => saveProjectFields(patch, { applyComposition: true }),
     saveVisualSpec,
     saveAutomation,
+    saveMediaMode: (mediaMode) => updateMusicVideoProject(selected.id, { mediaMode }, { silent: true })
+      .then((project) => patchProject(project.id, { mediaMode: project.mediaMode, updatedAt: project.updatedAt }))
+      .catch((err) => toast.error(err?.message || 'Failed to save the media mode')),
     saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
@@ -961,6 +965,7 @@ export default function MusicVideo() {
     commitSceneTiming,
     approveCastAndSets,
     skipCastAndSets,
+    goToStage,
     openArtifact,
     openPreview,
     openContactSheet: () => setContactSheetOpen(true),
@@ -1277,6 +1282,11 @@ export default function MusicVideo() {
               </StageSection>
             </div>}
           >
+            <StageChecklist
+              items={stageChecklist(activeStage, selected, productionReview.readiness)}
+              onAction={(action) => goToStage(activeStage, action.anchor)}
+              headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
+            />
             <StageView key={selected.id} board={board} />
           </MusicVideoLayout>
         )}
