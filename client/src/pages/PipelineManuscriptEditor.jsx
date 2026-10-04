@@ -593,8 +593,19 @@ export default function PipelineManuscriptEditor() {
   //   adoptSectionResult  — the server's text becomes the saved baseline; it
   //     replaces the editable buffer only if that buffer is still exactly what
   //     the mutation started from. A newer draft is kept (dirty against the new
-  //     baseline) and is NOT auto-saved over the server change.
+  //     baseline) and is NOT auto-saved over the server change — so a kept draft
+  //     also blocks the next mutation on its section until the writer has dealt
+  //     with it, because settling it first would save it over that change.
+  const retainedDrafts = useRef(new Set());
   const beginSectionMutation = async (keys = null) => {
+    for (const key of [...retainedDrafts.current]) {
+      const live = liveSectionsRef.current.find((s) => baselineKey(s) === key);
+      if (!live || !isSectionDirty(baselineRef.current, live)) retainedDrafts.current.delete(key);
+      else if (!keys || keys.includes(key)) {
+        toast('Not applied — review and save your kept draft first; this action would otherwise save it over the earlier server change');
+        return null;
+      }
+    }
     if (!(await flushPendingSectionSaves(keys))) {
       toast('Not applied — your unsaved edit could not be saved first');
       return null;
@@ -610,9 +621,11 @@ export default function PipelineManuscriptEditor() {
       || (snapshot?.has(key) && snapshot.get(key) !== live.content));
     setBaseline(key, content);
     if (retain) {
+      retainedDrafts.current.add(key);
       patchSection(issueId, { versions });
       return true;
     }
+    retainedDrafts.current.delete(key);
     patchSection(issueId, { content, versions });
     setSaveState((prev) => ({ ...prev, [issueId]: 'saved' }));
     return false;

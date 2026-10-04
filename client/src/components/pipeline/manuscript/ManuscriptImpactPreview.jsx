@@ -98,11 +98,12 @@ export default function ManuscriptImpactPreview({ open, onClose, seriesId, secti
     for (const target of targets) {
       // Settle + snapshot the touched sections per member: a draft typed while an
       // earlier member was in flight is saved first, and a keystroke typed during
-      // this one survives its response (#9954). A save failure stops the batch.
+      // this one survives its response (#9954). A failed save, or a draft kept
+      // over an earlier member's change, stops the batch.
       const snapshot = onBeginMutation ? await onBeginMutation(sectionKeysOf(target.edits)) : undefined;
       if (!mountedRef.current) return;
       if (snapshot === null) {
-        errors.push('an unsaved edit could not be saved first');
+        errors.push('a section has an unsaved or kept draft to resolve first');
         break;
       }
       const result = await acceptPipelineManuscriptFix(seriesId, target.comment.id, { edits: target.edits }, { silent: true })

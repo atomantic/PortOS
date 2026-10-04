@@ -866,14 +866,39 @@ describe('PipelineManuscriptEditor — mutation responses vs newer edits (#9954)
     expect(dirtyBadge()).not.toBeInTheDocument();
   });
 
+  it('does not auto-save a kept draft over the server change: the next revert is blocked until it is saved', async () => {
+    const restore = mockRestore();
+    api.savePipelineManuscriptSection.mockResolvedValue({
+      section: section(`${BASE} More.`, { versions: [{ runId: 'v1', createdAt: 't' }] }),
+    });
+    const toast = (await import('../components/ui/Toast')).default;
+    renderEditor();
+    const ta = await screen.findByDisplayValue(BASE);
+    await openVersionsAndRevert();
+    await waitFor(() => expect(api.restorePipelineStageVersion).toHaveBeenCalled());
+    fireEvent.change(ta, { target: { value: `${BASE} More.` } });
+    await act(async () => { restore.resolveWith(); });
+    api.restorePipelineStageVersion.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Revert/ }));
+    await act(async () => {});
+    expect(api.restorePipelineStageVersion).not.toHaveBeenCalled();
+    expect(api.savePipelineManuscriptSection).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/kept draft/));
+
+    // Once the writer saves it themselves the block lifts.
+    fireEvent.blur(ta);
+    await waitFor(() => expect(dirtyBadge()).not.toBeInTheDocument());
+    mockRestore();
+    fireEvent.click(screen.getByRole('button', { name: /Revert/ }));
+    await waitFor(() => expect(api.restorePipelineStageVersion).toHaveBeenCalled());
+  });
+
   it('saves an unblurred draft before reverting, and aborts the revert when that save fails', async () => {
     api.savePipelineManuscriptSection.mockRejectedValue(new Error('disk full'));
     renderEditor();
     const ta = await screen.findByDisplayValue(BASE);
-    await openVersionsAndRevert();
-    await act(async () => {});
-    // First click above ran with a clean buffer; make a draft, then retry.
-    api.restorePipelineStageVersion.mockClear();
+    fireEvent.click(await screen.findByTitle('Show prior saved versions'));
     fireEvent.change(ta, { target: { value: `${BASE} Draft.` } });
     fireEvent.click(screen.getByRole('button', { name: /Revert/ }));
 
