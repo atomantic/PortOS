@@ -144,6 +144,8 @@ describe('Error Detection', () => {
     it.each([
       ['prose about reaching a personal limit', 'He had hit your limit of patience, the narrator wrote.'],
       ['prose naming an unrelated limit', 'The hero hit your father with a limit break attack'],
+      ['a tool call limit in a tool log', "Error: you hit your tool call limit for this turn"],
+      ['a context window limit in file content', 'if (used > max) throw new Error("hit your context window limit")'],
     ])('does not classify %s as a usage limit', (_label, text) => {
       expect(analyzeError(text, 1).category).not.toBe(ERROR_CATEGORIES.USAGE_LIMIT);
     });
@@ -879,6 +881,14 @@ describe('Error Detection', () => {
       ['minutes', 'Rate limit resets 5 minutes from now', '5 minutes'],
       ['hours', 'limit resets 3 hours from now', '3 hours'],
     ])('reads a duration in %s off "resets" as a duration, not a clock time', (_label, text, expected) => {
+      expect(extractWaitTime(text)).toBe(expected);
+    });
+
+    // The clock must not cross a line for its zone, nor take `am` out of a word.
+    it.each([
+      ['a zone on the next TUI line', 'resets 12:40am\n(see docs)', '12:40am'],
+      ['a meridiem prefix of a longer word', 'resets 5 amounts', null],
+    ])('does not over-capture %s', (_label, text, expected) => {
       expect(extractWaitTime(text)).toBe(expected);
     });
 
