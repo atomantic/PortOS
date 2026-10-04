@@ -148,7 +148,7 @@ function sweep() {
   for (const map of [preflights, plans]) for (const [id, value] of map) if (value.expiresAt <= now) map.delete(id);
 }
 
-export function signPeerAdmin(peer, purpose, payload) {
+function signPeerAdmin(peer, purpose, payload) {
   return createHmac('sha256', peer.syncSecret).update(`portos-peer-admin:v1:${purpose}:${JSON.stringify(payload)}`).digest('hex');
 }
 export const verifyPeerAdminSignature = (peer, purpose, payload, signature) => sameSecret(signPeerAdmin(peer, purpose, payload), signature);

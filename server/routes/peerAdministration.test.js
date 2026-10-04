@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import express from 'express';
@@ -33,7 +33,9 @@ const { default: receiver } = await import('./peerAdministration.js');
 const { default: peerAdminOperatorRoutes } = await import('./peerAdminOperator.js');
 const { errorMiddleware } = await import('../lib/errorHandler.js');
 const { derivePeerAuthToken, peerFetch } = await import('../lib/peerHttpClient.js');
-const { signPeerAdmin } = await import('../services/peerAdministration.js');
+// Fixture peers sign the wire envelope independently of the receiving service.
+const signPeerAdmin = (peer, purpose, payload) => createHmac('sha256', peer.syncSecret)
+  .update(`portos-peer-admin:v1:${purpose}:${JSON.stringify(payload)}`).digest('hex');
 
 const ROOT = '/api/federation/admin/v1';
 let identity;
