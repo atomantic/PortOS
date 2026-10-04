@@ -2238,7 +2238,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       imported: [{ sceneId: 's1', takeId: 't-mj', kind: 'image', assetId: 'upload-0001.png', originalName: 'S01-s1-harbor.png' }],
       skipped: [],
     });
-    await openProject(SPEC_PROJECT, 'review');
+    await openProject(SPEC_PROJECT, 'produce');
 
     const file = new File(['png-bytes'], 'S01-s1-harbor.png', { type: 'image/png' });
     fireEvent.change(screen.getByLabelText('Import generated files'), { target: { files: [file] } });
@@ -2255,7 +2255,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
 
   it('downloads the ZIP handoff bundle from Export bundle (#8978)', async () => {
     getMusicVideoHandoffBundle.mockResolvedValueOnce(new ArrayBuffer(8));
-    await openProject(SPEC_PROJECT, 'review');
+    await openProject(SPEC_PROJECT, 'produce');
     fireEvent.click(await screen.findByRole('button', { name: /^Export bundle$/ }));
     await waitFor(() => expect(getMusicVideoHandoffBundle).toHaveBeenCalledWith('mv-spec', { silent: true }));
     await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(

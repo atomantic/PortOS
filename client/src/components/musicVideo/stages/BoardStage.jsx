@@ -1,5 +1,6 @@
 import { Plus } from 'lucide-react';
 import BeatTimeline from '../BeatTimeline.jsx';
+import ContactSheetButton from '../ContactSheetButton.jsx';
 import SceneCard from '../SceneCard.jsx';
 import { PlanActions } from '../ProjectActionGroups.jsx';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
@@ -39,9 +40,12 @@ export default function BoardStage({ board }) {
 
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium">Scene board</h3>
-        <button onClick={board.onAddScene} className="flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-2 py-1.5 text-sm text-white sm:min-h-0">
-          <Plus size={15} /> Add scene
-        </button>
+        <div className="flex items-center gap-2">
+          <ContactSheetButton onOpen={board.openContactSheet} />
+          <button onClick={board.onAddScene} className="flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-2 py-1.5 text-sm text-white sm:min-h-0">
+            <Plus size={15} /> Add scene
+          </button>
+        </div>
       </div>
 
       {scenes.length === 0 && <p className="text-sm text-port-text-muted">No scenes yet — add one to start the board.</p>}
