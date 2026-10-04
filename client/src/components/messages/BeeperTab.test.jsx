@@ -491,15 +491,13 @@ describe('the pinned grid is Beeper’s own isPinned, mirrored', () => {
   });
 });
 
-describe('deferred controls render inert rather than absent', () => {
-  it('disables Requests, Later, add-scope and the overflow menu, each saying it is not available yet', async () => {
+describe('unimplemented controls are absent rather than inert', () => {
+  it('renders no Requests, Later, add-scope, overflow, search or new-conversation control', async () => {
     renderTab();
     await screen.findByText('Nothing here');
 
-    for (const label of ['Requests', 'Later', 'Add scope', 'More scope options']) {
-      const control = screen.getByRole('button', { name: label });
-      expect(control).toBeDisabled();
-      expect(control).toHaveAttribute('title', `${label} — not available yet`);
+    for (const label of ['Requests', 'Later', 'Add scope', 'More scope options', 'Search conversations', 'New conversation']) {
+      expect(screen.queryByRole('button', { name: label })).toBeNull();
     }
   });
 

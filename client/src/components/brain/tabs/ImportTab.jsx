@@ -17,7 +17,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import { formatBytes, formatCount, formatDateShort } from '../../../utils/formatters';
 import FilePickerButton from '../../ui/FilePickerButton';
 
-// Sources we plan to support. Only `available` ones are clickable.
+// Import sources. `available` ones run a wizard here; `see-other` ones link to the page that hosts the importer.
 const SOURCES = [
   {
     id: 'chatgpt',
@@ -26,24 +26,28 @@ const SOURCES = [
     status: 'available'
   },
   {
-    id: 'claude',
-    label: 'Claude',
-    blurb: 'Coming soon — claude.ai conversations',
-    status: 'coming-soon'
-  },
-  {
-    id: 'notion',
-    label: 'Notion',
-    blurb: 'Coming soon — pages and databases',
-    status: 'coming-soon'
-  },
-  {
     id: 'obsidian',
     label: 'Obsidian',
     blurb: 'Already supported via Brain → Notes',
     status: 'see-other',
     href: '/brain/notes'
-  }
+  },
+  // The bulk-history importers live on the Timeline page (Import history).
+  ...[
+    ['gmail', 'Gmail', 'Mailbox (.mbox) exports from Google Takeout'],
+    ['spotify', 'Spotify', 'Streaming history export'],
+    ['location', 'Google location history', 'Takeout location history'],
+    ['discord', 'Discord', 'Data package message history'],
+    ['whatsapp', 'WhatsApp', 'Exported chat transcripts'],
+    ['browser', 'Browser history', 'Visited pages from your browser'],
+    ['youtube', 'YouTube', 'Watch history from Google Takeout']
+  ].map(([id, label, blurb]) => ({
+    id,
+    label,
+    blurb: `${blurb} — imported on the Timeline`,
+    status: 'see-other',
+    href: '/timeline'
+  }))
 ];
 
 const STEPS = [
@@ -94,21 +98,17 @@ function SourcePicker({ onPick, navigate }) {
             <button
               key={s.id}
               onClick={onClick}
-              disabled={!available && !seeOther}
               className={`text-left p-4 rounded-lg border transition-colors min-h-[80px] flex flex-col justify-between
                 ${available
                   ? 'bg-port-card border-port-border hover:border-port-accent hover:bg-port-card/70'
                   : seeOther
                     ? 'bg-port-card border-port-border hover:border-port-accent/50'
-                    : 'bg-port-card/50 border-port-border opacity-60 cursor-not-allowed'}`}
+                    : 'bg-port-card border-port-border'}`}
             >
               <div className="flex items-center justify-between">
                 <span className="font-medium text-white">{s.label}</span>
                 {available && (
                   <span className="text-xs px-2 py-0.5 rounded bg-port-accent/20 text-port-accent">Available</span>
-                )}
-                {s.status === 'coming-soon' && (
-                  <span className="text-xs px-2 py-0.5 rounded bg-port-warning/20 text-port-warning">Soon</span>
                 )}
                 {seeOther && (
                   <ExternalLink size={14} className="text-gray-400" aria-hidden="true" />
