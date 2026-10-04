@@ -22,21 +22,64 @@ import { xAdapter } from './x.js';
 import { redditAdapter } from './reddit.js';
 import { stackerNewsAdapter } from './stackerNews.js';
 import { sunoAdapter } from './suno.js';
+import { musicVideoEvents } from '../events.js';
 
 export const PUBLISH_ADAPTERS = Object.freeze({
   youtube: youtubeAdapter, shorts: shortsAdapter, tiktok: tiktokAdapter, instagram: instagramAdapter,
   x: xAdapter, reddit: redditAdapter, stackerNews: stackerNewsAdapter, suno: sunoAdapter,
 });
-const DRAFT_TTL_MS = 30 * 60 * 1000;
+// The tab stays open past this: the human publishes from it. After the TTL only
+// the CDP session is dropped; the tab closes on Discard, Fill again, or by hand.
+const DRAFT_DETACH_MS = 30 * 60 * 1000;
 const drafts = new Map();
 
-const draftError = (message) => new ServerError(message, { status: 409, code: 'PUBLISH_DRAFT_MISSING' });
+const draftPresentation = (draft) => ({
+  draftId: draft.id, projectId: draft.projectId, target: draft.target, summary: draft.summary,
+  screenshot: draft.screenshot, state: draft.state, createdAt: draft.createdAt, manualPublication: true,
+});
+const emitDraft = (draft, state = draft.state) => musicVideoEvents.emit('publish-draft', {
+  projectId: draft.projectId, draftId: draft.id, target: draft.target, state,
+});
 
-async function closeDraft(draft) {
+/** Drop the CDP session only (the PortOS Browser and the tab keep running). */
+async function detachDraft(draft) {
+  clearTimeout(draft.timer);
+  const { browser, page } = draft;
+  if (page && !page.isClosed()) draft.url = page.url(); // the tab may have moved on while the human worked
+  draft.browser = null;
+  draft.page = null;
+  await browser?.close().catch(() => {});
+}
+
+/** Whether the draft's tab is still open, reconnecting (never launching) when the session was dropped. */
+async function findDraftPage(draft, deps = {}) {
+  if (draft.page) return draft.page.isClosed() ? null : draft.page;
+  let session;
+  try { session = await (deps.connect || connectPortosBrowser)({ launch: false }); } catch { return null; }
+  const page = session.context.pages().find((candidate) => candidate.url() === draft.url) || null;
+  draft.reconnect = session;
+  return page;
+}
+
+/** Re-check a detached draft's tab; mark it closed (and tell the UI) when it is gone. */
+async function refreshDraft(draft, deps) {
+  if (draft.state === 'closed') return;
+  const page = await findDraftPage(draft, deps);
+  const session = draft.reconnect;
+  draft.reconnect = null;
+  await session?.browser.close().catch(() => {});
+  if (!page) { draft.state = 'closed'; emitDraft(draft); }
+}
+
+async function closeDraft(draft, deps) {
   drafts.delete(draft.id);
   clearTimeout(draft.timer);
-  await draft.page?.close().catch(() => {});
-  await draft.browser?.close().catch(() => {}); // disconnects; the PortOS Browser keeps running
+  const page = await findDraftPage(draft, deps);
+  await page?.close().catch(() => {});
+  const session = draft.reconnect || { browser: draft.browser };
+  draft.reconnect = null;
+  await session.browser?.close().catch(() => {}); // disconnects; the PortOS Browser keeps running
+  emitDraft(draft, 'discarded');
 }
 
 const DIRS = { videos: () => PATHS.videos, videoThumbnails: () => PATHS.videoThumbnails };
@@ -83,7 +126,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   let payload = resolveFiles(buildPublishPayload(target, project, options));
   payload = await withCovers(target, payload, deps);
-  for (const draft of [...drafts.values()]) if (draft.projectId === projectId && draft.target === target) await closeDraft(draft);
+  for (const draft of [...drafts.values()]) if (draft.projectId === projectId && draft.target === target) await closeDraft(draft, deps);
   return serialize(async () => {
     const { browser, context } = await (deps.connect || connectPortosBrowser)();
     const page = await context.newPage();
@@ -94,12 +137,15 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       assertAccount(platforms, target, summary?.account);
       const shot = await page.screenshot({ type: 'jpeg', quality: 70 }).catch(() => null);
       const id = `mvpub-${randomUUID()}`;
-      const draft = { id, projectId, target, payload, page, browser, summary, createdAt: Date.now() };
-      draft.timer = setTimeout(() => { closeDraft(draft).catch(() => {}); }, DRAFT_TTL_MS);
+      const screenshot = shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null;
+      const draft = { id, projectId, target, payload, page, browser, summary, screenshot, url: page.url(), state: 'open', createdAt: Date.now() };
+      draft.timer = setTimeout(() => { detachDraft(draft).catch(() => {}); }, DRAFT_DETACH_MS);
       draft.timer.unref?.();
+      page.once?.('close', () => { if (draft.page === page && draft.state === 'open' && drafts.has(id)) { draft.state = 'closed'; emitDraft(draft); } });
       drafts.set(id, draft);
+      emitDraft(draft);
       console.log(`📝 ${adapter.label} draft filled for music-video ${projectId.slice(0, 8)} [${id.slice(6, 14)}]`);
-      return { draftId: id, target, summary, manualPublication: true, screenshot: shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null };
+      return draftPresentation(draft);
     } catch (err) {
       await page.close().catch(() => {});
       await browser.close().catch(() => {});
@@ -109,11 +155,18 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
 }
 
 /** Close a draft without posting it. */
-export async function discardPublishDraft(projectId, draftId) {
+export async function discardPublishDraft(projectId, draftId, deps = {}) {
   const draft = drafts.get(draftId);
   if (!draft || draft.projectId !== projectId) return false;
-  await closeDraft(draft);
+  await closeDraft(draft, deps);
   return true;
+}
+
+/** A project's live drafts, each with whether its tab is still open (so a reloaded card can rehydrate). */
+export async function listPublishDrafts(projectId, deps = {}) {
+  const mine = [...drafts.values()].filter((draft) => draft.projectId === projectId);
+  await Promise.all(mine.filter((draft) => !draft.page).map((draft) => refreshDraft(draft, deps)));
+  return mine.map(draftPresentation);
 }
 
 /** Record or update one platform's post by hand: its link, reception (good/mixed/poor) and notes. */

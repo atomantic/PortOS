@@ -118,7 +118,7 @@ import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender }
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
-import { preparePublishDraft, discardPublishDraft, recordPublishPost } from '../services/musicVideo/publish/index.js';
+import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import {
   getDependencyImpact,
@@ -772,6 +772,10 @@ router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {
   const { password: _password, ...body } = req.body || {};
   const options = validateRequest(musicVideoPublishPrepareSchema, body);
   res.json(await preparePublishDraft(req.params.id, target, options));
+}));
+
+router.get('/:id/publish/drafts', asyncHandler(async (req, res) => {
+  res.json({ drafts: await listPublishDrafts(req.params.id) });
 }));
 
 router.delete('/:id/publish/drafts/:draftId', asyncHandler(async (req, res) => {

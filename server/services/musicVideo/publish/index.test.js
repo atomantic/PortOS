@@ -14,7 +14,8 @@ vi.mock('../../../lib/paths.js', async (importOriginal) => makePathsProxy(await 
 
 const { PATHS } = await import('../../../lib/paths.js');
 const projects = await import('../projects.js');
-const { preparePublishDraft, discardPublishDraft, recordPublishPost } = await import('./index.js');
+const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost } = await import('./index.js');
+const { musicVideoEvents } = await import('../events.js');
 
 const platforms = { stackerNews: { enabled: true, account: null }, youtube: { enabled: true, account: null }, x: { enabled: true, account: 'antic' } };
 
@@ -22,17 +23,30 @@ afterAll(() => cleanupTempDataRoots());
 
 function fakeBrowser() {
   const pages = [];
-  const connect = vi.fn(async () => ({
-    browser: { close: vi.fn(async () => {}) },
-    context: {
-      newPage: async () => {
-        const page = { closed: false, bringToFront: vi.fn(async () => {}), screenshot: vi.fn(async () => Buffer.from('jpg')), isClosed() { return this.closed; }, close: vi.fn(async function close() { page.closed = true; }) };
-        pages.push(page);
-        return page;
+  const browsers = [];
+  const connect = vi.fn(async () => {
+    const browser = { close: vi.fn(async () => {}) };
+    browsers.push(browser);
+    return {
+      browser,
+      context: {
+        pages: () => pages.filter((page) => !page.closed),
+        newPage: async () => {
+          const handlers = [];
+          const page = {
+            closed: false, bringToFront: vi.fn(async () => {}), screenshot: vi.fn(async () => Buffer.from('jpg')),
+            url: () => `https://example.com/post/${pages.indexOf(page)}`,
+            once: (_event, fn) => handlers.push(fn),
+            isClosed() { return this.closed; },
+            close: vi.fn(async function close() { page.closed = true; handlers.forEach((fn) => fn()); }),
+          };
+          pages.push(page);
+          return page;
+        },
       },
-    },
-  }));
-  return { connect, pages };
+    };
+  });
+  return { connect, pages, browsers };
 }
 
 const adapter = (over = {}) => ({
@@ -75,6 +89,47 @@ describe('publish drafts (#9282)', () => {
     expect(await discardPublishDraft(id, second.draftId)).toBe(true);
     expect(pages[1].closed).toBe(true);
     expect(await discardPublishDraft(id, second.draftId)).toBe(false);
+  });
+
+  it('keeps the filled tab open past the TTL, lists it for a reloaded card, and reports a hand-closed tab', async () => {
+    vi.useFakeTimers();
+    try {
+      const id = await readyProject();
+      const { connect, pages, browsers } = fakeBrowser();
+      const events = [];
+      const onEvent = (e) => events.push(e);
+      musicVideoEvents.on('publish-draft', onEvent);
+      const draft = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters: { stackerNews: adapter() }, platforms });
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+      expect(pages[0].closed).toBe(false);
+      expect(browsers[0].close).toHaveBeenCalled(); // CDP session dropped
+
+      expect(await listPublishDrafts(id, { connect })).toMatchObject([{ draftId: draft.draftId, state: 'open', summary: { title: 'Song' } }]);
+      expect(await listPublishDrafts('other-project', { connect })).toEqual([]);
+
+      pages[0].closed = true; // the human closed the tab
+      expect(await listPublishDrafts(id, { connect })).toMatchObject([{ draftId: draft.draftId, state: 'closed' }]);
+      expect(events.at(-1)).toMatchObject({ draftId: draft.draftId, state: 'closed' });
+      expect(await discardPublishDraft(id, draft.draftId, { connect })).toBe(true);
+      expect(events.at(-1)).toMatchObject({ state: 'discarded' });
+      musicVideoEvents.off('publish-draft', onEvent);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('discards a detached draft by closing its still-open tab', async () => {
+    vi.useFakeTimers();
+    try {
+      const id = await readyProject();
+      const { connect, pages } = fakeBrowser();
+      const draft = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters: { stackerNews: adapter() }, platforms });
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+      expect(await discardPublishDraft(id, draft.draftId, { connect })).toBe(true);
+      expect(pages[0].closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('closes the tab and surfaces the adapter\'s error when a fill fails', async () => {
