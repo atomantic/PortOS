@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, realpathSync } from 'fs';
 import { mkdir, open, readFile, rm, symlink, unlink, writeFile } from 'fs/promises';
-import { join, relative } from 'path';
+import { join, relative, resolve } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { materializeGitRepo, resetGitWorktreeSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -18,11 +18,17 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await im
   dataRoot: () => lazyTempDataRoot('portos-external-cleanup-'),
 }));
 const fault = vi.hoisted(() => ({ command: null, cwd: null, successfulMatches: 0, pathAlias: null, aliasTarget: null, registrationPath: null, calls: [] }));
+// Git reports POSIX separators (and possibly a different case/alias spelling)
+// on Windows, so an exact string match would silently skip the injected fault.
+const sameDir = (a, b) => {
+  const norm = (p) => { const r = resolve(p).replace(/\\/g, '/'); return process.platform === 'win32' ? r.toLowerCase() : r; };
+  return norm(a) === norm(b);
+};
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
     fault.calls.push({ args, cwd });
-    if (args[0] === fault.command && (!fault.cwd || cwd === fault.cwd)) {
+    if (args[0] === fault.command && (!fault.cwd || sameDir(cwd, fault.cwd))) {
       if (fault.successfulMatches > 0) {
         fault.successfulMatches--;
         return actual.execGit(args, cwd, options);
