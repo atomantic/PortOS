@@ -97,9 +97,23 @@ describe('server dead exports', () => {
     expect([...addedExportNamesFromDiff(diff)]).toEqual(['brandNew']);
   });
 
+  it('reports a newly introduced orphan export against candidate names', () => {
+    const candidates = addedExportNamesFromDiff('+export function orphan() {');
+    const files = new Map([
+      ['server/services/example.js', 'export function orphan() {}\n'],
+      ['server/routes/example.js', 'export function unrelated() {}\n'],
+    ]);
+
+    expect(deadExports(files, candidates)).toEqual([
+      { file: 'server/services/example.js', name: 'orphan' },
+    ]);
+  });
+
   it('keeps newly added server function exports reachable', () => {
     // Existing test-only and undocumented public exports predate this guard.
     // Gate additions while that legacy inventory is reduced separately.
-    expect(deadExports(trackedFiles(), addedExportNames())).toEqual([]);
+    const candidates = addedExportNames();
+    const orphans = candidates.size > 0 ? deadExports(trackedFiles(), candidates) : [];
+    expect(orphans).toEqual([]);
   });
 });
