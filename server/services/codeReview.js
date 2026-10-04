@@ -279,6 +279,18 @@ export function getLocalCodeReviewTimeoutMs(diff) {
   )
 }
 
+// Remote API reasoning models spend their latency thinking, not prefilling, so
+// the local diff-size formula starves them. A provider record's own `timeout`
+// wins (bounded); otherwise this higher default applies.
+export const REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS = 600_000
+export const REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS = 1_800_000
+
+export const getRemoteCodeReviewTimeoutMs = (provider) => (
+  Number.isFinite(provider?.timeout) && provider.timeout > 0
+    ? Math.min(REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, provider.timeout)
+    : REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS
+)
+
 const diffSizeLabel = (diffSizeBytes) => {
   const bytes = Math.max(0, Number(diffSizeBytes) || 0)
   return `${Math.max(1, Math.ceil(bytes / KIBIBYTE))} KiB (${bytes} bytes)`
@@ -856,7 +868,7 @@ export async function resolveProviderReviewTransport(provider, { allowUnconfined
 
 // Resolve the exact record the user selected. Never fall back to the active
 // provider, another account, or a replacement model for a pinned reviewer.
-async function runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, effort, timeoutMs, cwd: reviewCwd, toolFree = true, allowUnconfined = false }) {
+async function runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, effort, timeoutMs, timeoutExplicit = true, cwd: reviewCwd, toolFree = true, allowUnconfined = false }) {
   const { getProviderById } = await import('./providers.js')
   const { getAIToolkitInstance } = await import('../lib/aiToolkitState.js')
   const providerId = backend.slice('provider:'.length)
@@ -881,10 +893,12 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
   if (effort) provider = { ...provider, apiKey: provider.apiKey, effort }
   const prompt = messages.map(message => message.content).join('\n\n')
   let result
+  let budgetMs = timeoutMs
   if (transport.transport === 'api') {
+    if (!timeoutExplicit) budgetMs = getRemoteCodeReviewTimeoutMs(provider)
     if (!model) return { ok: false, code: 'NO_MODEL', error: 'Select a model for the reviewer provider.' }
     const { callProviderAISimple } = await import('./aiProvider.js')
-    result = await callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: timeoutMs, fallbackProvider: null }, model,
+    result = await callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: budgetMs, fallbackProvider: null }, model,
       prompt, { max_tokens: 8192, allowModelRecovery: false })
   } else {
     if (!transport.transport) return { ok: false, code: transport.code, error: transport.error }
@@ -936,6 +950,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     const errorText = result.error || result.stderr || result.text || 'Reviewer returned no content.'
     return {
       ok: false,
+      timeoutMs: budgetMs,
       error: errorText,
       ...(result.stderr ? { stderr: result.stderr } : {}),
       ...(result.text ? { text: result.text } : {}),
@@ -948,13 +963,13 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
   return { ok: true, backend, model, effort: effort || provider.effort || null, content: result.text.trim(), finishReason: normalizeReviewFinishReason(result.finishReason), responseLengthChars: result.text.length }
 }
 
-async function runReviewerCompletion({ backend, model: pinnedModel, messages, effort, timeoutMs, baseUrl: requestedBaseUrl = null, cwd, toolFree = true, allowUnconfined = false, diffSizeBytes = null }) {
+async function runReviewerCompletion({ backend, model: pinnedModel, messages, effort, timeoutMs, timeoutExplicit = true, baseUrl: requestedBaseUrl = null, cwd, toolFree = true, allowUnconfined = false, diffSizeBytes = null }) {
   if (isProviderReviewer(backend)) {
-    const result = await runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, effort, timeoutMs, cwd, toolFree, allowUnconfined })
+    const result = await runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, effort, timeoutMs, timeoutExplicit, cwd, toolFree, allowUnconfined })
     if (result.ok || !Number.isFinite(diffSizeBytes) || !isTimeoutFailure(result.error)) return result
     return {
       ...result,
-      error: localCodeReviewTimeoutError({ backend, timeoutMs, diffSizeBytes, phase: 'reviewer-process' }),
+      error: localCodeReviewTimeoutError({ backend, timeoutMs: result.timeoutMs ?? timeoutMs, diffSizeBytes, phase: 'reviewer-process' }),
     }
   }
   if (!isLocalLlmReviewer(backend)) {
@@ -1106,6 +1121,7 @@ export async function runLocalCodeReview({ backend, model, diff, effort = null, 
     model,
     effort,
     timeoutMs: reviewTimeoutMs,
+    timeoutExplicit: Number.isFinite(timeoutMs) && timeoutMs > 0,
     diffSizeBytes,
     baseUrl,
     cwd,
