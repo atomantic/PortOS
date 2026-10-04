@@ -187,10 +187,11 @@ export function claimContinuationWorkspace({ metadata, pathExists = () => false,
  * defers the launch and touches neither ref nor tree.
  *
  * A live claim run that picks its own branch (a swarm orchestrator whose
- * children cut trees PortOS never sees) might own this tree. Git activity is not
- * proof it stopped, so that doubt clears only on a registration: the run being
- * continued must itself have registered this exact branch, which only the run
- * that cut the tree could have done.
+ * children cut trees PortOS never sees) might own this tree, and neither git
+ * activity nor the predecessor's own registration proves it does not. That doubt
+ * clears only on checkout-specific evidence: `holderOccupied === false`, a
+ * process listing that ran and found nothing inside the tree. `true` and `null`
+ * (could not be established) both keep the launch deferred.
  *
  * @param {{
  *   metadata?: object,
@@ -198,10 +199,11 @@ export function claimContinuationWorkspace({ metadata, pathExists = () => false,
  *   sourceWorkspace?: string,
  *   worktrees: Array<object>|null,
  *   agents: Array<object>|null,
+ *   holderOccupied?: boolean|null,
  * }} input
  * @returns {{ admit: true }|{ admit: false, reason: string }}
  */
-export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace, worktrees, agents }) {
+export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace, worktrees, agents, holderOccupied = null }) {
   if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admit: false, reason: 'ownership-unreadable' };
   const branchName = metadata?.existingBranch;
   const worktreePath = metadata?.resumeWorktreePath;
@@ -214,15 +216,9 @@ export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace,
   }
   if (holder.locked || holder.prunable) return { admit: false, reason: 'holder-locked' };
 
-  const predecessorId = metadata?.resumedFromAgentId;
-  const ignoreIds = new Set([agentId, predecessorId].filter(Boolean));
+  const ignoreIds = new Set([agentId, metadata?.resumedFromAgentId].filter(Boolean));
   const occupancy = claimHolderOccupancy({ agents, holderPath: holder.path, branchName, sourceWorkspace, ignoreIds });
   if (occupancy === 'active') return { admit: false, reason: 'owner-active' };
-  if (occupancy === 'ambiguous') {
-    const predecessor = agents.find((agent) => agent?.id === predecessorId);
-    if (!predecessor || registeredClaimBranch(predecessor) !== branchName) {
-      return { admit: false, reason: 'owner-ambiguous' };
-    }
-  }
+  if (occupancy === 'ambiguous' && holderOccupied !== false) return { admit: false, reason: 'owner-ambiguous' };
   return { admit: true };
 }
