@@ -462,7 +462,7 @@ describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () 
   it('declares NO commit criterion for every non-committing coordinator type', async () => {
     // The structurally-no-commit coordinators: they run in the live checkout and deliver a
     // git/gh/external side effect, never a commit.
-    for (const analysisType of ['branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report']) {
+    for (const analysisType of ['app-checkout-recovery', 'branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report']) {
       const task = { id: 't1', taskType: 'internal', metadata: { analysisType } };
       expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
     }

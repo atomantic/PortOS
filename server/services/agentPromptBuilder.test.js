@@ -3534,6 +3534,60 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     });
   });
 
+  // Read the actual UI request as data: a renamed/stripped workflow must fail
+  // the end-to-end intake/composed-prompt regression, not just a helper test.
+  it.each(['tui', 'cli', 'api'])('preserves UI checkout recovery ownership on %s', async (providerType) => {
+    const { readFile } = await import('fs/promises');
+    const { parse } = await import('@babel/parser');
+    const { createCosTaskSchema } = await import('../lib/cosValidation.js');
+    const { buildQueuedTask } = await import('./cosTaskIntake.js');
+    const source = await readFile(join(PATHS.root, 'client/src/components/apps/tabs/GitRecoveryAction.jsx'), 'utf8');
+    const ast = parse(source, { sourceType: 'module', plugins: ['jsx'] });
+    let request;
+    const walk = node => {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'CallExpression' && node.callee?.object?.name === 'api'
+        && node.callee?.property?.name === 'addCosTask') request = node.arguments[0];
+      Object.values(node).forEach(value => {
+        if (Array.isArray(value)) value.forEach(walk);
+        else if (value && typeof value === 'object') walk(value);
+      });
+    };
+    walk(ast);
+    expect(request?.type).toBe('ObjectExpression');
+    const payload = { app: 'example-app', provider: 'example-provider' };
+    for (const property of request.properties) {
+      const value = property.value;
+      if (['StringLiteral', 'BooleanLiteral'].includes(value.type)) payload[property.key.name] = value.value;
+      if (value.type === 'TemplateLiteral') payload[property.key.name] = value.quasis.map(part => part.value.cooked).join('Example App');
+    }
+    const task = buildQueuedTask(createCosTaskSchema.parse(payload), 'user');
+    expect(task.metadata).toMatchObject({ analysisType: 'app-checkout-recovery', useWorktree: false, openPR: false });
+    expect(task.metadata).not.toHaveProperty('whenDone');
+    const prompt = await buildAgentPrompt(task, {}, '/r', null, {
+      providerType, providerId: 'codex', providerCommand: 'codex', agentId: 'checkout-recovery-test',
+    });
+    expect(prompt).toContain('## App Checkout Recovery Handoff');
+    expect(prompt).toContain('actual configured checkout');
+    expect(prompt).toContain('Existing commits may be preserved and published without making a new commit');
+    expect(prompt).toContain('named branch with an open or merged PR');
+    expect(prompt).toContain('current-head required CI');
+    expect(prompt).toContain('stash accounting');
+    expect(prompt).toContain('keep private paths and data out of public artifacts');
+    expect(prompt).toContain('.agent-done-checkout-recovery-test');
+    expect(prompt).toContain('Writing that one file is ALWAYS permitted');
+    expect(prompt).not.toMatch(/Do NOT push|do NOT push|PortOS will (?:push|merge)|commit directly to the current branch|[Cc]ommit only —/);
+    expect(prompt).not.toContain('## Completion Workflow');
+    expect(prompt).not.toContain('## Simplify Step');
+    expect(prompt).not.toContain('## Branch Reconciliation Handoff');
+    if (providerType === 'api') {
+      expect(prompt).toContain('Never create or pop a stash');
+      expect(prompt).toContain('preserve every unaccounted entry');
+      expect(prompt).not.toContain('Only commit files YOU changed');
+      expect(prompt).not.toContain('NEVER use `git stash`');
+    }
+  });
+
   // Assert the composed prompt: individually correct sections can contradict.
   describe.each([
     { metadata: { analysisType: 'branch-reconcile' } },

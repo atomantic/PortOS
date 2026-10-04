@@ -27,6 +27,7 @@
  * import it at top level.
  */
 
+import { resolveTaskHookType } from './taskTypeHooks.js';
 import { join, relative, resolve, sep } from 'path';
 import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
@@ -392,6 +393,7 @@ function resolveRunnerPrOwnership({ task, agent, agentState }) {
 }
 
 async function completeJiraHandOff({ agentId, task, agentState, effectiveSuccess, outputBuffer }) {
+  if (resolveTaskHookType(task) === 'app-checkout-recovery') return;
   // JIRA integration: push branch, create PR, comment on ticket
   const jiraTicketId = task?.metadata?.jiraTicketId;
   const jiraBranch = task?.metadata?.jiraBranch;
@@ -546,6 +548,9 @@ export async function removeCompletionSentinel({ agentId, agent, agentState }) {
 }
 
 async function completeWorktreeCleanup({ agentId, task, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, branchProvenEmpty }) {
+  // This task owns the actual checkout and its preservation branches.
+  // No CoS coordinator worktree exists to publish, merge, or remove.
+  if (resolveTaskHookType(task) === 'app-checkout-recovery') return;
   if (task?.metadata?.jiraBranch) return;
   return cleanupAgentWorktree(agentId, effectiveSuccess, await resolveWorktreeCleanupOptions({
     agentId, task, outputBuffer,
