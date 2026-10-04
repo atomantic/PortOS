@@ -104,11 +104,12 @@ afterAll(() => {
 vi.mock('./lib/maintenanceAdmission.js', async (importOriginal) => {
   const actual = await importOriginal();
   const io = await vi.importActual('node:fs');
+  const { randomUUID } = await vi.importActual('node:crypto');
   const root = io.mkdtempSync(join(tmpdir(), 'maintenance-workflow-'));
   const entry = { io, root, closed: false };
   maintenanceTestRoots.push(entry);
-  return { ...actual, maintenance: actual.createMaintenanceAdmission(root, { io, assertWrite: path => {
-    // Other suites may mock fs wholesale. Keep durable I/O private and real.
+  return { ...actual, maintenance: actual.createMaintenanceAdmission(root, { io, makeId: randomUUID, assertWrite: path => {
+    // Domain suites mock fs/UUIDs wholesale. Keep the journal private and real.
     if (entry.closed || path !== join(root, 'workflow-maintenance')) throw new Error('Unexpected maintenance test path');
   } }) };
 });

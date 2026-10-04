@@ -32,7 +32,7 @@ function syncDirectory(path, io) {
   try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
 }
 
-export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite } = {}) {
+export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite, makeId = randomUUID } = {}) {
   const directory = join(dataDir, 'workflow-maintenance');
   const file = join(directory, 'state.json');
   const lock = join(directory, 'transaction');
@@ -93,7 +93,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       result = change(state);
       state.revision++;
       schema.parse(state);
-      const pending = join(directory, `pending-${randomUUID()}.json`);
+      const pending = join(directory, `pending-${makeId()}.json`);
       const fd = io.openSync(pending, 'wx', 0o600);
       try { io.writeFileSync(fd, JSON.stringify(state) + '\n'); io.fsyncSync(fd); } finally { io.closeSync(fd); }
       io.renameSync(pending, file);
@@ -122,7 +122,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   const currentId = () => context.getStore() ?? null;
   const admit = (kind, resource = '', { continuation = false, parentId = null, parentKinds = null, reconnect = false } = {}) => {
     const inheritedId = parentId ?? (continuation ? currentId() : null);
-    let id = randomUUID();
+    let id = makeId();
     transaction(state => {
       const inherited = inheritedId && state.operations.some(op => op.id === inheritedId && (!op.unsettled || kind === 'settlement') && (!parentKinds || parentKinds.includes(op.kind)));
       if (state.hold && !inherited) throw error();
@@ -147,7 +147,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   const recoverOwned = (kind, resource) => permitFor(transaction(state => {
     const existing = state.operations.find(op => op.kind === kind && op.resource === resource);
     if (existing) return existing.id;
-    const id = randomUUID();
+    const id = makeId();
     state.operations.push({ id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() });
     return id;
   }));
@@ -202,7 +202,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     const input = maintenanceBeginSchema.parse({ reason });
     transaction(state => {
       if (state.hold) throw error('MAINTENANCE_STALE', 'A maintenance hold already exists. Refresh its status.');
-      state.hold = { id: randomUUID(), revision: state.revision + 1, ...input, owner,
+      state.hold = { id: makeId(), revision: state.revision + 1, ...input, owner,
         requestedAt: new Date().toISOString() };
     });
     return status();
