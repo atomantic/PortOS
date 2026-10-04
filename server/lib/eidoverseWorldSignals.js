@@ -23,6 +23,15 @@ export const eidoversePeerId = (peer) => opaqueId('peer', peer.instanceId || pee
 
 export const eidoverseHostId = (instanceId) => `hst_${opaqueDigest('hst', instanceId, 'unknown-instance')}`;
 
+// Closed diagnostic vocabulary. Reasons are requested only by local observation;
+// the normal projection/renderer/federation collection keeps its historical shape.
+export const EIDOVERSE_ATTENTION_REASON_CODES = Object.freeze([
+  'app_not_started', 'app_stopped', 'app_unknown',
+  'backup_failure', 'review_alerts', 'cos_paused',
+  'runtime_data_disk_pressure', 'runtime_data_disk_critical',
+  'memory_pressure', 'memory_critical',
+]);
+
 const coarseStatus = (value) => {
   const status = String(value || '').toLowerCase();
   if (/error|failed|unhealthy|offline|crash|blocked/.test(status)) return 'error';
@@ -85,13 +94,19 @@ function appSummary(apps) {
   };
 }
 
-function projectedApps(apps) {
+function projectedApps(apps, includeAttentionReasons) {
   if (!Array.isArray(apps)) return null;
   const groups = new Map();
   for (const app of apps) {
     const status = coarseStatus(app?.overallStatus);
-    const group = groups.get(status) || { count: 0, managed: 0 };
+    const group = groups.get(status) || { count: 0, managed: 0, reasons: new Map() };
     group.count += 1;
+    if (includeAttentionReasons && ['attention', 'error'].includes(status)) {
+      const code = { not_started: 'app_not_started', stopped: 'app_stopped', unknown: 'app_unknown' }[app?.overallStatus];
+      // Unknown/future spellings retain a coarse reason, never an invented cause.
+      const reason = code || `source_${status}`;
+      group.reasons.set(reason, (group.reasons.get(reason) || 0) + 1);
+    }
     if (app?.managed === true) group.managed += 1;
     groups.set(status, group);
   }
@@ -103,6 +118,9 @@ function projectedApps(apps) {
       status,
       count: group.count,
       managed: group.managed,
+      ...(includeAttentionReasons ? { attentionReasons: [...group.reasons]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([code, affectedCount]) => ({ code, affectedCount })) } : {}),
     }));
 }
 
@@ -250,16 +268,20 @@ export function projectedStorage(introspection) {
   return items;
 }
 
-function projectedOperations({ cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent, inboxCounts }) {
+function projectedOperations({ cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent, inboxCounts }, includeAttentionReasons) {
   const values = [cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent, inboxCounts];
   if (!values.some((value) => value !== null && value !== undefined)) return null;
-  const status = /failed|error|unhealthy/i.test(String(backupState?.status || ''))
-    ? 'error'
-    : ((review?.alert || 0) > 0 || cosStatus?.paused === true ? 'attention' : (cosStatus?.running ? 'active' : 'steady'));
+  const reasons = [];
+  if (/failed|error|unhealthy/i.test(String(backupState?.status || ''))) reasons.push({ code: 'backup_failure', severity: 'error' });
+  if ((review?.alert || 0) > 0) reasons.push({ code: 'review_alerts', severity: 'attention', affectedCount: nonNegativeOrNull(review.alert) });
+  if (cosStatus?.paused === true) reasons.push({ code: 'cos_paused', severity: 'attention' });
+  const status = reasons.some((reason) => reason.severity === 'error') ? 'error'
+    : reasons.length > 0 ? 'attention' : (cosStatus?.running ? 'active' : 'steady');
   return [{
     id: 'overview',
     label: 'PortOS operations',
     status,
+    ...(includeAttentionReasons ? { attentionReasons: reasons } : {}),
     cos: cosStatus ? {
       running: cosStatus.running === true,
       paused: cosStatus.paused === true,
@@ -319,7 +341,7 @@ export function projectedJiraTickets(tickets) {
   }));
 }
 
-function healthSnapshot({ apps, cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent }) {
+function healthSnapshot({ apps, cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent }, includeAttentionReasons) {
   const health = {
     id: 'overview',
     label: 'PortOS health',
@@ -354,16 +376,18 @@ function healthSnapshot({ apps, cosStatus, review, backupState, notifications, c
   const available = [apps, cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent]
     .some((value) => value !== null && value !== undefined);
   if (!available) return null;
-  const hasError = /failed|error|unhealthy/i.test(String(health.backup?.status || ''))
-    || (health.diskPercent ?? 0) >= 95
-    || (health.memory?.usedPercent ?? 0) >= 95;
-  const needsAttention = (health.apps?.stopped || 0) > 0
-    || (health.apps?.unknown || 0) > 0
-    || (health.review?.alerts || 0) > 0
-    || cosStatus?.paused === true
-    || (health.diskPercent ?? 0) >= 85
-    || (health.memory?.usedPercent ?? 0) >= 85;
-  health.status = hasError ? 'error' : (needsAttention ? 'attention' : 'healthy');
+  const reasons = [];
+  if (/failed|error|unhealthy/i.test(String(health.backup?.status || ''))) reasons.push({ code: 'backup_failure', severity: 'error' });
+  for (const [value, prefix] of [[health.diskPercent, 'runtime_data_disk'], [health.memory?.usedPercent, 'memory']]) {
+    if ((value ?? 0) >= 95) reasons.push({ code: `${prefix}_critical`, severity: 'error' });
+    else if ((value ?? 0) >= 85) reasons.push({ code: `${prefix}_pressure`, severity: 'attention' });
+  }
+  if ((health.apps?.stopped || 0) > 0) reasons.push({ code: 'app_stopped', severity: 'attention', affectedCount: health.apps.stopped });
+  if ((health.apps?.unknown || 0) > 0) reasons.push({ code: 'app_unknown', severity: 'attention', affectedCount: health.apps.unknown });
+  if ((health.review?.alerts || 0) > 0) reasons.push({ code: 'review_alerts', severity: 'attention', affectedCount: health.review.alerts });
+  if (cosStatus?.paused === true) reasons.push({ code: 'cos_paused', severity: 'attention' });
+  health.status = reasons.some((reason) => reason.severity === 'error') ? 'error' : (reasons.length ? 'attention' : 'healthy');
+  if (includeAttentionReasons) health.attentionReasons = reasons;
   return health;
 }
 
@@ -376,7 +400,7 @@ export function buildEidoverseWorldSignals({
   backupState, notifications, character, voiceConfig, memory, diskPercent,
   todayActivity, activityCalendar, goalsData, memoryGraph,
   inboxCounts, introspection, jira, destinations,
-}) {
+}, { includeAttentionReasons = false } = {}) {
   const projectedAgents = Array.isArray(agents)
     ? agents.filter((agent) => ['running', 'paused'].includes(agent?.status)).map((agent, index) => ({
       id: opaqueId('agent', agent.id, `agent-${index}`), label: 'Active agent', status: coarseStatus(agent.status),
@@ -404,10 +428,10 @@ export function buildEidoverseWorldSignals({
       status: coarseStatus(peer.status),
     }))
     : null;
-  const health = healthSnapshot({ apps, cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent });
+  const health = healthSnapshot({ apps, cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent }, includeAttentionReasons);
 
   return {
-    apps: projectedApps(apps),
+    apps: projectedApps(apps, includeAttentionReasons),
     agents: projectedAgents,
     tasks: projectedTasks,
     features: projectedFeatures,
@@ -419,6 +443,6 @@ export function buildEidoverseWorldSignals({
     memory: projectedMemory(memoryGraph),
     storage: projectedStorage(introspection),
     jira,
-    operations: projectedOperations({ cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent, inboxCounts }),
+    operations: projectedOperations({ cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent, inboxCounts }, includeAttentionReasons),
   };
 }

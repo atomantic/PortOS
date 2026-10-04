@@ -39,9 +39,10 @@
 import { asArray } from './arrayUtils.js';
 import {
   EIDOVERSE_SCALAR_SOURCE_KEYS,
+  EIDOVERSE_SOURCE_KEYS,
   EIDOVERSE_WORLD_DESIGN_V3,
 } from './eidoverseWorldDesign.js';
-import { eidoversePeerId } from './eidoverseWorldSignals.js';
+import { EIDOVERSE_ATTENTION_REASON_CODES, eidoversePeerId } from './eidoverseWorldSignals.js';
 
 /** Storage-layout version stamped on the persisted visit marker. */
 export const EIDOVERSE_OBSERVATION_SCHEMA_VERSION = 1;
@@ -55,6 +56,8 @@ const MAX_PEERS = 32;
 const MAX_INHERITED = 20;
 const MAX_ATTENTION_CONTROLLERS = 10;
 const MAX_CHANGE_ENTRIES = 20;
+const MAX_ATTENTION_REASONS = 24;
+const ATTENTION_REASON_CODES = new Set([...EIDOVERSE_ATTENTION_REASON_CODES, 'source_attention', 'source_error']);
 // Only `foundationIds` needs this: the other two marker lists are derived from
 // report sections that are already capped far below it. An install that
 // somehow exceeds it simply stops distinguishing the oldest ids as "seen",
@@ -79,18 +82,40 @@ const sortedUnique = (values) => [...new Set(asArray(values).filter(Boolean))].s
  * would show a mind density that does not exist in the world.
  */
 function readSource(source, key, includes) {
-  if (includes?.[key] !== true) return { count: null, disabled: true, attention: false };
+  if (includes?.[key] !== true) return { count: null, disabled: true, contributors: [] };
   const value = source?.[key];
-  if (EIDOVERSE_SCALAR_SOURCE_KEYS.includes(key)) {
-    if (value === null || value === undefined) return { count: null, disabled: false, attention: false };
-    return { count: 1, disabled: false, attention: value.status === 'error' || value.status === 'attention' };
+  const scalar = EIDOVERSE_SCALAR_SOURCE_KEYS.includes(key);
+  if (scalar ? value === null || value === undefined : !Array.isArray(value)) {
+    return { count: null, disabled: false, contributors: [] };
   }
-  if (!Array.isArray(value)) return { count: null, disabled: false, attention: false };
-  return {
-    count: value.length,
-    disabled: false,
-    attention: value.some((item) => item?.status === 'error' || item?.status === 'attention'),
-  };
+  const rows = scalar ? [value] : value;
+  const contributors = [];
+  // Aggregate by source severity, never by record identity. Stable code ordering
+  // and a closed vocabulary prevent private error text or row bags escaping.
+  for (const severity of ['error', 'attention']) {
+    const affectedRows = rows.filter((row) => row?.status === severity);
+    if (!affectedRows.length || !EIDOVERSE_SOURCE_KEYS.includes(key)) continue;
+    const reasons = new Map();
+    for (const row of affectedRows) {
+      const valid = asArray(row.attentionReasons).filter((reason) =>
+        ATTENTION_REASON_CODES.has(reason?.code));
+      const entries = valid.length ? valid : [{ code: `source_${severity}` }];
+      for (const reason of entries) {
+        const known = Number.isSafeInteger(reason.affectedCount) && reason.affectedCount >= 0;
+        const previous = reasons.get(reason.code);
+        reasons.set(reason.code, {
+          code: reason.code,
+          // Unknown counts stay unknown; a row is not necessarily one record.
+          affectedCount: known && (!previous || previous.affectedCount !== null)
+            ? Math.min(Number.MAX_SAFE_INTEGER, (previous?.affectedCount || 0) + reason.affectedCount) : null,
+        });
+      }
+    }
+    contributors.push({ source: key, severity, signalCount: affectedRows.length,
+      reasons: [...reasons.values()].sort((left, right) => left.code.localeCompare(right.code)) });
+  }
+  return { count: rows.length, disabled: false, contributors,
+    attention: rows.some((row) => row?.status === 'error' || row?.status === 'attention') };
 }
 
 /**
@@ -109,12 +134,25 @@ function observePlace(district, source, includes) {
   let attention = false;
   const unreadableSources = [];
   const disabledSources = [];
+  const contributorsBySource = [];
+  let attentionTruncated = false;
+  let reasonCount = 0;
   for (const key of district.sources) {
-    const { count, disabled, attention: wantsAttention } = readSource(source, key, includes);
+    const { count, disabled, attention: wantsAttention, contributors } = readSource(source, key, includes);
     if (disabled) disabledSources.push(key);
     else if (count === null) unreadableSources.push(key);
     else signalCount = (signalCount ?? 0) + count;
     if (wantsAttention) attention = true;
+    contributorsBySource.push(...contributors);
+  }
+  const attentionSignals = [];
+  contributorsBySource.sort((left, right) => left.source.localeCompare(right.source)
+    || (left.severity === right.severity ? 0 : left.severity === 'error' ? -1 : 1));
+  for (const contributor of contributorsBySource) {
+    const reasons = contributor.reasons.slice(0, MAX_ATTENTION_REASONS - reasonCount);
+    if (reasons.length < contributor.reasons.length) attentionTruncated = true;
+    reasonCount += reasons.length;
+    if (reasons.length) attentionSignals.push({ ...contributor, reasons });
   }
   // Priority order, and `quiet` only when every enabled source read cleanly:
   // an unreadable source must never render as an empty district.
@@ -131,6 +169,8 @@ function observePlace(district, source, includes) {
     disabledSources,
     signalCount,
     status,
+    attentionSignals,
+    attentionTruncated,
   };
 }
 
