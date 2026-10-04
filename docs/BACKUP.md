@@ -65,6 +65,10 @@ Admission inventory (`withBackupAssetPublication`):
 | Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
 | Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
 | LoRA dataset uploads, gallery imports, reference-sheet crops, generated completion/recovery copies, image/dataset deletion, and queued record edits (`loraDatasets.js`, `loraDatasetGenerate.js`) | Covered as complete file/record workflows (#9982 partial) |
+| Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982 partial) |
+| Music Video development artifact import/generated save and vocal-stem attachment (`musicVideo/devArtifactService.js`, `musicVideo/vocalStem.js`) | Covered from final file copy/write through project-record commit and failed-write cleanup (#9982 partial) |
+| Music-library deletion (`pipeline/musicLibrary.js`) | Outstanding: its route intentionally leaves existing issue/project references to the removed file (#9982) |
+| Other voice artifact owners (fine-tune and benchmark outputs) and Music Video asset workflows | Outstanding (#9982) |
 | Other durable replacement/deletion owners and final global readiness/invariant check | Outstanding (#9982) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
 
@@ -91,13 +95,22 @@ normalization/cropping and copying are included in the lease. Pending `rendering
 entries can still name files that do not exist yet, and admission does not repair
 pre-existing missing files or make failed writes transactional.
 
-The remaining inventory includes voice-profile asset copies (`voice/studio.js`), development
-artifact/vocal-stem import workflows (`musicVideo/devArtifactService.js`,
-`musicVideo/vocalStem.js`), direct render/index completion listeners, and the
-other completion paths above. Their persistence adapters and direct filesystem
-calls need workflow-level classification; independently locking `fileCore` or
-SQL primitives would not cover the gap between writes. No domain is newly
-excluded by this slice, and the final global readiness check is still pending.
+Voice Studio holds admission after inference has produced its WAV and before
+creating or copying final source assets, until the corresponding profile row
+commits or failed-write cleanup finishes. Music Video development artifacts
+validate their media policy outside admission, then hold one lease from the
+versioned file write through project-record mutation and cleanup. Vocal stems
+probe the master and upload outside admission, then hold one lease from library
+copy through the project update. A failed row write can still leave an
+unreferenced library stem; it cannot make a completed snapshot point at absent
+bytes.
+
+The remaining inventory includes music-library deletion, other voice artifacts,
+direct render/index completion listeners, and the other completion paths above.
+Their persistence adapters and direct filesystem calls still need workflow-level classification;
+independently locking `fileCore` or SQL primitives would not cover the gap
+between writes. No domain is newly excluded by this slice, and the final global
+readiness check is still pending.
 
 This is part of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923).
 Until every owner is covered, `status: ok` reports that the file

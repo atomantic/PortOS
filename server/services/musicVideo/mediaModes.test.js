@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdir, writeFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-media-policy-') }));
@@ -10,6 +10,7 @@ vi.mock('./devArtifactStore.js', async (original) => {
 const projects = await import('./projects.js');
 const { importDocumentDirectory } = await import('./compositionDocument.js');
 const { PATHS } = await import('../../lib/paths.js');
+const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 const { assertMusicVideoMedia, musicVideoMediaMode } = await import('../../lib/musicVideoMediaPolicy.js');
 const { castAndSetsAllowsImages, castAndSetsMedium } = await import('./castAndSetsDirection.js');
 const { migrateMediaMode } = await import('../../../scripts/migrations/421-music-video-media-modes.js');
@@ -103,6 +104,45 @@ it('refuses a guide upload when the media mode narrows before its record commit 
   expect((await projects.getProject(project.id)).devArtifacts || []).toEqual([]);
   await expect(stat(storedFile)).rejects.toMatchObject({ code: 'ENOENT' });
   await expect(stat(tempPath)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('drains development artifact bytes and their project record before a backup cut', async () => {
+  const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
+  const store = await import('./devArtifactStore.js');
+  const original = await vi.importActual('./devArtifactStore.js');
+  const project = await projects.createProject({ name: 'Backup artifact', mediaMode: 'code-images' });
+  let reachFile;
+  let finishFile;
+  const atFile = new Promise(resolve => { reachFile = resolve; });
+  const fileGate = new Promise(resolve => { finishFile = resolve; });
+  store.writeDevArtifactFile.mockImplementationOnce(async input => {
+    const written = await original.writeDevArtifactFile(input);
+    reachFile();
+    await fileGate;
+    return written;
+  });
+  const saving = saveGeneratedDevArtifact(project.id, {
+    kind: 'storyboard', title: 'Example', html: '<svg>example</svg>',
+  });
+  await atFile;
+  expect((await projects.getProject(project.id)).devArtifacts || []).toEqual([]);
+  let cutAcquired = false;
+  const cut = acquireBackupSnapshotCut().then(release => {
+    cutAcquired = true;
+    return release;
+  });
+  await Promise.resolve();
+  expect(cutAcquired).toBe(false);
+  finishFile();
+  const { artifact } = await saving;
+  const release = await cut;
+  try {
+    const recorded = (await projects.getProject(project.id)).devArtifacts[0].versions[0];
+    expect(recorded.file).toBe(artifact.versions[0].file);
+    expect(await readFile(store.resolveDevArtifactFile(recorded.file), 'utf8')).toBe('<svg>example</svg>');
+  } finally {
+    release();
+  }
 });
 
 it('blocks reselecting or approving retained raster guides, including embedded HTML, after narrowing', async () => {

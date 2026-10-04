@@ -15,6 +15,7 @@ import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { extname } from 'path';
 import { unlink } from 'fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import {
@@ -75,24 +76,26 @@ async function storeVersion(projectId, {
   if (artifactId) findDevArtifact(project, artifactId);
   const id = artifactId || newDevArtifactId();
   const version = nextDevArtifactVersion(project, artifactId);
-  const { file, bytes } = await writeDevArtifactFile({
-    projectId, artifactId: id, version, ext: ext === 'jpeg' ? 'jpg' : ext, buffer, tempPath,
-  });
-  const out = await mutateProjectRecord(projectId, (current) => {
-    if (musicVideoMediaMode(current) !== musicVideoMediaMode(project)) {
-      throw new ServerError('Media mode changed during the artifact upload — try again', { status: 409, code: 'DEV_ARTIFACT_CONFLICT' });
-    }
-    // A concurrent write took this version number: refuse rather than point
-    // two versions at one file.
-    if (nextDevArtifactVersion(current, artifactId) !== version) {
-      throw new ServerError('Another version of this artifact was saved at the same time — try again', { status: 409, code: 'DEV_ARTIFACT_CONFLICT' });
-    }
-    return addDevArtifactVersion(current, {
-      artifactId, id: artifactId ? null : id, kind, title, file, mimeType, bytes, source, status, notes,
+  const out = await withBackupAssetPublication(async () => {
+    const { file, bytes } = await writeDevArtifactFile({
+      projectId, artifactId: id, version, ext: ext === 'jpeg' ? 'jpg' : ext, buffer, tempPath,
     });
-  }).catch(async (err) => {
-    await discardDevArtifactFile(file);
-    throw err;
+    return mutateProjectRecord(projectId, (current) => {
+      if (musicVideoMediaMode(current) !== musicVideoMediaMode(project)) {
+        throw new ServerError('Media mode changed during the artifact upload — try again', { status: 409, code: 'DEV_ARTIFACT_CONFLICT' });
+      }
+      // A concurrent write took this version number: refuse rather than point
+      // two versions at one file.
+      if (nextDevArtifactVersion(current, artifactId) !== version) {
+        throw new ServerError('Another version of this artifact was saved at the same time — try again', { status: 409, code: 'DEV_ARTIFACT_CONFLICT' });
+      }
+      return addDevArtifactVersion(current, {
+        artifactId, id: artifactId ? null : id, kind, title, file, mimeType, bytes, source, status, notes,
+      });
+    }).catch(async (err) => {
+      await discardDevArtifactFile(file);
+      throw err;
+    });
   });
   console.log(`🗂️ Music Video dev artifact ${out.artifact.id.slice(4, 12)} v${version} saved for ${projectId.slice(0, 11)} (${out.artifact.kind}, ${mimeType})`);
   publish(projectId, out.project, out.artifact);

@@ -27,6 +27,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { importUploadedTrack } from '../pipeline/musicLibrary.js';
@@ -82,15 +83,17 @@ export async function attachVocalStem(projectId, { tempPath, originalName }) {
     const masterPath = await resolveMasterAudioPath(project);
     const [songSec, stemSec] = await Promise.all([probeVideoDuration(masterPath), probeVideoDuration(tempPath)]);
     assertVocalStemTimebase(stemSec, songSec);
-    const { filename } = await importUploadedTrack(tempPath, originalName);
-    // The song may have been swapped while the files were probed; a stem
-    // checked against the old master must not land on the new one.
-    const current = await getProject(projectId);
-    if (!current || audioSourceKey(current) !== audioSourceKey(project)) {
-      await unlink(join(PATHS.music, filename)).catch(() => {});
-      throw new ServerError('The project\'s song changed while the vocal stem was uploading. Upload it again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
-    }
-    return updateProject(projectId, { vocalStemFilename: filename, performanceConditioningSource: 'vocal-stem' });
+    return await withBackupAssetPublication(async () => {
+      const { filename } = await importUploadedTrack(tempPath, originalName);
+      // The song may have been swapped while the files were probed; a stem
+      // checked against the old master must not land on the new one.
+      const current = await getProject(projectId);
+      if (!current || audioSourceKey(current) !== audioSourceKey(project)) {
+        await unlink(join(PATHS.music, filename)).catch(() => {});
+        throw new ServerError('The project\'s song changed while the vocal stem was uploading. Upload it again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
+      }
+      return updateProject(projectId, { vocalStemFilename: filename, performanceConditioningSource: 'vocal-stem' });
+    });
   } finally {
     await unlink(tempPath).catch(() => {});
   }
