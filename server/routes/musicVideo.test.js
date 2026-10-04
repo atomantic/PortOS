@@ -181,7 +181,7 @@ describe('musicVideo routes', () => {
     expect(first.stage).toBe('produce');
     expect(first.status).toBe('draft');
     expect(first.runStatus).toBe('running');
-    expect(first.spend).toEqual({ spentUsd: 0.5, capUsd: 5.0 });
+    expect(first.spend).toMatchObject({ spentUsd: 0.5, capUsd: 5.0, autopilot: 0.5, manual: 0, autoReview: 0 });
     expect(first.updatedAt).toBe('2026-02-01T00:00:00Z');
     expect(first.scenes).toBeUndefined();
 

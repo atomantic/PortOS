@@ -76,6 +76,10 @@ const hook = createMediaJobImageHook({
     // renderer places the take by it, so a later retime can't misalign lips.
     shotInstruction: job.params?.shotInstruction ?? null,
     dependencies: job.params?.musicVideoDependencies ?? null,
+    // #10157: the estimate this clip was priced at; a revision-tagged job is
+    // an auto-review generation, the rest are manual takes.
+    costUsd: job.params?.musicVideoCostUsd ?? null,
+    spendKind: job.params?.musicVideo?.revisionId ? 'autoReview' : 'manual',
   }]),
   onAttached: ({ projectId, sceneId, videoHistoryId }, { scene, appended }) => {
     musicVideoEvents.emit('scene-video', {

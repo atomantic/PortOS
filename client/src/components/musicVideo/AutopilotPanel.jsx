@@ -11,7 +11,7 @@ import { codeFirstProductionAssets } from '../../../../server/lib/musicVideoMedi
 import {
   DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_LLM_STAGES, MUSIC_VIDEO_LLM_STAGE_LABELS, automationDraftFrom, automationFromDraft, llmRouteLabel,
 } from '../../lib/musicVideoAutomation.js';
-import { RESUMABLE_RUN_STATUSES, currentProductionRun, productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
+import { RESUMABLE_RUN_STATUSES, boardJobEstimate, currentProductionRun, productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
 
 const POOL_TOOLS = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group === 'image' || t.group === 'video');
@@ -164,13 +164,14 @@ function StartForm({ project, production }) {
   const [authorEffort, setAuthorEffort] = useState('');
   const [pool, setPool] = useState(() => initialPool(project));
   const [directive, setDirective] = useState('');
-  const [maxGenerations, setMaxGenerations] = useState(12);
+  const [maxGenerations, setMaxGenerations] = useState(() => boardJobEstimate(project).suggestedMaxGenerations);
   const [maxReviewAttempts, setMaxReviewAttempts] = useState(3);
   const [spendCap, setSpendCap] = useState('');
   const {
     providers, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel,
   } = useProviderModels({ allowDefault: true, silent: true });
   const idFor = (s) => `mv-production-${project?.id}-${s}`;
+  const estimate = boardJobEstimate(project);
   const picked = new Set(pool);
   const capValue = spendCap === '' ? null : Number(spendCap);
   const hasImage = pool.some((id) => id.startsWith('image:'));
@@ -228,6 +229,11 @@ function StartForm({ project, production }) {
           <input id={idFor('generations')} type="number" min={1} max={500} step={1} value={maxGenerations} disabled={production.busy}
             onChange={(e) => setMaxGenerations(Number(e.target.value))} className={inputCls} />
         </div>
+        {estimate.jobs > 0 && (
+          <p className="basis-full text-port-text-muted">
+            This board needs ~{formatCount(estimate.jobs)} jobs · est. {formatUsd(estimate.knownUsd)} known{estimate.unpriced > 0 ? ` + ${formatCount(estimate.unpriced)} unpriced` : ''}. The default limit adds a 25% review allowance.
+          </p>
+        )}
         <div>
           <label htmlFor={idFor('attempts')} className="block text-[10px] text-port-text-muted">Max reviews</label>
           <input id={idFor('attempts')} type="number" min={1} max={10} step={1} value={maxReviewAttempts} disabled={production.busy}
