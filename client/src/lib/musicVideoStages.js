@@ -9,6 +9,8 @@ import {
   AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS,
 } from './musicVideoAutonomous.js';
 import { formatCount, formatTimecode } from '../utils/formatters.js';
+import { isNonBlankStr } from './textUtils';
+import { modeLabel } from './imageGenModes.js';
 
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Setup', title: 'Setup' },
@@ -57,6 +59,13 @@ export function projectShotSummary(project) {
 }
 
 export const projectHasAudio = (project) => !!(project?.trackId || project?.uploadedAudioFilename);
+
+const VIDEO_BACKEND_LABELS = { local: 'Local video', grok: 'Grok video', fal: 'fal.ai video' };
+/** "Images: Local · Video: fal.ai video" — the project's saved image (frame) and video render services. */
+export const projectServicesSummary = (project) => [
+  `Images: ${project?.imageMode ? modeLabel(project.imageMode) : 'install default'}`,
+  `Video: ${VIDEO_BACKEND_LABELS[project?.videoSettings?.backend] || 'install default'}`,
+].join(' · ');
 
 /**
  * What the project has spent on paid generation across its production runs,
@@ -317,5 +326,90 @@ export function deriveNextAction(project, {
         id: 'render-final', kind: 'run', label: 'Render final video',
         disabled: renderBlockedByOther, reason: renderBlockedByOther ? 'Wait for the other project render to finish' : undefined,
       };
+  }
+}
+
+// The editable art-direction fields Production approvals needs before art can be approved.
+const ART_DIRECTION_FIELDS = [['cast', 'cast'], ['environments', 'sets'], ['visualLanguage', 'visual language'], ['motionLanguage', 'motion']];
+const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboard', proof: 'mv-review-proof' };
+
+/**
+ * What one stage tab needs before it counts as done, as a short checklist the
+ * tab shows above its panels: `[{ id, label, done, detail?, action? }]`. The
+ * `done` answers mirror `deriveStages`, so the tab, its status mark and the
+ * header's "needs you" agree; `detail` says what is still missing (for an
+ * approval, the server's first readiness problem); `action` is a
+ * `{ label, anchor }` the tab can scroll to. Approvals are revision-bound and
+ * live in Production approvals, never on a development file: approving a
+ * Cast & Sets sheet file does not approve the art direction, so the art item
+ * says so while it is open.
+ */
+export function stageChecklist(stageId, project, readiness = project?.productionReadiness) {
+  if (!project) return [];
+  const draft = project.productionReview?.draft || {};
+  const scenes = project.scenes || [];
+  const mode = project.composition?.mode || 'concat';
+  const approval = (key, label, waitingText) => {
+    const approved = !!readiness?.[key]?.approved;
+    return {
+      id: `approve-${key}`, label: `${label} approved`, done: approved,
+      detail: approved || !readiness ? null : (readiness[key]?.problems?.[0] || waitingText),
+      action: approved ? null : { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key] },
+    };
+  };
+  switch (stageId) {
+    case 'setup': {
+      // An autonomous run that is still going writes the song itself.
+      const autoSong = !!project.autonomousRun && !['completed', 'canceled', 'failed'].includes(project.autonomousRun.status);
+      const hasAudio = projectHasAudio(project);
+      return [
+        { id: 'track', label: 'Track attached', done: hasAudio, detail: !hasAudio && autoSong ? 'The autopilot run is making the song.' : null,
+          action: hasAudio || autoSong ? null : { label: 'Attach a track', anchor: 'mv-track' } },
+        { id: 'analysis', label: 'Song analyzed', done: !!project.audioAnalysis, detail: project.audioAnalysis ? null : 'Analyze the song from the header or Song & lyrics.' },
+      ];
+    }
+    case 'cast-sets': {
+      const missing = ART_DIRECTION_FIELDS.filter(([key]) => !isNonBlankStr(draft[key])).map(([, label]) => label);
+      const guide = (project.devArtifacts || []).find((a) => a.id === draft.guideArtifactId && !a.deleted) || null;
+      return [
+        { id: 'direction', label: 'Art direction written', done: missing.length === 0, detail: missing.length ? `Still missing: ${missing.join(', ')}.` : null },
+        { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}` : 'Visual guide chosen', done: !!guide,
+          detail: guide ? null : 'Pick a Cast & Sets sheet as the visual guide in Production approvals.' },
+        approval('art', 'Art direction', 'Ready for your review. Approving a sheet file does not approve the art direction; approve it in Production approvals.'),
+      ];
+    }
+    case 'board': {
+      const planned = scenes.length > 0 || (draft.storyboard || []).length > 0;
+      return [
+        { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.' },
+        approval('storyboard', 'Timed storyboard', 'Ready for your review in Production approvals.'),
+      ];
+    }
+    case 'produce': {
+      const items = [];
+      if (mode !== 'code' && mode !== 'document') {
+        const layered = isLayeredComposition(project);
+        const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
+        items.push({ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: scenes.length > 0 && ready === scenes.length });
+      }
+      items.push(approval('proof', 'Animated proof', 'Render the proof, watch it with sound, then approve it in Production approvals.'));
+      return items;
+    }
+    case 'compose': {
+      // Compose counts as done only behind an approved proof (see deriveStages).
+      const proof = { id: 'proof', label: 'Animated proof approved (Produce)', done: !!readiness?.proof?.approved };
+      if (mode === 'composed') return [proof, { id: 'composition', label: 'Timed typography added', done: (project.composition?.textCues || []).length > 0 }];
+      if (mode === 'document') return [proof, { id: 'composition', label: 'Composition document attached', done: !!project.composition?.document }];
+      return [proof, { id: 'composition', label: 'Nothing to compose for this render style', done: true }];
+    }
+    case 'review':
+      return [{ id: 'final', label: 'Final video rendered', done: !!project.renderHistoryId }];
+    case 'publish':
+      return [
+        { id: 'kit', label: 'Publishing kit built', done: !!project.publishKit?.builtAt },
+        { id: 'posted', label: 'Posted to a platform', done: Object.keys(project.publishKit?.posts || {}).length > 0 },
+      ];
+    default:
+      return [];
   }
 }

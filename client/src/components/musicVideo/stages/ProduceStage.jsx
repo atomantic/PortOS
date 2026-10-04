@@ -4,8 +4,9 @@ import { GenerationActions } from '../ProjectActionGroups.jsx';
 
 /**
  * Produce: the autopilot (brief, allowed routes, generation and spend caps,
- * the run log) and the manual generators — frame and clip renderers, and the
- * batch "generate what's missing" buttons.
+ * the run log) and the manual "generate what's missing" frame and clip
+ * buttons. Which image and video services they render on is a project
+ * option, set in Setup.
  */
 export default function ProduceStage({ board }) {
   const { project, locked, production, videoSettings, sceneMedia, kickoff } = board;
@@ -23,8 +24,8 @@ export default function ProduceStage({ board }) {
         kickoffStep={kickoff.stepLabel}
         kickoffBlockedReason={board.autopilotBlockedReason}
       />
-      <StageSection title="Generation" defaultOpen summary="Frame and clip renderers, and generate what is missing">
-        <GenerationActions project={project} videoSettings={videoSettings} sceneMedia={sceneMedia} />
+      <StageSection title="Generation" defaultOpen summary="Generate the frames and clips that are missing">
+        <GenerationActions project={project} videoSettings={videoSettings} sceneMedia={sceneMedia} onEditServices={() => board.goToStage('setup', 'mv-setup-options')} />
       </StageSection>
     </fieldset>
   );

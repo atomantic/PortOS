@@ -796,7 +796,7 @@ describe('MusicVideo project video renderer', () => {
     await openProject({
       ...PROJECT_NO_CLIP,
       videoSettings: { modelId: 'ltx23_distilled_q4' },
-    }, 'produce');
+    }, 'setup');
 
     expect(await screen.findByLabelText('Scene video renderer')).toHaveProperty('value', '');
     await openStage('board');
@@ -807,7 +807,7 @@ describe('MusicVideo project video renderer', () => {
   });
 
   it('clears an existing backend pin with the Install default option', async () => {
-    await openProject(PROJECT_NO_CLIP, 'produce');
+    await openProject(PROJECT_NO_CLIP, 'setup');
 
     fireEvent.change(await screen.findByLabelText('Scene video renderer'), {
       target: { value: '' },
@@ -822,7 +822,7 @@ describe('MusicVideo project video renderer', () => {
 
   it('persists the local model and uses it for scene generation', async () => {
     generateVideo.mockResolvedValue({ jobId: 'video-job-1' });
-    await openProject(PROJECT_NO_CLIP, 'produce');
+    await openProject(PROJECT_NO_CLIP, 'setup');
 
     const model = await screen.findByLabelText('Local video model');
     fireEvent.change(model, { target: { value: 'ltx23_distilled_q4' } });
@@ -860,7 +860,7 @@ describe('MusicVideo project video renderer', () => {
 
   it('uses project audio as no-vocals conditioning at the scene song offset', async () => {
     generateVideo.mockResolvedValue({ jobId: 'audio-reactive-job' });
-    await openProject(PROJECT_NO_CLIP, 'produce');
+    await openProject(PROJECT_NO_CLIP, 'setup');
 
     fireEvent.change(await screen.findByLabelText('Scene generation mode'), {
       target: { value: 'audioReactive' },
@@ -902,7 +902,7 @@ describe('MusicVideo project video renderer', () => {
         audioReactiveLora: 'audio-reactive-v2.safetensors',
         audioReactiveScale: 1.2,
       },
-    }, 'produce');
+    }, 'setup');
 
     const lora = await screen.findByLabelText('Audio reactive LoRA');
     expect(lora.value).toBe('audio-reactive-v2.safetensors');
@@ -922,7 +922,7 @@ describe('MusicVideo project video renderer', () => {
       falEnabled: true,
       models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }],
     });
-    await openProject(PROJECT_NO_CLIP, 'produce');
+    await openProject(PROJECT_NO_CLIP, 'setup');
 
     fireEvent.change(await screen.findByLabelText('Scene video renderer'), {
       target: { value: 'fal' },
@@ -961,7 +961,7 @@ describe('MusicVideo project video renderer', () => {
     await openProject({
       ...PROJECT_NO_CLIP,
       videoSettings: { backend: 'fal', falDuration: 6 },
-    }, 'produce');
+    }, 'setup');
 
     expect(await screen.findByLabelText('fal.ai scene clip duration')).toHaveProperty('value', '6');
     await openStage('board');
@@ -997,7 +997,7 @@ describe('MusicVideo project video renderer', () => {
     })));
 
     // Switching model clears the resolution pin — its alphabet is per model.
-    await openStage('produce');
+    await openStage('setup');
     fireEvent.change(await screen.findByLabelText('fal.ai cutaway model'), {
       target: { value: 'fal-ai/kling-video/v3/pro/image-to-video' },
     });
@@ -1033,7 +1033,7 @@ describe('MusicVideo project video renderer', () => {
     });
 
     it('labels Grok cutaway-only and blocks a performance shot on it without calling the provider', async () => {
-      await openProject(performanceProject({ backend: 'grok', grokDuration: 6 }), 'produce');
+      await openProject(performanceProject({ backend: 'grok', grokDuration: 6 }), 'setup');
 
       expect(await screen.findByRole('option', { name: 'Grok video (cutaway only)' })).toBeTruthy();
       await openStage('board');
@@ -2352,11 +2352,16 @@ describe('MusicVideo stage tabs (#9243)', () => {
   it('every control has exactly one home tab', async () => {
     const project = { ...PROJECT_WITH_CLIP, castAndSets: { status: 'review', revision: 1, plan: {}, images: {} }, audioAnalysis: PROJECT_ANALYZED.audioAnalysis };
     const landmarks = {
-      setup: { 'Change track': () => screen.queryByLabelText('Change track'), 'Concept': () => screen.queryByLabelText('Concept'), MIDI: () => screen.queryByRole('button', { name: /^MIDI$/ }) },
+      setup: {
+        'Change track': () => screen.queryByLabelText('Change track'), 'Concept': () => screen.queryByLabelText('Concept'), MIDI: () => screen.queryByRole('button', { name: /^MIDI$/ }),
+        // Project options: the render style and the image/video services are set once, here.
+        'Render style': () => document.getElementById('mv-toolbar-render-style'), 'Scene video renderer': () => screen.queryByLabelText('Scene video renderer'),
+        'Media': () => screen.queryByLabelText('Design and composition media'),
+      },
       'cast-sets': { 'Cast & Sets check-in': () => screen.queryByLabelText('Cast & Sets check-in') },
       board: { 'AI Plan': () => screen.queryByRole('button', { name: /AI Plan/ }), 'Add scene': () => screen.queryByRole('button', { name: /Add scene/ }), 'Shot prompt': () => screen.queryByLabelText('Shot prompt') },
-      produce: { 'Autopilot': () => screen.queryByLabelText('Autopilot'), 'Scene video renderer': () => screen.queryByLabelText('Scene video renderer'), 'Start production': () => screen.queryByRole('button', { name: /Start production/ }) },
-      compose: { 'Render style': () => document.getElementById('mv-toolbar-render-style'), Typography: () => screen.queryByText(/^Typography —/) },
+      produce: { 'Autopilot': () => screen.queryByLabelText('Autopilot'), 'Start production': () => screen.queryByRole('button', { name: /Start production/ }) },
+      compose: { Typography: () => screen.queryByText(/^Typography —/) },
       review: { 'Render final': () => screen.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': () => screen.queryByRole('button', { name: /Render excerpt/ }), 'Import development file': () => screen.queryByLabelText('Import development file') },
     };
     await openProject(project);
@@ -2638,6 +2643,41 @@ describe('direct production review navigation', () => {
     expect(screen.getByTestId('loc')).toHaveTextContent('/review');
     fireEvent.click(screen.getByRole('button', { name: 'go-1' }));
     await waitFor(() => expect(art).toHaveFocus());
+  });
+});
+
+describe('stage checklist and Setup project options', () => {
+  it('keeps Cast & Sets on the art approval after the unwanted sheet is gone, and says an approved sheet file is not that approval', async () => {
+    // The guide pick itself is covered by stageChecklist's unit test; selecting
+    // one here would make the open approvals panel fetch the sheet's file.
+    const project = { ...PROJECT_ANALYZED, scenes: [], castAndSets: { status: 'skipped' },
+      devArtifacts: [{ id: 'sheet', kind: 'cast-sets', title: 'Cast sheet', mimeType: 'text/html', version: 1, status: 'approved' }],
+      productionReview: { draft: { cast: 'c', environments: 'e', visualLanguage: 'v', motionLanguage: 'm', guideArtifactId: null,
+        lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] } },
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: false, problems: [] },
+        storyboard: { approved: false, problems: [] }, proof: { approved: false, problems: [] } } };
+    await openProject(project, 'cast-sets');
+    const checklist = screen.getByRole('region', { name: 'What this stage needs' });
+    expect(checklist).toHaveTextContent('1 of 3 done');
+    expect(checklist).toHaveTextContent('Pick a Cast & Sets sheet as the visual guide in Production approvals.');
+    expect(checklist).toHaveTextContent('Art direction approved');
+    expect(checklist).toHaveTextContent('Approving a sheet file does not approve the art direction');
+  });
+
+  it('shows the project options in Setup and saves a media mode and an autopilot tool change', async () => {
+    const project = { ...PROJECT_ANALYZED, mediaMode: 'code-images-video',
+      automation: { tools: ['image:local'], guidance: 'g', budgetUsd: 5, checkins: { castAndSets: 'review' } } };
+    updateMusicVideoProject.mockImplementation((_id, patch) => Promise.resolve({ ...project, ...patch }));
+    await openProject(project, 'setup');
+    const options = document.getElementById('mv-setup-options');
+    expect(options.open).toBe(true);
+    expect(options.querySelector('summary')).toHaveTextContent('Autopilot · Code + images + video · Footage');
+    fireEvent.change(screen.getByLabelText('Design and composition media'), { target: { value: 'code-only' } });
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, { mediaMode: 'code-only' }, { silent: true }));
+    fireEvent.click(screen.getByLabelText('Local video gen'));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, expect.objectContaining({
+      mode: 'autonomous', automation: expect.objectContaining({ tools: ['image:local', 'video:local'], guidance: 'g', budgetUsd: 5 }),
+    }), { silent: true }));
   });
 });
 

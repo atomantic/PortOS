@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, listPreviewSources, describeProjectStatus, resolveStageParam,
+  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist,
 } from './musicVideoStages.js';
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
@@ -216,4 +216,53 @@ it('links active draft and proof jobs to their own evidence controls before offe
   expect(deriveNextAction(project, { proofActive: true })).toMatchObject({ id: 'proof-progress', anchor: 'mv-review-render' });
   const nextAction = deriveNextAction(project, { draftActive: true });
   expect(describeProjectStatus(project, { progress: deriveStages(project), nextAction })).toMatchObject({ headline: 'Review render in progress', tone: 'muted' });
+});
+
+describe('stageChecklist', () => {
+  const NOT_APPROVED = {
+    art: { approved: false, problems: [] }, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'] },
+    proof: { approved: false, problems: [] }, readyForProduction: false,
+  };
+  const castProject = (over = {}) => ({
+    id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [],
+    devArtifacts: [{ id: 'sheet', title: 'Cast sheet', mimeType: 'text/html' }, { id: 'gone', title: 'Rejected sheet', deleted: true }],
+    productionReview: { draft: { cast: 'c', environments: 'e', visualLanguage: 'v', motionLanguage: 'm', guideArtifactId: 'sheet' } },
+    ...over,
+  });
+
+  it('keeps Cast & Sets open on the art approval, not on a sheet file, and says where to approve it', () => {
+    const items = stageChecklist('cast-sets', castProject(), NOT_APPROVED);
+    expect(items.map((i) => [i.id, i.done])).toEqual([['direction', true], ['guide', true], ['approve-art', false]]);
+    expect(items[1].label).toBe('Visual guide chosen: Cast sheet');
+    expect(items[2].detail).toMatch(/Approving a sheet file does not approve the art direction/);
+    expect(items[2].action).toEqual({ label: 'Review art direction', anchor: 'mv-review-art' });
+    // Its done answer matches the tab's own state, so the checklist and the "needs you" mark agree.
+    expect(deriveStages(castProject(), NOT_APPROVED).current).toBe('cast-sets');
+    const approved = stageChecklist('cast-sets', castProject(), APPROVED);
+    expect(approved.every((i) => i.done)).toBe(true);
+    expect(deriveStages(castProject(), APPROVED).stages.find((s) => s.id === 'cast-sets').state).toBe('done');
+  });
+
+  it('names what Cast & Sets is missing: unwritten direction, a deleted guide, and the server reason', () => {
+    const items = stageChecklist('cast-sets', castProject({
+      productionReview: { draft: { cast: 'c', environments: ' ', visualLanguage: '', motionLanguage: 'm', guideArtifactId: 'gone' } },
+    }), { ...NOT_APPROVED, art: { approved: false, problems: ['Attach a visual cast/environment sheet from Development artifacts.'] } });
+    expect(items[0]).toMatchObject({ done: false, detail: 'Still missing: sets, visual language.' });
+    expect(items[1]).toMatchObject({ done: false, label: 'Visual guide chosen' });
+    expect(items[2].detail).toBe('Attach a visual cast/environment sheet from Development artifacts.');
+  });
+
+  it('covers Setup, Board, Produce and Compose with the same done answers deriveStages uses', () => {
+    expect(stageChecklist('setup', { id: 'p' }).map((i) => i.done)).toEqual([false, false]);
+    expect(stageChecklist('setup', { id: 'p' })[0].action).toEqual({ label: 'Attach a track', anchor: 'mv-track' });
+    // A running autonomous run writes the song itself, so there is nothing to attach.
+    expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'running' } })[0]).toMatchObject({ action: null, detail: 'The autopilot run is making the song.' });
+    expect(stageChecklist('board', castProject({ scenes: [scene()] }), NOT_APPROVED).map((i) => [i.id, i.done]))
+      .toEqual([['shots', true], ['approve-storyboard', false]]);
+    expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])
+      .toMatchObject({ id: 'footage', label: 'Footage for every shot (1 of 2)', done: false });
+    // A code render draws its own picture: no footage item.
+    expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => i.id)).toEqual(['approve-proof']);
+    expect(stageChecklist('compose', castProject({ composition: { mode: 'composed', textCues: [] } }), APPROVED).map((i) => i.done)).toEqual([true, false]);
+  });
 });
