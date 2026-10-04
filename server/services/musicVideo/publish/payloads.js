@@ -29,7 +29,7 @@ const isVerticalCut = (e) => e?.status === 'complete' && e.aspect === '9:16' && 
  * excerpts flagged stale when the project changed since, plus the kit's
  * center-crop 9:16 encode (16:9 renders) while the kit is fresh.
  */
-export function verticalCuts(project) {
+function verticalCuts(project) {
   const kit = kitOf(project);
   const cuts = (project?.excerpts || []).filter(isVerticalCut)
     .map((e) => ({ id: e.id ?? null, filename: e.filename, startSec: e.startSec, endSec: e.endSec, stale: musicVideoDependencyChanges(project, e.dependencies).length > 0 }));
