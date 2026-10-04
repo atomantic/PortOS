@@ -82,7 +82,10 @@ export async function stageMusicVideoComposition(sourceDirectory, jobId, song, {
     if (prepare) await prepare(compositionDir);
     return { directory: `${MUSIC_VIDEO_SCRATCH_DIR}/${jobId}/composition`, scratchRoot };
   } catch (error) {
-    await rm(scratchRoot, { recursive: true, force: true });
+    await rm(scratchRoot, { recursive: true, force: true }).catch(cleanupError => {
+      maintenance.markCurrentUnsettled();
+      throw cleanupError;
+    });
     throw error;
   }
 }
@@ -341,17 +344,23 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
         ...(formats ? { videos: rendered.map(video => ({ format: video.format, ...summary(video) })) } : {}) };
     }
   } catch (error) {
+    if (job.committing) maintenance.markCurrentUnsettled();
     failure = error;
   } finally {
-    await page?.close();
+    if (page) await page.close().catch(error => {
+      maintenance.markCurrentUnsettled();
+      failure ||= error;
+    });
     if (audioDirectory) await rm(audioDirectory, { recursive: true, force: true }).catch(() => {
+      maintenance.markCurrentUnsettled();
       console.warn('⚠️ Could not remove temporary composition audio');
     });
     if (scratchRoot) await rm(scratchRoot, { recursive: true, force: true }).catch(() => {
+      maintenance.markCurrentUnsettled();
       console.warn('⚠️ Could not remove temporary music-video composition');
     });
     if (!success) {
-      for (const path of ownedPaths) await unlinkGuarded(path).catch(() => {});
+      for (const path of ownedPaths) await unlinkGuarded(path).catch(error => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
     }
     active.delete(jobId);
   }
