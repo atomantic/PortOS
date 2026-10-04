@@ -2,6 +2,7 @@ import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../u
 import MediaModePicker from './MediaModePicker.jsx';
 import { musicVideoMediaMode, musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { useEffect, useState, useRef } from 'react';
+import { useTimeTick } from '../../hooks/useTimeTick.js';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { Download, FileArchive, FolderInput, LayoutTemplate, Unlink, Film, RotateCcw } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -120,6 +121,14 @@ function DocumentFiles({ projectId, directory }) {
   );
 }
 
+
+/** Whole seconds since mount; mounted only while a generation runs, so it ticks only then. */
+function ElapsedSeconds() {
+  const [startedAt] = useState(() => Date.now());
+  const now = useTimeTick(1000);
+  return <>{Math.max(0, Math.floor((now - startedAt) / 1000))}s</>;
+}
+
 /**
  * The project's composition document (render style `document`): what is
  * attached, import (template / zip / data folder), export, the HUD overlay and
@@ -138,8 +147,6 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   const [candidate, setCandidate] = useState(null);
   const [selectedSection, setSelectedSection] = useState('');
   const [eventPending, setEventPending] = useState(false);
-  const [generationStartTime, setGenerationStartTime] = useState(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const {
     providers, selectedProviderId, selectedModel, availableModels, selectedProvider,
     setSelectedProviderId, setSelectedModel,
@@ -167,23 +174,6 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
       if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
     };
   }, [confirming]);
-
-  // Track elapsed time during generation
-  useEffect(() => {
-    if (busy !== 'generate' && busy !== 'regenerate') {
-      setGenerationStartTime(null);
-      setElapsedSeconds(0);
-      return;
-    }
-    if (!generationStartTime) {
-      setGenerationStartTime(Date.now());
-      return;
-    }
-    const interval = setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - generationStartTime) / 1000));
-    }, 100);
-    return () => clearInterval(interval);
-  }, [busy, generationStartTime]);
 
   const run = async (label, task, success) => {
     setBusy(label);
@@ -225,7 +215,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
 
   const docSummary = doc ? `${SOURCE_LABELS[doc.source?.kind] || 'imported'}${doc.source?.name ? ` · ${doc.source.name}` : ''}` : 'None yet';
   const generateSummary = busy === 'generate' || busy === 'regenerate'
-    ? `Generating… ${elapsedSeconds}s · ${selectedProvider?.name || 'provider'} / ${effectiveModel || 'model'}`
+    ? <>Generating… <ElapsedSeconds /> · {selectedProvider?.name || 'provider'} / {effectiveModel || 'model'}</>
     : candidate
     ? `Ready to review`
     : 'Generate or regenerate section';
@@ -292,7 +282,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         {!authoringValid && <p className="text-xs text-port-warning" role="status">Choose a compatible code authoring provider and model before generation.</p>}
         <div className="flex flex-wrap items-end gap-2">
           <button type="button" className={`${buttonCls} bg-port-accent text-white`} disabled={!!busy || eventPending || !authoringValid} onClick={generate}>
-            <Film size={14} /> {busy === 'generate' ? `Generating… ${elapsedSeconds}s` : musicVideoDocumentRenderer(project) === 'three' ? 'Generate authored 3D composition' : 'Generate mixed-media composition'}
+            <Film size={14} /> {busy === 'generate' ? <>Generating… <ElapsedSeconds /></> : musicVideoDocumentRenderer(project) === 'three' ? 'Generate authored 3D composition' : 'Generate mixed-media composition'}
           </button>
           {candidate?.source && <>
             <div>
@@ -303,7 +293,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
               </select>
             </div>
             <button type="button" className={buttonCls} disabled={!!busy || eventPending || !selectedSectionValid || candidate.stale || !authoringValid} onClick={regenerate}>
-              <RotateCcw size={14} /> {busy === 'regenerate' ? `Regenerating… ${elapsedSeconds}s` : 'Regenerate section'}
+              <RotateCcw size={14} /> {busy === 'regenerate' ? <>Regenerating… <ElapsedSeconds /></> : 'Regenerate section'}
             </button>
             <button type="button" className={buttonCls} disabled={!!busy || eventPending || !candidate.eventRevisionAvailable || !authoringValid} onClick={reviseEvents}>
               {busy === 'event-revision' ? 'Revising events…' : 'Revise events only'}
