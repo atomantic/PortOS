@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS } from '../lib/paths.js';
 import { POOL_CONFIG } from '../lib/db.js';
+import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal, databaseMaintenanceEndpointSchema } from '../lib/databaseMaintenanceJournal.js';
 import { databaseMaintenancePreflightSchema } from '../lib/validation.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -15,6 +16,7 @@ const refuse = (code, message) => new ServerError(message, { status: 409, code }
 const unavailable = () => refuse('DATABASE_PREFLIGHT_UNTRUSTED', 'Database configuration or work state could not be verified.');
 const stale = () => refuse('DATABASE_PREFLIGHT_STALE', 'Requested direction does not match the current database configuration and running pool.');
 const busy = () => refuse('DATABASE_PREFLIGHT_BUSY', 'PortOS has active or queued work. Wait for it to finish before database maintenance.');
+const ACCEPT_DRAIN_TIMEOUT_MS = 30_000;
 const count = z.number().int().nonnegative();
 // The dashboard summarizer intentionally accepts partial snapshots. Maintenance
 // cannot use a missing slice as proof that there are no writers in that domain.
@@ -108,11 +110,20 @@ export async function acceptDatabaseMaintenance(input) {
   const configuration = readConfiguration();
   validateDirection(direction, configuration);
   const journal = createDatabaseMaintenanceJournal();
+  // Publish the fence only at a whole-workflow boundary: admitted file-plus-row
+  // publications finish first, and a backup that owns the cut is never fenced
+  // out mid-snapshot. After the fence exists, new publications refuse on their
+  // own, so the cut is released as soon as begin() returns or fails.
+  const releaseSnapshotCut = await acquireBackupSnapshotCut({ timeoutMs: ACCEPT_DRAIN_TIMEOUT_MS }).catch(err => {
+    throw err.code === 'BACKUP_SNAPSHOT_BUSY' ? busy() : err;
+  });
   let operation;
   try {
     operation = journal.begin({ source: configuration.source, target: configuration.target });
   } catch {
     throw refuse('DATABASE_MAINTENANCE', 'Another database maintenance operation is active or requires recovery.');
+  } finally {
+    releaseSnapshotCut();
   }
   try {
     await assertTrustedIdle();

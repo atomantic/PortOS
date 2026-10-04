@@ -34,6 +34,7 @@ import { PATHS } from '../lib/paths.js';
 import { POOL_CONFIG, query } from '../lib/db.js';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
+import { acquireBackupSnapshotCut, withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { getSystemActivity } from '../services/activeProcessing.js';
 import { countActiveCosAgents, getPersistentMindImageWorkGuard } from '../services/updatePreflight.js';
@@ -245,6 +246,44 @@ describe('database cutover acceptance HTTP contract', () => {
     expect(journal.read()).toBeNull();
     expect(() => journal.assertAdmission()).not.toThrow();
     expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
+  });
+
+  it('publishes the fence only after an admitted file-plus-row publication drains, then refuses new ones', async () => {
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    let finishRow;
+    const halfPublished = withBackupAssetPublication(() => new Promise(resolve => { finishRow = resolve; }));
+    const accepting = accept().then(result => result);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(journal.read()).toBeNull();
+
+    finishRow();
+    await halfPublished;
+    expect((await accepting).status).toBe(202);
+    expect(journal.read()).toMatchObject({ stage: 'accepted' });
+    const work = vi.fn();
+    await expect(withBackupAssetPublication(work)).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it('refuses without a fence while a backup owns the snapshot cut, and accepts once it is released', async () => {
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    const releaseBackupCut = await acquireBackupSnapshotCut();
+    try {
+      const refused = await accept();
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe('DATABASE_PREFLIGHT_BUSY');
+      expect(journal.read()).toBeNull();
+      expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
+    } finally {
+      releaseBackupCut();
+    }
+    expect((await accept()).status).toBe(202);
+  });
+
+  it('releases its own cut when acceptance is cancelled, so a backup can still take one', async () => {
+    raceFinalCheck(busy);
+    expect((await accept()).body.code).toBe('DATABASE_PREFLIGHT_BUSY');
+    (await acquireBackupSnapshotCut())();
   });
 
   it('keeps the fence when the saved source changed during acceptance', async () => {

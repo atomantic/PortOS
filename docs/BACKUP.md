@@ -30,6 +30,26 @@ renderer is not stopped and cancellation is unchanged. A terminal write that
 fails inside the admission is retried inside it and releases it when it gives
 up.
 
+Database maintenance shares the same boundary and never terminates a render or
+stops PM2 to obtain it:
+
+- **A database restore (execution only; preview takes no cut)** acquires the cut before
+  it publishes its recovery journal. Admitted file-plus-row publications drain
+  completely first, so the replay never lands under a half-published pair. If a
+  backup owns the cut, or a publication does not drain within two minutes, the
+  restore returns `backup_snapshot_busy` without changing anything.
+- **Accepting a backend cutover** takes the cut around publishing the maintenance
+  fence (it waits up to 30 seconds to drain, and refuses with
+  `DATABASE_PREFLIGHT_BUSY` while a backup owns it). Once the fence exists, new
+  publications are refused before either store changes (`DATABASE_MAINTENANCE`),
+  and a backup refuses to start or to take its cut — a backup that already
+  reserved a snapshot marks it failed and preserves older recovery points.
+  Cancelling the operation reopens publication; nothing stays held.
+- Every release is owner-scoped: a failed or cancelled operation releases only the
+  cut it acquired and leaves the maintenance journal and restore-recovery
+  incomplete guards exactly as they were. The boundary is process-local; the
+  detached cutover worker runs only after the server stops.
+
 Admission inventory (`withBackupAssetPublication`):
 
 | Owner | Status |
@@ -41,7 +61,7 @@ Admission inventory (`withBackupAssetPublication`):
 | Recovery commit of a completion whose terminal write failed (the next queue write acknowledges it outside any admission) | Outstanding |
 | Other `mediaJobEvents` `completed` subscribers that write rows (universe-builder collection hook, LoRA dataset, character sheet, sprite animation, Creative Director scene runner/plan advance/seed settle, music-video production) | Outstanding |
 | Durable replacement/deletion owners | Outstanding (#9982) |
-| Database maintenance | Outstanding (#9983) |
+| Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
 
 This is part of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923).
 Until every owner is covered, `status: ok` reports that the file
@@ -225,6 +245,7 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 | `{ status: 'failed', reason: 'dump_incomplete', error }` | The dump lacks the `pg_dump` completion marker or a core PortOS table (header-only or truncated) — refused before any reset |
 | `{ status: 'failed', reason: 'restore_compatibility', error }` | Target PostgreSQL major cannot be established — repair the version check and retry preview before execution |
 | `{ status: 'failed', reason: 'restore_journal', error }` | The recovery journal could not be written — refused before any reset |
+| `{ status: 'failed', reason: 'backup_snapshot_busy', error }` | A backup cut is active, or admitted asset publications did not drain — refused before the recovery journal or any reset; retry later |
 | `{ status: 'failed', reason: 'restore_error' \| 'timeout', error }` | `psql` replay failed (stderr captured) and was **proven rolled back** from its receipt (below) |
 | `{ status: 'failed', reason: 'restore_commit_unknown', error, recovery }` | `psql` did not report success and the receipt could not settle whether the replay committed — recovery pending |
 | `{ status: 'failed', reason: 'restore_schema_reconciliation', error, recovery }` | The dump committed, but current schema recovery failed; **not rolled back**, recovery pending |

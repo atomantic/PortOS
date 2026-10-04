@@ -62,6 +62,14 @@ vi.mock('../lib/db.js', async () => ({
   getServerMajorVersion: vi.fn(() => null),
 }));
 
+// The real journal reads the install's data root, never this suite's temp tree.
+const maintenanceFence = vi.hoisted(() => ({ fenced: false }));
+vi.mock('../lib/databaseMaintenanceJournal.js', () => ({
+  assertDatabaseAdmission: () => {
+    if (maintenanceFence.fenced) throw Object.assign(new Error('Persistent database maintenance is active'), { status: 503, code: 'DATABASE_MAINTENANCE' });
+  },
+}));
+
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
@@ -181,6 +189,7 @@ function fakeProc() {
 // The restore/dump helpers await filesystem and health checks before calling
 // spawn() and attaching child-process listeners. Wait for the mocked spawn
 // call itself so CI scheduling cannot emit into an uninitialized fake process.
+const settle = () => new Promise(resolve => setTimeout(resolve, 25));
 const flush = () => vi.waitFor(() => expect(spawn).toHaveBeenCalled());
 
 const overridable = DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path);
@@ -1329,6 +1338,52 @@ describe('restorePostgres', () => {
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
     expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses a real restore while a backup cut is active and releases only its own admission', async () => {
+    const { acquireBackupSnapshotCut, withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const releaseBackupCut = await acquireBackupSnapshotCut();
+    try {
+      expect(await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false }))
+        .toMatchObject({ status: 'failed', reason: 'backup_snapshot_busy' });
+      expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(readRecoveryJournal()).toBeNull();
+      // The refused restore never owned the cut: the backup's remains closed.
+      let admitted = false;
+      const waiting = withBackupAssetPublication(() => { admitted = true; });
+      await settle();
+      expect(admitted).toBe(false);
+      releaseBackupCut();
+      await waiting;
+    } finally {
+      releaseBackupCut();
+    }
+  });
+
+  it('starts a real restore only after an admitted file-plus-row publication drains, then reopens publication', async () => {
+    const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    let finishRow;
+    const halfPublished = withBackupAssetPublication(() => new Promise(resolve => { finishRow = resolve; }));
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const restore = restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
+    await settle();
+    expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+
+    finishRow();
+    await halfPublished;
+    await flush();
+    expect(withDatabaseMaintenance).toHaveBeenCalledTimes(1);
+    proc.emit('close', 0);
+    expect(await restore).toMatchObject({ status: 'ok', dryRun: false });
+    await expect(withBackupAssetPublication(() => 'admitted')).resolves.toBe('admitted');
   });
 
   it('treats a 0-byte dump as no_dump (does not restore a truncated snapshot)', async () => {
@@ -3372,7 +3427,7 @@ describe('runBackup lifecycle', () => {
       expect(isBackupInProgress()).toBe(false);
     }
 
-    afterEach(() => { snapshotCutSeam.wrap = null; });
+    afterEach(() => { snapshotCutSeam.wrap = null; maintenanceFence.fenced = false; });
 
     it('fails the snapshot without copying, publishing or pruning when admitted takes cannot drain, then reopens admission', async () => {
       const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
@@ -3389,6 +3444,40 @@ describe('runBackup lifecycle', () => {
       await expect(withBackupAssetPublication(() => 'admitted')).resolves.toBe('admitted');
       finishTake();
       await stuckTake;
+    });
+
+    it('refuses to start while database maintenance is fenced, without reserving a snapshot or pruning', async () => {
+      await seedCompletedSnapshots();
+      maintenanceFence.fenced = true;
+      try {
+        await expect(runBackup(destRoot, null, { retentionCount: 1 })).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+      } finally {
+        maintenanceFence.fenced = false;
+      }
+      expect(spawn).not.toHaveBeenCalled();
+      const { listSnapshots, getState } = await import('./backup.js');
+      expect((await listSnapshots(destRoot)).map(snapshot => snapshot.id).sort()).toEqual(OLD_IDS);
+      expect((await getState()).status).toBe('error');
+      expect(isBackupInProgress()).toBe(false);
+    });
+
+    it('closes the cut when maintenance fences while admitted takes drain, leaving the admitted take intact', async () => {
+      const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+      await seedCompletedSnapshots();
+      let finishTake;
+      let takeCompleted = false;
+      const admittedTake = withBackupAssetPublication(() => new Promise(resolve => { finishTake = resolve; })).then(() => { takeCompleted = true; });
+      const pending = runBackup(destRoot, null, { retentionCount: 1 }).catch(error => error);
+      await new Promise(resolve => setTimeout(resolve, 25));
+      maintenanceFence.fenced = true;
+      finishTake();
+      await admittedTake;
+      expect(await pending).toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+      maintenanceFence.fenced = false;
+      expect(takeCompleted).toBe(true);
+      expect(spawn).not.toHaveBeenCalled();
+      await expectFailedSnapshotWithoutPruning();
+      await expect(withBackupAssetPublication(() => 'admitted')).resolves.toBe('admitted');
     });
 
     it('fails the snapshot without pruning when the cut cannot be released', async () => {
