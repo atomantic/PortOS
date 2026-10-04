@@ -72,10 +72,12 @@ beforeEach(() => {
   api.regenerateMusicVideoCodeSection.mockResolvedValue({ project });
 });
 
-function renderPanel(testProject = project) {
+const APPROVED = { storyboard: { approved: true } };
+
+function renderPanel(testProject = project, readiness = APPROVED) {
   return render(
     <MemoryRouter initialEntries={['/music-video/mv-1']}>
-      <CodeVideoPanel project={testProject} audioUrl={null} onProject={vi.fn()} />
+      <CodeVideoPanel project={testProject} audioUrl={null} onProject={vi.fn()} productionReadiness={readiness} />
     </MemoryRouter>,
   );
 }
@@ -125,12 +127,19 @@ describe('CodeVideoPanel section select (#10163)', () => {
   });
 
   it('disables both Generate buttons and shows reason when storyboard not approved', async () => {
-    renderPanel(projectNoStoryboard);
+    renderPanel(projectNoStoryboard, { storyboard: { approved: false } });
     await screen.findByLabelText('Section to regenerate');
     const generateBtn = screen.getByRole('button', { name: /Generate code video/ });
     const regenerateBtn = screen.getByRole('button', { name: /Regenerate section/ });
     expect(generateBtn).toBeDisabled();
     expect(regenerateBtn).toBeDisabled();
+    expect(await screen.findByText('Approve the storyboard first')).toBeTruthy();
+  });
+
+  it('stays gated when a saved approval is stale (server readiness says not approved)', async () => {
+    renderPanel(project, { storyboard: { approved: false } });
+    await screen.findByLabelText('Section to regenerate');
+    expect(screen.getByRole('button', { name: /Generate code video/ })).toBeDisabled();
     expect(await screen.findByText('Approve the storyboard first')).toBeTruthy();
   });
 

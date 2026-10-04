@@ -17,7 +17,7 @@ const inputCls = 'block w-full rounded border border-port-border bg-port-card px
  * Generation is gated on storyboard approval with inline reason (#10163).
  * Sections with generated code are marked in the select (#10163).
  */
-export default function CodeVideoPanel({ project, audioUrl, onProject }) {
+export default function CodeVideoPanel({ project, audioUrl, onProject, productionReadiness }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [doc, setDoc] = useState(null);
   const [error, setError] = useState('');
@@ -136,15 +136,7 @@ export default function CodeVideoPanel({ project, audioUrl, onProject }) {
     [project?.composition?.codeVideo?.sections],
   );
 
-  // Get production readiness from project (server computes this for read endpoints)
-  const productionReadiness = useMemo(() => {
-    if (!project?.productionReview) return null;
-    // Check if storyboard is approved (simple client-side check based on available data)
-    const approvalBasis = project.productionReview.approvals?.storyboard?.basis;
-    const storyboardApproved = !!approvalBasis;
-    return { storyboard: { approved: storyboardApproved } };
-  }, [project?.productionReview]);
-
+  // Server-computed readiness: approval freshness included, null while loading.
   const canGenerate = productionReadiness?.storyboard?.approved ?? false;
   const generateDisabledReason = !canGenerate ? 'Approve the storyboard first' : null;
 
