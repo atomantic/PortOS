@@ -57,6 +57,29 @@ describe('ManuscriptImpactPreview accept-all', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it('settles + snapshots the touched section before each member and hands the snapshot to onAccepted (#9954)', async () => {
+    acceptPipelineManuscriptFix.mockResolvedValue({ comment: { id: 'cx', status: 'accepted' }, sections: [] });
+    const snapshots = [new Map([['i1:prose', 'a']]), new Map([['i2:prose', 'b']])];
+    const onBeginMutation = vi.fn().mockImplementation(() => Promise.resolve(snapshots[onBeginMutation.mock.calls.length - 1]));
+    const { onAccepted, onClose } = renderPreview({ onBeginMutation });
+    fireEvent.click(screen.getByText('Accept all 2 edits'));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onBeginMutation.mock.calls).toEqual([[['i1:prose']], [['i2:prose']]]);
+    expect(onAccepted.mock.calls.map((c) => c[1])).toEqual(snapshots);
+  });
+
+  it('stops the batch, keeping the modal open, when a section\'s unsaved draft cannot be saved (#9954)', async () => {
+    const onBeginMutation = vi.fn().mockResolvedValue(null);
+    const { onAccepted, onClose } = renderPreview({ onBeginMutation });
+    fireEvent.click(screen.getByText('Accept all 2 edits'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(acceptPipelineManuscriptFix).not.toHaveBeenCalled();
+    expect(onBeginMutation).toHaveBeenCalledTimes(1);
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(toast.error.mock.calls[0][0]).toMatch(/Applied 0 of 2/);
+  });
+
   it('reports a partial failure, applies the rest, and keeps the modal open', async () => {
     acceptPipelineManuscriptFix
       .mockResolvedValueOnce({ comment: { id: 'c1', status: 'accepted' }, sections: [] })
