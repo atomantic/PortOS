@@ -156,6 +156,7 @@ vi.mock('./brainStorage.js', async (importOriginal) => ({
   invalidateAllCaches: vi.fn(),
 }));
 import { reloadSettings, withLiveSettingsRestore } from './settings.js';
+import { createDatabaseAuthority } from '../lib/databaseAuthority.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary, deleteSnapshot } from './backup.js';
 import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../lib/sharedSchemas.js';
@@ -2072,6 +2073,7 @@ describe('restoreSnapshot manifest verification', () => {
   afterEach(async () => {
     await realFs?.rm(tmpRoot, { recursive: true, force: true });
     await realFs?.rm(joinPath(PATHS.data, 'restore-integrity'), { recursive: true, force: true });
+    await realFs?.rm(joinPath(PATHS.data, 'database-authority.json'), { force: true });
   });
 
   async function writeSnapshotFile(relativePath, content) {
@@ -2297,6 +2299,136 @@ describe('restoreSnapshot manifest verification', () => {
       else process.env.PORTOS_RSYNC = previousRsync;
       spawn.mockReset();
     }
+  });
+
+  // #10064: database-authority.json is machine-local admission state. A snapshot
+  // keeps it as recovery evidence, but a restore must never install it: another
+  // machine's (or an older cutover's) record would fence a healthy local backend
+  // as DATABASE_RETIRED_BACKEND, including across restarts. Real rsync + the real
+  // authority adapter, because a mocked transfer cannot show the fence.
+  describe('machine-local database authority (#10064)', () => {
+    const native = { mode: 'native', host: '127.0.0.1', port: 5432, database: 'example_db', user: 'example_user' };
+    const docker = { mode: 'docker', host: '127.0.0.1', port: 5561, database: 'example_db', user: 'example_user' };
+    const authorityDoc = (operationId, source, target) => JSON.stringify({
+      version: 1, operationId, releasedAt: '2026-09-01T00:00:00.000Z', source, target,
+    }, null, 2) + '\n';
+    const SNAPSHOT_AUTHORITY = authorityDoc('11111111-1111-4111-8111-111111111111', native, docker);
+    const NEWER_LOCAL_AUTHORITY = authorityDoc('22222222-2222-4222-8222-222222222222', docker, native);
+    const poolFor = endpoint => ({ host: endpoint.host, port: endpoint.port, database: endpoint.database, user: endpoint.user });
+    const authorityPath = () => joinPath(PATHS.data, 'database-authority.json');
+    const RECORD = 'brain/authority-neighbor.json';
+
+    async function seedSnapshot({ withManifest = true } = {}) {
+      const recordHash = await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
+      const authorityHash = await writeSnapshotFile('database-authority.json', SNAPSHOT_AUTHORITY);
+      if (withManifest) await writeManifest({ [RECORD]: recordHash, 'database-authority.json': authorityHash });
+    }
+
+    async function withRealRsync(context, run) {
+      if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+        context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+        return;
+      }
+      const previousRsync = process.env.PORTOS_RSYNC;
+      delete process.env.PORTOS_RSYNC;
+      spawn.mockImplementation((...args) => spawnChild(...args));
+      try {
+        await run();
+      } finally {
+        if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
+        else process.env.PORTOS_RSYNC = previousRsync;
+        spawn.mockReset();
+        await realFs.rm(joinPath(PATHS.data, 'brain', 'authority-neighbor.json'), { force: true });
+      }
+    }
+
+    it.each([
+      { name: 'full restore', options: {} },
+      { name: 'brain-scoped restore', options: { subdirFilter: 'brain' } },
+    ])('a $name keeps an absent destination authority absent, so a healthy native backend is still admitted', async ({ options }, context) => {
+      await withRealRsync(context, async () => {
+        for (const manifest of [true, false]) {
+          await realFs.rm(joinPath(snapshotDir, 'manifest.json'), { force: true });
+          await seedSnapshot({ withManifest: manifest });
+          await realFs.rm(authorityPath(), { force: true });
+          await realFs.rm(joinPath(PATHS.data, RECORD), { force: true });
+
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, ...options });
+          expect(preview.changedFiles.some(line => line.includes('database-authority.json'))).toBe(false);
+          expect(preview.changedFiles.some(line => line.includes(RECORD))).toBe(true);
+
+          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, ...options });
+          expect(existsSync(authorityPath())).toBe(false);
+          expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+          expect(createDatabaseAuthority(PATHS.data).assertPool(poolFor(native))).toBeNull();
+        }
+      });
+    });
+
+    it('keeps a newer reverse-cutover authority over an older snapshot\'s, and still refuses the genuinely retired backend', async context => {
+      await withRealRsync(context, async () => {
+        await seedSnapshot();
+        await realFs.writeFile(authorityPath(), NEWER_LOCAL_AUTHORITY);
+
+        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+
+        expect(await realFs.readFile(authorityPath(), 'utf8')).toBe(NEWER_LOCAL_AUTHORITY);
+        const authority = createDatabaseAuthority(PATHS.data);
+        expect(authority.assertPool(poolFor(native))).toMatchObject({ operationId: '22222222-2222-4222-8222-222222222222' });
+        expect(() => authority.assertPool(poolFor(docker))).toThrow(expect.objectContaining({ code: 'DATABASE_RETIRED_BACKEND' }));
+      });
+    });
+
+    it('leaves a damaged destination authority byte-identical and still fail-closed', async context => {
+      await withRealRsync(context, async () => {
+        await seedSnapshot();
+        await realFs.writeFile(authorityPath(), '{ not json');
+
+        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+
+        expect(await realFs.readFile(authorityPath(), 'utf8')).toBe('{ not json');
+        expect(() => createDatabaseAuthority(PATHS.data).assertPool(poolFor(native)))
+          .toThrow(expect.objectContaining({ code: 'DATABASE_MAINTENANCE' }));
+      });
+    });
+
+    it('also keeps a mixed-case authority entry from replacing the destination record', async context => {
+      await withRealRsync(context, async () => {
+        await seedSnapshot();
+        await writeSnapshotFile('Database-Authority.json', SNAPSHOT_AUTHORITY);
+        await realFs.rm(joinPath(snapshotDataDir, 'database-authority.json'));
+        await writeManifest({ [RECORD]: createHash('sha256').update('{"value":"snapshot"}').digest('hex') });
+        await realFs.writeFile(authorityPath(), NEWER_LOCAL_AUTHORITY);
+
+        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+
+        expect(await realFs.readFile(authorityPath(), 'utf8')).toBe(NEWER_LOCAL_AUTHORITY);
+        expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+        await realFs.rm(joinPath(PATHS.data, 'Database-Authority.json'), { force: true });
+      });
+    });
+
+    it('does not fail integrity for an authority file the restore never transfers', async () => {
+      await seedSnapshot();
+      await realFs.writeFile(joinPath(snapshotDataDir, 'database-authority.json'), 'edited after sealing');
+      spawn.mockReturnValueOnce(fakeProc());
+      const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      spawn.mock.results[0].value.emit('close', 0);
+      await expect(pending).resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+    });
+
+    it.each(['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json'])(
+      'refuses an explicit %s selection before verification or transfer, for preview and execution alike',
+      async subdirFilter => {
+        await seedSnapshot();
+        for (const dryRun of [true, false]) {
+          await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, subdirFilter }))
+            .rejects.toMatchObject({ status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL', message: expect.stringMatching(/machine-local/) });
+        }
+        expect(spawn).not.toHaveBeenCalled();
+      },
+    );
   });
 
   // #7299: `--checksum` makes rsync digest BOTH copies of every file in scope,
@@ -2847,6 +2979,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=Thumbs.db',
         '--exclude=desktop.ini',
         '--exclude=._*',
+        // Machine-local admission state is never installed by a restore (#10064).
+        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
         '--dry-run',
         // Leading `/` is load-bearing: rsync matches an unanchored pattern
         // against the end of every path, so `brain/***` would also restore
@@ -2872,6 +3006,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=Thumbs.db',
         '--exclude=desktop.ini',
         '--exclude=._*',
+        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
       ]);
     });
 
