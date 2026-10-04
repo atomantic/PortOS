@@ -144,10 +144,13 @@ const ERROR_PATTERNS = [
     // phrase story text can legitimately contain, and this scan reads the
     // model's entire screen.
     //
-    // `hit your (<word> ){1,2}limit` is ONE alternative covering the whole
-    // banner family rather than an enumeration of limit kinds, because the kind
-    // and the separator both vary and an enumeration kept missing live wordings.
-    // At least one kind word is REQUIRED: every real banner names the kind
+    // `hit your [<modifier> ]<kind> limit` is ONE alternative covering the whole
+    // banner family regardless of separator. The kind slot is a closed
+    // vocabulary (session, usage, weekly, monthly, daily, hourly, spend, N-hour)
+    // with one optional leading modifier (a model name, `monthly spend`): an
+    // open `<word> limit` slot matched `hit your tool call limit` in tool logs
+    // and file contents, which would bench a healthy provider. A new CLI kind
+    // needs one word added here. At least one kind word is REQUIRED: every real banner names the kind
     // (`session`, `usage`, `weekly`, `5-hour`, `monthly spend`, `Opus usage`),
     // while a bare `hit your limit` is reachable by ordinary prose — "he had
     // hit your limit of patience" matched when the kind was optional.
@@ -161,7 +164,7 @@ const ERROR_PATTERNS = [
     // `5-hour`/`weekly`/`Opus` kinds the CLI also emits were missing for the
     // same reason. Anchored on the second-person `hit your … limit` so the
     // bound wildcard cannot be reached by prose about a limit.
-    pattern: /(?:hit your (?:[\w-]+ ){1,2}limit\b|usage limit|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
+    pattern: /(?:hit your (?:[\w-]+ )?(?:session|usage|weekly|monthly|daily|hourly|spend|\d+-hour) limit\b|usage limit|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
     category: ERROR_CATEGORIES.USAGE_LIMIT,
     requiresFallback: true,
     actionable: true,
@@ -264,7 +267,7 @@ const WAIT_TIME_PATTERNS = [
   // of a DURATION phrased off `resets` (`resets 5 minutes from now` → `5`),
   // which the general duration scan below reads correctly as `5 minutes`.
   // `resets in 3h51m14s` has no digit after `resets` and falls through either way.
-  /resets?\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2})\s*(?:\(([^)]+)\))?/i,
+  /resets?\s+(\d{1,2}(?::\d{2})?[ \t]*(?:am|pm)\b|\d{1,2}:\d{2})[ \t]*(?:\(([^)]+)\))?/i,
   /try again in\s+((?:\d+\s*(?:day|hour|minute|second)s?\s*)+)/i,
   /wait\s+((?:\d+\s*(?:day|hour|minute|second)s?\s*)+)/i,
   /in\s+(\d+)\s*(day|hour|minute|second)s?/i,
