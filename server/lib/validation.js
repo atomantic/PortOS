@@ -1740,6 +1740,19 @@ export function validateRequest(schema, data) {
   });
 }
 
+// Media cancellation bodies (#9932). An OMITTED jobId keeps the legacy
+// "newest/running job" selection; a SUPPLIED jobId must be a usable id — a
+// malformed one (array, object, null, blank) is a 400, never silently treated
+// as absent, because absent selects a different live render to cancel.
+export const mediaCancelJobIdSchema = z.string().trim().min(1).max(200);
+export const imageCancelBodySchema = z.object({
+  jobId: mediaCancelJobIdSchema.optional(),
+  all: z.boolean().optional(),
+});
+export const videoCancelBodySchema = z.object({
+  jobId: mediaCancelJobIdSchema.optional(),
+});
+
 export const rapidReaderLibraryParamsSchema = z.object({ id: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/) });
 export const rapidReaderLibraryCreateSchema = z.object({ title: z.string().trim().min(1).max(200), author: z.string().trim().max(200).optional(), text: z.string().trim().min(1).max(2 * 1024 * 1024) });
 export const rapidReaderLibraryFetchSchema = z.object({ url: z.string().trim().url().max(2000).refine((value) => /^https?:\/\//i.test(value), 'url must be http(s)'), title: z.string().trim().min(1).max(200).optional() });

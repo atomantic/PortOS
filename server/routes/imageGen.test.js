@@ -70,6 +70,7 @@ vi.mock('../services/imageGen/index.js', () => ({
   generateAvatar: vi.fn(),
   attachSseClient: vi.fn(() => false),
   cancel: vi.fn(() => false),
+  cancelJob: vi.fn(() => false),
   IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok', AGY: 'agy' },
   IMAGE_GEN_MODES: ['external', 'local', 'codex', 'grok', 'agy'],
   CLOUD_IMAGE_GEN_MODES: ['codex', 'grok', 'agy'],
@@ -1377,6 +1378,75 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(200);
       expect(mediaJobQueue.cancelJob).toHaveBeenCalledTimes(1);
       expect(mediaJobQueue.cancelJob.mock.calls[0][0]).toBe('middle');
+    });
+  });
+
+  // Explicit-target contract (#9932): a named id cancels that job or nothing —
+  // it never degrades to bulk cancellation or to a different live job.
+  describe('POST /cancel explicit-target contract', () => {
+    it.each([
+      ['array', []],
+      ['object', {}],
+      ['null', null],
+      ['whitespace', '   '],
+      ['number', 7],
+    ])('rejects a %s jobId with 400 and cancels nothing', async (_label, jobId) => {
+      // Validation runs before any job lookup, so no queue state is needed.
+      const response = await request(app).post('/api/image-gen/cancel').send({ jobId });
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+      expect(imageGen.cancelJob).not.toHaveBeenCalled();
+      expect(imageGen.cancel).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-boolean all flag with 400', async () => {
+      const response = await request(app).post('/api/image-gen/cancel').send({ all: 'yes' });
+      expect(response.status).toBe(400);
+      expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+      expect(imageGen.cancel).not.toHaveBeenCalled();
+    });
+
+    it('409s for a known terminal job without touching live job B or any bulk method', async () => {
+      mediaJobQueue.listJobs.mockReturnValueOnce([
+        { id: 'running-b', kind: 'image', status: 'running' },
+        { id: 'finished-a', kind: 'image', status: 'completed' },
+      ]);
+      const response = await request(app).post('/api/image-gen/cancel').send({ jobId: 'finished-a' });
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('ALREADY_TERMINAL');
+      expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+      expect(imageGen.cancelJob).not.toHaveBeenCalled();
+      expect(imageGen.cancel).not.toHaveBeenCalled();
+    });
+
+    it('404s for an unknown id after asking providers for that exact id only', async () => {
+      mediaJobQueue.listJobs.mockReturnValueOnce([{ id: 'running-b', kind: 'image', status: 'running' }]);
+      imageGen.cancelJob.mockReturnValueOnce(false);
+      const response = await request(app).post('/api/image-gen/cancel').send({ jobId: 'expired-a' });
+      expect(response.status).toBe(404);
+      expect(response.body.code).toBe('NOT_FOUND');
+      expect(imageGen.cancelJob).toHaveBeenCalledWith('expired-a');
+      expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+      expect(imageGen.cancel).not.toHaveBeenCalled();
+    });
+
+    it('cancels an exact legacy-provider job the queue does not know, never the bulk path', async () => {
+      mediaJobQueue.listJobs.mockReturnValueOnce([]);
+      imageGen.cancelJob.mockReturnValueOnce(true);
+      const response = await request(app).post('/api/image-gen/cancel').send({ jobId: ' codex-1 ' });
+      expect(response.status).toBe(200);
+      expect(response.body.ok).toBe(true);
+      expect(imageGen.cancelJob).toHaveBeenCalledWith('codex-1');
+      expect(imageGen.cancel).not.toHaveBeenCalled();
+    });
+
+    it('maps a queue-reported ALREADY_TERMINAL race (job finished mid-request) to 409', async () => {
+      mediaJobQueue.listJobs.mockReturnValueOnce([{ id: 'racing', kind: 'image', status: 'running' }]);
+      mediaJobQueue.cancelJob.mockResolvedValueOnce({ ok: false, code: 'ALREADY_TERMINAL', status: 'completed', error: 'Job is already finishing' });
+      const response = await request(app).post('/api/image-gen/cancel').send({ jobId: 'racing' });
+      expect(response.status).toBe(409);
+      expect(imageGen.cancel).not.toHaveBeenCalled();
     });
   });
 

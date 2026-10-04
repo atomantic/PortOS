@@ -14,7 +14,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
-  validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
+  validateRequest, imageCancelBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
@@ -847,17 +847,16 @@ router.post('/cancel', asyncHandler(async (req, res) => {
   //   1. body.all === true — cancel every queued/running image job. Used by
   //      the writers-room storyboard "Cancel renders" CTA, which can have
   //      20+ scene renders in flight at once.
-  //   2. Explicit body.jobId — cancel that queued/running local image job.
-  //      Required for users with multiple in-flight renders.
+  //   2. Explicit body.jobId — cancel exactly that job and NOTHING else. An id
+  //      that is unknown (404) or already terminal (409) never falls through
+  //      to another job or a bulk cancel (#9932). A malformed id is a 400.
   //   3. No jobId — cancel the newest queued/running local image job (most
   //      recent activity wins, matching the user's last "submit" gesture).
   //   4. No queue match — fall through to the codex-mode cancel.
-  const requestedJobId = typeof req.body?.jobId === 'string' && req.body.jobId.trim()
-    ? req.body.jobId.trim()
-    : undefined;
-  const cancellable = listJobs({ kind: 'image' })
-    .filter((j) => j.status === 'queued' || j.status === 'running');
-  if (req.body?.all === true) {
+  const { jobId: requestedJobId, all } = validateRequest(imageCancelBodySchema, req.body ?? {});
+  const imageJobs = listJobs({ kind: 'image' });
+  const cancellable = imageJobs.filter((j) => j.status === 'queued' || j.status === 'running');
+  if (all === true) {
     // Cancel queued first so the running job's slot doesn't get refilled the
     // moment we cancel it. Settle individually so one stale job doesn't
     // block the rest. cancellable is already a fresh filter() result.
@@ -872,9 +871,21 @@ router.post('/cancel', asyncHandler(async (req, res) => {
     return res.json({ ok: true, canceled: results.filter((r) => r?.ok).length, attempted: results.length });
   }
   if (requestedJobId) {
-    const target = cancellable.find((j) => j.id === requestedJobId);
-    if (target) return res.json(await cancelJob(target.id));
-    // jobId not in our queue — fall through (could be a codex job).
+    const known = imageJobs.find((j) => j.id === requestedJobId);
+    if (known) {
+      if (!cancellable.includes(known)) {
+        throw new ServerError(`Job already ${known.status}`, { status: 409, code: 'ALREADY_TERMINAL' });
+      }
+      const result = await cancelJob(known.id);
+      if (!result?.ok && result?.code) {
+        throw new ServerError(result.error || 'Cancel failed', { status: result.code === 'ALREADY_TERMINAL' ? 409 : 404, code: result.code });
+      }
+      return res.json(result);
+    }
+    // Not in the queue — it may be a legacy provider job (sync codex/grok/agy/
+    // fal, local) the dispatcher owns. Exact-ID only; never the bulk path.
+    if (imageGen.cancelJob(requestedJobId)) return res.json({ ok: true });
+    throw new ServerError('Job not found or expired', { status: 404 });
   } else if (cancellable.length) {
     // "Most recent submit" — explicitly sort by queuedAt DESC instead of
     // relying on listJobs() ordering (which puts gpuRunning before

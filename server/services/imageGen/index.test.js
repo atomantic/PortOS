@@ -4,22 +4,28 @@ const settings = vi.hoisted(() => ({ value: {} }));
 const models = vi.hoisted(() => ({ value: [] }));
 
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => settings.value) }));
+const localMock = vi.hoisted(() => ({ activeJob: null, cancel: vi.fn(() => true) }));
 vi.mock('./local.js', () => ({
-  getActiveJob: () => null,
+  getActiveJob: () => localMock.activeJob,
   attachSseClient: () => false,
-  cancel: () => false,
+  cancel: localMock.cancel,
 }));
 // The model registry moved behind the shared diagnosis in localRuntime.js, which
 // reads it from the lib leaf rather than through the renderer.
 vi.mock('../../lib/mediaModels.js', () => ({ getImageModels: vi.fn(() => models.value) }));
 vi.mock('./external.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null }));
-vi.mock('./codex.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancelAll: () => false }));
-vi.mock('./grok.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancelAll: () => false }));
-vi.mock('./agy.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancelAll: () => false }));
+const codexMock = vi.hoisted(() => ({ cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
+vi.mock('./codex.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancel: codexMock.cancel, cancelAll: codexMock.cancelAll }));
+const grokMock = vi.hoisted(() => ({ cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
+vi.mock('./grok.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancel: grokMock.cancel, cancelAll: grokMock.cancelAll }));
+const agyMock = vi.hoisted(() => ({ cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
+vi.mock('./agy.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancel: agyMock.cancel, cancelAll: agyMock.cancelAll }));
+const falMock = vi.hoisted(() => ({ cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
+vi.mock('./fal.js', async (importOriginal) => ({ ...(await importOriginal()), cancel: falMock.cancel, cancelAll: falMock.cancelAll }));
 vi.mock('./setup.js', () => ({ getSetupCheck: vi.fn() }));
 vi.mock('../../lib/pythonSetup.js', () => ({ isFlux2VenvHealthy: vi.fn(), FLUX2_VENV_DEFAULT: '/test/venv-flux2/bin/python3' }));
 
-import { checkConnection } from './index.js';
+import { checkConnection, cancelJob } from './index.js';
 import { getSetupCheck } from './setup.js';
 import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 
@@ -32,6 +38,9 @@ const mfluxModel = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localMock.activeJob = null;
+  localMock.cancel.mockReturnValue(true);
+  for (const m of [codexMock, grokMock, agyMock, falMock]) m.cancel.mockReset().mockReturnValue(false);
   models.value = [mfluxModel];
   settings.value = { imageGen: { mode: 'local', local: { modelId: 'dev', pythonPath: '/test/python3' } } };
 });
@@ -126,5 +135,43 @@ describe('local image connection readiness', () => {
       reason: expect.stringContaining('shared torch image runtime is not installed or healthy'),
       remedy: { kind: 'install-torch-venv', label: 'Install runtime', venvPath: '/test/venv-flux2/bin/python3' },
     });
+  });
+});
+
+// Exact-ID cancel (#9932): signals only the owning backend; never a bulk method.
+describe('cancelJob exact-ID dispatch', () => {
+  const bulk = () => [localMock.cancel, codexMock.cancelAll, grokMock.cancelAll, agyMock.cancelAll, falMock.cancelAll];
+
+  it('refuses an empty id without touching any backend', () => {
+    expect(cancelJob('')).toBe(false);
+    expect(localMock.cancel).not.toHaveBeenCalled();
+    expect(codexMock.cancel).not.toHaveBeenCalled();
+  });
+
+  it('signals local only when its active job IS the requested id', () => {
+    localMock.activeJob = { id: 'local-b', generationId: 'local-b' };
+    expect(cancelJob('local-a')).toBe(false);
+    expect(localMock.cancel).not.toHaveBeenCalled();
+    expect(cancelJob('local-b')).toBe(true);
+    expect(localMock.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['codex', codexMock],
+    ['grok', grokMock],
+    ['agy', agyMock],
+    ['fal', falMock],
+  ])('routes an exact %s id to that backend only, leaving the others and bulk cancels alone', (_name, owner) => {
+    owner.cancel.mockImplementation((id) => id === 'job-1');
+    localMock.activeJob = { id: 'local-b', generationId: 'local-b' };
+    expect(cancelJob('job-1')).toBe(true);
+    expect(owner.cancel).toHaveBeenCalledWith('job-1');
+    expect(localMock.cancel).not.toHaveBeenCalled();
+    for (const fn of bulk()) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('returns false for an id no backend owns', () => {
+    expect(cancelJob('gone')).toBe(false);
+    for (const fn of bulk()) expect(fn).not.toHaveBeenCalled();
   });
 });

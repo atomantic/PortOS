@@ -15,7 +15,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { uploadFields, optionalUpload } from '../lib/multipart.js';
 import {
-  validateRequest, videoModelTermsSchema,
+  validateRequest, videoCancelBodySchema, videoModelTermsSchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import {
@@ -1094,9 +1094,9 @@ router.post('/cancel', asyncHandler(async (req, res) => {
   //   2. No jobId — cancel the currently-running video job (legacy behavior).
   //   3. No running job — cancel the newest queued video job so the user can
   //      take back a submission they regret while it's still in line.
-  const requestedJobId = typeof req.body?.jobId === 'string' && req.body.jobId.trim()
-    ? req.body.jobId.trim()
-    : undefined;
+  // A supplied-but-malformed jobId is a 400, not "absent": absent selects the
+  // running job, which would cancel a different render than the one named (#9932).
+  const { jobId: requestedJobId } = validateRequest(videoCancelBodySchema, req.body ?? {});
   if (requestedJobId) {
     // Validate that the jobId is a video job before cancelling, so a stray
     // image jobId from another tab doesn't accidentally cancel here.
