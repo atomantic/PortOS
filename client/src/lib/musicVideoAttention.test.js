@@ -56,6 +56,16 @@ describe('deriveAttentionItems (#9940)', () => {
     expect(deriveAttentionItems(open, { generatingSceneIds: new Set(['scene-c']) })).toHaveLength(1);
   });
 
+  it('does not flag an auto-review whose server already claimed a revised section — it is generating there with no spinner on this board (#10014)', () => {
+    const claimed = revision({ sections: [
+      { sceneId: 'scene-a', kind: 'video', verdict: 'rejected', claimedAt: '2026-01-01T00:00:00.000Z' },
+      { sceneId: 'scene-b', kind: 'image', verdict: 'rejected' },
+    ] });
+    expect(deriveAttentionItems(project({ revisions: [claimed], autoReviews: [run()] }))).toEqual([]);
+    // Never handed out (no section claimed): stalled, so Continue is offered.
+    expect(deriveAttentionItems(project({ revisions: [revision()], autoReviews: [run()] }))).toMatchObject([{ kind: 'auto-review' }]);
+  });
+
   it('flags an interrupted Cast & Sets stage but not one that is working or settled', () => {
     expect(deriveAttentionItems(project({ castAndSets: { status: 'imaging', interrupted: true } }))).toMatchObject([{ kind: 'cast-and-sets' }]);
     expect(deriveAttentionItems(project({ castAndSets: { status: 'imaging', interrupted: false } }))).toEqual([]);

@@ -19,6 +19,10 @@ import { currentPlateEvidence } from '../../lib/musicVideoPlateEvidence.js';
  *
  * A step carrying a `revisionId` (the review's revision of a failed section)
  * passes the revision's enqueue-time guard first, exactly as the routes do.
+ *
+ * A STANDALONE auto-review run's revised sections (#10014) ride the same
+ * lanes with a tag that names no production run: only the production-step
+ * reservation is skipped, the revision guard still charges the spend limit.
  */
 
 import { withMusicVideoStyle } from './styleReferences.js';
@@ -76,9 +80,12 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: route.model, ...common };
   const params = await withMusicVideoStyle(project, baseParams, route.mode, route.model, settings);
   await guardRevision(tag, 'image');
-  const { assertProductionSubmission } = await import('./productionService.js');
-  await assertProductionSubmission(tag.projectId, tag.productionRunId, tag.productionStepKey, { sceneId: tag.sceneId, kind: 'image' });
-  const { jobId } = await enqueueJob({ kind: 'image', params, owner: `music-video-production:${tag.productionRunId}` });
+  if (tag.productionRunId) {
+    const { assertProductionSubmission } = await import('./productionService.js');
+    await assertProductionSubmission(tag.projectId, tag.productionRunId, tag.productionStepKey, { sceneId: tag.sceneId, kind: 'image' });
+  }
+  const owner = tag.productionRunId ? `music-video-production:${tag.productionRunId}` : `music-video-auto-review:${tag.revisionId}`;
+  const { jobId } = await enqueueJob({ kind: 'image', params, owner });
   return { jobId };
 }
 
@@ -127,7 +134,8 @@ async function dispatchClip({ project, scene, route, tag }) {
 /**
  * Dispatch one production step. `tag` is the full `musicVideo` job tag
  * (`projectId`, `sceneId`, `productionRunId`, `productionStepKey`, optional
- * `revisionId`). Returns `{ jobId }`; throws when the submission is refused.
+ * `revisionId`; a standalone auto-review section carries only `projectId`,
+ * `sceneId` and `revisionId`). Returns `{ jobId }`; throws when the submission is refused.
  */
 export async function dispatchProductionStep({ stepKind, project, scene, route, tag, settings }) {
   return stepKind === 'frame'

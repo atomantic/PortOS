@@ -21,24 +21,22 @@ const OUTCOME_TOASTS = {
  * Opt-in automatic review/retries (#8988). A run is started only by the
  * director, with explicit limits on reviews (`maxAttempts`) and paid
  * generations (`maxGenerations`); the server then renders the draft window,
- * reviews it, and revises only the flagged sections, reporting each step over
- * the `music-video:auto-review` socket event. This hook applies the pushed
- * project, and — while the board is open — submits the sections a run hands
- * out through the board's normal scene lanes (`submitSections`, from
- * `useMusicVideoRevisions`), tagged with the run's revision so the server's
- * enqueue guard charges them against the spend limit.
+ * reviews it, revises only the flagged sections and generates them itself
+ * (#10014) — so a run completes with no tab open and a tab never submits a
+ * second copy. It reports each step over the `music-video:auto-review` socket
+ * event; this hook only applies the pushed project and surfaces outcomes.
  *
  * Returns `{ busy, action, start(startSec, endSec, limits, reviewer), resume(runId, limits?), stop(runId), cancel(runId) }`
  * — `action` is the latest step the server reported for this project's run.
  */
-export default function useMusicVideoAutoReview({ project, replaceProject, submitSections } = {}) {
+export default function useMusicVideoAutoReview({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
   const [busy, setBusy] = useState(false);
   const [action, setAction] = useState(null);
-  const handlers = useRef({ replaceProject, submitSections });
+  const handlers = useRef({ replaceProject });
   const lastStatus = useRef(new Map());
   useEffect(() => {
-    handlers.current = { replaceProject, submitSections };
+    handlers.current = { replaceProject };
   });
 
   useEffect(() => {
@@ -46,23 +44,8 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
     setAction(null);
     const onAutoReview = (data) => {
       if (data?.projectId !== projectId) return;
-      const { replaceProject: replace, submitSections: submit } = handlers.current;
-      if (data.project) replace?.(data.project);
+      if (data.project) handlers.current.replaceProject?.(data.project);
       setAction(data.action || null);
-      // Only a RUNNING run's hand-out is submitted — never one that raced a pause.
-      // A run a production owns (#9066) is dispatched by the server, not the board.
-      if (data.action?.type === 'generate' && data.run?.status === 'running' && !data.run.productionRunId
-        && data.action.sections?.length && submit) {
-        // The hand-out is the only thing driving a board-owned run forward, so a
-        // throw here must not vanish: say so and point at Continue (#9940).
-        // (The executor runs synchronously, so the hand-out starts this tick.)
-        new Promise((resolve) => resolve(submit(data.project, data.action.sections, data.action.revisionId))).then((n) => {
-          if (n) toast.info(`Auto-review: generating ${n} revised section${n === 1 ? '' : 's'}`);
-        }).catch((err) => {
-          console.error(`❌ Music Video auto-review hand-out failed: ${err?.message || 'unknown error'}`);
-          toast.error(`Auto-review could not start its revised sections (${err?.message || 'unexpected error'}) — use Continue under "Needs attention" to try again.`);
-        });
-      }
       const run = data.run;
       if (run?.id && lastStatus.current.get(run.id) !== run.status) {
         const seen = lastStatus.current.has(run.id);
