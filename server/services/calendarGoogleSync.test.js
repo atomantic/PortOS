@@ -546,4 +546,17 @@ describe('Google participant snapshot reconciliation (#8838)', () => {
     expect(savedCache().events[0]).toMatchObject({ organizer: null, attendees: [] });
     expect(savedCache().events[0].myStatus).toBeUndefined();
   });
+  it('with a dateRange, prunes only in-window deletions and retains events outside the window', async () => {
+    const day = 86400000;
+    const now = Date.now();
+    const iso = (offset) => new Date(now + offset * day).toISOString();
+    const mk = (id, off) => ({ id, externalId: id, title: id, subcalendarId: CAL_ID, startTime: iso(off), endTime: iso(off) });
+    await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [rawEvent('kept-in-window', 'Kept')]);
+    const kept = { ...savedCache().events[0], id: 'kept-in-window', startTime: iso(5), endTime: iso(5) };
+    loadCache.mockResolvedValue({ events: [mk('old', -60), mk('far', 90), mk('deleted-in-window', 3), kept] });
+    const dateRange = { pastDate: new Date(now - 7 * day), futureDate: new Date(now + 30 * day) };
+    const result = await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [rawEvent('kept-in-window', 'Kept')], null, { dateRange });
+    expect(result.pruned).toBe(1);
+    expect(savedCache().events.map(e => e.id).sort()).toEqual(['far', 'kept-in-window', 'old']);
+  });
 });

@@ -86,9 +86,14 @@ export function getSyncDateRange(pastDays = 7, futureDays = 30) {
  * (a CLI that exited non-zero mid-stream) must pass `prune: false`, or the
  * missing tail reads as "these events were deleted upstream" and destroys real
  * calendar data. `options.status` labels the resulting sync for the UI.
+ *
+ * `options.dateRange` ({ pastDate, futureDate }) declares that `rawEvents` only
+ * covers that window: pruning is then limited to cached events overlapping it,
+ * so history older than the window and events beyond it are never mistaken for
+ * upstream deletions.
  */
 export async function pushSyncEvents(accountId, calendarId, calendarName, rawEvents, io, options = {}) {
-  const { prune: shouldPrune = true, status = 'success' } = options;
+  const { prune: shouldPrune = true, status = 'success', dateRange = null } = options;
   const account = await getAccount(accountId);
   if (!account) throw new ServerError('Account not found', { status: 404 });
 
@@ -155,8 +160,17 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
     let pruned = 0;
     if (shouldPrune) {
       const before = cache.events.length;
+      const winStart = dateRange ? dateRange.pastDate.getTime() : null;
+      const winEnd = dateRange ? dateRange.futureDate.getTime() : null;
+      const inSyncedWindow = (e) => {
+        if (!dateRange) return true;
+        const start = Date.parse(e.startTime || e.endTime);
+        const end = Date.parse(e.endTime || e.startTime);
+        // Unparseable/missing times can't be proven outside the window.
+        return (Number.isNaN(start) || start <= winEnd) && (Number.isNaN(end) || end >= winStart);
+      };
       cache.events = cache.events.filter(e =>
-        e.subcalendarId !== calendarId || incomingIds.has(e.externalId)
+        e.subcalendarId !== calendarId || incomingIds.has(e.externalId) || !inSyncedWindow(e)
       );
       pruned = before - cache.events.length;
     }
@@ -285,7 +299,7 @@ Include the full events arrays as returned by gcal_list_events, with every field
         cal.calendarName || cal.calendarId,
         partial ? cal.events : cal.events.map(withExplicitConferenceFields),
         null,
-        { prune: !partial, status },
+        { prune: !partial, status, dateRange: { pastDate, futureDate } },
       );
       totalNew += syncResult.newEvents;
       totalUpdated += syncResult.updated;
