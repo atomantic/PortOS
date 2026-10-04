@@ -1321,8 +1321,12 @@ const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name => `--
  * verification and execution cannot disagree.
  */
 const RESTORE_PRESERVED_FILES = Object.freeze(['database-authority.json']);
-const RESTORE_PRESERVED_RSYNC_EXCLUDES = RESTORE_PRESERVED_FILES.map(name => `--exclude=/${name}`);
-const isRestorePreservedPath = (relativePath) => RESTORE_PRESERVED_FILES.includes(relativePath);
+// Matched case-insensitively (rsync has no such flag, so each letter becomes a
+// `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
+// would otherwise overwrite the destination's lowercase record.
+const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
+const RESTORE_PRESERVED_RSYNC_EXCLUDES = RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`);
+const isRestorePreservedPath = (relativePath) => RESTORE_PRESERVED_FILES.includes(relativePath.toLowerCase());
 
 // A filter naming a preserved file would otherwise be a silent no-op restore.
 // Compared case-insensitively after dropping empty/`.` segments, so

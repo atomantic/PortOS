@@ -2392,6 +2392,22 @@ describe('restoreSnapshot manifest verification', () => {
       });
     });
 
+    it('also keeps a mixed-case authority entry from replacing the destination record', async context => {
+      await withRealRsync(context, async () => {
+        await seedSnapshot();
+        await writeSnapshotFile('Database-Authority.json', SNAPSHOT_AUTHORITY);
+        await realFs.rm(joinPath(snapshotDataDir, 'database-authority.json'));
+        await writeManifest({ [RECORD]: createHash('sha256').update('{"value":"snapshot"}').digest('hex') });
+        await realFs.writeFile(authorityPath(), NEWER_LOCAL_AUTHORITY);
+
+        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+
+        expect(await realFs.readFile(authorityPath(), 'utf8')).toBe(NEWER_LOCAL_AUTHORITY);
+        expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+        await realFs.rm(joinPath(PATHS.data, 'Database-Authority.json'), { force: true });
+      });
+    });
+
     it('does not fail integrity for an authority file the restore never transfers', async () => {
       await seedSnapshot();
       await realFs.writeFile(joinPath(snapshotDataDir, 'database-authority.json'), 'edited after sealing');
@@ -2964,7 +2980,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=desktop.ini',
         '--exclude=._*',
         // Machine-local admission state is never installed by a restore (#10064).
-        '--exclude=/database-authority.json',
+        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
         '--dry-run',
         // Leading `/` is load-bearing: rsync matches an unanchored pattern
         // against the end of every path, so `brain/***` would also restore
@@ -2990,7 +3006,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=Thumbs.db',
         '--exclude=desktop.ini',
         '--exclude=._*',
-        '--exclude=/database-authority.json',
+        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
       ]);
     });
 
