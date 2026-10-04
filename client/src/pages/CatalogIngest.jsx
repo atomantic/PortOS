@@ -371,7 +371,7 @@ export default function CatalogIngest() {
     if (!file) return;
     const name = (file.name || '').toLowerCase();
     if (name.endsWith('.pdf')) {
-      toast.error('PDF text extraction is not supported yet — paste the text or upload a .txt/.md file.');
+      toast.error('PDFs are not accepted — paste the text or upload a .txt/.md file.');
       return;
     }
     const text = await file.text().catch(() => '');

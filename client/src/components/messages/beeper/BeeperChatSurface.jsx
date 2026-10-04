@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
-  Archive, BellOff, Clock, Filter, Inbox, Loader2, Mail, MoreHorizontal,
-  PenSquare, Plus, RefreshCw, Search, Settings, TrendingDown,
+  Archive, BellOff, Filter, Inbox, Loader2,
+  RefreshCw, Settings, TrendingDown,
 } from 'lucide-react';
 import NetworkLogo, { networkLabel } from './BeeperNetworkLogo';
 import BeeperThread from './BeeperThread';
@@ -30,9 +30,9 @@ import * as api from '../../../services/api';
  *    roster and never the reference's user-curated saved scopes at mixed grain
  *    (a Discord-DMs chip beside a single-server chip). Those are deferred.
  *  - **`Archive` and `Low priority` are wired**, because `isArchived` and
- *    `isLowPriority` are real fields on every chat row. `Requests`, `Later`,
- *    `add scope` and the overflow menu render INERT with a tooltip saying so —
- *    an inert control that looks live is worse than an absent one.
+ *    `isLowPriority` are real fields on every chat row. Requests, Later, add-scope, search and
+ *    new conversation are omitted until they work (#9985) — an inert control
+ *    that looks live is worse than an absent one.
  *  - **The pinned grid is Beeper's own `isPinned`, mirrored.** PortOS never
  *    stores a pin of its own; a second source of truth for it is the whole
  *    thing #27 was designed to avoid.
@@ -48,18 +48,16 @@ import * as api from '../../../services/api';
  * rendered over the newer one.
  */
 
-// Fixed system scopes, in the reference's own order. `live: false` entries
-// render disabled with a tooltip rather than being omitted, so the deferral is
-// visible instead of silently missing (#9).
+// Fixed system scopes, in the reference's own order. Requests, Later, scope
+// management, search and new conversation are omitted until implemented
+// (tracked in the Beeper enhancements issue, #9985).
 const SYSTEM_SCOPES = [
-  { id: 'inbox', label: 'Inbox', icon: Inbox, live: true },
-  { id: 'archive', label: 'Archive', icon: Archive, live: true },
-  { id: 'requests', label: 'Requests', icon: Mail, live: false },
-  { id: 'low', label: 'Low priority', icon: TrendingDown, live: true },
-  { id: 'later', label: 'Later', icon: Clock, live: false },
+  { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'archive', label: 'Archive', icon: Archive },
+  { id: 'low', label: 'Low priority', icon: TrendingDown },
 ];
 
-const LIVE_SYSTEM_SCOPES = new Set(SYSTEM_SCOPES.filter((scope) => scope.live).map((scope) => scope.id));
+const LIVE_SYSTEM_SCOPES = new Set(SYSTEM_SCOPES.map((scope) => scope.id));
 const NETWORK_SCOPE_PREFIX = 'net:';
 const PINNED_GRID_CAP = 6;
 const DRAFTS_STORAGE_KEY = 'portos-beeper-drafts';
@@ -172,20 +170,6 @@ function SyncStrip({ sweep }) {
   );
 }
 
-function InertControl({ icon: Icon, label, className }) {
-  return (
-    <button
-      type="button"
-      disabled
-      aria-label={label}
-      title={`${label} — not available yet`}
-      className={`${className} cursor-not-allowed opacity-35`}
-    >
-      <Icon size={17} />
-    </button>
-  );
-}
-
 /* ------------------------------------------------------------------ rail -- */
 
 function Rail({
@@ -197,9 +181,6 @@ function Rail({
       {SYSTEM_SCOPES.map((systemScope) => {
         const Icon = systemScope.icon;
         const active = scope === systemScope.id;
-        if (!systemScope.live) {
-          return <InertControl key={systemScope.id} icon={Icon} label={systemScope.label} className={`${item} text-gray-500`} />;
-        }
         return (
           <button
             key={systemScope.id}
@@ -247,8 +228,6 @@ function Rail({
       })}
 
       <div className="mx-1 h-7 w-px shrink-0 bg-port-border sm:mx-0 sm:my-1.5 sm:h-px sm:w-7" />
-      <InertControl icon={Plus} label="Add scope" className={`${item} border border-dashed border-port-border text-gray-500`} />
-      <InertControl icon={MoreHorizontal} label="More scope options" className={`${item} text-gray-500`} />
 
       <button
         type="button"
@@ -930,8 +909,6 @@ export default function BeeperChatSurface({
           >
             <RefreshCw size={15} className={syncing || listLoading ? 'animate-spin' : undefined} />
           </button>
-          <InertControl icon={Search} label="Search conversations" className="rounded p-1.5 text-gray-500" />
-          <InertControl icon={PenSquare} label="New conversation" className="rounded p-1.5 text-gray-500" />
         </div>
 
         {listError && (
