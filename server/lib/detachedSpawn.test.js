@@ -339,14 +339,14 @@ describe('spawnDetached', () => {
     expect(handle.pid).toBeNull();
   });
 
-  // The Windows launcher is real powershell, so it can only be exercised on a
-  // Windows host — pinning the platform elsewhere would just
-  // fail to find the binary. Regression for #6169: the plain
+  // This shared quoted-argv/nonzero-exit contract runs locally on POSIX too;
+  // the actual PowerShell launcher still needs a real Windows CI host.
+  // Regression for #6169: the plain
   // `spawn(..., { detached: true })` this replaced meant DETACHED_PROCESS,
   // which denies a console host any console, so the job exited 0 in ~100ms
   // having produced no output and run no part of the script. Asserting real
   // streamed output plus the job's own exit code is what catches that.
-  it.runIf(!IS_POSIX)('runs the job and streams its output through the control dir', async () => {
+  it('runs the job and streams its output through the control dir', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached(
       process.execPath,
@@ -357,9 +357,17 @@ describe('spawnDetached', () => {
       { controlDir }
     );
     const getOut = collect(handle.stdout);
+    const getErr = collect(handle.stderr);
     expect(handle.pid).toBeGreaterThan(0);
     const { code, signal } = await onClose(handle);
-    expect(code).toBe(3);
+    // A Windows loader failure can write a PID and exit sentinel without ever
+    // executing this fixture. Preserve the exact job-exit assertion, but include
+    // the bounded bootstrap timeline and stream lengths so CI distinguishes
+    // that failure from quoting/output regressions. Never print raw control files
+    // or stderr: either can contain private paths from the host runtime.
+    const bootstrap = IS_POSIX ? 'posix' : await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log');
+    const evidence = `detached job code=${code} signal=${signal}; stdout-bytes=${Buffer.byteLength(getOut())}; stderr-bytes=${Buffer.byteLength(getErr())}; supervisor=${bootstrap}`;
+    expect(code, evidence).toBe(3);
     expect(signal).toBeNull();
     expect(getOut()).toBe('a b "c"\n');
   });
