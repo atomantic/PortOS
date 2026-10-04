@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import NeedsAttentionBanner from './NeedsAttentionBanner.jsx';
 import MusicVideoLayout from './MusicVideoLayout.jsx';
-import { MUSIC_VIDEO_STAGES, } from '../../lib/musicVideoStages.js';
+import { MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
 import { deriveAttentionItems } from '../../lib/musicVideoAttention.js';
 
 const actions = () => ({

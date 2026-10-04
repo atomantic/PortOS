@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { getMusicVideoDependencyImpact } from '../../services/apiMusicVideo.js';
+import { openRevisionOf } from '../../lib/musicVideoAttention.js';
 import { formatCount } from '../../utils/formatters.js';
+
+const REVISION_HINT_ID = 'mv-repair-blocked-hint';
 
 /** Preview first; only the director's Repair action starts any work. */
 export default function DependencyImpactPanel({ project, busy, onRepair }) {
@@ -18,7 +21,7 @@ export default function DependencyImpactPanel({ project, busy, onRepair }) {
     });
     return () => { active = false; };
   }, [project, retry]);
-  const revisionActive = (project.revisions || []).some((revision) => ['open', 'rendering'].includes(revision.status));
+  const revisionActive = !!openRevisionOf(project);
   if (error) return <div role="alert" className="text-xs text-port-error">{error} <button type="button" onClick={() => setRetry((value) => value + 1)}>Retry dependency check</button></div>;
   if (!result || (!result.shots.length && !result.evidence.length)) return null;
   return (
@@ -35,9 +38,15 @@ export default function DependencyImpactPanel({ project, busy, onRepair }) {
         : 'No new clips needed'}; {formatCount(result.estimate.evidenceRebuilds)} evidence records need rebuilding or review. Historical assets are retained.</p>
       {!result.shots.length && <p>Selected takes can be kept. Rebuild the draft and review it again; historical passing reviews cannot approve changed dependencies.</p>}
       <button type="button" disabled={busy || revisionActive} onClick={() => onRepair(result.basis)}
+        aria-describedby={revisionActive ? REVISION_HINT_ID : undefined}
         className="min-h-[44px] rounded border border-port-border px-3 text-port-accent disabled:opacity-50">
         Repair affected dependencies
       </button>
+      {revisionActive && (
+        <p id={REVISION_HINT_ID} className="text-port-warning">
+          A revision is already open — resume or cancel it (under "Needs attention" above) before repairing.
+        </p>
+      )}
     </section>
   );
 }

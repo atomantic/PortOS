@@ -26,16 +26,19 @@ const startRender = (projectId) => renderMusicVideoProject(projectId, { silent: 
  * A project the server marks `rendering` re-attaches on load (#9940) — the
  * same way excerpt renders do — through a READ of the live job
  * (`getMusicVideoActiveRender`), never a POST that would start a new render.
+ * `onSettled(reason, projectId)` fires on every terminal frame (complete, error,
+ * cancelled) and on a dropped stream.
  * `reattach(projectId)` is the explicit retry the "Needs attention" banner
  * offers when that automatic attempt found no job or the slot was busy.
  */
-export default function useMusicVideoRenderJob({ project, onRendered, onFailed } = {}) {
+export default function useMusicVideoRenderJob({ project, onRendered, onFailed, onSettled } = {}) {
   const [failure, setFailure] = useState(null);
   const slot = useSseJobSlot({
     startRequest: startRender,
     eventsUrl: musicVideoRenderEventsUrl,
     cancelRequest: cancelMusicVideoRender,
     readPercent: readRenderPercent,
+    onSettled,
     onComplete: (frame, projectId) => { setFailure(null); onRendered?.(projectId, frame.result || {}); },
     onErrorFrame: (frame, projectId) => {
       setFailure({ projectId, message: frame.error || 'Render failed' });

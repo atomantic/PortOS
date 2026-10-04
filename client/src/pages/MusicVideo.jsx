@@ -24,6 +24,7 @@ import {
   importMusicVideoLyrics,
   importMusicVideoTrackLyrics,
   alignMusicVideoLyrics,
+  getMusicVideoProject,
 } from '../services/apiMusicVideo.js';
 import useFieldDraft from '../hooks/useFieldDraft.js';
 import useMusicVideoYoutubeImport from '../hooks/useMusicVideoYoutubeImport.js';
@@ -62,6 +63,7 @@ import MusicVideoLayout, { MUSIC_VIDEO_SCROLL_ID } from '../components/musicVide
 import StageSection from '../components/musicVideo/StageSection.jsx';
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
+import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
 import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
 import BoardStage from '../components/musicVideo/stages/BoardStage.jsx';
@@ -78,6 +80,7 @@ import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
+import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import {
   productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam,
 } from '../lib/musicVideoStages.js';
@@ -217,6 +220,13 @@ export default function MusicVideo() {
     onTranscribed: (projectId, midiTranscription) => patchProject(projectId, { midiTranscription }),
   });
   const renderJob = useMusicVideoRenderJob({
+    project: selected,
+    // A cancelled or dropped render says nothing about the project's status: ask
+    // the server, or the board keeps showing a render that is gone (#9940).
+    onSettled: (reason, projectId) => {
+      if (reason === 'complete' || reason === 'error') return;
+      getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {});
+    },
     onRendered: (projectId, result) => patchProject(projectId, (project) => ({
       renderHistoryId: result.id || project.renderHistoryId,
       status: 'complete', renderError: null,
@@ -463,6 +473,7 @@ export default function MusicVideo() {
       })
       .catch((err) => { toast.error(err?.message || 'Could not align the words — planning without word timings'); return null; }),
     castAndSets: (project) => castSets.runToCheckpoint(project),
+    cancelCastAndSets: () => castSets.cancelWait(),
     plan: (project) => handlePlan(project),
   });
   // Approve & continue: the kickoff resumes past the check-in and plans —
@@ -835,6 +846,15 @@ export default function MusicVideo() {
     planning,
     analyzing,
   }) : null;
+  // What the server holds that this tab might not be showing (#9940): derived
+  // from the saved record, so it survives a reload. Work this tab can see
+  // progressing (spinning sections, an attached render) is not flagged.
+  const attentionItems = selected ? deriveAttentionItems(selected, {
+    generatingSceneIds: new Set([...Object.keys(sceneMedia.genScenes || {}), ...Object.keys(sceneMedia.genVideoScenes || {})]
+      .filter((sceneId) => sceneMedia.genScenes?.[sceneId] || sceneMedia.genVideoScenes?.[sceneId])),
+    draftRendering: excerpts.rendering,
+    finalRenderAttached: renderTargetsSelected,
+  }) : [];
   const runNextAction = () => {
     if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
     if (nextAction.kind === 'goto') { goToStage(nextAction.stage, nextAction.anchor); return; }
@@ -1212,6 +1232,20 @@ export default function MusicVideo() {
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
             status={describeProjectStatus(selected, { progress, nextAction, readiness: productionReview.readiness })}
+            attention={(
+              <NeedsAttentionBanner
+                items={attentionItems}
+                busy={revisions.busy || castSets.busy || autoReview.busy || renderJob.reattaching}
+                actions={{
+                  onResumeRevision: revisions.resume,
+                  onCancelRevision: revisions.cancel,
+                  onResumeCastAndSets: () => castSets.resume(),
+                  onContinueAutoReview: (runId) => autoReview.resume(runId),
+                  onCancelAutoReview: (runId) => autoReview.cancel(runId),
+                  onReattachRender: () => renderJob.reattach(selected.id),
+                }}
+              />
+            )}
             dock={previewSources.length ? (
               <PreviewDock
                 project={selected}

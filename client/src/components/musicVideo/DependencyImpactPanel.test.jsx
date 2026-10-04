@@ -33,4 +33,14 @@ describe('rendered stale impact', () => {
     resolveOld({ shots: [], evidence: [] });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Repair affected dependencies' })).toBeDisabled());
   });
+  it('says WHY Repair is disabled while a revision is open, and offers it again once that is gone (#9940)', async () => {
+    getMusicVideoDependencyImpact.mockResolvedValue(impact);
+    const { rerender } = render(<DependencyImpactPanel project={{ ...project, revisions: [{ id: 'mvrev-open', status: 'open' }] }} onRepair={vi.fn()} />);
+    const button = await screen.findByRole('button', { name: 'Repair affected dependencies' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(/A revision is already open — resume or cancel it/);
+    rerender(<DependencyImpactPanel project={{ ...project, revisions: [{ id: 'mvrev-open', status: 'canceled' }] }} onRepair={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Repair affected dependencies' })).toBeEnabled());
+    expect(screen.queryByText(/already open/)).not.toBeInTheDocument();
+  });
 });

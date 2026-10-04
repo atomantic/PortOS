@@ -66,6 +66,40 @@ function KickoffHarness({ project, steps }) {
 const cue = (id, text, words) => ({ id, text, startSec: null, endSec: null, ...(words ? { words } : {}) });
 
 describe('AutopilotPanel kickoff', () => {
+  it('offers Stop while a kickoff runs, and Stop ends a wait on the Cast & Sets check-in (#9940)', async () => {
+    const waiting = deferred();
+    const base = { id: 'mv-1', automation, audioAnalysis: { sections: [] }, lyricCues: [] };
+    const steps = {
+      castAndSets: vi.fn(() => waiting.promise),
+      cancelCastAndSets: vi.fn(() => waiting.resolve(null)),
+      plan: vi.fn(async () => {}),
+    };
+    function StoppableHarness() {
+      const kickoff = useMusicVideoKickoff(steps);
+      return (
+        <AutopilotPanel
+          project={base}
+          production={IDLE_PRODUCTION}
+          onSave={vi.fn()}
+          onKickoff={() => kickoff.run(base)}
+          onCancelKickoff={kickoff.running ? kickoff.cancel : undefined}
+          kickoffBusy={kickoff.running}
+          kickoffStep={kickoff.stepLabel}
+        />
+      );
+    }
+    render(<StoppableHarness />);
+    expect(screen.queryByRole('button', { name: /Stop/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Building the Cast & Sets check-in…');
+    fireEvent.click(screen.getByRole('button', { name: /Stop/ }));
+    // The run ends — the button is usable again and nothing was planned.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Analyze & plan/ }).disabled).toBe(false));
+    expect(steps.cancelCastAndSets).toHaveBeenCalledTimes(1);
+    expect(steps.plan).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Stop/ })).toBeNull();
+  });
+
   it('analyzes, imports track lyrics, separates vocals, aligns and plans — showing each step', async () => {
     const order = [];
     const base = { id: 'mv-1', trackId: 't1', automation, lyricCues: [] };

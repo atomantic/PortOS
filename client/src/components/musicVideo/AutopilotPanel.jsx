@@ -277,7 +277,7 @@ function StartForm({ project, production }) {
 }
 
 /** The brief: tools, guidance and budget, with the one-click kickoff. */
-function BriefSection({ project, onSave, onKickoff, kickoffBusy, kickoffStep, kickoffBlockedReason }) {
+function BriefSection({ project, onSave, onKickoff, onCancelKickoff, kickoffBusy, kickoffStep, kickoffBlockedReason }) {
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const automation = project.automation || null;
@@ -329,6 +329,16 @@ function BriefSection({ project, onSave, onKickoff, kickoffBusy, kickoffStep, ki
           >
             <Play size={14} /> {kickoffBusy ? 'Working…' : 'Analyze & plan'}
           </button>
+          {onCancelKickoff && (
+            <button
+              type="button"
+              onClick={onCancelKickoff}
+              title="Stop the kickoff before its next step (or at once while it waits on Cast & Sets). Work the server already started keeps running."
+              className="flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm text-port-error min-h-[44px] sm:min-h-0"
+            >
+              <X size={14} /> Stop
+            </button>
+          )}
         </div>
       </>
     );
@@ -419,10 +429,11 @@ function ProductionSection({ project, production, readiness }) {
  * budget, kickoff) and its server-side production run (allowed routes,
  * generation and spend caps, the run log). Edits PATCH through `onSave`, which
  * owns the error toast; `production` is the `useMusicVideoProduction` slot.
- * `kickoffStep` names the kickoff step running now.
+ * `kickoffStep` names the kickoff step running now; `onCancelKickoff` (passed
+ * only while one runs) stops it (#9940).
  */
 export default function AutopilotPanel({
-  project, production, readiness, onSave, onKickoff, kickoffBusy, kickoffStep = null, kickoffBlockedReason,
+  project, production, readiness, onSave, onKickoff, onCancelKickoff, kickoffBusy, kickoffStep = null, kickoffBlockedReason,
 }) {
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0" aria-label="Autopilot">
@@ -430,6 +441,7 @@ export default function AutopilotPanel({
         project={project}
         onSave={onSave}
         onKickoff={onKickoff}
+        onCancelKickoff={onCancelKickoff}
         kickoffBusy={kickoffBusy}
         kickoffStep={kickoffStep}
         kickoffBlockedReason={kickoffBlockedReason}
