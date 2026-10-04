@@ -1022,10 +1022,25 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       warnings.push(`Auto-merge skipped — source repo HEAD is on '${currentBranch}', not default '${defaultBranch || 'unknown'}'. Branch ${branchName} preserved for manual review.`);
       mergeRefused = true;
     } else {
-      commitsAhead = parseInt((await execGit(
+      const countResult = await execGit(
         ['rev-list', '--count', `${currentBranch}..${branchName}`],
-        sourceWorkspace
-      ).catch(() => ({ stdout: '0' }))).stdout.trim(), 10) || 0;
+        sourceWorkspace,
+        { ignoreExitCode: true },
+      ).catch(() => null);
+      const countText = countResult?.stdout?.trim();
+      const parsedCount = typeof countText === 'string' && /^\d+$/.test(countText)
+        ? Number(countText)
+        : NaN;
+
+      // A failed or malformed preflight cannot prove that the branch is empty.
+      // Keep both refs in place so retry can safely decide whether to merge.
+      if (countResult?.exitCode !== 0 || !Number.isSafeInteger(parsedCount)) {
+        console.log(`⚠️ Could not determine commits ahead for ${branchName}; preserving its worktree and branch for retry`);
+        warnings.push(`Worktree and branch ${branchName} preserved — could not read a valid commit count; retry cleanup when Git refs are available`);
+        return { merged: false, removed: false, uncommittedSaved: false, warnings };
+      }
+
+      commitsAhead = parsedCount;
 
       if (commitsAhead > 0) {
         await execGit(['merge', branchName, '--no-edit'], sourceWorkspace)
