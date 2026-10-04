@@ -73,6 +73,11 @@ export const sliceLoraDatasetRefSheet = (id, { variant, cols, rows, useVision } 
 export const startLoraCaptionRun = (id, options = {}) =>
   request(`/lora-datasets/${id}/caption`, { method: 'POST', body: JSON.stringify(options) });
 
+// Run-scoped cancel: the server rejects (404) a run id that is not the dataset's
+// current caption run. The terminal `canceled` frame follows over SSE.
+export const cancelLoraCaptionRun = (id, runId, options = {}) =>
+  request(`/lora-datasets/${id}/caption-runs/${runId}/cancel`, { method: 'POST', silent: options.silent });
+
 export const updateLoraDatasetImageCaption = (id, imageId, caption) =>
   request(`/lora-datasets/${id}/images/${imageId}`, {
     method: 'PATCH', body: JSON.stringify({ caption }),

@@ -26,6 +26,8 @@ vi.mock('../services/loraDatasetGenerate.js', () => ({
 
 vi.mock('../services/loraDatasetCaption.js', () => ({
   attachCaptionSseClient: vi.fn(),
+  cancelCaptionRun: vi.fn(),
+  getActiveCaptionRun: vi.fn(),
   startCaptionRun: vi.fn(),
 }));
 

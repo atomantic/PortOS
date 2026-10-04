@@ -24,9 +24,8 @@
 import { readFile } from 'fs/promises';
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId } from '../lib/fileUtils.js';
-import { v4 as uuidv4 } from '../lib/uuid.js';
 import { prefixCaption } from '../lib/loraDataset.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
+import { createSseRunner } from '../lib/sseUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { describeImageDataUrlDetailed } from './visionTest.js';
 import { getSettings } from './settings.js';
@@ -101,11 +100,83 @@ const CAPTION_MAX_TOKENS = 600;
 // FIFO-starve an interactive describe.
 export const withCaptionVisionLock = createMutex();
 
-// runId → { clients: [], lastPayload } — same shape the imageGen/videoGen
-// SSE helpers operate on.
-const captionRuns = new Map();
+// One caption run per dataset: the runner keys its map by datasetId, so a second
+// kickoff for the same dataset adopts the in-flight run (identical work) or is
+// reported as a conflict (different work) instead of spawning another detached
+// loop against the same images. The run's identity is therefore discoverable
+// from the dataset alone — a reloaded page / second tab re-attaches to it.
+const captionRunner = createSseRunner({ logLabel: 'lora caption run' });
 
-export const attachCaptionSseClient = (runId, res) => attachSse(captionRuns, runId, res);
+/** Live run record for `datasetId` only when it is still the `runId` asked for. */
+const recordFor = (datasetId, runId) => {
+  const record = captionRunner.runs.get(datasetId);
+  return record && record.runId === runId ? record : null;
+};
+
+/**
+ * Attach an SSE client to a run. The run must belong to THIS dataset and carry
+ * this id — a stale id for an older run (or another dataset's id) never binds
+ * onto whatever run currently holds the dataset's slot.
+ */
+export const attachCaptionSseClient = (datasetId, runId, res) => (
+  recordFor(datasetId, runId) ? captionRunner.attachClient(datasetId, res) : false
+);
+
+const projectRun = (record) => ({
+  runId: record.runId,
+  datasetId: record.meta.datasetId,
+  status: record.cancelRequested ? 'canceling' : 'running',
+  provider: record.meta.provider,
+  model: record.meta.model,
+  total: record.meta.total,
+  done: record.meta.done,
+  failed: record.meta.failed,
+  startedAt: record.startedAt,
+});
+
+/**
+ * Bounded projection of the dataset's in-flight caption run, or null. Carries
+ * no clients, controller or image content. `status: 'canceling'` means a cancel
+ * was requested but the run has not yet emitted its terminal frame (it is still
+ * settling an already-issued vision call).
+ */
+export const getActiveCaptionRun = (datasetId) => {
+  const record = captionRunner.runs.get(datasetId);
+  return record && !record.finished ? projectRun(record) : null;
+};
+
+/**
+ * Cancel the dataset's caption run, requiring the run id to match. Throws 404
+ * for an unknown/superseded run. A run that already finished (still inside its
+ * terminal-replay window) reports `canceled: false` rather than erroring so a
+ * late Cancel click is harmless.
+ */
+export function cancelCaptionRun(datasetId, runId) {
+  const record = recordFor(datasetId, runId);
+  if (!record) {
+    throw new ServerError(`Caption run not found: ${runId}`, { status: 404, code: 'NOT_FOUND' });
+  }
+  if (record.finished) return { canceled: false, run: null };
+  captionRunner.cancel(datasetId);
+  return { canceled: true, run: projectRun(record) };
+}
+
+const CANCELED = Symbol('caption-canceled');
+
+// Settle with CANCELED as soon as `signal` aborts, without waiting on `promise`.
+// The vision adapter takes no AbortSignal, so an already-issued call cannot be
+// terminated — the run stops waiting for it and its late result is discarded.
+// The original promise keeps its own rejection handler so a late failure is not
+// an unhandled rejection.
+function raceCancel(promise, signal) {
+  promise.catch(() => {});
+  if (signal.aborted) return Promise.resolve(CANCELED);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(CANCELED);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
 
 /**
  * Resolve which provider+model the run captions with, requiring a
@@ -220,16 +291,17 @@ export function buildCaption(triggerWord, text, model = 'vision model', meta = n
   return prefixCaption(triggerWord, text);
 }
 
-const emit = (runId, payload) => {
-  const run = captionRuns.get(runId);
-  if (run) broadcastSse(run, payload);
-};
-
 /**
- * Start a caption run. Returns `{ runId, total }` immediately; the loop
+ * Start (or adopt) the dataset's caption run. Returns
+ * `{ runId, total, provider, alreadyRunning, conflict? }` immediately; the loop
  * runs detached. `imageIds` limits the run to specific images (single
  * re-caption = one-element array); `overwrite: false` skips images that
- * already have a caption.
+ * already have a caption — so starting again after an interrupted run retries
+ * only the images that never got one.
+ *
+ * Identical work (same targets, overwrite mode, provider and model) adopts the
+ * in-flight run; different work returns the holder's id with `conflict: true`
+ * so the caller can attach to it instead of silently double-booking the images.
  */
 export async function startCaptionRun(datasetId, {
   imageIds = null, providerId = null, model = null, overwrite = false,
@@ -269,58 +341,105 @@ export async function startCaptionRun(datasetId, {
   }
   const captionPrompt = buildCaptionPrompt(signaturePhrases);
 
-  const runId = uuidv4();
-  captionRuns.set(runId, { clients: [], lastPayload: null });
-  console.log(`🏷️ Caption run ${shortId(runId)} — dataset=${shortId(datasetId)} images=${targets.length} provider=${resolvedProvider} model=${resolvedModel}`);
+  const targetIds = targets.map((img) => img.id);
+  const sig = JSON.stringify({
+    ids: [...targetIds].sort(), overwrite: !!overwrite, provider: resolvedProvider, model: resolvedModel,
+  });
+  const meta = {
+    datasetId, provider: resolvedProvider, model: resolvedModel, total: targets.length, done: 0, failed: 0, lastError: null,
+  };
 
-  // Detached loop — runs outside the request lifecycle, so each iteration
-  // wraps its fallible work in try/catch (the async-boundary exception to
-  // the no-try/catch rule) and failures route into the SSE error frames.
-  (async () => {
-    let done = 0;
-    let failed = 0;
-    for (const img of targets) {
-      let caption = null;
-      try {
-        const bytes = await readFile(datasetImagePath(datasetId, img.file));
-        const dataUrl = `data:image/png;base64,${bytes.toString('base64')}`;
-        const result = await withCaptionVisionLock(() => describeImageDataUrlDetailed({
+  // `start` is synchronous (no await between its in-flight check and the map
+  // write), so concurrent kickoffs that got past the awaits above cannot both
+  // become coordinators.
+  const started = captionRunner.start(datasetId, ({ runId, signal, record, broadcast }) => runCaptionLoop({
+    runId, signal, meta: record.meta, broadcast, dataset, targets, captionPrompt,
+  }), { sig, meta });
+
+  if (started.alreadyRunning) {
+    const holder = captionRunner.runs.get(datasetId);
+    console.log(`🏷️ Caption run ${shortId(started.runId)} already active for dataset=${shortId(datasetId)} — ${started.conflict ? 'conflicting request attached to it' : 'identical request adopted it'}`);
+    return {
+      runId: started.runId,
+      total: holder.meta.total,
+      provider: holder.meta.provider,
+      alreadyRunning: true,
+      ...(started.conflict ? { conflict: true } : {}),
+    };
+  }
+  console.log(`🏷️ Caption run ${shortId(started.runId)} — dataset=${shortId(datasetId)} images=${targets.length} provider=${resolvedProvider} model=${resolvedModel}`);
+  return { runId: started.runId, total: targets.length, provider: resolvedProvider, alreadyRunning: false };
+}
+
+/**
+ * The detached per-run loop. Runs inside `createSseRunner`'s coordinator, which
+ * owns the generic `error` frame and the terminal-replay cleanup; per-image
+ * failures are caught here (a boundary outside the request lifecycle) and routed
+ * into `progress` frames. Cancellation is checked before and after acquiring the
+ * vision mutex, after inference returns, and before each caption is committed.
+ */
+async function runCaptionLoop({ runId, signal, meta, broadcast, dataset, targets, captionPrompt }) {
+  const datasetId = dataset.id;
+  const total = targets.length;
+  let settling = false;
+  const canceled = () => {
+    broadcast({ type: 'canceled', runId, done: meta.done, failed: meta.failed, total, settling });
+    console.log(`🏷️ Caption run ${shortId(runId)} canceled — ${meta.done}/${total} captioned${settling ? ' (a vision call was still settling; its result is discarded)' : ''}`);
+  };
+
+  for (const img of targets) {
+    if (signal.aborted) return canceled();
+    let caption = null;
+    try {
+      const bytes = await readFile(datasetImagePath(datasetId, img.file));
+      if (signal.aborted) return canceled();
+      const dataUrl = `data:image/png;base64,${bytes.toString('base64')}`;
+      // A run canceled while queued behind another dataset's vision call
+      // returns here when the mutex frees WITHOUT calling the provider.
+      const call = withCaptionVisionLock(() => {
+        if (signal.aborted) return CANCELED;
+        settling = true;
+        return describeImageDataUrlDetailed({
           dataUrl,
           prompt: captionPrompt,
-          providerId: resolvedProvider,
-          model: resolvedModel,
+          providerId: meta.provider,
+          model: meta.model,
           maxTokens: CAPTION_MAX_TOKENS,
-        }));
-        caption = buildCaption(dataset.triggerWord, result.text, `vision model "${resolvedModel}"`, result);
-      } catch (err) {
-        failed += 1;
-        console.error(`❌ Caption failed [${shortId(runId)} ${img.id}]: ${err?.message || err}`);
-        emit(runId, { type: 'progress', done, total: targets.length, imageId: img.id, error: String(err?.message || err) });
-        continue;
-      }
-      try {
-        await updateDataset(datasetId, (current) => ({
-          ...current,
-          images: current.images.map((i) => (i.id === img.id
-            ? { ...i, caption, captionSource: 'vision', captionedAt: new Date().toISOString() }
-            : i)),
-        }));
-      } catch (err) {
-        failed += 1;
-        console.error(`❌ Caption persist failed [${shortId(runId)} ${img.id}]: ${err?.message || err}`);
-        emit(runId, { type: 'progress', done, total: targets.length, imageId: img.id, error: String(err?.message || err) });
-        continue;
-      }
-      done += 1;
-      emit(runId, { type: 'progress', done, total: targets.length, imageId: img.id, caption });
+        }).finally(() => { settling = false; });
+      });
+      const result = await raceCancel(call, signal);
+      if (result === CANCELED || signal.aborted) return canceled();
+      caption = buildCaption(dataset.triggerWord, result.text, `vision model "${meta.model}"`, result);
+    } catch (err) {
+      meta.failed += 1;
+      meta.lastError = String(err?.message || err);
+      console.error(`❌ Caption failed [${shortId(runId)} ${img.id}]: ${err?.message || err}`);
+      broadcast({ type: 'progress', runId, done: meta.done, total, imageId: img.id, error: String(err?.message || err) });
+      continue;
     }
-    const terminal = failed && !done
-      ? { type: 'error', message: `All ${failed} caption(s) failed — check the vision provider (${resolvedProvider})` }
-      : { type: 'complete', done, failed, total: targets.length };
-    emit(runId, terminal);
-    console.log(`🏷️ Caption run ${shortId(runId)} finished — ${done}/${targets.length} captioned, ${failed} failed`);
-    closeJobAfterDelay(captionRuns, runId);
-  })();
-
-  return { runId, total: targets.length, provider: resolvedProvider };
+    try {
+      await updateDataset(datasetId, (current) => ({
+        ...current,
+        images: current.images.map((i) => (i.id === img.id
+          ? { ...i, caption, captionSource: 'vision', captionedAt: new Date().toISOString() }
+          : i)),
+      }));
+    } catch (err) {
+      meta.failed += 1;
+      meta.lastError = String(err?.message || err);
+      console.error(`❌ Caption persist failed [${shortId(runId)} ${img.id}]: ${err?.message || err}`);
+      broadcast({ type: 'progress', runId, done: meta.done, total, imageId: img.id, error: String(err?.message || err) });
+      continue;
+    }
+    meta.done += 1;
+    broadcast({ type: 'progress', runId, done: meta.done, total, imageId: img.id, caption });
+  }
+  // Terminal frames carry the most recent per-image failure reason: a tab that
+  // attached after the `progress` frames were sent only replays this last frame,
+  // so the actionable detail (refusal vs. exhausted reasoning budget) must ride it.
+  const { done, failed, lastError } = meta;
+  broadcast(failed && !done
+    ? { type: 'error', runId, message: `All ${failed} caption(s) failed — check the vision provider (${meta.provider})`, lastError }
+    : { type: 'complete', runId, done, failed, total, lastError });
+  console.log(`🏷️ Caption run ${shortId(runId)} finished — ${done}/${total} captioned, ${failed} failed`);
 }
