@@ -1030,7 +1030,35 @@ const processMatches = async (pid, expectedProcess) => {
   return processCommandMatches(command, expectedProcess);
 };
 
-export const __detachedSpawnTesting = { processCommandMatches, readBootstrapDiagnostic };
+// Windows NT loader initialization exit codes (STATUS_DLL_INIT_FAILED and
+// STATUS_ACCESS_VIOLATION). Under heavy parallel spawn load on Windows CI runners,
+// the NT loader can terminate a newly created child process before user code runs
+// or any output is written (#10081).
+const WINDOWS_LOADER_EXIT_CODES = Object.freeze(new Set([
+  3221225794, // 0xC0000142 STATUS_DLL_INIT_FAILED
+  3221225477, // 0xC0000005 STATUS_ACCESS_VIOLATION
+]));
+
+const isLoaderInitFailure = ({
+  code,
+  outBytes = 0,
+  errBytes = 0,
+  isWindows = process.platform === 'win32',
+} = {}) => {
+  return Boolean(
+    isWindows
+    && WINDOWS_LOADER_EXIT_CODES.has(code)
+    && outBytes === 0
+    && errBytes === 0
+  );
+};
+
+export const __detachedSpawnTesting = {
+  processCommandMatches,
+  readBootstrapDiagnostic,
+  WINDOWS_LOADER_EXIT_CODES,
+  isLoaderInitFailure,
+};
 
 export async function isDetachedRunning(controlDir, expectedProcess = null) {
   const pidRaw = await readControlFile(join(controlDir, 'pid'));
