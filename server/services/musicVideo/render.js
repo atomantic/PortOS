@@ -127,6 +127,17 @@ function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC }
   return out;
 }
 
+/**
+ * The project's live final-render job on THIS instance, or null — a render
+ * still preparing (no job id yet) or running on another machine reports null.
+ * Read-only: lets a reloaded page re-attach to the render's progress stream
+ * without POSTing /render, which would START one when none is live (#9940).
+ */
+export function getActiveRenderJobId(projectId) {
+  const existing = projectRenders.get(projectId);
+  return existing && existing !== PENDING && jobs.has(existing) ? existing : null;
+}
+
 export function getRenderJobStatus(jobId) {
   const job = jobs.get(jobId);
   if (!job) return null;

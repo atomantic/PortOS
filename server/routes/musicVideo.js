@@ -111,7 +111,7 @@ import {
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { analyzeProjectSong, resolveProjectAudioPath } from '../services/musicVideo/projectAudio.js';
-import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
+import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
@@ -498,6 +498,12 @@ router.post('/transcribe-midi/:jobId/cancel', (req, res) => {
 router.post('/:id/render', asyncHandler(async (req, res) => {
   res.json(await renderMusicVideo(req.params.id));
 }));
+
+// Read-only: the live final-render job for a project (null when none runs on
+// this instance), so a reloaded page re-attaches without POSTing a new render.
+router.get('/:id/render', (req, res) => {
+  res.json({ jobId: getActiveRenderJobId(req.params.id) });
+});
 
 router.post('/:id/production-review/feedback', asyncHandler(async (req, res) => {
   res.json(await addProductionFeedback(req.params.id, validateRequest(musicVideoProductionFeedbackSchema, req.body)));
