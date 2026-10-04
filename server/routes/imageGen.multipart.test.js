@@ -12,6 +12,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 // module imports fileUtils.js — hence the dynamic import below.
 let imagesSandbox;
 let refsSandbox;
+let registrySandbox;
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
@@ -110,10 +111,20 @@ const PNG_FIXTURE = Buffer.from(
 // the route's first import. Guarded by `lib/importScoping.test.js`.
 imagesSandbox = await mkdtemp(join(tmpdir(), 'portos-imagegen-multipart-images-'));
 refsSandbox = await mkdtemp(join(tmpdir(), 'portos-imagegen-multipart-refs-'));
+// Isolate the media-model registry: without this the route reads the install's
+// live data/media-models.json, where an operator may have disabled
+// `qwen-image-edit` (-> "Unknown modelId" 400). A missing file seeds shipped
+// defaults, so the suite no longer depends on one install's registry (#10135).
+registrySandbox = await mkdtemp(join(tmpdir(), 'portos-imagegen-multipart-registry-'));
+const priorRegistryEnv = process.env.PORTOS_MEDIA_MODELS_FILE;
+process.env.PORTOS_MEDIA_MODELS_FILE = join(registrySandbox, 'media-models.json');
 ({ default: imageGenRoutes } = await import('./imageGen.js'));
 ({ enqueueJob } = await import('../services/mediaJobQueue/index.js'));
 
 afterAll(async () => {
+  if (priorRegistryEnv === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
+  else process.env.PORTOS_MEDIA_MODELS_FILE = priorRegistryEnv;
+  await rm(registrySandbox, { recursive: true, force: true });
   await rm(imagesSandbox, { recursive: true, force: true });
   await rm(refsSandbox, { recursive: true, force: true });
 });
