@@ -1,7 +1,14 @@
 # Dependencies
-node_modules/
-/client/node_modules
-/server/node_modules
+# NO trailing slash: a CoS agent worktree receives its dependencies as a
+# SYMLINK to the primary checkout's tree (root AGENTS.md → Architecture), and
+# git treats a symlink as a file, so `node_modules/` does not match one. The
+# root and `autofixer/` links therefore showed as untracked in every agent
+# worktree, and `npm run pregate` — which AGENTS.md requires before every push
+# — aborted on them: the hidden-content scan cannot diff an untracked
+# directory ("Could not access 'autofixer/node_modules/null'"). The explicit
+# `/client/node_modules` and `/server/node_modules` entries were slash-less for
+# this reason; unanchored, this one line covers every depth instead.
+node_modules
 
 # Build output
 dist/
