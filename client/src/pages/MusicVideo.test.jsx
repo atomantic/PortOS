@@ -65,6 +65,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   separateMusicVideoVocals: vi.fn(async () => ({ jobId: 'sep-job-1' })),
   musicVideoVocalSeparationEventsUrl: (jobId) => `/api/music-video/vocal-stem/separate/${jobId}/events`,
   cancelMusicVideoVocalSeparation: vi.fn(async () => ({ ok: true })),
+  getMusicVideoActiveRender: vi.fn(async () => ({ jobId: null })),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),
@@ -232,7 +233,7 @@ import {
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
-  updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject,
+  updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject, getMusicVideoActiveRender,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
   startMusicVideoCastAndSets, approveMusicVideoCastAndSets, stopMusicVideoProduction,
   getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
@@ -521,6 +522,8 @@ describe('MusicVideo render control (#1760)', () => {
     sseState.latest = { type: 'canceled' };
     forceRerender();
     expect(toast.info).toHaveBeenCalledWith('Render cancelled');
+    // A cancelled render says nothing about the project's status: the page asks the server (#9940).
+    await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalledWith('mv-1', { silent: true }));
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled();
   });
 
@@ -557,7 +560,33 @@ describe('MusicVideo render control (#1760)', () => {
     sseState.closed = true;
     fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Draft updated' } });
     expect(toast.info).toHaveBeenCalledWith('Lost connection to the render — check Media History for the result');
+    await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalledWith('mv-other', { silent: true }));
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled();
+  });
+
+  it('re-attaches a live final render on load without a Render click (#9940)', async () => {
+    getMusicVideoActiveRender.mockResolvedValue({ jobId: 'render-live' });
+    sseState.latest = { type: 'progress', progress: 0.5 };
+    await openProject({ ...PROJECT_WITH_CLIP, status: 'rendering' }, 'review');
+    await screen.findByTitle('Cancel render');
+    await waitFor(() => expect(screen.getByTitle('Cancel render')).toHaveTextContent('50%'));
+    expect(getMusicVideoActiveRender).toHaveBeenCalledWith('mv-1', { silent: true });
+    // A page load only READS the render — it never starts one.
+    expect(renderMusicVideoProject).not.toHaveBeenCalled();
+    // It is on screen, so the header does not flag it as an unwatched render.
+    expect(screen.queryByRole('button', { name: 'Reattach to the final render' })).not.toBeInTheDocument();
+  });
+
+  it('flags a rendering project nobody is watching and reattaches on request (#9940)', async () => {
+    getMusicVideoActiveRender.mockResolvedValueOnce({ jobId: null }).mockResolvedValueOnce({ jobId: 'render-late' });
+    sseState.latest = { type: 'progress', progress: 0.25 };
+    await openProject({ ...PROJECT_WITH_CLIP, status: 'rendering' }, 'review');
+    const reattach = await screen.findByRole('button', { name: 'Reattach to the final render' });
+    fireEvent.click(reattach);
+    await screen.findByTitle('Cancel render');
+    await waitFor(() => expect(screen.getByTitle('Cancel render')).toHaveTextContent('25%'));
+    expect(renderMusicVideoProject).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reattach to the final render' })).not.toBeInTheDocument());
   });
 
   it('disables Render when no scene has a generated clip', async () => {
@@ -572,6 +601,35 @@ describe('MusicVideo render control (#1760)', () => {
     const link = await screen.findByText(/Open in Media History/i);
     // Media History matches video items by their `video:<id>` key via ?preview=.
     expect(link.closest('a').getAttribute('href')).toContain('preview=video%3Arh-9');
+  });
+});
+
+describe('MusicVideo needs-attention banner (#9940)', () => {
+  const stranded = {
+    ...PROJECT_WITH_CLIP,
+    revisions: [{ id: 'mvrev-1', status: 'open', sections: [{ sceneId: 's1', kind: 'video', verdict: 'rejected', layer: 'footage' }] }],
+  };
+
+  it('keeps a stranded revision\'s Resume and Cancel in the header on every stage after a reload', async () => {
+    resumeMusicVideoRevision.mockResolvedValue({ project: stranded, revision: stranded.revisions[0], needsGeneration: [], generating: [] });
+    cancelMusicVideoRevision.mockResolvedValue({ project: { ...stranded, revisions: [{ ...stranded.revisions[0], status: 'canceled' }] }, canceledJobIds: [] });
+    await openProject(stranded, 'board');
+    const banner = await screen.findByRole('region', { name: 'Needs attention' });
+    expect(banner).toHaveTextContent('A section revision is open');
+    await openStage('review');
+    expect(screen.getByRole('region', { name: 'Needs attention' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume the open revision' }));
+    await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvrev-1', { silent: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel the open revision' }));
+    await waitFor(() => expect(cancelMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvrev-1', { silent: true }));
+    // Cancelling clears the banner: production is unblocked.
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Needs attention' })).not.toBeInTheDocument());
+  });
+
+  it('shows no banner for a healthy project', async () => {
+    await openProject(PROJECT_WITH_CLIP, 'board');
+    expect(screen.queryByRole('region', { name: 'Needs attention' })).not.toBeInTheDocument();
   });
 });
 
