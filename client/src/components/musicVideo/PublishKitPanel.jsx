@@ -103,9 +103,12 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           <p role="status" className="text-xs text-port-warning">Kit built from an earlier render. Fill draft is refused until you rebuild it. Use Rebuild kit.</p>
         )}
         {publishKit.building && (
-          <div>
+          <div className="space-y-2">
             <div className="h-1.5 bg-port-bg rounded overflow-hidden"><div className="h-full bg-port-accent transition-all" style={{ width: `${publishKit.progress}%` }} /></div>
-            <p className="text-xs text-port-text-muted mt-1">Encoding — {Math.round(publishKit.progress)}%</p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-port-text-muted">Encoding — {Math.round(publishKit.progress)}%</p>
+              <button type="button" onClick={publishKit.cancelBuild} className="text-xs text-port-text-muted hover:text-port-text-base px-2 py-1">Cancel</button>
+            </div>
           </div>
         )}
         {kit.builtAt && (

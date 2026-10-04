@@ -43,7 +43,7 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(within(sn).getByText('Song')).toBeInTheDocument();
     expect(publishing.submit).not.toHaveBeenCalled();
     expect(within(sn).queryByRole('button', { name: /Post to Stacker News/ })).toBeNull();
-    expect(within(sn).getByText(/PortOS cannot submit this draft/)).toBeInTheDocument();
+    expect(within(sn).getByRole('button', { name: /Discard/ })).toBeInTheDocument();
     fireEvent.click(within(sn).getByRole('button', { name: /Discard/ }));
     expect(publishing.discard).toHaveBeenCalledWith('stackerNews');
   });

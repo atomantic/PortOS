@@ -343,7 +343,6 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/render',
       'POST /api/music-video/:id/publish-kit/build',
       'POST /api/music-video/:id/publish/:target/prepare',
-      'POST /api/music-video/:id/publish/drafts/:draftId/submit',
     ]) {
       const [method, path] = route.split(' ');
       expect(mounted.has(route), route).toBe(true);

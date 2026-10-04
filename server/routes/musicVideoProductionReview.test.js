@@ -343,10 +343,9 @@ describe('human-reviewed Music Video workflow', () => {
     expect(imported.body.project.productionReview.reviewedRevisions[entry.basis]).toBeTruthy();
   });
 
-  it('never submits an external post, including forged approval and agent credentials', async () => {
+  it('exposes no submit route for an external post, including forged approval and agent credentials', async () => {
     const result = await request(app).post(`${base}/publish/drafts/any-draft/submit`).set('authorization', 'Bearer synthetic-agent').send({ approved: true, password: 'synthetic-operator-password' });
-    expect(result.status).toBe(403);
-    expect(result.body.code).toBe('PUBLISH_MANUAL_REQUIRED');
+    expect(result.status).toBe(404);
     auth.authenticated = false;
     expect((await request(app).post(`${base}/publish/youtube/prepare`).send({})).status).toBe(401);
     auth.authenticated = true;

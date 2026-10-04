@@ -204,6 +204,25 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
   const documentBlocked = !documentMode ? '' : noAudio ? 'Link a track first'
     : !(project.audioAnalysis?.durationSec > 0) ? 'Analyze the track first — the document is timed against the song'
       : !project.composition?.document ? 'Start from the template or import a composition document first' : '';
+
+  // Determine the blocker reason for display
+  let blockerReason = '';
+  if (!readiness?.readyForProduction) {
+    blockerReason = 'Approve the current visual guide, timed storyboard and animated proof first';
+  } else if (eidoverseMode && eidoverseBlocked) {
+    blockerReason = eidoverseBlocked;
+  } else if (documentMode && documentBlocked) {
+    blockerReason = documentBlocked;
+  } else if (codeMode && !codeReady) {
+    blockerReason = 'Analyze the song or time a scene before rendering code';
+  } else if (sceneCount === 0) {
+    blockerReason = 'Add scenes first';
+  } else if (readySceneCount !== sceneCount) {
+    blockerReason = layered
+      ? `${sceneCount - readySceneCount} scene${sceneCount - readySceneCount === 1 ? ' is' : 's are'} not ready — footage needs a video, a still needs a frame and a span, a card needs a span`
+      : `Generate videos for all ${sceneCount} scenes first`;
+  }
+
   if (renderJob.active && renderJob.context === project.id) {
     return (
       <button onClick={renderJob.cancel} disabled={renderJob.pending}
@@ -213,25 +232,18 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
       </button>
     );
   }
+
+  const isDisabled = !readiness?.readyForProduction || renderJob.active || (eidoverseMode ? !!eidoverseBlocked : documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount));
+
   return (
-    <button onClick={() => renderJob.start(project.id)} disabled={!readiness?.readyForProduction || renderJob.active || (eidoverseMode ? !!eidoverseBlocked : documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount))}
-      title={!readiness?.readyForProduction ? 'Approve the current visual guide, timed storyboard and animated proof first' : renderJob.active
-        ? 'Wait for the other project render to finish, or return to it to cancel'
-        : eidoverseMode
-          ? (eidoverseBlocked || 'Render the Eidoverse scene over the master song')
-        : documentMode
-          ? (documentBlocked || 'Render the composition document over the song')
-          : codeMode
-            ? (codeReady ? 'Render the code-rendered video over the song. This does not generate footage.' : 'Analyze the song or time a scene before rendering code')
-            : sceneCount === 0
-              ? 'Add scenes first'
-              : readySceneCount !== sceneCount
-                ? (layered
-                  ? `${sceneCount - readySceneCount} scene${sceneCount - readySceneCount === 1 ? ' is' : 's are'} not ready — footage needs a video, a still needs a frame and a span, a card needs a span`
-                  : `Generate videos for all ${sceneCount} scenes first`)
-                : 'Render the complete music video over the track'}
-      className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
-      <Film size={15} /> {renderJob.active ? 'Rendering another project…' : 'Render final'}
-    </button>
+    <div className="space-y-1">
+      <button onClick={() => renderJob.start(project.id)} disabled={isDisabled}
+        className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
+        <Film size={15} /> {renderJob.active ? 'Rendering another project…' : 'Render final'}
+      </button>
+      {isDisabled && blockerReason && (
+        <p className="text-xs text-port-text-muted">{blockerReason}</p>
+      )}
+    </div>
   );
 }

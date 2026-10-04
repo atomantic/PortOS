@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import toast from '../components/ui/Toast';
 import {
   prepareMusicVideoPublishDraft,
-  submitMusicVideoPublishDraft,
   discardMusicVideoPublishDraft,
   getMusicVideoPublishPlatforms,
   updateMusicVideoPublishPlatforms,
@@ -12,11 +10,10 @@ import {
 const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
 
 /**
- * Music Video posting (#9282). Each platform is two explicit steps: `prepare`
- * fills the post in the PortOS Browser and returns what it filled (a summary
- * and a screenshot) for the director to review; `submit` posts that same
- * draft. Nothing posts without the second press. Errors are kept per platform
- * so a sign-in prompt stays beside the platform that needs it.
+ * Music Video posting (#9282). `prepare` fills the post in the PortOS Browser
+ * and returns what it filled (a summary and a screenshot) for the director to
+ * review. Manual posting is handled outside this hook. Errors are kept per
+ * platform so a sign-in prompt stays beside the platform that needs it.
  *
  * Platforms are opt-in (#9287): `platforms` is the director's saved choice of
  * where they post (with an optional account each), `history` their posts and
@@ -61,28 +58,6 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
       .finally(() => setFor('busy', target, null));
   };
 
-  const submit = (target) => {
-    const draft = drafts[target];
-    if (!draft) return Promise.resolve(null);
-    setFor('busy', target, 'submit');
-    setFor('errors', target, null);
-    return submitMusicVideoPublishDraft(projectId, draft.draftId, { silent: true })
-      .then((res) => {
-        if (res?.project) replaceProject?.(res.project);
-        loadPlatforms();
-        setFor('drafts', target, null);
-        toast.success('Posted');
-        return res?.post || null;
-      })
-      .catch((err) => {
-        // A gone draft can't be posted again; the director fills it afresh.
-        if (err?.code === 'PUBLISH_DRAFT_MISSING') setFor('drafts', target, null);
-        fail(target, err);
-        return null;
-      })
-      .finally(() => setFor('busy', target, null));
-  };
-
   const discard = (target) => {
     const draft = drafts[target];
     setFor('drafts', target, null);
@@ -103,5 +78,5 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
 
   const enabledTargets = Object.entries(platforms || {}).filter(([, p]) => p?.enabled).map(([t]) => t);
 
-  return { drafts, busy, errors, prepare, submit, discard, platforms, history, enabledTargets, setPlatform, recordPost };
+  return { drafts, busy, errors, prepare, discard, platforms, history, enabledTargets, setPlatform, recordPost };
 }

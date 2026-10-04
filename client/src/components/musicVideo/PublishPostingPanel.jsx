@@ -55,9 +55,11 @@ function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
     return <div className="grid sm:grid-cols-2 gap-2">{text('territory', 'Territory', 'art')}<div className="sm:col-span-2">{area('firstComment', 'First comment (optional)')}</div></div>;
   }
   if (target === 'suno') {
+    // Prefill from kit links or run output if available
+    const defaultSongUrl = kit.links?.song || (options.songUrl ? null : 'https://suno.com/song/…');
     return (
       <div className="grid sm:grid-cols-2 gap-2 items-end">
-        {text('songUrl', 'Song URL (the take to publish)', kit.links?.song || 'https://suno.com/song/…')}
+        {text('songUrl', 'Song URL (the take to publish)', defaultSongUrl)}
         <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
           <input type="checkbox" checked={options.pin !== false} onChange={(e) => setOption('pin', e.target.checked)} /> Pin to profile
         </label>
@@ -124,7 +126,14 @@ function ManualLink({ idFor, label, onSave }) {
 function TargetRow({ project, kit, entry, publishing }) {
   const { target, label, note } = entry;
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
-  const [options, setOptions] = useState({});
+  const [options, setOptions] = useState(() => {
+    // Prefill Suno URL from autonomous run if available
+    if (target === 'suno' && project?.autonomousRun?.output?.sunoSongIds?.length > 0) {
+      const songId = project.autonomousRun.output.sunoSongIds[0];
+      return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}` };
+    }
+    return {};
+  });
   const setOption = (key, value) => setOptions((prev) => ({ ...prev, [key]: value }));
   const draft = publishing.drafts[target];
   const busy = publishing.busy[target];
@@ -136,7 +145,6 @@ function TargetRow({ project, kit, entry, publishing }) {
 
   return (
     <li className="rounded border border-port-border p-2 space-y-2">
-      <p className="text-xs text-port-text-muted">Preparing a draft may upload files and save platform metadata. This is separate from production and never publishes.</p>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as @{account}</span>}</div>
@@ -170,13 +178,10 @@ function TargetRow({ project, kit, entry, publishing }) {
               <div key={k} className="contents"><dt className="text-port-text-muted">{k}</dt><dd className="min-w-0 break-words whitespace-pre-wrap">{v}</dd></div>
             ))}
           </dl>
-          <div className="flex flex-wrap gap-2">
-            <p className="text-sm">Review and publish yourself in the destination platform's open browser tab. PortOS cannot submit this draft. Record the resulting link below.</p>
-            <button type="button" onClick={() => publishing.discard(target)} disabled={!!busy}
-              className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
-              <XIcon size={13} /> Discard
-            </button>
-          </div>
+          <button type="button" onClick={() => publishing.discard(target)} disabled={!!busy}
+            className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+            <XIcon size={13} /> Discard
+          </button>
         </div>
       )}
     </li>

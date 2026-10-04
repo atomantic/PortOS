@@ -167,6 +167,7 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
   const [aspect, setAspect] = useState(projectAspect);
   const [fade, setFade] = useState(false);
   const [suggestions, setSuggestions] = useState(null);
+  const [suggestionError, setSuggestionError] = useState(null);
   const [suggesting, setSuggesting] = useState(false);
   const idFor = (s) => `mv-excerpt-${project?.id}-${s}`;
   const valid = Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec;
@@ -176,9 +177,10 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
   const render = (s, e, opts) => actions.startExcerpt(s, e, opts);
   const suggestHooks = () => {
     setSuggesting(true);
+    setSuggestionError(null);
     getMusicVideoSocialCuts(project.id, { count: 3 }, { silent: true })
       .then((res) => setSuggestions(res?.suggestions || []))
-      .catch(() => setSuggestions([]))
+      .catch((err) => { setSuggestions(null); setSuggestionError(err?.message || 'Failed to find hooks'); })
       .finally(() => setSuggesting(false));
   };
 
@@ -228,7 +230,13 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
               <Sparkles size={12} /> {suggesting ? 'Finding hooks…' : 'Suggest hooks'}
             </button>
           </div>
-          {suggestions && suggestions.length === 0 && <p className="text-xs text-port-text-muted">No hook windows found. Time the lyrics first.</p>}
+          {suggestionError && (
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <p role="alert" className="text-port-error">{suggestionError}</p>
+              <button type="button" onClick={suggestHooks} disabled={suggesting} className="text-port-accent disabled:opacity-50">Retry</button>
+            </div>
+          )}
+          {!suggestionError && suggestions && suggestions.length === 0 && <p className="text-xs text-port-text-muted">No hook windows found. Time the lyrics first.</p>}
           {suggestions && suggestions.length > 0 && (
             <ul className="space-y-1">
               {suggestions.map((s) => (
