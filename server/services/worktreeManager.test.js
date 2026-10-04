@@ -670,10 +670,14 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       if (sub === 'rev-parse' && args[1] === '--verify' && String(args[2]).startsWith('origin/')) {
         return Promise.resolve({ stdout: remoteTargetResolves ? 'deadbeef' : '', stderr: '', exitCode: remoteTargetResolves ? 0 : 1 });
       }
+      if (sub === 'rev-parse' && args[1] === '--abbrev-ref' && args[2] === 'HEAD') {
+        return Promise.resolve({ stdout: 'main', stderr: '', exitCode: 0 });
+      }
       if (sub === 'rev-parse' && args[1] === '--show-toplevel') {
         return Promise.resolve({ stdout: detectedToplevel ?? cwd, stderr: '', exitCode: 0 });
       }
       if (sub === 'status') return Promise.resolve({ stdout: porcelain, stderr: '', exitCode: 0 });
+      if (sub === 'rev-list') return Promise.resolve({ stdout: '0\n', stderr: '', exitCode: 0 });
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
   }
@@ -694,6 +698,65 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     lstat.mockReset().mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
     rm.mockClear();
     scriptGit();
+  });
+
+  it.each([
+    ['a rejected ref read', () => Promise.reject(new Error('git command timed out'))],
+    ['a nonzero ref read', () => Promise.resolve({ stdout: '1', stderr: 'bad ref', exitCode: 128 })],
+    ['an empty ref count', () => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })],
+    ['a malformed ref count', () => Promise.resolve({ stdout: 'unknown', stderr: '', exitCode: 0 })],
+  ])('preserves the worktree and branch when merge preflight returns %s', async (_description, readCount) => {
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) =>
+      args[0] === 'rev-list' ? readCount() : scripted(args, ...rest));
+
+    // This is the scheduled caller's option shape: merge enabled, with no
+    // optional branch-preservation flag.
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+    expect(result).toMatchObject({ merged: false, removed: false, uncommittedSaved: false });
+    expect(result.warnings.join(' ')).toMatch(/preserved.*retry/i);
+    expect(rm).not.toHaveBeenCalled();
+    expect(calledWith(['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'])).toBe(false);
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+    expect(calledWith(['merge', 'cos/task-1/agent-x', '--no-edit'])).toBe(false);
+  });
+
+  it('still removes an empty branch after a verified zero commit count', async () => {
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+    expect(result.removed).toBe(true);
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+  });
+
+  it('attempts and records a merge after a verified positive commit count', async () => {
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) =>
+      args[0] === 'rev-list'
+        ? Promise.resolve({ stdout: '2\n', stderr: '', exitCode: 0 })
+        : scripted(args, ...rest));
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+    expect(result).toMatchObject({ merged: true, removed: true });
+    expect(calledWith(['merge', 'cos/task-1/agent-x', '--no-edit'])).toBe(true);
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+  });
+
+  it('preserves a branch after a verified positive count and failed merge', async () => {
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) => {
+      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '1\n', stderr: '', exitCode: 0 });
+      if (args[0] === 'merge' && args[1] !== '--abort') return Promise.reject(new Error('merge conflict'));
+      return scripted(args, ...rest);
+    });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+    expect(result.removed).toBe(true);
+    expect(result.merged).toBe(false);
+    expect(calledWith(['merge', 'cos/task-1/agent-x', '--no-edit'])).toBe(true);
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
   });
 
   afterEach(() => {
@@ -1400,7 +1463,7 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
       if (args[0] === 'worktree' && args[1] === 'remove') removedPaths.add(args[2]);
       if (args[0] === 'rev-parse') return Promise.resolve({ stdout: args[1] === '--show-toplevel' ? cwd : 'main' });
       if (args[0] === 'status') return Promise.resolve({ stdout: cwd === tree('agent-dirty') ? ' M src/work.js' : '' });
-      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '0' });
+      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '0', stderr: '', exitCode: 0 });
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
 
