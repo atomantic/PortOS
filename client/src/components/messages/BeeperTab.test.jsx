@@ -1692,6 +1692,8 @@ describe('saved conversation scopes', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save scope' }));
     expect(await screen.findByRole('button', { name: 'Renamed example' })).toBeInTheDocument();
     expect(api.updateBeeperScope).toHaveBeenCalledWith(CONV_B, { name: 'Renamed example', filters: saved.filters }, { silent: true });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Changed example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unread only' }));
     fireEvent.click(screen.getByRole('button', { name: 'More scope options' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete scope' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Renamed example' })).not.toBeInTheDocument());

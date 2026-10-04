@@ -1022,7 +1022,12 @@ export default function BeeperChatSurface({
                   setScopeSaving(false);
                   if (!result) return;
                   setSavedScopes((prev) => (prev || []).filter((entry) => entry.id !== id));
-                  setScopeEditor(null); setParam('scope', 'inbox');
+                  setScopeEditor(null);
+                  setSearchParams((prev) => {
+                    const params = new URLSearchParams(prev);
+                    params.set('scope', 'inbox'); params.delete('q'); params.delete('unread');
+                    return params;
+                  }, { replace: true });
                 }}>Delete scope</button>}
             </div>
           </form>
