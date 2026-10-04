@@ -15,6 +15,10 @@ import {
 // Where a stage stops needing the server: the autopilot continues past an
 // approved or skipped one, and waits for the director at `review` or `failed`.
 const CHECKPOINTS = new Set(['review', 'approved', 'skipped', 'failed']);
+// A working stage a server restart unpinned (`interrupted`) will never reach a
+// checkpoint on its own — it waits for the director's Resume. A kickoff watching
+// it must stop watching, not wait forever (#9940).
+const reachedCheckpoint = (stage) => CHECKPOINTS.has(stage?.status) || stage?.interrupted === true;
 
 /**
  * The Cast & Sets check-in (runs before the shot plan). The server does the
@@ -25,10 +29,11 @@ const CHECKPOINTS = new Set(['review', 'approved', 'skipped', 'failed']);
  *
  * `runToCheckpoint(project)` is the autopilot kickoff's step: it starts the
  * check-in when there is none and resolves with the project once the stage
- * reaches a checkpoint (`review`, `approved`, `skipped`, `failed`), or null
- * when it could not start.
+ * reaches a checkpoint (`review`, `approved`, `skipped`, `failed`, or
+ * `interrupted` by a restart), or null when it could not start or the wait was
+ * abandoned with `cancelWait()` (the kickoff's Cancel).
  *
- * Returns `{ busy, start, regenerate, editDirection, resume, approve, skip, runToCheckpoint }`.
+ * Returns `{ busy, start, regenerate, editDirection, resume, approve, skip, runToCheckpoint, cancelWait }`.
  */
 export default function useMusicVideoCastAndSets({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -51,7 +56,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
       snapshotRevision.current += 1;
       replaceRef.current?.(next);
       const w = waiter.current;
-      if (w && w.projectId === projectId && CHECKPOINTS.has(next.castAndSets?.status)) {
+      if (w && w.projectId === projectId && reachedCheckpoint(next.castAndSets)) {
         waiter.current = null;
         w.resolve(next);
       }
@@ -118,7 +123,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const runToCheckpoint = (target) => {
     if (!target?.id) return Promise.resolve(null);
     const status = target.castAndSets?.status;
-    if (CHECKPOINTS.has(status)) return Promise.resolve(target);
+    if (reachedCheckpoint(target.castAndSets)) return Promise.resolve(target);
     const reached = new Promise((resolve) => { waiter.current = { projectId: target.id, resolve }; });
     // A stage already underway just needs watching; otherwise start one.
     if (status) return reached;
@@ -134,5 +139,13 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
       });
   };
 
-  return { busy, start, regenerate, editDirection, resume, approve, skip, runToCheckpoint };
+  // Stop a kickoff's wait without touching the stage: the server keeps working.
+  const cancelWait = () => {
+    const w = waiter.current;
+    if (!w) return;
+    waiter.current = null;
+    w.resolve(null);
+  };
+
+  return { busy, start, regenerate, editDirection, resume, approve, skip, runToCheckpoint, cancelWait };
 }

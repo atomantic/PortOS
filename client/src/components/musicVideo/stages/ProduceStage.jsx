@@ -18,6 +18,7 @@ export default function ProduceStage({ board }) {
         readiness={board.productionReadiness}
         onSave={board.saveAutomation}
         onKickoff={board.onKickoff}
+        onCancelKickoff={kickoff.running ? kickoff.cancel : undefined}
         kickoffBusy={board.busy.analyzing || board.busy.planning || kickoff.running}
         kickoffStep={kickoff.stepLabel}
         kickoffBlockedReason={board.autopilotBlockedReason}

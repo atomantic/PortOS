@@ -99,6 +99,16 @@ let deps = { ...defaults };
 export function __setCastAndSetsDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
 export const __castAndSetsProcessId = () => PROCESS_ID;
 
+/**
+ * The project as a CLIENT reads it. Only this process knows its own id, so only
+ * the server can tell a working stage a restart unpinned (`interrupted`) from
+ * one still running here; a raw record read would show every such stage as
+ * live forever (#9940). Not for write paths — never persist the result.
+ */
+export const presentProjectCastAndSets = (project) => (project?.castAndSets
+  ? { ...project, castAndSets: presentCastAndSets(project.castAndSets, PROCESS_ID) }
+  : project);
+
 async function requireProject(id) {
   const project = await getProject(id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });

@@ -158,6 +158,11 @@ export const cancelMusicVideoMidiTranscription = (jobId, options = {}) =>
 // the SSE URL below (subscribe with useSseProgress). cancel stops an in-flight job.
 export const renderMusicVideoProject = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/render`, { method: 'POST', ...options });
+// Read-only: resolves { jobId } of the project's live final render on this
+// install (null when none) so a reloaded page can re-attach to its progress
+// stream. Never starts a render — only the POST above does (#9940).
+export const getMusicVideoActiveRender = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/render`, options);
 export const getMusicVideoCodeDocument = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/code/document`, options);
 export const generateMusicVideoCode = (id, body = {}, options = {}) =>

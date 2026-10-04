@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
+import { toastWorkflowError } from '../components/musicVideo/workflowErrorToast.jsx';
 import {
+  getMusicVideoProject,
   startMusicVideoAutoReview,
   resumeMusicVideoAutoReview,
   stopMusicVideoAutoReview,
@@ -51,8 +53,14 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
       // A run a production owns (#9066) is dispatched by the server, not the board.
       if (data.action?.type === 'generate' && data.run?.status === 'running' && !data.run.productionRunId
         && data.action.sections?.length && submit) {
-        submit(data.project, data.action.sections, data.action.revisionId).then((n) => {
+        // The hand-out is the only thing driving a board-owned run forward, so a
+        // throw here must not vanish: say so and point at Continue (#9940).
+        // (The executor runs synchronously, so the hand-out starts this tick.)
+        new Promise((resolve) => resolve(submit(data.project, data.action.sections, data.action.revisionId))).then((n) => {
           if (n) toast.info(`Auto-review: generating ${n} revised section${n === 1 ? '' : 's'}`);
+        }).catch((err) => {
+          console.error(`❌ Music Video auto-review hand-out failed: ${err?.message || 'unknown error'}`);
+          toast.error(`Auto-review could not start its revised sections (${err?.message || 'unexpected error'}) — use Continue under "Needs attention" to try again.`);
         });
       }
       const run = data.run;
@@ -66,6 +74,10 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
     return () => socket.off('music-video:auto-review', onAutoReview);
   }, [projectId]);
 
+  // A refusal for an open revision links to it; reload so the banner can show
+  // a revision this tab never saw.
+  const reload = () => getMusicVideoProject(projectId, { silent: true }).then((next) => handlers.current.replaceProject?.(next));
+
   const call = (request) => {
     setBusy(true);
     return request()
@@ -74,7 +86,7 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
         if (res?.run) lastStatus.current.set(res.run.id, res.run.status);
         return res;
       })
-      .catch((err) => { toast.error(err?.message || 'Auto-review request failed'); return null; })
+      .catch((err) => { toastWorkflowError(err, 'Auto-review request failed', { reload }); return null; })
       .finally(() => setBusy(false));
   };
 

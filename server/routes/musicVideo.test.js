@@ -45,6 +45,7 @@ vi.mock('../services/musicVideo/render.js', () => ({
   renderMusicVideo: vi.fn(async () => ({ jobId: 'job-1' })),
   attachRenderSseClient: vi.fn(() => true),
   cancelRender: vi.fn(() => true),
+  getActiveRenderJobId: vi.fn(() => null),
 }));
 
 // Same posture for the draft excerpt render (#8986) — the route's job is to
@@ -657,6 +658,18 @@ describe('musicVideo routes', () => {
       await request(app).post('/api/music-video/mv-1/render').send({});
       // The render handler ran, not the scene handler.
       expect(svc.addProjectScene).not.toHaveBeenCalled();
+    });
+
+    it('GET /:id/render reports the live job without starting a render (#9940)', async () => {
+      renderSvc.getActiveRenderJobId.mockReturnValueOnce('job-live');
+      const live = await request(app).get('/api/music-video/mv-1/render');
+      expect(live.status).toBe(200);
+      expect(live.body).toEqual({ jobId: 'job-live' });
+      expect(renderSvc.getActiveRenderJobId).toHaveBeenCalledWith('mv-1');
+      const idle = await request(app).get('/api/music-video/mv-1/render');
+      expect(idle.body).toEqual({ jobId: null });
+      // A page reload only READS — it must never kick off a render.
+      expect(renderSvc.renderMusicVideo).not.toHaveBeenCalled();
     });
 
     it('POST /render/:jobId/cancel cancels the job', async () => {

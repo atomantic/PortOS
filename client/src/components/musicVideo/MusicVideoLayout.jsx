@@ -43,12 +43,14 @@ const DOCK_CLASSES = 'max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 
  *
  * `progress` is `deriveStages(project)`; `nextAction` is `deriveNextAction(…)`;
  * `status` is `describeProjectStatus(…)`, the one "where it stands" line under
- * the name. `dock` is the `PreviewDock` element (or null when there is nothing
+ * the name. `attention` is the `NeedsAttentionBanner` element (or null): it sits
+ * under that line so a stranded revision, interrupted check-in or unwatched
+ * render is visible on every tab, with its Resume/Cancel inline (#9940). `dock` is the `PreviewDock` element (or null when there is nothing
  * to preview).
  */
 export default function MusicVideoLayout({
   project, trackLabel, stage, onStageChange, progress, nextAction, onNextAction, spend, status = null,
-  dock, projectPanels, children,
+  attention = null, dock, projectPanels, children,
 }) {
   const headerRef = useRef(null);
   const rootRef = useRef(null);
@@ -125,6 +127,7 @@ export default function MusicVideoLayout({
             ))}
           </p>
         )}
+        {attention}
         <nav
           aria-label="Stages"
           className="max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-40 max-md:border-t max-md:border-port-border max-md:bg-port-bg max-md:pb-[env(safe-area-inset-bottom)]"

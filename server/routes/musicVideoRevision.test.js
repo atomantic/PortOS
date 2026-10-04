@@ -387,6 +387,12 @@ describe('selective section revision (#8987)', () => {
     const second = await request(app).post(`${base(project.id)}/excerpt/mve-draft/revisions`).send({});
     expect(second.status).toBe(409);
     expect(second.body.code).toBe('REVISION_IN_PROGRESS');
+    // Every refusal names the blocking revision so the board can link to it (#9940).
+    expect(second.body.context).toEqual({ revisionId: first.body.revision.id });
+    const repair = await request(app).post(`${base(project.id)}/dependency-repairs`).send({ basis: 'basis-example' });
+    expect(repair.status).toBe(409);
+    expect(repair.body.code).toBe('REVISION_IN_PROGRESS');
+    expect(repair.body.context).toEqual({ revisionId: first.body.revision.id });
 
     const outside = await request(app).post(`${base(project.id)}/revisions/${first.body.revision.id}/cancel`);
     expect(outside.status).toBe(200);
