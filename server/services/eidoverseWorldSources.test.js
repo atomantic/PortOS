@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { statfs } from 'node:fs/promises';
+import { PATHS } from '../lib/paths.js';
+
 const sources = vi.hoisted(() => ({}));
 
 vi.mock('node:fs/promises', () => ({
@@ -85,6 +88,16 @@ beforeEach(() => {
 });
 
 describe('Eidoverse world source aggregation', () => {
+  it('uses runtime data capacity and preserves unavailable storage signals', async () => {
+    sources.diskPercent = 99;
+    const result = await collectEidoverseWorldSources();
+    expect(statfs).toHaveBeenCalledWith(PATHS.data);
+    expect(result.health.diskPercent).toBe(99);
+    statfs.mockRejectedValueOnce(new Error('private volume'));
+    const failed = await collectEidoverseWorldSources();
+    expect(failed.health.diskPercent).toBeNull();
+  });
+
   it.each([
     ['critical disk usage', { diskPercent: 95 }, 'error'],
     ['failed backup', { backupState: { status: 'failed' } }, 'error'],

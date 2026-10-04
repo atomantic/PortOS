@@ -353,6 +353,7 @@ export async function buildSystemResourceReport() {
 
   const [
     diskStats,
+    dataDiskStats,
     dataOverview,
     databaseRow,
     hf,
@@ -376,6 +377,7 @@ export async function buildSystemResourceReport() {
     modelDuplicates,
   ] = await Promise.all([
     statfs('/').catch(() => null),
+    statfs(PATHS.data).catch(() => null),
     getDataOverview({ strict: true }).catch(() => null),
     query('SELECT pg_database_size(current_database()) AS bytes')
       .then((result) => result.rows[0] || null)
@@ -407,6 +409,13 @@ export async function buildSystemResourceReport() {
     usedBytes: parsedFilesystem.usedBytes,
     freeBytes: parsedFilesystem.freeBytes,
     usagePercent: parsedFilesystem.usagePercent,
+  };
+  const parsedDataFilesystem = parseFilesystemStats(dataDiskStats);
+  const dataFilesystem = parsedDataFilesystem && {
+    totalBytes: parsedDataFilesystem.totalBytes,
+    usedBytes: parsedDataFilesystem.usedBytes,
+    freeBytes: parsedDataFilesystem.freeBytes,
+    usagePercent: parsedDataFilesystem.usagePercent,
   };
   const databaseBytes = finiteOrNull(databaseRow?.bytes);
   const dependenciesBytes = sumKnownBytes(dependencySizes);
@@ -513,6 +522,7 @@ export async function buildSystemResourceReport() {
   const sourceErrors = [...new Set([
     ...storageErrors,
     ...(!filesystem ? ['filesystem'] : []),
+    ...(!dataFilesystem ? ['data-filesystem'] : []),
     ...(!ollamaStatus?.available ? ['ollama-backend'] : []),
     ...(ollamaStored == null ? ['ollama-inventory'] : []),
     ...(ollamaResidencyError ? ['ollama-residency'] : []),
@@ -545,6 +555,7 @@ export async function buildSystemResourceReport() {
     inventorySource: 'scan',
     manifestReconciledAt: manifest?.reconciledAt || null,
     filesystem,
+    dataFilesystem,
     summary: {
       knownFootprintBytes: sumKnownBytes(storageAreas.map((area) => area.sizeBytes)),
       footprintMayOverlap: true,

@@ -194,3 +194,14 @@ describe('SystemHealthWidget', () => {
     expect(refetchHealth).not.toHaveBeenCalled();
   });
 });
+
+
+it('distinguishes root and data capacity and never hides unavailable data behind root', () => {
+  const health = { ...HEALTH, system: { ...HEALTH.system, dataDisk: { usagePercent: 99, usedFormatted: '99 GB', totalFormatted: '100 GB' } } };
+  const { rerender } = renderWidget({ health });
+  expect(screen.getByText('Root disk')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Open runtime data disk usage report' })).toHaveTextContent('99%');
+  rerender(<MemoryRouter><SystemHealthWidget dashboardState={{ health: { ...health, system: { ...health.system, dataDisk: null } } }} /></MemoryRouter>);
+  expect(screen.getByLabelText('Runtime data disk status unavailable')).toHaveTextContent('Unavailable');
+  expect(screen.getByRole('link', { name: 'Open disk usage report' })).toHaveTextContent('60%');
+});

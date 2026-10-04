@@ -40,18 +40,20 @@ function ReportEmpty({ loading, onRun }) {
   );
 }
 
-function DiskGauge({ filesystem }) {
-  if (!filesystem) return null;
+function DiskGauge({ filesystem, label }) {
+  if (!filesystem) return <section className="rounded-2xl border border-port-border bg-port-card p-5" aria-label={`${label} status unavailable`}><h3>{label}</h3><p className="text-port-warning">Unavailable</p></section>;
   const pct = Math.min(100, Math.max(0, filesystem.usagePercent));
   const color = pct >= 98 ? '#ef4444' : pct >= 90 ? '#f59e0b' : '#22c55e';
   return (
     <section className="rounded-2xl border border-port-border bg-port-card p-5">
+      <h3 className="mb-3 font-semibold">{label}</h3>
+      {label === 'Runtime data disk' && <p className="mb-3 text-xs text-gray-500">Capacity of the filesystem holding PortOS runtime data. PostgreSQL and external model stores may use other filesystems.</p>}
       <div className="grid items-center gap-5 md:grid-cols-[160px_1fr]">
         <div
           className="relative mx-auto grid h-36 w-36 place-items-center rounded-full"
           style={{ background: `conic-gradient(${color} ${pct}%, rgba(75,85,99,.25) ${pct}% 100%)` }}
           role="meter"
-          aria-label={`${pct}% disk used`}
+          aria-label={`${label}: ${pct}% disk used`}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={pct}
@@ -299,7 +301,8 @@ export default function StoragePanel({ report, loading, onRunReport, onReport, c
       {report.sourceErrors.length > 0 && (
         <Banner tone="warning" icon={AlertTriangle}>Some sources were unavailable: {report.sourceErrors.join(', ')}. Other totals remain usable.</Banner>
       )}
-      <DiskGauge filesystem={report.filesystem} />
+      <DiskGauge filesystem={report.filesystem} label="Root disk" />
+      {Object.hasOwn(report, 'dataFilesystem') && <DiskGauge filesystem={report.dataFilesystem} label="Runtime data disk" />}
       <div className="grid gap-4 xl:grid-cols-2">
         <StorageAreas areas={report.storageAreas} />
         <CandidateRows candidates={report.cleanupCandidates} cleanup={cleanup} />

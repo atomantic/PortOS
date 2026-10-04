@@ -136,3 +136,15 @@ describe('StoragePanel storage area meters', () => {
     expect(unavailable.firstElementChild.className).not.toContain('animate-pulse');
   });
 });
+
+
+it('labels both filesystem gauges and preserves unavailable data capacity', () => {
+  const report = { ...makeReport('2026-08-16T00:00:00.000Z'), dataFilesystem: { totalBytes: 1000, usedBytes: 990, freeBytes: 10, usagePercent: 99 } };
+  const renderPanel = value => <MemoryRouter><StoragePanel report={value} loading={false} onRunReport={vi.fn()} onReport={vi.fn()} cleanup={cleanup} /></MemoryRouter>;
+  const { rerender } = render(renderPanel(report));
+  expect(screen.getByRole('meter', { name: 'Root disk: 70% disk used' })).toHaveAttribute('aria-valuenow', '70');
+  expect(screen.getByRole('meter', { name: 'Runtime data disk: 99% disk used' })).toHaveAttribute('aria-valuenow', '99');
+  rerender(renderPanel({ ...report, dataFilesystem: null }));
+  expect(screen.getByLabelText('Runtime data disk status unavailable')).toHaveTextContent('Unavailable');
+  expect(screen.queryByRole('meter', { name: /Runtime data disk/ })).not.toBeInTheDocument();
+});

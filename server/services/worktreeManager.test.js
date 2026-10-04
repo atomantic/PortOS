@@ -790,7 +790,7 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       present();
       failRemoval();
       const scripted = execGitMock.getMockImplementation();
-      execGitMock.mockImplementation((args, ...rest) => (args[0] === 'rev-list' ? Promise.resolve({ stdout: '2' })
+      execGitMock.mockImplementation((args, ...rest) => (args[0] === 'rev-list' ? Promise.resolve({ stdout: '2', stderr: '', exitCode: 0 })
         : (args[0] === 'rev-parse' && args[1] === '--abbrev-ref' ? Promise.resolve({ stdout: 'main' }) : scripted(args, ...rest))));
       getDefaultBranchMock.mockResolvedValue('main');
 

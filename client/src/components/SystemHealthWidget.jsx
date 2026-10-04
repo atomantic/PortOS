@@ -40,7 +40,8 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
   // so React's hook count stays stable across renders.
   const memPct = health?.system?.memory?.usagePercent;
   const cpuPct = health?.system?.cpu?.usagePercent;
-  const diskPct = health?.system?.disk?.usagePercent;
+  const diskPct = Object.hasOwn(health?.system || {}, 'dataDisk')
+    ? health.system.dataDisk?.usagePercent : health?.system?.disk?.usagePercent;
   const procOnline = health?.processes?.online;
   const procTotal = health?.processes?.total;
   const appOnline = health?.apps?.online;
@@ -266,36 +267,41 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
           )}
         </div>
 
-        {/* Disk Usage */}
-        {system.disk ? (
+        {/* Root fields remain compatible with older health responses. */}
+        {[{ disk: system.disk, label: 'Root disk', unavailable: diskProbeUnavailable },
+          ...(Object.hasOwn(system, 'dataDisk') ? [{ disk: system.dataDisk, label: 'Runtime data disk', unavailable: true }] : [])
+        ].map(({ disk, label, unavailable }) => (
+        disk ? (
           <Link
+            key={label}
             to="/system-resources/storage"
-            aria-label="Open disk usage report"
+            aria-label={label === 'Root disk' ? 'Open disk usage report' : 'Open runtime data disk usage report'}
             className="block rounded-lg bg-port-bg/50 p-3 transition-colors hover:bg-port-bg/80 focus:outline-none focus:ring-2 focus:ring-port-accent/60"
           >
             <div className="flex min-w-0 items-center gap-2 mb-1">
               <Database size={14} className="hidden shrink-0 text-cyan-400 @2xs:block" />
-              <span className="truncate text-xs text-gray-500">Disk</span>
+              <span className="truncate text-xs text-gray-500">{label}</span>
             </div>
-            <div className={`text-lg @sm:text-xl font-bold ${pctTone(system.disk.usagePercent, thresholds.diskWarn, thresholds.diskCritical)}`}>
-              {system.disk.usagePercent}%
+            <div className={`text-lg @sm:text-xl font-bold ${pctTone(disk.usagePercent, thresholds.diskWarn, thresholds.diskCritical)}`}>
+              {disk.usagePercent}%
             </div>
             <div className="text-xs text-gray-500">
-              {system.disk.usedFormatted} / {system.disk.totalFormatted}
+              {disk.usedFormatted} / {disk.totalFormatted}
             </div>
             <div className="mt-2 h-1.5 bg-port-border rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all ${barTone(system.disk.usagePercent, thresholds.diskWarn, thresholds.diskCritical)}`}
-                style={{ width: `${system.disk.usagePercent}%` }}
+                className={`h-full rounded-full transition-all ${barTone(disk.usagePercent, thresholds.diskWarn, thresholds.diskCritical)}`}
+                style={{ width: `${disk.usagePercent}%` }}
               />
             </div>
           </Link>
-        ) : diskProbeUnavailable ? (
-          <div className="rounded-lg bg-port-bg/50 p-3" aria-label="Disk status unavailable">
-            <div className="text-xs text-gray-500">Disk</div>
+        ) : unavailable ? (
+          <div className="rounded-lg bg-port-bg/50 p-3" key={label} aria-label={label === 'Root disk' ? 'Disk status unavailable' : `${label} status unavailable`}>
+            <div className="text-xs text-gray-500">{label}</div>
             <div className="text-lg font-bold text-port-warning">Unavailable</div>
           </div>
-        ) : null}
+        ) : null
+        ))}
       </div>
 
       {/* CoS Status (if running) */}

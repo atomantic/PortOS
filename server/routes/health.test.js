@@ -12,7 +12,8 @@ import { isAuthEnabled } from '../services/auth.js';
 import { checkGhHealth } from '../services/github.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
 import { getSettingsWithStatus, updateSettingsWith } from '../services/settings.js';
-import { statfs } from 'fs/promises';
+import { stat, statfs } from 'fs/promises';
+import { PATHS } from '../lib/paths.js';
 import { getAppStatusSummary } from '../services/appProcessStatus.js';
 
 vi.mock('../services/pm2.js', () => ({
@@ -25,6 +26,7 @@ vi.mock('../services/pm2.js', () => ({
 // otherwise-unrelated route case critical, masking the behavior under test.
 vi.mock('fs/promises', async (importOriginal) => ({
   ...(await importOriginal()),
+  stat: vi.fn(async path => ({ dev: path === '/' ? 1 : 2 })),
   statfs: vi.fn().mockResolvedValue({ blocks: 100, bavail: 50, bsize: 1 })
 }));
 
@@ -889,4 +891,70 @@ describe('System Health Routes', () => {
       expect(recovered.body.warnings.filter((w) => w.source === 'cos-queue' || w.source === 'cos-agents')).toEqual([]);
     });
   });
+
+
+  describe('runtime data volume health', () => {
+    const stats = used => ({ blocks: 100, bavail: 100 - used, bsize: 1 });
+    it('warns for a critical data volume, independently dismisses it, and prunes on recovery', async () => {
+      vi.mocked(statfs).mockImplementationOnce(async path => stats(path === '/' ? 20 : 99))
+        .mockImplementationOnce(async path => stats(path === '/' ? 20 : 99));
+      const response = await request(app).get('/api/system/health/details');
+      expect(statfs).toHaveBeenCalledWith(PATHS.data);
+      expect(response.body.system.disk.usagePercent).toBe(20);
+      expect(response.body.system.dataDisk.usagePercent).toBe(99);
+      expect(response.body.overallHealth).toBe('critical');
+      expect(response.body.warnings).toContainEqual({ type: 'data-disk', severity: 'critical', message: 'Runtime data disk usage at or above 98%' });
+      expect(Object.keys(response.body.system.dataDisk).sort()).toEqual(['free', 'freeFormatted', 'total', 'totalFormatted', 'usagePercent', 'used', 'usedFormatted']);
+      const dismissed = await request(app).post('/api/system/health/warnings/data-disk/dismiss').send({ message: 'Runtime data disk usage at or above 98%' });
+      expect(dismissed.status).toBe(200);
+      vi.mocked(getSettingsWithStatus).mockResolvedValueOnce({ corrupt: false, settings: { health: { dismissedWarnings: { 'data-disk': dismissed.body } } } });
+      vi.mocked(statfs).mockResolvedValueOnce(stats(20)).mockResolvedValueOnce(stats(99));
+      const hidden = await request(app).get('/api/system/health/details');
+      expect(hidden.body.warnings.some(w => w.type === 'data-disk')).toBe(false);
+      vi.mocked(getSettingsWithStatus).mockResolvedValueOnce({ corrupt: false, settings: { health: { dismissedWarnings: { 'data-disk': dismissed.body } } } });
+      vi.mocked(statfs).mockResolvedValueOnce(stats(20)).mockResolvedValueOnce(stats(20));
+      const recovered = await request(app).get('/api/system/health/details');
+      expect(recovered.body.system.dataDisk.usagePercent).toBe(20);
+      expect(recovered.body.warnings.some(w => w.type === 'data-disk')).toBe(false);
+      const mutation = vi.mocked(updateSettingsWith).mock.calls.at(-1)[0];
+      expect(mutation({ health: { dismissedWarnings: { 'data-disk': dismissed.body } } }).health.dismissedWarnings).toEqual({});
+    });
+
+    it('keeps one legacy root warning when both volumes share a device', async () => {
+      vi.mocked(stat).mockResolvedValueOnce({ dev: 7 }).mockResolvedValueOnce({ dev: 7 });
+      vi.mocked(statfs).mockResolvedValueOnce(stats(99)).mockResolvedValueOnce(stats(99));
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.body.system.sameFilesystem).toBe(true);
+      expect(response.body.warnings.filter(w => ['disk', 'data-disk'].includes(w.type))).toEqual([{ type: 'disk', severity: 'critical', message: 'Disk usage at or above 98%' }]);
+    });
+
+    it('deduplicates shared-volume samples without losing a newer critical reading', async () => {
+      vi.mocked(stat).mockResolvedValueOnce({ dev: 7 }).mockResolvedValueOnce({ dev: 7 });
+      vi.mocked(statfs).mockResolvedValueOnce(stats(95)).mockResolvedValueOnce(stats(99));
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.body.warnings.filter(w => ['disk', 'data-disk'].includes(w.type))).toEqual([{ type: 'disk', severity: 'critical', message: 'Disk usage at or above 98%' }]);
+    });
+
+    it('does not substitute root capacity for an unavailable data probe and recovers', async () => {
+      vi.mocked(statfs).mockResolvedValueOnce(stats(20)).mockRejectedValueOnce(new Error('private mount detail'));
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.body.system.disk.usagePercent).toBe(20);
+      expect(response.body.system.dataDisk).toBeNull();
+      expect(response.body.overallHealth).not.toBe('healthy');
+      expect(response.body.warnings).toContainEqual({ type: 'probe-unavailable', source: 'data-disk', status: 'unavailable', severity: 'warning', message: 'Runtime data disk status unavailable', dismissible: false });
+      expect(JSON.stringify(response.body)).not.toContain('private mount detail');
+      const recovered = await request(app).get('/api/system/health/details');
+      expect(recovered.body.system.dataDisk.usagePercent).toBe(50);
+      expect(recovered.body.warnings.some(w => w.source === 'data-disk')).toBe(false);
+    });
+
+    it('preserves independent data warnings when filesystem identity cannot be read', async () => {
+      vi.mocked(stat).mockRejectedValueOnce(new Error('unavailable')).mockResolvedValueOnce({ dev: 2 });
+      vi.mocked(statfs).mockResolvedValueOnce(stats(20)).mockResolvedValueOnce(stats(99));
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.body.system.sameFilesystem).toBeNull();
+      expect(response.body.warnings.some(w => w.type === 'data-disk' && w.severity === 'critical')).toBe(true);
+    });
+  });
+
 });
