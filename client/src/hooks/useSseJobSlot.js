@@ -161,6 +161,9 @@ export default function useSseJobSlot({
     jobId: job?.jobId ?? null,
     percent: progress.percent,
     stage: progress.stage,
+    // Most recent frame for THIS job (null until one arrives) — for features
+    // that render counts the percent projection can't carry.
+    latest: job?.jobId ? latest : null,
     context: job?.context ?? null,
     start,
     attach,

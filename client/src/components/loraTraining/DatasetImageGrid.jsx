@@ -7,7 +7,6 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Loader2, RefreshCw, AlertTriangle, ChevronLeft, ChevronRight, X, Eye, EyeOff,
 } from 'lucide-react';
-import toast from '../ui/Toast';
 import Modal from '../ui/Modal';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
@@ -15,7 +14,6 @@ import Pill from '../ui/Pill';
 import {
   updateLoraDatasetImageCaption,
   deleteLoraDatasetImage,
-  startLoraCaptionRun,
 } from '../../services/api';
 
 // Lightweight full-size preview for a dataset image. Kept page-local (the
@@ -97,7 +95,7 @@ const SOURCE_BADGE = {
 };
 
 export default function DatasetImageGrid({
-  dataset, onImagesChange, onCaptionRunStarted, captionModel = null, draftResetToken = 0,
+  dataset, onImagesChange, onRecaption, recaptioningId = null, captionBusy = false, draftResetToken = 0,
 }) {
   const [drafts, setDrafts] = useState({});
   // A bulk caption rewrite in the parent (e.g. strip-shared-fragments) replaces
@@ -107,7 +105,6 @@ export default function DatasetImageGrid({
   const [savingId, setSavingId] = useState(null);
   const [confirmingId, setConfirmingId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
-  const [recaptioningId, setRecaptioningId] = useState(null);
   const [showCaptions, setShowCaptions] = useState(true);
   // Index into the ready-image subset that the lightbox is previewing (null = closed).
   const [previewIndex, setPreviewIndex] = useState(null);
@@ -140,22 +137,6 @@ export default function DatasetImageGrid({
     } finally {
       setDeletingId(null);
       setConfirmingId(null);
-    }
-  };
-
-  const recaption = async (img) => {
-    setRecaptioningId(img.id);
-    try {
-      const run = await startLoraCaptionRun(dataset.id, {
-        imageIds: [img.id],
-        overwrite: true,
-        ...(captionModel?.providerId ? { providerId: captionModel.providerId } : {}),
-        ...(captionModel?.model ? { model: captionModel.model } : {}),
-      });
-      onCaptionRunStarted?.(run);
-      toast.success('Re-captioning image…');
-    } finally {
-      setRecaptioningId(null);
     }
   };
 
@@ -245,8 +226,8 @@ export default function DatasetImageGrid({
                   <div className="flex items-center justify-between text-xs">
                     <button
                       type="button"
-                      onClick={() => recaption(img)}
-                      disabled={img.status !== 'ready' || recaptioningId === img.id}
+                      onClick={() => onRecaption?.(img)}
+                      disabled={img.status !== 'ready' || captionBusy || recaptioningId === img.id}
                       className="text-gray-400 hover:text-white flex items-center gap-1 disabled:opacity-50"
                       title="Re-caption with the vision model"
                     >

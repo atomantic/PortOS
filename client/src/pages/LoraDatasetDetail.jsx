@@ -12,17 +12,17 @@ import { listSheetPointers } from '../lib/sheetPointers.js';
  * single source of truth; rendering images poll-refresh until they land.
  */
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, Link } from 'react-router';
 import {
-  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, RefreshCw, AlertTriangle, Images, Replace, Lightbulb, Eraser,
+  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, RefreshCw, AlertTriangle, Images, Replace, Lightbulb, Eraser, XCircle,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import { IMAGE_ACCEPT } from '../utils/fileUpload';
 import Modal from '../components/ui/Modal';
 import { useSocketResource } from '../hooks/useSocketResource.js';
-import { useSseProgress } from '../hooks/useSseProgress';
+import useSseJobSlot from '../hooks/useSseJobSlot';
 import DatasetImageGrid from '../components/loraTraining/DatasetImageGrid';
 import GenerateBatchDialog from '../components/loraTraining/GenerateBatchDialog';
 import TrainingPanel from '../components/loraTraining/TrainingPanel';
@@ -44,6 +44,7 @@ import {
   uploadLoraDatasetImages,
   sliceLoraDatasetRefSheet,
   startLoraCaptionRun,
+  cancelLoraCaptionRun,
   stripLoraDatasetSharedCaptionFragments,
   getUniverse,
 } from '../services/api';
@@ -217,8 +218,6 @@ export default function LoraDatasetDetail({ recordId }) {
   const [showSlice, setShowSlice] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showReassign, setShowReassign] = useState(false);
-  const [captionRun, setCaptionRun] = useState(null);
-  const [captionStarting, setCaptionStarting] = useState(false);
   // Chosen caption model { providerId, model } — null fields mean "let the
   // server auto-pick a vision model". Lifted from CaptionModelPicker so caption
   // runs pass the explicit selection.
@@ -297,43 +296,54 @@ export default function LoraDatasetDetail({ recordId }) {
 
   const renderingCount = readiness.rendering;
 
-  // Caption-run SSE — refetch on terminal so captions land in the grid, and
-  // surface failures the run reported. The server emits per-image `error`
-  // progress frames and a terminal frame carrying the failure tally
-  // (`complete` with `failed`, or `error` when every image failed); without
-  // this the run just stops spinning and the user never learns an image was
-  // refused / returned an empty description.
-  const captionSseUrl = captionRun ? `/api/lora-datasets/${datasetId}/caption-runs/${captionRun.runId}/events` : null;
-  const captionSse = useSseProgress(captionSseUrl, { enabled: !!captionRun });
-  useEffect(() => {
-    if (!captionRun || !captionSse.closed) return;
-    const last = captionSse.latest;
-    // The per-image `progress` frames carry the specific failure reason (refusal
-    // vs. a reasoning model that exhausted its token budget). The terminal frame
-    // only has a tally, so pull the most recent per-image error to surface the
-    // actionable detail — invaluable when a single-image run fails.
-    const lastImageError = [...(captionSse.frames || [])]
-      .reverse().find((f) => f?.type === 'progress' && f.error)?.error;
-    if (last?.type === 'error') {
-      // Every image failed — the server's terminal `error` frame carries only a
-      // generic "check the vision provider" tally, but the per-image `progress`
-      // frames already reported the specific reason (refusal vs. a reasoning
-      // model that exhausted its token budget). Prefer that detail; it's the
-      // whole point for the common single-image failure, which lands here (not
-      // in the `complete` branch) because done===0.
-      toast.error(lastImageError || last.message || 'Captioning failed');
-    } else if (last?.type === 'complete' && last.failed > 0) {
-      const noun = last.failed === 1 ? 'image' : 'images';
-      const detail = lastImageError ? ` ${lastImageError}` : '';
-      toast.error(last.done > 0
-        ? `Captioned ${last.done}/${last.total} — ${last.failed} ${noun} failed.${detail || ' Re-caption individually or pick another vision model.'}`
-        : `All ${last.failed} ${noun} failed to caption.${detail || ' The vision model refused or returned nothing — try another vision model.'}`);
-    } else if (last?.type === 'complete' && last.done > 0) {
-      toast.success(`Captioned ${last.done} image${last.done === 1 ? '' : 's'}`);
+  // Caption run — one slot, driven by the SERVER's run (not the kickoff reply):
+  // the dataset GET reports the in-flight run (`dataset.captionRun`), so a reload,
+  // a second tab or a lost kickoff acknowledgement re-attaches to the same batch
+  // instead of showing idle controls. The server emits per-image `error` progress
+  // and a terminal frame carrying the failure tally + the last per-image reason
+  // (refusal vs. an exhausted reasoning budget); surface it so a failure isn't silent.
+  const toastCaptionFailure = (frame) => {
+    const detail = frame.lastError ? ` ${frame.lastError}` : '';
+    if (frame.type === 'error') {
+      toast.error(frame.lastError || frame.message || frame.error || 'Captioning failed');
+      return;
     }
-    setCaptionRun(null);
-    refresh();
-  }, [captionRun, captionSse.closed, captionSse.latest, captionSse.frames, refresh]);
+    const noun = frame.failed === 1 ? 'image' : 'images';
+    toast.error(frame.done > 0
+      ? `Captioned ${frame.done}/${frame.total} — ${frame.failed} ${noun} failed.${detail || ' Re-caption individually or pick another vision model.'}`
+      : `All ${frame.failed} ${noun} failed to caption.${detail || ' The vision model refused or returned nothing — try another vision model.'}`);
+  };
+  // Run ids already adopted from a dataset snapshot — a snapshot read before the
+  // terminal refetch lands must not re-attach to the run that just settled.
+  const adoptedCaptionRuns = useRef(new Set());
+  const captionSlot = useSseJobSlot({
+    startRequest: async (options) => {
+      const run = await startLoraCaptionRun(datasetId, options);
+      if (run.conflict) toast.info('A different caption run is already active on this dataset — showing its progress');
+      return { jobId: run.runId };
+    },
+    eventsUrl: (runId) => `/api/lora-datasets/${datasetId}/caption-runs/${runId}/events`,
+    cancelRequest: (runId, opts) => cancelLoraCaptionRun(datasetId, runId, opts),
+    onKickoffSuccess: (runId) => adoptedCaptionRuns.current.add(runId),
+    onSettled: () => refresh(),
+    onComplete: (frame) => {
+      if (frame.failed > 0) toastCaptionFailure(frame);
+      else if (frame.done > 0) toast.success(`Captioned ${frame.done} image${frame.done === 1 ? '' : 's'}`);
+    },
+    onErrorFrame: (frame) => { toastCaptionFailure(frame); return true; },
+    canceledMessage: 'Captioning canceled — captions already written are kept',
+    lostConnectionMessage: 'Lost connection to the caption run — reload to re-attach',
+    startErrorFallback: 'Failed to start captioning',
+  });
+  const activeCaptionRun = dataset?.captionRun;
+  useEffect(() => {
+    const runId = activeCaptionRun?.runId;
+    if (!runId || adoptedCaptionRuns.current.has(runId)) return;
+    if (captionSlot.attach(runId, null)) adoptedCaptionRuns.current.add(runId);
+  }, [activeCaptionRun?.runId, captionSlot.active]);
+  const captionBusy = captionSlot.active;
+  const captionProgress = captionSlot.latest ?? activeCaptionRun;
+  const canceling = captionProgress?.status === 'canceling';
 
   const onImagesChange = (mutate) => setDataset((prev) => (prev ? { ...prev, images: mutate(prev.images) } : prev));
 
@@ -382,15 +392,8 @@ export default function LoraDatasetDetail({ recordId }) {
   // Caption only images that have no caption yet (overwrite: false). Re-caption
   // all overwrites every ready image's caption with the picked model — the way
   // to re-run the whole dataset through a newer/better VLM.
-  const startCaption = async (overwrite) => {
-    setCaptionStarting(true);
-    try {
-      const run = await startLoraCaptionRun(datasetId, captionOptions({ overwrite }));
-      setCaptionRun(run);
-    } finally {
-      setCaptionStarting(false);
-    }
-  };
+  const startCaption = (overwrite) => captionSlot.start(captionOptions({ overwrite }));
+  const recaptionImage = (img) => captionSlot.start(captionOptions({ imageIds: [img.id], overwrite: true }));
   const captionAll = () => startCaption(false);
   const recaptionAll = () => startCaption(true);
 
@@ -519,18 +522,18 @@ export default function LoraDatasetDetail({ recordId }) {
         <button
           type="button"
           onClick={captionAll}
-          disabled={captionStarting || !!captionRun || !readiness.ready}
+          disabled={captionBusy || !readiness.ready}
           className="px-3 py-2 text-sm rounded bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center gap-2 disabled:opacity-50"
         >
-          {captionStarting || captionRun ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tags className="w-4 h-4" />}
-          {captionRun
-            ? `Captioning ${captionSse.latest?.done ?? 0}/${captionSse.latest?.total ?? '…'}`
+          {captionBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tags className="w-4 h-4" />}
+          {captionBusy
+            ? `Captioning ${captionProgress?.done ?? 0}/${captionProgress?.total ?? '…'}`
             : 'Caption all'}
         </button>
         <button
           type="button"
           onClick={recaptionAll}
-          disabled={captionStarting || !!captionRun || !readiness.ready}
+          disabled={captionBusy || !readiness.ready}
           title="Re-caption every ready image with the selected model — overwrites all existing captions, including manual edits"
           className="px-3 py-2 text-sm rounded bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center gap-2 disabled:opacity-50"
         >
@@ -538,6 +541,33 @@ export default function LoraDatasetDetail({ recordId }) {
         </button>
         <CaptionModelPicker onChange={onCaptionModelChange} />
       </div>
+
+      {captionBusy && (
+        <div
+          role="status"
+          className="bg-port-card border border-port-border rounded-lg p-3 flex flex-wrap items-center gap-3 text-sm"
+        >
+          <Loader2 className="w-4 h-4 animate-spin text-port-accent shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-white">
+              {canceling
+                ? 'Canceling… finishing the vision call already in flight (its result is discarded)'
+                : `Captioning ${captionProgress?.done ?? 0}/${captionProgress?.total ?? '…'}${captionProgress?.failed ? ` · ${captionProgress.failed} failed` : ''}`}
+            </div>
+            {activeCaptionRun?.model && (
+              <div className="text-xs text-gray-400 truncate">{activeCaptionRun.provider} · {activeCaptionRun.model}</div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={captionSlot.cancel}
+            disabled={!captionSlot.jobId || canceling}
+            className="px-3 py-2 text-sm rounded bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center gap-2 disabled:opacity-50 min-h-[40px]"
+          >
+            <XCircle className="w-4 h-4" /> Cancel
+          </button>
+        </div>
+      )}
 
       {captionInvariants.sharedFragments.length > 0 && (
         <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg p-3 text-sm">
@@ -569,7 +599,7 @@ export default function LoraDatasetDetail({ recordId }) {
               <button
                 type="button"
                 onClick={stripSharedFragments}
-                disabled={strippingFragments || !!captionRun}
+                disabled={strippingFragments || captionBusy}
                 className="px-3 py-1.5 text-xs rounded bg-port-warning/20 text-port-warning hover:bg-port-warning/30 flex items-center gap-2 disabled:opacity-50"
                 title="Remove these shared fragments from every caption, keeping the trigger word and per-shot detail"
               >
@@ -621,8 +651,9 @@ export default function LoraDatasetDetail({ recordId }) {
         <DatasetImageGrid
           dataset={dataset}
           onImagesChange={onImagesChange}
-          onCaptionRunStarted={setCaptionRun}
-          captionModel={captionModel}
+          onRecaption={recaptionImage}
+          recaptioningId={captionSlot.context?.imageIds?.length === 1 ? captionSlot.context.imageIds[0] : null}
+          captionBusy={captionBusy}
           draftResetToken={captionDraftResetToken}
         />
         <TrainingPanel
