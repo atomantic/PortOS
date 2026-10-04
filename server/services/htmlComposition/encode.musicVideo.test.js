@@ -121,6 +121,25 @@ describe('encodeComposition song-time windows', () => {
 });
 
 describe('encodeComposition process termination diagnostics', () => {
+  it('identifies a capture failure by output frame and absolute song time', async () => {
+    let frames = 0;
+    const broken = { ...page, async send(method) {
+      if (method === 'Page.captureScreenshot' && frames++ === 2) throw new Error('Synthetic screenshot failure');
+      return page.send(method);
+    } };
+    const spawnProcess = () => {
+      const proc = new EventEmitter();
+      proc.stderr = new EventEmitter(); proc.stdin = new EventEmitter();
+      proc.stdin.write = (_bytes, callback) => { callback(); return true; };
+      // The test terminates the encoder independently after capture fails.
+      setTimeout(() => proc.emit('close', 0), 20);
+      return proc;
+    };
+    await expect(encodeComposition(broken, contract(0.5), '/tmp/capture-failure.mp4', {
+      offsetSec: 12, spawnProcess,
+    })).rejects.toThrow(/capture failed at frame 2 \(song 12\.166667s\).*Synthetic screenshot failure/);
+  });
+
   it.each([
     { code: null, signal: 'SIGKILL', abort: false, message: 'SIGKILL; external signal (no encoder stop requested)' },
     { code: null, signal: 'SIGTERM', abort: true, message: 'SIGTERM; encoder abort requested' },

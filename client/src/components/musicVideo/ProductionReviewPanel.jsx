@@ -65,6 +65,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const proofContent = <>
     <p className="text-xs text-port-text-muted break-words">Project v{project.version || 1} · proof revision {ready?.basis.proof?.slice(0, 12) || 'Loading…'} · {excerpt ? `Excerpt ${excerpt.id}` : 'No registered proof'}</p>
     {excerpt && <p className="text-xs text-port-text-muted break-words">{excerpt.filename || excerpt.status} · {project.productionReview?.proof?.basis === ready?.basis.proof ? 'Current source revision' : 'Source changed — render a new proof'}</p>}
+    {excerpt?.status === 'error' && excerpt.error && <p role="alert" className="text-sm text-port-error break-words">{excerpt.error}</p>}
 
       <p className="text-sm">Author the approved storyboard in Compose, then render a 10–45 second chorus with its entry and exit. Watch with sound at normal speed and compare the chosen energy target and timed choreography below against the actual subject, props, camera, typography and transitions. Check accents against beat and lyric anchors, readable holds and repeated-chorus escalation. A strong static frame does not prove the motion works.</p>
       <section aria-label="Saved choreography for proof comparison" className="rounded border border-port-border bg-port-bg p-3">

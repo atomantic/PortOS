@@ -4,7 +4,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, homedir } from 'os';
-import { deriveMacAppBundleFromChromePath } from '../server/lib/browserConfig.js';
+import { browserExecutablePath, deriveMacAppBundleFromChromePath } from '../server/lib/browserConfig.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..');
@@ -30,20 +30,6 @@ const PREFS_MISSING = Symbol('prefs-missing');
 const PREFS_UNREADABLE = Symbol('prefs-unreadable');
 
 const DEFAULT_MAC_CHROME_APP = '/Applications/Google Chrome.app';
-
-function defaultChromeBinary() {
-  const os = platform();
-  if (os === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  if (os === 'win32') return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-  return 'google-chrome';
-}
-
-function getChromePath(config) {
-  if (typeof config?.chromePath === 'string' && config.chromePath.trim()) {
-    return config.chromePath;
-  }
-  return defaultChromeBinary();
-}
 
 function getMacAppBundle(config, chromePath) {
   if (typeof config?.macAppBundle === 'string' && config.macAppBundle.trim()) {
@@ -240,7 +226,7 @@ async function launchBrowser() {
   }
 
   const profileDir = config.userDataDir || DEFAULT_PROFILE_DIR;
-  const chromePath = getChromePath(config);
+  const chromePath = browserExecutablePath(config);
   const macAppBundle = getMacAppBundle(config, chromePath);
 
   await mkdir(profileDir, { recursive: true });

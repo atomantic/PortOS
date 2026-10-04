@@ -333,7 +333,7 @@ export async function encodeDocumentComposition({
       prepare: (dir) => stageDocumentData(dir, data, media),
     });
     signal?.throwIfAborted();
-    page = await openComposition(staged.directory, { signal, streamMedia: true, mediaMode: musicVideoMediaMode(project) });
+    page = await openComposition(staged.directory, { signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true });
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
       if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');

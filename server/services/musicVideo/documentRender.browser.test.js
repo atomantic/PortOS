@@ -6,14 +6,30 @@ import { richSceneSource } from './__richSceneFixture.js';
  * every time, and carries the master song. Skips without Chrome or ffmpeg.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
+
+const { it, drain } = ownTestBodies(vitestIt);
+const ownedChildren = vi.hoisted(() => []);
+vi.mock('../../lib/childProcess.js', async original => {
+  const actual = await original();
+  return { ...actual, spawn(...args) {
+    const child = actual.spawn(...args);
+    const profileArg = args[1]?.find(arg => arg.startsWith('--user-data-dir=') && arg.includes('portos-composition-browser-'));
+    if (profileArg) {
+      const owned = { profile: profileArg.slice('--user-data-dir='.length), closed: false };
+      child.once('close', () => { owned.closed = true; });
+      ownedChildren.push(owned);
+    }
+    return child;
+  } };
+});
 
 // This suite measures encoder pixels; the actual operator boundary is exercised in musicVideoProductionReview.browser.test.js.
 vi.mock('./productionReview.js', async original => ({ ...await original(), assertProductionApproval: () => {} }));
@@ -40,7 +56,7 @@ let testSignal;
 beforeEach(({ signal }) => { testSignal = signal; });
 
 let endpoint;
-vi.mock('../browserService.js', () => ({ cdpRequest: (path) => fetch(`${endpoint}${path}`) }));
+vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: vi.fn((path) => fetch(`${endpoint}${path}`)) }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-browser-'),
 }));
@@ -67,7 +83,13 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     // Keep collection read-only when Chrome/ffmpeg prerequisites skip the suite.
     ({ PATHS } = await import('../../lib/paths.js'));
-    ({ encodeDocumentComposition, prepareDocumentRender, documentRenderClock } = await import('./documentRender.js'));
+    const renderer = await import('./documentRender.js');
+    ({ prepareDocumentRender, documentRenderClock } = renderer);
+    // The test deadline owns staging, Chrome, capture and muxing together.
+    // An encoder-only signal leaves Chrome alive when Vitest times out.
+    encodeDocumentComposition = options => renderer.encodeDocumentComposition({
+      ...options, signal: AbortSignal.any([options.signal, testSignal].filter(Boolean)),
+    });
     ({ importDocumentTemplate } = await import('./compositionDocument.js'));
     ({ generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js'));
     ({ buildDocumentPreview } = await import('./documentPreview.js'));
@@ -78,11 +100,38 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
     browser = await chromium.connectOverCDP(endpoint);
   }, 30000);
-  afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: () => {} }));
+  afterAll(async () => {
+    try {
+      await drain();
+      for (const owned of ownedChildren) {
+        expect(owned.closed, 'owned capture child closed before fixture teardown').toBe(true);
+        expect(existsSync(owned.profile), 'owned capture profile removed before fixture teardown').toBe(false);
+      }
+    } finally { await _cleanupTestBrowser({ browser, proc, cleanup: () => {} }); }
+  });
+
+  it('keeps network refusal inside the owned capture browser and leaves the browsing session alive', async () => {
+    const { openComposition } = await import('../htmlComposition/browser.js');
+    const directory = 'compositions/synthetic-owned-refusal';
+    await mkdir(join(PATHS.data, directory), { recursive: true });
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<!doctype html><title>Synthetic contained capture</title>');
+    const page = await openComposition(directory, { ownedBrowser: true, signal: testSignal });
+    try {
+      await expect((async () => {
+        await page.evaluate("fetch('https://example.invalid/refused').catch(() => null)");
+        page.check();
+      })()).rejects.toThrow(/Refused composition request/);
+    } finally { await page.close(); }
+    expect(browser.isConnected()).toBe(true);
+    const untouched = await browser.newPage();
+    expect(await untouched.evaluate(() => 6 * 7)).toBe(42);
+    await untouched.close();
+  }, 30000);
 
   // Server-only CI does not install client dependencies; the full local install
   // exercises this cross-workspace package/render contract alongside the UI proof.
-  it.skipIf(!existsSync(new URL('../../../client/node_modules/three/package.json', import.meta.url)))('authors a local Three.js world and renders the same deterministic scene through module preview and export', async () => {
+  const threeIt = existsSync(new URL('../../../client/node_modules/three/package.json', import.meta.url)) ? it : vitestIt.skip;
+  threeIt('authors a local Three.js world and renders the same deterministic scene through module preview and export', async () => {
     const created = await projects.createProject({ name: 'Synthetic authored world', mediaMode: 'code-only' });
     await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
       audioAnalysis: { durationSec: 1, beats: [0, 0.5], downbeats: [0], sections: [{ id: 'world', label: 'World', startSec: 0, endSec: 1 }] },
@@ -203,6 +252,10 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   }, 120000);
 
   it('draws the selected take at SONG time in an excerpt, identically on every render, with the master muxed', async () => {
+    const { cdpRequest } = await import('../browserService.js');
+    const managedCalls = cdpRequest.mock.calls.length;
+    const unrelatedPage = await browser.newPage();
+    await unrelatedPage.setContent('<title>Unrelated browser session</title>');
     // A 3s clip: red, then green, then blue — each second a solid colour.
     await mkdir(PATHS.videos, { recursive: true });
     await mkdir(PATHS.music, { recursive: true });
@@ -245,6 +298,9 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(streams.split('\n').filter(Boolean).sort()).toEqual(['audio', 'video']);
 
     const second = await render('second.mp4');
+    expect(cdpRequest.mock.calls.length).toBe(managedCalls);
+    expect(await unrelatedPage.title()).toBe('Unrelated browser session');
+    await unrelatedPage.close();
     const hashes = (path) => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-map', '0:v', '-f', 'framemd5', '-']).toString().split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split(',').pop().trim());
     expect(hashes(second.outputPath)).toEqual(hashes(first.outputPath));
     // The staged job folder is gone once the render ends.
@@ -253,7 +309,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     await rm(second.outputPath, { force: true });
   }, 120000);
 
-  it.each(['ramps', 'generated-shots'])('matches bounded grades across real composed/document %s and song-time excerpts', async (fixture) => {
+  ['ramps', 'generated-shots'].forEach(fixture => it(`matches bounded grades across real composed/document ${fixture} and song-time excerpts`, async () => {
     // render.js initializes the media registry. Import it only when this test
     // runs: a skipped browser suite never executes afterAll cleanup.
     const { buildMusicVideoFfmpegArgs } = await import('./render.js');
@@ -359,7 +415,36 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       }
       await writeFile(join(proof, 'metrics.json'), JSON.stringify({ paletteMeanAbsoluteError: mae(documentRgb, composedRgb), excerptMeanAbsoluteError: excerptError, composedExcerptMeanAbsoluteError: composedExcerptError, neutralExcerptMeanAbsoluteError: neutralExcerptError, repeatIdentical: true }, null, 2));
     }
-  }, 120000);
+  }, 120000));
+
+  it('propagates a deadline through a pending seek and waits for owned Chrome cleanup', async () => {
+    const directory = 'music-video/mv-cancel/composition/doc-cancel';
+    await mkdir(join(PATHS.data, directory), { recursive: true });
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<!doctype html><style>body{margin:0;background:#123456}</style><script>window.portosComposition={durationSec:2,fps:12,width:1280,height:720,seek:t=>t>0?new Promise(()=>{}):undefined};</script>');
+    const master = join(PATHS.music, 'cancel.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', master]);
+    const project = { id: 'mv-cancel', name: 'Synthetic cancellation', scenes: [], audioAnalysis: { durationSec: 2, sections: [] }, composition: { mode: 'document', document: { directory } } };
+    const outputPath = join(PATHS.videos, 'cancel.mp4');
+    const controller = new AbortController();
+    const before = ownedChildren.length;
+    const originalSignal = testSignal;
+    testSignal = AbortSignal.any([originalSignal, controller.signal]);
+    try {
+      // Start the next seek before the injected test deadline fires. It never
+      // resolves: cancellation must reach the outer browser, not only ffmpeg.
+      await expect(encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'cancel-proof', audioPath: master, outputPath,
+        onProgress: () => queueMicrotask(() => controller.abort(new Error('Synthetic capture deadline'))),
+      })).rejects.toThrow('Synthetic capture deadline');
+    } finally { testSignal = originalSignal; }
+    expect(ownedChildren).toHaveLength(before + 1);
+    const owned = ownedChildren.at(-1);
+    expect(owned.closed).toBe(true);
+    expect(existsSync(owned.profile)).toBe(false);
+    expect(existsSync(`${outputPath}.silent.mp4`)).toBe(false);
+    expect(browser.isConnected()).toBe(true);
+  }, 30000);
 
   it('renders a generated 30-second card/still/clip document with the selected performance in-point', async () => {
     await mkdir(PATHS.videos, { recursive: true });
