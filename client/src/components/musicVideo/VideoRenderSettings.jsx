@@ -1,3 +1,4 @@
+import RenderPoolPicker from './RenderPoolPicker.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
@@ -36,6 +37,7 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
   const lipSync = SOURCE_AUDIO_LIPSYNC.fal;
   return (
     <>
+      <RenderPoolPicker settings={settings} change={change} disabled={locked} />
       <label htmlFor="mv-video-backend" className="sr-only">Scene video renderer</label>
       <select
         id="mv-video-backend"
@@ -77,6 +79,7 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
             className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto"
           >
             <option value="image">Prompt motion</option>
+            <option value="suppliedAudio">Supplied song audio (cutaway only)</option>
             <option value="audioReactive" disabled={!detectedAudioReactiveLora}>Audio reactive</option>
           </select>
           <label htmlFor="mv-video-model" className="sr-only">Local video model</label>

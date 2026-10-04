@@ -7,15 +7,18 @@
  * allowlisted capability/job/result projections cross the peer boundary.
  */
 
-import { stat, readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { maintenance } from '../lib/maintenanceAdmission.js';
+import { stat, readFile, writeFile } from 'node:fs/promises';
 import { totalmem, freemem } from 'node:os';
 import { evaluateHardwareRequirements } from '../lib/systemCapabilities.js';
-import { pcmAudioInfo } from './federatedMedia/sourceAudio.js';
+import { discardSourceAudioWindow, pcmAudioInfo, supportsSourceAudioWindow } from './federatedMedia/sourceAudio.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { canonicalStringify } from '../lib/objects.js';
 import {
-  PATHS, makePathResolver, resolveGalleryImage, sha256File, sha256Text,
+  PATHS, ensureDir, makePathResolver, resolveGalleryImage, sha256File, sha256Text,
 } from '../lib/fileUtils.js';
 import { findCachedRepoFiles, inspectModelCache } from '../lib/hfCache.js';
 import { getImageModels, getVideoModels, isEditOnly, isFlux2, repoForModel, requiredModelCacheGroups } from '../lib/mediaModels.js';
@@ -120,7 +123,7 @@ function federatedInputProfile(kind, model) {
     const roles = [];
     if (modes.includes('image') || modes.includes('fflf') || modes.includes('a2v')) roles.push('sourceImage');
     if (modes.includes('fflf')) roles.push('lastImage');
-    if (modes.includes('a2v')) roles.push('sourceAudio');
+
     if (!roles.length) return null;
     return { roles, required: !modes.includes('text') };
   }
@@ -141,8 +144,8 @@ function federatedInputProfile(kind, model) {
 // model with declared modes but neither `text` nor a frame slot has no way in.
 const supportsFederatedInput = (kind, model) => {
   if (kind !== 'video') return true;
-  if (resolveVideoSupportedModes(model).includes('text')) return true;
-  return !!federatedInputProfile(kind, model);
+  const modes = resolveVideoSupportedModes(model);
+  return modes.some((mode) => ['text', 'image', 'fflf'].includes(mode)) || supportsSourceAudioWindow(model);
 };
 
 // The capability's input-asset block. Limits only — never a filename, digest, or
@@ -153,7 +156,7 @@ const federatedInputAssetsBlock = (kind, model) => {
   return {
     maxBytes: FEDERATED_MEDIA_ASSET_MAX_BYTES,
     maxCount: FEDERATED_MEDIA_ASSET_MAX_COUNT,
-    mimeTypes: [...FEDERATED_MEDIA_ASSET_MIME_TYPES],
+    mimeTypes: FEDERATED_MEDIA_ASSET_MIME_TYPES.filter((mime) => mime.startsWith('image/')),
     roles: profile.roles,
     required: profile.required,
   };
@@ -215,7 +218,7 @@ async function resolveSubmissionInputAssets({ callerId, input, capability }) {
       400,
     );
   }
-  const unsupportedRoles = requested.filter((entry) => !limits.roles.includes(entry.role));
+  const unsupportedRoles = requested.filter((entry) => !(entry.role === 'sourceAudio' ? capability.sourceAudio : limits.roles.includes(entry.role)));
   if (unsupportedRoles.length) {
     unavailable(
       `Requested model does not accept ${unsupportedRoles.map((entry) => entry.role).join(' or ')}`,
@@ -255,7 +258,8 @@ async function resolveSubmissionInputAssets({ callerId, input, capability }) {
     if (entry.role === 'sourceAudio') {
       const info = pcmAudioInfo(await readFile(found[0].path));
       const audio = input.audioConditioning;
-      if (!audio || !info || info.sampleCount !== audio.sampleCount
+      if (!audio || !info || !Number.isInteger(input.fps) || !Number.isInteger(input.numFrames)
+        || input.fps <= 0 || input.numFrames <= 1 || info.sampleCount !== audio.sampleCount
         || await sha256File(found[0].path) !== audio.clipSha256
         || Math.abs((input.numFrames - 1) / input.fps - info.sampleCount / info.sampleRate) > 1 / info.sampleRate) {
         unavailable('Source audio does not match its exact sample window', 'MEDIA_PROVIDER_ASSET_INTEGRITY', 400);
@@ -465,7 +469,7 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
     });
     const hardwareEligible = hardware.state === 'available';
     const memory = { requiredGb, totalGb: totalmem() / 2 ** 30, freeGb: freemem() / 2 ** 30 };
-    const held = kind === 'video'  && model && isVideoModelHeld(model.id, model.runtime);
+    const held = kind === 'video' && model && isVideoModelHeld(model.id, model.runtime);
     const reason = !isLocal ? 'unknown-engine'
       : !model ? 'unknown-model'
         : !modelSupportsInput ? 'unsupported-input'
@@ -521,9 +525,11 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
       defaultDurationSec: null,
       lyrics: false,
       inputAssets: federatedInputAssetsBlock(kind, model),
+      ...(kind === 'video' ? { supportedModes: resolveVideoSupportedModes(model).filter((mode) =>
+        ['text', 'image', 'fflf'].includes(mode) || (mode === 'a2v' && supportsSourceAudioWindow(model))) } : {}),
       hardwareEligible,
       memory,
-      ...(kind === 'video' && resolveVideoSupportedModes(model).includes('a2v')
+      ...(kind === 'video' && supportsSourceAudioWindow(model)
         ? { sourceAudio: { requiresImage: true } } : {}),
       autoDuration: false,
       frameStride,
@@ -618,7 +624,8 @@ function activeQueueSnapshot(config, kinds) {
     queued,
     running,
     maxQueuedJobs: config.maxQueuedJobs,
-    accepting: active.length < config.maxQueuedJobs,
+    accepting: !maintenance.held() && active.length < config.maxQueuedJobs,
+    maintenanceHeld: maintenance.held(),
     concurrency: federatedLaneConcurrency(kinds),
     byKind,
   };
@@ -674,6 +681,13 @@ export async function getFederatedMediaProviderStatus(config, { kinds = ['audio'
  *
  * @returns {Promise<{image: object[], video: object[]}>}
  */
+/** Project placement checks one explicit local model without enabling sharing. */
+export async function getLocalVideoRenderCapability(modelId) {
+  const pythonPath = await resolveLocalRuntimePythonPath(['video']);
+  const capabilities = await configuredVideoCapabilities(pythonPath, { videoModels: [{ engine: 'local', modelId }] });
+  return capabilities[0] ? publicCapability(capabilities[0]) : null;
+}
+
 export async function listLocalMediaShareCandidates() {
   const pythonPath = await resolveLocalRuntimePythonPath(['image', 'video']);
   const catalogs = { image: getImageModels(), video: getVideoModels() };
@@ -823,6 +837,7 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
       return { replayed: true, job: await describeFederatedMediaJob(callerId, existing) };
     }
 
+    return maintenance.run('media-input', 'Federated job admission', async () => {
     const queue = activeQueueSnapshot(config, [input.kind]);
     if (!queue.accepting) {
       unavailable('Provider queue is at capacity', 'MEDIA_PROVIDER_BUSY', 429, {
@@ -849,6 +864,12 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
     }
     if (input.sourceAudio && capability.memory?.requiredGb > capability.memory?.freeGb) {
       unavailable('Insufficient free memory for supplied audio generation', 'MEDIA_PROVIDER_BUSY', 429, { retryable: true });
+    }
+    if (input.kind === 'video') {
+      const mode = input.sourceAudio ? 'a2v' : input.lastImage ? 'fflf' : input.sourceImage ? 'image' : 'text';
+      if (!resolveVideoSupportedModes(capability._model).includes(mode)) {
+        unavailable('Requested model cannot run this conditioning mode', 'MEDIA_PROVIDER_INPUT_UNSUPPORTED', 400);
+      }
     }
     validateFederatedVideoControls(input, capability._model);
     // Lyrics reach a lyric-aware model only. `input.lyrics` is checked for a
@@ -885,7 +906,8 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
     // Jobs are passed in so the sweep can PIN an in-flight job's conditioning:
     // the TTL alone is a backstop, and a job queued behind a long render can
     // outlive it (imageCleanTmpGc.js records the same lesson for its dir).
-    sweepFederatedMediaAssets({ jobs: listJobs() }).catch((error) => {
+    await sweepFederatedMediaAssets({ jobs: [...listJobs(), { status: 'queued', params: inputAssetParams }] }).catch((error) => {
+      maintenance.markCurrentUnsettled();
       console.error(`❌ Federated media inbox sweep failed: ${error.message}`);
     });
 
@@ -895,11 +917,27 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
       idempotencyKey,
       requestHash,
     };
+    let audioUpload = null;
+    if (inputAssetParams.audioFilePath) {
+      audioUpload = join(PATHS.uploads, `federated-audio-${randomUUID()}.wav`);
+      const bytes = await readFile(inputAssetParams.audioFilePath);
+      if (sha256Text(bytes) !== input.audioConditioning.clipSha256) unavailable('Audio changed before admission', 'MEDIA_PROVIDER_ASSET_INTEGRITY', 400);
+      await ensureDir(PATHS.uploads);
+      // This UUID path is unpublished until enqueue succeeds. An exclusive
+      // write owns even a partial file, allowing admission to settle cleanup
+      // without a shared atomic-write helper's unknown temporary sibling.
+      await writeFile(audioUpload, bytes, { flag: 'wx', mode: 0o600 }).catch(async (error) => {
+        if (error.code !== 'EEXIST') await discardSourceAudioWindow(audioUpload);
+        throw error;
+      });
+      inputAssetParams.audioFilePath = audioUpload;
+    }
     const queued = await enqueueJob({
       kind: input.kind,
       owner: jobOwner(callerId),
       params: buildQueueParams(input, capability, federatedMedia, inputAssetParams),
-    }).catch((error) => {
+    }).catch(async (error) => {
+      if (audioUpload) await discardSourceAudioWindow(audioUpload);
       // The shared queue's own pending ceiling (#8326) is the same capacity
       // refusal as the provider bound above; answer in the wire's vocabulary so
       // the consumer retries later instead of seeing a local queue code.
@@ -912,6 +950,7 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
       replayed: false,
       job: await describeFederatedMediaJob(callerId, queued.jobId),
     };
+    });
   });
 }
 

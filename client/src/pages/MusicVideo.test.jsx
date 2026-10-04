@@ -8,6 +8,7 @@ import { findEnabledByRole } from '../test/enabledBarrier.js';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
 import toast from '../components/ui/Toast';
 
+
 const PROJECT_WITH_CLIP = {
   id: 'mv-1', name: 'Neon Run', mode: 'director', status: 'ready',
   trackId: 't1', uploadedAudioFilename: null, audioAnalysis: null, renderHistoryId: null,
@@ -159,6 +160,7 @@ const pushSocket = (event, payload) => act(async () => {
 vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn(), listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../services/apiSystem.js', () => ({
+  getInstances: vi.fn(async () => ({ peers: [] })),
   generateImage: vi.fn(async () => ({ status: 'queued', jobId: 'example-frame-job' })),
   uploadGalleryImage: vi.fn(),
   listImageModels: vi.fn(async () => []),

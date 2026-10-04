@@ -80,6 +80,11 @@ export const musicVideoConceptSchema = z.object({
 // is optional because Grok does not consume it; the video-gen route performs
 // the authoritative installed-model validation when a local render starts.
 export const musicVideoVideoSettingsSchema = z.object({
+  renderPool: z.object({
+    mode: z.enum(['local', 'peers', 'both']),
+    peers: z.array(z.object({ peerId: z.string().uuid(), modelId: z.string().trim().min(1).max(256) }).strict()).max(12),
+  }).strict().refine((v) => v.mode === 'local' || v.peers.length > 0, { message: 'Select at least one peer model' })
+    .refine((v) => new Set(v.peers.map((p) => p.peerId)).size === v.peers.length, { message: 'Choose one model per peer' }).optional(),
   // null clears the per-project pin so this install's configured default wins.
   // 'fal' is the metered fal.ai queue REST backend (server/services/videoGen/fal.js,
   // #8968) — image-to-video only here; the audio-reactive lane stays local-only
@@ -106,7 +111,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   // false = lip-sync to the audio alone, without the provider transcribing it
   // first (sung words it mishears turn into the wrong mouth shapes).
   falLipSyncTranscription: z.boolean().nullable().optional(),
-  generationMode: z.enum(['image', 'audioReactive']).optional(),
+  generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
 }).strict();

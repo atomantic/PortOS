@@ -1,3 +1,4 @@
+vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: { run: (_kind, _resource, fn) => fn() } }));
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';

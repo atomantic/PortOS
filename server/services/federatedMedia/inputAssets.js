@@ -140,7 +140,7 @@ export function inputAssetRejection(capability, assets = [], status = null) {
       return `This render supplies a ${pair.role} with no ${pair.needs} — ${pair.why}. Add one, or render on this instance.`;
     }
   }
-  const unsupported = roles.filter((role) => !limits.roles.includes(role));
+  const unsupported = roles.filter((role) => !(role === 'sourceAudio' ? capability.sourceAudio : limits.roles.includes(role)));
   if (unsupported.length) {
     return `The selected peer model does not accept ${unsupported.join(' or ')}. Render locally, or clear that input.`;
   }
@@ -256,7 +256,7 @@ function createInputAssetStager({ requestJson, emitStatus }) {
   // path start a second transfer of the same bytes before the first could
   // populate the cache — the exact case the memo exists to collapse.
   return function stageInputAsset(localPath, role) {
-    const key = `${role}:${localPath}`;
+    const key = `${role === 'sourceAudio' ? 'audio' : 'image'}:${localPath}`;
     const pending = uploads.get(key);
     if (pending) return pending;
     const upload = uploadInputAsset(localPath, role);

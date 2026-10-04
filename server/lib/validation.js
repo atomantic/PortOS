@@ -1403,6 +1403,9 @@ export const federatedMediaVideoJobSubmissionSchema = federatedMediaVideoJobSubm
   .refine((v) => Boolean(v.sourceAudio) === Boolean(v.audioConditioning), {
     message: 'sourceAudio and audioConditioning must be supplied together',
   })
+  .refine((v) => !v.audioConditioning || (v.fps !== undefined && v.numFrames !== undefined), {
+    message: 'Source audio requires explicit fps and numFrames for its exact window',
+  })
   .refine((v) => !v.sourceAudio || (!v.lastImage && v.sourceAudio.assetId.endsWith(v.audioConditioning?.clipSha256 || '!')), {
     message: 'Source audio must match its clip digest and cannot combine with an end frame',
   })

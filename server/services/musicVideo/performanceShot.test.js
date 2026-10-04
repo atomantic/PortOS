@@ -103,6 +103,33 @@ beforeEach(async () => {
 
 afterAll(() => cleanupTempDataRoots());
 
+it('blocks composition and exposes a repair when supplied audio used an older take of the same track', async () => {
+  const { assertCurrentPerformanceTakes } = await import('./performanceShot.js');
+  const { resolveMasterAudioPath } = await import('./render.js');
+  const { getDependencyImpact } = await import('./revisionService.js');
+  const sourceSha256 = createHash('sha256').update(songWav()).digest('hex');
+  const supplied = { ...project({ shotMode: 'cutaway' }), trackId: 'same-track', uploadedAudioFilename: null };
+  const shot = supplied.scenes[0];
+  shot.videoHistoryId = 'supplied-take';
+  shot.takes = [{ kind: 'video', assetId: shot.videoHistoryId, shotInstruction: {
+    shotMode: 'cutaway', songInterval: { startSec: shot.startSec, endSec: shot.endSec },
+    audioConditioning: { sourceSha256, startSample: shot.startSec * RATE },
+  } }];
+  getProject.mockResolvedValue(supplied);
+  getTrack.mockResolvedValue({ audioFilename: 'song.wav' });
+  await expect(assertCurrentPerformanceTakes(supplied, await resolveMasterAudioPath(supplied))).resolves.toBeUndefined();
+  await writeFile(join(PATHS.music, 'another-take.wav'), songWav({ markerAmp: 10000 }));
+  getTrack.mockResolvedValue({ audioFilename: 'another-take.wav' });
+  await expect(assertCurrentPerformanceTakes(supplied, await resolveMasterAudioPath(supplied))).rejects.toMatchObject({ code: 'MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES' });
+  const impact = await getDependencyImpact(supplied.id);
+  expect(impact.shots).toEqual(expect.arrayContaining([expect.objectContaining({ sceneId: shot.sceneId, reasons: expect.arrayContaining(['source-audio-changed']) })]));
+  for (const visualLayer of ['still', 'card']) {
+    shot.visualLayer = visualLayer;
+    await expect(assertCurrentPerformanceTakes(supplied, await resolveMasterAudioPath(supplied))).resolves.toBeUndefined();
+    expect((await getDependencyImpact(supplied.id)).shots).toEqual([]);
+  }
+});
+
 describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync lane (#8977)', () => {
   it('slices the exact song window, submits it once, and trims the delivered take at its edit points', async () => {
     getProject.mockResolvedValue(project());

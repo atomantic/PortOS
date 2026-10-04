@@ -793,6 +793,7 @@ function startLaneJob(job, { lane }) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] startLaneJob: already removed from queue, skipping`);
     return false;
   }
+  if (lane === 'remote' && remoteRunning.some((active) => active.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId)) return false;
   const permit = recoveringJobs.has(job.id)
     ? maintenance.recoverOwned('media', job.id)
     : maintenance.tryAdmit('media', job.id, { reconnect: isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true });
@@ -948,6 +949,9 @@ async function drainLoop() {
       if (job.status !== 'queued' || job.hold || job.admitting) continue;
       const lane = jobLane(job);
       if (slots[lane] <= 0) continue;
+      // One GPU job per peer initially. Different peers and this Mac remain
+      // independent. Reconciliation occupies the same slot until settled.
+      if (lane === 'remote' && !job.params?.remoteMedia?.reconcile && candidates.some((pending) => pending.status === 'queued' && pending.params?.remoteMedia?.reconcile && pending.params.remoteMedia.peerId === job.params?.remoteMedia?.peerId)) continue;
       if (!startLaneJob(job, { lane })) continue;
       slots[lane] -= 1;
       if (Object.values(slots).every((remaining) => remaining <= 0)) break;
@@ -1161,6 +1165,8 @@ async function runJobLifecycle(job, markDispatched) {
   let resolveProviderSettlement;
   const providerSettlement = new Promise(resolve => { resolveProviderSettlement = resolve; });
   let watchdogNeedsProviderSettlement = false;
+  let providerInputsDisposable = false;
+  let inputCleanupAttempted = false;
   let progressPersistDirty = false;
   let progressPersistTimer = null;
   let progressPersisting = null;
@@ -1205,7 +1211,24 @@ async function runJobLifecycle(job, markDispatched) {
   // fire a redundant provider cancel. It's a transient in-memory flag
   // (excluded from persistImpl's serialized field set).
   let watchdogTimer;
-  async function terminate(state, apply) {
+  async function releaseRemoteAudioInputs(disposable) {
+    if (!disposable || inputCleanupAttempted || job.kind !== 'video' || !isRemoteMediaJob(job)) return;
+    inputCleanupAttempted = true;
+    try {
+      await maintenance.withResource('media', job.id, async () => {
+        const { discardSourceAudioWindow } = await import('../federatedMedia/sourceAudio.js');
+        for (const asset of job.params?.remoteMedia?.inputAssets || []) {
+          if (asset.role === 'sourceAudio' && normalizeTempPaths(job.params?.uploadedTempPaths).includes(asset.path)) {
+            await discardSourceAudioWindow(asset.path);
+          }
+        }
+      });
+    } catch (error) {
+      maintenance.markResourceUnsettled('media', job.id);
+      console.error(`❌ Remote video input cleanup needs recovery for ${job.id}: ${error.message}`);
+    }
+  }
+  async function terminate(state, apply, remoteInputsDisposable = false) {
     if (!claimTerminalOutcome(job)) return;
     // setInterval now (was setTimeout) — using clearInterval to match the new
     // API. (Node accepts either clearTimeout or clearInterval on the same
@@ -1214,10 +1237,10 @@ async function runJobLifecycle(job, markDispatched) {
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
     await drainProgressPersist();
-    await admitCompletion(state, () => publishTerminalTransition(state, apply));
+    await admitCompletion(state, () => publishTerminalTransition(state, apply, remoteInputsDisposable));
   }
 
-  async function publishTerminalTransition(state, apply) {
+  async function publishTerminalTransition(state, apply, remoteInputsDisposable) {
     stageTerminalTransition(job, (job) => {
       apply(job);
       job.status = state;
@@ -1230,6 +1253,11 @@ async function runJobLifecycle(job, markDispatched) {
       // so the residual values are not displayed for terminal jobs.
       job.completedAt = new Date().toISOString();
     }, async () => {
+      // The terminal snapshot is durable now; a restart no longer rebuilds
+      // this request. Absence of the executor verdict retains all inputs.
+      // A shared persist can acknowledge another job: restore THAT job's
+      // maintenance context, and never let cleanup failure lose this callback.
+      await releaseRemoteAudioInputs(remoteInputsDisposable);
       if (job.params?.videoProduction) {
         const tag = job.params.videoProduction;
         const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
@@ -1279,8 +1307,9 @@ async function runJobLifecycle(job, markDispatched) {
       broadcastSse(sseEntry, payload);
     },
     completed: (payload) => {
+      const { remoteInputsDisposable, ...result } = payload;
       trackTerminalOperation(
-        terminate('completed', (j) => { j.result = payload; })
+        terminate('completed', (j) => { j.result = result; }, remoteInputsDisposable === true)
           .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
       );
     },
@@ -1295,7 +1324,7 @@ async function runJobLifecycle(job, markDispatched) {
             // is cleaned up still gets a meaningful terminal frame from the
             // archived state, rather than the generic "Canceled" fallback.
             j.error = 'Canceled while running';
-          }).catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
+          }, payload.remoteInputsDisposable === true).catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
         );
         return;
       }
@@ -1303,7 +1332,7 @@ async function runJobLifecycle(job, markDispatched) {
         terminate('failed', (j) => {
           j.error = payload.error || 'unknown error';
           videoHolds.captureFailure(j, j.error, payload);
-        })
+        }, payload.remoteInputsDisposable === true)
           .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
       );
     },
@@ -1349,8 +1378,8 @@ async function runJobLifecycle(job, markDispatched) {
   // provider terminal event can release that additional wait.
   const dispatcher = makeGenDispatcher(emitter, job, {
     ...handlers,
-    completed: payload => { resolveProviderSettlement(); handlers.completed(payload); },
-    failed: payload => { resolveProviderSettlement(); handlers.failed(payload); },
+    completed: payload => { providerInputsDisposable = payload.remoteInputsDisposable === true; resolveProviderSettlement(); handlers.completed(payload); },
+    failed: payload => { providerInputsDisposable = payload.remoteInputsDisposable === true; resolveProviderSettlement(); handlers.failed(payload); },
   });
   dispatcher.attach();
 
@@ -1495,10 +1524,12 @@ async function runJobLifecycle(job, markDispatched) {
     // Tracked from the first microtask of the rejection, so a drain that saw
     // the dispatch window close cannot miss this failure (#9029).
     await trackTerminalOperation((async () => {
-      await safeUnlinkUpload(job.params?.uploadedTempPath);
-      await safeUnlinkUpload(job.params?.audioFilePath);
-      for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
-        await safeUnlinkUpload(p);
+      if (!(isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true)) {
+        await safeUnlinkUpload(job.params?.uploadedTempPath);
+        await safeUnlinkUpload(job.params?.audioFilePath);
+        for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
+          await safeUnlinkUpload(p);
+        }
       }
       handlers.failed({ error: err.message, code: err.code });
     })());
@@ -1509,6 +1540,10 @@ async function runJobLifecycle(job, markDispatched) {
   // lane release immediate and gives tests a deterministic lifecycle to drain.
   await terminalState;
   if (watchdogNeedsProviderSettlement) await providerSettlement;
+  // A watchdog can win the terminal row before the real provider responds.
+  // Keep its later trusted verdict through physical settlement, then release
+  // inputs under the still-owned lane after that row is durable.
+  await releaseRemoteAudioInputs(providerInputsDisposable);
   dispatcher.detach();
 }
 

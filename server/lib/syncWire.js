@@ -71,6 +71,10 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
     const { document: _document, documentDraft: _documentDraft, ...composition } = shared.composition;
     shared.composition = composition;
   }
+  if (shared.videoSettings && typeof shared.videoSettings === 'object' && !Array.isArray(shared.videoSettings)) {
+    const { renderPool: _renderPool, ...settings } = shared.videoSettings;
+    shared.videoSettings = settings;
+  }
   if (stripVideoBackend && shared.videoSettings
     && typeof shared.videoSettings === 'object' && !Array.isArray(shared.videoSettings)) {
     const { backend: _backend, ...sharedVideoSettings } = shared.videoSettings;

@@ -186,6 +186,7 @@ describe('federated video consumer adapter', () => {
       type: 'completed',
       event: {
         generationId: LOCAL_JOB_ID,
+        remoteInputsDisposable: true,
         filename: `${LOCAL_JOB_ID}.mp4`,
         path: `/data/videos/${LOCAL_JOB_ID}.mp4`,
         thumbnail: `${LOCAL_JOB_ID}.jpg`,
@@ -268,5 +269,35 @@ describe('federated video consumer adapter', () => {
     expect(outcome.type).toBe('failed');
     expect(outcome.event.error).toMatch(/chained video renders cannot run on a federated media provider/i);
     expect(transport.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['failed', 'canceled'])('marks inputs disposable only after a known provider %s outcome', async (status) => {
+    transport.fetch.mockResolvedValue(jsonResponse(providerJob(status), 200));
+    const terminal = captureTerminal(LOCAL_JOB_ID);
+    await generateVideo(params());
+    expect(await terminal).toMatchObject({ type: 'failed', event: { remoteInputsDisposable: true } });
+  });
+
+  it('retains replay inputs after an uncertain submission or malformed recovery metadata', async () => {
+    transport.fetch.mockRejectedValue(new Error('Uncertain transport response'));
+    let terminal = captureTerminal(LOCAL_JOB_ID);
+    await generateVideo(params());
+    expect(await terminal).toMatchObject({ type: 'failed', event: { remoteInputsDisposable: false } });
+    terminal = captureTerminal(LOCAL_JOB_ID);
+    await generateVideo(params({ remoteMedia: { reconcile: true } }));
+    expect((await terminal).event.remoteInputsDisposable).not.toBe(true);
+  });
+
+  it('retains inputs when local finalization fails after downloading a verified remote result', async () => {
+    const mp4 = Buffer.from('fixture verified video');
+    const digest = sha256(mp4);
+    transport.fetch.mockImplementation(async (url) => url.endsWith('/jobs')
+      ? jsonResponse(providerJob('completed', { result: { available: true, mimeType: 'video/mp4', sizeBytes: mp4.length,
+        sha256: digest, downloadUrl: '/ignored', engine: 'local', modelId: 'ltx2', durationSec: 5 } }))
+      : new Response(mp4, { headers: { 'Content-Length': String(mp4.length), 'Content-Type': 'video/mp4', 'X-Content-SHA256': digest } }));
+    ffmpeg.faststart.mockRejectedValueOnce(new Error('fixture finalization failed'));
+    const terminal = captureTerminal(LOCAL_JOB_ID);
+    await generateVideo(params());
+    expect(await terminal).toMatchObject({ type: 'failed', event: { remoteInputsDisposable: false } });
   });
 });

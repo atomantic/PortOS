@@ -276,7 +276,6 @@ export const federatedMediaAssetSchema = z.object({
 // can't drift the two.
 export const FEDERATED_MEDIA_RESULT_EXTENSION = Object.freeze({
   'audio/wav': 'wav',
-  'audio/wav': 'wav',
   'image/png': 'png',
   'video/mp4': 'mp4',
 });
@@ -317,6 +316,7 @@ export const federatedMediaCapabilitySchema = z.object({
     label: z.string().trim().max(120).optional(),
   })).max(100).nullable().optional(),
   inputAssets: federatedMediaInputAssetsSchema,
+  supportedModes: z.array(z.enum(['text', 'image', 'fflf', 'a2v'])).max(4).optional(),
   // Supplied audio drives motion; it does not establish verified lip-sync.
   sourceAudio: z.object({ requiresImage: z.boolean() }).strict().optional(),
   hardwareEligible: z.boolean().optional(),
@@ -342,6 +342,7 @@ const federatedMediaQueueStatusSchema = z.object({
   running: z.number().int().nonnegative(),
   maxQueuedJobs: z.number().int().positive(),
   accepting: z.boolean(),
+  maintenanceHeld: z.boolean().optional(),
   // Both added after wire v1 shipped, so both are optional: an older provider
   // omits them, and absent must read as UNKNOWN rather than zero. See "Drain
   // rate and per-kind occupancy" in docs/FEDERATED_MEDIA_PROVIDERS.md for what

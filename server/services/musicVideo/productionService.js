@@ -626,6 +626,12 @@ async function cancelOwnedJobs(runId, { includeRunning = false, jobIds = null } 
  */
 export async function startProduction(projectId, { directive, pool: requested, limits, reviewer, authoring: requestedAuthoring }) {
   const project = await requireProject(projectId);
+  if (project.videoSettings?.renderPool && project.videoSettings.renderPool.mode !== 'local') {
+    throw new ServerError('Production runs require This Mac until immutable run pools support peer placement', { status: 409, code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
+  }
+  if (project.videoSettings?.generationMode === 'suppliedAudio') {
+    throw new ServerError('Production runs do not yet bind supplied-audio windows in their immutable pool; use Prompt motion', { status: 409, code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
+  }
   const assets = codeFirstProductionAssets(project);
   const authoring = assets ? await deps.resolveAuthoring(requestedAuthoring) : null;
   const pool = normalizeProductionPool(requested, { allowEmpty: !!assets });

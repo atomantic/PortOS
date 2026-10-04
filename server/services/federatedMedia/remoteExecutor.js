@@ -536,13 +536,17 @@ export function createRemoteMediaExecutor({
     activeJobs.set(params.jobId, state);
     try {
       const result = await runRemote(state, marker.data);
-      events.emit('completed', { generationId: params.jobId, ...result });
+      // This is a transient executor verdict, never a provider/caller field.
+      // The queue may release owned inputs only AFTER its terminal row is durable.
+      events.emit('completed', { generationId: params.jobId, ...result,
+        remoteInputsDisposable: !state.finalizing && (state.remoteTerminal === true || !state.submissionMayExist) });
     } catch (error) {
       // An unreachable/revoked peer is not proof that its admitted render
       // stopped. Keep local ownership until completion can be reconciled.
       if ((state.submissionMayExist && !state.remoteTerminal) || state.finalizing) maintenance.markCurrentUnsettled();
       events.emit('failed', {
         generationId: params.jobId,
+        remoteInputsDisposable: !state.finalizing && (state.remoteTerminal === true || !state.submissionMayExist),
         error: error?.canceled
           ? `Remote ${label} generation canceled`
           : (error?.message || `Remote ${label} generation failed`),
