@@ -138,7 +138,9 @@ export function ensureGrokTuiArgs(args = []) {
  * the grok stdin sentinel, so it's safe to call unconditionally before a spawn.
  * @param {string[]} args - the built argv (may contain the /dev/stdin sentinel)
  * @param {string} prompt - the prompt text
- * @returns {{ args: string[], useStdin: boolean, cleanup: () => void }}
+ * `cleanup({ throwOnError: true })` lets an owner retain failed cleanup as a
+ * recovery blocker; the default remains best-effort for existing callers.
+ * @returns {{ args: string[], useStdin: boolean, cleanup: (options?: {throwOnError?: boolean}) => void }}
  */
 export function prepareGrokPromptFile(args, prompt) {
   if (process.platform !== 'win32') return { args, useStdin: true, cleanup: NOOP_CLEANUP };
@@ -163,6 +165,9 @@ export function prepareGrokPromptFile(args, prompt) {
   return {
     args: rewritten,
     useStdin: false,
-    cleanup: () => { try { unlinkSync(file); } catch { /* already gone */ } },
+    cleanup: ({ throwOnError = false } = {}) => {
+      try { unlinkSync(file); }
+      catch (error) { if (throwOnError && error.code !== 'ENOENT') throw error; }
+    },
   };
 }

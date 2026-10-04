@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -8,6 +8,20 @@ import {
 } from '../lib/superColliderRuntime.js';
 import { setupSuperColliderRuntime } from './superColliderRuntime.js';
 import { readSuperColliderPreview, renderSuperColliderSource } from './superColliderRender.js';
+import { createMaintenanceAdmission } from '../lib/maintenanceAdmission.js';
+
+const fixture = vi.hoisted(() => ({ admission: null, failedCleanupPath: null }));
+vi.mock('../lib/maintenanceAdmission.js', async importOriginal => ({
+  ...await importOriginal(),
+  maintenance: new Proxy({}, { get: (_target, property) => fixture.admission[property] }),
+}));
+vi.mock('fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, rm: async (path, options) => {
+    if (path === fixture.failedCleanupPath) throw Object.assign(new Error('Cleanup denied'), { code: 'EACCES' });
+    return actual.rm(path, options);
+  } };
+});
 
 // Interleaved IEEE-float WAV — the format the render wrapper asks scsynth for.
 function floatWav(seconds, amplitude, { channels = 2, sampleRate = 48000 } = {}) {
@@ -90,7 +104,11 @@ describe('contained SuperCollider renders', () => {
     jobId: `job-${(jobSeq += 1)}`, source: STOCK_SOURCE, durationSec: 4, seed: 42, docker, dataDir, ...overrides,
   });
 
-  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'portos-sc-render-')); });
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'portos-sc-render-'));
+    fixture.admission = createMaintenanceAdmission(dataDir);
+    fixture.failedCleanupPath = null;
+  });
   afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
 
   it('renders frozen source through the contained wrapper into a validated preview and leaves no scratch', async () => {
@@ -127,6 +145,22 @@ describe('contained SuperCollider renders', () => {
     } }));
     await render(docker, { source: '"/tmp/elsewhere.wav".postln; Pbind(\\dur, 1)' });
     expect(wrapper).toBe(SUPERCOLLIDER_RENDER_WRAPPER_SOURCE);
+  });
+
+  it('retains a recovery blocker when render scratch cannot be removed', async () => {
+    const jobId = 'job-cleanup-failed';
+    const docker = await ready(fakeDocker({ render: run => {
+      fixture.failedCleanupPath = join(jobsDir(), jobId);
+      return defaultRender(run);
+    } }));
+    const permit = fixture.admission.admit('media', jobId);
+    fixture.admission.begin({ reason: 'Drain audio render', owner: 'Operator' });
+    await permit.run(() => render(docker, { jobId }));
+    await permit.finish();
+    expect(fixture.admission.status()).toMatchObject({
+      state: 'draining', blockers: [expect.objectContaining({ resource: jobId, unsettled: true })],
+    });
+    expect(leftoverScratch()).toEqual([jobId]);
   });
 
   it('reports a syntax error with sclang\'s location and publishes nothing', async () => {

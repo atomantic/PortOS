@@ -31,6 +31,7 @@ import { createHash } from 'crypto';
 import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { PATHS } from '../lib/paths.js';
 import { measureWavAudio } from '../lib/wavAudioFile.js';
 import {
@@ -307,7 +308,11 @@ export async function renderSuperColliderSource({
     if (quotaTimer) clearInterval(quotaTimer);
     signal?.removeEventListener('abort', forwardAbort);
     await rm(jobDir, { recursive: true, force: true })
-      .catch((err) => console.error(`❌ SuperCollider job scratch ${jobId.slice(0, 8)} not removed: ${err.message}`));
+      .catch((err) => {
+        maintenance.markCurrentUnsettled();
+        maintenance.markResourceUnsettled('media', jobId);
+        console.error(`❌ SuperCollider job scratch ${jobId.slice(0, 8)} not removed: ${err.message}`);
+      });
   }
 }
 

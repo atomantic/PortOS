@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { posixPath } from '../../lib/testHelper.js';
+import { pinPlatform, posixPath } from '../../lib/testHelper.js';
 
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
 import { ChildProcess } from '../../lib/childProcess.js';
@@ -30,7 +30,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
   const { readFileSync } = await import('fs');
   return {
     ...actual,
-    spawn: vi.fn((bin, args) => {
+    spawn: vi.fn((bin, args, options) => {
       const child = makeFakeChild();
       // On Windows grok cannot read /dev/stdin, so prepareGrokPromptFile writes
       // the prompt to a temp file and rewrites --prompt-file to point at it —
@@ -44,7 +44,8 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
       if (pfPath && pfPath !== '/dev/stdin') {
         try { promptFromFile = readFileSync(pfPath, 'utf8'); } catch { promptFromFile = null; }
       }
-      spawnCalls.push({ bin, args, child, promptFromFile });
+      const jobId = options?.cwd ? basename(options.cwd).replace(/^portos-grok-video-/, '') : null;
+      spawnCalls.push({ bin, args, child, promptFromFile, jobId });
       return child;
     }),
   };
@@ -55,6 +56,11 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
 const TEST_ROOT = join(tmpdir(), `portos-grok-video-test-${process.pid}-${Date.now()}`);
 const FAKE_VIDEOS_DIR = join(TEST_ROOT, 'data-videos');
 const FAKE_DATA_DIR = join(TEST_ROOT, 'data');
+const fixture = vi.hoisted(() => ({ admission: null }));
+vi.mock('../../lib/maintenanceAdmission.js', async importOriginal => ({
+  ...await importOriginal(),
+  maintenance: new Proxy({}, { get: (_target, property) => fixture.admission[property] }),
+}));
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   actual.PATHS.videos = FAKE_VIDEOS_DIR;
@@ -62,6 +68,8 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return {
     ...actual,
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
+    rmGuarded: vi.fn(actual.rmGuarded),
+    unlinkGuarded: vi.fn(actual.unlinkGuarded),
   };
 });
 
@@ -80,6 +88,9 @@ vi.mock('../../lib/ffmpeg.js', async () => {
 const grok = await import('./grok.js');
 const { videoGenEvents } = await import('./events.js');
 const { loadHistory } = await import('./history.js');
+const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
+const { rmGuarded, unlinkGuarded } = await import('../../lib/fileUtils.js');
+const realFiles = await vi.importActual('../../lib/fileUtils.js');
 
 const flush = () => new Promise((r) => setImmediate(r));
 const scratchDirFor = (jobId) => join(tmpdir(), `portos-grok-video-${jobId}`);
@@ -87,9 +98,19 @@ const stagingPathFor = (jobId) => join(scratchDirFor(jobId), 'output.mp4');
 // Prefer the --prompt-file temp file (Windows) and fall back to stdin (POSIX).
 const promptOf = (i = 0) => spawnCalls[i].promptFromFile ?? spawnCalls[i].child.stdin.written;
 const closeChild = async (i = 0, code = 1) => {
+  const terminal = new Promise(resolve => {
+    const finish = payload => {
+      if (payload.generationId !== spawnCalls[i].jobId) return;
+      videoGenEvents.off('failed', finish);
+      videoGenEvents.off('completed', finish);
+      resolve();
+    };
+    videoGenEvents.on('failed', finish);
+    videoGenEvents.on('completed', finish);
+  });
   spawnCalls[i].child.exitCode = code;
   spawnCalls[i].child.emit('close', code, null);
-  await flush();
+  await terminal;
 };
 // Minimal valid MP4 header: size box + `ftyp` at offset 4.
 const MP4_BYTES = Buffer.concat([
@@ -103,6 +124,9 @@ beforeEach(async () => {
   grok._internals.setHarvestTimeoutForTests(10);
   await rm(TEST_ROOT, { recursive: true, force: true }).catch(() => {});
   await mkdir(FAKE_DATA_DIR, { recursive: true });
+  fixture.admission = createMaintenanceAdmission(FAKE_DATA_DIR);
+  rmGuarded.mockReset().mockImplementation(realFiles.rmGuarded);
+  unlinkGuarded.mockReset().mockImplementation(realFiles.unlinkGuarded);
 });
 
 afterEach(async () => {
@@ -215,12 +239,7 @@ describe('videoGen/grok — harvest and finalize', () => {
     await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
     expect(failed.mock.calls[0][0].error).toMatch(/non-MP4 file/);
     expect(existsSync(join(FAKE_VIDEOS_DIR, job.filename))).toBe(false);
-    // Scratch-dir removal is fire-and-forget alongside the 'failed' event
-    // (not awaited before it), so give it a moment to land on disk rather
-    // than racing it.
-    const scratchDir = scratchDirFor(job.jobId);
-    await vi.waitFor(() => expect(existsSync(scratchDir)).toBe(false));
-    expect(existsSync(scratchDir)).toBe(false);
+    expect(existsSync(scratchDirFor(job.jobId))).toBe(false);
   });
 
   it('fails with the narration tail when grok exits 0 with no file', async () => {
@@ -250,6 +269,109 @@ describe('videoGen/grok — harvest and finalize', () => {
 });
 
 describe('videoGen/grok — cancel', () => {
+  it('retains cancel escalation and maintenance ownership after a live error until close and all cleanup finish', async () => {
+    const restorePlatform = pinPlatform('darwin');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const scratchCleanup = Promise.withResolvers();
+    const uploadCleanup = Promise.withResolvers();
+    const jobId = 'grok-maintenance-live-error';
+    const upload = join(TEST_ROOT, 'source.png');
+    await writeFile(upload, 'synthetic reference');
+    rmGuarded.mockImplementationOnce(async (...args) => {
+      await scratchCleanup.promise;
+      return realFiles.rmGuarded(...args);
+    });
+    unlinkGuarded.mockImplementationOnce(async (...args) => {
+      await uploadCleanup.promise;
+      return realFiles.unlinkGuarded(...args);
+    });
+    const permit = fixture.admission.admit('media', jobId);
+    let settlement;
+    const failed = vi.fn(() => { settlement = permit.finish(); });
+    videoGenEvents.on('failed', failed);
+    let closing;
+    try {
+      await permit.run(() => grok.generateVideo({ jobId, prompt: 'synthetic motion', uploadedTempPath: upload }));
+      const child = spawnCalls[0].child;
+      child.pid = 101;
+      fixture.admission.begin({ reason: 'Drain renderer', owner: 'Operator' });
+      child.emit('error', new Error('Signal transport failed'));
+      expect(failed).not.toHaveBeenCalled();
+      expect(grok.getActiveJob()).toMatchObject({ generationId: jobId });
+      expect(grok.cancel(jobId)).toBe(true);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(fixture.admission.status().state).toBe('draining');
+      expect(rmGuarded).not.toHaveBeenCalled();
+
+      closing = closeChild();
+      await vi.waitFor(() => expect(unlinkGuarded).toHaveBeenCalledWith(upload));
+      scratchCleanup.resolve();
+      await vi.waitFor(() => expect(existsSync(scratchDirFor(jobId))).toBe(false));
+      expect(failed).not.toHaveBeenCalled();
+      expect(fixture.admission.status().state).toBe('draining');
+      uploadCleanup.resolve();
+      await closing;
+      await settlement;
+      expect(existsSync(upload)).toBe(false);
+      expect(failed).toHaveBeenCalledTimes(1);
+      expect(failed.mock.calls[0][0].error).toContain('Signal transport failed');
+      expect(fixture.admission.status().state).toBe('ready');
+      expect(grok.cancel(jobId)).toBe(false);
+      child.emit('close', 1, null);
+      expect(failed).toHaveBeenCalledTimes(1);
+    } finally {
+      scratchCleanup.resolve();
+      uploadCleanup.resolve();
+      if (!closing && spawnCalls[0] && failed.mock.calls.length === 0) closing = closeChild();
+      await closing;
+      await permit.finish();
+      vi.useRealTimers();
+      restorePlatform();
+    }
+  });
+
+  it('waits for cleanup once when a failed spawn emits both error and close', async () => {
+    const cleanup = Promise.withResolvers();
+    rmGuarded.mockImplementationOnce(async (...args) => {
+      await cleanup.promise;
+      return realFiles.rmGuarded(...args);
+    });
+    const failed = vi.fn();
+    videoGenEvents.on('failed', failed);
+    const job = await grok.generateVideo({ prompt: 'synthetic motion' });
+    const child = spawnCalls[0].child;
+    try {
+      child.emit('error', new Error('spawn ENOENT'));
+      child.emit('close', -2, null);
+      await flush();
+      expect(failed).not.toHaveBeenCalled();
+      cleanup.resolve();
+      await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+      expect(existsSync(scratchDirFor(job.jobId))).toBe(false);
+      expect(rmGuarded).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup.resolve();
+      await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    }
+  });
+
+  it.each(['scratch', 'upload'])('retains a recovery blocker when %s cleanup fails', async target => {
+    const jobId = `grok-maintenance-${target}-cleanup`;
+    const upload = join(TEST_ROOT, 'source.png');
+    await writeFile(upload, 'synthetic reference');
+    (target === 'scratch' ? rmGuarded : unlinkGuarded).mockRejectedValueOnce(Object.assign(new Error('Cleanup denied'), { code: 'EACCES' }));
+    const permit = fixture.admission.admit('media', jobId);
+    await permit.run(() => grok.generateVideo({ jobId, prompt: 'synthetic motion', uploadedTempPath: upload }));
+    fixture.admission.begin({ reason: 'Drain renderer', owner: 'Operator' });
+    await closeChild();
+    await permit.finish();
+    expect(fixture.admission.status()).toMatchObject({
+      state: 'draining', blockers: [expect.objectContaining({ resource: jobId, unsettled: true })],
+    });
+    await realFiles.rmGuarded(scratchDirFor(jobId), { recursive: true, force: true });
+  });
+
   it('cancel() requires a jobId; cancel(jobId) SIGTERMs; cancelAll() sweeps', async () => {
     expect(() => grok.cancel()).toThrow(/requires a jobId/);
     const a = await grok.generateVideo({ prompt: 'one' });
