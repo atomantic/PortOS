@@ -53,6 +53,7 @@ const ALLOWED_UNVALIDATED = new Map([
   ['routes/brainImport.js POST /chatgpt/zip', 'multipart upload: req.body only carries optional text fields beside the ZIP'],
   ['routes/federatedMedia.js POST /assets', 'raw binary body (express.raw); authenticated and byte-validated by storeFederatedMediaAsset'],
   ['routes/imageClean.js POST /', 'raw image bytes (express.raw Buffer); the JSON-shaped options are validated from req.query'],
+  ['routes/settings.js PUT /', 'polymorphic settings store: only the slices with a known schema are validated, slice by slice, by design'],
   ['routes/imageTo3d.js POST /models/:id/usdz', 'raw binary body (express.raw); validated by byte checks (non-empty, size cap, zip magic)'],
   ['routes/pipeline/audio.js POST /issues/:id/stages/audio/music/upload', 'multipart upload: req.body only carries an optional label text field'],
 ]);
@@ -87,7 +88,8 @@ function topLevelComma(args) {
 
 /** True when some validation call in `text` receives the body as its DATA argument. */
 function validatesBody(text) {
-  const carriesBody = new RegExp(`\\breq\\.body\\b|\\b(?:${bodyAliases(text).join('|') || '(?!)'})\\b`);
+  // A whole-body expression only: `req.body.name` is one field, not the body.
+  const carriesBody = new RegExp(`\\b(?:req\\.body|${bodyAliases(text).join('|') || '(?!)'})\\b(?!\\s*(?:\\?\\.|\\.|\\[))`);
   for (const call of text.matchAll(VALIDATE_CALL)) {
     const open = call.index + call[0].length - 1;
     const end = matchBracket(text, open);
@@ -190,6 +192,10 @@ describe('the unvalidated-body recognizer', () => {
     expect(findUnvalidatedBodyHandlers("router.post('/x/:id', asyncHandler(async (req, res) => { validateRequest(idSchema, req.params); use(req.body.name); }));"))
       .toEqual(['POST /x/:id']);
     expect(findUnvalidatedBodyHandlers("router.post('/x', asyncHandler(async (req, res) => { const { key, content } = req.body; validateRequest(keySchema, key); }));"))
+      .toEqual(['POST /x']);
+    expect(findUnvalidatedBodyHandlers("router.post('/x', asyncHandler(async (req, res) => { validateRequest(nameSchema, req.body.name); use(req.body.other); }));"))
+      .toEqual(['POST /x']);
+    expect(findUnvalidatedBodyHandlers("router.post('/x', asyncHandler(async (req, res) => { const body = req.body; validateRequest(nameSchema, body.name); use(body.other); }));"))
       .toEqual(['POST /x']);
     expect(findUnvalidatedBodyHandlers("router.post('/x', asyncHandler(async (req, res) => { validateRequest(schemaFor(req.body.kind), req.params); }));"))
       .toEqual(['POST /x']);
