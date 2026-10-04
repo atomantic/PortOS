@@ -68,6 +68,8 @@ describe('publishing kit build (#9281)', () => {
       await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
       const overlap = kit.startPublishKitBuild(id);
       releasePrerequisite(null);
+      // No SSE job exists yet, so nothing is advertised as attachable.
+      expect(kit.getActivePublishKitBuild(id)).toBeNull();
       await expect(overlap).rejects.toMatchObject({ status: 409, code: 'PUBLISH_KIT_BUILD_IN_PROGRESS' });
       expect(await firstFailure).toMatchObject({ code: 'FFMPEG_MISSING' });
       expect(probe).toHaveBeenCalledTimes(1);

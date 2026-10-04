@@ -117,7 +117,7 @@ import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../serv
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
-import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
+import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
 import { preparePublishDraft, submitPublishDraft, discardPublishDraft, recordPublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import {
@@ -210,7 +210,9 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const p = await getProject(req.params.id);
   if (!p) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(p);
+  // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
+  const activePublishKitBuild = getActivePublishKitBuild(p.id);
+  res.json(activePublishKitBuild ? { ...p, activePublishKitBuild } : p);
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
