@@ -114,7 +114,10 @@ export default function ManuscriptImpactPreview({ open, onClose, seriesId, secti
       if (!mountedRef.current) return;
       if (result) {
         applied += 1;
-        onAccepted(result, snapshot);
+        if (onAccepted(result, snapshot) === false) {
+          setAcceptState(null);
+          return;
+        }
       }
       setAcceptState((s) => (s ? { ...s, done: s.done + 1 } : s));
     }
